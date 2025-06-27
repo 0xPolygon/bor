@@ -17,8 +17,10 @@
 package vm
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -96,6 +98,20 @@ type StateDB interface {
 	AddPreimage(common.Hash, []byte)
 
 	Witness() *stateless.Witness
+
+	// Polygon Specific StateDB methods
+	GetMVHashmap() *blockstm.MVHashMap
+	SetMVHashmap(mvHashmap *blockstm.MVHashMap)
+	IntermediateRoot(deleteEmptyObjects bool) common.Hash
+	IsVerkle() bool
+	GetLogs(txHash common.Hash, blockNumber uint64, blockHash common.Hash) []*types.Log
+	TxIndex() int
+	SetTxContext(txHash common.Hash, txIndex int)
+	SetBalance(common.Address, *uint256.Int, tracing.BalanceChangeReason) uint256.Int
+	Clone() any
+	Unhooked() any
+	SetBorConsensusTime(borConsensusTime time.Duration)
+}
 
 	AccessEvents() *state.AccessEvents
 
