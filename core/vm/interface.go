@@ -100,6 +100,12 @@ type StateDB interface {
 	Witness() *stateless.Witness
 
 	// Polygon Specific StateDB methods
+	AccessEvents() *state.AccessEvents
+
+	// Finalise must be invoked at the end of a transaction
+	Finalise(bool)
+
+  	// Polygon Specific StateDB methods
 	GetMVHashmap() *blockstm.MVHashMap
 	SetMVHashmap(mvHashmap *blockstm.MVHashMap)
 	IntermediateRoot(deleteEmptyObjects bool) common.Hash
@@ -108,13 +114,19 @@ type StateDB interface {
 	TxIndex() int
 	SetTxContext(txHash common.Hash, txIndex int)
 	SetBalance(common.Address, *uint256.Int, tracing.BalanceChangeReason) uint256.Int
+  	// Clone is used to create a copy of the StateDB, same as `Copy` on *state.StateDB but rename so interface has its own nameAdd commentMore actions
+	//
+	//   state.Clone().(vm.StateDB)
+	//
+	// The `any` return type is required to avoid import cycles.
 	Clone() any
+  	// Unhooked is used to return the underlying state without any hooks applied, in Polygon, some potentialAdd commentMore actions
+	// state modifying operations can be called on a vm.StateDB interface, which might be hooked but we want those
+	// operation to always be non-recorded, this method ensures this.
+	//
+	//   state.Unhooked().(vm.StateDB)
+	//
+	// The `any` return type is required to avoid import cycles.
 	Unhooked() any
 	SetBorConsensusTime(borConsensusTime time.Duration)
-}
-
-	AccessEvents() *state.AccessEvents
-
-	// Finalise must be invoked at the end of a transaction
-	Finalise(bool)
 }
