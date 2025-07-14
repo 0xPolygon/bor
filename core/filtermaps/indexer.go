@@ -221,7 +221,7 @@ func (f *FilterMaps) processSingleEvent(blocking bool) bool {
 	return true
 }
 
-// setTargetView updates the target chain view of the iterator.
+// setTarget updates the target chain view of the iterator.
 func (f *FilterMaps) setTarget(target targetUpdate) {
 	f.targetView = target.targetView
 	f.historyCutoff = target.historyCutoff
