@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	protobor "github.com/maticnetwork/polyproto/bor"
@@ -61,6 +62,16 @@ func (s *Server) BlockByNumber(ctx context.Context, req *protobor.GetBlockByNumb
 	if err != nil {
 		return nil, err
 	}
+	// START - remove this code
+	if s.backend == nil {
+		log.Info("[grpcdebug] s.backend == nil")
+		return nil, errors.New("s.backend == nil")
+	}
+	if s.backend.APIBackend == nil {
+		log.Info("[grpcdebug] s.backend.APIBackend == nil")
+		return nil, errors.New("s.backend.APIBackend == nil")
+	}
+	// END - remove this code
 	block, err := s.backend.APIBackend.BlockByNumber(ctx, bN)
 	if err != nil {
 		return nil, err
