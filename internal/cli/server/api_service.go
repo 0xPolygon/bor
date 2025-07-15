@@ -45,6 +45,16 @@ func (s *Server) HeaderByNumber(ctx context.Context, req *protobor.GetHeaderByNu
 	if err != nil {
 		return nil, err
 	}
+	// START - remove this code
+	if s.backend == nil {
+		log.Info("[grpcdebug] s.backend == nil")
+		return nil, errors.New("s.backend == nil")
+	}
+	if s.backend.APIBackend == nil {
+		log.Info("[grpcdebug] s.backend.APIBackend == nil")
+		return nil, errors.New("s.backend.APIBackend == nil")
+	}
+	// END - remove this code
 	header, err := s.backend.APIBackend.HeaderByNumber(ctx, bN)
 	if err != nil {
 		return nil, err
@@ -62,16 +72,6 @@ func (s *Server) BlockByNumber(ctx context.Context, req *protobor.GetBlockByNumb
 	if err != nil {
 		return nil, err
 	}
-	// START - remove this code
-	if s.backend == nil {
-		log.Info("[grpcdebug] s.backend == nil")
-		return nil, errors.New("s.backend == nil")
-	}
-	if s.backend.APIBackend == nil {
-		log.Info("[grpcdebug] s.backend.APIBackend == nil")
-		return nil, errors.New("s.backend.APIBackend == nil")
-	}
-	// END - remove this code
 	block, err := s.backend.APIBackend.BlockByNumber(ctx, bN)
 	if err != nil {
 		return nil, err
