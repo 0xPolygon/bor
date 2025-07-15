@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"runtime/debug"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -464,8 +463,6 @@ func (s *Server) gRPCServerByListener(listener net.Listener) error {
 	}()
 
 	log.Info("GRPC Server started", "addr", listener.Addr())
-
-	log.Info("Stack call to startup of grpc", "stackTraceCaught", string(debug.Stack()))
 
 	return nil
 }
