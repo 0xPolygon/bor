@@ -40,13 +40,7 @@ func handleWitness(backend Backend, msg Decoder, peer *Peer) error {
 
 	// Forward the response to the dispatcher
 	log.Debug("Dispatching witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
-	log.Info("[witpagination] starting dispatch response")
 	err := peer.dispatchResponse(res, nil)
-	if err != nil {
-		log.Info("[witpagination] error dispatching response", "err", err)
-	} else {
-		log.Info("[witpagination] successfully dispatched response")
-	}
 	return err
 }
 
