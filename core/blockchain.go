@@ -3651,14 +3651,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 	if crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
+		err = fmt.Errorf("stateless self-validation state root mismatch: remote %x != local %x", block.Root(), crossStateRoot)
 		return nil, err
 	}
 	if crossReceiptRoot != block.ReceiptHash() {
 		log.Error("Stateless self-validation receipt root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossReceiptRoot, "local", block.ReceiptHash())
+		err = fmt.Errorf("stateless self-validation receipt root mismatch: remote %x != local %x", block.ReceiptHash(), crossReceiptRoot)
 		return nil, err
-	}
-	if !(err != nil || crossStateRoot != block.Root() || crossReceiptRoot != block.ReceiptHash()) {
-		log.Info("Successfully self validated the block", "block", block.Number(), "hash", block.Hash())
 	}
 	return statedb, nil
 }

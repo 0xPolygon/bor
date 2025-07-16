@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math/big"
 	"sort"
 	"strconv"
@@ -1296,17 +1295,15 @@ func (c *Bor) checkAndCommitSpan(
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Copy()
+	tempState.SetPrefetcher(nil)
+	tempState.StartPrefetcher("bor", state.Witness())
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
 		return err
 	}
 
-	if tempState.Witness() != nil {
-		// Clone the witness Codes and State sets from the temporary snapshot back into the original state
-		state.Witness().Codes = maps.Clone(tempState.Witness().Codes)
-		state.Witness().State = maps.Clone(tempState.Witness().State)
-	}
+	tempState.IntermediateRoot(false)
 
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.ID+1, state, header, chain)
@@ -1439,17 +1436,15 @@ func (c *Bor) CommitStates(
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Copy()
+		tempState.SetPrefetcher(nil)
+		tempState.StartPrefetcher("bor", state.Witness())
+
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
-
-		if tempState.Witness() != nil {
-			// Clone the witness Codes and State sets from the temporary snapshot back into the original state
-			state.Witness().Codes = maps.Clone(tempState.Witness().Codes)
-			state.Witness().State = maps.Clone(tempState.Witness().State)
-		}
-
 		if err != nil {
 			return nil, err
 		}
+
+		tempState.IntermediateRoot(false)
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)

@@ -525,6 +525,10 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
+func (s *StateDB) SetPrefetcher(prefetcher *triePrefetcher) {
+	s.prefetcher = prefetcher
+}
+
 // setError remembers the first non-nil error it is called with.
 func (s *StateDB) setError(err error) {
 	if s.dbErr == nil {
