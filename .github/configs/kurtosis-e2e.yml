@@ -3,22 +3,22 @@ polygon_pos_package:
     el_block_interval_seconds: 1
 
   participants:
-    # 8 validators on Bor's stateless_sync branch
+    # 7 validators on Bor's stateless_sync branch
     - kind: validator
       cl_type: heimdall-v2
       cl_image: heimdall-v2:local
       el_type: bor
       el_image: bor:local
-      count: 8
+      count: 7
       el_bor_produce_witness: true
       el_bor_sync_with_witness: false
 
-    # 1 validator with Bor 2.2.5 version
+    # 1 validator with Bor's latest version
     - kind: validator
       cl_type: heimdall-v2
       cl_image: heimdall-v2:local
       el_type: bor
-      el_image: 0xpolygon/bor:2.2.5
+      el_image: 0xpolygon/bor:latest
       count: 1
       el_bor_produce_witness: false
       el_bor_sync_with_witness: false

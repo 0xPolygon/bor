@@ -73,31 +73,31 @@ get_block_hash() {
 echo "Setting up service lists based on kurtosis configuration..."
 
 # Based on the kurtosis config:
-# - 8 validators with stateless_sync branch (l2-el-1 through l2-el-8)
-# - 1 validator with bor:2.2.5 (l2-el-9)
-# - 3 RPC nodes with stateless_sync branch (l2-el-10, l2-el-11, l2-el-12)
+# - 7 validators with stateless_sync branch (l2-el-1 through l2-el-7)
+# - 1 validator with bor:latest (l2-el-8)
+# - 3 RPC nodes with stateless_sync branch (l2-el-9, l2-el-10, l2-el-11)
 
 STATELESS_SYNC_VALIDATORS=()
 LEGACY_VALIDATORS=()
 STATELESS_RPC_SERVICES=()
 
-# Stateless sync validators (1-8)
-for i in {1..8}; do
+# Stateless sync validators (1-7)
+for i in {1..7}; do
 	STATELESS_SYNC_VALIDATORS+=("l2-el-$i-bor-heimdall-v2-validator")
 done
 
-# Legacy validator (9)
-LEGACY_VALIDATORS+=("l2-el-9-bor-heimdall-v2-validator")
+# Legacy validator (8)
+LEGACY_VALIDATORS+=("l2-el-8-bor-heimdall-v2-validator")
 
-# RPC nodes (10-12)
-# Note: According to kurtosis config, l2-el-12 has el_bor_sync_with_witness: true
-for i in {10..12}; do
+# RPC nodes (9-11)
+# Note: According to kurtosis config, l2-el-11 has el_bor_sync_with_witness: true
+for i in {9..11}; do
 	STATELESS_RPC_SERVICES+=("l2-el-$i-bor-heimdall-v2-rpc")
 done
 
-echo "Stateless sync validators (1-8): ${STATELESS_SYNC_VALIDATORS[*]}"
-echo "Legacy validator (9): ${LEGACY_VALIDATORS[*]}"
-echo "RPC services (10-12): ${STATELESS_RPC_SERVICES[*]}"
+echo "Stateless sync validators (1-7): ${STATELESS_SYNC_VALIDATORS[*]}"
+echo "Legacy validator (8): ${LEGACY_VALIDATORS[*]}"
+echo "RPC services (9-11): ${STATELESS_RPC_SERVICES[*]}"
 
 # Verify services are accessible
 echo "Verifying service accessibility..."
