@@ -35,7 +35,7 @@ func TestRequestWitnesses_HasWitPeer_Returns(t *testing.T) {
 
 	hashToRequest := common.Hash{123}
 	witness, _ := stateless.NewWitness(&types.Header{}, nil)
-	FillWitnessWithDeterministicRandomCode(witness, 10*1024)
+	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
 	witness.EncodeRLP(&witBuf)
 
@@ -75,7 +75,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 
 	hashToRequest := common.Hash{123}
 	witness, _ := stateless.NewWitness(&types.Header{}, nil)
-	FillWitnessWithDeterministicRandomCode(witness, 10*1024)
+	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
 	witness.EncodeRLP(&witBuf)
 
@@ -98,7 +98,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 					maxConcurrentCount = concurrentCount
 				}
 				muConcurrentCount.Unlock()
-				time.Sleep(10 * time.Millisecond)                                     // force wait to increase concurrency
+				time.Sleep(50 * time.Millisecond)                                     // force wait to increase concurrency
 				testPageSize := 200                                                   // 200bytes -> ~ 10*1024/200 ~ 54 pages
 				totalPages := (len(witBuf.Bytes()) + testPageSize - 1) / testPageSize // ceil division len()/pageSize
 				start := wpr[0].Page * uint64(testPageSize)
@@ -132,10 +132,10 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	assert.Equal(t, 5, maxConcurrentCount, "must reach the maximum of the concurrent cound")
 }
 
-// FillWitnessWithDeterministicRandomCode repeatedly generates and adds random code blocks
+// FillWitnessWithDeterministicRandomState repeatedly generates and adds random code blocks
 // to the witness until the total added code reaches 40MB. The size of each block is up to 24KB.
 // Random generation is seeded deterministically on each call, so the sequence is repeatable.
-func FillWitnessWithDeterministicRandomCode(w *stateless.Witness, targetSize int) {
+func FillWitnessWithDeterministicRandomState(w *stateless.Witness, targetSize int) {
 	const (
 		maxChunkSize = 24 * 1024 // 24KB
 		seed         = 42        // fixed seed for determinism
@@ -158,7 +158,9 @@ func FillWitnessWithDeterministicRandomCode(w *stateless.Witness, targetSize int
 		}
 
 		// add to witness
-		w.AddCode(buf)
+		states := make(map[string]struct{})
+		states[string(buf)] = struct{}{}
+		w.AddState(states)
 		total += chunkSize
 	}
 }
