@@ -1068,6 +1068,12 @@ func (q *queue) DeliverWitnesses(id string, witnessData interface{}, meta interf
 
 	log.Debug("DeliverWitnesses: Received witness RLP data", "peer", id, "count", len(witnessRLP))
 
+	// Log witness reception from peer
+	log.Info("[Stateless] Received witness data from peer via downloader",
+		"peer", id,
+		"witnessCount", len(witnessRLP),
+		"requestHeaders", len(request.Headers))
+
 	// Mark incoming data and time
 	witnessInMeter.Mark(int64(len(witnessRLP)))
 	witnessReqTimer.UpdateSince(request.Time)
@@ -1094,6 +1100,17 @@ func (q *queue) DeliverWitnesses(id string, witnessData interface{}, meta interf
 			return
 		}
 		log.Trace("DeliverWitnesses: Successfully decoded witness RLP", "peer", id, "index", index)
+
+		// Log detailed witness information after successful decoding
+		log.Info("[Stateless] Successfully decoded witness from peer",
+			"peer", id,
+			"blockNumber", wit.Header().Number,
+			"blockHash", wit.Header().Hash(),
+			"preStateRoot", wit.Root(),
+			"headerCount", len(wit.Headers),
+			"stateNodeCount", len(wit.State),
+			"codeCount", len(wit.Codes))
+
 		// Assign decoded witness and mark as done
 		result.Witness = wit
 		result.SetWitnessDone()

@@ -75,6 +75,25 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	peer.AddKnownWitness(witness.Header().Hash())
 	hash := witness.Header().Hash()
 
+	// Log witness reception from peer
+	log.Info("[Stateless] Received witness broadcast from peer",
+		"peer", peer.ID(),
+		"blockNumber", witness.Header().Number,
+		"blockHash", hash,
+		"preStateRoot", witness.Root(),
+		"headerCount", len(witness.Headers),
+		"stateNodeCount", len(witness.State),
+		"codeCount", len(witness.Codes))
+
+	// Validate witness pre-state root
+	if err := h.validateWitnessPreState(witness, peer.ID()); err != nil {
+		log.Error("[Stateless] Witness pre-state validation failed for broadcast",
+			"peer", peer.ID(),
+			"err", err)
+		// Don't inject invalid witness into fetcher
+		return fmt.Errorf("invalid witness broadcast: %w", err)
+	}
+
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
 		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID())
@@ -90,6 +109,50 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 		// This shouldn't happen in normal operation, but log if it does
 		peer.Log().Warn("Block fetcher nil in witHandler, cannot inject witness")
 	}
+
+	return nil
+}
+
+// validateWitnessPreState validates that the witness pre-state root matches the parent block's state root
+func (h *witHandler) validateWitnessPreState(witness *stateless.Witness, peerID string) error {
+	if witness == nil {
+		return fmt.Errorf("witness is nil")
+	}
+
+	// Check if witness has any headers
+	if len(witness.Headers) == 0 {
+		return fmt.Errorf("witness has no headers")
+	}
+
+	// Get the witness context header (the block this witness is for)
+	contextHeader := witness.Header()
+	if contextHeader == nil {
+		return fmt.Errorf("witness context header is nil")
+	}
+
+	// Get the parent block header from the chain
+	parentHeader := h.Chain().GetHeader(contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	if parentHeader == nil {
+		return fmt.Errorf("parent block header not found: parentHash=%x, parentNumber=%d",
+			contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	}
+
+	// Get witness pre-state root (from first header which should be parent)
+	witnessPreStateRoot := witness.Root()
+
+	// Compare with actual parent block's state root
+	if witnessPreStateRoot != parentHeader.Root {
+		return fmt.Errorf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
+			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
+	}
+
+	// Log successful validation
+	log.Info("[Stateless] Witness pre-state validation successful",
+		"peer", peerID,
+		"blockNumber", contextHeader.Number.Uint64(),
+		"blockHash", contextHeader.Hash(),
+		"preStateRoot", witnessPreStateRoot,
+		"parentHash", contextHeader.ParentHash)
 
 	return nil
 }

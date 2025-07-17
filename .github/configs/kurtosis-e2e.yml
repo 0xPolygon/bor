@@ -13,12 +13,12 @@ polygon_pos_package:
       el_bor_produce_witness: true
       el_bor_sync_with_witness: false
 
-    # 1 validator with Bor 2.2.5 version
+    # 1 validator with Bor's 2.2.9 version
     - kind: validator
       cl_type: heimdall-v2
       cl_image: heimdall-v2:local
       el_type: bor
-      el_image: 0xpolygon/bor:2.2.5
+      el_image: 0xpolygon/bor:2.2.9
       count: 1
       el_bor_produce_witness: false
       el_bor_sync_with_witness: false
