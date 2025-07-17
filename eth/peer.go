@@ -27,11 +27,13 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
-	DefaultPagesRequestPerWitness = 1
+	DefaultPagesRequestPerWitness   = 1
+	DefaultConcurrentRequestsPerPee = 5
 )
 
 // ethPeerInfo represents a short summary of the `eth` sub-protocol metadata known
@@ -77,15 +79,33 @@ type witPeerInfo struct {
 	Version uint `json:"version"` // Witness protocol version negotiated
 }
 
-// witPeer is wrapper around wit.Peer to maintain a few extra metadata.
+type WitnessPeer interface {
+	// the method ethPeer.RequestWitnesses invokes
+	AsyncSendNewWitness(witness *stateless.Witness)
+	AsyncSendNewWitnessHash(hash common.Hash, number uint64)
+	RequestWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error)
+	Close()
+	ID() string
+	Version() uint
+	Log() log.Logger
+	KnownWitnesses() *wit.KnownCache
+	AddKnownWitness(hash common.Hash)
+	KnownWitnessesCount() int
+	KnownWitnessesContains(witness *stateless.Witness) bool
+	KnownWitnessContainsHash(hash common.Hash) bool
+	ReplyWitness(requestID uint64, response *wit.WitnessPacketResponse) error
+}
+
+// witPeer is wrapper around wit.Peer to maintain a few extra metadata and test compatibility.
 type witPeer struct {
-	*wit.Peer
+	// *wit.Peer
+	Peer WitnessPeer
 }
 
 // info gathers and returns some `wit` protocol metadata known about a peer.
 func (p *witPeer) info() *witPeerInfo {
 	return &witPeerInfo{
-		Version: p.Version(),
+		Version: p.Peer.Version(),
 	}
 }
 
@@ -123,19 +143,22 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
-	p.witPeer.Log().Trace("RequestWitnesses called", "peer", p.ID(), "hashes", len(hashes))
+	p.witPeer.Peer.Log().Trace("RequestWitnesses called", "peer", p.ID(), "hashes", len(hashes))
 
 	witResCh := make(chan *wit.Response, 10)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPee) // semaphore to limit concurrent requests
 	var witReqs []*wit.Request
 	var witReqsWg sync.WaitGroup
 	witTotalPages := make(map[common.Hash]uint64)   // witness hash and its total pages required
 	witTotalRequest := make(map[common.Hash]uint64) // witness hash and its total requests
+	var mapsMu sync.RWMutex
 
-	// build first requests
-	err := p.buildWitnessRequests(hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witResCh)
-	if err != nil {
-		return nil, err
-	}
+	// non-blocking build first requests
+	witReqsWg.Add(1)
+	go func() {
+		p.buildWitnessRequests(hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, &mapsMu)
+		witReqsWg.Done()
+	}()
 
 	// closes witResCh after all requests are done
 	go func() {
@@ -158,23 +181,24 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 
 	// Start a goroutine to adapt responses from the wit channel to the eth channel.
 	go func() {
-		p.witPeer.Log().Trace("RequestWitnesses adapter goroutine started", "peer", p.ID())
-		defer p.witPeer.Log().Trace("RequestWitnesses adapter goroutine finished", "peer", p.ID())
+		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter goroutine started", "peer", p.ID())
+		defer p.witPeer.Peer.Log().Trace("RequestWitnesses adapter goroutine finished", "peer", p.ID())
 
 		receivedWitPages := make(map[common.Hash][]wit.WitnessPageResponse)
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witResCh {
-			err := p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witResCh)
+			err := p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, &mapsMu)
 			if err != nil {
 				return
 			}
 
+			<-witReqSem
 			witRes.Done <- nil
 			witReqsWg.Done()
 			lastWitRes = witRes
 		}
-		p.witPeer.Log().Trace("RequestWitnesses adapter received all responses", "peer", p.ID())
+		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter received all responses", "peer", p.ID())
 
 		var witnesses []*stateless.Witness
 		for _, wit := range reconstructedWitness {
@@ -201,9 +225,9 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		// or stop if the request has been cancelled.
 		select {
 		case dlResCh <- ethRes:
-			p.witPeer.Log().Trace("RequestWitnesses adapter forwarded eth response", "peer", p.ID())
+			p.witPeer.Peer.Log().Trace("RequestWitnesses adapter forwarded eth response", "peer", p.ID())
 		case <-wrapperReq.Request.Cancel:
-			p.witPeer.Log().Trace("RequestWitnesses adapter cancelled before forwarding response", "peer", p.ID())
+			p.witPeer.Peer.Log().Trace("RequestWitnesses adapter cancelled before forwarding response", "peer", p.ID())
 			// If cancelled, exit the goroutine. The closing of witResCh
 			// will also eventually terminate the loop, but returning
 			// here ensures we don't block trying to send after cancellation.
@@ -213,7 +237,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 
 	// Return the embedded *eth.Request part of the wrapper.
 	// This satisfies the function signature.
-	p.witPeer.Log().Trace("RequestWitnesses returning ethReq shim", "peer", p.ID())
+	p.witPeer.Peer.Log().Trace("RequestWitnesses returning ethReq shim", "peer", p.ID())
 	return wrapperReq.Request, nil
 }
 
@@ -227,15 +251,17 @@ func (p *ethPeer) receiveWitnessPage(
 	witTotalPages map[common.Hash]uint64,
 	witTotalRequest map[common.Hash]uint64,
 	witResCh chan *wit.Response,
+	witReqSem chan int,
+	mapsMu *sync.RWMutex,
 ) error {
 	witPacketPtr, ok := witRes.Res.(*wit.WitnessPacketRLPPacket)
 	if !ok {
-		p.witPeer.Log().Warn("RequestWitnesses received unexpected response type", "type", fmt.Sprintf("%T", witRes.Res), "peer", p.ID())
+		p.witPeer.Peer.Log().Warn("RequestWitnesses received unexpected response type", "type", fmt.Sprintf("%T", witRes.Res), "peer", p.ID())
 	}
 
 	for _, page := range witPacketPtr.WitnessPacketResponse {
 
-		p.witPeer.Log().Trace("RequestWitnesses adapter received wit page response", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "TotalPages", page.TotalPages, "lenData", len(page.Data))
+		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter received wit page response", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "TotalPages", page.TotalPages, "lenData", len(page.Data))
 		if len(page.Data) == 0 {
 			continue
 		}
@@ -251,7 +277,13 @@ func (p *ethPeer) receiveWitnessPage(
 
 		// check and build any remaining witnessRequest for the witnesses we dont know previously the totalPages
 		witTotalPages[page.Hash] = page.TotalPages
-		p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh)
+
+		// non blocking call to avoid race condition because of semaphore
+		witReqsWg.Add(1) // protecting from not finishing before requests are built
+		go func() {
+			p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu)
+			witReqsWg.Done()
+		}()
 	}
 	return nil
 }
@@ -269,13 +301,23 @@ func (p *ethPeer) reconstructWitness(pages []wit.WitnessPageResponse) (*stateles
 
 	wit := new(stateless.Witness)
 	if err := rlp.DecodeBytes(reconstructedWitnessRLPBytes, wit); err != nil {
-		p.witPeer.Log().Warn("RequestWitnesses adapter failed to decode witness page RLP", "err", err)
+		p.witPeer.Peer.Log().Warn("RequestWitnesses adapter failed to decode witness page RLP", "err", err)
 		return nil, err
 	}
 	return wit, nil
 }
 
-func (p *ethPeer) buildWitnessRequests(hashes []common.Hash, witReqs []*wit.Request, witReqsWg *sync.WaitGroup, witTotalPages map[common.Hash]uint64, witTotalRequest map[common.Hash]uint64, witResCh chan *wit.Response) error {
+func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
+	witReqs []*wit.Request,
+	witReqsWg *sync.WaitGroup,
+	witTotalPages map[common.Hash]uint64,
+	witTotalRequest map[common.Hash]uint64,
+	witResCh chan *wit.Response,
+	witReqSem chan int,
+	mapsMu *sync.RWMutex,
+) error {
+	mapsMu.Lock()
+	defer mapsMu.Unlock()
 	for _, hash := range hashes {
 		start := witTotalRequest[hash]
 		end, ok := witTotalPages[hash]
@@ -283,10 +325,11 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash, witReqs []*wit.Requ
 			end = DefaultPagesRequestPerWitness
 		}
 		for page := start; page < end; page++ {
-			p.witPeer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page)
-			witReq, err := p.witPeer.Peer.RequestWitness([]wit.WitnessPageRequest{wit.WitnessPageRequest{Hash: hash, Page: uint64(page)}}, witResCh)
+			p.witPeer.Peer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page)
+			witReqSem <- 1
+			witReq, err := p.witPeer.Peer.RequestWitness([]wit.WitnessPageRequest{{Hash: hash, Page: uint64(page)}}, witResCh)
 			if err != nil {
-				p.witPeer.Log().Error("RequestWitnesses failed to make wit request", "peer", p.ID(), "err", err)
+				p.witPeer.Peer.Log().Error("RequestWitnesses failed to make wit request", "peer", p.ID(), "err", err)
 				return err
 			}
 			witReqsWg.Add(1)
