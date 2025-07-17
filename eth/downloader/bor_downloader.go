@@ -61,6 +61,8 @@ var (
 	fsMinFullBlocks   = 64              // Number of blocks to retrieve fully even in snap sync
 
 	maxValidationThreshold = uint64(1024) // Number of block difference from remote peer to start validation
+
+	fastForwardTimeout = 30 * time.Second // Timeout for waiting for fast forward block
 )
 
 var (
@@ -589,7 +591,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 	var origin uint64
 	if mode == StatelessSync {
 		// Get the fast forward block first
-		fastForwardBlock := d.GetOrWaitFastForwardBlock()
+		fastForwardBlock := d.GetOrWaitFastForwardBlock(fastForwardTimeout)
 
 		// Check if we need to download bytecodes before starting stateless sync
 		if d.needsBytecodeSync(fastForwardBlock) {
@@ -2256,20 +2258,34 @@ func (d *Downloader) UpdateFastForwardBlockFromCheckpoint(checkpoint *checkpoint
 
 }
 
-func (d *Downloader) GetOrWaitFastForwardBlock() uint64 {
+func (d *Downloader) GetOrWaitFastForwardBlock(timeout time.Duration) uint64 {
 	localHeight := d.blockchain.CurrentBlock().Number.Uint64()
 
 	var fastForwardBlock uint64
 	if d.fastForwardBlock != 0 {
 		fastForwardBlock = d.fastForwardBlock
 	} else {
-		// wait until receive a fast forward block
-		fastForwardBlock = <-d.fastForwardBlockCh
+		// wait until receive a fast forward block with a timeout
+		// This prevents indefinite blocking when no milestones/checkpoints are available
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case fastForwardBlock = <-d.fastForwardBlockCh:
+			// Got a fast forward block
+		case <-timer.C:
+			// Timeout - use current height + threshold as fallback
+			log.Warn("Timeout waiting for fast forward block, using fallback",
+				"localHeight", localHeight,
+				"threshold", d.FastForwardThreshold)
+			// Return local height to proceed with normal sync
+			return localHeight
+		}
 	}
 
 	distance := (int64(fastForwardBlock) - int64(localHeight))
 	if distance > int64(d.FastForwardThreshold) {
-		log.Info("StatelessSync: FastForwarding", "fastForwardBlock", fastForwardBlock)
+		log.Debug("StatelessSync: FastForwarding", "fastForwardBlock", fastForwardBlock)
 		return fastForwardBlock
 	} else {
 		return localHeight
@@ -2286,10 +2302,6 @@ func (d *Downloader) setFastForwardBlock(nextFastForward uint64) {
 
 // needsBytecodeSync checks if bytecode-only snap sync is needed before stateless sync
 func (d *Downloader) needsBytecodeSync(fastForwardBlock uint64) bool {
-	if fastForwardBlock == 0 {
-		fastForwardBlock = d.GetOrWaitFastForwardBlock()
-	}
-
 	// Get the current fast forward block to compare against completed block
 	currentBlock := d.blockchain.CurrentBlock().Number.Uint64()
 
