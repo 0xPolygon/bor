@@ -77,7 +77,7 @@ func NewHeimdallClient(urlString string, timeout time.Duration) *HeimdallClient 
 }
 
 const (
-	fetchStateSyncEventsFormat = "from-id=%d&to-time=%d"
+	fetchStateSyncEventsFormat = "from_id=%d&to_time=%s&pagination.limit=%d"
 	fetchStateSyncEventsPath   = "clerk/time"
 	fetchStateSyncList         = "clerk/event-records/list"
 
@@ -94,7 +94,7 @@ func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to 
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
 	for {
-		url, err := stateSyncListURL(h.urlString)
+		url, err := stateSyncURL(h.urlString, fromID, to)
 		if err != nil {
 			return nil, err
 		}
@@ -368,7 +368,9 @@ func latestSpanURL(urlString string) (*url.URL, error) {
 }
 
 func stateSyncURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
-	queryParams := fmt.Sprintf(fetchStateSyncEventsFormat, fromID, to)
+	t := time.Unix(to, 0).UTC()
+	formattedTime := t.Format(time.RFC3339Nano)
+	queryParams := fmt.Sprintf(fetchStateSyncEventsFormat, fromID, formattedTime, stateFetchLimit)
 
 	return makeURL(urlString, fetchStateSyncEventsPath, queryParams)
 }
