@@ -329,16 +329,6 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 	hash := msg.witness.Header().Hash()
 	log.Debug("[wm] Processing injected witness", "peer", msg.peer, "hash", hash, "number", msg.witness.Header().Number.Uint64())
 
-	// Log witness reception from peer
-	log.Info("[Stateless] Received witness via broadcast injection",
-		"peer", msg.peer,
-		"blockNumber", msg.witness.Header().Number,
-		"blockHash", hash,
-		"preStateRoot", msg.witness.Root(),
-		"headerCount", len(msg.witness.Headers),
-		"stateNodeCount", len(msg.witness.State),
-		"codeCount", len(msg.witness.Codes))
-
 	// We'll access maps under lock; then perform enqueue outside.
 	m.mu.Lock()
 	state, pending := m.pending[hash]
@@ -617,16 +607,6 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 // handleWitnessFetchSuccess processes a successfully fetched witness.
 // It needs the original origin from the op state for consistency checks.
 func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time) {
-	// Log witness reception from peer
-	log.Info("[Stateless] Successfully fetched witness from peer",
-		"peer", fetchPeer,
-		"blockNumber", witness.Header().Number,
-		"blockHash", hash,
-		"preStateRoot", witness.Root(),
-		"headerCount", len(witness.Headers),
-		"stateNodeCount", len(witness.State),
-		"codeCount", len(witness.Codes))
-
 	m.mu.Lock()
 	state, exists := m.pending[hash]
 	if !exists {
