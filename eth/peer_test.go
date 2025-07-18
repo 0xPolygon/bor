@@ -48,12 +48,14 @@ func TestRequestWitnesses_HasWitPeer_Returns(t *testing.T) {
 		EXPECT().
 		RequestWitness(gomock.Eq([]wit.WitnessPageRequest{{Hash: hashToRequest, Page: 0}}), gomock.AssignableToTypeOf((chan *wit.Response)(nil))).
 		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
-			ch <- &wit.Response{
-				Res: &wit.WitnessPacketRLPPacket{
-					WitnessPacketResponse: []wit.WitnessPageResponse{{Page: 0, TotalPages: 1, Hash: hashToRequest, Data: witBuf.Bytes()}},
-				},
-				Done: make(chan error, 10), // buffered so no block
-			}
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{
+						WitnessPacketResponse: []wit.WitnessPageResponse{{Page: 0, TotalPages: 1, Hash: hashToRequest, Data: witBuf.Bytes()}},
+					},
+					Done: make(chan error, 10), // buffered so no block
+				}
+			}()
 
 			return &wit.Request{}, nil
 		}).
@@ -88,6 +90,11 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	testPageSize := 200                                                   // 200bytes -> ~ 10*1024/200 ~ 54 pages
 	totalPages := (len(witBuf.Bytes()) + testPageSize - 1) / testPageSize // ceil division len()/pageSize
 
+	randomPageToFailTwice := rand.Intn(totalPages-1) + 1
+	randomFailCount := 0
+	zeroPageFailCount := 0 //page zero is edge case so we will also fail this page in all tests
+	calls := 0
+
 	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
 	mockWitPeer.
 		EXPECT().
@@ -96,9 +103,21 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 			go func() {
 				muConcurrentCount.Lock()
 				concurrentCount++
+				calls++
 				if concurrentCount > maxConcurrentCount {
 					maxConcurrentCount = concurrentCount
 				}
+
+				shouldFail := false
+				if wpr[0].Page == uint64(randomPageToFailTwice) && randomFailCount < 2 {
+					shouldFail = true
+					randomFailCount++
+				}
+				if wpr[0].Page == uint64(0) && zeroPageFailCount < 2 {
+					shouldFail = true
+					zeroPageFailCount++
+				}
+
 				muConcurrentCount.Unlock()
 				time.Sleep(50 * time.Millisecond) // force wait to increase concurrency
 				start := wpr[0].Page * uint64(testPageSize)
@@ -107,11 +126,20 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 					end = uint64(len(witBuf.Bytes()))
 				}
 
-				ch <- &wit.Response{
-					Res: &wit.WitnessPacketRLPPacket{
-						WitnessPacketResponse: []wit.WitnessPageResponse{{Page: wpr[0].Page, TotalPages: uint64(totalPages), Hash: hashToRequest, Data: witBuf.Bytes()[start:end]}},
-					},
-					Done: make(chan error, 10), // buffered so no block
+				if !shouldFail {
+
+					ch <- &wit.Response{
+						Res: &wit.WitnessPacketRLPPacket{
+							WitnessPacketResponse: []wit.WitnessPageResponse{{Page: wpr[0].Page, TotalPages: uint64(totalPages), Hash: hashToRequest, Data: witBuf.Bytes()[start:end]}},
+						},
+						Done: make(chan error, 10), // buffered so no block
+					}
+				} else {
+					ch <- &wit.Response{
+						Res:  0,
+						Done: make(chan error, 10), // buffered so no block
+					}
+
 				}
 
 				muConcurrentCount.Lock()
@@ -121,7 +149,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 
 			return &wit.Request{}, nil
 		}).
-		Times(totalPages)
+		Times(totalPages + 4) // because of two fails
 
 	req, err := p.RequestWitnesses([]common.Hash{hashToRequest}, dlCh)
 
