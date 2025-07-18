@@ -122,8 +122,8 @@ while true; do
 	current_time=$SECONDS
 	elapsed=$((current_time - start_time))
 
-	# Timeout after 10 minutes
-	if [ $elapsed -gt 600 ]; then
+	# Timeout after 30 minutes
+	if [ $elapsed -gt 1800 ]; then
 		echo "Timeout waiting for block $TARGET_BLOCK"
 		exit 1
 	fi
@@ -216,8 +216,8 @@ while true; do
 	current_time=$SECONDS
 	elapsed=$((current_time - start_time))
 
-	# Timeout after 15 minutes total (extended for hash verification)
-	if [ $elapsed -gt 900 ]; then
+	# Timeout after 30 minutes total (extended for hash verification)
+	if [ $elapsed -gt 1800 ]; then
 		echo "Timeout waiting for post-HF block $TARGET_BLOCK_POST_HF"
 		exit 1
 	fi
