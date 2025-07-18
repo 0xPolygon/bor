@@ -110,13 +110,13 @@ for service in "${STATELESS_SYNC_VALIDATORS[@]}" "${LEGACY_VALIDATORS[@]}" "${ST
 	fi
 done
 
-# Test 1: Check all nodes reach block 399 and have same block hash
+# Test 1: Check all nodes reach TARGET_BLOCK and have same block hash
 echo ""
-echo "=== Test 1: Checking all the nodes reach block 399 and have the same block hash ==="
+echo "=== Test 1: Checking all the nodes reach block $TARGET_BLOCK and have the same block hash ==="
 
 SECONDS=0
 start_time=$SECONDS
-TARGET_BLOCK=399
+TARGET_BLOCK=383
 
 while true; do
 	current_time=$SECONDS
@@ -158,7 +158,7 @@ while true; do
 	if [ $min_block -ge $TARGET_BLOCK ]; then
 		echo "All nodes have reached block $TARGET_BLOCK, checking block hash consensus..."
 
-		# Get block hash for block 399 from all services
+		# Get block hash for block TARGET_BLOCK from all services
 		block_hashes=()
 		reference_hash=""
 		hash_mismatch=false
@@ -203,13 +203,13 @@ while true; do
 	sleep 5
 done
 
-# Test 2: Check nodes continue syncing after block 400 (veblop HF)
-echo ""
-echo "=== Test 2: Checking post-veblop HF behavior (after block 400) ==="
+# Test 2: Check nodes continue syncing after block TARGET_BLOCK_HF (veblop HF)
 
-# Wait for block 450 to ensure we're past the HF
-TARGET_BLOCK_HF=400
-TARGET_BLOCK_POST_HF=450
+TARGET_BLOCK_HF=384
+TARGET_BLOCK_POST_HF=420
+
+echo ""
+echo "=== Test 2: Checking post-veblop HF behavior (after block $TARGET_BLOCK_HF) ==="
 echo "Waiting for block $TARGET_BLOCK_POST_HF to ensure we're past veblop HF..."
 
 while true; do
@@ -253,13 +253,13 @@ while true; do
 			echo "⚠️  Legacy nodes are still running (at block $max_legacy_block) - forked off from stateless sync validators"
 		fi
 
-		# Check block hash consensus for stateless sync services at block 450
+		# Check block hash consensus for stateless sync services at block TARGET_BLOCK_POST_HF
 		echo "Checking block hash consensus for stateless sync services at block $TARGET_BLOCK_POST_HF..."
 
 		# Only check stateless sync validators and RPC services (not legacy validators)
 		STATELESS_SERVICES=("${STATELESS_SYNC_VALIDATORS[@]}" "${STATELESS_RPC_SERVICES[@]}")
 
-		# Get block hash for block 450 from all stateless sync services
+		# Get block hash for block TARGET_BLOCK_POST_HF from all stateless sync services
 		block_hashes=()
 		reference_hash=""
 		hash_mismatch=false
@@ -341,6 +341,6 @@ echo "✅ All milestone settlement latency checks passed (< 5 seconds)"
 
 echo ""
 echo "🎉 All stateless sync tests passed successfully!"
-echo "✅ All nodes reached block 399 with the same block hash"
-echo "✅ Stateless sync services continued syncing after veblop HF with matching block hash at block 450"
+echo "✅ All nodes reached block $TARGET_BLOCK with the same block hash"
+echo "✅ Stateless sync services continued syncing after veblop HF with matching block hash at block $TARGET_BLOCK_POST_HF"
 echo "✅ Milestone settlement latency is under 5 seconds"
