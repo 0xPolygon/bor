@@ -40,8 +40,7 @@ func handleWitness(backend Backend, msg Decoder, peer *Peer) error {
 
 	// Forward the response to the dispatcher
 	log.Debug("Dispatching witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
-	err := peer.dispatchResponse(res, nil)
-	return err
+	return peer.dispatchResponse(res, nil)
 }
 
 func handleNewWitness(backend Backend, msg Decoder, peer *Peer) error {

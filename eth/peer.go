@@ -32,8 +32,9 @@ import (
 )
 
 const (
-	DefaultPagesRequestPerWitness   = 1
-	DefaultConcurrentRequestsPerPee = 5
+	DefaultPagesRequestPerWitness     = 1
+	DefaultConcurrentRequestsPerPeer  = 5
+	DefaultConcurrentResponsesHandled = 10
 )
 
 // ethPeerInfo represents a short summary of the `eth` sub-protocol metadata known
@@ -145,8 +146,8 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	}
 	p.witPeer.Peer.Log().Trace("RequestWitnesses called", "peer", p.ID(), "hashes", len(hashes))
 
-	witResCh := make(chan *wit.Response, 10)
-	witReqSem := make(chan int, DefaultConcurrentRequestsPerPee) // semaphore to limit concurrent requests
+	witResCh := make(chan *wit.Response, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer) // semaphore to limit concurrent requests
 	var witReqs []*wit.Request
 	var witReqsWg sync.WaitGroup
 	witTotalPages := make(map[common.Hash]uint64)   // witness hash and its total pages required

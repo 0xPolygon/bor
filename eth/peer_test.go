@@ -85,6 +85,8 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	concurrentCount := 0
 	maxConcurrentCount := 0
 	var muConcurrentCount sync.Mutex
+	testPageSize := 200                                                   // 200bytes -> ~ 10*1024/200 ~ 54 pages
+	totalPages := (len(witBuf.Bytes()) + testPageSize - 1) / testPageSize // ceil division len()/pageSize
 
 	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
 	mockWitPeer.
@@ -98,9 +100,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 					maxConcurrentCount = concurrentCount
 				}
 				muConcurrentCount.Unlock()
-				time.Sleep(50 * time.Millisecond)                                     // force wait to increase concurrency
-				testPageSize := 200                                                   // 200bytes -> ~ 10*1024/200 ~ 54 pages
-				totalPages := (len(witBuf.Bytes()) + testPageSize - 1) / testPageSize // ceil division len()/pageSize
+				time.Sleep(50 * time.Millisecond) // force wait to increase concurrency
 				start := wpr[0].Page * uint64(testPageSize)
 				end := start + uint64(testPageSize)
 				if end > uint64(len(witBuf.Bytes())) {
@@ -121,7 +121,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 
 			return &wit.Request{}, nil
 		}).
-		Times(54)
+		Times(totalPages)
 
 	req, err := p.RequestWitnesses([]common.Hash{hashToRequest}, dlCh)
 
