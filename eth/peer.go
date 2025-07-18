@@ -202,8 +202,13 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter received all responses", "peer", p.ID())
 
 		var witnesses []*stateless.Witness
-		for _, wit := range reconstructedWitness {
+		var responseHashes []common.Hash
+		for hash, wit := range reconstructedWitness {
 			witnesses = append(witnesses, wit)
+			responseHashes = append(responseHashes, hash)
+		}
+		if len(witnesses) != len(hashes) {
+			p.witPeer.Peer.Log().Error("Not able to fetch all requests witnesses", "peer", p.ID(), "requestedHashes", hashes, "responseHashes", responseHashes)
 		}
 		doneCh := make(chan error)
 		go func() {
