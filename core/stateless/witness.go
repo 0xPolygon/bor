@@ -43,7 +43,7 @@ type Witness struct {
 	State   map[string]struct{} // Set of MPT state trie nodes (account and storage together)
 
 	chain HeaderReader // Chain reader to convert block hash ops to header proofs
-	lock  sync.Mutex   // Lock to allow concurrent state insertions
+	lock  sync.RWMutex // Lock to allow concurrent state insertions
 }
 
 // NewWitness creates an empty witness ready for population.
@@ -101,6 +101,8 @@ func (w *Witness) AddState(nodes map[string]struct{}) {
 // Copy deep-copies the witness object.  Witness.Block isn't deep-copied as it
 // is never mutated by Witness
 func (w *Witness) Copy() *Witness {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
 	cpy := &Witness{
 		Headers: slices.Clone(w.Headers),
 		Codes:   maps.Clone(w.Codes),

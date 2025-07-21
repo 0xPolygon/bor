@@ -119,6 +119,9 @@ func (w *Witness) MakeHashDB(diskdb ethdb.Database) ethdb.Database {
 		rawdb.WriteHeader(routingDB, header)
 	}
 	// Inject all the MPT trie nodes into the ephemeral database
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+
 	for node := range w.State {
 		blob := []byte(node)
 
