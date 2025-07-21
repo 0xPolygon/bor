@@ -31,6 +31,7 @@ import (
 	"time"
 
 	crand2 "github.com/maticnetwork/crand"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -2882,6 +2883,33 @@ func TestSetCodeTransactionsReorg(t *testing.T) {
 	if err := pool.addRemoteSync(pricedTransaction(3, 100000, big.NewInt(1000), keyA)); err != nil {
 		t.Fatalf("failed to added single transaction: %v", err)
 	}
+}
+
+// TestPendingWithCommitInterrupt is a simple test to check the behaviour of the public
+// `Pending` method when interrupt is set (during block building).
+func TestPendingWithCommitInterrupt(t *testing.T) {
+	t.Parallel()
+
+	// Create a test account and fund it
+	pool, key := setupPool()
+	defer pool.Close()
+
+	account := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, account, big.NewInt(1000000000000))
+
+	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	// Ensure the transaction is present in the pool
+	pending := pool.Pending(txpool.PendingFilter{}, nil)
+	require.Equal(t, 1, len(pending), "expected non-empty pending pool")
+
+	// Define interrupt and set it so that pending returns an empty list
+	interrupt := new(atomic.Bool)
+	interrupt.Store(true)
+	pending = pool.Pending(txpool.PendingFilter{}, interrupt)
+	require.Equal(t, 0, len(pending), "expected empty list due to interrupt")
 }
 
 // Benchmarks the speed of validating the contents of the pending queue of the
