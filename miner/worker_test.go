@@ -46,6 +46,7 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/golang/mock/gomock"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 	"gotest.tools/assert"
 )
 
@@ -718,6 +719,7 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 		txs         = make([]*types.Transaction, 0, txInTxpool)
 	)
 
+	testConfig.CommitInterruptFlag = true
 	chainConfig = params.BorUnittestChainConfig
 
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
@@ -766,6 +768,7 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 		ctrl        *gomock.Controller
 	)
 
+	testConfig.CommitInterruptFlag = true
 	chainConfig = params.BorUnittestChainConfig
 
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
@@ -826,6 +829,71 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 	assert.Equal(t, w.current.header.Number.Uint64(), uint64(3))
 	assert.Equal(t, w.current.tcount, 2)
 	assert.Equal(t, len(w.current.txs), 2)
+}
+
+// nolint: paralleltest
+// TestCommitInterruptPending tests setting interrupting the block building very early on
+// in the fill transactions phase. The test is just to ensure that commit work works when
+// it started the block production late.
+func TestCommitInterruptPending(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+		txInTxpool  = 100
+		txs         = make([]*types.Transaction, 0, txInTxpool)
+	)
+
+	chainConfig = params.BorUnittestChainConfig
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+
+	// Disable the commit interrupt as this will cause a reset on every block which we don't want
+	// for this test.
+	testConfig.CommitInterruptFlag = false
+	w, b, _ := newTestWorker(t, chainConfig, engine, rawdb.NewMemoryDatabase(), true, 0)
+	defer func() {
+		w.close()
+		engine.Close()
+		db.Close()
+		ctrl.Finish()
+	}()
+
+	// nonce starts from 0 because have no txs yet
+	initNonce := uint64(0)
+
+	for i := 0; i < txInTxpool; i++ {
+		tx := b.newRandomTxWithNonce(false, initNonce+uint64(i))
+		txs = append(txs, tx)
+	}
+
+	wrapped := make([]*types.Transaction, len(txs))
+	copy(wrapped, txs)
+
+	b.TxPool().Add(wrapped, false)
+
+	// Set the interrupt to true by default so that it'll stop block building early on
+	// even before entering commit transactions.
+	w.interruptBlockBuilding.Store(true)
+
+	// Create a chain head subscription for tests
+	chainHeadCh := make(chan core.ChainHeadEvent, 10)
+	w.chain.SubscribeChainHeadEvent(chainHeadCh)
+
+	// Start mining!
+	w.start()
+	go func() {
+		for {
+			head := <-chainHeadCh
+			txs := w.chain.GetBlockByNumber(head.Header.Number.Uint64()).Transactions().Len()
+			require.Equal(t, 0, txs, "expected no transactions due to interrupt in block building")
+		}
+	}()
+	time.Sleep(5 * time.Second)
+	w.stop()
 }
 
 func BenchmarkBorMining(b *testing.B) {
