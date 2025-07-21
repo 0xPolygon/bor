@@ -2673,25 +2673,24 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		// Process block using the parent state as reference point
 		pstart := time.Now()
 
-		computeWitness := makeWitness
-		var externalWitness *stateless.Witness
-
+		// Validate the witness.
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
-			externalWitness = witnesses[it.processed()-1]
-
-			// Validate witness.
-			if err := stateless.ValidateWitnessPreState(externalWitness, bc); err != nil {
-				log.Error("Witness validation failed during block processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], bc); err != nil {
+				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
 				return nil, it.index, fmt.Errorf("witness validation failed: %w", err)
 			}
+		}
 
-			memdb := externalWitness.MakeHashDB(bc.statedb.TrieDB().Disk())
+		computeWitness := makeWitness
+
+		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
+			witness = witnesses[it.processed()-1]
+			memdb := witness.MakeHashDB(bc.statedb.TrieDB().Disk())
 			bc.statedb.TrieDB().SetReadBackend(hashdb.New(memdb, triedb.HashDefaults.HashDB))
 			computeWitness = false
 			bc.statedb.DisableSnapInReader()
-			witness = externalWitness
 		}
 
 		if computeWitness {
