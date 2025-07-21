@@ -548,7 +548,7 @@ func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.B
 		if interrupt.Load() {
 			// We could send partial set of pending transactions but they'll anyways
 			// be rejected during commit transactions. Instead avoid sending anything.
-			return nil
+			return map[common.Address][]*txpool.LazyTransaction{}
 		}
 
 		txs := list.Flatten()
