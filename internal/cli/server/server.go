@@ -303,6 +303,11 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 		return nil, err
 	}
 
+	// start the GRPC Server
+	if err := WithGRPCAddress()(srv, config); err != nil {
+		return nil, err
+	}
+
 	return srv, nil
 }
 
