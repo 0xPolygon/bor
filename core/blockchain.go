@@ -2686,8 +2686,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		computeWitness := makeWitness
 
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
-			witness = witnesses[it.processed()-1]
-			memdb := witness.MakeHashDB(bc.statedb.TrieDB().Disk())
+			memdb := witnesses[it.processed()-1].MakeHashDB(bc.statedb.TrieDB().Disk())
 			bc.statedb.TrieDB().SetReadBackend(hashdb.New(memdb, triedb.HashDefaults.HashDB))
 			computeWitness = false
 			bc.statedb.DisableSnapInReader()
@@ -2696,7 +2695,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if computeWitness {
 			witness, err = stateless.NewWitness(block.Header(), bc)
 			if err != nil {
-				log.Error("error in witness generation", "caughterr", err)
+				log.Error("Error in witness generation", "err", err)
 			}
 		}
 
@@ -2708,7 +2707,6 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if err != nil {
 			bc.reportBlock(block, &ProcessResult{Receipts: receipts}, err)
 			followupInterrupt.Store(true)
-
 			return nil, it.index, err
 		}
 
