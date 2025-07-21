@@ -790,7 +790,7 @@ func TestProcessVerkleSelfDestructInSeparateTx(t *testing.T) {
 	}
 }
 
-// TestProcessVerkleSelfDestructInSeparateTx controls the contents of the witness after
+// TestProcessVerkleSelfDestructInSameTx controls the contents of the witness after
 // a eip6780-compliant selfdestruct occurs.
 func TestProcessVerkleSelfDestructInSameTx(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
