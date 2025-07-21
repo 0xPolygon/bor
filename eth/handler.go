@@ -624,7 +624,8 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 			transfer := peersWithoutWitness[:int(math.Sqrt(float64(len(peersWithoutWitness))))]
 			for _, peer := range transfer {
 				log.Debug("Sending witness to peer", "hash", witness.Header().Hash(), "peer", peer.Peer.ID())
-				peer.Peer.AsyncSendNewWitness(witness)
+				// TODO - uncomment this once we have a working broadcast witness
+				// peer.Peer.AsyncSendNewWitness(witness)
 			}
 		}
 

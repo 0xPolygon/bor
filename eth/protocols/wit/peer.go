@@ -68,8 +68,7 @@ func NewPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWriter, logger log.Logger)
 	}
 
 	// Start background handlers
-	// TODO - uncomment this once we have a working broadcast witness
-	// go peer.broadcastWitness()
+	go peer.broadcastWitness()
 	go peer.dispatcher()
 
 	return peer
