@@ -22,6 +22,7 @@ import (
 	"errors"
 	"io"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -34,6 +35,17 @@ var (
 	uncompressedCount   int64
 	totalOriginalSize   int64
 	totalCompressedSize int64
+
+	// Compression timing and rate metrics
+	totalCompressionTime int64 // nanoseconds
+	totalCompressionSize int64 // total size of compressed data
+	compressionRate      int64 // bytes per second
+
+	// Decompression metrics
+	decompressionCount     int64
+	totalDecompressionTime int64 // nanoseconds
+	totalDecompressionSize int64 // total size of decompressed data
+	decompressionRate      int64 // bytes per second
 )
 
 // CompressionStats returns current compression statistics
@@ -41,10 +53,31 @@ func CompressionStats() map[string]interface{} {
 	compressed := atomic.LoadInt64(&compressionCount)
 	uncompressed := atomic.LoadInt64(&uncompressedCount)
 	total := compressed + uncompressed
+	decompressed := atomic.LoadInt64(&decompressionCount)
 
 	var avgRatio float64
 	if compressed > 0 {
 		avgRatio = float64(atomic.LoadInt64(&compressionRatio)) / float64(compressed)
+	}
+
+	var avgCompressionTime float64
+	if compressed > 0 {
+		avgCompressionTime = float64(atomic.LoadInt64(&totalCompressionTime)) / float64(compressed) / 1e6 // Convert to milliseconds
+	}
+
+	var avgDecompressionTime float64
+	if decompressed > 0 {
+		avgDecompressionTime = float64(atomic.LoadInt64(&totalDecompressionTime)) / float64(decompressed) / 1e6 // Convert to milliseconds
+	}
+
+	var compressionRateBps float64
+	if atomic.LoadInt64(&totalCompressionTime) > 0 {
+		compressionRateBps = float64(atomic.LoadInt64(&totalCompressionSize)) / float64(atomic.LoadInt64(&totalCompressionTime)) * 1e9 // bytes per second
+	}
+
+	var decompressionRateBps float64
+	if atomic.LoadInt64(&totalDecompressionTime) > 0 {
+		decompressionRateBps = float64(atomic.LoadInt64(&totalDecompressionSize)) / float64(atomic.LoadInt64(&totalDecompressionTime)) * 1e9 // bytes per second
 	}
 
 	return map[string]interface{}{
@@ -55,6 +88,19 @@ func CompressionStats() map[string]interface{} {
 		"total_original_size":   atomic.LoadInt64(&totalOriginalSize),
 		"total_compressed_size": atomic.LoadInt64(&totalCompressedSize),
 		"space_saved_bytes":     atomic.LoadInt64(&totalOriginalSize) - atomic.LoadInt64(&totalCompressedSize),
+
+		// Compression timing and rate metrics
+		"total_compression_time_ms": float64(atomic.LoadInt64(&totalCompressionTime)) / 1e6,
+		"avg_compression_time_ms":   avgCompressionTime,
+		"total_compression_size":    atomic.LoadInt64(&totalCompressionSize),
+		"compression_rate_bps":      compressionRateBps,
+
+		// Decompression metrics
+		"decompression_count":         decompressed,
+		"total_decompression_time_ms": float64(atomic.LoadInt64(&totalDecompressionTime)) / 1e6,
+		"avg_decompression_time_ms":   avgDecompressionTime,
+		"total_decompression_size":    atomic.LoadInt64(&totalDecompressionSize),
+		"decompression_rate_bps":      decompressionRateBps,
 	}
 }
 
@@ -156,6 +202,9 @@ func (w *Witness) EncodeCompressed(wr io.Writer) error {
 
 	// Only compress if enabled and the data is large enough to benefit from compression
 	if globalCompressionConfig.Enabled && len(rlpData) > globalCompressionConfig.Threshold {
+		// Start timing compression
+		startTime := time.Now()
+
 		// Compress the RLP data
 		var compressedBuf bytes.Buffer
 		gw, err := gzip.NewWriterLevel(&compressedBuf, globalCompressionConfig.CompressionLevel)
@@ -173,11 +222,16 @@ func (w *Witness) EncodeCompressed(wr io.Writer) error {
 
 		compressedData := compressedBuf.Bytes()
 
+		// Calculate compression time
+		compressionTime := time.Since(startTime).Nanoseconds()
+
 		// Only use compression if it actually reduces size
 		if len(compressedData) < len(rlpData) {
 			// Track compression metrics
 			atomic.AddInt64(&compressionCount, 1)
 			atomic.AddInt64(&totalCompressedSize, int64(len(compressedData)))
+			atomic.AddInt64(&totalCompressionTime, compressionTime)
+			atomic.AddInt64(&totalCompressionSize, int64(len(compressedData)))
 			ratio := int64(float64(len(compressedData)) / float64(originalSize) * 100)
 			atomic.AddInt64(&compressionRatio, ratio)
 
@@ -214,6 +268,9 @@ func (w *Witness) DecodeCompressed(data []byte) error {
 
 	var rlpData []byte
 	if compressed {
+		// Start timing decompression
+		startTime := time.Now()
+
 		// Decompress
 		gr, err := gzip.NewReader(bytes.NewReader(witnessData))
 		if err != nil {
@@ -226,6 +283,12 @@ func (w *Witness) DecodeCompressed(data []byte) error {
 			return err
 		}
 		rlpData = decompressedBuf.Bytes()
+
+		// Calculate decompression time and track metrics
+		decompressionTime := time.Since(startTime).Nanoseconds()
+		atomic.AddInt64(&decompressionCount, 1)
+		atomic.AddInt64(&totalDecompressionTime, decompressionTime)
+		atomic.AddInt64(&totalDecompressionSize, int64(len(rlpData)))
 	} else {
 		rlpData = witnessData
 	}

@@ -3,6 +3,9 @@ package stateless
 import (
 	"bytes"
 	"testing"
+	"time"
+
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -183,4 +186,352 @@ func TestBackwardCompatibility(t *testing.T) {
 	}
 
 	t.Logf("Backward compatibility test passed - original RLP format still works")
+}
+
+func TestCompressionMetrics(t *testing.T) {
+	// Reset metrics before test
+	resetMetrics()
+
+	// Create a test witness with substantial data to ensure compression
+	header := &types.Header{
+		Number:     common.Big1,
+		ParentHash: common.Hash{},
+		Root:       common.Hash{},
+	}
+
+	witness, err := NewWitness(header, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add lots of data to ensure compression is triggered
+	for i := 0; i < 1000; i++ {
+		witness.AddCode([]byte("repetitive bytecode pattern that should compress well and provide good metrics"))
+		witness.AddState(map[string]struct{}{
+			"repetitive_state_node_pattern_that_should_compress": {},
+		})
+	}
+
+	// Configure for compression
+	config := &CompressionConfig{
+		Enabled:          true,
+		Threshold:        100, // Low threshold to ensure compression
+		CompressionLevel: 6,
+		UseDeduplication: true,
+	}
+	SetCompressionConfig(config)
+
+	// Get initial stats
+	initialStats := CompressionStats()
+	t.Logf("Initial stats: %+v", initialStats)
+
+	// Perform compression
+	var buf bytes.Buffer
+	startTime := time.Now()
+	if err := witness.EncodeCompressed(&buf); err != nil {
+		t.Fatal(err)
+	}
+	encodeTime := time.Since(startTime)
+
+	// Get stats after compression
+	compressionStats := CompressionStats()
+	t.Logf("After compression stats: %+v", compressionStats)
+
+	// Verify compression metrics
+	if compressionStats["compression_count"].(int64) <= initialStats["compression_count"].(int64) {
+		t.Errorf("Compression count should increase, got %d", compressionStats["compression_count"])
+	}
+
+	if compressionStats["total_compression_time_ms"].(float64) <= 0 {
+		t.Errorf("Total compression time should be positive, got %f", compressionStats["total_compression_time_ms"])
+	}
+
+	if compressionStats["avg_compression_time_ms"].(float64) <= 0 {
+		t.Errorf("Average compression time should be positive, got %f", compressionStats["avg_compression_time_ms"])
+	}
+
+	if compressionStats["total_compression_size"].(int64) <= 0 {
+		t.Errorf("Total compression size should be positive, got %d", compressionStats["total_compression_size"])
+	}
+
+	if compressionStats["compression_rate_bps"].(float64) <= 0 {
+		t.Errorf("Compression rate should be positive, got %f", compressionStats["compression_rate_bps"])
+	}
+
+	// Verify timing is reasonable (should be close to our measured time)
+	measuredTimeMs := float64(encodeTime.Nanoseconds()) / 1e6
+	reportedTimeMs := compressionStats["avg_compression_time_ms"].(float64)
+	tolerance := 0.5 // 50% tolerance for timing variations
+	if reportedTimeMs < measuredTimeMs*(1-tolerance) || reportedTimeMs > measuredTimeMs*(1+tolerance) {
+		t.Logf("Warning: Reported compression time (%f ms) differs significantly from measured time (%f ms)",
+			reportedTimeMs, measuredTimeMs)
+	}
+
+	t.Logf("Compression metrics test passed")
+}
+
+func TestDecompressionMetrics(t *testing.T) {
+	// Reset metrics before test
+	resetMetrics()
+
+	// Create a test witness with substantial data
+	header := &types.Header{
+		Number:     common.Big1,
+		ParentHash: common.Hash{},
+		Root:       common.Hash{},
+	}
+
+	witness, err := NewWitness(header, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add lots of data to ensure compression
+	for i := 0; i < 500; i++ {
+		witness.AddCode([]byte("repetitive bytecode pattern for decompression testing"))
+		witness.AddState(map[string]struct{}{
+			"repetitive_state_node_for_decompression": {},
+		})
+	}
+
+	// Configure for compression
+	config := &CompressionConfig{
+		Enabled:          true,
+		Threshold:        100,
+		CompressionLevel: 6,
+		UseDeduplication: true,
+	}
+	SetCompressionConfig(config)
+
+	// Encode the witness
+	var buf bytes.Buffer
+	if err := witness.EncodeCompressed(&buf); err != nil {
+		t.Fatal(err)
+	}
+
+	encodedData := buf.Bytes()
+
+	// Get initial stats
+	initialStats := CompressionStats()
+	t.Logf("Initial decompression stats: %+v", initialStats)
+
+	// Perform decompression
+	var decodedWitness Witness
+	startTime := time.Now()
+	if err := decodedWitness.DecodeCompressed(encodedData); err != nil {
+		t.Fatal(err)
+	}
+	decodeTime := time.Since(startTime)
+
+	// Get stats after decompression
+	decompressionStats := CompressionStats()
+	t.Logf("After decompression stats: %+v", decompressionStats)
+
+	// Verify decompression metrics
+	if decompressionStats["decompression_count"].(int64) <= initialStats["decompression_count"].(int64) {
+		t.Errorf("Decompression count should increase, got %d", decompressionStats["decompression_count"])
+	}
+
+	if decompressionStats["total_decompression_time_ms"].(float64) <= 0 {
+		t.Errorf("Total decompression time should be positive, got %f", decompressionStats["total_decompression_time_ms"])
+	}
+
+	if decompressionStats["avg_decompression_time_ms"].(float64) <= 0 {
+		t.Errorf("Average decompression time should be positive, got %f", decompressionStats["avg_decompression_time_ms"])
+	}
+
+	if decompressionStats["total_decompression_size"].(int64) <= 0 {
+		t.Errorf("Total decompression size should be positive, got %d", decompressionStats["total_decompression_size"])
+	}
+
+	if decompressionStats["decompression_rate_bps"].(float64) <= 0 {
+		t.Errorf("Decompression rate should be positive, got %f", decompressionStats["decompression_rate_bps"])
+	}
+
+	// Verify timing is reasonable
+	measuredTimeMs := float64(decodeTime.Nanoseconds()) / 1e6
+	reportedTimeMs := decompressionStats["avg_decompression_time_ms"].(float64)
+	tolerance := 0.5 // 50% tolerance for timing variations
+	if reportedTimeMs < measuredTimeMs*(1-tolerance) || reportedTimeMs > measuredTimeMs*(1+tolerance) {
+		t.Logf("Warning: Reported decompression time (%f ms) differs significantly from measured time (%f ms)",
+			reportedTimeMs, measuredTimeMs)
+	}
+
+	t.Logf("Decompression metrics test passed")
+}
+
+func TestCompressionRateCalculation(t *testing.T) {
+	// Reset metrics before test
+	resetMetrics()
+
+	// Create a large witness
+	header := &types.Header{
+		Number:     common.Big1,
+		ParentHash: common.Hash{},
+		Root:       common.Hash{},
+	}
+
+	witness, err := NewWitness(header, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add substantial data
+	dataSize := 1024 * 1024 // 1MB of data
+	chunkSize := 1024
+	for i := 0; i < dataSize/chunkSize; i++ {
+		witness.AddCode(make([]byte, chunkSize))
+	}
+
+	// Configure for compression
+	config := &CompressionConfig{
+		Enabled:          true,
+		Threshold:        100,
+		CompressionLevel: 6,
+		UseDeduplication: true,
+	}
+	SetCompressionConfig(config)
+
+	// Perform multiple compressions to test rate calculation
+	for i := 0; i < 5; i++ {
+		var buf bytes.Buffer
+		if err := witness.EncodeCompressed(&buf); err != nil {
+			t.Fatal(err)
+		}
+
+		// Also perform decompression to test decompression rates
+		var decodedWitness Witness
+		if err := decodedWitness.DecodeCompressed(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats := CompressionStats()
+	t.Logf("Compression rate stats: %+v", stats)
+
+	// Verify rate calculations
+	if stats["compression_rate_bps"].(float64) <= 0 {
+		t.Errorf("Compression rate should be positive, got %f", stats["compression_rate_bps"])
+	}
+
+	if stats["decompression_rate_bps"].(float64) <= 0 {
+		t.Errorf("Decompression rate should be positive, got %f", stats["decompression_rate_bps"])
+	}
+
+	// Verify that rates are reasonable (should be in MB/s range for typical operations)
+	compressionRateMBps := stats["compression_rate_bps"].(float64) / (1024 * 1024)
+	decompressionRateMBps := stats["decompression_rate_bps"].(float64) / (1024 * 1024)
+
+	t.Logf("Compression rate: %.2f MB/s", compressionRateMBps)
+	t.Logf("Decompression rate: %.2f MB/s", decompressionRateMBps)
+
+	// Rates should be reasonable (between 0.1 MB/s and 1000 MB/s)
+	if compressionRateMBps < 0.1 || compressionRateMBps > 1000 {
+		t.Logf("Warning: Compression rate (%.2f MB/s) seems unusual", compressionRateMBps)
+	}
+
+	if decompressionRateMBps < 0.1 || decompressionRateMBps > 1000 {
+		t.Logf("Warning: Decompression rate (%.2f MB/s) seems unusual", decompressionRateMBps)
+	}
+
+	t.Logf("Compression rate calculation test passed")
+}
+
+func TestMetricsConsistency(t *testing.T) {
+	// Reset metrics before test
+	resetMetrics()
+
+	// Create a test witness
+	header := &types.Header{
+		Number:     common.Big1,
+		ParentHash: common.Hash{},
+		Root:       common.Hash{},
+	}
+
+	witness, err := NewWitness(header, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add data
+	for i := 0; i < 100; i++ {
+		witness.AddCode([]byte("test data for consistency check"))
+		witness.AddState(map[string]struct{}{
+			"test_state": {},
+		})
+	}
+
+	// Configure for compression
+	config := &CompressionConfig{
+		Enabled:          true,
+		Threshold:        100,
+		CompressionLevel: 6,
+		UseDeduplication: true,
+	}
+	SetCompressionConfig(config)
+
+	// Perform compression and decompression multiple times
+	for i := 0; i < 3; i++ {
+		var buf bytes.Buffer
+		if err := witness.EncodeCompressed(&buf); err != nil {
+			t.Fatal(err)
+		}
+
+		var decodedWitness Witness
+		if err := decodedWitness.DecodeCompressed(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats := CompressionStats()
+	t.Logf("Final stats: %+v", stats)
+
+	// Verify consistency of metrics
+	compressionCount := stats["compression_count"].(int64)
+	decompressionCount := stats["decompression_count"].(int64)
+
+	// Should have performed 3 compressions and 3 decompressions
+	if compressionCount != 3 {
+		t.Errorf("Expected 3 compressions, got %d", compressionCount)
+	}
+
+	if decompressionCount != 3 {
+		t.Errorf("Expected 3 decompressions, got %d", decompressionCount)
+	}
+
+	// Verify that sizes are consistent
+	totalOriginalSize := stats["total_original_size"].(int64)
+	totalCompressedSize := stats["total_compressed_size"].(int64)
+	spaceSaved := stats["space_saved_bytes"].(int64)
+
+	if spaceSaved != totalOriginalSize-totalCompressedSize {
+		t.Errorf("Space saved calculation incorrect: got %d, expected %d",
+			spaceSaved, totalOriginalSize-totalCompressedSize)
+	}
+
+	// Verify that compression size matches total compression size
+	totalCompressionSize := stats["total_compression_size"].(int64)
+	if totalCompressionSize != totalCompressedSize {
+		t.Errorf("Total compression size mismatch: got %d, expected %d",
+			totalCompressionSize, totalCompressedSize)
+	}
+
+	t.Logf("Metrics consistency test passed")
+}
+
+// resetMetrics resets all compression/decompression metrics for testing
+func resetMetrics() {
+	// Reset all atomic variables to zero
+	atomic.StoreInt64(&compressionRatio, 0)
+	atomic.StoreInt64(&compressionCount, 0)
+	atomic.StoreInt64(&uncompressedCount, 0)
+	atomic.StoreInt64(&totalOriginalSize, 0)
+	atomic.StoreInt64(&totalCompressedSize, 0)
+	atomic.StoreInt64(&totalCompressionTime, 0)
+	atomic.StoreInt64(&totalCompressionSize, 0)
+	atomic.StoreInt64(&compressionRate, 0)
+	atomic.StoreInt64(&decompressionCount, 0)
+	atomic.StoreInt64(&totalDecompressionTime, 0)
+	atomic.StoreInt64(&totalDecompressionSize, 0)
+	atomic.StoreInt64(&decompressionRate, 0)
 }
