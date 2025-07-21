@@ -2674,12 +2674,24 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		pstart := time.Now()
 
 		computeWitness := makeWitness
+		var externalWitness *stateless.Witness
 
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
-			memdb := witnesses[it.processed()-1].MakeHashDB(bc.statedb.TrieDB().Disk())
+			externalWitness = witnesses[it.processed()-1]
+
+			// Validate witness.
+			if err := stateless.ValidateWitnessPreState(externalWitness, bc); err != nil {
+				log.Error("Witness validation failed during block processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+				bc.reportBlock(block, &ProcessResult{}, err)
+				followupInterrupt.Store(true)
+				return nil, it.index, fmt.Errorf("witness validation failed: %w", err)
+			}
+
+			memdb := externalWitness.MakeHashDB(bc.statedb.TrieDB().Disk())
 			bc.statedb.TrieDB().SetReadBackend(hashdb.New(memdb, triedb.HashDefaults.HashDB))
 			computeWitness = false
 			bc.statedb.DisableSnapInReader()
+			witness = externalWitness
 		}
 
 		if computeWitness {
@@ -3631,6 +3643,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	if witness == nil {
 		return nil, errors.New("nil witness")
 	}
+
+	// Validate witness.
+	if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
+		log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+		return nil, fmt.Errorf("witness validation failed: %w", err)
+	}
+
 	// Remove critical computed fields from the block to force true recalculation
 	context := block.Header()
 	context.Root = common.Hash{}

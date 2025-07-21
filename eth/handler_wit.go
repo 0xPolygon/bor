@@ -75,13 +75,6 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	peer.AddKnownWitness(witness.Header().Hash())
 	hash := witness.Header().Hash()
 
-	// Validate witness pre-state root.
-	if err := stateless.ValidateWitnessPreState(witness, h.Chain(), peer.ID()); err != nil {
-		log.Error("Witness pre-state validation failed for broadcast", "peer", peer.ID(), "err", err)
-		// Don't inject invalid witness into fetcher.
-		return fmt.Errorf("invalid witness broadcast: %w", err)
-	}
-
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
 		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID())

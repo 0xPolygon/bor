@@ -25,7 +25,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 // HeaderReader is an interface to pull in headers in place of block hashes for the witness.
@@ -35,7 +34,7 @@ type HeaderReader interface {
 }
 
 // ValidateWitnessPreState validates that the witness pre-state root matches the parent block's state root.
-func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, peerID string) error {
+func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader) error {
 	if witness == nil {
 		return fmt.Errorf("witness is nil")
 	}
@@ -66,9 +65,6 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, peerID
 		return fmt.Errorf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
 			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
 	}
-
-	// Log successful validation.
-	log.Debug("Witness pre-state validation successful", "blockNumber", contextHeader.Number.Uint64())
 
 	return nil
 }

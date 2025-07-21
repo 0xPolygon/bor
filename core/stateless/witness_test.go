@@ -59,7 +59,7 @@ func TestValidateWitnessPreState_Success(t *testing.T) {
 	}
 
 	// Test validation - should succeed.
-	err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+	err := ValidateWitnessPreState(witness, mockReader)
 	if err != nil {
 		t.Errorf("Expected validation to succeed, but got error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 	}
 
 	// Test validation - should fail.
-	err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+	err := ValidateWitnessPreState(witness, mockReader)
 	if err == nil {
 		t.Error("Expected validation to fail due to state root mismatch, but it succeeded")
 	}
@@ -123,7 +123,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 
 	// Test case 1: Nil witness.
 	t.Run("NilWitness", func(t *testing.T) {
-		err := ValidateWitnessPreState(nil, mockReader, "test-peer")
+		err := ValidateWitnessPreState(nil, mockReader)
 		if err == nil {
 			t.Error("Expected validation to fail for nil witness")
 		}
@@ -141,7 +141,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			State:   make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+		err := ValidateWitnessPreState(witness, mockReader)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with no headers")
 		}
@@ -164,7 +164,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			State: make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+		err := ValidateWitnessPreState(witness, mockReader)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with nil context header")
 		}
@@ -194,7 +194,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 		}
 
 		// Don't add parent header to mock reader - it won't be found.
-		err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+		err := ValidateWitnessPreState(witness, mockReader)
 		if err == nil {
 			t.Error("Expected validation to fail when parent header is not found")
 		}
@@ -251,7 +251,7 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 
 	// Test validation - should succeed (only first header matters for validation).
-	err := ValidateWitnessPreState(witness, mockReader, "test-peer")
+	err := ValidateWitnessPreState(witness, mockReader)
 	if err != nil {
 		t.Errorf("Expected validation to succeed with multiple headers, but got error: %v", err)
 	}
