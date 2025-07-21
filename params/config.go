@@ -343,6 +343,9 @@ var (
 			},
 			ValidatorContract:     "0x0000000000000000000000000000000000001000",
 			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			OverrideStateSyncRecordsInRange: []BlockRangeOverride{
+				{StartBlock: 23184305, EndBlock: 23220127, Value: 0},
+			},
 			BurntContract: map[string]string{
 				"0":     "0x000000000000000000000000000000000000dead",
 				"73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9",
@@ -428,6 +431,10 @@ var (
 				"14953792": 0,
 				"14953856": 0,
 			},
+			OverrideStateSyncRecordsInRange: []BlockRangeOverride{
+				{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+			},
+
 			BurntContract: map[string]string{
 				"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
 				"50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",

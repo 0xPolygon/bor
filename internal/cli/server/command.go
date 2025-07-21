@@ -243,7 +243,7 @@ func (c *Command) Run(args []string) int {
 		}()
 	}
 
-	srv, err := NewServer(c.config, WithGRPCAddress())
+	srv, err := NewServer(c.config)
 	if err != nil {
 		c.UI.Error(err.Error())
 		return 1

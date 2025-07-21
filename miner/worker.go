@@ -438,7 +438,7 @@ func (w *worker) stop() {
 	w.running.Store(false)
 }
 
-// isRunning returns an indicator whether worker is running or not.
+// IsRunning returns an indicator whether worker is running or not.
 func (w *worker) IsRunning() bool {
 	return w.running.Load()
 }
@@ -749,6 +749,13 @@ func (w *worker) resultLoop() {
 			}
 			// Short circuit when receiving duplicate result caused by resubmitting.
 			if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
+				continue
+			}
+
+			// Skip if the sealed block is behind current head (stale block from before reorg)
+			currentBlock := w.chain.CurrentBlock()
+			if currentBlock != nil && block.NumberU64() <= currentBlock.Number.Uint64() {
+				log.Info("Skipping stale sealed block", "sealed", block.NumberU64(), "current", currentBlock.Number.Uint64())
 				continue
 			}
 
@@ -1084,6 +1091,7 @@ mainloop:
 
 				if env.tcount > len(env.depsMVFullWriteList) {
 					log.Warn("blockstm - env.tcount > len(env.depsMVFullWriteList)", "env.tcount", env.tcount, "len(depsMVFullWriteList)", len(env.depsMVFullWriteList))
+					return errors.New("transaction count exceeds dependency list length")
 				}
 
 				temp := blockstm.TxDep{
@@ -1092,7 +1100,20 @@ mainloop:
 					FullWriteList: env.depsMVFullWriteList,
 				}
 
-				chDeps <- temp
+				// Send with timeout to prevent deadlock
+				select {
+				case chDeps <- temp:
+					// Successfully sent
+				case <-time.After(1 * time.Second):
+					// Timeout after 1 second - channel is blocked
+					log.Error("Transaction dependency channel blocked, aborting block building",
+						"txIndex", env.tcount-1,
+						"blockNumber", env.header.Number.Uint64())
+					once.Do(func() {
+						close(chDeps)
+					})
+					return errors.New("dependency channel timeout")
+				}
 			}
 
 			txs.Shift()
