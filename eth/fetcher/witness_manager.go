@@ -576,6 +576,12 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 			return
 		}
 
+		if len(witness) == 0 {
+			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
+			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
+			return
+		}
+
 		// Process successful fetch
 		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 
