@@ -18,7 +18,6 @@
 package consensus
 
 import (
-	"github.com/ethereum/go-ethereum/core/vm"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
