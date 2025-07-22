@@ -586,12 +586,20 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 			return nil, err
 		}
 
-		witnessRlpEncoded := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+		witnessData := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+		if len(witnessData) == 0 {
+			continue
+		}
 
 		var decodedWitness stateless.Witness
-		stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
-		if err := decodedWitness.DecodeRLP(stream); err != nil {
-			log.Error("Failed to decode witness", "caughtErr", err)
+		// Try to decode as compressed format first
+		if err := decodedWitness.DecodeCompressed(witnessData); err != nil {
+			// If that fails, try original RLP format for backward compatibility
+			stream := rlp.NewStream(bytes.NewReader(witnessData), 0)
+			if err := decodedWitness.DecodeRLP(stream); err != nil {
+				log.Error("Failed to decode witness", "caughtErr", err)
+				continue
+			}
 		}
 
 		response = append(response, &decodedWitness)
@@ -602,11 +610,15 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 
 func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash, witness *stateless.Witness) error {
 	var witBuf bytes.Buffer
-	if err := witness.EncodeRLP(&witBuf); err != nil {
+	if err := witness.EncodeCompressed(&witBuf); err != nil {
 		log.Error("error in witness encoding", "caughterr", err)
 	}
 
 	rawdb.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
 
 	return nil
+}
+
+func (b *EthAPIBackend) GetWitnessCompressionStats(ctx context.Context) (map[string]interface{}, error) {
+	return stateless.CompressionStats(), nil
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/rlp"
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
 
@@ -565,7 +564,7 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		}
 
 		witness := &stateless.Witness{}
-		err = rlp.DecodeBytes(packet.WitnessPacketResponse[0].Data, witness)
+		err = witness.DecodeCompressed(packet.WitnessPacketResponse[0].Data)
 		if err != nil {
 			log.Debug("[wm] Failed to decode witness RLP", "peer", peer, "hash", hash, "err", err)
 			m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("RLP decoding failed: %w", err), false)
