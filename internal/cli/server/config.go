@@ -952,6 +952,9 @@ func (c *Config) loadChain() error {
 
 //nolint:gocognit
 func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*ethconfig.Config, error) {
+	log.Info("[debugfilterlogs] Start call buildEth")
+	defer log.Info("[debugfilterlogs] End call buildEth")
+
 	dbHandles, err := MakeDatabaseHandles(c.Cache.FDLimit)
 	if err != nil {
 		return nil, err
@@ -1243,6 +1246,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 	}
 
+	log.Info("[debugfilterlogs] Assigning BorLogs", "n.BorLogs", n.BorLogs, "c.BorLogs", c.BorLogs)
 	n.BorLogs = c.BorLogs
 	n.DatabaseHandles = dbHandles
 

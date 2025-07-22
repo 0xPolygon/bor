@@ -686,7 +686,7 @@ func ReadReceiptsRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawVa
 // The receipt metadata fields are not guaranteed to be populated, so they
 // should not be used. Use ReadReceipts instead if the metadata is needed.
 func ReadRawReceipts(db ethdb.Reader, hash common.Hash, number uint64) types.Receipts {
-	log.Info("[debugfilterlogs] Start ReadRawReceipts")
+	// log.Info("[debugfilterlogs] Start ReadRawReceipts")
 	// Retrieve the flattened receipt slice
 	data := ReadReceiptsRLP(db, hash, number)
 	if len(data) == 0 {
@@ -702,11 +702,11 @@ func ReadRawReceipts(db ethdb.Reader, hash common.Hash, number uint64) types.Rec
 	receipts := make(types.Receipts, len(storageReceipts))
 	for i, storageReceipt := range storageReceipts {
 		receipts[i] = (*types.Receipt)(storageReceipt)
-		for _, lg := range receipts[i].Logs {
-			log.Info("[debugfilterlogs] retrieved log", "blockNumber", number, "txHash", lg.TxHash, "logIndex", lg.Index)
-		}
+		// for _, lg := range receipts[i].Logs {
+		// 	log.Info("[debugfilterlogs] retrieved log", "blockNumber", number, "txHash", lg.TxHash, "logIndex", lg.Index)
+		// }
 	}
-	log.Info("[debugfilterlogs] End ReadRawReceipts")
+	// log.Info("[debugfilterlogs] End ReadRawReceipts")
 
 	return receipts
 }
