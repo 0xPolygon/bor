@@ -151,6 +151,7 @@ func loadBaseConfig(ctx *cli.Context) gethConfig {
 		Metrics: metrics.DefaultConfig,
 	}
 
+	log.Info("[debugfilterlogs] load base config file", "ctx.String(configFileFlag.Name)", ctx.String(configFileFlag.Name))
 	// Load config file.
 	if file := ctx.String(configFileFlag.Name); file != "" {
 		if err := loadConfig(file, &cfg); err != nil {
