@@ -899,6 +899,82 @@ func TestCommitInterruptPending(t *testing.T) {
 	w.stop()
 }
 
+// TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
+// large number of transactions into the pool and captures the time taken for `pending` to return the list
+// of pending transactions. The purpose is just to compare the performance on different branches.
+func TestBenchmarkPending(t *testing.T) {
+	t.Skip("This test is just for benchmarking against other branches and shouldn't be used in normal CI process")
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+		txInTxpool  = 20000
+		txs         = make([]*types.Transaction, 0, txInTxpool)
+	)
+
+	chainConfig = params.BorUnittestChainConfig
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+
+	// Disable the commit interrupt as this will cause a reset on every block which we don't want
+	// for this test.
+	testConfig := DefaultTestConfig()
+	testConfig.CommitInterruptFlag = false
+	w, b, _ := newTestWorker(t, testConfig, chainConfig, engine, rawdb.NewMemoryDatabase(), true, 0)
+	defer func() {
+		w.close()
+		engine.Close()
+		db.Close()
+		ctrl.Finish()
+	}()
+
+	// nonce starts from 0 because have no txs yet
+	initNonce := uint64(0)
+
+	for i := 0; i < txInTxpool; i++ {
+		tx := b.newRandomTxWithNonce(false, initNonce+uint64(i))
+		txs = append(txs, tx)
+	}
+
+	wrapped := make([]*types.Transaction, len(txs))
+	copy(wrapped, txs)
+
+	// Set the interrupt to true by default so that it'll stop block building early on
+	// even before entering commit transactions.
+	w.interruptBlockBuilding.Store(true)
+
+	b.TxPool().Add(wrapped, false)
+
+	// Create a chain head subscription for tests
+	chainHeadCh := make(chan core.ChainHeadEvent, 10)
+	w.chain.SubscribeChainHeadEvent(chainHeadCh)
+
+	durations := make([]time.Duration, 0)
+
+	// Start mining!
+	w.start()
+	go func() {
+		for {
+			<-chainHeadCh
+			// Wait for a few ms so that run reorg is triggered
+			time.Sleep(10 * time.Millisecond)
+
+			// Make a call to pending and capture the time
+			start := time.Now()
+			b.txPool.Pending(txpool.PendingFilter{}, nil)
+			durations = append(durations, time.Since(start))
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	time.Sleep(5 * time.Second)
+	w.stop()
+
+	t.Log("Durations:", durations)
+}
+
 func BenchmarkBorMining(b *testing.B) {
 	chainConfig := params.BorUnittestChainConfig
 
