@@ -60,7 +60,6 @@ const (
 var (
 	// flags that configure the node
 	nodeFlags = slices.Concat([]cli.Flag{
-		utils.BorLogsFlag,
 		utils.IdentityFlag,
 		utils.UnlockedAccountFlag,
 		utils.PasswordFileFlag,

@@ -437,10 +437,6 @@ var (
 		Value:    ethconfig.Defaults.TxPool.Lifetime,
 		Category: flags.TxPoolCategory,
 	}
-	BorLogsFlag = &cli.BoolFlag{
-		Name:  "bor.logs",
-		Usage: "Enable bor logs retrieval",
-	}
 
 	// Blob transaction pool settings
 	BlobPoolDataDirFlag = &cli.StringFlag{
@@ -2375,6 +2371,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		RunHeimdall:         ctx.Bool(RunHeimdallArgsFlag.Name),
 		RunHeimdallArgs:     ctx.String(RunHeimdallArgsFlag.Name),
 		UseHeimdallApp:      ctx.Bool(UseHeimdallAppFlag.Name),
+		BorLogs:             ctx.Bool(BorLogsFlag.Name),
 	}
 	_ = CreateBorEthereum(configs)
 	engine, err := ethconfig.CreateConsensusEngine(config, configs, chainDb, nil)
