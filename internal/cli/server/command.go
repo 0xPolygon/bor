@@ -228,6 +228,7 @@ func (c *Command) Run(args []string) int {
 		c.UI.Error(err.Error())
 		return 1
 	}
+	log.Info("[debugfilterlogs] called run", "c.config.BorLogs", c.config.BorLogs, "c.config.P2P.MaxPeers", c.config.P2P.MaxPeers)
 
 	if c.config.Heimdall.RunHeimdall {
 		// TODO HV2: Find a way to pass the shutdown ctx to heimdall process
