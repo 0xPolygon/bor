@@ -17,7 +17,9 @@
 package state
 
 import (
+	"github.com/ethereum/go-ethereum/core/blockstm"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -179,6 +181,14 @@ func (s *hookedStateDB) AddBalance(addr common.Address, amount *uint256.Int, rea
 	return prev
 }
 
+func (s *hookedStateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	prev := s.inner.SetBalance(addr, amount, reason)
+	if s.hooks.OnBalanceChange != nil {
+		s.hooks.OnBalanceChange(addr, prev.ToBig(), amount.ToBig(), reason)
+	}
+	return prev
+}
+
 func (s *hookedStateDB) SetNonce(address common.Address, nonce uint64, reason tracing.NonceChangeReason) {
 	prev := s.inner.GetNonce(address)
 	s.inner.SetNonce(address, nonce, reason)
@@ -275,4 +285,36 @@ func (s *hookedStateDB) Finalise(deleteEmptyObjects bool) {
 			}
 		}
 	}
+}
+
+func (s *hookedStateDB) GetLogs(txHash common.Hash, blockNumber uint64, blockHash common.Hash) []*types.Log {
+	return s.inner.GetLogs(txHash, blockNumber, blockHash)
+}
+
+func (s *hookedStateDB) GetMVHashmap() *blockstm.MVHashMap {
+	return s.inner.GetMVHashmap()
+}
+func (s *hookedStateDB) SetMVHashmap(mvHashmap *blockstm.MVHashMap) {
+	s.inner.SetMVHashmap(mvHashmap)
+}
+func (s *hookedStateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
+	return s.inner.IntermediateRoot(deleteEmptyObjects)
+}
+func (s *hookedStateDB) IsVerkle() bool {
+	return s.inner.IsVerkle()
+}
+func (s *hookedStateDB) TxIndex() int {
+	return s.inner.TxIndex()
+}
+func (s *hookedStateDB) SetTxContext(txHash common.Hash, txIndex int) {
+	s.inner.SetTxContext(txHash, txIndex)
+}
+func (s *hookedStateDB) Clone() any {
+	return NewHookedState(s.inner.Copy(), s.hooks)
+}
+func (s *hookedStateDB) Unhooked() any {
+	return s.inner
+}
+func (s *hookedStateDB) SetBorConsensusTime(borConsensusTime time.Duration) {
+	s.inner.SetBorConsensusTime(borConsensusTime)
 }
