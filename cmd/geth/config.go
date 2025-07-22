@@ -156,6 +156,8 @@ func loadBaseConfig(ctx *cli.Context) gethConfig {
 		if err := loadConfig(file, &cfg); err != nil {
 			utils.Fatalf("%v", err)
 		}
+
+		log.Info("[debugfilterlogs] load config file successful", "cfg.Eth.BorLogs", cfg.Eth.BorLogs, "cfg.Node.DataDir", cfg.Node.DataDir, "cfg.Node.P2P.MaxPeers", cfg.Node.P2P.MaxPeers)
 	}
 
 	if ctx.IsSet(utils.MumbaiFlag.Name) {
