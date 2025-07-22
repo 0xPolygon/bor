@@ -2243,110 +2243,120 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		return 0, whitelist.ErrMismatch
 	}
 
+	var wg sync.WaitGroup
+
 	// In stateless mode, we process blocks one by one without committing the state
-	var processed int
+	var processed int32
 	for i, block := range chain {
-		// Check if block is already known before attempting to process
+		wg.Add(1)
+		go func(block *types.Block, i int) error {
+			defer wg.Done()
 
-		if bc.HasBlock(block.Hash(), block.NumberU64()) {
-			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
-			processed++ // Count as processed since we're skipping it
-			// We need to ensure the header verification result for this block is consumed
-			// even though we are skipping the processing.
-			if err := <-results; err != nil {
-				// If header verification failed for this known block (shouldn't happen often),
-				// it might indicate a deeper issue, but we can't proceed with the chain.
-				log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
-				return processed - 1, fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
-			}
-			continue // Skip to the next block
-		}
-		// If the chain is terminating, don't even bother starting up.
-		if bc.insertStopped() {
-			return processed, errInsertionInterrupted
-		}
-
-		// Wait for the block's verification to complete
-		if err := <-results; err != nil {
-			if err == consensus.ErrUnknownAncestor {
-				// For stateless nodes, check if this is a reorg situation
-				parentNum := block.NumberU64() - 1
-				existingBlock := bc.GetBlockByNumber(parentNum)
-
-				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
-					// We have a different block at the parent's height - this could be a reorg
-					log.Info("Conflicting block detected in stateless sync",
-						"blockNum", block.NumberU64(),
-						"parentNum", parentNum,
-						"existingParent", existingBlock.Hash(),
-						"expectedParent", block.ParentHash())
-
-					// Verify the existing parent block to see if it's valid
-					// This helps avoid unnecessary rewinds if the existing block is correct
-					existingHeader := existingBlock.Header()
-					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
-
-					// Check if the existing parent is valid
-					if verifyErr == nil {
-						// Existing parent is valid, so the new block is on a wrong fork
-						log.Info("Existing parent block is valid, rejecting new fork",
-							"existingParent", existingBlock.Hash(),
-							"rejectedParent", block.ParentHash())
-						return processed, fmt.Errorf("rejecting block %d: existing parent %s is valid",
-							block.NumberU64(), existingBlock.Hash())
-					}
-
-					// Existing parent is invalid, we need to rewind and accept the new chain
-					log.Info("Existing parent block is invalid, accepting reorg",
-						"existingParent", existingBlock.Hash(),
-						"newParent", block.ParentHash(),
-						"verifyErr", verifyErr)
-
-					// For stateless nodes, we need to rewind and let the sync continue
-					// This will cause the correct parent block to be fetched and imported
-					if err := bc.SetHead(parentNum - 1); err != nil {
-						return processed, fmt.Errorf("failed to rewind for reorg: %w", err)
-					}
-
-					// Return to let the downloader retry with the correct chain
-					return processed, fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-				} else if i != 0 {
-					// Not the first block and no reorg detected
-					return processed, err
+			// Check if block is already known before attempting to process
+			if bc.HasBlock(block.Hash(), block.NumberU64()) {
+				log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+				// Count as processed since we're skipping it
+				atomic.AddInt32(&processed, 1)
+				// We need to ensure the header verification result for this block is consumed
+				// even though we are skipping the processing.
+				if err := <-results; err != nil {
+					// If header verification failed for this known block (shouldn't happen often),
+					// it might indicate a deeper issue, but we can't proceed with the chain.
+					log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+					atomic.StoreInt32(&processed, processed-1)
+					return fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 				}
-				// First block in batch or successful reorg handling - continue
-			} else {
-				return processed, err
 			}
-		}
 
-		// Get the witness for this block if available
-		var witness *stateless.Witness
-		if i < len(witnesses) {
-			witness = witnesses[i]
-		}
+			// If the chain is terminating, don't even bother starting up.
+			if bc.insertStopped() {
+				return errInsertionInterrupted
+			}
 
-		// Process the block using stateless execution
-		statedb, err := bc.ProcessBlockWithWitnesses(block, witness)
-		if err != nil {
-			return processed, err
-		}
+			// Wait for the block's verification to complete
+			if err := <-results; err != nil {
+				if err == consensus.ErrUnknownAncestor {
+					// For stateless nodes, check if this is a reorg situation
+					parentNum := block.NumberU64() - 1
+					existingBlock := bc.GetBlockByNumber(parentNum)
 
-		statedb.SetWitness(witness)
+					if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
+						// We have a different block at the parent's height - this could be a reorg
+						log.Info("Conflicting block detected in stateless sync",
+							"blockNum", block.NumberU64(),
+							"parentNum", parentNum,
+							"existingParent", existingBlock.Hash(),
+							"expectedParent", block.ParentHash())
 
-		// Write the block to the chain without committing state
-		if _, err := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); err != nil {
-			return processed, err
-		}
+						// Verify the existing parent block to see if it's valid
+						// This helps avoid unnecessary rewinds if the existing block is correct
+						existingHeader := existingBlock.Header()
+						verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
 
-		processed++
+						// Check if the existing parent is valid
+						if verifyErr == nil {
+							// Existing parent is valid, so the new block is on a wrong fork
+							log.Info("Existing parent block is valid, rejecting new fork",
+								"existingParent", existingBlock.Hash(),
+								"rejectedParent", block.ParentHash())
+							return fmt.Errorf("rejecting block %d: existing parent %s is valid",
+								block.NumberU64(), existingBlock.Hash())
+						}
 
-		stats.processed = processed
+						// Existing parent is invalid, we need to rewind and accept the new chain
+						log.Info("Existing parent block is invalid, accepting reorg",
+							"existingParent", existingBlock.Hash(),
+							"newParent", block.ParentHash(),
+							"verifyErr", verifyErr)
 
-		stats.report(chain, i, 0, 0, 0, 0, true, true)
+						// For stateless nodes, we need to rewind and let the sync continue
+						// This will cause the correct parent block to be fetched and imported
+						if err := bc.SetHead(parentNum - 1); err != nil {
+							return fmt.Errorf("failed to rewind for reorg: %w", err)
+						}
+
+						// Return to let the downloader retry with the correct chain
+						return fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+					} else if i != 0 {
+						// Not the first block and no reorg detected
+						return err
+					}
+					// First block in batch or successful reorg handling - continue
+				} else {
+					log.Warn("Ignoring unknown ancestor error during parallel insert", "block", block.Hash(), "hash", block.Hash(), "err", err)
+				}
+			}
+
+			// Get the witness for this block if available
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+
+			// Process the block using stateless execution
+			statedb, err := bc.ProcessBlockWithWitnesses(block, witness)
+			if err != nil {
+				return err
+			}
+
+			statedb.SetWitness(witness)
+
+			// Write the block to the chain without committing state
+			if _, err := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); err != nil {
+				return err
+			}
+
+			atomic.AddInt32(&processed, 1)
+
+			stats.processed = int(atomic.LoadInt32(&processed))
+
+			stats.report(chain, i, 0, 0, 0, 0, true, true)
+			return nil
+		}(block, i)
+
 	}
 
-	return processed, nil
+	return int(atomic.LoadInt32(&processed)), nil
 }
 
 // insertChain is the internal implementation of InsertChain, which assumes that
