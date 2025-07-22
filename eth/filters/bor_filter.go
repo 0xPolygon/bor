@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -145,6 +146,8 @@ func (f *BorBlockLogsFilter) unindexedLogs(ctx context.Context, end uint64) ([]*
 func (f *BorBlockLogsFilter) borBlockLogs(ctx context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
 	if bloomFilter(receipt.Bloom, f.addresses, f.topics) {
 		logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
+	} else {
+		log.Info("[debugfilterlogs] bloomFilter is false (but probably should be true)", "lenLogs", len(receipt.Logs))
 	}
 
 	return logs, nil
