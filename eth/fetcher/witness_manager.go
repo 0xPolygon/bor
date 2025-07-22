@@ -13,7 +13,6 @@ import (
 
 	//	"github.com/ethereum/go-ethereum/eth/protocols/eth" // Not directly needed here
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
@@ -529,12 +528,32 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 			log.Debug("[wm] Marking witness as unavailable based on fetch initiation error", "hash", hash)
 			m.markWitnessUnavailable(hash)
 			// Don't penalize the announcing peer in this case
-		} else {
-			// Penalize the peer for other initiation failures
-			m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
+			return
 		}
+
+		// For other errors, check if still pending before handling failure
+		m.mu.Lock()
+		if _, exists := m.pending[hash]; !exists {
+			m.mu.Unlock()
+			log.Debug("[wm] Skipping witness fetch failure handling, block no longer pending", "peer", peer, "hash", hash)
+			return
+		}
+		m.mu.Unlock()
+
+		// Penalize the peer for other initiation failures
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
 		return
 	}
+
+	// Check if still pending after successful request creation
+	m.mu.Lock()
+	if _, exists := m.pending[hash]; !exists {
+		m.mu.Unlock()
+		log.Debug("[wm] Skipping witness fetch, block no longer pending", "peer", peer, "hash", hash)
+		req.Close()
+		return
+	}
+	m.mu.Unlock()
 	defer req.Close()
 
 	timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
@@ -550,29 +569,21 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		res.Done <- nil // Signal consumption
 
 		// Assuming NewWitnessPacket contains only one witness.
-		packet, ok := res.Res.(*wit.WitnessPacketRLPPacket)
+		witness, ok := res.Res.([]*stateless.Witness)
 		if !ok {
 			log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
 			m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
 			return
 		}
 
-		if len(packet.WitnessPacketResponse) == 0 {
+		if len(witness) == 0 {
 			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
 			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
 			return
 		}
 
-		witness := &stateless.Witness{}
-		err = witness.DecodeCompressed(packet.WitnessPacketResponse[0].Data)
-		if err != nil {
-			log.Debug("[wm] Failed to decode witness RLP", "peer", peer, "hash", hash, "err", err)
-			m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("RLP decoding failed: %w", err), false)
-			return
-		}
-
 		// Process successful fetch
-		m.handleWitnessFetchSuccess(peer, hash, witness, announcedAt)
+		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
@@ -588,23 +599,22 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common.Hash, witness *stateless.Witness, announcedAt time.Time) {
 	m.mu.Lock()
 	state, exists := m.pending[hash]
-	m.mu.Unlock()
 	if !exists {
+		m.mu.Unlock()
 		// Block is no longer pending (e.g., already imported, timed out elsewhere, forgotten)
 		log.Debug("[wm] Witness received, but block no longer pending", "peer", fetchPeer, "hash", hash)
 		return
 	}
-
 	// Check if witness already arrived via broadcast
 	if state.op.witness != nil {
+		m.mu.Unlock()
 		log.Debug("[wm] Witness received via fetch, but already present (likely from broadcast)", "peer", fetchPeer, "hash", hash)
 		return // Already handled
 	}
 
 	log.Debug("[wm] Witness received via fetch, queuing block for import", "peer", fetchPeer, "origin", state.op.origin, "number", state.op.number(), "hash", hash)
 
-	// Attach witness and enqueue
-	m.mu.Lock()
+	// Attach witness (under lock)
 	state.op.witness = witness
 	m.mu.Unlock()
 

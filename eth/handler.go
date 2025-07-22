@@ -600,7 +600,7 @@ func (h *handler) Stop() {
 func (h *handler) BroadcastWitness(witness *stateless.Witness) {
 	// broadcast the witness to all peers who are not aware of it
 	for _, peer := range h.peers.peersWithoutWitness(witness.Headers[0].Hash()) {
-		peer.AsyncSendNewWitness(witness)
+		peer.Peer.AsyncSendNewWitness(witness)
 	}
 }
 
@@ -620,14 +620,6 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 
 	// If propagation is requested, send to a subset of the peer
 	if propagate {
-		if witness != nil {
-			transfer := peersWithoutWitness[:int(math.Sqrt(float64(len(peersWithoutWitness))))]
-			for _, peer := range transfer {
-				log.Debug("Sending witness to peer", "hash", witness.Header().Hash(), "peer", peer.ID())
-				peer.AsyncSendNewWitness(witness)
-			}
-		}
-
 		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
 		var td *big.Int
 		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
@@ -649,8 +641,27 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 
 		// Send the block to a subset of our peers
 		transfer := peers[:int(math.Sqrt(float64(len(peers))))]
+		sentBlockPeers := make(map[string]bool)
 		for _, peer := range transfer {
 			peer.AsyncSendNewBlock(block, td)
+			sentBlockPeers[peer.Peer.ID()] = true
+		}
+
+		if witness != nil {
+			transfer := peersWithoutWitness[:int(math.Sqrt(float64(len(peersWithoutWitness))))]
+			for _, peer := range transfer {
+				log.Debug("Sending witness to peer", "hash", witness.Header().Hash(), "peer", peer.Peer.ID())
+				if !sentBlockPeers[peer.Peer.ID()] {
+					p := h.peers.peer(peer.Peer.ID())
+					if p != nil {
+						p.AsyncSendNewBlock(block, td)
+					}
+				}
+
+				// TODO - send witness to peer instead of witness hash once we have a working broadcast witness
+				// peer.Peer.AsyncSendNewWitness(witness)
+				peer.Peer.AsyncSendNewWitnessHash(witness.Header().Hash(), witness.Header().Number.Uint64())
+			}
 		}
 
 		// Send the block to the trusted and static peers
@@ -670,8 +681,8 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 		}
 
 		for _, peer := range peersWithoutWitness {
-			log.Debug("Announcing block hash to peer", "peer", peer.ID(), "hash", block.Header().Hash(), "number", block.NumberU64())
-			peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+			log.Debug("Announcing block hash to peer", "peer", peer.Peer.ID(), "hash", block.Header().Hash(), "number", block.NumberU64())
+			peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
 		}
 
 		log.Debug("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))

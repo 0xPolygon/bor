@@ -34,7 +34,7 @@ type Peer struct {
 
 	logger log.Logger // Contextual logger with the peer id injected
 
-	knownWitnesses    *knownCache                  // Set of witness hashes (`witness.Headers[0].Hash()`) known to be known by this peer
+	knownWitnesses    *KnownCache                  // Set of witness hashes (`witness.Headers[0].Hash()`) known to be known by this peer
 	queuedWitness     chan *stateless.Witness      // Queue of witness to broadcast to this peer
 	queuedWitnessAnns chan *NewWitnessHashesPacket // Queue of witness announcements to this peer
 
@@ -175,7 +175,7 @@ func (p *Peer) Log() log.Logger {
 }
 
 // KnownWitnesses retrieves the set of witness hashes known to be known by this peer.
-func (p *Peer) KnownWitnesses() *knownCache {
+func (p *Peer) KnownWitnesses() *KnownCache {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 	return p.knownWitnesses
@@ -221,22 +221,22 @@ func (p *Peer) ReplyWitness(requestID uint64, response *WitnessPacketResponse) e
 	})
 }
 
-// knownCache is a cache for known witness, identified by the hash of the parent witness block.
-type knownCache struct {
+// KnownCache is a cache for known witness, identified by the hash of the parent witness block.
+type KnownCache struct {
 	hashes mapset.Set[common.Hash]
 	max    int
 }
 
 // newKnownCache creates a new knownCache with a max capacity.
-func newKnownCache(max int) *knownCache {
-	return &knownCache{
+func newKnownCache(max int) *KnownCache {
+	return &KnownCache{
 		max:    max,
 		hashes: mapset.NewSet[common.Hash](),
 	}
 }
 
 // Add adds a witness to the set.
-func (k *knownCache) Add(hash common.Hash) {
+func (k *KnownCache) Add(hash common.Hash) {
 	for k.hashes.Cardinality() > max(0, k.max-1) {
 		k.hashes.Pop()
 	}
@@ -244,11 +244,11 @@ func (k *knownCache) Add(hash common.Hash) {
 }
 
 // Contains returns whether the given item is in the set.
-func (k *knownCache) Contains(hash common.Hash) bool {
+func (k *KnownCache) Contains(hash common.Hash) bool {
 	return k.hashes.Contains(hash)
 }
 
 // Cardinality returns the number of elements in the set.
-func (k *knownCache) Cardinality() int {
+func (k *KnownCache) Cardinality() int {
 	return k.hashes.Cardinality()
 }

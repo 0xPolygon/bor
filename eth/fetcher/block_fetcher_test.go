@@ -997,14 +997,17 @@ func TestBlockMemoryExhaustionAttack(t *testing.T) {
 
 // makeWitnessFetcher creates a witness fetcher for a given peer.
 func (f *fetcherTester) makeWitnessFetcher(peer string, blocks map[common.Hash]*types.Block, drift time.Duration) witnessRequesterFn {
-	return func(hash common.Hash, sink chan *wit.Response) (*wit.Request, error) {
+	return func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
 		// Create a new peer to handle the request
 		p := wit.NewPeer(1, &p2p.Peer{}, nil, log.New())
-
 		// Request witnesses from the peer
-		req, err := p.RequestWitness([]common.Hash{hash}, sink)
+		req, err := p.RequestWitness([]wit.WitnessPageRequest{}, make(chan *wit.Response))
 		if err != nil {
 			return nil, err
+		}
+		ethReqShim := &eth.Request{
+			Peer:   p.ID(),              // Set the Peer ID here
+			Cancel: make(chan struct{}), // Initialize the cancel channel
 		}
 
 		// Start delivery of the witnesses on a new thread
@@ -1023,8 +1026,8 @@ func (f *fetcherTester) makeWitnessFetcher(peer string, blocks map[common.Hash]*
 				}
 
 				// Deliver the witness
-				sink <- &wit.Response{
-					Req:  req,
+				sink <- &eth.Response{
+					Req:  ethReqShim,
 					Res:  &wit.NewWitnessPacket{Witness: witness},
 					Time: time.Since(req.Sent),
 					Done: make(chan error),
@@ -1032,7 +1035,7 @@ func (f *fetcherTester) makeWitnessFetcher(peer string, blocks map[common.Hash]*
 			}
 		}()
 
-		return req, nil
+		return ethReqShim, nil
 	}
 }
 

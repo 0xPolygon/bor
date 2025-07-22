@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,8 +16,10 @@ import (
 
 const (
 	// witnessRequestTimeout defines how long to wait for an in-flight witness computation.
-	witnessRequestTimeout = 5 * time.Second
-	PageSize              = 15 * 1024 * 1024 // 15 MB
+	witnessRequestTimeout          = 5 * time.Second
+	PageSize                       = 15 * 1024 * 1024  // 15 MB
+	MaximumCachedWitnessOnARequest = 200 * 1024 * 1024 // 200 MB, the maximum amount of memory a request can demand while getting witness
+	MaximumResponseSize            = 16 * 1024 * 1024  // 16 MB, helps to fast fail check
 )
 
 // witHandler implements the eth.Backend interface to handle the various network
@@ -122,6 +125,10 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 	// query witnesses by demand
 	var response wit.WitnessPacketResponse
 	witnessCache := make(map[common.Hash][]byte, len(seen))
+
+	totalResponsePayloadDataAmount := 0 // fast fail check
+	totalCached := 0                    // protection against heavy memory requests
+
 	for _, witnessPage := range req.WitnessPages {
 		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize // integer trick for: ceil(witnessSize/PageSize)
 		var witnessPageResponse wit.WitnessPageResponse
@@ -138,6 +145,7 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 				queriedBytes := rawdb.ReadWitness(h.Chain().DB(), witnessPage.Hash)
 				witnessCache[witnessPage.Hash] = queriedBytes
 				witnessBytes = queriedBytes
+				totalCached += len(queriedBytes)
 			}
 
 			start := PageSize * witnessPage.Page
@@ -146,11 +154,21 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 				end = uint64(len(witnessBytes))
 			}
 			witnessPageResponse.Data = witnessBytes[start:end]
+			totalResponsePayloadDataAmount += len(witnessPageResponse.Data)
 		}
 		response = append(response, witnessPageResponse)
+
+		// fast fail check
+		if totalCached >= MaximumCachedWitnessOnARequest {
+			return nil, errors.New("requests demans huge amount of memory")
+		}
+		// memory protection check
+		if totalResponsePayloadDataAmount >= MaximumResponseSize {
+			return nil, errors.New("response exceeds maximum p2p payload size")
+		}
 	}
 
-	// Return the collected RLP data (now supports compressed format)
+	// Return the collected RLP data
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
 }

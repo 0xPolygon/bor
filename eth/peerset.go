@@ -301,7 +301,7 @@ func (ps *peerSet) getOnePeerWithWitness(hash common.Hash) *ethPeer {
 	defer ps.lock.RUnlock()
 
 	for _, p := range ps.peers {
-		if p.witPeer != nil && p.witPeer.KnownWitnessContainsHash(hash) {
+		if p.witPeer != nil && p.witPeer.Peer.KnownWitnessContainsHash(hash) {
 			return p
 		}
 	}
@@ -318,7 +318,7 @@ func (ps *peerSet) peersWithoutWitness(hash common.Hash) []*witPeer {
 	list := make([]*witPeer, 0, len(ps.peers))
 
 	for _, p := range ps.peers {
-		if p.witPeer != nil && !p.witPeer.KnownWitnessContainsHash(hash) {
+		if p.witPeer != nil && !p.witPeer.Peer.KnownWitnessContainsHash(hash) {
 			list = append(list, p.witPeer)
 		}
 	}

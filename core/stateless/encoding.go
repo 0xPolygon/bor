@@ -141,13 +141,12 @@ func GetCompressionConfig() *CompressionConfig {
 
 // toExtWitness converts our internal witness representation to the consensus one.
 func (w *Witness) toExtWitness() *extWitness {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+
 	ext := &extWitness{
 		Context: w.context,
 		Headers: w.Headers,
-	}
-	ext.Codes = make([][]byte, 0, len(w.Codes))
-	for code := range w.Codes {
-		ext.Codes = append(ext.Codes, []byte(code))
 	}
 	ext.State = make([][]byte, 0, len(w.State))
 	for node := range w.State {
@@ -160,11 +159,6 @@ func (w *Witness) toExtWitness() *extWitness {
 func (w *Witness) fromExtWitness(ext *extWitness) error {
 	w.context = ext.Context
 	w.Headers = ext.Headers
-
-	w.Codes = make(map[string]struct{}, len(ext.Codes))
-	for _, code := range ext.Codes {
-		w.Codes[string(code)] = struct{}{}
-	}
 	w.State = make(map[string]struct{}, len(ext.State))
 	for _, node := range ext.State {
 		w.State[string(node)] = struct{}{}
@@ -312,6 +306,5 @@ func (w *Witness) DecodeCompressed(data []byte) error {
 type extWitness struct {
 	Context *types.Header
 	Headers []*types.Header
-	Codes   [][]byte
 	State   [][]byte
 }
