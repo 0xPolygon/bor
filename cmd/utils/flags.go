@@ -440,6 +440,7 @@ var (
 	BorLogsFlag = &cli.BoolFlag{
 		Name:  "bor.logs",
 		Usage: "Enable bor logs retrieval",
+		Value: true,
 	}
 
 	// Blob transaction pool settings

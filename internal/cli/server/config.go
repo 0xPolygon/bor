@@ -682,7 +682,7 @@ func DefaultConfig() *Config {
 		GcMode:      "full",
 		StateScheme: "path",
 		Snapshot:    true,
-		BorLogs:     false,
+		BorLogs:     true,
 		TxPool: &TxPoolConfig{
 			Locals:       []string{},
 			NoLocals:     false,
