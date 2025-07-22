@@ -10,11 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/eth/protocols/wit"
-	"github.com/ethereum/go-ethereum/rlp"
 
 	//	"github.com/ethereum/go-ethereum/eth/protocols/eth" // Not directly needed here
-
+	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
@@ -517,7 +515,7 @@ func (m *witnessManager) tick() {
 
 // fetchWitness performs a single witness fetch in a goroutine.
 func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *blockAnnounce) {
-	resCh := make(chan *wit.Response)
+	resCh := make(chan *eth.Response)
 
 	announcedAt := announce.time // Capture the original 'ready-to-fetch' time for logging/timestamping
 	witnessFetchMeter.Mark(1)
@@ -571,29 +569,21 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		res.Done <- nil // Signal consumption
 
 		// Assuming NewWitnessPacket contains only one witness.
-		packet, ok := res.Res.(*wit.WitnessPacketRLPPacket)
+		witness, ok := res.Res.([]*stateless.Witness)
 		if !ok {
 			log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
 			m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
 			return
 		}
 
-		if len(packet.WitnessPacketResponse) == 0 {
+		if len(witness) == 0 {
 			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
 			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
 			return
 		}
 
-		witness := &stateless.Witness{}
-		err = rlp.DecodeBytes(packet.WitnessPacketResponse[0], witness)
-		if err != nil {
-			log.Debug("[wm] Failed to decode witness RLP", "peer", peer, "hash", hash, "err", err)
-			m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("RLP decoding failed: %w", err), false)
-			return
-		}
-
 		// Process successful fetch
-		m.handleWitnessFetchSuccess(peer, hash, witness, announcedAt)
+		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)

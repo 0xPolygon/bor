@@ -25,6 +25,9 @@ import (
 
 // toExtWitness converts our internal witness representation to the consensus one.
 func (w *Witness) toExtWitness() *extWitness {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+
 	ext := &extWitness{
 		Context: w.context,
 		Headers: w.Headers,

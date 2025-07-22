@@ -15,7 +15,7 @@ func handleGetWitness(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	// Validate request parameters
-	if len(req.Hashes) == 0 {
+	if len(req.WitnessPages) == 0 {
 		return fmt.Errorf("invalid GetWitnessPacket: Hashes cannot be empty")
 	}
 
@@ -26,7 +26,7 @@ func handleGetWitness(backend Backend, msg Decoder, peer *Peer) error {
 func handleWitness(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the WitnessPacketRLPPacket response
 	packet := new(WitnessPacketRLPPacket)
-	if err := msg.Decode(&packet); err != nil {
+	if err := msg.Decode(packet); err != nil {
 		log.Error("Failed to decode witness response packet", "err", err)
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
