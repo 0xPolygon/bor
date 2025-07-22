@@ -2673,19 +2673,18 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		// Process block using the parent state as reference point
 		pstart := time.Now()
 
-		// Validate the witness.
+		computeWitness := makeWitness
+
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
+			// 1. Validate the witness.
 			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], bc); err != nil {
 				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
 				return nil, it.index, fmt.Errorf("witness validation failed: %w", err)
 			}
-		}
 
-		computeWitness := makeWitness
-
-		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
+			// 2. Set the witness to the statedb.
 			memdb := witnesses[it.processed()-1].MakeHashDB(bc.statedb.TrieDB().Disk())
 			bc.statedb.TrieDB().SetReadBackend(hashdb.New(memdb, triedb.HashDefaults.HashDB))
 			computeWitness = false

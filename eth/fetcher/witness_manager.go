@@ -10,10 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
-
-	//	"github.com/ethereum/go-ethereum/eth/protocols/eth" // Not directly needed here
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
 
