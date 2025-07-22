@@ -78,6 +78,7 @@ type FilterAPI struct {
 
 // NewFilterAPI returns a new FilterAPI instance.
 func NewFilterAPI(system *FilterSystem, borLogs bool) *FilterAPI {
+	log.Info("[debugfilterlogs] NewFilterAPI", "borLogs", borLogs)
 	api := &FilterAPI{
 		sys:     system,
 		events:  NewEventSystem(system),
