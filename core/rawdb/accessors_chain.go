@@ -702,7 +702,9 @@ func ReadRawReceipts(db ethdb.Reader, hash common.Hash, number uint64) types.Rec
 	receipts := make(types.Receipts, len(storageReceipts))
 	for i, storageReceipt := range storageReceipts {
 		receipts[i] = (*types.Receipt)(storageReceipt)
-		log.Info("[debugfilterlogs] retrieved receipt", "txHash", receipts[i].TxHash)
+		for _, lg := range receipts[i].Logs {
+			log.Info("[debugfilterlogs] retrieved log", "blockNumber", lg.BlockNumber, "txHash", lg.TxHash, "logIndex", lg.Index)
+		}
 	}
 	log.Info("[debugfilterlogs] End ReadRawReceipts")
 
