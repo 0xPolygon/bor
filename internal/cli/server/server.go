@@ -22,7 +22,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethstats"
 	"github.com/ethereum/go-ethereum/graphql"
-	hmm "github.com/ethereum/go-ethereum/heimdall-migration-monitor"
 	"github.com/ethereum/go-ethereum/internal/cli/server/pprof"
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 	"github.com/ethereum/go-ethereum/log"
@@ -283,11 +282,6 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 		}
 	}
 
-	if !config.Developer.Enabled {
-		hmm.StartHeimdallMigrationMonitor(config.Heimdall.URL, srv.backend.ChainDb())
-		hmm.WaitFirstSuccessfulCheck()
-	}
-
 	// sealing (if enabled) or in dev mode
 	if config.Sealer.Enabled || config.Developer.Enabled {
 		if err := srv.backend.StartMining(); err != nil {
@@ -300,6 +294,11 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 
 	// start the node
 	if err := srv.node.Start(); err != nil {
+		return nil, err
+	}
+
+	// start the GRPC Server
+	if err := WithGRPCAddress()(srv, config); err != nil {
 		return nil, err
 	}
 

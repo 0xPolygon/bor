@@ -400,3 +400,4 @@ jobs:
             packaging/deb/bor-pbss-mainnet-**.deb
             packaging/deb/bor-mainnet-**.deb.checksum
             packaging/deb/bor-pbss-mainnet-**.deb.checksum
+            builder/files/genesis-mainnet-v1.json
