@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -306,6 +307,9 @@ func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (type
 }
 
 func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash, number uint64) ([][]*types.Log, error) {
+	log.Info("[debugfilterlogs] Start call (b *EthAPIBackend) GetLogs(")
+	defer log.Info("[debugfilterlogs] End call (b *EthAPIBackend) GetLogs(")
+
 	return rawdb.ReadLogs(b.eth.chainDb, hash, number), nil
 }
 
