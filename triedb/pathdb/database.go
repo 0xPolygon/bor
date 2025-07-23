@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -359,6 +360,8 @@ func (db *Database) Disable() error {
 	}
 	db.waitSync = true
 
+	log.Info("[debugcritissue] Called to disable database", "stackTraceOfCall", string(debug.Stack()))
+
 	// Mark the disk layer as stale to prevent access to persistent state.
 	db.tree.bottom().markStale()
 
@@ -532,6 +535,8 @@ func (db *Database) Size() (diffs common.StorageSize, nodes common.StorageSize) 
 // modifyAllowed returns the indicator if mutation is allowed. This function
 // assumes the db.lock is already held.
 func (db *Database) modifyAllowed() error {
+	log.Info("[debugcritissue] Called modifyAllowed", "db.readOnly", db.readOnly, "db.waitSync", db.waitSync, "stackTraceOfCall", string(debug.Stack()))
+
 	if db.readOnly {
 		return errDatabaseReadOnly
 	}
