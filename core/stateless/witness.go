@@ -17,7 +17,6 @@
 package stateless
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -140,15 +139,6 @@ func (w *Witness) Optimize() {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
-	// Remove duplicate codes by normalizing them
-	normalizedCodes := make(map[string]struct{})
-	for code := range w.Codes {
-		// Remove leading/trailing zeros that don't affect execution
-		normalized := bytes.TrimRight([]byte(code), "\x00")
-		normalizedCodes[string(normalized)] = struct{}{}
-	}
-	w.Codes = normalizedCodes
-
 	// Remove duplicate state nodes by normalizing them
 	normalizedState := make(map[string]struct{})
 	for node := range w.State {
@@ -175,11 +165,6 @@ func (w *Witness) Size() int {
 		if header != nil {
 			size += 32 + 8 + 32 + 32 // hash + number + parentHash + root
 		}
-	}
-
-	// Codes size
-	for code := range w.Codes {
-		size += len(code)
 	}
 
 	// State size

@@ -26,8 +26,6 @@ func TestWitnessCompression(t *testing.T) {
 	}
 
 	// Add some test data
-	witness.AddCode([]byte("test bytecode 1234567890"))
-	witness.AddCode([]byte("another bytecode 0987654321"))
 	witness.AddState(map[string]struct{}{
 		"state_node_1": {},
 		"state_node_2": {},
@@ -72,11 +70,6 @@ func TestWitnessCompression(t *testing.T) {
 			}
 
 			// Verify data integrity
-			if len(decodedWitness.Codes) != len(witness.Codes) {
-				t.Errorf("Codes count mismatch: got %d, want %d",
-					len(decodedWitness.Codes), len(witness.Codes))
-			}
-
 			if len(decodedWitness.State) != len(witness.State) {
 				t.Errorf("State count mismatch: got %d, want %d",
 					len(decodedWitness.State), len(witness.State))
@@ -100,7 +93,6 @@ func TestCompressionEffectiveness(t *testing.T) {
 
 	// Add lots of repetitive data to test compression
 	for i := 0; i < 100; i++ {
-		witness.AddCode([]byte("repetitive bytecode pattern that should compress well"))
 		witness.AddState(map[string]struct{}{
 			"repetitive_state_node_pattern": {},
 		})
@@ -157,7 +149,6 @@ func TestBackwardCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	witness.AddCode([]byte("test bytecode"))
 	witness.AddState(map[string]struct{}{
 		"state_node": {},
 	})
@@ -175,11 +166,6 @@ func TestBackwardCompatibility(t *testing.T) {
 	}
 
 	// Verify data integrity
-	if len(decodedWitness.Codes) != len(witness.Codes) {
-		t.Errorf("Codes count mismatch: got %d, want %d",
-			len(decodedWitness.Codes), len(witness.Codes))
-	}
-
 	if len(decodedWitness.State) != len(witness.State) {
 		t.Errorf("State count mismatch: got %d, want %d",
 			len(decodedWitness.State), len(witness.State))
@@ -206,7 +192,6 @@ func TestCompressionMetrics(t *testing.T) {
 
 	// Add lots of data to ensure compression is triggered
 	for i := 0; i < 1000; i++ {
-		witness.AddCode([]byte("repetitive bytecode pattern that should compress well and provide good metrics"))
 		witness.AddState(map[string]struct{}{
 			"repetitive_state_node_pattern_that_should_compress": {},
 		})
@@ -288,7 +273,6 @@ func TestDecompressionMetrics(t *testing.T) {
 
 	// Add lots of data to ensure compression
 	for i := 0; i < 500; i++ {
-		witness.AddCode([]byte("repetitive bytecode pattern for decompression testing"))
 		witness.AddState(map[string]struct{}{
 			"repetitive_state_node_for_decompression": {},
 		})
@@ -380,7 +364,9 @@ func TestCompressionRateCalculation(t *testing.T) {
 	dataSize := 1024 * 1024 // 1MB of data
 	chunkSize := 1024
 	for i := 0; i < dataSize/chunkSize; i++ {
-		witness.AddCode(make([]byte, chunkSize))
+		witness.AddState(map[string]struct{}{
+			"test_state": {},
+		})
 	}
 
 	// Configure for compression
@@ -455,7 +441,6 @@ func TestMetricsConsistency(t *testing.T) {
 
 	// Add data
 	for i := 0; i < 100; i++ {
-		witness.AddCode([]byte("test data for consistency check"))
 		witness.AddState(map[string]struct{}{
 			"test_state": {},
 		})
