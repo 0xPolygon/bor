@@ -670,10 +670,12 @@ func ReadReceiptsRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawVa
 	_ = db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
 		// Check if the data is in ancients
 		if isCanon(reader, number, hash) {
+			log.Info("[debugethgetlogs] isCanon", "number", number, "hash", hash)
 			data, _ = reader.Ancient(ChainFreezerReceiptTable, number)
 			return nil
 		}
 		// If not, try reading from leveldb
+		log.Info("[debugethgetlogs] blocksReceipts key", "number", number, "hash", hash, "key", common.Bytes2Hex(blockReceiptsKey(number, hash)))
 		data, _ = db.Get(blockReceiptsKey(number, hash))
 
 		return nil
