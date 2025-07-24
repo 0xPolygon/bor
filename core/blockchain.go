@@ -2189,6 +2189,42 @@ func (bc *BlockChain) InsertChainWithWitnesses(chain types.Blocks, makeWitness b
 	return n, err
 }
 
+// BlockState tracks the completion state of blocks during insertion.
+type BlockState struct {
+	mu        sync.Mutex
+	completed map[common.Hash]bool
+	cond      *sync.Cond
+}
+
+func NewBlockState() *BlockState {
+	bs := &BlockState{
+		completed: make(map[common.Hash]bool),
+	}
+	bs.cond = sync.NewCond(&bs.mu)
+	return bs
+}
+
+func (bs *BlockState) IsComplete(hash common.Hash) bool {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	return bs.completed[hash]
+}
+
+func (bs *BlockState) WaitForParent(hash common.Hash) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	for !bs.completed[hash] {
+		bs.cond.Wait()
+	}
+}
+
+func (bs *BlockState) MarkComplete(hash common.Hash) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.completed[hash] = true
+	bs.cond.Broadcast()
+}
+
 func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stateless.Witness) (int, error) {
 	// Sanity check that we have something meaningful to import
 	if len(chain) == 0 {
@@ -2245,8 +2281,10 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 	var wg sync.WaitGroup
 
-	// In stateless mode, we process blocks one by one without committing the state
-	var processed int32
+	// In stateless mode, we process blocks parallely without committing the state
+	var processed atomic.Int32
+
+	bs := NewBlockState() // Block state tracker to manage parallel block processing
 	for i, block := range chain {
 		wg.Add(1)
 		go func(block *types.Block, i int) error {
@@ -2256,14 +2294,14 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 			if bc.HasBlock(block.Hash(), block.NumberU64()) {
 				log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
 				// Count as processed since we're skipping it
-				atomic.AddInt32(&processed, 1)
+				processed.Add(1)
 				// We need to ensure the header verification result for this block is consumed
 				// even though we are skipping the processing.
 				if err := <-results; err != nil {
 					// If header verification failed for this known block (shouldn't happen often),
 					// it might indicate a deeper issue, but we can't proceed with the chain.
 					log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
-					atomic.StoreInt32(&processed, processed-1)
+					processed.Store(processed.Load() - 1)
 					return fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 				}
 			}
@@ -2333,10 +2371,23 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 				witness = witnesses[i]
 			}
 
+		retry:
 			// Process the block using stateless execution
 			statedb, err := bc.ProcessBlockWithWitnesses(block, witness)
 			if err != nil {
-				return err
+				// if there is an error in calculation of state root, let's wait for the previous block to be processed
+				if errors.Is(err, fmt.Errorf("stateless self-validation state root mismatch")) {
+					log.Warn("Stateless self-validation state root mismatch, waiting for previous block to be processed", "block", block.NumberU64(), "hash", block.Hash(), "err", err)
+
+					// If this is not the first block, wait for the previous block to be processed
+					if i > 0 {
+						if !bs.IsComplete(block.Header().ParentHash) {
+							log.Warn("Waiting for previous block to be processed", "block", block.NumberU64(), "hash", block.Hash(), "previousBlock", chain[i-1].Hash())
+							bs.WaitForParent(block.Header().ParentHash)
+							goto retry
+						}
+					}
+				}
 			}
 
 			statedb.SetWitness(witness)
@@ -2346,9 +2397,10 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 				return err
 			}
 
-			atomic.AddInt32(&processed, 1)
-
-			stats.processed = int(atomic.LoadInt32(&processed))
+			processed.Add(1)
+			// Mark the block as processed
+			bs.MarkComplete(block.Hash())
+			stats.processed = int(processed.Load())
 
 			stats.report(chain, i, 0, 0, 0, 0, true, true)
 			return nil
@@ -2356,7 +2408,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 	}
 
-	return int(atomic.LoadInt32(&processed)), nil
+	return int(processed.Load()), nil
 }
 
 // insertChain is the internal implementation of InsertChain, which assumes that
