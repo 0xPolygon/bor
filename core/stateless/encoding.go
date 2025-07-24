@@ -121,7 +121,7 @@ func DefaultCompressionConfig() *CompressionConfig {
 	return &CompressionConfig{
 		Enabled:          true,
 		Threshold:        compressionThreshold,
-		CompressionLevel: gzip.BestCompression,
+		CompressionLevel: gzip.BestSpeed,
 		UseDeduplication: true,
 	}
 }
