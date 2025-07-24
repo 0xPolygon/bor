@@ -19,7 +19,7 @@ RUN --mount=type=ssh \
 # Copy the source code.
 COPY . .
 
-# Build with cache mounts and optimized settings
+# Build with cache mounts and optimized settings.
 RUN --mount=type=ssh \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -31,13 +31,13 @@ FROM alpine:3.22
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR
 
-# Install only runtime dependencies
+# Install only runtime dependencies.
 RUN apk add --no-cache ca-certificates && \
     mkdir -p ${BOR_DIR}
 
 WORKDIR ${BOR_DIR}
 
-# Copy binary from builder stage
+# Copy binary from builder stage.
 COPY --from=builder ${BOR_DIR}/build/bin/bor /usr/bin/
 
 EXPOSE 8545 8546 8547 30303 30303/udp
