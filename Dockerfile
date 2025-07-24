@@ -1,29 +1,45 @@
-FROM golang:latest
+FROM golang:1.24-alpine AS builder
 
-ARG BOR_DIR=/var/lib/bor
+ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR
 
-RUN apt-get update -y && apt-get upgrade -y \
-  && apt install build-essential git -y \
-  && mkdir -p ${BOR_DIR}
+# Install only essential build dependencies (much faster than apt-get).
+RUN apk add --no-cache build-base git linux-headers
 
 WORKDIR ${BOR_DIR}
 
-# Copy go.mod and go.sum first to leverage Docker's cache
+# Copy go.mod and go.sum first to leverage Docker's cache.
 COPY go.mod go.sum ./
 
-# Download dependencies separately (this layer can be cached)
-RUN --mount=type=ssh go mod download
+# Download dependencies with build cache mount for faster rebuilds.
+RUN --mount=type=ssh \
+    --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
-# Copy the rest of the application code
+# Copy the source code.
 COPY . .
 
-# Build the application
-RUN --mount=type=ssh make bor
+# Build with cache mounts and optimized settings
+RUN --mount=type=ssh \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    make bor
 
-RUN cp build/bin/bor /usr/bin/
+# Final stage - minimal runtime image.
+FROM alpine:3.22
 
-ENV SHELL /bin/bash
+ARG BOR_DIR=/var/lib/bor/
+ENV BOR_DIR=$BOR_DIR
+
+# Install only runtime dependencies
+RUN apk add --no-cache ca-certificates && \
+    mkdir -p ${BOR_DIR}
+
+WORKDIR ${BOR_DIR}
+
+# Copy binary from builder stage
+COPY --from=builder ${BOR_DIR}/build/bin/bor /usr/bin/
+
 EXPOSE 8545 8546 8547 30303 30303/udp
 
 ENTRYPOINT ["bor"]
