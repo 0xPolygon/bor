@@ -2,6 +2,7 @@ package stateless
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/klauspost/compress/gzip"
 )
 
 func TestWitnessCompression(t *testing.T) {
@@ -502,6 +504,92 @@ func TestMetricsConsistency(t *testing.T) {
 	}
 
 	t.Logf("Metrics consistency test passed")
+}
+
+// BenchmarkWitnessCompression benchmarks gzip compression and decompression for various witness sizes.
+func BenchmarkWitnessCompression(b *testing.B) {
+	sizes := []int{
+		1 << 10,   // 1KB
+		2 << 10,   // 2KB
+		4 << 10,   // 4KB
+		8 << 10,   // 8KB
+		16 << 10,  // 16KB
+		32 << 10,  // 32KB
+		64 << 10,  // 64KB
+		128 << 10, // 128KB
+		256 << 10, // 256KB
+		512 << 10, // 512KB
+		1 << 20,   // 1MB
+		2 << 20,   // 2MB
+		4 << 20,   // 4MB
+		8 << 20,   // 8MB
+		16 << 20,  // 16MB
+	}
+
+	header := &types.Header{
+		Number:     common.Big1,
+		ParentHash: common.Hash{},
+		Root:       common.Hash{},
+	}
+
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("%dKB", size/1024), func(b *testing.B) {
+			resetMetrics()
+			// Generate witness with State map of the target size (approximate)
+			witness, err := NewWitness(header, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			// Each key is 32 bytes, value is struct{} (0 bytes), so fill with enough keys
+			key := make([]byte, 32)
+			for i := 0; len(witness.State)*32 < size; i++ {
+				copy(key, fmt.Sprintf("node_%d", i))
+				witness.AddState(map[string]struct{}{string(key): {}})
+			}
+
+			// Set compression config
+			SetCompressionConfig(&CompressionConfig{
+				Enabled:          true,
+				Threshold:        0, // always compress
+				CompressionLevel: gzip.BestCompression,
+				UseDeduplication: true,
+			})
+
+			var (
+				compressTime   int64
+				decompressTime int64
+				origSize       int
+				compSize       int
+			)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var buf bytes.Buffer
+				start := time.Now()
+				if err := witness.EncodeCompressed(&buf); err != nil {
+					b.Fatal(err)
+				}
+				compressTime += time.Since(start).Nanoseconds()
+				compSize = buf.Len()
+				origSize = witness.Size()
+
+				// Decompression
+				var decoded Witness
+				start = time.Now()
+				if err := decoded.DecodeCompressed(buf.Bytes()); err != nil {
+					b.Fatal(err)
+				}
+				decompressTime += time.Since(start).Nanoseconds()
+			}
+			b.StopTimer()
+
+			avgCompressMs := float64(compressTime) / float64(b.N) / 1e6
+			avgDecompressMs := float64(decompressTime) / float64(b.N) / 1e6
+			compressionRatio := float64(compSize) / float64(origSize)
+
+			b.Logf("Witness size: %d bytes, Compressed: %d bytes, Ratio: %.2f%%, Avg Compress: %.2fms, Avg Decompress: %.2fms", origSize, compSize, compressionRatio*100, avgCompressMs, avgDecompressMs)
+		})
+	}
 }
 
 // resetMetrics resets all compression/decompression metrics for testing
