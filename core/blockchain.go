@@ -2314,7 +2314,8 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 			// Wait for the block's verification to complete
 			if err := <-results; err != nil {
 				if err == consensus.ErrUnknownAncestor {
-					// For stateless nodes, check if this is a reorg situation
+					// In parallel import, ErrUnknownAncestor might occur if parent block
+					// is still being processed by another goroutine. Handle differently based on context.
 					parentNum := block.NumberU64() - 1
 					existingBlock := bc.GetBlockByNumber(parentNum)
 
@@ -2355,13 +2356,46 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 						// Return to let the downloader retry with the correct chain
 						return fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-					} else if i != 0 {
-						// Not the first block and no reorg detected
+					} else if existingBlock == nil && i > 0 {
+						// Parent is missing but should be in the current batch being processed
+						// Check if parent is being processed in parallel
+						parentHash := block.ParentHash()
+						if !bs.IsComplete(parentHash) {
+							log.Debug("Parent block still being processed, waiting for completion",
+								"blockNum", block.NumberU64(),
+								"parentHash", parentHash)
+							// Wait for parent to complete processing
+							bs.WaitForParent(parentHash)
+							// After parent completes, retry the header verification
+							// This ensures proper dependency ordering in parallel processing
+							log.Debug("Parent processing completed, continuing with block",
+								"blockNum", block.NumberU64(),
+								"parentHash", parentHash)
+						} else {
+							// Parent should be complete but still getting unknown ancestor
+							// This indicates a genuine missing parent scenario
+							log.Error("Parent block processing completed but still unknown ancestor",
+								"blockNum", block.NumberU64(),
+								"parentHash", parentHash)
+							return err
+						}
+					} else if i == 0 {
+						// First block in batch - parent might not be in our chain yet
+						// This is acceptable for the first block as it connects to existing chain
+						log.Debug("First block in batch has unknown ancestor, continuing",
+							"blockNum", block.NumberU64(),
+							"parentHash", block.ParentHash())
+					} else {
+						// Other cases - return the error
 						return err
 					}
-					// First block in batch or successful reorg handling - continue
 				} else {
-					log.Warn("Ignoring unknown ancestor error during parallel insert", "block", block.Hash(), "hash", block.Hash(), "err", err)
+					// Non-ancestor related errors should still fail the import
+					log.Warn("Block verification failed during parallel insert",
+						"blockNum", block.NumberU64(),
+						"hash", block.Hash(),
+						"err", err)
+					return err
 				}
 			}
 

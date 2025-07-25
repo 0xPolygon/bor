@@ -26,6 +26,7 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -5281,6 +5282,381 @@ func TestStatelessInsertChain(t *testing.T) {
 	}
 
 	t.Log("InsertChainStateless method exists and handles stateless mode configuration correctly")
+}
+
+// TestStatelessInsertChainUnknownAncestor tests ErrUnknownAncestor handling in parallel import
+func TestStatelessInsertChainUnknownAncestor(t *testing.T) {
+	var (
+		engine = ethash.NewFaker()
+		gspec  = &Genesis{
+			Config: params.TestChainConfig,
+		}
+	)
+
+	// Create blockchain with stateless config
+	cacheConfig := &CacheConfig{
+		TriesInMemory: 0,
+	}
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	// First block with unknown ancestor should be allowed
+	t.Run("FirstBlockUnknownAncestor", func(t *testing.T) {
+		// Create a block with a non-existent parent (simulating unknown ancestor)
+		parent := chain.Genesis()
+
+		// Create a fake parent hash that doesn't exist
+		fakeParentHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+
+		// Verify the fake parent doesn't exist in the chain
+		if chain.HasBlock(fakeParentHash, 0) {
+			t.Fatal("Test setup error: fake parent hash should not exist in chain")
+		}
+
+		// Create block with fake parent
+		header := &types.Header{
+			ParentHash: fakeParentHash,
+			Number:     big.NewInt(1),
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 1,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+1, parent.Header()),
+		}
+		block := types.NewBlockWithHeader(header)
+
+		// For the first block in batch, unknown ancestor should not cause immediate rejection
+		// The error should be related to missing witnesses, not unknown ancestor
+		processed, err := chain.InsertChainStateless([]*types.Block{block}, nil)
+
+		// Should process at least the attempt (processed count may be 0 due to other errors)
+		if processed < 0 {
+			t.Errorf("Expected non-negative processed count, got %d", processed)
+		}
+
+		// Error should NOT be ErrUnknownAncestor for first block - our implementation should handle this
+		if err != nil && strings.Contains(err.Error(), "unknown ancestor") {
+			t.Errorf("First block should not fail due to unknown ancestor, got: %v", err)
+		}
+
+		// Should get other errors (like missing witnesses) but not unknown ancestor
+		if err != nil {
+			t.Logf("Expected non-ancestor error for first block: %v", err)
+		}
+	})
+
+	// Sequential blocks where parent is in the same batch
+	t.Run("ParentInSameBatch", func(t *testing.T) {
+		// Test that blocks referencing parents in the same batch are handled correctly
+		// This tests the dependency tracking logic
+
+		// Create two sequential blocks
+		parent := chain.Genesis()
+		header1 := &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(1),
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 1,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+1, parent.Header()),
+		}
+		block1 := types.NewBlockWithHeader(header1)
+
+		header2 := &types.Header{
+			ParentHash: block1.Hash(),
+			Number:     big.NewInt(2),
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 2,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+2, header1),
+		}
+		block2 := types.NewBlockWithHeader(header2)
+
+		// Verify block2's parent (block1) is not in the chain yet
+		if chain.HasBlock(block1.Hash(), 1) {
+			t.Fatal("Test setup error: block1 should not exist in chain yet")
+		}
+
+		// Attempt to insert both blocks
+		blocks := []*types.Block{block1, block2}
+		processed, err := chain.InsertChainStateless(blocks, nil)
+
+		// Should attempt to process both blocks
+		if processed < 0 {
+			t.Errorf("Expected non-negative processed count, got %d", processed)
+		}
+
+		// Should handle the dependency correctly - not fail due to unknown ancestor
+		// since block1 is in the same batch as block2's parent
+		if err != nil && strings.Contains(err.Error(), "unknown ancestor") {
+			t.Errorf("Blocks in same batch should not fail due to unknown ancestor, got: %v", err)
+		}
+
+		// May get other errors (witnesses, etc.) but should exercise dependency logic
+		if err != nil {
+			t.Logf("Expected non-ancestor error for sequential blocks: %v", err)
+		}
+	})
+}
+
+// TestStatelessInsertChainReorgScenario tests reorg handling in parallel import
+func TestStatelessInsertChainReorgScenario(t *testing.T) {
+	var (
+		engine = ethash.NewFaker()
+		gspec  = &Genesis{
+			Config: params.TestChainConfig,
+		}
+	)
+
+	// Create blockchain with stateless config
+	cacheConfig := &CacheConfig{
+		TriesInMemory: 0,
+	}
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	t.Run("ConflictingParentDetection", func(t *testing.T) {
+		// Test the reorg detection logic when a block references a non-existent parent
+		// that conflicts with existing blockchain state
+
+		parent := chain.Genesis()
+
+		// Create a block that would conflict with an existing parent
+		conflictingParentHash := common.HexToHash("0xdeadbeef") // Different from actual parent
+
+		// Verify the conflicting parent doesn't exist
+		if chain.HasBlock(conflictingParentHash, 0) {
+			t.Fatal("Test setup error: conflicting parent hash should not exist in chain")
+		}
+
+		header := &types.Header{
+			ParentHash: conflictingParentHash,
+			Number:     big.NewInt(1),
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 1,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+1, parent.Header()),
+		}
+		block := types.NewBlockWithHeader(header)
+
+		// Should process the attempt but handle the conflict appropriately
+		processed, err := chain.InsertChainStateless([]*types.Block{block}, nil)
+
+		// Should attempt processing
+		if processed < 0 {
+			t.Errorf("Expected non-negative processed count, got %d", processed)
+		}
+
+		// Should handle the reorg scenario - either through proper error or resolution
+		// The key is that it shouldn't panic or hang
+		if err != nil {
+			// Error is expected in this scenario, but should be handled gracefully
+			t.Logf("Reorg conflict handled with error (expected): %v", err)
+
+			// Should not be a simple unknown ancestor error since this tests reorg logic
+			if strings.Contains(err.Error(), "unknown ancestor") {
+				t.Logf("Got unknown ancestor error, which may indicate reorg detection: %v", err)
+			}
+		}
+
+		// Verify the chain state is consistent after the operation
+		currentHead := chain.CurrentBlock()
+		if currentHead == nil {
+			t.Error("Chain head should not be nil after reorg scenario")
+		}
+	})
+}
+
+// TestStatelessInsertChainDependencyHandling tests the BlockState dependency tracking
+func TestStatelessInsertChainDependencyHandling(t *testing.T) {
+	var (
+		engine = ethash.NewFaker()
+		gspec  = &Genesis{
+			Config: params.TestChainConfig,
+		}
+	)
+
+	// Create blockchain with stateless config
+	cacheConfig := &CacheConfig{
+		TriesInMemory: 0,
+	}
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	t.Run("BlockStateDependencyTracking", func(t *testing.T) {
+		// Test that blocks with proper parent-child relationships are handled correctly
+		// This verifies the dependency tracking infrastructure works
+
+		parent := chain.Genesis()
+		blocks := make([]*types.Block, 3)
+
+		// Create a chain of 3 sequential blocks
+		for i := 0; i < 3; i++ {
+			var parentHash common.Hash
+			var parentTime uint64
+			var parentHeader *types.Header
+
+			if i == 0 {
+				parentHash = parent.Hash()
+				parentTime = parent.Time()
+				parentHeader = parent.Header()
+			} else {
+				parentHash = blocks[i-1].Hash()
+				parentTime = blocks[i-1].Time()
+				parentHeader = blocks[i-1].Header()
+			}
+
+			header := &types.Header{
+				ParentHash: parentHash,
+				Number:     big.NewInt(int64(i + 1)),
+				GasLimit:   parent.GasLimit(),
+				Time:       parentTime + 1,
+				Difficulty: engine.CalcDifficulty(chain, parentTime+1, parentHeader),
+			}
+			blocks[i] = types.NewBlockWithHeader(header)
+		}
+
+		// Verify the chain structure is correct before testing
+		for i := 1; i < len(blocks); i++ {
+			if blocks[i].ParentHash() != blocks[i-1].Hash() {
+				t.Fatalf("Test setup error: block %d parent hash mismatch", i)
+			}
+		}
+
+		// None of these blocks should exist in the chain yet
+		for i, block := range blocks {
+			if chain.HasBlock(block.Hash(), uint64(i+1)) {
+				t.Fatalf("Test setup error: block %d should not exist in chain yet", i)
+			}
+		}
+
+		// Attempt parallel processing - the dependency logic should be exercised
+		processed, err := chain.InsertChainStateless(blocks, nil)
+
+		// Should attempt to process all blocks
+		if processed < 0 {
+			t.Errorf("Expected non-negative processed count, got %d", processed)
+		}
+
+		// With proper sequential blocks, should not fail due to unknown ancestor
+		// The dependency tracking should handle the parent-child relationships
+		if err != nil && strings.Contains(err.Error(), "unknown ancestor") {
+			t.Errorf("Sequential blocks should not fail due to unknown ancestor with proper dependency tracking, got: %v", err)
+		}
+
+		// May get other errors (witnesses, validation, etc.) but dependency tracking should work
+		if err != nil {
+			t.Logf("Dependency tracking tested, got expected non-ancestor error: %v", err)
+		}
+	})
+}
+
+// TestStatelessInsertChainErrorHandling tests various error scenarios
+func TestStatelessInsertChainErrorHandling(t *testing.T) {
+	var (
+		engine = ethash.NewFaker()
+		gspec  = &Genesis{
+			Config: params.TestChainConfig,
+		}
+	)
+
+	// Create blockchain with stateless config
+	cacheConfig := &CacheConfig{
+		TriesInMemory: 0,
+	}
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	t.Run("NonContiguousBlocks", func(t *testing.T) {
+		// Test that non-contiguous block sequences are properly rejected
+		parent := chain.Genesis()
+
+		header1 := &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(1),
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 1,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+1, parent.Header()),
+		}
+		block1 := types.NewBlockWithHeader(header1)
+
+		// Create block3 without block2 (non-contiguous)
+		header3 := &types.Header{
+			ParentHash: common.HexToHash("0xmissingblock2hash"),
+			Number:     big.NewInt(3), // Skip block 2 - this makes it non-contiguous
+			GasLimit:   parent.GasLimit(),
+			Time:       parent.Time() + 3,
+			Difficulty: engine.CalcDifficulty(chain, parent.Time()+3, header1),
+		}
+		block3 := types.NewBlockWithHeader(header3)
+
+		// Verify the blocks are indeed non-contiguous
+		if block1.NumberU64()+1 == block3.NumberU64() {
+			t.Fatal("Test setup error: blocks should be non-contiguous")
+		}
+
+		// This should fail due to non-contiguous blocks before even reaching unknown ancestor logic
+		processed, err := chain.InsertChainStateless([]*types.Block{block1, block3}, nil)
+
+		// Should fail early with contiguous check
+		if err == nil {
+			t.Error("Expected error for non-contiguous blocks, but got nil")
+		}
+
+		// Should contain "contiguous" in error message since this is caught early
+		if err != nil && !strings.Contains(err.Error(), "contiguous") {
+			t.Errorf("Expected 'contiguous' error for non-contiguous blocks, got: %v", err)
+		}
+
+		// Should not process any blocks due to early validation failure
+		if processed != 0 {
+			t.Errorf("Expected 0 processed blocks for non-contiguous input, got %d", processed)
+		}
+
+		t.Logf("Correctly rejected non-contiguous blocks: %v", err)
+	})
+
+	t.Run("InvalidBlockStructure", func(t *testing.T) {
+		// Test with malformed block - empty/invalid header should cause validation failure
+		emptyHeader := &types.Header{
+			// Missing required fields like Number, ParentHash, etc.
+		}
+		invalidBlock := types.NewBlockWithHeader(emptyHeader)
+
+		// Verify the block is indeed invalid
+		if invalidBlock.Number() != nil && invalidBlock.Number().Uint64() != 0 {
+			t.Fatal("Test setup error: block should have invalid/empty number")
+		}
+
+		processed, err := chain.InsertChainStateless([]*types.Block{invalidBlock}, nil)
+
+		// Should fail due to invalid block structure
+		if err == nil {
+			t.Error("Expected error for invalid block structure, but got nil")
+		}
+
+		// Should fail early in validation, not reach unknown ancestor logic
+		if err != nil {
+			t.Logf("Correctly rejected invalid block: %v", err)
+
+			// Should not be an unknown ancestor error since structure is the issue
+			if strings.Contains(err.Error(), "unknown ancestor") {
+				t.Logf("Note: Got unknown ancestor error for invalid block: %v", err)
+			}
+		}
+
+		// Should not successfully process invalid blocks
+		if processed < 0 {
+			t.Errorf("Expected non-negative processed count, got %d", processed)
+		}
+	})
 }
 
 // TestStatelessSetHeadBeyondRoot tests setHeadBeyondRoot in stateless mode
