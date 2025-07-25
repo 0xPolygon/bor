@@ -197,6 +197,9 @@ type LightChain interface {
 	// InsertHeaderChain inserts a batch of headers into the local chain.
 	InsertHeaderChain([]*types.Header) (int, error)
 
+	// InsertHeaderChainWithoutValidation inserts a batch of headers into the local chain without validation.
+	InsertHeaderChainWithoutValidation([]*types.Header) (int, error)
+
 	// SetHead rewinds the local chain to a new head.
 	SetHead(uint64) error
 }
@@ -616,6 +619,14 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 			}
 
 			log.Info("Bytecode-only snap sync completed, continuing with stateless sync")
+
+			if !d.blockchain.HasHeader(pivotHeader.Hash(), pivotHeader.Number.Uint64()) {
+				log.Info("Pivot header not found in local chain, inserting", "pivotHeader", pivotHeader.Number, "hash", pivotHeader.Hash())
+				_, err := d.blockchain.InsertHeaderChainWithoutValidation([]*types.Header{pivotHeader})
+				if err != nil {
+					return fmt.Errorf("failed to insert pivot header into local chain: %w", err)
+				}
+			}
 		}
 
 		origin = fastForwardBlock

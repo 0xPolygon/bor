@@ -100,7 +100,7 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 	return nil
 }
 
-// handleGetWitness retrieves witnesses for the requested block hashes and returns them as raw RLP data.
+// handleGetWitness retrieves witnesses for the requested block hashes and returns them as raw RLP data (compressed).
 // It now returns the data and error, rather than sending the reply directly.
 // The returned data is [][]byte, as rlp.RawValue is essentially []byte.
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
@@ -168,7 +168,7 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 		}
 	}
 
-	// Return the collected RLP data
+	// Return the collected RLP data (now supports compressed format)
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
 }

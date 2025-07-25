@@ -15,7 +15,7 @@ if ! command -v kurtosis &>/dev/null; then
 fi
 
 # Define the enclave name
-ENCLAVE_NAME=${ENCLAVE_NAME:-"kurtosis-e2e"}
+ENCLAVE_NAME=${ENCLAVE_NAME:-"kurtosis-stateless-e2e"}
 
 # Function to get RPC URL for a service
 get_rpc_url() {

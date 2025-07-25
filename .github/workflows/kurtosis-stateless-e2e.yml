@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ENCLAVE_NAME: kurtosis-e2e
+  ENCLAVE_NAME: kurtosis-stateless-e2e
 
 jobs:
   e2e-tests:
@@ -58,27 +58,27 @@ jobs:
       - name: Checkout Kurtosis
         uses: actions/checkout@v4
         with:
-          repository: 0xPolygon/kurtosis-polygon-pos
+          repository: 0xPolygon/kurtosis-pos
           ref: stateless
-          path: kurtosis-polygon-pos
+          path: kurtosis-pos
 
       - name: Copy kurtosis config
-        run: cp ./bor/.github/configs/kurtosis-e2e.yml ./kurtosis-polygon-pos/kurtosis-e2e.yml
+        run: cp ./bor/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
 
       - name: Kurtosis run
         run: |
-          cd kurtosis-polygon-pos
-          kurtosis run --args-file kurtosis-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+          cd kurtosis-pos
+          kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: |
-          cd kurtosis-polygon-pos
+          cd kurtosis-pos
           kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Run stateless sync tests
         run: |
           cd bor
-          bash integration-tests/stateless_sync_test.sh
+          bash integration-tests/kurtosis_stateless_test.sh
 
       - name: Test state syncs (post VeBlop HF)
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,matic,pol --recursive tests/"

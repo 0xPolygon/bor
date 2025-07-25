@@ -1962,7 +1962,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	if statedb.Witness() != nil {
 		var witBuf bytes.Buffer
-		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
+		if err := statedb.Witness().EncodeCompressed(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
@@ -3700,6 +3700,20 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header) (int, error) {
 	defer bc.chainmu.Unlock()
 	_, err := bc.hc.InsertHeaderChain(chain, start, bc.forker)
 	return 0, err
+}
+
+func (bc *BlockChain) InsertHeaderChainWithoutValidation(chain []*types.Header) (int, error) {
+	if len(chain) == 0 {
+		return 0, nil
+	}
+
+	if !bc.chainmu.TryLock() {
+		return 0, errChainStopped
+	}
+	defer bc.chainmu.Unlock()
+
+	count, err := bc.hc.WriteHeaders(chain)
+	return count, err
 }
 
 func (bc *BlockChain) GetChainConfig() *params.ChainConfig {

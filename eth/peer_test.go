@@ -37,7 +37,7 @@ func TestRequestWitnesses_HasWitPeer_Returns(t *testing.T) {
 	witness, _ := stateless.NewWitness(&types.Header{}, nil)
 	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
-	witness.EncodeRLP(&witBuf)
+	witness.EncodeCompressed(&witBuf)
 
 	mockWitPeer := NewMockWitnessPeer(ctrl)
 	p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil), witPeer: &witPeer{Peer: mockWitPeer}}
@@ -79,7 +79,7 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 	witness, _ := stateless.NewWitness(&types.Header{}, nil)
 	FillWitnessWithDeterministicRandomState(witness, 10*1024)
 	var witBuf bytes.Buffer
-	witness.EncodeRLP(&witBuf)
+	witness.EncodeCompressed(&witBuf)
 
 	mockWitPeer := NewMockWitnessPeer(ctrl)
 	p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil), witPeer: &witPeer{Peer: mockWitPeer}}

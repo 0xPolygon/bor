@@ -727,10 +727,6 @@ func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *
 
 		log.Info("Span check complete", "foundNewSpan", foundNewSpan)
 
-		if !foundNewSpan {
-			return c.performSpanCheck(chain, targetHeader, parents)
-		}
-
 		return nil
 	} else if missingTargetSignature == nil && targetHeaderAuthor != parentHeaderAuthor {
 		log.Info("Updating latest span due to different author", "target block", targetHeader.Number.Uint64(), "parentHeader", targetHeader.ParentHash, "parentHeaderAuthor", parentHeaderAuthor, "targetHeaderAuthor", targetHeaderAuthor)
