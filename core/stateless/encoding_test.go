@@ -6,13 +6,18 @@ import (
 	"testing"
 	"time"
 
-	"sync/atomic"
+	"compress/gzip"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/klauspost/compress/gzip"
 )
+
+func init() {
+	// Enable metrics for testing
+	metrics.Enable()
+}
 
 func TestWitnessCompression(t *testing.T) {
 	// Create a test witness with some data
@@ -551,7 +556,7 @@ func BenchmarkWitnessCompression(b *testing.B) {
 			SetCompressionConfig(&CompressionConfig{
 				Enabled:          true,
 				Threshold:        0, // always compress
-				CompressionLevel: gzip.BestCompression,
+				CompressionLevel: gzip.BestSpeed,
 				UseDeduplication: true,
 			})
 
@@ -594,17 +599,14 @@ func BenchmarkWitnessCompression(b *testing.B) {
 
 // resetMetrics resets all compression/decompression metrics for testing
 func resetMetrics() {
-	// Reset all atomic variables to zero
-	atomic.StoreInt64(&compressionRatio, 0)
-	atomic.StoreInt64(&compressionCount, 0)
-	atomic.StoreInt64(&uncompressedCount, 0)
-	atomic.StoreInt64(&totalOriginalSize, 0)
-	atomic.StoreInt64(&totalCompressedSize, 0)
-	atomic.StoreInt64(&totalCompressionTime, 0)
-	atomic.StoreInt64(&totalCompressionSize, 0)
-	atomic.StoreInt64(&compressionRate, 0)
-	atomic.StoreInt64(&decompressionCount, 0)
-	atomic.StoreInt64(&totalDecompressionTime, 0)
-	atomic.StoreInt64(&totalDecompressionSize, 0)
-	atomic.StoreInt64(&decompressionRate, 0)
+	// Reset all metrics to zero
+	compressionRatio.Update(0)
+	compressionCount.Clear()
+	uncompressedCount.Clear()
+	totalOriginalSize.Update(0)
+	totalCompressedSize.Update(0)
+	spaceSavedBytes.Update(0)
+	// Note: Timer and Meter don't have Clear methods, they accumulate over time
+	// We can't easily reset them in tests, but this is acceptable for metrics
+	decompressionCount.Clear()
 }

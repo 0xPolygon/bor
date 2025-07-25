@@ -21,63 +21,71 @@ import (
 	"compress/gzip"
 	"errors"
 	"io"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // Compression metrics
 var (
-	compressionRatio    int64
-	compressionCount    int64
-	uncompressedCount   int64
-	totalOriginalSize   int64
-	totalCompressedSize int64
+	// Counters for operations
+	compressionCount   = metrics.NewRegisteredCounter("witness/compression/count", nil)
+	uncompressedCount  = metrics.NewRegisteredCounter("witness/uncompressed/count", nil)
+	decompressionCount = metrics.NewRegisteredCounter("witness/decompression/count", nil)
 
-	// Compression timing and rate metrics
-	totalCompressionTime int64 // nanoseconds
-	totalCompressionSize int64 // total size of compressed data
-	compressionRate      int64 // bytes per second
+	// Gauges for current values
+	compressionRatio    = metrics.NewRegisteredGauge("witness/compression/ratio", nil)
+	totalOriginalSize   = metrics.NewRegisteredGauge("witness/compression/original_size", nil)
+	totalCompressedSize = metrics.NewRegisteredGauge("witness/compression/compressed_size", nil)
+	spaceSavedBytes     = metrics.NewRegisteredGauge("witness/compression/space_saved", nil)
 
-	// Decompression metrics
-	decompressionCount     int64
-	totalDecompressionTime int64 // nanoseconds
-	totalDecompressionSize int64 // total size of decompressed data
-	decompressionRate      int64 // bytes per second
+	// Timers for timing operations
+	compressionTimer   = metrics.NewRegisteredTimer("witness/compression/timer", nil)
+	decompressionTimer = metrics.NewRegisteredTimer("witness/decompression/timer", nil)
+
+	// Meters for rates
+	compressionRate   = metrics.NewRegisteredMeter("witness/compression/rate", nil)
+	decompressionRate = metrics.NewRegisteredMeter("witness/decompression/rate", nil)
 )
 
 // CompressionStats returns current compression statistics
 func CompressionStats() map[string]interface{} {
-	compressed := atomic.LoadInt64(&compressionCount)
-	uncompressed := atomic.LoadInt64(&uncompressedCount)
+	compressed := compressionCount.Snapshot().Count()
+	uncompressed := uncompressedCount.Snapshot().Count()
 	total := compressed + uncompressed
-	decompressed := atomic.LoadInt64(&decompressionCount)
+	decompressed := decompressionCount.Snapshot().Count()
 
 	var avgRatio float64
 	if compressed > 0 {
-		avgRatio = float64(atomic.LoadInt64(&compressionRatio)) / float64(compressed)
+		avgRatio = float64(compressionRatio.Snapshot().Value()) / float64(compressed)
 	}
 
 	var avgCompressionTime float64
-	if compressed > 0 {
-		avgCompressionTime = float64(atomic.LoadInt64(&totalCompressionTime)) / float64(compressed) / 1e6 // Convert to milliseconds
+	var totalCompressionTimeMs float64
+	compressionTimerSnapshot := compressionTimer.Snapshot()
+	if compressionTimerSnapshot.Count() > 0 {
+		avgCompressionTime = float64(compressionTimerSnapshot.Mean()) / 1e6    // Convert to milliseconds
+		totalCompressionTimeMs = float64(compressionTimerSnapshot.Sum()) / 1e6 // Total time in milliseconds
 	}
 
 	var avgDecompressionTime float64
-	if decompressed > 0 {
-		avgDecompressionTime = float64(atomic.LoadInt64(&totalDecompressionTime)) / float64(decompressed) / 1e6 // Convert to milliseconds
+	var totalDecompressionTimeMs float64
+	decompressionTimerSnapshot := decompressionTimer.Snapshot()
+	if decompressionTimerSnapshot.Count() > 0 {
+		avgDecompressionTime = float64(decompressionTimerSnapshot.Mean()) / 1e6    // Convert to milliseconds
+		totalDecompressionTimeMs = float64(decompressionTimerSnapshot.Sum()) / 1e6 // Total time in milliseconds
 	}
 
 	var compressionRateBps float64
-	if atomic.LoadInt64(&totalCompressionTime) > 0 {
-		compressionRateBps = float64(atomic.LoadInt64(&totalCompressionSize)) / float64(atomic.LoadInt64(&totalCompressionTime)) * 1e9 // bytes per second
+	if compressionTimerSnapshot.Count() > 0 && compressionTimerSnapshot.Mean() > 0 {
+		compressionRateBps = float64(totalCompressedSize.Snapshot().Value()) / compressionTimerSnapshot.Mean() * 1e9 // bytes per second
 	}
 
 	var decompressionRateBps float64
-	if atomic.LoadInt64(&totalDecompressionTime) > 0 {
-		decompressionRateBps = float64(atomic.LoadInt64(&totalDecompressionSize)) / float64(atomic.LoadInt64(&totalDecompressionTime)) * 1e9 // bytes per second
+	if decompressionTimerSnapshot.Count() > 0 && decompressionTimerSnapshot.Mean() > 0 {
+		decompressionRateBps = float64(totalCompressedSize.Snapshot().Value()) / decompressionTimerSnapshot.Mean() * 1e9 // bytes per second
 	}
 
 	return map[string]interface{}{
@@ -85,21 +93,21 @@ func CompressionStats() map[string]interface{} {
 		"uncompressed_count":    uncompressed,
 		"total_witnesses":       total,
 		"compression_ratio":     avgRatio,
-		"total_original_size":   atomic.LoadInt64(&totalOriginalSize),
-		"total_compressed_size": atomic.LoadInt64(&totalCompressedSize),
-		"space_saved_bytes":     atomic.LoadInt64(&totalOriginalSize) - atomic.LoadInt64(&totalCompressedSize),
+		"total_original_size":   totalOriginalSize.Snapshot().Value(),
+		"total_compressed_size": totalCompressedSize.Snapshot().Value(),
+		"space_saved_bytes":     spaceSavedBytes.Snapshot().Value(),
 
 		// Compression timing and rate metrics
-		"total_compression_time_ms": float64(atomic.LoadInt64(&totalCompressionTime)) / 1e6,
+		"total_compression_time_ms": totalCompressionTimeMs,
 		"avg_compression_time_ms":   avgCompressionTime,
-		"total_compression_size":    atomic.LoadInt64(&totalCompressionSize),
+		"total_compression_size":    totalCompressedSize.Snapshot().Value(),
 		"compression_rate_bps":      compressionRateBps,
 
 		// Decompression metrics
 		"decompression_count":         decompressed,
-		"total_decompression_time_ms": float64(atomic.LoadInt64(&totalDecompressionTime)) / 1e6,
+		"total_decompression_time_ms": totalDecompressionTimeMs,
 		"avg_decompression_time_ms":   avgDecompressionTime,
-		"total_decompression_size":    atomic.LoadInt64(&totalDecompressionSize),
+		"total_decompression_size":    totalCompressedSize.Snapshot().Value(),
 		"decompression_rate_bps":      decompressionRateBps,
 	}
 }
@@ -198,7 +206,7 @@ func (w *Witness) EncodeCompressed(wr io.Writer) error {
 	originalSize := len(rlpData)
 
 	// Track original size
-	atomic.AddInt64(&totalOriginalSize, int64(originalSize))
+	totalOriginalSize.Inc(int64(originalSize))
 
 	// Only compress if enabled and the data is large enough to benefit from compression
 	if globalCompressionConfig.Enabled && len(rlpData) > globalCompressionConfig.Threshold {
@@ -228,12 +236,15 @@ func (w *Witness) EncodeCompressed(wr io.Writer) error {
 		// Only use compression if it actually reduces size
 		if len(compressedData) < len(rlpData) {
 			// Track compression metrics
-			atomic.AddInt64(&compressionCount, 1)
-			atomic.AddInt64(&totalCompressedSize, int64(len(compressedData)))
-			atomic.AddInt64(&totalCompressionTime, compressionTime)
-			atomic.AddInt64(&totalCompressionSize, int64(len(compressedData)))
+			compressionCount.Inc(1)
+			totalCompressedSize.Inc(int64(len(compressedData)))
+			compressionTimer.Update(time.Duration(compressionTime))
 			ratio := int64(float64(len(compressedData)) / float64(originalSize) * 100)
-			atomic.AddInt64(&compressionRatio, ratio)
+			compressionRatio.Update(ratio)
+
+			// Update space saved
+			spaceSaved := int64(originalSize) - int64(len(compressedData))
+			spaceSavedBytes.Inc(spaceSaved)
 
 			// Write compression marker and compressed data
 			if _, err := wr.Write([]byte{0x01}); err != nil {
@@ -245,8 +256,8 @@ func (w *Witness) EncodeCompressed(wr io.Writer) error {
 	}
 
 	// Track uncompressed metrics
-	atomic.AddInt64(&uncompressedCount, 1)
-	atomic.AddInt64(&totalCompressedSize, int64(originalSize))
+	uncompressedCount.Inc(1)
+	totalCompressedSize.Inc(int64(originalSize))
 
 	// Write uncompressed marker and original RLP data
 	if _, err := wr.Write([]byte{0x00}); err != nil {
@@ -286,9 +297,8 @@ func (w *Witness) DecodeCompressed(data []byte) error {
 
 		// Calculate decompression time and track metrics
 		decompressionTime := time.Since(startTime).Nanoseconds()
-		atomic.AddInt64(&decompressionCount, 1)
-		atomic.AddInt64(&totalDecompressionTime, decompressionTime)
-		atomic.AddInt64(&totalDecompressionSize, int64(len(rlpData)))
+		decompressionCount.Inc(1)
+		decompressionTimer.Update(time.Duration(decompressionTime))
 	} else {
 		rlpData = witnessData
 	}
