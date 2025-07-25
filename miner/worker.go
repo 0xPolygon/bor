@@ -167,7 +167,6 @@ const (
 // newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
 type newWorkReq struct {
 	interrupt *atomic.Int32
-	noempty   bool
 	timestamp int64
 }
 
@@ -498,14 +497,14 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	<-timer.C // discard the initial tick
 
 	// commit aborts in-flight transaction execution with given signal and resubmits a new one.
-	commit := func(noempty bool, s int32) {
+	commit := func(s int32) {
 		if interrupt != nil {
 			interrupt.Store(s)
 		}
 
 		interrupt = new(atomic.Int32)
 		select {
-		case w.newWorkCh <- &newWorkReq{interrupt: interrupt, timestamp: timestamp, noempty: noempty}:
+		case w.newWorkCh <- &newWorkReq{interrupt: interrupt, timestamp: timestamp}:
 		case <-w.exitCh:
 			return
 		}
@@ -529,13 +528,13 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
-			commit(false, commitInterruptNewHead)
+			commit(commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
 			clearPending(head.Header.Number.Uint64())
 
 			timestamp = time.Now().Unix()
-			commit(false, commitInterruptNewHead)
+			commit(commitInterruptNewHead)
 
 		case <-timer.C:
 			// If sealing is running resubmit a new work cycle periodically to pull in
@@ -549,7 +548,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				// 	timer.Reset(recommit)
 				// 	continue
 				// }
-				commit(true, commitInterruptResubmit)
+				commit(commitInterruptResubmit)
 			}
 
 		case interval := <-w.resubmitIntervalCh:
@@ -611,11 +610,11 @@ func (w *worker) mainLoop() {
 			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
 				if w.eth.PeerCount() > 0 || devFakeAuthor {
 					//nolint:contextcheck
-					w.commitWork(req.interrupt, req.noempty, req.timestamp)
+					w.commitWork(req.interrupt, req.timestamp)
 				}
 			} else {
 				//nolint:contextcheck
-				w.commitWork(req.interrupt, req.noempty, req.timestamp)
+				w.commitWork(req.interrupt, req.timestamp)
 			}
 
 		case req := <-w.getWorkCh:
@@ -676,7 +675,7 @@ func (w *worker) mainLoop() {
 				// submit sealing work here since all empty submission will be rejected
 				// by clique. Of course the advance sealing(empty submission) is disabled.
 				if w.chainConfig.Clique != nil && w.chainConfig.Clique.Period == 0 {
-					w.commitWork(nil, true, time.Now().Unix())
+					w.commitWork(nil, time.Now().Unix())
 				}
 			}
 
@@ -1478,7 +1477,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
-func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64) {
+func (w *worker) commitWork(interrupt *atomic.Int32, timestamp int64) {
 	// Abort committing if node is still syncing
 	if w.syncing.Load() {
 		return
@@ -1515,14 +1514,16 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		stopFn()
 	}()
 
-	if !noempty && w.interruptCommitFlag {
+	if w.interruptCommitFlag {
 		w.interruptCtx, stopFn = getInterruptTimer(w.interruptCtx, work.header.Number.Uint64(), work.header.Time)
 		w.interruptCtx = vm.PutCache(w.interruptCtx, w.interruptedTxCache)
 	}
 
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
-	if !noempty && !w.noempty.Load() {
+	// The field `w.noempty` is only set to true when commit interrupt
+	// is enabled which means we won't commit an empty block.
+	if !w.noempty.Load() {
 		_ = w.commit(work.copy(), nil, false, start)
 	}
 	// Fill pending transactions from the txpool into the block.
