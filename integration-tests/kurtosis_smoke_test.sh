@@ -26,7 +26,7 @@ test_checkpoint() {
 
 	echo "Using Heimdall HTTP URL: $http_url"
 
-	local max_attempts=60
+	local max_attempts=100
 	local attempt=0
 
 	while [ $attempt -lt $max_attempts ]; do

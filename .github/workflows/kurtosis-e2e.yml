@@ -60,21 +60,21 @@ jobs:
       - name: Checkout Kurtosis
         uses: actions/checkout@v4
         with:
-          repository: 0xPolygon/kurtosis-polygon-pos
+          repository: 0xPolygon/kurtosis-pos
           ref: main
-          path: kurtosis-polygon-pos
+          path: kurtosis-pos
 
       - name: Copy kurtosis config
-        run: cp ./bor/.github/configs/kurtosis-e2e.yml ./kurtosis-polygon-pos/kurtosis-e2e.yml
+        run: cp ./bor/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
 
       - name: Kurtosis run
         run: |
-          cd kurtosis-polygon-pos
+          cd kurtosis-pos
           kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: |
-          cd kurtosis-polygon-pos
+          cd kurtosis-pos
           kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Test state syncs
