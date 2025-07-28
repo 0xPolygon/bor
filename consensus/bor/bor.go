@@ -1298,7 +1298,7 @@ func (c *Bor) checkAndCommitSpan(
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Inner().Copy()
-	tempState.SetPrefetcher(nil)
+	tempState.ResetPrefetcher()
 	tempState.StartPrefetcher("bor", state.Witness())
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
@@ -1443,7 +1443,7 @@ func (c *Bor) CommitStates(
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
-		tempState.SetPrefetcher(nil)
+		tempState.ResetPrefetcher()
 		tempState.StartPrefetcher("bor", state.Witness())
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)

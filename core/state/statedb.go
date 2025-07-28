@@ -525,8 +525,11 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
-func (s *StateDB) SetPrefetcher(prefetcher *triePrefetcher) {
-	s.prefetcher = prefetcher
+// ResetPrefetcher cleans the prefetcher from a State, commonly used in tempStates to track witness while no impacting block building
+// Do also remove mutations previously tracked to just look to the new ones
+func (s *StateDB) ResetPrefetcher() {
+	s.prefetcher = nil
+	s.mutations = make(map[common.Address]*mutation)
 }
 
 // setError remembers the first non-nil error it is called with.
