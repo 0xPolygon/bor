@@ -6,6 +6,8 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 )
@@ -24,6 +26,7 @@ type IHeimdallClient interface {
 
 type IHeimdallWSClient interface {
 	SubscribeMilestoneEvents(ctx context.Context) <-chan *milestone.Milestone
-	Unsubscribe(ctx context.Context) error
-	Close() error
+	SubscribeSpanEvents(ctx context.Context) <-chan *span.HeimdallSpanEvent
+	Unsubscribe(eventType heimdallws.HeimdallEvent)
+	Close()
 }

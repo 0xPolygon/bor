@@ -15,9 +15,9 @@ import (
 type HeimdallEvent string
 
 const (
-	milestoneEventType  HeimdallEvent = "milestone"
+	MilestoneEventType  HeimdallEvent = "milestone"
 	milestoneEventQuery string        = "tm.event='NewBlock' AND milestone.number>0"
-	spanEventType       HeimdallEvent = "span"
+	SpanEventType       HeimdallEvent = "span"
 	spanEventQuery      string        = "tm.event='NewBlock' AND span.id>0"
 )
 
@@ -54,7 +54,7 @@ func (c *HeimdallWSClient) GetSubscription(eventName HeimdallEvent) (eventSubscr
 // SubscribeMilestoneEvents sends the subscription request and starts processing incoming messages
 // for milestone events, returning a channel to receive incoming events.
 func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan *milestone.Milestone {
-	c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, milestoneEventType)
+	c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
 
 	events := make(chan *milestone.Milestone)
 
@@ -67,7 +67,7 @@ func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan 
 // SubscribeSpanEvents sends the subscription request and starts processing incoming messages
 // for span events, returning a channel to receive incoming events.
 func (c *HeimdallWSClient) SubscribeSpanEvents(ctx context.Context) <-chan *span.HeimdallSpanEvent {
-	c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, spanEventType)
+	c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
 
 	events := make(chan *span.HeimdallSpanEvent)
 
@@ -145,10 +145,10 @@ func (c *HeimdallWSClient) tryUntilSubscribeHeimdallEvents(ctx context.Context, 
 func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events chan *milestone.Milestone) {
 	defer close(events)
 
-	sub, ok := c.GetSubscription(milestoneEventType)
+	sub, ok := c.GetSubscription(MilestoneEventType)
 	if !ok || sub.conn == nil {
-		c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, milestoneEventType)
-		sub, _ = c.GetSubscription(milestoneEventType)
+		c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+		sub, _ = c.GetSubscription(MilestoneEventType)
 	}
 
 	for {
@@ -170,8 +170,8 @@ func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events cha
 		if err != nil {
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
 
-			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, milestoneEventType)
-			sub, _ = c.GetSubscription(milestoneEventType)
+			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+			sub, _ = c.GetSubscription(MilestoneEventType)
 			continue
 		}
 
@@ -206,10 +206,10 @@ func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events cha
 func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *span.HeimdallSpanEvent) {
 	defer close(events)
 
-	sub, ok := c.GetSubscription(spanEventType)
+	sub, ok := c.GetSubscription(SpanEventType)
 	if !ok || sub.conn == nil {
-		c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, spanEventType)
-		sub, _ = c.GetSubscription(spanEventType)
+		c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+		sub, _ = c.GetSubscription(SpanEventType)
 	}
 
 	for {
@@ -231,8 +231,8 @@ func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *sp
 		if err != nil {
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
 
-			c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, spanEventType)
-			sub, _ = c.GetSubscription(spanEventType)
+			c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+			sub, _ = c.GetSubscription(SpanEventType)
 			continue
 		}
 

@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
@@ -719,6 +720,12 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 
 	// If heimdall ws is available use WS subscription to new milestone events instead of polling
 	if bor != nil && bor.HeimdallWSClient != nil {
+		// Fetch a milestone first before starting websocket listener to fetch
+		// the latest milestone.
+		ctx, cancel := context.WithTimeout(context.Background(), whitelistTimeout)
+		s.fetchAndHandleMilestone(ctx, ethHandler, bor)
+		cancel()
+
 		s.subscribeAndHandleMilestone(context.Background(), ethHandler, bor)
 	} else {
 		const (
@@ -806,7 +813,16 @@ func (s *Ethereum) fetchAndHandleMilestone(ctx context.Context, ethHandler *ethH
 }
 
 func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *ethHandler, bor *bor.Bor) error {
+	// a shortcut helps with tests and early exit
+	select {
+	case <-s.closeCh:
+		return nil
+	default:
+	}
+
+	// Subscribe to new milestone events
 	milestoneEvents := bor.HeimdallWSClient.SubscribeMilestoneEvents(ctx)
+	defer bor.HeimdallWSClient.Unsubscribe(heimdallws.MilestoneEventType)
 
 	for {
 		select {
@@ -821,6 +837,9 @@ func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *
 			}
 
 		case <-ctx.Done():
+			return nil
+
+		case <-s.closeCh:
 			return nil
 		}
 	}
