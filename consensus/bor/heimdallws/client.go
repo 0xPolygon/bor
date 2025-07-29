@@ -98,10 +98,7 @@ func (c *HeimdallWSClient) tryUntilSubscribeHeimdallEvents(ctx context.Context, 
 		default:
 		}
 
-		c.mu.Lock()
-		sub, ok := c.subscriptions[eventType]
-		c.mu.Unlock()
-
+		sub, ok := c.GetSubscription(eventType)
 		if ok {
 			select {
 			case <-sub.done:
