@@ -1,6 +1,10 @@
 package heimdallws
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // subscriptionRequest represents the JSON-RPC request for subscribing.
 type subscriptionRequest struct {
@@ -58,4 +62,36 @@ type wsResponse struct {
 	ID      int      `json:"id"`
 	Result  wsResult `json:"result"`
 	// "events" field is present but not needed here.
+}
+
+type milestoneEvent struct {
+	Proposer        common.Address `json:"milestone.proposer"`
+	StartBlock      uint64         `json:"milestone.start_block"`
+	EndBlock        uint64         `json:"milestone.end_block"`
+	Hash            common.Hash    `json:"milestone.hash"`
+	BorChainID      string         `json:"milestone.bor_chain_id"`
+	MilestoneID     string         `json:"milestone.milestone_id"`
+	Timestamp       uint64         `json:"milestone.timestamp"`
+	TotalDifficulty uint64         `json:"milestone.total_difficulty"`
+}
+
+type wsResponseMilestone struct {
+	JSONRPC        string         `json:"jsonrpc"`
+	ID             int            `json:"id"`
+	Result         wsResult       `json:"result"`
+	MilestoneEvent milestoneEvent `json:"events"`
+}
+
+type spanEvent struct {
+	ID            uint64 `json:"span.id"`
+	StartBlock    uint64 `json:"span.start_block"`
+	EndBlock      uint64 `json:"span.end_block"`
+	BlockProducer string `json:"span.block_producer"`
+}
+
+type wsResponseSpanEvent struct {
+	JSONRPC   string    `json:"jsonrpc"`
+	ID        int       `json:"id"`
+	Result    wsResult  `json:"result"`
+	SpanEvent spanEvent `json:"events"`
 }
