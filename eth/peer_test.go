@@ -127,7 +127,6 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 				}
 
 				if !shouldFail {
-
 					ch <- &wit.Response{
 						Res: &wit.WitnessPacketRLPPacket{
 							WitnessPacketResponse: []wit.WitnessPageResponse{{Page: wpr[0].Page, TotalPages: uint64(totalPages), Hash: hashToRequest, Data: witBuf.Bytes()[start:end]}},
@@ -139,7 +138,6 @@ func TestRequestWitnesses_Controlling_Max_Concurrent_Calls(t *testing.T) {
 						Res:  0,
 						Done: make(chan error, 10), // buffered so no block
 					}
-
 				}
 
 				muConcurrentCount.Lock()

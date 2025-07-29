@@ -47,7 +47,6 @@ type Backend interface {
 func MakeProtocols(backend Backend, network uint64) []p2p.Protocol {
 	protocols := make([]p2p.Protocol, 0, len(ProtocolVersions))
 	for _, version := range ProtocolVersions {
-		version := version // Closure
 		protocols = append(protocols, p2p.Protocol{
 			Name:    ProtocolName,
 			Version: version,
@@ -70,7 +69,6 @@ func MakeProtocols(backend Backend, network uint64) []p2p.Protocol {
 			// TODO(@pratikspatil024) - check if we need this
 			Attributes: []enr.Entry{currentENREntry(backend.Chain())},
 		})
-
 	}
 
 	return protocols

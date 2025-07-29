@@ -19,7 +19,7 @@ import (
 // maxSpanFetchLimit denotes maximum number of future spans to fetch. During snap sync,
 // we verify very large batch of headers. The maximum range is not known as of now and
 // hence we set a very high limit. It can be reduced later.
-const maxSpanFetchLimit = 10_000
+// const maxSpanFetchLimit = 10_000
 
 // SpanStore acts as a simple middleware to cache span data populated from heimdall. It is used
 // in multiple places of bor consensus for verification.
@@ -272,7 +272,6 @@ func (s *SpanStore) estimateSpanId(blockNumber uint64) uint64 {
 				if lastUsedSpan.Id >= spansToDecrement { // Prevent underflow for uint64
 					return lastUsedSpan.Id - spansToDecrement
 				} else {
-
 					return 1 + (blockNumber-zerothSpanEnd-1)/defaultSpanLength
 				}
 			} else {

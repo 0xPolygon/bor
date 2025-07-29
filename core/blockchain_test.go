@@ -4695,10 +4695,9 @@ func TestPragueRequests(t *testing.T) {
 
 // mockChainValidator is a mock implementation of ethereum.ChainValidator for testing
 type mockChainValidator struct {
-	hasMilestone     bool
-	milestoneNumber  uint64
-	milestoneHash    common.Hash
-	shouldFailHeader map[uint64]bool // block numbers that should fail verification
+	hasMilestone    bool
+	milestoneNumber uint64
+	milestoneHash   common.Hash
 }
 
 func (m *mockChainValidator) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {

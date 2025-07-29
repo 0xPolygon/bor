@@ -1770,7 +1770,7 @@ func TestSpawnSyncDominant(t *testing.T) {
 		)
 
 		// Use a custom cancel channel to track cancellation
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		// Regular fetcher that waits for cancellation
@@ -1897,7 +1897,7 @@ func TestSpawnSyncDominant(t *testing.T) {
 		)
 
 		// Use a custom context for cancellation tracking
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		// Create multiple regular fetchers

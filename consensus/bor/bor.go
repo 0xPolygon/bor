@@ -111,8 +111,8 @@ var (
 	// be modified via out-of-range or non-contiguous headers.
 	errOutOfRangeChain = errors.New("out of range or non-contiguous chain")
 
-	errUncleDetected     = errors.New("uncles not allowed")
-	errUnknownValidators = errors.New("unknown validators")
+	errUncleDetected = errors.New("uncles not allowed")
+	// errUnknownValidators = errors.New("unknown validators")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a

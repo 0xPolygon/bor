@@ -82,7 +82,7 @@ func (h *MockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 func TestSpanStore_SpanById(t *testing.T) {
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	type Testcase struct {
 		id         uint64
@@ -136,7 +136,7 @@ func TestSpanStore_SpanById(t *testing.T) {
 func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	type Testcase struct {
 		blockNumber uint64
@@ -391,7 +391,7 @@ func (h *MockOverlappingHeimdallClient) Close() {
 func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
 	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Pre-load spans 0-4 into cache to simulate known spans
 	for i := uint64(0); i <= 4; i++ {
@@ -470,7 +470,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
 	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Pre-load spans 0-2 into cache, leaving spans 3-6 as "future" spans
 	for i := uint64(0); i <= 2; i++ {
@@ -494,7 +494,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.T) {
 	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Pre-load all spans 0-6 into cache
 	for i := uint64(0); i <= 6; i++ {
@@ -520,7 +520,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.
 }
 
 func TestSpanStore_GetFutureSpan(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	type testCase struct {
 		name              string
@@ -662,7 +662,7 @@ func TestSpanStore_GetFutureSpan(t *testing.T) {
 
 			// Pre-load some spans to make the store behave more realistically
 			for i := uint64(0); i <= tc.latestKnownSpanID; i++ {
-				_, err := spanStore.spanById(context.Background(), i)
+				_, err := spanStore.spanById(t.Context(), i)
 				require.NoError(t, err)
 			}
 
@@ -799,7 +799,7 @@ func TestSpanStore_EstimateSpanId(t *testing.T) {
 }
 
 func TestGetMockSpan0(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	chainId := "1337"
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

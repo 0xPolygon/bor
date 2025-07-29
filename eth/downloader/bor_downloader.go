@@ -851,7 +851,6 @@ func (d *Downloader) spawnSyncDominant(fetchers []func() error, dominantFetcher 
 
 	// Start all regular fetchers
 	for _, fn := range fetchers {
-		fn := fn // capture loop variable
 		go func() {
 			defer d.cancelWg.Done()
 			errc <- fn()
@@ -2364,7 +2363,6 @@ func (d *Downloader) UpdateFastForwardBlockFromCheckpoint(checkpoint *checkpoint
 		}
 		d.futureCandidateBlocks = filteredCandidates
 	}
-
 }
 
 func (d *Downloader) GetOrWaitFastForwardBlock(timeout time.Duration) uint64 {
@@ -2447,62 +2445,4 @@ func (d *Downloader) needsBytecodeSync(fastForwardBlock uint64) bool {
 	// Bytecode sync is already complete up to or beyond the fast forward block
 	log.Info("Bytecode sync not needed", "lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock)
 	return false
-}
-
-// runBytecodeOnlySnapSync performs a bytecode-only snap sync before stateless sync
-func (d *Downloader) runBytecodeOnlySnapSync(p *peerConnection, pivot *types.Header) error {
-	// Save current mode to restore later
-	oldMode := d.getMode()
-
-	// Switch to bytecode-only snap sync mode
-	d.mode.Store(uint32(BytecodeOnlySnapSync))
-	defer d.mode.Store(uint32(oldMode)) // Restore mode on exit
-
-	// Set up the pivot for snap sync
-	d.pivotLock.Lock()
-	d.pivotHeader = pivot
-	d.pivotLock.Unlock()
-
-	// Don't write pivot number for bytecode-only sync in stateless mode
-	// This prevents the node from entering snap sync mode on restart
-	if oldMode != StatelessSync {
-		// Write the pivot number to database
-		rawdb.WriteLastPivotNumber(d.stateDB, pivot.Number.Uint64())
-	}
-
-	log.Info("Starting bytecode-only snap sync", "pivot", pivot.Number, "hash", pivot.Hash())
-
-	// Configure the snap syncer for bytecode-only mode
-	d.SnapSyncer.SetBytecodeOnlyMode(true)
-	defer d.SnapSyncer.SetBytecodeOnlyMode(false)
-
-	// For stateless sync, don't mark snap sync as running to avoid triggering
-	// full trie rebuild. We only need bytecodes, not full state sync.
-	if oldMode != StatelessSync {
-		// Mark snap sync as running (this tells the snap syncer we're in snap sync mode)
-		rawdb.WriteSnapSyncStatusFlag(d.stateDB, rawdb.StateSyncRunning)
-	}
-
-	// Start the state sync at the pivot root
-	sync := d.syncState(pivot.Root)
-
-	// Wait for sync to complete
-	if err := sync.Wait(); err != nil {
-		return fmt.Errorf("bytecode-only snap sync failed: %w", err)
-	}
-
-	// Mark bytecode-only sync as completed up to this pivot block
-	rawdb.WriteBytecodeSyncLastBlock(d.stateDB, pivot.Number.Uint64())
-	rawdb.WriteBytecodeSyncStateRoot(d.stateDB, pivot.Root)
-
-	// Clear the snap sync status flag if it was set
-	// This is critical for stateless nodes to continue with stateless sync
-	if oldMode != StatelessSync {
-		rawdb.WriteSnapSyncStatusFlag(d.stateDB, rawdb.StateSyncFinished)
-	}
-
-	// Verify the write was successful
-	verifyBlock := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
-	log.Info("Bytecode-only snap sync completed successfully", "completedBlock", pivot.Number.Uint64(), "verifiedBlock", verifyBlock)
-	return nil
 }

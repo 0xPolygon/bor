@@ -64,7 +64,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 	const numOperationsPerGoroutine = 20
 
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create test blocks
@@ -259,7 +259,7 @@ func TestWitnessManagerConcurrentAccess(t *testing.T) {
 	const numOperationsPerGoroutine = 15
 
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Create test blocks
