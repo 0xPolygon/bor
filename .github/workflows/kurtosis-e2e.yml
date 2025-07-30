@@ -61,7 +61,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.1.0
+          ref: v1.1.1
           path: kurtosis-pos
 
       - name: Copy kurtosis config
