@@ -184,6 +184,7 @@ func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events cha
 
 		var resp wsResponseMilestone
 		if err := json.Unmarshal(message, &resp); err != nil {
+			log.Error("failed to unmarshal milestone event message", "error", err)
 			// Skip messages that don't match the expected format.
 			continue
 		}
@@ -233,7 +234,14 @@ func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *sp
 		}
 
 		conn := sub.conn
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Error("failed to set read deadline on heimdall ws subscription", "eventType", SpanEventType, "err", err)
+
+			c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+			sub, _ = c.GetSubscription(SpanEventType)
+			continue
+		}
+
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
@@ -245,6 +253,7 @@ func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *sp
 
 		var resp wsResponseSpanEvent
 		if err := json.Unmarshal(message, &resp); err != nil {
+			log.Error("failed to unmarshal span event message", "error", err)
 			// Skip messages that don't match the expected format.
 			continue
 		}
