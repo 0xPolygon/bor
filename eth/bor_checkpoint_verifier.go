@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -109,15 +110,26 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 			doExist  bool
 		)
 
+		// First try the original logic to find existing whitelisted milestone/checkpoint
 		if doExist, rewindTo, _ = ethHandler.downloader.GetWhitelistedMilestone(); doExist {
-
+			// Use existing whitelisted milestone
+			log.Info("Using existing whitelisted milestone for rewind", "block", rewindTo)
 		} else if doExist, rewindTo, _ = ethHandler.downloader.GetWhitelistedCheckpoint(); doExist {
-
+			// Use existing whitelisted checkpoint
+			log.Info("Using existing whitelisted checkpoint for rewind", "block", rewindTo)
 		} else {
-			if start <= 0 {
-				rewindTo = 0
+			// No existing whitelisted milestone/checkpoint found
+			// For milestones, try to find the common ancestor by checking past milestones
+			if !isCheckpoint && end > 0 {
+				log.Info("No existing whitelisted milestone/checkpoint, searching for common ancestor")
+				rewindTo = findCommonAncestorWithFutureMilestones(eth, start, end, hash)
 			} else {
-				rewindTo = start - 1
+				// For checkpoints or when start is 0, use simple fallback
+				if start <= 0 {
+					rewindTo = 0
+				} else {
+					rewindTo = start - 1
+				}
 			}
 		}
 
@@ -142,21 +154,11 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 			canonicalChain[i], canonicalChain[j] = canonicalChain[j], canonicalChain[i]
 		}
 
-		rewindBack(eth, head, rewindTo)
-
-		if canonicalChain != nil && len(canonicalChain) == int(length) {
-			log.Info("Inserting canonical chain", "from", canonicalChain[0].NumberU64(), "hash", canonicalChain[0].Hash(), "to", canonicalChain[len(canonicalChain)-1].NumberU64(), "hash", canonicalChain[len(canonicalChain)-1].Hash())
-			_, err := eth.BlockChain().InsertChain(canonicalChain, eth.config.SyncAndProduceWitnesses)
-			if err != nil {
-				log.Warn("Failed to insert canonical chain", "err", err)
-				return hash, err
-			} else {
-				log.Info("Successfully inserted canonical chain")
-			}
-		} else {
-			log.Warn("Failed to insert canonical chain", "length", len(canonicalChain), "expected", length)
-			return hash, errHashMismatch
+		if len(canonicalChain) != int(length) {
+			canonicalChain = nil
 		}
+
+		reorgToFinalized(eth, head, rewindTo, canonicalChain)
 	}
 
 	// fetch the end block hash
@@ -171,19 +173,20 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	return hash, nil
 }
 
-// Stop the miner if the mining process is running and rewind back the chain
-func rewindBack(eth *Ethereum, head uint64, rewindTo uint64) {
-	if eth.Miner() != nil && eth.Miner().Mining() {
+// reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
+// and inserts the chain finalized by checkpoint/milestone.
+func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
+	if eth.Miner().Mining() {
 		ch := make(chan struct{})
 		eth.Miner().Stop(ch)
 
 		<-ch
-		rewind(eth, head, rewindTo)
 
-		eth.Miner().Start()
-	} else {
-		rewind(eth, head, rewindTo)
+		defer eth.Miner().Start()
 	}
+
+	rewind(eth, head, rewindTo)
+	insertFinalized(eth, canonicalChain)
 }
 
 func rewind(eth *Ethereum, head uint64, rewindTo uint64) {
@@ -195,4 +198,85 @@ func rewind(eth *Ethereum, head uint64, rewindTo uint64) {
 	} else {
 		rewindLengthMeter.Mark(int64(head - rewindTo))
 	}
+}
+
+// findCommonAncestorWithFutureMilestones tries to find where the local chain diverged from the milestone chain
+// by checking blocks backwards from the milestone range
+func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uint64, milestoneEndHash string) uint64 {
+	// Start from the milestone start block and work backwards
+	// to find where our chain matches the expected chain
+	if start == 0 {
+		return 0
+	}
+
+	blockchain := eth.BlockChain()
+	db := eth.ChainDb()
+
+	// First, check if we have the correct milestone end block
+	localBlock := blockchain.GetBlockByNumber(end)
+	if localBlock != nil {
+		localHash := localBlock.Hash().Hex()[2:]
+		if localHash == milestoneEndHash {
+			return end
+		}
+	}
+
+	// We have a fork. Need to find the actual fork point by checking past milestones
+	log.Info("Local chain forked from milestone", "milestone_end", end, "expected_hash", milestoneEndHash)
+
+	// Read future milestone list from database
+	// These are milestones that haven't been processed yet but are stored
+	futureMilestoneOrder, futureMilestoneList, err := rawdb.ReadFutureMilestoneList(db)
+	targetBlock := start - 1
+	if err == nil && len(futureMilestoneOrder) > 0 {
+		// Check future milestones from newest to oldest
+		for i := len(futureMilestoneOrder) - 1; i >= 0; i-- {
+			milestoneNum := futureMilestoneOrder[i]
+			if milestoneNum >= end {
+				continue
+			}
+
+			milestoneHash := futureMilestoneList[milestoneNum]
+			localBlock := blockchain.GetBlockByNumber(milestoneNum)
+			if localBlock != nil && localBlock.Hash() == milestoneHash {
+				log.Info("Found matching future milestone", "block", milestoneNum, "hash", milestoneHash)
+				return milestoneNum
+			}
+
+			if milestoneNum < targetBlock {
+				targetBlock = milestoneNum - 1
+			}
+		}
+	}
+
+	if targetBlock < 0 {
+		return 0
+	}
+
+	return targetBlock
+}
+
+// insertFinalized inserts the chain finalized by checkpoint/milestone and ensures the final block is set as canonical.
+func insertFinalized(eth *Ethereum, canonicalChain []*types.Block) {
+	if len(canonicalChain) == 0 {
+		return
+	}
+
+	// Perform the canonical chain insertion
+	log.Info("Inserting canonical chain", "from", canonicalChain[0].NumberU64(), "hash", canonicalChain[0].Hash(), "to", canonicalChain[len(canonicalChain)-1].NumberU64(), "hash", canonicalChain[len(canonicalChain)-1].Hash())
+	_, err := eth.BlockChain().InsertChain(canonicalChain, eth.config.SyncAndProduceWitnesses)
+	if err != nil {
+		log.Warn("Failed to insert canonical chain", "err", err)
+		return
+	}
+
+	// Then explicitly set the final block as canonical to ensure proper canonical mapping
+	finalBlock := canonicalChain[len(canonicalChain)-1]
+	_, err = eth.BlockChain().SetCanonical(finalBlock)
+	if err != nil {
+		log.Warn("Failed to set canonical head after insertion", "err", err, "block", finalBlock.NumberU64(), "hash", finalBlock.Hash())
+		return
+	}
+
+	log.Info("Successfully inserted canonical chain")
 }

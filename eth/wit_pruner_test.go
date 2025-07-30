@@ -227,11 +227,23 @@ func TestPruneWitness_ExistingCursorLessThanCutoff_DeletesThenUpdates(t *testing
 		Delete(deleteKey1).
 		Times(1)
 
+	deleteSizeKey1 := append(rawdb.WitnessSizePrefix, hash1.Bytes()...)
+	mockBatch.
+		EXPECT().
+		Delete(deleteSizeKey1).
+		Times(1)
+
 	hash2 := common.BytesToHash(hashBytes2)
 	deleteKey2 := append(rawdb.WitnessPrefix, hash2.Bytes()...)
 	mockBatch.
 		EXPECT().
 		Delete(deleteKey2).
+		Times(1)
+
+	deleteSizeKey2 := append(rawdb.WitnessSizePrefix, hash2.Bytes()...)
+	mockBatch.
+		EXPECT().
+		Delete(deleteSizeKey2).
 		Times(1)
 
 	updatedCursor := uint64(90)

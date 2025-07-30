@@ -65,6 +65,7 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
 		if err != nil {
 			log.Error("failed to dial websocket on heimdall ws subscription", "err", err)
+			continue
 		}
 		c.mu.Lock()
 		c.conn = conn
@@ -101,7 +102,13 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			// continue to process messages
 		}
 
-		c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if err := c.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Error("failed to set read deadline on heimdall ws subscription", "err", err)
+
+			c.tryUntilSubscribeMilestoneEvents(ctx)
+			continue
+		}
+
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
@@ -152,6 +159,9 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 		}
 		if timestamp, err := strconv.ParseUint(attrs["timestamp"], 10, 64); err == nil {
 			m.Timestamp = timestamp
+		}
+		if totalDifficulty, err := strconv.ParseUint(attrs["total_difficulty"], 10, 64); err == nil {
+			m.TotalDifficulty = totalDifficulty
 		}
 
 		// Deliver the milestone event, respecting context cancellation.

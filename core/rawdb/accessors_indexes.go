@@ -189,7 +189,7 @@ func ReadReceipt(db ethdb.Reader, hash common.Hash, config *params.ChainConfig) 
 	return nil, common.Hash{}, 0, 0
 }
 
-// ReadFilterMapRow retrieves a filter map row at the given mapRowIndex
+// ReadFilterMapExtRow retrieves a filter map row at the given mapRowIndex
 // (see filtermaps.mapRowIndex for the storage index encoding).
 // Note that zero length rows are not stored in the database and therefore all
 // non-existent entries are interpreted as empty rows and return no error.

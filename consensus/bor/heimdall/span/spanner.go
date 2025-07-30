@@ -16,11 +16,14 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 )
 
 type ChainSpanner struct {
@@ -47,7 +50,7 @@ func NewChainSpanner(ethAPI api.Caller, validatorSet abi.ABI, chainConfig *param
 }
 
 // GetCurrentSpan get current span from contract
-func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, state *state.StateDB) (*Span, error) {
+func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, state *state.StateDB) (*borTypes.Span, error) {
 	// block
 	blockNr := rpc.BlockNumberOrHashWithHash(headerHash, false)
 
@@ -87,8 +90,8 @@ func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Has
 	}
 
 	// create new span
-	span := Span{
-		ID:         ret.Number.Uint64(),
+	span := borTypes.Span{
+		Id:         ret.Number.Uint64(),
 		StartBlock: ret.StartBlock.Uint64(),
 		EndBlock:   ret.EndBlock.Uint64(),
 	}
@@ -288,7 +291,7 @@ func (c *ChainSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHas
 
 const method = "commitSpan"
 
-func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan Span, validators, producers []stakeTypes.MinimalVal, state *state.StateDB, header *types.Header, chainContext core.ChainContext) error {
+func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext) error {
 	// get validators bytes
 	validatorBytes, err := rlp.EncodeToBytes(validators)
 	if err != nil {
@@ -302,7 +305,7 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan Span, validat
 	}
 
 	log.Info("✅ Committing new span",
-		"id", minimalSpan.ID,
+		"id", minimalSpan.Id,
 		"startBlock", minimalSpan.StartBlock,
 		"endBlock", minimalSpan.EndBlock,
 		"validatorBytes", hex.EncodeToString(validatorBytes),
@@ -310,7 +313,7 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan Span, validat
 	)
 
 	data, err := c.validatorSet.Pack(method,
-		big.NewInt(0).SetUint64(minimalSpan.ID),
+		big.NewInt(0).SetUint64(minimalSpan.Id),
 		big.NewInt(0).SetUint64(minimalSpan.StartBlock),
 		big.NewInt(0).SetUint64(minimalSpan.EndBlock),
 		validatorBytes,

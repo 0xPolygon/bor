@@ -529,6 +529,10 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
+func (s *StateDB) SetPrefetcher(prefetcher *triePrefetcher) {
+	s.prefetcher = prefetcher
+}
+
 // setError remembers the first non-nil error it is called with.
 func (s *StateDB) setError(err error) {
 	if s.dbErr == nil {
@@ -818,13 +822,16 @@ func (s *StateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tr
 	return stateObject.SetBalance(new(uint256.Int).Sub(stateObject.Balance(), amount))
 }
 
-func (s *StateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
+// SetBalance sets amount to the account associated with addr.
+func (s *StateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
 	stateObject := s.getOrNewStateObject(addr)
-	if stateObject != nil {
-		stateObject = s.mvRecordWritten(stateObject)
-		stateObject.SetBalance(amount)
-		MVWrite(s, blockstm.NewSubpathKey(addr, BalancePath))
+	if stateObject == nil {
+		return uint256.Int{}
 	}
+
+	stateObject = s.mvRecordWritten(stateObject)
+	MVWrite(s, blockstm.NewSubpathKey(addr, BalancePath))
+	return stateObject.SetBalance(amount)
 }
 
 func (s *StateDB) SetNonce(addr common.Address, nonce uint64, reason tracing.NonceChangeReason) {
@@ -1001,10 +1008,6 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			return nil
 		}
 		s.AccountReads += time.Since(start)
-		// Short circuit if the account is not found
-		if acct == nil {
-			return nil
-		}
 		// Independent of where we loaded the data from, add it to the prefetcher.
 		// Whilst this would be a bit weird if snapshots are disabled, but we still
 		// want the trie nodes to end up in the prefetcher too, so just push through.
@@ -1012,6 +1015,10 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			if err = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
 				log.Error("Failed to prefetch account", "addr", addr, "err", err)
 			}
+		}
+		// Short circuit if the account is not found
+		if acct == nil {
+			return nil
 		}
 		// Insert into the live set
 		obj := newObject(s, addr, acct)
@@ -1944,4 +1951,9 @@ func (s *StateDB) Witness() *stateless.Witness {
 
 func (s *StateDB) AccessEvents() *AccessEvents {
 	return s.accessEvents
+}
+
+// Inner receives the underlying state db
+func (s *StateDB) Inner() *StateDB {
+	return s
 }

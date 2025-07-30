@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math/big"
 	"sort"
 	"strconv"
@@ -20,7 +19,6 @@ import (
 	"github.com/holiman/uint256"
 	"golang.org/x/crypto/sha3"
 
-	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -29,7 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -46,6 +44,9 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
 	ttlcache "github.com/jellydator/ttlcache/v3"
+
+	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 )
 
 const (
@@ -522,7 +523,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 
 // snapshot retrieves the authorization snapshot at a given point in time.
 // nolint: gocognit
-func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.Header, parents []*types.Header, checkNewSpan bool) (*Snapshot, error) {
+func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.Header, parents []*types.Header, checkNewSpan bool) (snap *Snapshot, err error) {
 	// Search for a snapshot in memory or on disk for checkpoints
 	signer := common.BytesToAddress(c.authorizedSigner.Load().signer.Bytes())
 	if c.DevFakeAuthor && signer.String() != "0x0000000000000000000000000000000000000000" {
@@ -536,7 +537,9 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 		return snapshot, nil
 	}
 
-	var snap *Snapshot
+	if c.config.IsVeBlop(targetHeader.Number) {
+		return c.getVeBlopSnapshot(chain, targetHeader, parents, checkNewSpan)
+	}
 
 	headers := make([]*types.Header, 0, 16)
 
@@ -580,7 +583,8 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 				}
 
 				// new snap shot
-				snap = newSnapshot(c.chainConfig, c.signatures, number, hash, span.ValidatorSet.Validators)
+				borValSet := borSpan.ConvertHeimdallValSetToBorValSet(span.ValidatorSet)
+				snap = newSnapshot(c.chainConfig, c.signatures, number, hash, borValSet.Validators)
 				if err := snap.store(c.db); err != nil {
 					return nil, err
 				}
@@ -623,14 +627,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 		headers[i], headers[len(headers)-1-i] = headers[len(headers)-1-i], headers[i]
 	}
 
-	if checkNewSpan && c.config.IsVeBlop(targetHeader.Number) {
-		err := c.performSpanCheck(chain, targetHeader)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	snap, err := snap.apply(headers, c)
+	snap, err = snap.apply(headers, c)
 	if err != nil {
 		return nil, err
 	}
@@ -646,21 +643,43 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 		log.Trace("Stored snapshot to disk", "number", snap.Number, "hash", snap.Hash)
 	}
 
-	if c.config.IsVeBlop(targetHeader.Number) {
-		snap, err = snap.applyNumber(targetHeader.Number.Uint64(), c)
-		if err != nil {
-			return nil, err
-		}
-
-		snap.Number = targetHeader.Number.Uint64()
-		snap.Hash = targetHeader.Hash()
-	}
-
 	return snap, err
 }
 
+func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader *types.Header, parents []*types.Header, checkNewSpan bool) (*Snapshot, error) {
+	number := targetHeader.Number.Uint64()
+
+	if checkNewSpan {
+		err := c.performSpanCheck(chain, targetHeader, parents)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
+	if err != nil {
+		return nil, err
+	}
+
+	producers := make([]*valset.Validator, len(span.SelectedProducers))
+	for i, validator := range span.SelectedProducers {
+		producers[i] = &valset.Validator{
+			Address:     common.HexToAddress(validator.Signer),
+			VotingPower: validator.VotingPower,
+		}
+	}
+
+	sortedProducers := valset.ValidatorsByAddress(producers)
+	sort.Sort(sortedProducers)
+
+	snap := newSnapshot(c.chainConfig, c.signatures, number, targetHeader.Hash(), sortedProducers)
+
+	c.recents.Set(snap.Hash, snap, ttlcache.DefaultTTL)
+	return snap, nil
+}
+
 // Check if the node needs to wait for a new span
-func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *types.Header) error {
+func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *types.Header, parents []*types.Header) error {
 	if targetHeader.Number.Uint64()-1 == 0 {
 		return nil
 	}
@@ -674,7 +693,12 @@ func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *
 		return nil
 	}
 
-	parentHeader := chain.GetHeader(targetHeader.ParentHash, targetHeader.Number.Uint64()-1)
+	var parentHeader *types.Header
+	if len(parents) > 0 {
+		parentHeader = parents[len(parents)-1]
+	} else {
+		parentHeader = chain.GetHeader(targetHeader.ParentHash, targetHeader.Number.Uint64()-1)
+	}
 
 	// If parent header isn't known or a milestone check is requested, we need to wait for a new span
 	if parentHeader == nil {
@@ -705,10 +729,6 @@ func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *
 		}
 
 		log.Info("Span check complete", "foundNewSpan", foundNewSpan)
-
-		if !foundNewSpan {
-			return c.performSpanCheck(chain, targetHeader)
-		}
 
 		return nil
 	} else if missingTargetSignature == nil && targetHeaderAuthor != parentHeaderAuthor {
@@ -849,7 +869,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 		newValidators := make([]*valset.Validator, len(span.SelectedProducers))
 		for i, val := range span.SelectedProducers {
-			newValidators[i] = &val
+			newValidators[i] = &valset.Validator{
+				Address:     common.HexToAddress(val.Signer),
+				VotingPower: val.VotingPower,
+			}
 		}
 
 		// sort validator by address
@@ -944,10 +967,6 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		return
 	}
 
-	// Extract the underlying state to access methods like `IntermediateRoot` and `Copy`
-	// required for bor consensus operations
-	state := wrappedState.(*state.StateDB)
-
 	var (
 		stateSyncData []*types.StateSyncData
 		err           error
@@ -958,7 +977,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 		// check and commit span
 		if !c.config.IsVeBlop(header.Number) {
-			if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return
 			}
@@ -966,17 +985,22 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 		if c.HeimdallClient != nil {
 			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
+			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
 				return
 			}
 		}
 
+		// Get the underlying state for updating consensus time
+		state := wrappedState.Inner()
 		state.BorConsensusTime = time.Since(start)
 	}
 
-	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
+	// Check if any hardfork needs change in genesis contract code. Note that we use
+	// the wrapped state here as it may have a hooked state db instance which can help
+	// in tracing if it's enabled.
+	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
 		log.Error("Error changing contract code", "error", err)
 		return
 	}
@@ -1001,7 +1025,7 @@ func decodeGenesisAlloc(i interface{}) (types.GenesisAlloc, error) {
 	return alloc, nil
 }
 
-func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state *state.StateDB) error {
+func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) error {
 	for blockNumber, genesisAlloc := range c.config.BlockAlloc {
 		if blockNumber == strconv.FormatUint(headerNumber, 10) {
 			allocs, err := decodeGenesisAlloc(genesisAlloc)
@@ -1150,7 +1174,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Wait until sealing is terminated or delay timeout.
-	log.Info("Waiting for slot to sign and propagate", "number", number, "hash", header.Hash, "delay-in-sec", uint(delay), "delay", common.PrettyDuration(delay))
+	log.Info("Waiting for slot to sign and propagate", "number", number, "hash", header.Hash(), "delay-in-sec", uint(delay), "delay", common.PrettyDuration(delay))
 
 	go func() {
 		select {
@@ -1266,34 +1290,32 @@ func (c *Bor) runMilestoneFetcher() {
 }
 
 func (c *Bor) checkAndCommitSpan(
-	state *state.StateDB,
+	state vm.StateDB,
 	header *types.Header,
 	chain core.ChainContext,
 ) error {
 	var ctx = context.Background()
 	headerNumber := header.Number.Uint64()
 
-	tempState := state.Copy()
+	tempState := state.Inner().Copy()
+	tempState.SetPrefetcher(nil)
+	tempState.StartPrefetcher("bor", state.Witness())
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
 		return err
 	}
 
-	if tempState.Witness() != nil {
-		// Clone the witness Codes and State sets from the temporary snapshot back into the original state
-		state.Witness().Codes = maps.Clone(tempState.Witness().Codes)
-		state.Witness().State = maps.Clone(tempState.Witness().State)
-	}
+	tempState.IntermediateRoot(false)
 
 	if c.needToCommitSpan(span, headerNumber) {
-		return c.FetchAndCommitSpan(ctx, span.ID+1, state, header, chain)
+		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
 	}
 
 	return nil
 }
 
-func (c *Bor) needToCommitSpan(currentSpan *span.Span, headerNumber uint64) bool {
+func (c *Bor) needToCommitSpan(currentSpan *borTypes.Span, headerNumber uint64) bool {
 	// If span is nil, return false.
 	if currentSpan == nil {
 		return false
@@ -1306,11 +1328,12 @@ func (c *Bor) needToCommitSpan(currentSpan *span.Span, headerNumber uint64) bool
 	}
 
 	// If the current block is the first block of the last sprint in the current span.
-	// But here we should skip the check for the 0th span, as it will cause the span to be committed to be committed twice.
-	if currentSpan.EndBlock > c.config.CalculateSprint(headerNumber) && currentSpan.EndBlock-c.config.CalculateSprint(headerNumber)+1 == headerNumber {
-		if currentSpan.ID == 0 {
+	// But here we should skip the check for the 0th span, as it will cause the span to be committed twice.
+	sprintLength := c.config.CalculateSprint(headerNumber)
+	if currentSpan.EndBlock > sprintLength && currentSpan.EndBlock-sprintLength+1 == headerNumber {
+		if currentSpan.Id == 0 {
 			// If the current span is the 0th span, we will skip committing the span.
-			log.Info("Skipping the last sprint commit for 0th span", "spanID", currentSpan.ID, "headerNumber", headerNumber)
+			log.Info("Skipping the last sprint commit for 0th span", "spanID", currentSpan.Id, "headerNumber", headerNumber)
 			return false
 		}
 		return true
@@ -1322,12 +1345,12 @@ func (c *Bor) needToCommitSpan(currentSpan *span.Span, headerNumber uint64) bool
 func (c *Bor) FetchAndCommitSpan(
 	ctx context.Context,
 	newSpanID uint64,
-	state *state.StateDB,
+	state vm.StateDB,
 	header *types.Header,
 	chain core.ChainContext,
 ) error {
 	var (
-		minSpan    span.Span
+		minSpan    borTypes.Span
 		chainId    string
 		validators []stakeTypes.MinimalVal
 		producers  []stakeTypes.MinimalVal
@@ -1340,42 +1363,35 @@ func (c *Bor) FetchAndCommitSpan(
 			return err
 		}
 
-		minSpan = span.Span{
-			ID:         s.ID,
+		minSpan = borTypes.Span{
+			Id:         s.Id,
 			StartBlock: s.StartBlock,
 			EndBlock:   s.EndBlock,
 		}
-		chainId = s.ChainID
+		chainId = s.BorChainId
 
 		for _, val := range s.ValidatorSet.Validators {
-			m := stakeTypes.MinimalVal{
-				ID:          val.ID,
-				VotingPower: uint64(val.VotingPower),
-				Signer:      val.Address,
-			}
-			validators = append(validators, m)
+			validators = append(validators, val.MinimalVal())
 		}
 
 		for _, val := range s.SelectedProducers {
-			m := stakeTypes.MinimalVal{
-				ID:          val.ID,
-				VotingPower: uint64(val.VotingPower),
-				Signer:      val.Address,
-			}
-			producers = append(producers, m)
+			producers = append(producers, val.MinimalVal())
 		}
 	} else {
 		response, err := c.spanStore.spanById(ctx, newSpanID)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get span by id %d: %w", newSpanID, err)
+		}
+		if response == nil {
+			return fmt.Errorf("span with id %d not found", newSpanID)
 		}
 
-		minSpan = span.Span{
-			ID:         response.ID,
+		minSpan = borTypes.Span{
+			Id:         response.Id,
 			StartBlock: response.StartBlock,
 			EndBlock:   response.EndBlock,
 		}
-		chainId = response.ChainID
+		chainId = response.BorChainId
 
 		for _, val := range response.ValidatorSet.Validators {
 			validators = append(validators, val.MinimalVal())
@@ -1400,12 +1416,22 @@ func (c *Bor) FetchAndCommitSpan(
 
 // CommitStates commit states
 func (c *Bor) CommitStates(
-	state *state.StateDB,
+	state vm.StateDB,
 	header *types.Header,
 	chain statefull.ChainContext,
 ) ([]*types.StateSyncData, error) {
 	fetchStart := time.Now()
 	number := header.Number.Uint64()
+
+	// Check for override state sync records before fetching event records
+	if c.config.OverrideStateSyncRecordsInRange != nil {
+		overrideStateSyncRecord, ok := c.config.GetOverrideStateSyncRecord(number)
+		if ok && overrideStateSyncRecord == 0 {
+			// If override value is 0, skip fetching event records entirely
+			log.Info("Skipping state sync events fetch due to override value 0", "number", number)
+			return make([]*types.StateSyncData, 0), nil
+		}
+	}
 
 	var (
 		lastStateIDBig *big.Int
@@ -1416,18 +1442,16 @@ func (c *Bor) CommitStates(
 
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
-		tempState := state.Copy()
+		tempState := state.Inner().Copy()
+		tempState.SetPrefetcher(nil)
+		tempState.StartPrefetcher("bor", state.Witness())
+
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
-
-		if tempState.Witness() != nil {
-			// Clone the witness Codes and State sets from the temporary snapshot back into the original state
-			state.Witness().Codes = maps.Clone(tempState.Witness().Codes)
-			state.Witness().State = maps.Clone(tempState.Witness().State)
-		}
-
 		if err != nil {
 			return nil, err
 		}
+
+		tempState.IntermediateRoot(false)
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)
@@ -1448,14 +1472,29 @@ func (c *Bor) CommitStates(
 		"fromID", from,
 		"to", to.Format(time.RFC3339))
 
-	eventRecords, err := c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
+	var eventRecords []*clerk.EventRecordWithTime
+	eventRecords, err = c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
 	if err != nil {
 		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
+
+		stateSyncs := make([]*types.StateSyncData, 0)
+		return stateSyncs, nil
 	}
 
+	// This if statement checks if there are any state sync record overrides configured for the current block number.
+	// If there are, it truncates the eventRecords array to the specified number of records.
 	if c.config.OverrideStateSyncRecords != nil {
 		if val, ok := c.config.OverrideStateSyncRecords[strconv.FormatUint(number, 10)]; ok {
 			eventRecords = eventRecords[0:val]
+		}
+	}
+
+	// This if statement checks if there are any state sync record overrides configured for the current block number.
+	// If there are, it truncates the eventRecords array to the specified number of records.
+	if c.config.OverrideStateSyncRecordsInRange != nil {
+		overrideStateSyncRecord, ok := c.config.GetOverrideStateSyncRecord(number)
+		if ok {
+			eventRecords = eventRecords[0:overrideStateSyncRecord]
 		}
 	}
 
@@ -1534,7 +1573,7 @@ func (c *Bor) getNextHeimdallSpanForTest(
 	newSpanID uint64,
 	header *types.Header,
 	chain core.ChainContext,
-) (*span.HeimdallSpan, error) {
+) (*borTypes.Span, error) {
 	headerNumber := header.Number.Uint64()
 
 	spanBor, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, nil)
@@ -1551,7 +1590,7 @@ func (c *Bor) getNextHeimdallSpanForTest(
 	}
 
 	// new span
-	spanBor.ID = newSpanID
+	spanBor.Id = newSpanID
 	if spanBor.EndBlock == 0 {
 		spanBor.StartBlock = 256
 	} else {
@@ -1559,20 +1598,11 @@ func (c *Bor) getNextHeimdallSpanForTest(
 	}
 
 	spanBor.EndBlock = spanBor.StartBlock + (100 * c.config.CalculateSprint(headerNumber)) - 1
+	spanBor.BorChainId = c.chainConfig.ChainID.String()
+	spanBor.ValidatorSet = borSpan.ConvertBorValSetToHeimdallValSet(snap.ValidatorSet)
+	spanBor.SelectedProducers = borSpan.ConvertBorValidatorsToHeimdallValidators(snap.ValidatorSet.Validators)
 
-	selectedProducers := make([]valset.Validator, len(snap.ValidatorSet.Validators))
-	for i, v := range snap.ValidatorSet.Validators {
-		selectedProducers[i] = *v
-	}
-
-	heimdallSpan := &span.HeimdallSpan{
-		Span:              *spanBor,
-		ValidatorSet:      *snap.ValidatorSet,
-		SelectedProducers: selectedProducers,
-		ChainID:           c.chainConfig.ChainID.String(),
-	}
-
-	return heimdallSpan, nil
+	return spanBor, nil
 }
 
 func validatorContains(a []*valset.Validator, x *valset.Validator) (*valset.Validator, bool) {

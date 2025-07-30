@@ -13,13 +13,14 @@ import (
 	context "context"
 	reflect "reflect"
 
-	types "github.com/0xPolygon/heimdall-v2/x/stake/types"
+	types "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	types0 "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	common "github.com/ethereum/go-ethereum/common"
-	span "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	valset "github.com/ethereum/go-ethereum/consensus/bor/valset"
 	core "github.com/ethereum/go-ethereum/core"
 	state "github.com/ethereum/go-ethereum/core/state"
-	types0 "github.com/ethereum/go-ethereum/core/types"
+	types1 "github.com/ethereum/go-ethereum/core/types"
+	vm "github.com/ethereum/go-ethereum/core/vm"
 	rpc "github.com/ethereum/go-ethereum/rpc"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -49,7 +50,7 @@ func (m *MockSpanner) EXPECT() *MockSpannerMockRecorder {
 }
 
 // CommitSpan mocks base method.
-func (m *MockSpanner) CommitSpan(ctx context.Context, minimalSpan span.Span, validators, producers []types.MinimalVal, arg4 *state.StateDB, header *types0.Header, chainContext core.ChainContext) error {
+func (m *MockSpanner) CommitSpan(ctx context.Context, minimalSpan types.Span, validators, producers []types0.MinimalVal, arg4 vm.StateDB, header *types1.Header, chainContext core.ChainContext) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CommitSpan", ctx, minimalSpan, validators, producers, arg4, header, chainContext)
 	ret0, _ := ret[0].(error)
@@ -63,10 +64,10 @@ func (mr *MockSpannerMockRecorder) CommitSpan(ctx, minimalSpan, validators, prod
 }
 
 // GetCurrentSpan mocks base method.
-func (m *MockSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, arg2 *state.StateDB) (*span.Span, error) {
+func (m *MockSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, arg2 *state.StateDB) (*types.Span, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetCurrentSpan", ctx, headerHash, arg2)
-	ret0, _ := ret[0].(*span.Span)
+	ret0, _ := ret[0].(*types.Span)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

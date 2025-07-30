@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	heimdalltypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -28,32 +28,36 @@ type mockHeimdall struct {
 	fetchCheckpointCount func(ctx context.Context) (int64, error)
 	fetchMilestone       func(ctx context.Context) (*milestone.Milestone, error)
 	fetchMilestoneCount  func(ctx context.Context) (int64, error)
-	getLatestSpan        func(ctx context.Context) (*heimdalltypes.Span, error)
 }
 
 func (m *mockHeimdall) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
 
-func (m *mockHeimdall) GetSpan(ctx context.Context, spanID uint64) (*heimdalltypes.Span, error) {
+func (m *mockHeimdall) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
+	return nil, nil
+}
+
+func (m *mockHeimdall) GetLatestSpan(ctx context.Context) (*types.Span, error) {
 	return nil, nil
 }
 
 func (m *mockHeimdall) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
 	return m.fetchCheckpoint(ctx, number)
 }
+
 func (m *mockHeimdall) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	return m.fetchCheckpointCount(ctx)
 }
+
 func (m *mockHeimdall) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
 	return m.fetchMilestone(ctx)
 }
+
 func (m *mockHeimdall) FetchMilestoneCount(ctx context.Context) (int64, error) {
 	return m.fetchMilestoneCount(ctx)
 }
-func (m *mockHeimdall) GetLatestSpan(ctx context.Context) (*heimdalltypes.Span, error) {
-	return m.getLatestSpan(ctx)
-}
+
 func (m *mockHeimdall) Close() {}
 
 func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
@@ -113,17 +117,14 @@ func fetchCheckpointTest(t *testing.T, heimdall *mockHeimdall, bor *bor.Bor, han
 		}
 	}
 
-	// create a background context
-	ctx := context.Background()
-
-	_, err := handler.fetchWhitelistCheckpoint(ctx, bor)
+	_, err := handler.fetchWhitelistCheckpoint(t.Context(), bor)
 	require.ErrorIs(t, err, errCheckpoint)
 
 	// create 4 mock checkpoints
 	checkpoints = createMockCheckpoints(4)
 
-	checkpoint, err := handler.fetchWhitelistCheckpoint(ctx, bor)
-	blockHash, err2 := handler.handleWhitelistCheckpoint(ctx, checkpoint, nil, verifier, false)
+	checkpoint, err := handler.fetchWhitelistCheckpoint(t.Context(), bor)
+	blockHash, err2 := handler.handleWhitelistCheckpoint(t.Context(), checkpoint, nil, verifier, false)
 	blockNum := checkpoint.EndBlock
 
 	// Check if we have expected result
@@ -146,16 +147,13 @@ func fetchMilestoneTest(t *testing.T, heimdall *mockHeimdall, bor *bor.Bor, hand
 		}
 	}
 
-	// create a background context
-	ctx := context.Background()
-
-	_, err := handler.fetchWhitelistMilestone(ctx, bor)
+	_, err := handler.fetchWhitelistMilestone(t.Context(), bor)
 	require.ErrorIs(t, err, errMilestone)
 
 	// create 4 mock checkpoints
 	milestones = createMockMilestones(4)
 
-	milestone, err := handler.fetchWhitelistMilestone(ctx, bor)
+	milestone, err := handler.fetchWhitelistMilestone(t.Context(), bor)
 	num := milestone.EndBlock
 	hash := milestone.Hash
 

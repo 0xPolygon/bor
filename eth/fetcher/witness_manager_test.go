@@ -10,7 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -157,7 +159,7 @@ func TestHandleNeed(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -206,7 +208,7 @@ func TestHandleNeedDuplicates(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -259,7 +261,7 @@ func TestHandleNeedKnownBlock(t *testing.T) {
 		chainHeight,
 	)
 
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -318,7 +320,7 @@ func TestHandleBroadcast(t *testing.T) {
 	witness := createTestWitnessForBlock(block)
 
 	// First add a pending request
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -481,7 +483,7 @@ func TestForget(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -529,7 +531,7 @@ func TestHandleFilterResult(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -565,7 +567,7 @@ func TestCheckCompleting(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -674,6 +676,117 @@ func TestCleanupUnavailableCache(t *testing.T) {
 	}
 }
 
+// TestWitnessFetchWithBlockNoLongerPending tests the new error handling when a block
+// is removed from pending during witness fetch
+func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit,
+		dropPeer,
+		enqueueCh,
+		getBlock,
+		getHeader,
+		chainHeight,
+	)
+
+	block := createTestBlock(101)
+	blockHash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	// Create a channel to control witness fetch timing
+	fetchStarted := make(chan struct{})
+	responseSent := false
+
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
+		// Signal that fetch has started
+		close(fetchStarted)
+
+		// Send the response in a goroutine
+		go func() {
+			// Wait a bit to ensure we're in the middle of processing
+			time.Sleep(10 * time.Millisecond)
+
+			// Before sending response, remove block from pending
+			manager.mu.Lock()
+			delete(manager.pending, blockHash)
+			manager.mu.Unlock()
+
+			// Now send the response with the correct structure
+			witnessBytes, _ := rlp.EncodeToBytes(witness)
+			responseCh <- &eth.Response{
+				Res: &wit.WitnessPacketRLPPacket{
+					WitnessPacketResponse: wit.WitnessPacketResponse{{Data: rlp.RawValue(witnessBytes)}},
+				},
+				Done: make(chan error, 1),
+			}
+			responseSent = true
+		}()
+
+		// Return successful request
+		req := &eth.Request{
+			Peer: "test-peer",
+			Sent: time.Now(),
+		}
+		return req, nil
+	}
+
+	// Create message to inject block that needs witness
+	msg := &injectBlockNeedWitnessMsg{
+		origin:       "test-peer",
+		block:        block,
+		time:         time.Now(),
+		fetchWitness: fetchWitness,
+	}
+
+	// Inject the block
+	manager.handleNeed(msg)
+
+	// Verify block is pending
+	manager.mu.Lock()
+	if _, exists := manager.pending[blockHash]; !exists {
+		t.Fatal("Block should be pending after handleNeed")
+	}
+	manager.mu.Unlock()
+
+	// Trigger tick to start witness fetch
+	manager.tick()
+
+	// Wait for fetch to start
+	<-fetchStarted
+
+	// Give time for the response to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify response was sent and block is no longer pending
+	if !responseSent {
+		t.Error("Response should have been sent")
+	}
+
+	manager.mu.Lock()
+	_, exists := manager.pending[blockHash]
+	manager.mu.Unlock()
+
+	if exists {
+		t.Error("Block should not be pending after being removed during fetch")
+	}
+
+	// Check that no enqueue occurred (since block was removed from pending)
+	select {
+	case <-enqueueCh:
+		t.Error("Should not enqueue block that was removed from pending")
+	default:
+		// Expected - no enqueue
+	}
+}
+
 // TestTick tests the witness timer tick functionality
 func TestTick(t *testing.T) {
 	quit := make(chan struct{})
@@ -699,7 +812,7 @@ func TestTick(t *testing.T) {
 
 	// Add a pending request but make it NOT ready to fetch to avoid goroutine issues
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -783,7 +896,7 @@ func TestTickMaxRetries(t *testing.T) {
 		hash:   block.Hash(),
 		number: block.NumberU64(),
 		time:   time.Now().Add(-time.Second), // Ready to fetch
-		fetchWitness: func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 			return nil, nil
 		},
 	}
@@ -850,7 +963,7 @@ func TestTickWithWitnessAlreadyPresent(t *testing.T) {
 		hash:   block.Hash(),
 		number: block.NumberU64(),
 		time:   time.Now().Add(-time.Second), // Ready to fetch (this will be updated)
-		fetchWitness: func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 			return nil, nil
 		},
 	}
@@ -1065,7 +1178,7 @@ func TestRescheduleWitness(t *testing.T) {
 		hash:   block.Hash(),
 		number: block.NumberU64(),
 		time:   time.Now().Add(time.Second), // Future time
-		fetchWitness: func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 			return nil, nil
 		},
 	}
@@ -1188,7 +1301,7 @@ func TestHandleNeedPenalizedPeer(t *testing.T) {
 	manager.penalisePeer(peer)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1229,7 +1342,7 @@ func TestHandleNeedDistanceCheck(t *testing.T) {
 
 	// Create block that's too far away (block 10 when chain is at 100)
 	block := createTestBlock(10)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1310,7 +1423,7 @@ func TestLoop(t *testing.T) {
 
 	// Test injecting a block need witness message
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1461,7 +1574,7 @@ func TestFetchWitnessError(t *testing.T) {
 		hash:   hash,
 		number: 101,
 		time:   time.Now(),
-		fetchWitness: func(common.Hash, chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
 			return nil, errors.New("no peer available")
 		},
 	}
@@ -1501,7 +1614,7 @@ func TestFetchWitnessNoPeerError(t *testing.T) {
 		hash:   hash,
 		number: 101,
 		time:   time.Now(),
-		fetchWitness: func(common.Hash, chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
 			return nil, errors.New("no peer with witness for hash")
 		},
 	}
@@ -1542,7 +1655,7 @@ func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 	// Mark witness as unavailable first
 	manager.markWitnessUnavailable(block.Hash())
 
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1578,7 +1691,7 @@ func TestHandleFilterResultDuplicate(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1625,7 +1738,7 @@ func TestHandleFilterResultPenalizedPeer(t *testing.T) {
 	manager.penalisePeer(peer)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1665,7 +1778,7 @@ func TestCheckCompletingWitnessUnavailable(t *testing.T) {
 	// Mark witness as unavailable first
 	manager.markWitnessUnavailable(block.Hash())
 
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1701,7 +1814,7 @@ func TestCheckCompletingDuplicate(t *testing.T) {
 	)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1750,7 +1863,7 @@ func TestCheckCompletingKnownBlock(t *testing.T) {
 		chainHeight,
 	)
 
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1790,7 +1903,7 @@ func TestCheckCompletingPenalizedPeer(t *testing.T) {
 	manager.penalisePeer(peer)
 
 	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		return nil, nil
 	}
 
@@ -1871,7 +1984,7 @@ func TestTickNotReadyYet(t *testing.T) {
 		hash:   block.Hash(),
 		number: block.NumberU64(),
 		time:   time.Now().Add(time.Hour), // Not ready yet - future time
-		fetchWitness: func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
+		fetchWitness: func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 			return nil, nil
 		},
 	}
@@ -2006,7 +2119,7 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 	)
 
 	// Start the manager
-	go manager.loop()
+	manager.start()
 	defer manager.stop()
 
 	hash := common.HexToHash("0x123")
@@ -2035,5 +2148,134 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 
 	if failureCount != numGoroutines {
 		t.Errorf("Expected failure count %d, got %d", numGoroutines, failureCount)
+	}
+}
+
+// TestHandleWitnessFetchSuccessWithBlockNoLongerPending tests handleWitnessFetchSuccess
+// when block is no longer pending
+func TestHandleWitnessFetchSuccessWithBlockNoLongerPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit,
+		dropPeer,
+		enqueueCh,
+		getBlock,
+		getHeader,
+		chainHeight,
+	)
+
+	// Create test data
+	block := createTestBlock(101)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	// First add the block to pending
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin: "test-peer",
+			block:  block,
+		},
+		announce: &blockAnnounce{
+			origin: "test-peer",
+			hash:   hash,
+			number: block.NumberU64(),
+			time:   time.Now(),
+		},
+	}
+	manager.mu.Unlock()
+
+	// Remove it to simulate the scenario
+	manager.mu.Lock()
+	delete(manager.pending, hash)
+	manager.mu.Unlock()
+
+	// Call handleWitnessFetchSuccess - should handle gracefully
+	manager.handleWitnessFetchSuccess("test-peer", hash, witness, time.Now())
+
+	// Verify no enqueue occurred
+	select {
+	case <-enqueueCh:
+		t.Error("Should not enqueue when block is no longer pending")
+	default:
+		// Expected - no enqueue
+	}
+}
+
+// TestFetchWitnessWithBlockRemovedBeforeError tests that when a block is removed from pending
+// before a fetch error occurs, the peer is not penalized
+func TestFetchWitnessWithBlockRemovedBeforeError(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit,
+		dropPeer,
+		enqueueCh,
+		getBlock,
+		getHeader,
+		chainHeight,
+	)
+
+	// Create test data
+	block := createTestBlock(101)
+	hash := block.Hash()
+
+	// Track original failure count
+	originalFailures := 0
+
+	// Create a mock fetchWitness that removes block from pending before error
+	fetchWitness := func(h common.Hash, resCh chan *eth.Response) (*eth.Request, error) {
+		// Remove block from pending before returning error
+		manager.mu.Lock()
+		delete(manager.pending, hash)
+		originalFailures = manager.failedWitnessAttempts["test-peer"]
+		manager.mu.Unlock()
+
+		// Return an error - this should trigger the check for pending status
+		return nil, errors.New("simulated fetch error")
+	}
+
+	// Add block to pending
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin: "test-peer",
+			block:  block,
+		},
+		announce: &blockAnnounce{
+			origin:       "test-peer",
+			hash:         hash,
+			number:       block.NumberU64(),
+			time:         time.Now().Add(-time.Second), // Make it ready to fetch
+			fetchWitness: fetchWitness,
+		},
+	}
+	manager.mu.Unlock()
+
+	// Call fetchWitness directly to simulate the fetch attempt
+	manager.fetchWitness("test-peer", hash, manager.pending[hash].announce)
+
+	// Verify peer was not penalized (failure count should not increase)
+	manager.mu.Lock()
+	currentFailures := manager.failedWitnessAttempts["test-peer"]
+	manager.mu.Unlock()
+
+	if currentFailures > originalFailures {
+		t.Errorf("Peer should not be penalized when block is no longer pending, failures increased from %d to %d", originalFailures, currentFailures)
 	}
 }

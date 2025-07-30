@@ -18,6 +18,7 @@ package stateless
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -26,11 +27,46 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// HeaderReader is an interface to pull in headers in place of block hashes for
-// the witness.
+// HeaderReader is an interface to pull in headers in place of block hashes for the witness.
 type HeaderReader interface {
-	// GetHeader retrieves a block header from the database by hash and number,
+	// GetHeader retrieves a block header from the database by hash and number.
 	GetHeader(hash common.Hash, number uint64) *types.Header
+}
+
+// ValidateWitnessPreState validates that the witness pre-state root matches the parent block's state root.
+func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader) error {
+	if witness == nil {
+		return fmt.Errorf("witness is nil")
+	}
+
+	// Check if witness has any headers.
+	if len(witness.Headers) == 0 {
+		return fmt.Errorf("witness has no headers")
+	}
+
+	// Get the witness context header (the block this witness is for).
+	contextHeader := witness.Header()
+	if contextHeader == nil {
+		return fmt.Errorf("witness context header is nil")
+	}
+
+	// Get the parent block header from the chain.
+	parentHeader := headerReader.GetHeader(contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	if parentHeader == nil {
+		return fmt.Errorf("parent block header not found: parentHash=%x, parentNumber=%d",
+			contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	}
+
+	// Get witness pre-state root (from first header which should be parent).
+	witnessPreStateRoot := witness.Root()
+
+	// Compare with actual parent block's state root.
+	if witnessPreStateRoot != parentHeader.Root {
+		return fmt.Errorf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
+			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
+	}
+
+	return nil
 }
 
 // Witness encompasses the state required to apply a set of transactions and
@@ -43,7 +79,7 @@ type Witness struct {
 	State   map[string]struct{} // Set of MPT state trie nodes (account and storage together)
 
 	chain HeaderReader // Chain reader to convert block hash ops to header proofs
-	lock  sync.Mutex   // Lock to allow concurrent state insertions
+	lock  sync.RWMutex // Lock to allow concurrent state insertions
 }
 
 // NewWitness creates an empty witness ready for population.
@@ -98,9 +134,52 @@ func (w *Witness) AddState(nodes map[string]struct{}) {
 	maps.Copy(w.State, nodes)
 }
 
+// Optimize removes duplicate data and compresses the witness structure.
+func (w *Witness) Optimize() {
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	// Remove duplicate state nodes by normalizing them
+	normalizedState := make(map[string]struct{})
+	for node := range w.State {
+		// Remove empty or redundant state nodes
+		if len(node) > 0 {
+			normalizedState[node] = struct{}{}
+		}
+	}
+	w.State = normalizedState
+}
+
+// Size returns the approximate size of the witness in bytes.
+// this is only used in testing
+func (w *Witness) Size() int {
+	size := 0
+
+	// Context header size
+	if w.context != nil {
+		size += 32 + 8 + 32 + 32 // hash + number + parentHash + root
+	}
+
+	// Headers size
+	for _, header := range w.Headers {
+		if header != nil {
+			size += 32 + 8 + 32 + 32 // hash + number + parentHash + root
+		}
+	}
+
+	// State size
+	for node := range w.State {
+		size += len(node)
+	}
+
+	return size
+}
+
 // Copy deep-copies the witness object.  Witness.Block isn't deep-copied as it
 // is never mutated by Witness
 func (w *Witness) Copy() *Witness {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
 	cpy := &Witness{
 		Headers: slices.Clone(w.Headers),
 		Codes:   maps.Clone(w.Codes),
@@ -123,4 +202,10 @@ func (w *Witness) Root() common.Hash {
 
 func (w *Witness) Header() *types.Header {
 	return w.context
+}
+
+func (w *Witness) SetHeader(header *types.Header) {
+	if w != nil {
+		w.context = header
+	}
 }

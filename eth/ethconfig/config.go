@@ -61,8 +61,8 @@ var Defaults = Config{
 	HistoryMode:           history.KeepAll,
 	NetworkId:             0, // enable auto configuration of networkID == chainID
 	TxLookupLimit:         2350000,
-	TransactionHistory:    2350000,
-	LogHistory:            2350000,
+	TransactionHistory:    2350000, // Note: used in bor cli
+	LogHistory:            2350000, // Note: used in bor cli
 	StateHistory:          params.FullImmutabilityThreshold,
 	DatabaseCache:         512,
 	TrieCleanCache:        154,
@@ -260,8 +260,9 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 
 			var heimdallClient bor.IHeimdallClient
 			if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
-				// TODO HV2: Uncomment once FetchMilestoneID is implemented
+				// TODO: Running heimdall from bor is not tested yet.
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
+				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
 			} else if ethConfig.HeimdallgRPCAddress != "" {
 				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress)
 			} else {

@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -99,8 +98,8 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 			bodyFetcher := func(hashes []common.Hash, respCh chan *eth.Response) (*eth.Request, error) {
 				return &eth.Request{}, nil
 			}
-			witnessFetcher := func(hash common.Hash, respCh chan *wit.Response) (*wit.Request, error) {
-				return &wit.Request{}, nil
+			witnessFetcher := func(hash common.Hash, respCh chan *eth.Response) (*eth.Request, error) {
+				return &eth.Request{}, nil
 			}
 
 			err := fetcher.Notify(
@@ -287,8 +286,8 @@ func TestWitnessManagerConcurrentAccess(t *testing.T) {
 			block := blocks[blockIdx]
 			peer := "peer-need-" + randomString(5)
 
-			fetchWitness := func(hash common.Hash, responseCh chan *wit.Response) (*wit.Request, error) {
-				return &wit.Request{}, nil
+			fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
+				return &eth.Request{}, nil
 			}
 
 			msg := &injectBlockNeedWitnessMsg{
@@ -720,7 +719,6 @@ func TestWitnessManagerMemoryLeaks(t *testing.T) {
 // after the mutex was unlocked
 func TestWitnessManagerMapAccessRace(t *testing.T) {
 	quit := make(chan struct{})
-	defer close(quit)
 
 	dropPeer := peerDropFn(func(id string) {})
 	enqueueCh := make(chan *enqueueRequest, 100)
@@ -738,8 +736,12 @@ func TestWitnessManagerMapAccessRace(t *testing.T) {
 	)
 
 	// Start the manager
-	go manager.loop()
-	defer manager.stop()
+	manager.start()
+	defer func() {
+		close(quit)
+		time.Sleep(10 * time.Millisecond) // Give the loop time to exit
+		manager.stop()
+	}()
 
 	// Create test data
 	hash := common.HexToHash("0x123")

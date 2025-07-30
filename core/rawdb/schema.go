@@ -102,6 +102,12 @@ var (
 	// snapSyncStatusFlagKey flags that status of snap sync.
 	snapSyncStatusFlagKey = []byte("SnapSyncStatus")
 
+	// bytecodeSyncLastBlockKey tracks the last block number up to which bytecodes were synced.
+	bytecodeSyncLastBlockKey = []byte("BytecodeSyncLastBlock")
+
+	// bytecodeSyncStateRootKey tracks the state root at the last synced block for validation.
+	bytecodeSyncStateRootKey = []byte("BytecodeSyncStateRoot")
+
 	// Data item prefixes (use single byte to avoid mixing data types, avoid `i`, used for indexes).
 	headerPrefix       = []byte("h") // headerPrefix + num (uint64 big endian) + hash -> header
 	headerTDSuffix     = []byte("t") // headerPrefix + num (uint64 big endian) + hash + headerTDSuffix -> td
@@ -135,6 +141,7 @@ var (
 	genesisPrefix  = []byte("ethereum-genesis-") // genesis state prefix for the db
 
 	WitnessPrefix         = []byte("witness-")
+	WitnessSizePrefix     = []byte("witnessSize-")
 	WitnessPruneCursorKey = []byte("witnessPruneCursorKey")
 
 	// BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
@@ -154,6 +161,8 @@ var (
 	FixedCommitteeRootKey = []byte("fixedRoot-") // bigEndian64(syncPeriod) -> committee root hash
 	SyncCommitteeKey      = []byte("committee-") // bigEndian64(syncPeriod) -> serialized committee
 
+	preimageCounter = metrics.NewRegisteredCounter("db/preimage/total", nil)
+
 	// new log index
 	filterMapsPrefix         = "fm-"
 	filterMapsRangeKey       = []byte(filterMapsPrefix + "R")
@@ -164,7 +173,6 @@ var (
 	// old log index
 	bloomBitsMetaPrefix = []byte("iB")
 
-	preimageCounter     = metrics.NewRegisteredCounter("db/preimage/total", nil)
 	preimageHitsCounter = metrics.NewRegisteredCounter("db/preimage/hits", nil)
 	preimageMissCounter = metrics.NewRegisteredCounter("db/preimage/miss", nil)
 )
@@ -257,6 +265,11 @@ func preimageKey(hash common.Hash) []byte {
 // witnessKey = WitnessPrefix + hash
 func witnessKey(hash common.Hash) []byte {
 	return append(WitnessPrefix, hash.Bytes()...)
+}
+
+// witnessSizeKey = WitnessSizePrefix + hash
+func witnessSizeKey(hash common.Hash) []byte {
+	return append(WitnessSizePrefix, hash.Bytes()...)
 }
 
 func witnessPruneCursorKey() []byte {

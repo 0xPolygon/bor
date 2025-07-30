@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/trie"
@@ -90,7 +89,7 @@ type headerRequesterFn func(common.Hash, chan *eth.Response) (*eth.Request, erro
 type bodyRequesterFn func([]common.Hash, chan *eth.Response) (*eth.Request, error)
 
 // witnessRequesterFn is a callback type for sending a witness retrieval request.
-type witnessRequesterFn func(common.Hash, chan *wit.Response) (*wit.Request, error)
+type witnessRequesterFn func(common.Hash, chan *eth.Response) (*eth.Request, error)
 
 // headerVerifierFn is a callback type to verify a block's header for fast propagation.
 type headerVerifierFn func(header *types.Header) error
@@ -508,11 +507,19 @@ func (f *BlockFetcher) loop() {
 			}
 			// Otherwise if fresh and still unknown, try and import
 			// Also check if witness manager is handling it
-			if (number+maxUncleDist < height) || (f.light && f.getHeader(hash) != nil) || (!f.light && f.getBlock(hash) != nil) || f.wm.isPending(hash) {
-				// If known or pending witness, just forget about it in the main queue
+			if (number+maxUncleDist < height) || (f.light && f.getHeader(hash) != nil) || (!f.light && f.getBlock(hash) != nil) {
+				// If known, forget about it
 				f.forgetBlock(hash)
-				// We don't call wm.forget here because the block might still be needed by wm
 				continue
+			}
+			if f.wm.isPending(hash) {
+				// If witness manager is handling it, re-queue for later
+				// The witness manager will enqueue it when ready
+				f.queue.Push(op, -int64(number))
+				if f.queueChangeHook != nil {
+					f.queueChangeHook(hash, true)
+				}
+				break // Exit the import loop to let witness manager work
 			}
 
 			if f.light {
