@@ -24,6 +24,7 @@ type IHeimdallClient interface {
 	Close()
 }
 
+//go:generate mockgen -source=heimdall.go -destination=../../tests/bor/mocks/IHeimdallClient.go -package=mocks
 type IHeimdallWSClient interface {
 	SubscribeMilestoneEvents(ctx context.Context) <-chan *milestone.Milestone
 	SubscribeSpanEvents(ctx context.Context) <-chan *span.HeimdallSpanEvent

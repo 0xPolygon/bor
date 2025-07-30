@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
-	"go.uber.org/mock/gomock"
+	gomock "github.com/golang/mock/gomock"
 )
 
 type MockHeimdallClient struct {
@@ -80,7 +80,7 @@ func (h *MockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 }
 
 func TestSpanStore_SpanById(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, nil, "1337")
 	defer spanStore.Close()
 	ctx := context.Background()
 
@@ -134,7 +134,7 @@ func TestSpanStore_SpanById(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, nil, "1337")
 	defer spanStore.Close()
 	ctx := context.Background()
 
@@ -389,7 +389,7 @@ func (h *MockOverlappingHeimdallClient) Close() {
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, nil, "1337")
 	defer spanStore.Close()
 	ctx := context.Background()
 
@@ -468,7 +468,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, nil, "1337")
 	defer spanStore.Close()
 	ctx := context.Background()
 
@@ -492,7 +492,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.T) {
-	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockOverlappingHeimdallClient{}, nil, nil, "1337")
 	defer spanStore.Close()
 	ctx := context.Background()
 
@@ -657,7 +657,7 @@ func TestSpanStore_GetFutureSpan(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockClient := tc.mockClientSetup()
-			spanStore := NewSpanStore(mockClient, nil, "1337")
+			spanStore := NewSpanStore(mockClient, nil, nil, "1337")
 			defer spanStore.Close()
 
 			// Pre-load some spans to make the store behave more realistically
@@ -683,7 +683,7 @@ func TestSpanStore_GetFutureSpan(t *testing.T) {
 }
 
 func TestSpanStore_EstimateSpanId(t *testing.T) {
-	spanStore := NewSpanStore(nil, nil, "1337") // Heimdall client and spanner not needed for this test
+	spanStore := NewSpanStore(nil, nil, nil, "1337") // Heimdall client and spanner not needed for this test
 	defer spanStore.Close()
 
 	// Mock lastUsedSpan for some test cases
@@ -832,7 +832,7 @@ func TestGetMockSpan0(t *testing.T) {
 }
 
 func TestSpanStore_SetHeimdallClient(t *testing.T) {
-	spanStore := NewSpanStore(nil, nil, "1337")
+	spanStore := NewSpanStore(nil, nil, nil, "1337")
 	defer spanStore.Close()
 
 	require.Nil(t, spanStore.heimdallClient, "Initial heimdall client should be nil")
@@ -844,7 +844,7 @@ func TestSpanStore_SetHeimdallClient(t *testing.T) {
 }
 
 func TestSpanStore_Close(t *testing.T) {
-	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, nil, "1337")
 	require.NotNil(t, spanStore.cancel, "Cancel function should be set by NewSpanStore")
 
 	spanStore.Close()
@@ -974,7 +974,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author2)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		found, err := store.waitForNewSpan(150, author1, 1*time.Second)
@@ -987,7 +987,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		go func() {
@@ -1006,7 +1006,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1)
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		// Use a short timeout to ensure the test doesn't run for too long
@@ -1020,7 +1020,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		expectedErr := fmt.Errorf("heimdall connection error")
 		client.setError(expectedErr)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		found, err := store.waitForNewSpan(150, author1, 1*time.Second)
@@ -1035,7 +1035,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1.SelectedProducers = []stakeTypes.Validator{} // Empty producer list
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		go func() {
@@ -1054,7 +1054,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		span1 := makeTestSpan(1, 100, 200, author1) // block 150 is now in this span
 		client.setSpans(map[uint64]*types.Span{0: span0, 1: span1}, span1)
 
-		store := NewSpanStore(client, nil, "1337")
+		store := NewSpanStore(client, nil, nil, "1337")
 		defer store.Close()
 
 		go func() {
