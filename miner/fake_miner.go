@@ -5,12 +5,13 @@ import (
 	"math/big"
 	"testing"
 
-	heimdallTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
-	heimdallStakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
+	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -59,12 +60,13 @@ func NewBorDefaultMiner(t *testing.T) *DefaultBorMiner {
 	}
 
 	spanner := bor.NewMockSpanner(ctrl)
-	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(validators, nil).AnyTimes()
+	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, nil).AnyTimes()
 
 	heimdallClient := mocks.NewMockIHeimdallClient(ctrl)
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 	heimdallClient.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(&span0, nil).AnyTimes()
 	heimdallClient.EXPECT().GetLatestSpan(gomock.Any()).Return(&span0, nil).AnyTimes()
+	heimdallClient.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
 	heimdallClient.EXPECT().Close().Times(1)
 
 	genesisContracts := bor.NewMockGenesisContract(ctrl)
@@ -165,27 +167,24 @@ func NewFakeBor(t TensingObject, chainDB ethdb.Database, chainConfig *params.Cha
 	return bor.New(chainConfig, chainDB, ethAPIMock, spanner, heimdallClientMock, heimdallClientWSMock, contractMock, false)
 }
 
-func createMockSpanForTest(address common.Address, chainId string) heimdallTypes.Span {
+func createMockSpanForTest(address common.Address, chainId string) borTypes.Span {
 	// Mock span 0 for heimdall calls
-	validator := heimdallStakeTypes.Validator{
-		ValId:            0,
-		StartEpoch:       0,
-		EndEpoch:         0,
-		Nonce:            0,
+	validator := valset.Validator{
+		ID:               0,
+		Address:          address,
 		VotingPower:      100,
 		ProposerPriority: 0,
-		Signer:           address.Hex(),
 	}
-	validatorSet := heimdallStakeTypes.ValidatorSet{
-		Validators: []*heimdallStakeTypes.Validator{&validator},
+	validatorSet := valset.ValidatorSet{
+		Validators: []*valset.Validator{&validator},
 		Proposer:   &validator,
 	}
-	span0 := heimdallTypes.Span{
+	span0 := borTypes.Span{
 		Id:                0,
 		StartBlock:        0,
 		EndBlock:          255,
-		ValidatorSet:      validatorSet,
-		SelectedProducers: []heimdallStakeTypes.Validator{validator},
+		ValidatorSet:      borSpan.ConvertBorValSetToHeimdallValSet(&validatorSet),
+		SelectedProducers: borSpan.ConvertBorValidatorsToHeimdallValidators([]*valset.Validator{&validator}),
 		BorChainId:        chainId,
 	}
 

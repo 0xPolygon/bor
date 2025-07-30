@@ -701,7 +701,7 @@ func DefaultAmoyGenesisBlock() *Genesis {
 	}
 }
 
-// DefaultBorMainnet returns the Bor Mainnet network gensis block.
+// DefaultBorMainnetGenesisBlock returns the Bor Mainnet network gensis block.
 func DefaultBorMainnetGenesisBlock() *Genesis {
 	return &Genesis{
 		Config:     params.BorMainnetChainConfig,

@@ -15,7 +15,7 @@ func CreateMockServer(config *Config) (*Server, error) {
 	config.DBEngine = "leveldb"
 
 	// get grpc port and listener
-	grpcPort, gRPCListener, err := network.FindAvailablePort()
+	grpcPort, _, err := network.FindAvailablePort()
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func CreateMockServer(config *Config) (*Server, error) {
 	config.JsonRPC.Http.Port = 0 // It will choose a free/available port
 
 	// start the server
-	return NewServer(config, WithGRPCListener(gRPCListener))
+	return NewServer(config)
 }
 
 func CloseMockServer(server *Server) {

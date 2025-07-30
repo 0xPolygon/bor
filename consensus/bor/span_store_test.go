@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0xPolygon/heimdall-v2/x/bor/types"
+	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/stretchr/testify/require"
 
-	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	"go.uber.org/mock/gomock"
 )
@@ -100,7 +100,7 @@ func TestSpanStore_SpanById(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			span, err := spanStore.spanById(ctx, tc.id)
 			require.NoError(t, err, "err in spanById for id=%d", tc.id)
-			require.Equal(t, tc.id, span.ID, "invalid id in spanById for id=%d", tc.id)
+			require.Equal(t, tc.id, span.Id, "invalid id in spanById for id=%d", tc.id)
 			require.Equal(t, tc.startBlock, span.StartBlock, "invalid start block in spanById for id=%d", tc.id)
 			require.Equal(t, tc.endBlock, span.EndBlock, "invalid end block in spanById for id=%d", tc.id)
 		})
@@ -123,7 +123,7 @@ func TestSpanStore_SpanById(t *testing.T) {
 	// Ensure we're still able to fetch old spans even though they're evicted from cache
 	span, err := spanStore.spanById(ctx, 0)
 	require.NoError(t, err, "err in spanById after eviction for id=0")
-	require.Equal(t, uint64(0), span.ID, "invalid id in spanById after eviction for id=0")
+	require.Equal(t, uint64(0), span.Id, "invalid id in spanById after eviction for id=0")
 	require.Equal(t, uint64(0), span.StartBlock, "invalid start block in spanById after eviction for id=0")
 	require.Equal(t, uint64(255), span.EndBlock, "invalid end block in spanById after eviction for id=0")
 
@@ -173,7 +173,7 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			span, err := spanStore.spanByBlockNumber(ctx, tc.blockNumber)
 			require.NoError(t, err, "err in spanByBlockNumber for block=%d", tc.blockNumber)
-			require.Equal(t, tc.id, span.ID, "invalid id in spanByBlockNumber for block=%d", tc.blockNumber)
+			require.Equal(t, tc.id, span.Id, "invalid id in spanByBlockNumber for block=%d", tc.blockNumber)
 			require.Equal(t, tc.startBlock, span.StartBlock, "invalid start block in spanByBlockNumber for block=%d", tc.blockNumber)
 			require.Equal(t, tc.endBlock, span.EndBlock, "invalid end block in spanByBlockNumber for block=%d", tc.blockNumber)
 		})
@@ -201,7 +201,7 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			span, err := spanStore.spanByBlockNumber(ctx, tc.blockNumber)
 			require.NoError(t, err, "err in spanByBlockNumber for block=%d", tc.blockNumber)
-			require.Equal(t, tc.id, span.ID, "invalid id in spanByBlockNumber for block=%d", tc.blockNumber)
+			require.Equal(t, tc.id, span.Id, "invalid id in spanByBlockNumber for block=%d", tc.blockNumber)
 			require.Equal(t, tc.startBlock, span.StartBlock, "invalid start block in spanByBlockNumber for block=%d", tc.blockNumber)
 			require.Equal(t, tc.endBlock, span.EndBlock, "invalid end block in spanByBlockNumber for block=%d", tc.blockNumber)
 		})
@@ -210,7 +210,7 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 	// Asking for a future span
 	span, err := spanStore.spanByBlockNumber(ctx, 128256) // block 128256 belongs to span 21 (future span)
 	require.NoError(t, err, "err in spanByBlockNumber for future block 128256")
-	require.Equal(t, uint64(21), span.ID, "invalid id in spanByBlockNumber for future block 128256")
+	require.Equal(t, uint64(21), span.Id, "invalid id in spanByBlockNumber for future block 128256")
 	require.Equal(t, uint64(128256), span.StartBlock, "invalid start block in spanByBlockNumber for future block 128256")
 	require.Equal(t, uint64(134655), span.EndBlock, "invalid end block in spanByBlockNumber for future block 128256")
 }
@@ -219,27 +219,23 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 func (h *MockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	panic("implement me")
 }
+
 func (h *MockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
 	panic("implement me")
 }
+
 func (h *MockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	panic("implement me")
 }
+
 func (h *MockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
 	panic("implement me")
 }
+
 func (h *MockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
 	panic("implement me")
 }
-func (h *MockHeimdallClient) FetchNoAckMilestone(ctx context.Context, milestoneID string) error {
-	panic("implement me")
-}
-func (h *MockHeimdallClient) FetchLastNoAckMilestone(ctx context.Context) (string, error) {
-	panic("implement me")
-}
-func (h *MockHeimdallClient) FetchMilestoneID(ctx context.Context, milestoneID string) error {
-	panic("implement me")
-}
+
 func (h *MockHeimdallClient) Close() {
 	panic("implement me")
 }
@@ -466,7 +462,7 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			span, err := spanStore.spanByBlockNumber(ctx, tc.blockNumber)
 			require.NoError(t, err, "err in spanByBlockNumber for block=%d: %s", tc.blockNumber, tc.description)
-			require.Equal(t, tc.expectedID, span.ID, "invalid span ID for block=%d: %s", tc.blockNumber, tc.description)
+			require.Equal(t, tc.expectedID, span.Id, "invalid span ID for block=%d: %s", tc.blockNumber, tc.description)
 		})
 	}
 }
@@ -487,12 +483,12 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansWithFuture(t *testing.T) {
 	span, err := spanStore.spanByBlockNumber(ctx, 175)
 	require.NoError(t, err, "err in spanByBlockNumber for block 175")
 	// Should return span 5 since it has higher ID than span 1
-	require.Equal(t, uint64(5), span.ID, "should return span 5 for block 175 (higher ID than span 1)")
+	require.Equal(t, uint64(5), span.Id, "should return span 5 for block 175 (higher ID than span 1)")
 
 	// Test purely future span
 	span, err = spanStore.spanByBlockNumber(ctx, 450)
 	require.NoError(t, err, "err in spanByBlockNumber for future block 450")
-	require.Equal(t, uint64(6), span.ID, "should return span 6 for block 450")
+	require.Equal(t, uint64(6), span.Id, "should return span 6 for block 450")
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.T) {
@@ -510,17 +506,17 @@ func TestSpanStore_SpanByBlockNumber_OverlappingSpansMultipleMatches(t *testing.
 	// Block 200 appears in spans 2 (200-299) and 3 (150-249)
 	span, err := spanStore.spanByBlockNumber(ctx, 200)
 	require.NoError(t, err, "err in spanByBlockNumber for block 200")
-	require.Equal(t, uint64(5), span.ID, "should return span 5 (highest ID) for block 200")
+	require.Equal(t, uint64(5), span.Id, "should return span 5 (highest ID) for block 200")
 
 	// Block 225 appears in spans 2 (200-299), 3 (150-249), and 5 (175-225)
 	span, err = spanStore.spanByBlockNumber(ctx, 225)
 	require.NoError(t, err, "err in spanByBlockNumber for block 225")
-	require.Equal(t, uint64(5), span.ID, "should return span 5 (highest ID) for block 225")
+	require.Equal(t, uint64(5), span.Id, "should return span 5 (highest ID) for block 225")
 
 	// Block 190 appears in spans 1 (100-199), 3 (150-249), and 5 (175-225)
 	span, err = spanStore.spanByBlockNumber(ctx, 190)
 	require.NoError(t, err, "err in spanByBlockNumber for block 190")
-	require.Equal(t, uint64(5), span.ID, "should return span 5 (highest ID) for block 190")
+	require.Equal(t, uint64(5), span.Id, "should return span 5 (highest ID) for block 190")
 }
 
 func TestSpanStore_GetFutureSpan(t *testing.T) {
@@ -680,7 +676,7 @@ func TestSpanStore_GetFutureSpan(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, span)
-				require.Equal(t, tc.expectedSpanID, span.ID)
+				require.Equal(t, tc.expectedSpanID, span.Id)
 			}
 		})
 	}
@@ -692,12 +688,10 @@ func TestSpanStore_EstimateSpanId(t *testing.T) {
 
 	// Mock lastUsedSpan for some test cases
 	mockLastUsedSpan := func(id, startBlock, endBlock uint64) {
-		spanStore.lastUsedSpan.Store(&span.HeimdallSpan{
-			Span: span.Span{
-				ID:         id,
-				StartBlock: startBlock,
-				EndBlock:   endBlock,
-			},
+		spanStore.lastUsedSpan.Store(&borTypes.Span{
+			Id:         id,
+			StartBlock: startBlock,
+			EndBlock:   endBlock,
 		})
 	}
 
@@ -794,7 +788,7 @@ func TestSpanStore_EstimateSpanId(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Reset lastUsedSpan for each test case if setupLastUsedSpan is not defined
 			if tc.setupLastUsedSpan == nil {
-				spanStore.lastUsedSpan = atomic.Pointer[span.HeimdallSpan]{}
+				spanStore.lastUsedSpan = atomic.Pointer[borTypes.Span]{}
 			} else {
 				tc.setupLastUsedSpan()
 			}
@@ -809,30 +803,6 @@ func TestGetMockSpan0(t *testing.T) {
 	chainId := "1337"
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-
-	t.Run("successful_mock_span_0", func(t *testing.T) {
-		mockSpanner := NewMockSpanner(ctrl)
-		mockValidators := []*valset.Validator{
-			{ID: 1, Address: common.HexToAddress("0x1"), VotingPower: 100},
-			{ID: 2, Address: common.HexToAddress("0x2"), VotingPower: 200},
-		}
-		mockSpanner.EXPECT().GetCurrentValidatorsByBlockNrOrHash(ctx, rpc.BlockNumberOrHashWithNumber(0), uint64(0)).Return(mockValidators, nil)
-
-		s, err := getMockSpan0(ctx, mockSpanner, chainId)
-		require.NoError(t, err)
-		require.NotNil(t, s)
-		require.Equal(t, uint64(0), s.ID)
-		require.Equal(t, uint64(0), s.StartBlock)
-		require.Equal(t, uint64(zerothSpanEnd), s.EndBlock) // Uses zerothSpanEnd from existing constants
-		require.Equal(t, chainId, s.ChainID)
-		require.Len(t, s.ValidatorSet.Validators, len(mockValidators))
-		require.Len(t, s.SelectedProducers, len(mockValidators))
-		for i, v := range mockValidators {
-			require.Equal(t, *v, s.SelectedProducers[i])
-			require.Equal(t, v, s.ValidatorSet.Validators[i])
-		}
-		require.Equal(t, mockValidators[0], s.ValidatorSet.Proposer)
-	})
 
 	t.Run("spanner_returns_error_from_heimdall", func(t *testing.T) {
 		mockSpanner := NewMockSpanner(ctrl)

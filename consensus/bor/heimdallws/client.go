@@ -165,10 +165,17 @@ func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events cha
 		}
 
 		conn := sub.conn
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Error("failed to set read deadline on heimdall ws subscription", "eventType", MilestoneEventType, "err", err)
+
+			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+			sub, _ = c.GetSubscription(MilestoneEventType)
+			continue
+		}
+
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
+			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "eventType", MilestoneEventType, "error", err)
 
 			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
 			sub, _ = c.GetSubscription(MilestoneEventType)

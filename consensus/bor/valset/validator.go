@@ -153,11 +153,11 @@ func ParseValidators(validatorsBytes []byte) ([]*Validator, error) {
 
 // MinimalVal is the minimal validator representation
 // Used to send validator information to bor validator contract
-// type MinimalVal struct {
-// 	ID          uint64         `json:"ID"`
-// 	Signer      common.Address `json:"signer"`
-// 	VotingPower uint64         `json:"power"` // TODO add 10^-18 here so that we dont overflow easily
-// }
+type MinimalVal struct {
+	ID          uint64         `json:"ID"`
+	Signer      common.Address `json:"signer"`
+	VotingPower uint64         `json:"power"` // TODO add 10^-18 here so that we dont overflow easily
+}
 
 // SortMinimalValByAddress sorts validators
 func SortMinimalValByAddress(a []stakeTypes.MinimalVal) []stakeTypes.MinimalVal {
@@ -188,7 +188,7 @@ func HeimdallToValSetValidators(heimdallValidators []*stakeTypes.Validator) []*V
 	return result
 }
 
-// HeimdalToValSetValidator converts heimdall validator to valset validator
+// HeimdallToValSetValidator converts heimdall validator to valset validator
 func HeimdallToValSetValidator(heimdallValidator *stakeTypes.Validator) *Validator {
 	return &Validator{
 		ID:               heimdallValidator.ValId,

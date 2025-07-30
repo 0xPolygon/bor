@@ -59,6 +59,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/shutdowncheck"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -68,6 +69,10 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	gethversion "github.com/ethereum/go-ethereum/version"
+)
+
+var (
+	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
 )
 
 // Config contains the configuration options of the ETH protocol.
@@ -710,13 +715,17 @@ func (s *Ethereum) startCheckpointWhitelistService() {
 		fnName         = "whitelist checkpoint"
 	)
 
-	s.retryHeimdallHandler(s.fetchAndHandleWhitelistCheckpoint, tickerDuration, whitelistTimeout, fnName)
+	s.retryHeimdallHandler(s.fetchAndHandleWhitelistCheckpoint, tickerDuration, whitelistTimeout)
 }
 
 // startMilestoneWhitelistService starts the goroutine to fetch milestiones and update the
 // milestone whitelist map.
 func (s *Ethereum) startMilestoneWhitelistService() {
 	ethHandler, bor, _ := s.getHandler()
+
+	const (
+		tickerDuration = 2 * time.Second
+	)
 
 	// If heimdall ws is available use WS subscription to new milestone events instead of polling
 	if bor != nil && bor.HeimdallWSClient != nil {
@@ -732,16 +741,16 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 			tickerDuration = 500 * time.Millisecond
 			fnName         = "whitelist milestone"
 		)
-
-		s.retryHeimdallHandler(s.fetchAndHandleMilestone, tickerDuration, whitelistTimeout, fnName)
 	}
+
+	s.retryHeimdallHandler(s.fetchAndHandleMilestone, tickerDuration, whitelistTimeout)
 }
 
-func (s *Ethereum) retryHeimdallHandler(fn heimdallHandler, tickerDuration time.Duration, timeout time.Duration, fnName string) {
-	retryHeimdallHandler(fn, tickerDuration, timeout, fnName, s.closeCh, s.getHandler)
+func (s *Ethereum) retryHeimdallHandler(fn heimdallHandler, tickerDuration time.Duration, timeout time.Duration) {
+	retryHeimdallHandler(fn, tickerDuration, timeout, s.closeCh, s.getHandler)
 }
 
-func retryHeimdallHandler(fn heimdallHandler, tickerDuration time.Duration, timeout time.Duration, fnName string, closeCh chan struct{}, getHandler func() (*ethHandler, *bor.Bor, error)) {
+func retryHeimdallHandler(fn heimdallHandler, tickerDuration time.Duration, timeout time.Duration, closeCh chan struct{}, getHandler func() (*ethHandler, *bor.Bor, error)) {
 	// a shortcut helps with tests and early exit
 	select {
 	case <-closeCh:
@@ -797,8 +806,6 @@ func (s *Ethereum) fetchAndHandleWhitelistCheckpoint(ctx context.Context, ethHan
 }
 
 type heimdallHandler func(ctx context.Context, ethHandler *ethHandler, bor *bor.Bor) error
-
-var lastSeenMilestoneBlockNumber uint64
 
 // fetchAndHandleMilestone handles the milestone mechanism.
 func (s *Ethereum) fetchAndHandleMilestone(ctx context.Context, ethHandler *ethHandler, bor *bor.Bor) error {

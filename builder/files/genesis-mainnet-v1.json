@@ -15,11 +15,13 @@
     "londonBlock": 23850000,
     "shanghaiBlock": 50523000,
     "cancunBlock": 54876000,
+    "pragueBlock": 73440256,
     "bor": {
       "jaipurBlock": 23850000,
       "delhiBlock": 38189056,
       "indoreBlock": 44934656,
       "ahmedabadBlock": 62278656,
+      "bhilaiBlock": 73440256,
       "stateSyncConfirmationDelay": {
         "44934656": 128
       },
@@ -50,6 +52,9 @@
         "14953792": 0,
         "14953856": 0
       },
+      "overrideStateSyncRecordsInRange": [
+        { "startBlock": 73812433, "endBlock": 73826700, "value": 0 }
+      ],
       "blockAlloc": {
         "22156660": {
           "0000000000000000000000000000000000001010": {

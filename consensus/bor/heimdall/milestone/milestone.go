@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// milestone defines a response object type of bor milestone
+// Milestone defines a response object type of bor milestone
 type Milestone struct {
 	Proposer        common.Address `json:"proposer"`
 	StartBlock      uint64         `json:"start_block"`
@@ -35,7 +35,6 @@ func (m *Milestone) UnmarshalJSON(data []byte) error {
 	}
 
 	if err := json.Unmarshal(data, temp); err != nil {
-
 		return err
 	}
 
@@ -63,17 +62,35 @@ func (m *Milestone) UnmarshalJSON(data []byte) error {
 	}
 	m.Timestamp = timestamp
 
-	td, err := strconv.ParseUint(temp.TotalDifficulty, 10, 64)
+	totalDifficulty, err := strconv.ParseUint(temp.TotalDifficulty, 10, 64)
 	if err != nil {
 		return fmt.Errorf("invalid total_difficulty: %w", err)
 	}
-	m.TotalDifficulty = td
+	m.TotalDifficulty = totalDifficulty
 
 	return nil
 }
 
 type MilestoneResponse struct {
 	Result Milestone `json:"milestone"`
+}
+
+func (m *MilestoneCountResponse) UnmarshalJSON(data []byte) error {
+	temp := &struct {
+		Count string `json:"count"`
+	}{}
+
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+
+	count, err := strconv.ParseInt(temp.Count, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid count: %w", err)
+	}
+	m.Count = count
+
+	return nil
 }
 
 type MilestoneCountResponse struct {

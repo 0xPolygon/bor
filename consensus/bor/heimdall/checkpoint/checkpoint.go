@@ -24,16 +24,14 @@ func (m *Checkpoint) UnmarshalJSON(data []byte) error {
 	temp := &struct {
 		StartBlock string `json:"start_block"`
 		EndBlock   string `json:"end_block"`
-
-		RootHash  string `json:"root_hash"`
-		Timestamp string `json:"timestamp"`
+		RootHash   string `json:"root_hash"`
+		Timestamp  string `json:"timestamp"`
 		*Alias
 	}{
 		Alias: (*Alias)(m),
 	}
 
 	if err := json.Unmarshal(data, temp); err != nil {
-
 		return err
 	}
 
@@ -66,6 +64,24 @@ func (m *Checkpoint) UnmarshalJSON(data []byte) error {
 
 type CheckpointResponse struct {
 	Result Checkpoint `json:"checkpoint"`
+}
+
+func (m *CheckpointCountResponse) UnmarshalJSON(data []byte) error {
+	temp := &struct {
+		Count string `json:"ack_count"`
+	}{}
+
+	if err := json.Unmarshal(data, temp); err != nil {
+		return err
+	}
+
+	count, err := strconv.ParseInt(temp.Count, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid count: %w", err)
+	}
+	m.Result = count
+
+	return nil
 }
 
 type CheckpointCountResponse struct {

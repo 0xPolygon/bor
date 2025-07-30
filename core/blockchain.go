@@ -3274,7 +3274,14 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 			return errInvalidNewChain
 		}
 	}
+
 	// Ensure the user sees large reorgs
+	if len(oldChain) == 0 && len(newChain) == 0 {
+		// No actual reorg, same block
+		log.Info("No reorg needed; old and new head are identical", "number", oldHead.Number, "hash", oldHead.Hash())
+		return nil
+	}
+
 	if len(oldChain) > 0 && len(newChain) > 0 {
 		bc.chain2HeadFeed.Send(Chain2HeadEvent{
 			Type:     Chain2HeadReorgEvent,
