@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -28,8 +29,9 @@ type SpanStore struct {
 
 	latestSpanCache atomic.Pointer[borTypes.Span]
 
-	heimdallClient IHeimdallClient
-	spanner        Spanner
+	heimdallClient   IHeimdallClient
+	heimdallWsClient IHeimdallWSClient
+	spanner          Spanner
 
 	chainId           string
 	lastUsedSpan      atomic.Pointer[borTypes.Span]
@@ -39,38 +41,48 @@ type SpanStore struct {
 	cancel context.CancelFunc
 }
 
-func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId string) *SpanStore {
+func NewSpanStore(heimdallClient IHeimdallClient, heimdallWsClient IHeimdallWSClient, spanner Spanner, chainId string) *SpanStore {
 	cache, _ := lru.NewARC(10)
 	store := SpanStore{
-		store:           cache,
-		heimdallClient:  heimdallClient,
-		spanner:         spanner,
-		chainId:         chainId,
-		latestSpanCache: atomic.Pointer[borTypes.Span]{},
-		lastUsedSpan:    atomic.Pointer[borTypes.Span]{},
+		store:            cache,
+		heimdallClient:   heimdallClient,
+		heimdallWsClient: heimdallWsClient,
+		spanner:          spanner,
+		chainId:          chainId,
+		latestSpanCache:  atomic.Pointer[borTypes.Span]{},
+		lastUsedSpan:     atomic.Pointer[borTypes.Span]{},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	store.cancel = cancel
 
-	if heimdallClient != nil {
-		go func() {
-			for {
-				err := store.updateLatestSpan(ctx)
-				if err != nil {
-					log.Error("Failed to update latest span", "err", err)
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(200 * time.Millisecond):
-				}
-			}
-		}()
+	if heimdallWsClient != nil && heimdallClient != nil {
+		// Fetch the latest span directly using the http client
+		store.updateLatestSpan(ctx)
+
+		// Subscribe to span events via websocket
+		go store.subscribeAndHandleSpan(ctx)
+	} else if heimdallClient != nil {
+		go store.fetchSpanEndlessly(ctx)
 	}
 
 	return &store
+}
+
+// fetchSpanEndlessly
+func (s *SpanStore) fetchSpanEndlessly(ctx context.Context) {
+	for {
+		err := s.updateLatestSpan(ctx)
+		if err != nil {
+			log.Error("Failed to update latest span", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
 }
 
 func (s *SpanStore) getLatestSpan(ctx context.Context) (*borTypes.Span, error) {
@@ -83,6 +95,69 @@ func (s *SpanStore) getLatestSpan(ctx context.Context) (*borTypes.Span, error) {
 		return nil, err
 	}
 	return s.latestSpanCache.Load(), nil
+}
+
+func (s *SpanStore) subscribeAndHandleSpan(ctx context.Context) error {
+	spanEvents := s.heimdallWsClient.SubscribeSpanEvents(ctx)
+
+	// Toggle to denote whether we need to fallback to fetching span from heimdall via http or not
+	var needToFetch bool
+
+	for {
+		if needToFetch {
+			break
+		}
+		select {
+		case spanEvent, ok := <-spanEvents:
+			if !ok {
+				return nil
+			}
+
+			// The websocket event just contains metadata for the span. Fetch the full
+			// span details from heimdall via http.
+			span, err := s.spanByIdWithRetry(ctx, spanEvent.ID, 10)
+			if err != nil {
+				needToFetch = true
+			}
+
+			// Ensure details of span fetched matches with the one in event
+			if span.StartBlock != spanEvent.StartBlock || span.EndBlock != spanEvent.EndBlock {
+				log.Warn("Span data doesn't match with websocket event", "id", spanEvent.ID)
+				needToFetch = true
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+
+	// Unsubscribe
+	s.heimdallWsClient.Unsubscribe(heimdallws.SpanEventType)
+
+	// Fallback to fetching span from heimdall via http
+	if needToFetch {
+		s.fetchSpanEndlessly(ctx)
+	}
+
+	return nil
+}
+
+// spanByIdWithRetry fetchs span by id and keeps retrying in case of failure.
+func (s *SpanStore) spanByIdWithRetry(ctx context.Context, spanId uint64, retries int) (*borTypes.Span, error) {
+	var (
+		span *borTypes.Span
+		err  error
+	)
+
+	for i := 0; i < retries; i++ {
+		span, err = s.spanById(ctx, spanId)
+		if err == nil {
+			return span, nil
+		}
+		log.Warn("Failed to fetch span by id with retry", "id", spanId, "attempt", i+1, "err", err)
+		time.Sleep(time.Second)
+	}
+
+	return nil, fmt.Errorf("failed to fetch span by id %d after retries: %w", spanId, err)
 }
 
 func (s *SpanStore) updateLatestSpan(ctx context.Context) error {

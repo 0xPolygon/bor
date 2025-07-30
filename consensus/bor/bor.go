@@ -285,7 +285,7 @@ func New(
 	)
 
 	// Create a new span store
-	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
+	spanStore := NewSpanStore(heimdallClient, heimdallWSClient, spanner, chainConfig.ChainID.String())
 
 	c := &Bor{
 		chainConfig:            chainConfig,
