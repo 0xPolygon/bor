@@ -1039,23 +1039,6 @@ func (f *fetcherTester) makeWitnessFetcher(peer string, blocks map[common.Hash]*
 	}
 }
 
-// verifyWitnessingEvent verifies that a witness request arrives within a timeout.
-func verifyWitnessingEvent(t *testing.T, witnessing chan *wit.Request, arrive bool) {
-	if arrive {
-		select {
-		case <-witnessing:
-		case <-time.After(time.Second):
-			t.Fatalf("witness request timeout")
-		}
-	} else {
-		select {
-		case <-witnessing:
-			t.Fatalf("unexpected witness request")
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
 // TestFullWitnessFetching tests witness fetching in full mode.
 func TestFullWitnessFetching(t *testing.T) {
 	testWitnessFetching(t, false)

@@ -309,7 +309,6 @@ func DeleteWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
 	if err := db.Delete(witnessSizeKey(blockHash)); err != nil {
 		log.Crit("Failed to remove witness size", "err", err)
 	}
-
 }
 
 func ReadWitnessPruneCursor(db ethdb.KeyValueReader) *uint64 {

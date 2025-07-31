@@ -179,25 +179,36 @@ type queue struct {
 	closed bool
 
 	logTime time.Time // Time instance when status was last reported
+
+	blockCacheLimit      int
+	thresholdInitialSize int
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
 func newQueue(blockCacheLimit int, thresholdInitialSize int) *queue {
 	lock := new(sync.RWMutex)
 	q := &queue{
-		headerContCh:     make(chan bool, 1),
-		blockTaskQueue:   prque.New[int64, *types.Header](nil),
-		blockWakeCh:      make(chan bool, 1),
-		receiptTaskQueue: prque.New[int64, *types.Header](nil),
-		receiptWakeCh:    make(chan bool, 1),
-		witnessTaskQueue: prque.New[int64, *types.Header](nil),
-		witnessWakeCh:    make(chan bool, 1),
-		active:           sync.NewCond(lock),
-		lock:             lock,
+		headerContCh:         make(chan bool, 1),
+		blockTaskQueue:       prque.New[int64, *types.Header](nil),
+		blockWakeCh:          make(chan bool, 1),
+		receiptTaskQueue:     prque.New[int64, *types.Header](nil),
+		receiptWakeCh:        make(chan bool, 1),
+		witnessTaskQueue:     prque.New[int64, *types.Header](nil),
+		witnessWakeCh:        make(chan bool, 1),
+		active:               sync.NewCond(lock),
+		lock:                 lock,
+		blockCacheLimit:      blockCacheLimit,
+		thresholdInitialSize: thresholdInitialSize,
 	}
+
+	// Initialize the queue by calling Reset
 	q.Reset(blockCacheLimit, thresholdInitialSize)
 
 	return q
+}
+
+func (q *queue) ResetDefault() {
+	q.Reset(blockCacheMaxItems, blockCacheInitialItems)
 }
 
 // Reset clears out the queue contents.

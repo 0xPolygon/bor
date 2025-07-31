@@ -110,12 +110,12 @@ var (
 	blockPrefetchExecuteTimer   = metrics.NewRegisteredTimer("chain/prefetch/executes", nil)
 	blockPrefetchInterruptMeter = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
 
-	errInsertionInterrupted     = errors.New("insertion is interrupted")
-	errChainStopped             = errors.New("blockchain is stopped")
-	errInvalidOldChain          = errors.New("invalid old chain")
-	errInvalidNewChain          = errors.New("invalid new chain")
-	errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
-	errWitnessComputationFailed = errors.New("witness computation failed or was cancelled") // New error
+	errInsertionInterrupted = errors.New("insertion is interrupted")
+	errChainStopped         = errors.New("blockchain is stopped")
+	errInvalidOldChain      = errors.New("invalid old chain")
+	errInvalidNewChain      = errors.New("invalid new chain")
+	// errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
+	// errWitnessComputationFailed = errors.New("witness computation failed or was cancelled") // New error
 )
 
 const (
@@ -233,12 +233,6 @@ var DefaultCacheConfig = defaultCacheConfig
 type txLookup struct {
 	lookup      *rawdb.LegacyTxLookupEntry
 	transaction *types.Transaction
-}
-
-// witnessResult holds the outcome of a witness computation.
-type witnessResult struct {
-	witness *stateless.Witness
-	err     error
 }
 
 // BlockChain represents the canonical chain given a database with a genesis
@@ -1986,6 +1980,9 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			return []*types.Log{}, err
 		}
 	}
+
+	rawdb.WriteBytecodeSyncLastBlock(bc.db, block.NumberU64())
+
 	// If node is running in path mode, skip explicit gc operation
 	// which is unnecessary in this mode.
 	if bc.triedb.Scheme() == rawdb.PathScheme {

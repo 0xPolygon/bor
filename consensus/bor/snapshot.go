@@ -179,33 +179,6 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 	return snap, nil
 }
 
-func (s *Snapshot) applyNumber(number uint64, c *Bor) (*Snapshot, error) {
-	if s.Number != number-1 {
-		return nil, errOutOfRangeChain
-	}
-
-	snap := s.copy()
-
-	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
-	if err != nil {
-		return nil, err
-	}
-	producers := make([]*valset.Validator, len(span.SelectedProducers))
-	for i, validator := range span.SelectedProducers {
-		producers[i] = &valset.Validator{
-			Address:     common.HexToAddress(validator.Signer),
-			VotingPower: validator.VotingPower,
-		}
-	}
-	v := getUpdatedValidatorSet(snap.ValidatorSet.Copy(), producers)
-
-	v.IncrementProposerPriority(1)
-
-	snap.ValidatorSet = v
-
-	return snap, nil
-}
-
 // GetSignerSuccessionNumber returns the relative position of signer in terms of the in-turn proposer
 func (s *Snapshot) GetSignerSuccessionNumber(signer common.Address) (int, error) {
 	validators := s.ValidatorSet.Validators

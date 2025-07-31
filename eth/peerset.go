@@ -378,14 +378,6 @@ func (ps *peerSet) snapLen() int {
 	return ps.snapPeers
 }
 
-// witLen returns if the current number of `wit` peers in the set.
-func (ps *peerSet) witLen() int {
-	ps.lock.RLock()
-	defer ps.lock.RUnlock()
-
-	return ps.witPeers
-}
-
 // peerWithHighestTD retrieves the known peer with the currently highest total
 // difficulty, but below the given PoS switchover threshold.
 func (ps *peerSet) peerWithHighestTD() *eth.Peer {

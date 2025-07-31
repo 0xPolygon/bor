@@ -46,8 +46,8 @@ var (
 	decompressionTimer = metrics.NewRegisteredTimer("witness/decompression/timer", nil)
 
 	// Meters for rates
-	compressionRate   = metrics.NewRegisteredMeter("witness/compression/rate", nil)
-	decompressionRate = metrics.NewRegisteredMeter("witness/decompression/rate", nil)
+	// compressionRate   = metrics.NewRegisteredMeter("witness/compression/rate", nil)
+	// decompressionRate = metrics.NewRegisteredMeter("witness/decompression/rate", nil)
 )
 
 // CompressionStats returns current compression statistics

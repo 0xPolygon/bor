@@ -111,8 +111,8 @@ var (
 	// be modified via out-of-range or non-contiguous headers.
 	errOutOfRangeChain = errors.New("out of range or non-contiguous chain")
 
-	errUncleDetected     = errors.New("uncles not allowed")
-	errUnknownValidators = errors.New("unknown validators")
+	errUncleDetected = errors.New("uncles not allowed")
+	// errUnknownValidators = errors.New("unknown validators")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -1298,7 +1298,7 @@ func (c *Bor) checkAndCommitSpan(
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Inner().Copy()
-	tempState.SetPrefetcher(nil)
+	tempState.ResetPrefetcher()
 	tempState.StartPrefetcher("bor", state.Witness())
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
@@ -1443,7 +1443,7 @@ func (c *Bor) CommitStates(
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
-		tempState.SetPrefetcher(nil)
+		tempState.ResetPrefetcher()
 		tempState.StartPrefetcher("bor", state.Witness())
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)

@@ -169,7 +169,6 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 			// Return nil? Or the error? Let's return nil as dropping isn't a peer protocol error.
 			return nil
 		}
-
 	} else {
 		// Not in stateless mode, use the direct Enqueue optimization.
 		h.blockFetcher.Enqueue(peer.ID(), block)

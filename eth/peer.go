@@ -170,7 +170,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	// non-blocking build first requests
 	witReqsWg.Add(1)
 	go func() {
-		p.buildWitnessRequests(hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+		p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
 		witReqsWg.Done()
 	}()
 
@@ -202,7 +202,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
 
 			<-witReqSem
 			witRes.Response.Done <- nil
@@ -262,7 +262,7 @@ func (p *ethPeer) receiveWitnessPage(
 	receivedWitPages map[common.Hash][]wit.WitnessPageResponse,
 	reconstructedWitness map[common.Hash]*stateless.Witness,
 	hashes []common.Hash,
-	witReqs []*wit.Request,
+	witReqs *[]*wit.Request,
 	witReqsWg *sync.WaitGroup,
 	witTotalPages map[common.Hash]uint64,
 	witTotalRequest map[common.Hash]uint64,
@@ -302,7 +302,6 @@ func (p *ethPeer) receiveWitnessPage(
 	}
 
 	for _, page := range witPacketPtr.WitnessPacketResponse {
-
 		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter received wit page response", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "TotalPages", page.TotalPages, "lenData", len(page.Data))
 		if len(page.Data) == 0 {
 			continue
@@ -352,7 +351,7 @@ func (p *ethPeer) reconstructWitness(pages []wit.WitnessPageResponse) (*stateles
 }
 
 func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
-	witReqs []*wit.Request,
+	witReqs *[]*wit.Request,
 	witReqsWg *sync.WaitGroup,
 	witTotalPages map[common.Hash]uint64,
 	witTotalRequest map[common.Hash]uint64,
@@ -420,7 +419,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 func (p *ethPeer) doWitnessRequest(
 	hash common.Hash,
 	page uint64,
-	witReqs []*wit.Request,
+	witReqs *[]*wit.Request,
 	witReqsWg *sync.WaitGroup,
 	witReqResCh chan *witReqRes,
 	witReqSem chan int,
@@ -430,7 +429,7 @@ func (p *ethPeer) doWitnessRequest(
 	p.witPeer.Peer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page)
 	witReqSem <- 1
 	witResCh := make(chan *wit.Response)
-	request := []wit.WitnessPageRequest{{Hash: hash, Page: uint64(page)}}
+	request := []wit.WitnessPageRequest{{Hash: hash, Page: page}}
 	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
 	if err != nil {
 		p.witPeer.Peer.Log().Error("RequestWitnesses failed to make wit request", "peer", p.ID(), "err", err)
@@ -445,7 +444,7 @@ func (p *ethPeer) doWitnessRequest(
 		}
 	}()
 	witReqsWg.Add(1)
-	witReqs = append(witReqs, witReq)
+	*witReqs = append(*witReqs, witReq)
 
 	if page >= witTotalRequest[hash] {
 		mapsMu.Lock()

@@ -191,7 +191,7 @@ func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
 
 func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	// If we're in snap sync mode, return that directly
-	if cs.handler.snapSync.Load() {
+	if cs.handler.snapSync.Load() && !cs.handler.statelessSync.Load() {
 		block := cs.handler.chain.CurrentSnapBlock()
 		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
 		return downloader.SnapSync, td
@@ -200,7 +200,7 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 	// We are probably in full sync, but we might have rewound to before the
 	// snap sync pivot, check if we should re-enable snap sync.
 	head := cs.handler.chain.CurrentBlock()
-	if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil {
+	if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil && !cs.handler.statelessSync.Load() {
 		if head.Number.Uint64() < *pivot {
 			block := cs.handler.chain.CurrentSnapBlock()
 			td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
