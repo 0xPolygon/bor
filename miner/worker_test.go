@@ -44,9 +44,9 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/golang/mock/gomock"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
-	gomock "go.uber.org/mock/gomock"
 	"gotest.tools/assert"
 
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
