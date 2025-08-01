@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
-	"go.uber.org/mock/gomock"
+	"github.com/golang/mock/gomock"
 )
 
 var headerPrefix = []byte("h") // headerPrefix + num (uint64 big endian) + hash -> header

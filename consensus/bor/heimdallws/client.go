@@ -3,9 +3,11 @@ package heimdallws
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/log"
@@ -182,22 +184,51 @@ func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events cha
 			continue
 		}
 
-		var resp wsResponseMilestone
+		var resp wsResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
-			log.Error("failed to unmarshal milestone event message", "error", err)
 			// Skip messages that don't match the expected format.
 			continue
 		}
 
+		// Find the milestone event.
+		var milestoneEvent *wsEvent
+		for _, event := range resp.Result.Data.Value.FinalizeBlock.Events {
+			if event.Type == "milestone" {
+				// In this case their types are set to the types of the respective iteration values
+				// and their scope is the block of the "for" statement; they are re-used in each iteration.
+				e := event
+				milestoneEvent = &e
+				break
+			}
+		}
+		if milestoneEvent == nil {
+			continue
+		}
+
+		// Map attributes for easier lookup.
+		attrs := make(map[string]string)
+		for _, attr := range milestoneEvent.Attributes {
+			attrs[attr.Key] = attr.Value
+		}
+
+		// Build the Milestone object from attributes.
 		m := &milestone.Milestone{
-			Proposer:        resp.MilestoneEvent.Proposer,
-			Hash:            resp.MilestoneEvent.Hash,
-			BorChainID:      resp.MilestoneEvent.BorChainID,
-			MilestoneID:     resp.MilestoneEvent.MilestoneID,
-			StartBlock:      resp.MilestoneEvent.StartBlock,
-			EndBlock:        resp.MilestoneEvent.EndBlock,
-			Timestamp:       resp.MilestoneEvent.Timestamp,
-			TotalDifficulty: resp.MilestoneEvent.TotalDifficulty,
+			Proposer:    common.HexToAddress(attrs["proposer"]),
+			Hash:        common.HexToHash(attrs["hash"]),
+			BorChainID:  attrs["bor_chain_id"],
+			MilestoneID: attrs["milestone_id"],
+		}
+		if startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64); err == nil {
+			m.StartBlock = startBlock
+		}
+		if endBlock, err := strconv.ParseUint(attrs["end_block"], 10, 64); err == nil {
+			m.EndBlock = endBlock
+		}
+		if timestamp, err := strconv.ParseUint(attrs["timestamp"], 10, 64); err == nil {
+			m.Timestamp = timestamp
+		}
+		if totalDifficulty, err := strconv.ParseUint(attrs["total_difficulty"], 10, 64); err == nil {
+			m.TotalDifficulty = totalDifficulty
 		}
 
 		// Deliver the milestone event, respecting context cancellation.
@@ -251,23 +282,51 @@ func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *sp
 			continue
 		}
 
-		var resp wsResponseSpanEvent
+		var resp wsResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			log.Error("failed to unmarshal span event message", "error", err)
 			// Skip messages that don't match the expected format.
 			continue
 		}
 
-		s := &span.HeimdallSpanEvent{
-			ID:            resp.SpanEvent.ID,
-			StartBlock:    resp.SpanEvent.StartBlock,
-			EndBlock:      resp.SpanEvent.EndBlock,
-			BlockProducer: resp.SpanEvent.BlockProducer,
+		// Find the span event.
+		var spanEvent *wsEvent
+		for _, event := range resp.Result.Data.Value.FinalizeBlock.Events {
+			if event.Type == "span" {
+				// In this case their types are set to the types of the respective iteration values
+				// and their scope is the block of the "for" statement; they are re-used in each iteration.
+				e := event
+				spanEvent = &e
+				break
+			}
+		}
+		if spanEvent == nil {
+			continue
+		}
+
+		// Map attributes for easier lookup.
+		attrs := make(map[string]string)
+		for _, attr := range spanEvent.Attributes {
+			attrs[attr.Key] = attr.Value
+		}
+
+		// Build the span object from attributes.
+		span := &span.HeimdallSpanEvent{
+			BlockProducer: common.HexToAddress(attrs["block_producer"]),
+		}
+		if id, err := strconv.ParseUint(attrs["id"], 10, 64); err == nil {
+			span.ID = id
+		}
+		if startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64); err == nil {
+			span.StartBlock = startBlock
+		}
+		if endBlock, err := strconv.ParseUint(attrs["end_block"], 10, 64); err == nil {
+			span.EndBlock = endBlock
 		}
 
 		// Deliver the span event, respecting context cancellation.
 		select {
-		case events <- s:
+		case events <- span:
 		case <-ctx.Done():
 			return
 		}

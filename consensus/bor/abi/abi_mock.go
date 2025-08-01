@@ -7,7 +7,7 @@ package abi
 import (
 	reflect "reflect"
 
-	gomock "go.uber.org/mock/gomock"
+	"github.com/golang/mock/gomock"
 )
 
 // MockABI is a mock of ABI interface.
