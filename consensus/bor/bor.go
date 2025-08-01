@@ -1256,7 +1256,9 @@ func (c *Bor) Close() error {
 		if c.HeimdallClient != nil {
 			c.HeimdallClient.Close()
 		}
-
+		if c.HeimdallWSClient != nil {
+			c.HeimdallWSClient.Close()
+		}
 		if c.spanStore != nil {
 			c.spanStore.Close()
 		}
