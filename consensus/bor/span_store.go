@@ -115,16 +115,45 @@ func (s *SpanStore) subscribeAndHandleSpan(ctx context.Context) error {
 
 			// The websocket event just contains metadata for the span. Fetch the full
 			// span details from heimdall via http.
-			span, err := s.spanByIdWithRetry(ctx, spanEvent.ID, 10)
+			latestSpan, err := s.spanByIdWithRetry(ctx, spanEvent.ID, 10)
 			if err != nil {
 				needToFetch = true
 			}
 
 			// Ensure details of span fetched matches with the one in event
-			if span.StartBlock != spanEvent.StartBlock || span.EndBlock != spanEvent.EndBlock {
+			if latestSpan.StartBlock != spanEvent.StartBlock || latestSpan.EndBlock != spanEvent.EndBlock {
 				log.Warn("Span data doesn't match with websocket event", "id", spanEvent.ID)
 				needToFetch = true
 			}
+
+			validators := make([]*valset.Validator, len(latestSpan.ValidatorSet.Validators))
+			for i, v := range latestSpan.ValidatorSet.Validators {
+				validators[i] = &valset.Validator{
+					ID:               v.ValId,
+					Address:          common.HexToAddress(v.Signer),
+					VotingPower:      v.VotingPower,
+					ProposerPriority: v.ProposerPriority,
+				}
+			}
+
+			selectedProducers := make([]*valset.Validator, len(latestSpan.SelectedProducers))
+			for i, v := range latestSpan.SelectedProducers {
+				selectedProducers[i] = &valset.Validator{
+					ID:               v.ValId,
+					Address:          common.HexToAddress(v.Signer),
+					VotingPower:      v.VotingPower,
+					ProposerPriority: v.ProposerPriority,
+				}
+			}
+
+			s.latestSpanCache.Store(&borTypes.Span{
+				Id:                latestSpan.Id,
+				StartBlock:        latestSpan.StartBlock,
+				EndBlock:          latestSpan.EndBlock,
+				SelectedProducers: span.ConvertBorValidatorsToHeimdallValidators(selectedProducers),
+				ValidatorSet:      span.ConvertBorValSetToHeimdallValSet(valset.NewValidatorSet(validators)),
+				BorChainId:        s.chainId,
+			})
 		case <-ctx.Done():
 			return nil
 		}
