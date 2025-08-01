@@ -724,7 +724,8 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 	ethHandler, bor, _ := s.getHandler()
 
 	const (
-		tickerDuration = 2 * time.Second
+		tickerDuration = 500 * time.Millisecond
+		fnName         = "whitelist milestone"
 	)
 
 	// If heimdall ws is available use WS subscription to new milestone events instead of polling
@@ -737,10 +738,6 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 
 		s.subscribeAndHandleMilestone(context.Background(), ethHandler, bor)
 	} else {
-		const (
-			tickerDuration = 500 * time.Millisecond
-			fnName         = "whitelist milestone"
-		)
 	}
 
 	s.retryHeimdallHandler(s.fetchAndHandleMilestone, tickerDuration, whitelistTimeout)
