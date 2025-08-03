@@ -149,6 +149,12 @@ func (r *ethWitRequest) Close() error {
 	return nil
 }
 
+// SupportsWitness implements downloader.Peer.
+// It returns true if the peer supports the witness protocol.
+func (p *ethPeer) SupportsWitness() bool {
+	return p.witPeer != nil
+}
+
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {

@@ -215,6 +215,10 @@ func (p *skeletonTestPeer) RequestWitnesses([]common.Hash, chan *eth.Response) (
 	panic("skeleton sync must not request witnesses")
 }
 
+func (p *skeletonTestPeer) SupportsWitness() bool {
+	return false
+}
+
 // Tests various sync initializations based on previous leftovers in the database
 // and announced heads.
 func TestSkeletonSyncInit(t *testing.T) {
