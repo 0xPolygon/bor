@@ -1,5 +1,6 @@
 module github.com/ethereum/go-ethereum
 
+// Note: Change the go image version in Dockerfile if you change this.
 go 1.24.4
 
 require (

@@ -1,0 +1,90 @@
+name: Kurtosis E2E Tests
+
+on:
+  push:
+    branches:
+      - 'qa'
+      - 'master'
+      - 'develop'
+  pull_request:
+    branches:
+      - '**'
+    types: [opened, synchronize]
+
+concurrency:
+  group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENCLAVE_NAME: kurtosis-e2e
+
+jobs:
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Bor
+        uses: actions/checkout@v4
+        with:
+          path: bor
+
+      - name: Install dependencies on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt update && sudo apt install build-essential
+
+      - name: Pre kurtosis run
+        uses: ./bor/.github/actions/kurtosis-pre-run
+        with:
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Build Bor Docker Image
+        run: |
+          cd bor
+          docker build -t bor:local --file Dockerfile .
+
+      - name: Checkout Heimdall-v2
+        uses: actions/checkout@v4
+        with:
+          repository: 0xPolygon/heimdall-v2
+          ref: develop
+          path: heimdall-v2
+
+      - name: Build Heimdall-v2 Docker Image
+        run: |
+          cd heimdall-v2
+          docker build -t heimdall-v2:local --file Dockerfile .
+
+      - name: Checkout Kurtosis
+        uses: actions/checkout@v4
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: v1.1.1
+          path: kurtosis-pos
+
+      - name: Copy kurtosis config
+        run: cp ./bor/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
+
+      - name: Kurtosis run
+        run: |
+          cd kurtosis-pos
+          kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+
+      - name: Inspect enclave
+        run: |
+          cd kurtosis-pos
+          kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+
+      - name: Test state syncs
+        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,matic,pol --recursive tests/"
+
+      - name: Run smoke tests (Checkpoint)
+        run: bash ./bor/integration-tests/kurtosis_smoke_test.sh
+
+      - name: Post kurtosis run
+        if: always()
+        uses: ./bor/.github/actions/kurtosis-post-run
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
