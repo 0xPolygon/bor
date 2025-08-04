@@ -156,7 +156,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 						peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
 						continue
 					}
-					
+
 					idles = append(idles, peer)
 					caps = append(caps, queue.capacity(peer, time.Second))
 				} else if stale != nil {
@@ -230,7 +230,20 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 			// Make sure that we have peers available for fetching. If all peers have been tried
 			// and all failed throw an error
-			if !progressed && !throttled && len(pending) == 0 && len(idles) == d.peers.Len() && queued > 0 && !beaconMode {
+			var capablePeers int
+			if isWitnessQueue {
+				// For witness fetching, only count peers that support the witness protocol
+				for _, peer := range d.peers.AllPeers() {
+					if peer.peer.SupportsWitness() {
+						capablePeers++
+					}
+				}
+			} else {
+				// For other queues, all peers are capable
+				capablePeers = d.peers.Len()
+			}
+
+			if !progressed && !throttled && len(pending) == 0 && len(idles) == capablePeers && queued > 0 && !beaconMode {
 				return errPeersUnavailable
 			}
 		}

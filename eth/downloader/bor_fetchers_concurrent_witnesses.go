@@ -85,6 +85,12 @@ func (q *witnessQueue) unreserve(peer string) int {
 // request is responsible for converting a generic fetch request into a witness
 // one and sending it to the remote peer for fulfillment using the wit protocol.
 func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh chan *eth.Response) (*eth.Request, error) {
+	// Safety check: ensure the peer supports witness protocol
+	if !peer.peer.SupportsWitness() {
+		peer.log.Warn("Attempted to request witnesses from non-witness peer", "peer", peer.id)
+		return nil, errors.New("peer does not support witness protocol")
+	}
+
 	// Extract hashes from the headers in the fetch request.
 	hashes := make([]common.Hash, 0, len(req.Headers))
 	for _, header := range req.Headers {
