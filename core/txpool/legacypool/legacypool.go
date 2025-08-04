@@ -108,6 +108,10 @@ var (
 	throttleTxMeter = metrics.NewRegisteredMeter("txpool/throttle", nil)
 	// reorgDurationTimer measures how long time a txpool reorg takes.
 	reorgDurationTimer = metrics.NewRegisteredTimer("txpool/reorgtime", nil)
+	// reorgLockDurationTimer measures how long the global lock was held during
+	// a reorg. Note that this won't account for reheap as it happens without
+	// the global lock.
+	reorgLockDurationTimer = metrics.NewRegisteredTimer("txpool/reorglock", nil)
 	// dropBetweenReorgHistogram counts how many drops we experience between two reorg runs. It is expected
 	// that this number is pretty low, since txpool reorgs happen very frequently.
 	dropBetweenReorgHistogram = metrics.NewRegisteredHistogram("txpool/dropbetweenreorg", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -118,6 +122,12 @@ var (
 
 	resetCacheGauge = metrics.NewRegisteredGauge("txpool/resetcache", nil)
 	reheapTimer     = metrics.NewRegisteredTimer("txpool/reheap", nil)
+	// pendingLockWaitTimer measures how long the pending lock was held. This is useful
+	// to understand delay in block building and the impact of lock in it.
+	pendingLockWaitTimer = metrics.NewRegisteredTimer("txpool/pendinglockwait", nil)
+	// pendingWaitTimer measures the total time taken for a pending call. This is useful
+	// to understand delay in block building.
+	pendingWaitTimer = metrics.NewRegisteredTimer("txpool/pendingwait", nil)
 )
 
 // BlockChain defines the minimal set of methods needed to back a tx pool with
@@ -519,12 +529,20 @@ func (pool *LegacyPool) ContentFrom(addr common.Address) ([]*types.Transaction, 
 // reduce allocations and load on downstream subsystems. The retrieval is halted
 // if interrupt is set (during block building timeout).
 func (pool *LegacyPool) Pending(filter txpool.PendingFilter, interrupt *atomic.Bool) map[common.Address][]*txpool.LazyTransaction {
+	defer func(t0 time.Time) {
+		pendingWaitTimer.Update(time.Since(t0))
+	}(time.Now())
+
 	// If only blob transactions are requested, this pool is unsuitable as it
 	// contains none, don't even bother.
 	if filter.OnlyBlobTxs {
 		return nil
 	}
+
+	// Capture the time taken to acquire the lock
+	lockWait := time.Now()
 	pool.mu.Lock()
+	pendingLockWaitTimer.Update(time.Since(lockWait))
 	defer pool.mu.Unlock()
 
 	if interrupt == nil {
@@ -1333,6 +1351,7 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		// the flatten operation can be avoided.
 		promoteAddrs = dirtyAccounts.flatten()
 	}
+	lockTime := time.Now()
 	pool.mu.Lock()
 	if reset != nil {
 		// Reset from the old head to the new, rescheduling any reorged transactions
@@ -1376,6 +1395,7 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	pool.changesSinceReorg = 0 // Reset change counter
 
 	pool.mu.Unlock()
+	reorgLockDurationTimer.Update(time.Since(lockTime))
 
 	// Reheap if needed
 	if reset != nil {

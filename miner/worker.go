@@ -88,6 +88,11 @@ var (
 	sealedBlocksCounter      = metrics.NewRegisteredCounter("worker/sealedBlocks", nil)
 	sealedEmptyBlocksCounter = metrics.NewRegisteredCounter("worker/sealedEmptyBlocks", nil)
 	txCommitInterruptCounter = metrics.NewRegisteredCounter("worker/txCommitInterrupt", nil)
+
+	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
+	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
+	// commitTransactionsTimer measures time taken to executed transactions
+	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -915,6 +920,10 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 }
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, minTip *uint256.Int) error {
+	defer func(t0 time.Time) {
+		commitTransactionsTimer.Update(time.Since(t0))
+	}(time.Now())
+
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
@@ -1370,8 +1379,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
+		heapInitTime := time.Now()
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		txHeapInitTimer.Update(time.Since(heapInitTime))
 
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
 			return err
