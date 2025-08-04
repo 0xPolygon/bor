@@ -5,7 +5,7 @@ go 1.24.4
 
 require (
 	github.com/0xPolygon/crand v1.0.3
-	github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391
+	github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250804094154-706333be6a8c
 	github.com/0xPolygon/polyproto v0.0.7
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
 	github.com/BurntSushi/toml v1.4.0

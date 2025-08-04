@@ -78,6 +78,8 @@ github.com/0xPolygon/crand v1.0.3 h1:BYYflmgLhmGPEgqtopG4muq6wV6DOkwD8uPymNz5WeQ
 github.com/0xPolygon/crand v1.0.3/go.mod h1:km4366oC7EVFl1xNUCwzxUXNM10swZqd8LZ0E5SgbAE=
 github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391 h1:ZRD7i2q9wp2J/IbWKdLmBCA+PgviBRGDm5MLWZ5tX0Y=
 github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391/go.mod h1:OrfslZ/6UByzKaxGqJyf7l/OUFa/vky5lTNAl0JIZ+s=
+github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250804094154-706333be6a8c h1:2FuhE1crx6xU0aq4F4uhrdpP4r00cwXNTyxOeJuINNk=
+github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250804094154-706333be6a8c/go.mod h1:sB8YR8CH0rYfiFIkvZqonRU74t6iZPMCkWpR7iwt9Bs=
 github.com/0xPolygon/polyproto v0.0.7 h1:Ody+kFyCRK4QXRPXbsP5pdxKrDgwAAXtFB8NPgaIxRs=
 github.com/0xPolygon/polyproto v0.0.7/go.mod h1:2Iw93k2LismvckKKeXQITuhJH9vLbqOa212AMskH6no=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 h1:/vQbFIOMbk2FiG/kXiLl8BRyzTWDw7gX/Hz7Dd5eDMs=
