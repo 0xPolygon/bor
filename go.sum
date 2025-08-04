@@ -74,8 +74,12 @@ github.com/0xPolygon/cosmos-sdk v0.2.0-polygon h1:UA+phMOuP/efBUqIzXDp+54ZzhPQyE
 github.com/0xPolygon/cosmos-sdk v0.2.0-polygon/go.mod h1:tioDE1GjYEWnyOcyyi0iVlU+FvCEYmy21oCoDV0fUxQ=
 github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1 h1:XV7f44uAJ1p1w9j15uzm2S8VOSusHFJ1UWvkUj0EK7g=
 github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1/go.mod h1:JEUSu9moNZQ4kU3ir1DKD5eU4bllmAexrGWjmb9k8qU=
+github.com/0xPolygon/crand v1.0.3 h1:BYYflmgLhmGPEgqtopG4muq6wV6DOkwD8uPymNz5WeQ=
+github.com/0xPolygon/crand v1.0.3/go.mod h1:km4366oC7EVFl1xNUCwzxUXNM10swZqd8LZ0E5SgbAE=
 github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391 h1:ZRD7i2q9wp2J/IbWKdLmBCA+PgviBRGDm5MLWZ5tX0Y=
 github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391/go.mod h1:OrfslZ/6UByzKaxGqJyf7l/OUFa/vky5lTNAl0JIZ+s=
+github.com/0xPolygon/polyproto v0.0.7 h1:Ody+kFyCRK4QXRPXbsP5pdxKrDgwAAXtFB8NPgaIxRs=
+github.com/0xPolygon/polyproto v0.0.7/go.mod h1:2Iw93k2LismvckKKeXQITuhJH9vLbqOa212AMskH6no=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 h1:/vQbFIOMbk2FiG/kXiLl8BRyzTWDw7gX/Hz7Dd5eDMs=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4/go.mod h1:hN7oaIRCjzsZ2dE+yG5k+rsdt3qcwykqK6HVGcKwsw4=
 github.com/99designs/keyring v1.2.1 h1:tYLp1ULvO7i3fI5vE21ReQuj99QFSs7lGm0xWyJo87o=
@@ -815,8 +819,6 @@ github.com/magiconair/properties v1.8.7 h1:IeQXZAiQcpL9mgcAe1Nu6cX9LLw6ExEHKjN0V
 github.com/magiconair/properties v1.8.7/go.mod h1:Dhd985XPs7jluiymwWYZ0G4Z61jb3vdS329zhj2hYo0=
 github.com/manifoldco/promptui v0.9.0 h1:3V4HzJk1TtXW1MTZMP7mdlwbBpIinw3HztaIlYthEiA=
 github.com/manifoldco/promptui v0.9.0/go.mod h1:ka04sppxSGFAtxX0qhlYQjISsg9mR4GWtQEhdbn6Pgg=
-github.com/maticnetwork/crand v1.0.2 h1:Af0tAivC8zrxXDpGWNWVT/0s1fOz8w0eRbahZgURS8I=
-github.com/maticnetwork/crand v1.0.2/go.mod h1:/NRNL3bj2eYdqpWmoIP5puxndTpi0XRxpj5ZKxfHjyg=
 github.com/maticnetwork/polyproto v0.0.6 h1:9eq44no4pyDjeBDitpbF9mjxCRIwzIyne04pqiwLAVE=
 github.com/maticnetwork/polyproto v0.0.6/go.mod h1:e1mU2EXSwEpn5jM7GfNwu3AupsV6WAGoPFFfswXOF0o=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=

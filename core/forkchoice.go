@@ -21,7 +21,7 @@ import (
 	"errors"
 	"math/big"
 
-	"github.com/maticnetwork/crand"
+	"github.com/0xPolygon/crand"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"

@@ -357,7 +357,7 @@ func TestAdjustTimeAfterFork(t *testing.T) {
 }
 
 // This one will fail in the previous bor version as well
-// caused by the custom bor changes (https://github.com/maticnetwork/bor/commit/a91b24d4d091826461c3533b657db5b189731f48)
+// caused by the custom bor changes (https://github.com/0xPolygon/bor/commit/a91b24d4d091826461c3533b657db5b189731f48)
 // TODO: fix this
 /*
 func createAndCloseSimBackend() {

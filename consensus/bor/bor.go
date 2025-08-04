@@ -1202,7 +1202,7 @@ func (c *Bor) needToCommitSpan(currentSpan *borTypes.Span, headerNumber uint64) 
 	}
 
 	// Check if span is not set initially, we commit the span with spanId 1, which will also commit the 0th span.
-	// Check: https://github.com/maticnetwork/genesis-contracts/blob/5dcbcc72f10ab847276586e629f96b8a6d369e1d/contracts/BorValidatorSet.template#L229
+	// Check: https://github.com/0xPolygon/genesis-contracts/blob/5dcbcc72f10ab847276586e629f96b8a6d369e1d/contracts/BorValidatorSet.template#L229
 	if currentSpan.EndBlock == 0 {
 		return true
 	}
@@ -1402,7 +1402,7 @@ func (c *Bor) CommitStates(
 
 		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
 		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
-		// https://github.com/maticnetwork/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
+		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
 		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain)
 		if err != nil {
 			return nil, err

@@ -9,7 +9,7 @@ borDockerBuildContext: '../../bor'
 heimdallChainId: heimdall-15001
 heimdallDockerBuildContext: 'https://github.com/0xPolygon/heimdall-v2.git#develop'
 
-genesisContractsRepo: https://github.com/maticnetwork/genesis-contracts.git
+genesisContractsRepo: https://github.com/0xPolygon/genesis-contracts.git
 genesisContractsBranch: master
 
 contractsRepo: https://github.com/0xPolygon/pos-contracts.git

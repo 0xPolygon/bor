@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	crand2 "github.com/maticnetwork/crand"
+	crand2 "github.com/0xPolygon/crand"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"

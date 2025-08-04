@@ -4,7 +4,9 @@ module github.com/ethereum/go-ethereum
 go 1.24.4
 
 require (
+	github.com/0xPolygon/crand v1.0.3
 	github.com/0xPolygon/heimdall-v2 v0.2.8-0.20250708101522-d403fe733391
+	github.com/0xPolygon/polyproto v0.0.7
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
 	github.com/BurntSushi/toml v1.4.0
 	github.com/JekaMas/go-grpc-net-conn v0.0.0-20220708155319-6aff21f2d13d
@@ -62,8 +64,6 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/karalabe/hid v1.0.1-0.20240306101548-573246063e52
 	github.com/kylelemons/godebug v1.1.0
-	github.com/maticnetwork/crand v1.0.2
-	github.com/maticnetwork/polyproto v0.0.6
 	github.com/mattn/go-colorable v0.1.13
 	github.com/mattn/go-isatty v0.0.20
 	github.com/mitchellh/cli v1.1.5
@@ -289,6 +289,7 @@ require (
 	github.com/linxGnu/grocksdb v1.8.14 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
+	github.com/maticnetwork/polyproto v0.0.6 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/mitchellh/copystructure v1.0.0 // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
@@ -360,9 +361,7 @@ replace (
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
 	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.2.0-polygon
 	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.0-polygon
-	github.com/ethereum/go-ethereum => github.com/maticnetwork/bor v1.14.14-0.20250618164709-3dc7d31cdac3
-	github.com/ethereum/go-ethereum/common/math => github.com/maticnetwork/bor/common/math v1.5.5
-	github.com/tendermint/tendermint => github.com/maticnetwork/tendermint v0.33.0
-	github.com/tendermint/tm-db => github.com/tendermint/tm-db v0.2.0
+	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20250618164709-3dc7d31cdac3
+	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0
 )

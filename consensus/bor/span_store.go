@@ -102,7 +102,7 @@ func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (
 		return nil, err
 	}
 	// Iterate over all spans and check for number. This is to replicate the behaviour implemented in
-	// https://github.com/maticnetwork/genesis-contracts/blob/master/contracts/BorValidatorSet.template#L118-L134
+	// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/BorValidatorSet.template#L118-L134
 	// This logic is independent of the span length (bit extra effort but maintains equivalence) and will work
 	// for all span lengths (even if we change it in future).
 	latestKnownSpanId := s.latestKnownSpanId

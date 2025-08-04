@@ -205,7 +205,7 @@ jobs:
       - name: Checkout matic-cli
         uses: actions/checkout@v4
         with:
-          repository: maticnetwork/matic-cli
+          repository: 0xPolygon/matic-cli
           ref: heimdall-v2
           path: matic-cli
 

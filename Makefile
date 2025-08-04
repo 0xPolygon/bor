@@ -214,7 +214,7 @@ geth-windows-amd64:
 	@echo "Windows amd64 cross compilation done:"
 	@ls -ld $(GOBIN)/geth-windows-* | grep amd64
 
-PACKAGE_NAME          := github.com/maticnetwork/bor
+PACKAGE_NAME          := github.com/0xPolygon/bor
 GOLANG_CROSS_VERSION  ?= v1.22.1
 
 .PHONY: release-dry-run
