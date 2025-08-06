@@ -5,7 +5,7 @@ go 1.24.4
 
 require (
 	github.com/0xPolygon/crand v1.0.3
-	github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250804094154-706333be6a8c
+	github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250806094653-f76a382c4af2
 	github.com/0xPolygon/polyproto v0.0.7
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
 	github.com/BurntSushi/toml v1.4.0
@@ -289,7 +289,6 @@ require (
 	github.com/linxGnu/grocksdb v1.8.14 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
-	github.com/maticnetwork/polyproto v0.0.6 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
 	github.com/mitchellh/copystructure v1.0.0 // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
@@ -361,7 +360,7 @@ replace (
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
 	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.2.0-polygon
 	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.0-polygon
-	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20250618164709-3dc7d31cdac3
+	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20250804100633-1c7ddc53676b
 	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0
 )
