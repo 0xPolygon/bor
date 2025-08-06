@@ -66,8 +66,13 @@ func NewHeimdallClient(urlString string, timeout time.Duration) *HeimdallClient 
 }
 
 const (
-	fetchStateSyncEventsFormat = "from_id=%d&to_time=%s&pagination.limit=%d"
-	fetchStateSyncEventsPath   = "clerk/time"
+	fetchStateSyncEventsWithTimeFormat = "from_id=%d&to_time=%s&pagination.limit=%d"
+	fetchStateSyncEventsWithTimePath   = "clerk/time"
+
+	fetchStateSyncEventByIdPathFormat = "/clerk/event-records/%d"
+
+	fetchStateSyncEventsListFormat = "page=%d&limit=%d"
+	fetchStateSyncEventsListPath   = "clerk/event-records/list"
 
 	fetchCheckpoint      = "/checkpoints/%s"
 	fetchCheckpointCount = "/checkpoints/count"
@@ -79,12 +84,12 @@ const (
 	fetchLatestSpan = "bor/spans/latest"
 )
 
-// StateSyncEvents fetches the state sync events from heimdall
-func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+// StateSyncEvents fetches the state sync events from heimdall based on time
+func (h *HeimdallClient) StateSyncEventsWithTime(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
 	for {
-		url, err := stateSyncURL(h.urlString, fromID, to)
+		url, err := stateSyncWithTimeURL(h.urlString, fromID, to)
 		if err != nil {
 			return nil, err
 		}
@@ -130,6 +135,89 @@ func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to 
 	})
 
 	return eventRecords, nil
+}
+
+// StateSyncEvents fetches the most it can of state sync events in a single list given an id to start
+func (h *HeimdallClient) StateSyncEventsList(ctx context.Context, fromID uint64) ([]*clerk.EventRecordWithTime, error) {
+	eventRecords := make([]*clerk.EventRecordWithTime, 0)
+	page := (fromID - 1 + stateFetchLimit) / stateFetchLimit // since on heimdall 	startRecordID := (page-1)*limit + 1, so we are applying floor division
+	url, err := stateSyncListURL(h.urlString, page)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug("Fetching state sync events", "queryParams", url.RawQuery)
+
+	ctx = WithRequestType(ctx, StateSyncRequest)
+
+	request := &Request{client: h.client, url: url, start: time.Now()}
+	response, err := Fetch[clerkTypes.RecordListResponse](ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	var record *clerk.EventRecordWithTime
+
+	for _, e := range response.EventRecords {
+		if e.Id < fromID {
+			continue
+		}
+		record = &clerk.EventRecordWithTime{
+			EventRecord: clerk.EventRecord{
+				ID:       e.Id,
+				ChainID:  e.BorChainId,
+				Contract: common.HexToAddress(e.Contract),
+				Data:     e.Data,
+				LogIndex: e.LogIndex,
+				TxHash:   common.HexToHash(e.TxHash),
+			},
+			Time: e.RecordTime,
+		}
+		eventRecords = append(eventRecords, record)
+
+	}
+
+	sort.SliceStable(eventRecords, func(i, j int) bool {
+		return eventRecords[i].ID < eventRecords[j].ID
+	})
+
+	return eventRecords, nil
+}
+
+// StateSyncEventById fetches a single state sync event by id
+func (h *HeimdallClient) StateSyncEventById(ctx context.Context, ID uint64) (*clerk.EventRecordWithTime, error) {
+	url, err := stateSyncByIdURL(h.urlString, ID)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug("Fetching state sync event", "queryParams", url.Path)
+
+	ctx = WithRequestType(ctx, StateSyncRequest)
+
+	request := &Request{client: h.client, url: url, start: time.Now()}
+	response, err := Fetch[clerkTypes.EventRecord](ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	record := &clerk.EventRecordWithTime{
+		EventRecord: clerk.EventRecord{
+			ID:       response.Id,
+			ChainID:  response.BorChainId,
+			Contract: common.HexToAddress(response.Contract),
+			Data:     response.Data,
+			LogIndex: response.LogIndex,
+			TxHash:   common.HexToHash(response.TxHash),
+		},
+		Time: response.RecordTime,
+	}
+
+	return record, nil
+}
+
+func (h *HeimdallClient) StateFetchLimit() uint64 {
+	return stateFetchLimit
 }
 
 func (h *HeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
@@ -361,13 +449,25 @@ func latestSpanUrl(urlString string) (*url.URL, error) {
 	return makeURL(urlString, fetchLatestSpan, "")
 }
 
-func stateSyncURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
+func stateSyncWithTimeURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
 	t := time.Unix(to, 0).UTC()
 	formattedTime := t.Format(time.RFC3339Nano)
 
-	queryParams := fmt.Sprintf(fetchStateSyncEventsFormat, fromID, formattedTime, stateFetchLimit)
+	queryParams := fmt.Sprintf(fetchStateSyncEventsWithTimeFormat, fromID, formattedTime, stateFetchLimit)
 
-	return makeURL(urlString, fetchStateSyncEventsPath, queryParams)
+	return makeURL(urlString, fetchStateSyncEventsWithTimePath, queryParams)
+}
+
+func stateSyncByIdURL(urlString string, ID uint64) (*url.URL, error) {
+	path := fmt.Sprintf(fetchStateSyncEventByIdPathFormat, ID)
+
+	return makeURL(urlString, path, "")
+}
+
+func stateSyncListURL(urlString string, page uint64) (*url.URL, error) {
+	queryParams := fmt.Sprintf(fetchStateSyncEventsListFormat, page, stateFetchLimit)
+
+	return makeURL(urlString, fetchStateSyncEventsListPath, queryParams)
 }
 
 func checkpointURL(urlString string, number int64) (*url.URL, error) {

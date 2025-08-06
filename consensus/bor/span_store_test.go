@@ -160,7 +160,7 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 }
 
 // Irrelevant to the tests above but necessary for interface compatibility
-func (h *MockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+func (h *MockHeimdallClient) StateSyncEventsWithTime(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	panic("implement me")
 }
 

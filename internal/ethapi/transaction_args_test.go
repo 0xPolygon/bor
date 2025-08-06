@@ -332,14 +332,15 @@ func (b *backendMock) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 func (b *backendMock) FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, []*big.Int, []float64, error) {
 	return nil, nil, nil, nil, nil, nil, nil
 }
-func (b *backendMock) ChainDb() ethdb.Database           { return nil }
-func (b *backendMock) AccountManager() *accounts.Manager { return nil }
-func (b *backendMock) ExtRPCEnabled() bool               { return false }
-func (b *backendMock) RPCGasCap() uint64                 { return 0 }
-func (b *backendMock) RPCEVMTimeout() time.Duration      { return time.Second }
-func (b *backendMock) RPCTxFeeCap() float64              { return 0 }
-func (b *backendMock) UnprotectedAllowed() bool          { return false }
-func (b *backendMock) SetHead(number uint64)             {}
+func (b *backendMock) ChainDb() ethdb.Database                                            { return nil }
+func (b *backendMock) AccountManager() *accounts.Manager                                  { return nil }
+func (b *backendMock) ExtRPCEnabled() bool                                                { return false }
+func (b *backendMock) RPCGasCap() uint64                                                  { return 0 }
+func (b *backendMock) RPCEVMTimeout() time.Duration                                       { return time.Second }
+func (b *backendMock) RPCTxFeeCap() float64                                               { return 0 }
+func (b *backendMock) UnprotectedAllowed() bool                                           { return false }
+func (b *backendMock) SetHead(number uint64)                                              {}
+func (b *backendMock) CheckStateSyncConsistency(start, end uint64) ([]common.Hash, error) { return nil }
 func (b *backendMock) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	//nolint:nilnil
 	return nil, nil

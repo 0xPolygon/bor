@@ -430,7 +430,7 @@ func TestSpanURL(t *testing.T) {
 func TestStateSyncURL(t *testing.T) {
 	t.Parallel()
 
-	url, err := stateSyncURL("http://bor0", 10, 100)
+	url, err := stateSyncWithTimeURL("http://bor0", 10, 100)
 	if err != nil {
 		t.Fatal("got an error", err)
 	}

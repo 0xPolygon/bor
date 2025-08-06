@@ -22,8 +22,19 @@ type mockHeimdall struct {
 	fetchMilestoneCount  func(ctx context.Context) (int64, error)
 }
 
-func (m *mockHeimdall) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+func (m *mockHeimdall) StateSyncEventsWithTime(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
+}
+
+func (m *mockHeimdall) StateSyncEventById(ctx context.Context, ID uint64) (*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+func (m *mockHeimdall) StateSyncEventsList(ctx context.Context, fromId uint64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+
+func (m *mockHeimdall) StateFetchLimit() uint64 {
+	return 50
 }
 
 func (m *mockHeimdall) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {

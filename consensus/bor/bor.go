@@ -1348,7 +1348,7 @@ func (c *Bor) CommitStates(
 		"to", to.Format(time.RFC3339))
 
 	var eventRecords []*clerk.EventRecordWithTime
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
+	eventRecords, err = c.HeimdallClient.StateSyncEventsWithTime(context.Background(), from, to.Unix())
 	if err != nil {
 		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
 

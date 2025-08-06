@@ -552,3 +552,11 @@ func (b *EthAPIBackend) PurgeWhitelistedMilestone() {
 func (b *EthAPIBackend) PeerStats() interface{} {
 	return b.eth.handler.GetPeerStats()
 }
+
+func (b *EthAPIBackend) CheckStateSyncConsistency(start, end uint64) ([]common.Hash, error) {
+	_, bor, err := b.eth.getHandler()
+	if err != nil {
+		return nil, err
+	}
+	return b.eth.checkStateSyncConsistency(start, end, b.eth.APIBackend, bor)
+}

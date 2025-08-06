@@ -2278,6 +2278,14 @@ func (api *DebugAPI) SetHead(number hexutil.Uint64) {
 	api.b.SetHead(uint64(number))
 }
 
+// CheckStateSyncConsistency runs over the block interval checking
+// if there are any missing state sync txs. The data is
+// retrieved from Heimdall as source of truth, which demands a
+// synced heimdall node.
+func (api *DebugAPI) CheckStateSyncConsistency(start, end hexutil.Uint64) ([]common.Hash, error) {
+	return api.b.CheckStateSyncConsistency(uint64(start), uint64(end))
+}
+
 // GetTraceStack returns the current trace stack
 func (api *DebugAPI) GetTraceStack() string {
 	buf := make([]byte, 1024)
