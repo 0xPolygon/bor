@@ -3,13 +3,13 @@ polygon_pos_package:
     el_block_interval_seconds: 1
 
   participants:
-    # 5 validators on Bor's stateless_sync branch
+    # 4 validators on Bor's stateless_sync branch
     - kind: validator
       cl_type: heimdall-v2
       cl_image: heimdall-v2:local
       el_type: bor
       el_image: bor:local
-      count: 5
+      count: 4
       el_bor_produce_witness: true
       el_log_level: info
 

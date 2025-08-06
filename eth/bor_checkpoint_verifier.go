@@ -176,7 +176,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 // reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
 // and inserts the chain finalized by checkpoint/milestone.
 func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
-	if eth.Miner().Mining() {
+	if eth.Miner() != nil && eth.Miner().Mining() {
 		ch := make(chan struct{})
 		eth.Miner().Stop(ch)
 

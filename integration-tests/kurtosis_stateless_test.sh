@@ -3,7 +3,7 @@ set -e
 
 echo "Starting stateless sync tests..."
 
-# Check if required tools are available
+# Check if required tools are available.
 if ! command -v cast &>/dev/null; then
 	echo "Error: 'cast' command not found. Please install Foundry toolkit."
 	exit 1
@@ -14,16 +14,16 @@ if ! command -v kurtosis &>/dev/null; then
 	exit 1
 fi
 
-# Define the enclave name
+# Define the enclave name.
 ENCLAVE_NAME=${ENCLAVE_NAME:-"kurtosis-stateless-e2e"}
 
-# Function to get RPC URL for a service
+# Function to get RPC URL for a service.
 get_rpc_url() {
 	local service_name=$1
 	kurtosis port print $ENCLAVE_NAME $service_name rpc 2>/dev/null || echo ""
 }
 
-# Function to get block number from a specific service using cast
+# Function to get block number from a specific service using cast.
 get_block_number() {
 	local service_name=$1
 	local rpc_url=$(get_rpc_url $service_name)
@@ -34,7 +34,7 @@ get_block_number() {
 	fi
 }
 
-# Function to get block timestamp using cast
+# Function to get block timestamp using cast.
 get_block_timestamp() {
 	local service_name=$1
 	local block_number=$2
@@ -46,7 +46,7 @@ get_block_timestamp() {
 	fi
 }
 
-# Function to get finalized block number using cast
+# Function to get finalized block number using cast.
 get_finalized_block() {
 	local service_name=$1
 	local rpc_url=$(get_rpc_url $service_name)
@@ -57,7 +57,7 @@ get_finalized_block() {
 	fi
 }
 
-# Function to get block hash using cast
+# Function to get block hash using cast.
 get_block_hash() {
 	local service_name=$1
 	local block_number=$2
@@ -69,37 +69,37 @@ get_block_hash() {
 	fi
 }
 
-# Define services based on the kurtosis configuration
+# Define services based on the kurtosis configuration.
 echo "Setting up service lists based on kurtosis configuration..."
 
 # Based on the kurtosis config:
-# - 8 validators with stateless_sync branch (l2-el-1 through l2-el-8)
-# - 1 validator with bor:2.2.5 (l2-el-9)
-# - 3 RPC nodes with stateless_sync branch (l2-el-10, l2-el-11, l2-el-12)
+# - 7 validators with stateless_sync branch (l2-el-1 through l2-el-7)
+# - 1 validator with bor:2.2.5 (l2-el-8)
+# - 3 RPC nodes with stateless_sync branch (l2-el-9, l2-el-10, l2-el-11)
 
 STATELESS_SYNC_VALIDATORS=()
 LEGACY_VALIDATORS=()
 STATELESS_RPC_SERVICES=()
 
-# Stateless sync validators (1-8)
-for i in {1..8}; do
+# Stateless sync validators (1-7)
+for i in {1..7}; do
 	STATELESS_SYNC_VALIDATORS+=("l2-el-$i-bor-heimdall-v2-validator")
 done
 
-# Legacy validator (9)
-LEGACY_VALIDATORS+=("l2-el-9-bor-heimdall-v2-validator")
+# Legacy validator (8)
+LEGACY_VALIDATORS+=("l2-el-8-bor-heimdall-v2-validator")
 
-# RPC nodes (10-12)
-# Note: According to kurtosis config, l2-el-12 has el_bor_sync_with_witness: true
-for i in {10..12}; do
+# RPC nodes (9-11)
+# Note: According to kurtosis config, l2-el-11 has el_bor_sync_with_witness: true
+for i in {9..11}; do
 	STATELESS_RPC_SERVICES+=("l2-el-$i-bor-heimdall-v2-rpc")
 done
 
-echo "Stateless sync validators (1-8): ${STATELESS_SYNC_VALIDATORS[*]}"
-echo "Legacy validator (9): ${LEGACY_VALIDATORS[*]}"
-echo "RPC services (10-12): ${STATELESS_RPC_SERVICES[*]}"
+echo "Stateless sync validators (1-7): ${STATELESS_SYNC_VALIDATORS[*]}"
+echo "Legacy validator (8): ${LEGACY_VALIDATORS[*]}"
+echo "RPC services (9-11): ${STATELESS_RPC_SERVICES[*]}"
 
-# Verify services are accessible
+# Verify services are accessible.
 echo "Verifying service accessibility..."
 for service in "${STATELESS_SYNC_VALIDATORS[@]}" "${LEGACY_VALIDATORS[@]}" "${STATELESS_RPC_SERVICES[@]}"; do
 	rpc_url=$(get_rpc_url $service)
@@ -110,7 +110,7 @@ for service in "${STATELESS_SYNC_VALIDATORS[@]}" "${LEGACY_VALIDATORS[@]}" "${ST
 	fi
 done
 
-# Test 1: Check all nodes reach TARGET_BLOCK and have same block hash
+# Test 1: Check all nodes reach TARGET_BLOCK and have same block hash.
 echo ""
 echo "=== Test 1: Checking all the nodes reach block $TARGET_BLOCK and have the same block hash ==="
 
@@ -122,17 +122,17 @@ while true; do
 	current_time=$SECONDS
 	elapsed=$((current_time - start_time))
 
-	# Timeout after 30 minutes
+	# Timeout after 30 minutes.
 	if [ $elapsed -gt 1800 ]; then
 		echo "Timeout waiting for block $TARGET_BLOCK"
 		exit 1
 	fi
 
-	# Get block numbers from all services
+	# Get block numbers from all services.
 	block_numbers=()
 	max_block=0
 
-	# Check all services (stateless_sync validators + legacy validators + RPC)
+	# Check all services (stateless_sync validators + legacy validators + RPC).
 	ALL_TEST_SERVICES=("${STATELESS_SYNC_VALIDATORS[@]}" "${LEGACY_VALIDATORS[@]}" "${STATELESS_RPC_SERVICES[@]}")
 
 	for service in "${ALL_TEST_SERVICES[@]}"; do
@@ -147,7 +147,7 @@ while true; do
 
 	echo "Current max block: $max_block ($(printf '%02dm:%02ds\n' $((elapsed / 60)) $((elapsed % 60)))) [${#block_numbers[@]} nodes responding]"
 
-	# Check if all nodes have reached the target block
+	# Check if all nodes have reached the target block.
 	min_block=${block_numbers[0]}
 	for block in "${block_numbers[@]}"; do
 		if [ $block -lt $min_block ]; then
@@ -158,7 +158,7 @@ while true; do
 	if [ $min_block -ge $TARGET_BLOCK ]; then
 		echo "All nodes have reached block $TARGET_BLOCK, checking block hash consensus..."
 
-		# Get block hash for block TARGET_BLOCK from all services
+		# Get block hash for block TARGET_BLOCK from all services.
 		block_hashes=()
 		reference_hash=""
 		hash_mismatch=false
@@ -168,12 +168,12 @@ while true; do
 			if [ -n "$block_hash" ]; then
 				block_hashes+=("$service:$block_hash")
 
-				# Set reference hash from first service
+				# Set reference hash from first service.
 				if [ -z "$reference_hash" ]; then
 					reference_hash=$block_hash
 					echo "Reference hash from $service: $reference_hash"
 				else
-					# Compare with reference hash
+					# Compare with reference hash.
 					if [ "$block_hash" != "$reference_hash" ]; then
 						echo "❌ Hash mismatch! $service has hash: $block_hash (expected: $reference_hash)"
 						hash_mismatch=true
@@ -203,7 +203,7 @@ while true; do
 	sleep 5
 done
 
-# Test 2: Check nodes continue syncing after block TARGET_BLOCK_HF (veblop HF)
+# Test 2: Check nodes continue syncing after block TARGET_BLOCK_HF (veblop HF).
 
 TARGET_BLOCK_HF=384
 TARGET_BLOCK_POST_HF=420
@@ -216,13 +216,13 @@ while true; do
 	current_time=$SECONDS
 	elapsed=$((current_time - start_time))
 
-	# Timeout after 30 minutes total (extended for hash verification)
+	# Timeout after 30 minutes total (extended for hash verification).
 	if [ $elapsed -gt 1800 ]; then
 		echo "Timeout waiting for post-HF block $TARGET_BLOCK_POST_HF"
 		exit 1
 	fi
 
-	# Check stateless_sync services (should continue syncing after HF)
+	# Check stateless_sync services (should continue syncing after HF).
 	max_stateless_block=0
 	for service in "${STATELESS_SYNC_VALIDATORS[@]}" "${STATELESS_RPC_SERVICES[@]}"; do
 		block_num=$(get_block_number $service)
@@ -231,7 +231,7 @@ while true; do
 		fi
 	done
 
-	# Check legacy services (might stop syncing after HF)
+	# Check legacy services (might stop syncing after HF).
 	max_legacy_block=0
 	for service in "${LEGACY_VALIDATORS[@]}"; do
 		block_num=$(get_block_number $service)
@@ -246,20 +246,20 @@ while true; do
 	if [ $max_stateless_block -ge $TARGET_BLOCK_POST_HF ]; then
 		echo "✅ Stateless sync nodes continued syncing past veblop HF"
 
-		# Check if legacy nodes stopped progressing
+		# Check if legacy nodes stopped progressing.
 		if [ $max_legacy_block -lt $TARGET_BLOCK_HF ]; then
 			echo "✅ Legacy nodes appropriately stopped syncing after veblop HF (at block $max_legacy_block)"
 		else
 			echo "⚠️  Legacy nodes are still running (at block $max_legacy_block) - forked off from stateless sync validators"
 		fi
 
-		# Check block hash consensus for stateless sync services at block TARGET_BLOCK_POST_HF
+		# Check block hash consensus for stateless sync services at block TARGET_BLOCK_POST_HF.
 		echo "Checking block hash consensus for stateless sync services at block $TARGET_BLOCK_POST_HF..."
 
-		# Only check stateless sync validators and RPC services (not legacy validators)
+		# Only check stateless sync validators and RPC services (not legacy validators).
 		STATELESS_SERVICES=("${STATELESS_SYNC_VALIDATORS[@]}" "${STATELESS_RPC_SERVICES[@]}")
 
-		# Get block hash for block TARGET_BLOCK_POST_HF from all stateless sync services
+		# Get block hash for block TARGET_BLOCK_POST_HF from all stateless sync services.
 		block_hashes=()
 		reference_hash=""
 		hash_mismatch=false
@@ -269,12 +269,12 @@ while true; do
 			if [ -n "$block_hash" ]; then
 				block_hashes+=("$service:$block_hash")
 
-				# Set reference hash from first service
+				# Set reference hash from first service.
 				if [ -z "$reference_hash" ]; then
 					reference_hash=$block_hash
 					echo "Reference hash from $service: $reference_hash"
 				else
-					# Compare with reference hash
+					# Compare with reference hash.
 					if [ "$block_hash" != "$reference_hash" ]; then
 						echo "❌ Hash mismatch! $service has hash: $block_hash (expected: $reference_hash)"
 						hash_mismatch=true
@@ -305,17 +305,17 @@ while true; do
 	sleep 5
 done
 
-# Test 3: Check milestone settlement latency
+# Test 3: Check milestone settlement latency.
 echo ""
 echo "=== Test 3: Checking milestone settlement latency ==="
 
-# Pick a representative service for latency testing (use the first stateless sync validator)
+# Pick a representative service for latency testing (use the first stateless sync validator).
 REPRESENTATIVE_SERVICE=${STATELESS_SYNC_VALIDATORS[0]}
 echo "Using service $REPRESENTATIVE_SERVICE for latency testing"
 
-# Check the last 10 finalized blocks for latency
+# Check the last 10 finalized blocks for latency.
 for i in {1..10}; do
-	# Get current finalized block
+	# Get current finalized block.
 	finalized_block=$(get_finalized_block $REPRESENTATIVE_SERVICE)
 
 	if [[ "$finalized_block" =~ ^[0-9]+$ ]] && [ $finalized_block -gt 0 ]; then

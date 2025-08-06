@@ -372,6 +372,11 @@ func (dlp *downloadTesterPeer) RequestWitnesses(hashes []common.Hash, sink chan 
 	return nil, nil
 }
 
+// SupportsWitness implements Peer
+func (dlp *downloadTesterPeer) SupportsWitness() bool {
+	return false
+}
+
 // ID retrieves the peer's unique identifier.
 func (dlp *downloadTesterPeer) ID() string {
 	return dlp.id

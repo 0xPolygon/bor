@@ -1,34 +1,30 @@
-name: Stateless Sync Tests
+name: Kurtosis E2E Tests
 
 on:
   push:
     branches:
-      - 'stateless_sync'
+      - 'qa'
+      - 'master'
+      - 'develop'
   pull_request:
     branches:
-      - 'stateless_sync'
-    types: [opened, synchronize, reopened]
+      - '**'
+    types: [opened, synchronize]
 
 concurrency:
-  group: stateless-sync-${{ github.event.pull_request.number || github.ref }}
+  group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  ENCLAVE_NAME: kurtosis-stateless-e2e
+  ENCLAVE_NAME: kurtosis-e2e
 
 jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
-      # This is needed because the job fails with "System.IO.IOException: No space left on device".
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # 2023/10/19
-        with:
-          tool-cache: true
-
       - name: Checkout Bor
         uses: actions/checkout@v4
         with:
@@ -53,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 0xPolygon/heimdall-v2
-          ref: stateless_sync
+          ref: develop
           path: heimdall-v2
 
       - name: Build Heimdall-v2 Docker Image
@@ -65,29 +61,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: stateless
+          ref: v1.1.1
           path: kurtosis-pos
 
       - name: Copy kurtosis config
-        run: cp ./bor/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
+        run: cp ./bor/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
 
       - name: Kurtosis run
         run: |
           cd kurtosis-pos
-          kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+          kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: |
           cd kurtosis-pos
           kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
-      - name: Run stateless sync tests
-        run: |
-          cd bor
-          bash integration-tests/kurtosis_stateless_test.sh
-
-      - name: Test state syncs (post VeBlop HF)
+      - name: Test state syncs
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,matic,pol --recursive tests/"
+
+      - name: Run smoke tests (Checkpoint)
+        run: bash ./bor/integration-tests/kurtosis_smoke_test.sh
 
       - name: Post kurtosis run
         if: always()

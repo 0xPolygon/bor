@@ -65,6 +65,9 @@ type Peer interface {
 	RequestBodies([]common.Hash, chan *eth.Response) (*eth.Request, error)
 	RequestReceipts([]common.Hash, chan *eth.Response) (*eth.Request, error)
 	RequestWitnesses([]common.Hash, chan *eth.Response) (*eth.Request, error)
+
+	// SupportsWitness returns true if the peer supports the witness protocol
+	SupportsWitness() bool
 }
 
 // newPeerConnection creates a new downloader peer.

@@ -252,10 +252,14 @@ var (
 		LondonBlock:         big.NewInt(22640000),
 		ShanghaiBlock:       big.NewInt(41874000),
 		CancunBlock:         big.NewInt(45648608),
+		PragueBlock:         big.NewInt(48582656),
 		Bor: &BorConfig{
-			JaipurBlock: big.NewInt(22770000),
-			DelhiBlock:  big.NewInt(29638656),
-			IndoreBlock: big.NewInt(37075456),
+			JaipurBlock:    big.NewInt(22770000),
+			DelhiBlock:     big.NewInt(29638656),
+			IndoreBlock:    big.NewInt(37075456),
+			AhmedabadBlock: big.NewInt(48576256),
+			BhilaiBlock:    big.NewInt(48582656),
+			VeBlopBlock:    big.NewInt(48614656),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"37075456": 128,
 			},
