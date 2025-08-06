@@ -122,8 +122,8 @@ var (
 
 	resetCacheGauge = metrics.NewRegisteredGauge("txpool/resetcache", nil)
 	reheapTimer     = metrics.NewRegisteredTimer("txpool/reheap", nil)
-	// pendingLockWaitTimer measures how long the pending lock was held. This is useful
-	// to understand delay in block building and the impact of lock in it.
+	// pendingLockWaitTimer measures how long it took to acquire the pending lock. This is useful
+	// to understand delay in block building and the impact of lock acquisition.
 	pendingLockWaitTimer = metrics.NewRegisteredTimer("txpool/pendinglockwait", nil)
 	// pendingWaitTimer measures the total time taken for a pending call. This is useful
 	// to understand delay in block building.
