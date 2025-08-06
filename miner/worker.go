@@ -91,7 +91,7 @@ var (
 
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
-	// commitTransactionsTimer measures time taken to executed transactions
+	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 )
 
