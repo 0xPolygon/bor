@@ -94,7 +94,9 @@ func checkStateSyncOnRange(startStateSyncId uint64, targetBlockTime time.Time, b
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for stateSyncId := startStateSyncId; ; stateSyncId += bor.HeimdallClient.StateFetchLimit() {
 			select {
 			case <-ctx.Done():

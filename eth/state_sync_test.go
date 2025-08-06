@@ -2,6 +2,7 @@
 package eth
 
 import (
+	"context"
 	"math/big"
 	"testing"
 	"time"
@@ -17,79 +18,138 @@ import (
 	"github.com/golang/mock/gomock"
 )
 
-func TestCheckStateSyncConsistency_WithMocks(t *testing.T) {
+var (
+	borTxLookupPrefixTest    = []byte(borTxLookupPrefixStrTest)
+	borTxLookupPrefixStrTest = "matic-bor-tx-lookup-"
+)
+
+// testing Purpose
+func borTxLookupKeyTest(hash common.Hash) []byte {
+	return append(borTxLookupPrefixTest, hash.Bytes()...)
+}
+
+func TestCheckStateSyncConsistency_LargeRange(t *testing.T) {
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	t0 := time.Date(2025, 8, 6, 0, 0, 0, 0, time.UTC)
-	startHdr := &types.Header{Number: big.NewInt(1), Time: uint64(t0.Unix())}
-	endHdr := &types.Header{Number: big.NewInt(2000), Time: uint64(t0.Add(time.Hour).Unix())}
+	// --- test parameters ---
+	startBlock := uint64(31)
+	endBlock := uint64(2005)
+	currentBlock := uint64(3008)
+	blockDur := 2 * time.Second
+	fetchLimit := uint64(50)
+	missingStateSyncId := uint(30)
+
+	// baseTime = epoch (for simplicity)
+	baseTime := time.Unix(0, 0)
+
+	// compute the header timestamps
+	startTime := baseTime.Add(time.Duration(startBlock) * blockDur)
+	endTime := baseTime.Add(time.Duration(endBlock) * blockDur)
+	startHdr := &types.Header{Time: uint64(startTime.Unix())}
+	endHdr := &types.Header{Time: uint64(endTime.Unix())}
 	currentHdr := &types.Header{
-		Number: big.NewInt(3000),
+		Number: big.NewInt(int64(currentBlock)),
 	}
 
-	// mocks
+	// --- Mock HeaderProvider ---
 	mockHP := mocks.NewMockHeaderProvider(ctrl)
 	mockHP.
 		EXPECT().
-		HeaderByNumber(gomock.Any(), rpc.BlockNumber(1)).
+		HeaderByNumber(gomock.Any(), rpc.BlockNumber(startBlock)).
 		Return(startHdr, nil)
 	mockHP.
 		EXPECT().
-		HeaderByNumber(gomock.Any(), rpc.BlockNumber(2)).
+		HeaderByNumber(gomock.Any(), rpc.BlockNumber(endBlock)).
 		Return(endHdr, nil)
 	mockHP.
 		EXPECT().
 		CurrentHeader().
-		Return(currentHdr)
+		Return(currentHdr).
+		Times(2)
 
+	// --- Mock GenesisContract ---
+	lastStateID := currentBlock / 16
 	mockGen := bor.NewMockGenesisContract(ctrl)
 	mockGen.
 		EXPECT().
 		LastStateId(
 			gomock.Any(),
-			currentHdr.Number.Uint64(),
+			currentBlock,
 			currentHdr.Hash(),
 		).
-		Return(big.NewInt(0), nil)
+		Return(big.NewInt(int64(lastStateID)), nil)
 
+	// --- Mock Heimdall client ---
 	mockHeimdall := mocks.NewMockIHeimdallClient(ctrl)
-	// 1) findBoundaryStateSync(0) → t0+10m
+
+	// 1) StateSyncEventById → time = base + id*16*blockDur + 1s
 	mockHeimdall.
 		EXPECT().
-		StateSyncEventById(gomock.Any(), uint64(0)).
-		Return(&clerk.EventRecordWithTime{Time: t0.Add(10 * time.Minute)}, nil)
-	// 2) throttle concurrency
+		StateSyncEventById(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, id uint64) (*clerk.EventRecordWithTime, error) {
+			respTime := baseTime.Add(time.Duration(id*16) * blockDur).Add(time.Second)
+			return &clerk.EventRecordWithTime{Time: respTime, EventRecord: clerk.EventRecord{ID: id}}, nil
+		}).
+		AnyTimes()
+
+	// 2) StateFetchLimit = 50
 	mockHeimdall.
 		EXPECT().
 		StateFetchLimit().
-		Return(uint64(1))
-	// 3) one missing tx
-	expectedTx := common.HexToHash("0xDEADBEEF")
+		Return(fetchLimit).
+		AnyTimes()
+
+	// 3) StateSyncEventsList pages through [fromId ... fromId+49], stopping when time > endTime
 	mockHeimdall.
 		EXPECT().
-		StateSyncEventsList(gomock.Any(), uint64(0)).
-		Return([]*clerk.EventRecordWithTime{{
-			EventRecord: clerk.EventRecord{TxHash: expectedTx},
-			Time:        t0.Add(10 * time.Minute),
-		}}, nil)
+		StateSyncEventsList(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, fromId uint64) ([]*clerk.EventRecordWithTime, error) {
+			var out []*clerk.EventRecordWithTime
+			for id := fromId; id < fromId+fetchLimit; id++ {
+				respTime := baseTime.Add(time.Duration(id*16) * blockDur).Add(time.Second)
+				out = append(out, &clerk.EventRecordWithTime{
+					EventRecord: clerk.EventRecord{ID: id, TxHash: common.BigToHash(big.NewInt(int64(id)))},
+					Time:        respTime,
+				})
+			}
+			return out, nil
+		}).
+		AnyTimes()
 
+	// assemble a Bor stub with both mocks
 	borStub := &gb.Bor{
 		GenesisContractsClient: mockGen,
 		HeimdallClient:         mockHeimdall,
 	}
 
+	// empty DB ⇒ every event is “missing”
 	db := rawdb.NewMemoryDatabase()
 
-	// invoke SUT
+	// writing state sync txs for all txs except 1
+	for i := 0; i < 300; i++ {
+		if i == int(missingStateSyncId) {
+			continue
+		}
+		db.Put(borTxLookupKeyTest(common.BigToHash(big.NewInt(int64(i)))), common.Hex2Bytes("00AA00"))
+	}
+
 	eth := &Ethereum{chainDb: db}
-	missing, err := eth.checkStateSyncConsistency(1, 2, mockHP, borStub)
+	missing, err := eth.checkStateSyncConsistency(startBlock, endBlock, mockHP, borStub)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// assert
-	if len(missing) != 1 || missing[0] != expectedTx {
-		t.Fatalf("got %v, want [%s]", missing, expectedTx.Hex())
+	if len(missing) != 1 {
+		t.Errorf("wrong count: got %d, want %d", len(missing), 1)
+	}
+
+	// check hash
+	if missing[0] != common.BigToHash(big.NewInt(int64(missingStateSyncId))) {
+		t.Errorf("only hash: got %s, want %s",
+			missing[0].Hex(),
+			common.BigToHash(big.NewInt(int64(missingStateSyncId))).Hex(),
+		)
 	}
 }
