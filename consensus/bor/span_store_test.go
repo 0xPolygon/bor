@@ -159,9 +159,19 @@ func TestSpanStore_SpanByBlockNumber(t *testing.T) {
 	require.Equal(t, uint64(134655), span.EndBlock, "invalid end block in spanByBlockNumber for future block 128256")
 }
 
-// Irrelevant to the tests above but necessary for interface compatibility
 func (h *MockHeimdallClient) StateSyncEventsWithTime(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
-	panic("implement me")
+	return nil, nil
+}
+
+func (h *MockHeimdallClient) StateSyncEventById(ctx context.Context, ID uint64) (*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+func (h *MockHeimdallClient) StateSyncEventsList(ctx context.Context, fromId uint64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+
+func (h *MockHeimdallClient) StateFetchLimit() uint64 {
+	return 50
 }
 
 func (h *MockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {

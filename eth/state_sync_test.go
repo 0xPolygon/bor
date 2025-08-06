@@ -29,7 +29,6 @@ func borTxLookupKeyTest(hash common.Hash) []byte {
 }
 
 func TestCheckStateSyncConsistency_LargeRange(t *testing.T) {
-
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 

@@ -54,7 +54,7 @@ func (eth *Ethereum) checkStateSyncConsistency(start, end uint64, headerProvider
 		return nil, err
 	}
 
-	// Fetch State Syncs and checks agains local db
+	// Fetch State Syncs and checks against local db
 	targetBlockEndTime := time.Unix(int64(endBlockHeader.Time), 0)
 
 	return checkStateSyncOnRange(startStateSyncId, targetBlockEndTime, bor, eth.chainDb)
@@ -135,7 +135,6 @@ func checkStateSyncOnRange(startStateSyncId uint64, targetBlockTime time.Time, b
 						missingStateSyncTxsMu.Unlock()
 					}
 				}
-
 			}(stateSyncId)
 		}
 	}()

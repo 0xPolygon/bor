@@ -174,7 +174,6 @@ func (h *HeimdallClient) StateSyncEventsList(ctx context.Context, fromID uint64)
 			Time: e.RecordTime,
 		}
 		eventRecords = append(eventRecords, record)
-
 	}
 
 	sort.SliceStable(eventRecords, func(i, j int) bool {
