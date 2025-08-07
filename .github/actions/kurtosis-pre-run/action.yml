@@ -45,3 +45,10 @@ runs:
       uses: foundry-rs/foundry-toolchain@v1
       with:
         version: v1.0.0
+
+    - name: Install polycli
+      shell: bash
+      run: |
+        tmp_dir=$(mktemp -d) && curl -L https://github.com/0xPolygon/polygon-cli/releases/download/v0.1.85/polycli_v0.1.85_linux_amd64.tar.gz | tar -xz -C "$tmp_dir" && mv "$tmp_dir"/* /usr/local/bin/polycli && rm -rf "$tmp_dir"
+        sudo chmod +x /usr/local/bin/polycli
+        /usr/local/bin/polycli version
