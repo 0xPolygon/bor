@@ -35,6 +35,7 @@ var (
 	ErrNotInRejectedList     = errors.New("milestoneID doesn't exist in rejected list")
 	ErrNotInMilestoneList    = errors.New("milestoneID doesn't exist in Heimdall")
 	ErrServiceUnavailable    = errors.New("service unavailable")
+	ErrPageDoesNotExist      = errors.New("page does not exist")
 )
 
 const (
@@ -542,6 +543,12 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 		}
 		if err := json.Unmarshal(b, &rpcErr); err != nil {
 			return nil, fmt.Errorf("%w: status %d, body=%q, parseErr=%v", ErrNotSuccessfulResponse, res.StatusCode, string(b), err)
+		}
+
+		switch rpcErr.Code {
+		case 13:
+			return nil, ErrPageDoesNotExist
+		default:
 		}
 		return nil, fmt.Errorf("%w: response code %d rpcErr=%q", ErrNotSuccessfulResponse, res.StatusCode, string(b))
 	}

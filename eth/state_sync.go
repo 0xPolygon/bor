@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -119,6 +120,9 @@ func checkStateSyncOnRange(startStateSyncId uint64, targetBlockTime time.Time, b
 				// new context because we dont cancel pending queries even though cancel is called
 				resp, err := bor.HeimdallClient.StateSyncEventsList(context.Background(), x)
 				if err != nil {
+					if err == heimdall.ErrPageDoesNotExist { //expected error
+						return
+					}
 					select {
 					case errCh <- err:
 					default:
