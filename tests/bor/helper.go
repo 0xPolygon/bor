@@ -424,7 +424,7 @@ func getMockedHeimdallClient(t *testing.T, heimdallSpan *borTypes.Span) (*mocks.
 	h := mocks.NewMockIHeimdallClient(ctrl)
 
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(heimdallSpan, nil).AnyTimes()
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 
 	return h, ctrl
 }

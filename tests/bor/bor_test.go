@@ -390,7 +390,7 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 	defer ctrl.Finish()
 
 	h := createMockHeimdall(ctrl, &span0, res)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
@@ -475,7 +475,7 @@ func TestFetchStateSyncEvents(t *testing.T) {
 	sample.Time = time.Unix(to-int64(eventCount+1), 0) // Last event.Time will be just < to
 	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
 
-	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -563,7 +563,7 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 		buildStateEvent(sample, 6, 4), // id = 6, time = 4
 	}
 
-	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -590,7 +590,7 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 		buildStateEvent(sample, 5, 7),
 		buildStateEvent(sample, 6, 4),
 	}
-	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
 
 	for i := sprintSize + 1; i <= spanSize; i++ {
 		// Update the validator set at the end of span and update the respective mocks
@@ -647,7 +647,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 	defer ctrl.Finish()
 
 	h := createMockHeimdall(ctrl, &span0, res)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(&span0, nil).AnyTimes()
 	_bor.SetHeimdallClient(h)
@@ -750,7 +750,7 @@ func TestSignerNotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	h := createMockHeimdall(ctrl, &span0, res)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -1572,7 +1572,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	defer ctrl.Finish()
 
 	h := createMockHeimdall(ctrl, &span0, res)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
@@ -1741,7 +1741,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 	defer ctrl.Finish()
 
 	h := createMockHeimdall(ctrl, res1, res2)
-	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).
+	h.EXPECT().StateSyncEventsWithTime(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 	_bor.SetHeimdallClient(h)
 
