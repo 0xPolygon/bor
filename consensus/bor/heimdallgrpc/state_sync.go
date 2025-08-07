@@ -129,6 +129,8 @@ func (h *HeimdallGRPCClient) StateSyncEventsList(ctx context.Context, fromID uin
 func (h *HeimdallGRPCClient) StateSyncEventById(ctx context.Context, ID uint64) (*clerk.EventRecordWithTime, error) {
 	log.Debug("Fetching state sync events", "ID", ID)
 
+	log.Info("[checkstatesync] Start request by id")
+
 	var err error
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, defaultTimeout)
@@ -153,6 +155,7 @@ func (h *HeimdallGRPCClient) StateSyncEventById(ctx context.Context, ID uint64) 
 	}
 
 	event := res.GetRecord()
+	log.Info("[checkstatesync] Successfully get record")
 
 	eventRecord := &clerk.EventRecordWithTime{
 		EventRecord: clerk.EventRecord{
@@ -166,6 +169,7 @@ func (h *HeimdallGRPCClient) StateSyncEventById(ctx context.Context, ID uint64) 
 		Time: event.RecordTime,
 	}
 
+	log.Info("[checkstatesync] Retrieved response")
 	log.Debug("Fetched state sync events", "ID", ID)
 
 	return eventRecord, nil
