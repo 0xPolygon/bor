@@ -528,13 +528,26 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 		return nil, fmt.Errorf("%w: response code %d", ErrServiceUnavailable, res.StatusCode)
 	}
 
-	// check status code
-	if res.StatusCode != 200 && res.StatusCode != 204 {
-		return nil, fmt.Errorf("%w: response code %d", ErrNotSuccessfulResponse, res.StatusCode)
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNoContent {
+		limitedBody := http.MaxBytesReader(nil, res.Body, heimdallAPIBodyLimit)
+		b, readErr := io.ReadAll(limitedBody)
+		if readErr != nil {
+			return nil, fmt.Errorf("%w: reading error body: %v", ErrNotSuccessfulResponse, readErr)
+		}
+
+		var rpcErr struct {
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+		}
+		if err := json.Unmarshal(b, &rpcErr); err != nil {
+			return nil, fmt.Errorf("%w: status %d, body=%q, parseErr=%v", ErrNotSuccessfulResponse, res.StatusCode, string(b), err)
+		}
+		return nil, fmt.Errorf("%w: response code %d rpcErr=%q", ErrNotSuccessfulResponse, res.StatusCode, string(b))
 	}
 
 	// unmarshall data from buffer
-	if res.StatusCode == 204 {
+	if res.StatusCode == http.StatusNoContent {
 		return nil, nil
 	}
 
