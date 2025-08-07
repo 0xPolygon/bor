@@ -147,12 +147,14 @@ func (h *HeimdallClient) StateSyncEventsList(ctx context.Context, fromID uint64)
 	}
 
 	log.Debug("Fetching state sync events", "queryParams", url.RawQuery)
+	log.Info("[checkstatesync] StateSyncEventsList called")
 
 	ctx = WithRequestType(ctx, StateSyncRequest)
 
 	request := &Request{client: h.client, url: url, start: time.Now()}
 	response, err := Fetch[clerkTypes.RecordListResponse](ctx, request)
 	if err != nil {
+		log.Info("[checkstatesync] StateSyncEventsList failed", "queryParams", url.RawQuery, "err", err)
 		return nil, err
 	}
 
@@ -191,14 +193,12 @@ func (h *HeimdallClient) StateSyncEventById(ctx context.Context, ID uint64) (*cl
 	}
 
 	log.Debug("Fetching state sync event", "queryParams", url.Path)
-	log.Info("[checkstatesync] Fetching state sync event", "queryParams", url.Path)
 
 	ctx = WithRequestType(ctx, StateSyncRequest)
 
 	request := &Request{client: h.client, url: url, start: time.Now()}
 	response, err := Fetch[clerkTypes.RecordResponse](ctx, request)
 	if err != nil {
-		log.Info("[checkstatesync] Error on the request", "err", err)
 		return nil, err
 	}
 

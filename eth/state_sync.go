@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -54,6 +55,8 @@ func (eth *Ethereum) checkStateSyncConsistency(start, end uint64, headerProvider
 		return nil, err
 	}
 
+	log.Info("[checkstatesync] Boundary found", "startStateSyncId", startStateSyncId)
+
 	// Fetch State Syncs and checks against local db
 	targetBlockEndTime := time.Unix(int64(endBlockHeader.Time), 0)
 
@@ -84,6 +87,8 @@ func findBoundaryStateSync(lo, hi uint64, targetBlockTime time.Time, bor *bor.Bo
 }
 
 func checkStateSyncOnRange(startStateSyncId uint64, targetBlockTime time.Time, bor *bor.Bor, db ethdb.Reader) ([]common.Hash, error) {
+	log.Info("[checkstatesync] checkStateSyncOnRange start")
+
 	missingStateSyncTxs := make([]common.Hash, 0)
 	var missingStateSyncTxsMu sync.Mutex
 	// closed when we reach lastTargetBlockTime
