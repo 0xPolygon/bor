@@ -191,12 +191,14 @@ func (h *HeimdallClient) StateSyncEventById(ctx context.Context, ID uint64) (*cl
 	}
 
 	log.Debug("Fetching state sync event", "queryParams", url.Path)
+	log.Info("[checkstatesync] Fetching state sync event", "queryParams", url.Path)
 
 	ctx = WithRequestType(ctx, StateSyncRequest)
 
 	request := &Request{client: h.client, url: url, start: time.Now()}
 	response, err := Fetch[clerkTypes.RecordResponse](ctx, request)
 	if err != nil {
+		log.Info("[checkstatesync] Error on the request", "err", err)
 		return nil, err
 	}
 
