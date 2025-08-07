@@ -195,21 +195,23 @@ func (h *HeimdallClient) StateSyncEventById(ctx context.Context, ID uint64) (*cl
 	ctx = WithRequestType(ctx, StateSyncRequest)
 
 	request := &Request{client: h.client, url: url, start: time.Now()}
-	response, err := Fetch[clerkTypes.EventRecord](ctx, request)
+	response, err := Fetch[clerkTypes.RecordResponse](ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
+	event := response.GetRecord()
+
 	record := &clerk.EventRecordWithTime{
 		EventRecord: clerk.EventRecord{
-			ID:       response.Id,
-			ChainID:  response.BorChainId,
-			Contract: common.HexToAddress(response.Contract),
-			Data:     response.Data,
-			LogIndex: response.LogIndex,
-			TxHash:   common.HexToHash(response.TxHash),
+			ID:       event.Id,
+			ChainID:  event.BorChainId,
+			Contract: common.HexToAddress(event.Contract),
+			Data:     event.Data,
+			LogIndex: event.LogIndex,
+			TxHash:   common.HexToHash(event.TxHash),
 		},
-		Time: response.RecordTime,
+		Time: event.RecordTime,
 	}
 
 	return record, nil
