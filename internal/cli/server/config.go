@@ -97,15 +97,6 @@ type Config struct {
 	// Ethstats is the address of the ethstats server to send telemetry
 	Ethstats string `hcl:"ethstats,optional" toml:"ethstats,optional"`
 
-	// WitnessProtocol enables the wit/0 protocol
-	WitnessProtocol bool `hcl:"witnessprotocol,optional" toml:"witnessprotocol,optional"`
-
-	// SyncWithWitnesses enables syncing blocks with witnesses
-	SyncWithWitnesses bool `hcl:"syncwithwitnesses,optional" toml:"syncwithwitnesses,optional"`
-
-	// SyncAndProduceWitnesses enables producing witnesses while syncing
-	SyncAndProduceWitnesses bool `hcl:"syncandproducewitnesses,optional" toml:"syncandproducewitnesses,optional"`
-
 	// Logging has the logging related settings
 	Logging *LoggingConfig `hcl:"log,block" toml:"log,block"`
 
@@ -146,6 +137,9 @@ type Config struct {
 
 	// ParallelEVM has the parallel evm related settings
 	ParallelEVM *ParallelEVMConfig `hcl:"parallelevm,block" toml:"parallelevm,block"`
+
+	// Witness has the witness related settings
+	Witness *WitnessConfig `hcl:"witness,block" toml:"witness,block"`
 
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
@@ -638,6 +632,26 @@ type ParallelEVMConfig struct {
 	Enforce bool `hcl:"enforce,optional" toml:"enforce,optional"`
 }
 
+type WitnessConfig struct {
+	// Enable enables the wit/1 protocol
+	Enable bool `hcl:"enable,optional" toml:"enable,optional"`
+
+	// SyncWithWitnesses enables syncing blocks with witnesses
+	SyncWithWitnesses bool `hcl:"syncwithwitnesses,optional" toml:"syncwithwitnesses,optional"`
+
+	// ProduceWitnesses enables producing witnesses while syncing
+	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
+
+	// Minimum necessary distance between local header and peer to fast forward
+	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
+
+	// Minimum necessary distance between local header and latest non pruned witness
+	PruneThreshold uint64 `hcl:"prunethreshold,optional" toml:"prunethreshold,optional"`
+
+	// The time interval between each witness prune routine
+	PruneInterval time.Duration `hcl:"pruneinterval,optional" toml:"pruneinterval,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                   "mainnet",
@@ -650,9 +664,6 @@ func DefaultConfig() *Config {
 		Ancient:                 "",
 		DBEngine:                "pebble",
 		KeyStoreDir:             "",
-		WitnessProtocol:         false,
-		SyncWithWitnesses:       false,
-		SyncAndProduceWitnesses: false,
 		Logging: &LoggingConfig{
 			Vmodule:             "",
 			Json:                false,
@@ -841,6 +852,14 @@ func DefaultConfig() *Config {
 			Enable:               true,
 			SpeculativeProcesses: 8,
 			Enforce:              false,
+		},
+		Witness: &WitnessConfig{
+			Enable:               false,
+			SyncWithWitnesses:    false,
+			ProduceWitnesses:     false,
+			FastForwardThreshold: 6400,
+			PruneThreshold:       64000,
+			PruneInterval:        120 * time.Second,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
@@ -1266,15 +1285,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.ParallelEVM.SpeculativeProcesses = c.ParallelEVM.SpeculativeProcesses
 	n.ParallelEVM.Enforce = c.ParallelEVM.Enforce
 
-	n.WitnessProtocol = c.WitnessProtocol
+	n.WitnessProtocol = c.Witness.Enable
 	if c.SyncMode == "stateless" {
-		if !c.WitnessProtocol {
+		if !c.Witness.Enable {
 			log.Warn("Witness protocol is disabled, overriding to true for stateless sync")
 		}
 		n.WitnessProtocol = true
 	}
-	n.SyncWithWitnesses = c.SyncWithWitnesses
-	n.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
+	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
+	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.FastForwardThreshold = c.Witness.FastForwardThreshold
+	n.WitnessPruneThreshold = c.Witness.PruneThreshold
+	n.WitnessPruneInterval = c.Witness.PruneInterval
 
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit
 

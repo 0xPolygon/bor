@@ -113,7 +113,7 @@ type handlerConfig struct {
 	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
 	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
 	witnessPruneThreshold   uint64                 // Minimum necessary distance between local header and latest non pruned witness
-	witnessPruneInterval    uint64                 // The time interval between each witness prune routine
+	witnessPruneInterval    time.Duration          // The time interval between each witness prune routine
 }
 
 type handler struct {
@@ -294,7 +294,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	h.chainSync = newChainSyncer(h)
 
 	if config.witnessProtocol {
-		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, time.Duration(config.witnessPruneInterval)*time.Second)
+		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, config.witnessPruneInterval)
 		h.witPruner.Start()
 	}
 

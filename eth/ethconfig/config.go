@@ -79,7 +79,7 @@ var Defaults = Config{
 	RPCTxFeeCap:           1, // 1 ether
 	FastForwardThreshold:  6400,
 	WitnessPruneThreshold: 64000,
-	WitnessPruneInterval:  120,
+	WitnessPruneInterval:  120 * time.Second,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -236,7 +236,7 @@ type Config struct {
 	WitnessPruneThreshold uint64
 
 	// The time interval between each witness prune routine
-	WitnessPruneInterval uint64
+	WitnessPruneInterval time.Duration
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
