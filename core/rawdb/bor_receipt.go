@@ -47,7 +47,7 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 		// If not, try reading from leveldb
 
 		data, _ = db.Get(borReceiptKey(number, hash))
-		log.Info("[statesyncissue] Reading from db", "key", borReceiptKey(number, hash), "data", data)
+		log.Info("[statesyncissue] Reading from db", "key", common.Bytes2Hex(borReceiptKey(number, hash)), "data", data)
 
 		return nil
 	})
