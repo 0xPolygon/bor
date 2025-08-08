@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"math/bits"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -412,7 +413,7 @@ func TestUnmarshalUint(t *testing.T) {
 		var v Uint
 
 		err := json.Unmarshal([]byte(test.input), &v)
-		if uintBits == 32 && test.wantErr32bit != nil {
+		if bits.UintSize == 32 && test.wantErr32bit != nil {
 			checkError(t, test.input, err, test.wantErr32bit)
 			continue
 		}
