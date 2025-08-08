@@ -1783,6 +1783,11 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 	if borTx {
 		// Fetch bor block receipt
 		receipt, err = api.b.GetBorBlockReceipt(ctx, blockHash)
+		if receipt == nil {
+			log.Info("[statesyncissue] Receipt not found in bor tx")
+		} else {
+			log.Info("[statesyncissue] Receipt found in bor tx")
+		}
 		if err != nil && err != ethereum.NotFound {
 			return nil, err
 		}

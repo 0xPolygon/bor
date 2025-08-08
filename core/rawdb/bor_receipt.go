@@ -37,13 +37,17 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 	err := db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
 		// Check if the data is in ancients
 		if isCanon(reader, number, hash) {
+			log.Info("[statesyncissue] Reading from freezing", "hash", hash, "number", number)
+
 			data, _ = reader.Ancient(freezerBorReceiptTable, number)
 
 			return nil
 		}
 
 		// If not, try reading from leveldb
+
 		data, _ = db.Get(borReceiptKey(number, hash))
+		log.Info("[statesyncissue] Reading from db", "key", borReceiptKey(number, hash), "data", data)
 
 		return nil
 	})
