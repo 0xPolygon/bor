@@ -22,3 +22,6 @@ polygon_pos_package:
   additional_services:
     - prometheus_grafana
     - test_runner
+
+  test_runner_params:
+    image: leovct/e2e:6f827b8
