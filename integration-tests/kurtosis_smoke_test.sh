@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Kurtosis smoke tests for Bor.
+# Kurtosis smoke tests for heimdallv2.
 
 set -e
 
@@ -46,8 +46,54 @@ test_checkpoint() {
 	return 1
 }
 
+test_milestone() {
+	echo "Starting milestones test…"
+
+	local http_url=$(get_http_url $HEIMDALL_SERVICE_NAME)
+
+	if [ -z "$http_url" ]; then
+		echo "❌ Failed to get HTTP URL for service: $HEIMDALL_SERVICE_NAME"
+		return 1
+	fi
+
+	echo "Using Heimdall HTTP URL: $http_url"
+
+	local initial_count=$(curl -s "${http_url}/milestones/count" | jq -r '.count' 2>/dev/null || echo "0")
+
+	if [ "$initial_count" = "null" ] || [ "$initial_count" = "" ]; then
+		initial_count=0
+	fi
+
+	echo "Initial milestone count: $initial_count"
+	local target_count=$((initial_count + 10))
+	echo "Target milestone count: $target_count"
+
+	local max_attempts=20
+	local attempt=0
+
+	while [ $attempt -lt $max_attempts ]; do
+		current_count=$(curl -s "${http_url}/milestones/count" | jq -r '.count' 2>/dev/null || echo "0")
+
+		if [ "$current_count" = "null" ] || [ "$current_count" = "" ]; then
+			current_count=0
+		fi
+
+		if [ "$current_count" -ge "$target_count" ]; then
+			echo "✅ Milestone target reached! Current count: $current_count (increased by $((current_count - initial_count)))"
+			return 0
+		else
+			echo "Current milestone count: $current_count (need $((target_count - current_count)) more, polling… attempt $((attempt + 1))/$max_attempts)"
+			sleep 5
+			((attempt++))
+		fi
+	done
+
+	echo "❌ Timeout: Only $((current_count - initial_count)) milestones created in 100 seconds (expected 10)"
+	return 1
+}
+
 main() {
-	echo "🚀 Starting Kurtosis Bor Smoke Test"
+	echo "🚀 Starting Kurtosis Heimdall Smoke Test"
 	echo "Enclave: $ENCLAVE_NAME"
 	echo "Service: $HEIMDALL_SERVICE_NAME"
 	echo ""
@@ -55,8 +101,18 @@ main() {
 	if test_checkpoint; then
 		echo ""
 		echo "🎉 Checkpoint test passed — Heimdall checkpoint looks good!"
-		echo "✅ All Kurtosis smoke tests completed successfully!"
-		exit 0
+		echo ""
+
+		if test_milestone; then
+			echo ""
+			echo "🎉 Milestone test passed — Heimdall milestones are being created!"
+			echo "✅ All Kurtosis smoke tests completed successfully!"
+			exit 0
+		else
+			echo ""
+			echo "❌ Milestone test failed"
+			exit 1
+		fi
 	else
 		echo ""
 		echo "❌ Checkpoint test failed"
