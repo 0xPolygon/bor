@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Kurtosis smoke tests for heimdallv2.
+# Kurtosis smoke tests for Bor.
 
 set -e
 
@@ -93,7 +93,7 @@ test_milestone() {
 }
 
 main() {
-	echo "🚀 Starting Kurtosis Heimdall Smoke Test"
+	echo "🚀 Starting Kurtosis Bor Smoke Test"
 	echo "Enclave: $ENCLAVE_NAME"
 	echo "Service: $HEIMDALL_SERVICE_NAME"
 	echo ""
