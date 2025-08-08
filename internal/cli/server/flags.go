@@ -1033,13 +1033,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
-		Usage:   "Minimum necessary distance between local header and peer to fast forward",
+		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",
 		Value:   &c.cliConfig.Witness.FastForwardThreshold,
 		Default: c.cliConfig.Witness.FastForwardThreshold,
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.prunethreshold",
-		Usage:   "Minimum necessary distance between local header and latest non pruned witness",
+		Usage:   "Maximum distance between local header and latest non pruned witness after a pruning routine",
 		Value:   &c.cliConfig.Witness.PruneThreshold,
 		Default: c.cliConfig.Witness.PruneThreshold,
 	})
