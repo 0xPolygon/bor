@@ -66,15 +66,19 @@ func ReadRawBorReceipt(db ethdb.Reader, hash common.Hash, number uint64) *types.
 	// Retrieve the flattened receipt slice
 	data := ReadBorReceiptRLP(db, hash, number)
 	if len(data) == 0 {
+		log.Info("[statesyncissue] No data retrieved")
+
 		return nil
 	}
 
 	// Convert the receipts from their storage form to their internal representation
 	var storageReceipt types.ReceiptForStorage
 	if err := rlp.DecodeBytes(data, &storageReceipt); err != nil {
+		log.Info("[statesyncissue] Failed decoding receipt")
 		log.Error("Invalid bor receipt RLP", "hash", hash, "err", err)
 		return nil
 	}
+	log.Info("[statesyncissue] Successfully decoded raw receipt")
 
 	return (*types.Receipt)(&storageReceipt)
 }
@@ -90,22 +94,30 @@ func ReadBorReceipt(db ethdb.Reader, hash common.Hash, number uint64, config *pa
 	// We're deriving many fields from the block body, retrieve beside the receipt
 	borReceipt := ReadRawBorReceipt(db, hash, number)
 	if borReceipt == nil {
+		log.Info("[statesyncissue] borReceipt == nil")
+
 		return nil
 	}
 
 	// We're deriving many fields from the block body, retrieve beside the receipt
 	receipts := ReadRawReceipts(db, hash, number)
 	if receipts == nil {
+		log.Info("[statesyncissue] receipts == nil")
+
 		return nil
 	}
 
 	body := ReadBody(db, hash, number)
 	if body == nil {
+		log.Info("[statesyncissue] Missing body but have bor receipt")
+
 		log.Error("Missing body but have bor receipt", "hash", hash, "number", number)
 		return nil
 	}
 
 	if err := types.DeriveFieldsForBorReceipt(borReceipt, hash, number, receipts); err != nil {
+		log.Info("[statesyncissue] Failed deriving bor")
+
 		log.Error("Failed to derive bor receipt fields", "hash", hash, "number", number, "err", err)
 		return nil
 	}
