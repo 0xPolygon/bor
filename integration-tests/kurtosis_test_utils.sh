@@ -273,24 +273,18 @@ start_network_latency() {
     fi
 }
 
-# Function to stop network latency
-stop_network_latency() {
+# Function to wait for network latency to complete
+wait_for_pending_network_latency() {
     if [ -n "$NETWORK_LATENCY_PID" ]; then
-        echo "Stopping network latency process (PID: $NETWORK_LATENCY_PID)..."
+        echo "Waiting for network latency process to complete (PID: $NETWORK_LATENCY_PID)..."
         
-        # Send SIGTERM to the process group to stop all child processes
-        kill -TERM -$NETWORK_LATENCY_PID 2>/dev/null || true
-        
-        # Wait a bit for graceful shutdown
-        sleep 2
-        
-        # Force kill if still running
-        if kill -0 $NETWORK_LATENCY_PID 2>/dev/null; then
-            echo "Force killing network latency process..."
-            kill -KILL -$NETWORK_LATENCY_PID 2>/dev/null || true
+        # Wait for the process to complete naturally
+        if wait $NETWORK_LATENCY_PID 2>/dev/null; then
+            echo "✅ Network latency process completed successfully"
+        else
+            echo "✅ Network latency process completed"
         fi
         
-        echo "✅ Network latency stopped"
         NETWORK_LATENCY_PID=""
     fi
 }

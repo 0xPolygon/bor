@@ -231,7 +231,7 @@ test_network_latency_resilience() {
 	# Set up cleanup trap to ensure network latency is stopped
 	cleanup_network_latency() {
 		echo "Cleaning up network latency..."
-		stop_network_latency
+		wait_for_pending_network_latency
 	}
 	trap cleanup_network_latency EXIT
 
@@ -252,8 +252,8 @@ test_network_latency_resilience() {
 		return 1
 	fi
 
-	# Stop network latency
-	stop_network_latency
+	# Wait for network latency to complete
+	wait_for_pending_network_latency
 
 	echo "✅ Network latency test passed - milestone settlement latency remained acceptable despite network delays"
 }
@@ -275,17 +275,8 @@ test_extreme_network_latency_recovery() {
 		return 1
 	fi
 
-	# Wait for the extreme latency duration to complete automatically
-	echo "Waiting for extreme latency duration (${EXTREME_LATENCY_DURATION}) to complete..."
-	if [[ "$EXTREME_LATENCY_DURATION" =~ ^([0-9]+)s$ ]]; then
-		duration_seconds=${BASH_REMATCH[1]}
-		sleep $((duration_seconds + 10))  # Add 10 seconds buffer
-	else
-		sleep 40  # Default fallback
-	fi
-
-	# Stop network latency to ensure it's cleaned up
-	stop_network_latency
+	# Wait for network latency to complete
+	wait_for_pending_network_latency
 
 	# Test that nodes can recover and generate new blocks after extreme latency is removed
 	echo "Testing recovery after extreme network latency removal..."
@@ -334,8 +325,7 @@ test_block_producer_rotation() {
 	# Check block author diversity in last 100 blocks
 	echo ""
 	echo "Checking block author diversity..."
-	first_rpc_service="${STATELESS_RPC_SERVICES[0]}"
-	if ! check_block_author_diversity "$first_rpc_service" 100 2; then
+	if ! check_block_author_diversity "$STATELESS_NODE_7" 100 2; then
 		echo "❌ Block producer rotation test failed - insufficient author diversity"
 		return 1
 	fi
