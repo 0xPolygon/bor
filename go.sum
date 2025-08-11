@@ -76,10 +76,8 @@ github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1 h1:XV7f44uAJ1p1w9j15uzm2
 github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1/go.mod h1:JEUSu9moNZQ4kU3ir1DKD5eU4bllmAexrGWjmb9k8qU=
 github.com/0xPolygon/crand v1.0.3 h1:BYYflmgLhmGPEgqtopG4muq6wV6DOkwD8uPymNz5WeQ=
 github.com/0xPolygon/crand v1.0.3/go.mod h1:km4366oC7EVFl1xNUCwzxUXNM10swZqd8LZ0E5SgbAE=
-github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250806094653-f76a382c4af2 h1:nNNhFytlNtuGmjKexvT4sILtlKRMZunVzOUly9qwTms=
-github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250806094653-f76a382c4af2/go.mod h1:g9xSiFSn5WT24reRAOyfb4qwktKyzFdbjeL/zlOHC0I=
-github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250806140653-d58ce649f932 h1:EdJvr+Aq/AjFX0orVOVpgayFQH2h/Veh+6RuMwd37uI=
-github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250806140653-d58ce649f932/go.mod h1:bjPFHwnFdLk64wWO8ioPjzcM6xqwFB8l7kmg8TB2ZRw=
+github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250808133002-2a5044148f79 h1:up1yqQ0gj4TmX46tFHMDP5QFAmO+jkJ2YvIlNTFNzio=
+github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250808133002-2a5044148f79/go.mod h1:/IYUm6D63SNsREv2U/TwEYIiKHnB12+1zBc1tyZQXY0=
 github.com/0xPolygon/polyproto v0.0.7 h1:Ody+kFyCRK4QXRPXbsP5pdxKrDgwAAXtFB8NPgaIxRs=
 github.com/0xPolygon/polyproto v0.0.7/go.mod h1:2Iw93k2LismvckKKeXQITuhJH9vLbqOa212AMskH6no=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 h1:/vQbFIOMbk2FiG/kXiLl8BRyzTWDw7gX/Hz7Dd5eDMs=
