@@ -25,7 +25,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
@@ -57,7 +57,7 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
@@ -85,7 +85,7 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
@@ -136,7 +136,7 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
@@ -175,7 +175,7 @@ jobs:
     needs: [unit-tests, integration-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Download artifacts
         uses: actions/download-artifact@v4.1.8
       - name: Upload coverage to Codecov
@@ -188,7 +188,7 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: bor
       - name: Checkout submodules
@@ -202,7 +202,7 @@ jobs:
           go-version: 1.24.3
 
       - name: Checkout matic-cli
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: maticnetwork/matic-cli
           ref: heimdall-v2
