@@ -12,7 +12,7 @@ jobs:
     name: Lint
     runs-on: self-hosted
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     # Cache build tools to avoid downloading them each time
     - uses: actions/cache@v4
@@ -35,7 +35,7 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
