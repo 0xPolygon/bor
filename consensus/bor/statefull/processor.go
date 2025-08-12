@@ -2,7 +2,6 @@ package statefull
 
 import (
 	"bytes"
-	"context"
 	"math"
 	"math/big"
 
@@ -17,8 +16,10 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// System Address
 var systemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
 
+// ChainContext implements core.ChainContext to allow passing it as a chain context.
 type ChainContext struct {
 	Chain consensus.ChainHeaderReader
 	Bor   consensus.Engine
@@ -36,7 +37,7 @@ func (c ChainContext) Config() *params.ChainConfig {
 	return c.Chain.Config()
 }
 
-// callmsg implements core.Message to allow passing it as a transaction simulator.
+// Callmsg implements core.Message to allow passing it as a transaction simulator.
 type Callmsg struct {
 	ethereum.CallMsg
 }
@@ -50,7 +51,7 @@ func (m Callmsg) Gas() uint64          { return m.CallMsg.Gas }
 func (m Callmsg) Value() *big.Int      { return m.CallMsg.Value }
 func (m Callmsg) Data() []byte         { return m.CallMsg.Data }
 
-// get system message
+// Get System Message
 func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	return Callmsg{
 		ethereum.CallMsg{
@@ -64,26 +65,24 @@ func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	}
 }
 
-// apply message
+// Apply Message
 func ApplyMessage(
-	_ context.Context,
 	msg Callmsg,
 	state vm.StateDB,
 	header *types.Header,
 	chainConfig *params.ChainConfig,
 	chainContext core.ChainContext,
-) (uint64, error) {
+) (bool, uint64, error) {
 	initialGas := msg.Gas()
 
-	// Create a new context to be used in the EVM environment
+	// Creates a new context to be used in the EVM environment.
 	blockContext := core.NewEVMBlockContext(header, chainContext, &header.Coinbase)
 
-	// Create a new environment which holds all relevant information
-	// about the transaction and calling mechanisms.
+	// Creates a new environment which holds all relevant information about the transaction and calling mechanisms.
 	vmenv := vm.NewEVM(blockContext, state, chainConfig, vm.Config{})
 
 	// nolint : contextcheck
-	// Apply the transaction to the current state (included in the env)
+	// Applies the transaction to the current state (included in the env).
 	ret, gasLeft, err := vmenv.Call(
 		msg.From(),
 		*msg.To(),
@@ -93,35 +92,39 @@ func ApplyMessage(
 		nil,
 	)
 
-	success := big.NewInt(5).SetBytes(ret)
-
+	applied := true
+	gasUsed := initialGas - gasLeft
+	success := big.NewInt(0).SetBytes(ret)
 	validatorContract := common.HexToAddress(chainConfig.Bor.ValidatorContract)
 
-	// if success == 0 and msg.To() != validatorContractAddress, log Error
-	// if msg.To() == validatorContractAddress, its committing a span and we don't get any return value
-	if success.Cmp(big.NewInt(0)) == 0 && !bytes.Equal(msg.To().Bytes(), validatorContract.Bytes()) {
-		log.Error("message execution failed on contract", "msgData", msg.Data)
+	// If success == 0 and msg.To() != validatorContractAddress, return and log error.
+	// If msg.To() == validatorContractAddress, its committing a span and we don't get any return value.
+	if success.Cmp(big.NewInt(0)) == 0 && !bytes.Equal((*msg.To()).Bytes(), validatorContract.Bytes()) {
+		applied = false
+		log.Error("Message execution failed on contract", "to", *msg.To(), "msgData", msg.Data(), "gasUsed", gasUsed)
 	}
 
 	// If there's error committing span, log it here. It won't be reported before because the return value is empty.
-	if bytes.Equal(msg.To().Bytes(), validatorContract.Bytes()) && err != nil {
-		log.Error("message execution failed on contract", "err", err)
+	if bytes.Equal((*msg.To()).Bytes(), validatorContract.Bytes()) && err != nil {
+		applied = false
+		log.Error("Message execution failed on contract", "to", *msg.To(), "err", err, "gasUsed", gasUsed)
 	}
 
-	// Update the state with pending changes
+	// Update the state with pending changes.
 	if err != nil {
+		applied = false
 		state.Finalise(true)
+		log.Error("Error applying message", "to", *msg.To(), "err", err, "gasUsed", gasUsed)
 	}
 
-	gasUsed := initialGas - gasLeft
-
-	return gasUsed, nil
+	return applied, gasUsed, nil
 }
 
-func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) {
+// Apply Bor Message
+func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (bool, *core.ExecutionResult, error) {
 	initialGas := msg.Gas()
 
-	// Apply the transaction to the current state (included in the env)
+	// Applies the transaction to the current state (included in the env).
 	ret, gasLeft, err := vmenv.Call(
 		msg.From(),
 		*msg.To(),
@@ -130,16 +133,16 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		uint256.NewInt(msg.Value().Uint64()),
 		nil,
 	)
-	// Update the state with pending changes
-	if err != nil {
-		vmenv.StateDB.Finalise(true)
-	}
 
+	applied := true
 	gasUsed := initialGas - gasLeft
 
-	return &core.ExecutionResult{
-		UsedGas:    gasUsed,
-		Err:        err,
-		ReturnData: ret,
-	}, nil
+	// Update the state with pending changes.
+	if err != nil {
+		applied = false
+		vmenv.StateDB.Finalise(true)
+		log.Error("Error applying bor message", "to", *msg.To(), "err", err, "gasUsed", gasUsed)
+	}
+
+	return applied, &core.ExecutionResult{UsedGas: gasUsed, Err: err, ReturnData: ret}, nil
 }

@@ -291,19 +291,19 @@ func (c *ChainSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHas
 const method = "commitSpan"
 
 func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext) error {
-	// get validators bytes
+	// Get validator bytes.
 	validatorBytes, err := rlp.EncodeToBytes(validators)
 	if err != nil {
 		return err
 	}
 
-	// get producers bytes
+	// Get producer bytes.
 	producerBytes, err := rlp.EncodeToBytes(producers)
 	if err != nil {
 		return err
 	}
 
-	log.Info("✅ Committing new span",
+	log.Info("Committing new span",
 		"id", minimalSpan.Id,
 		"startBlock", minimalSpan.StartBlock,
 		"endBlock", minimalSpan.EndBlock,
@@ -320,15 +320,20 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span
 	)
 	if err != nil {
 		log.Error("Unable to pack tx for commitSpan", "error", err)
-
 		return err
 	}
 
-	// get system message
+	// Get system message.
 	msg := statefull.GetSystemMessage(c.validatorContractAddress, data)
 
-	// apply message
-	_, err = statefull.ApplyMessage(ctx, msg, state, header, c.chainConfig, chainContext)
+	// Apply message.
+	applied, gasUsed, err := statefull.ApplyMessage(msg, state, header, c.chainConfig, chainContext)
+
+	if applied {
+		log.Info("Committed new span", "gasUsed", gasUsed)
+	} else {
+		log.Error("Failed to commit new span")
+	}
 
 	return err
 }

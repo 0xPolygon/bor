@@ -1415,7 +1415,7 @@ func (c *Bor) CommitStates(
 
 	processTime := time.Since(processStart)
 
-	log.Info("StateSyncData", "gas", totalGas, "number", number, "lastStateID", lastStateID, "total records", len(eventRecords), "fetch time", int(fetchTime.Milliseconds()), "process time", int(processTime.Milliseconds()))
+	log.Info("StateSyncData", "gas", totalGas, "number", number, "lastStateID", lastStateID, "total records", len(eventRecords), "fetch_time_ms", int(fetchTime.Milliseconds()), "process_time_ms", int(processTime.Milliseconds()))
 
 	return stateSyncs, nil
 }
