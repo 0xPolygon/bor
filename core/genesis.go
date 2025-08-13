@@ -492,7 +492,7 @@ func isBorHFConfigEmpty(bor *params.BorConfig) bool {
 
 	// Check if any block numbers are set
 	if bor.JaipurBlock != nil || bor.DelhiBlock != nil || bor.IndoreBlock != nil ||
-		bor.AhmedabadBlock != nil || bor.BhilaiBlock != nil || bor.VeBlopBlock != nil {
+		bor.AhmedabadBlock != nil || bor.BhilaiBlock != nil {
 		return false
 	}
 
