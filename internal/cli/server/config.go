@@ -726,7 +726,7 @@ func DefaultConfig() *Config {
 			GasCeil:             miner.DefaultConfig.GasCeil,
 			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:           "",
-			Recommit:            1 * time.Second,
+			Recommit:            125 * time.Second,
 			CommitInterruptFlag: true,
 		},
 		Gpo: &GpoConfig{

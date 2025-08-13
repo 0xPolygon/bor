@@ -393,6 +393,135 @@ test_polycli_load_test() {
 	fi
 }
 
+# Test 8: Combined load test with block producer rotation
+test_polycli_load_with_rotation() {
+	echo ""
+	echo "=== Test 8: Combined load test with block producer rotation ==="
+	echo "This test ensures all transactions are mined during producer rotations"
+
+	# Check if polycli is available
+	if ! command -v polycli &>/dev/null; then
+		echo "⚠️  polycli not found, skipping combined load test"
+		return 0
+	fi
+
+	polycli_bin=$(which polycli)
+	first_rpc_service="${STATELESS_RPC_SERVICES[0]}"
+	first_rpc_url=$(get_rpc_url "$first_rpc_service")
+	echo "Using RPC service: $first_rpc_service -> $first_rpc_url"
+
+	# Record initial state
+	test_account="0x97538585a02A3f1B1297EB9979cE1b34ff953f1E"
+	num_txs=6000  # More transactions for longer test
+	initial_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
+
+	echo "Initial account nonce: $initial_nonce"
+	echo "Target transactions: $num_txs"
+
+	# Start load test in background
+	echo ""
+	echo "Starting polycli load test in background with $num_txs transactions..."
+	$polycli_bin loadtest \
+		--rpc-url "$first_rpc_url" \
+		--private-key "0x2a4ae8c4c250917781d38d95dafbb0abe87ae2c9aea02ed7c7524685358e49c2" \
+		--verbosity 500 \
+		--requests $num_txs \
+		--rate-limit 100 \
+		--mode t \
+		--gas-price 35000000000 > /tmp/polycli_rotation_test.log 2>&1 &
+
+	LOAD_PID=$!
+	echo "Load test started with PID: $LOAD_PID"
+
+	# Give load test time to start
+	sleep 5
+
+	# Perform rotations while load test is running
+	for rotation_round in {1..2}; do
+		echo ""
+		echo "--- Rotation round $rotation_round/2 ---"
+
+		# Check transaction progress before rotation
+		current_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
+		txs_mined=$((current_nonce - initial_nonce))
+		echo "Before rotation $rotation_round: $txs_mined transactions mined"
+
+		# Perform rotation
+		echo "Executing block producer rotation..."
+		if ! "$SCRIPT_DIR/rotate_current_block_producer.sh"; then
+			echo "⚠️  Rotation script failed, but continuing test..."
+		fi
+
+		# Wait after rotation
+		echo "Waiting 10 seconds after rotation..."
+		sleep 10
+
+		# Check transaction progress after rotation
+		post_rotation_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
+		txs_during_rotation=$((post_rotation_nonce - current_nonce))
+		total_txs_so_far=$((post_rotation_nonce - initial_nonce))
+
+		echo "After rotation $rotation_round:"
+		echo "  Transactions mined during rotation: $txs_during_rotation"
+		echo "  Total transactions mined so far: $total_txs_so_far / $num_txs"
+	done
+
+	# Wait for load test to complete or timeout
+	echo ""
+	echo "Waiting for load test to complete (max 120 seconds)..."
+	WAIT_COUNT=0
+	while kill -0 $LOAD_PID 2>/dev/null && [ $WAIT_COUNT -lt 120 ]; do
+		sleep 5
+		WAIT_COUNT=$((WAIT_COUNT + 5))
+		current_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
+		txs_so_far=$((current_nonce - initial_nonce))
+		echo "  Progress: $txs_so_far/$num_txs transactions mined ($WAIT_COUNT seconds elapsed)"
+
+		# If we've mined enough transactions, we can stop waiting
+		if [ $txs_so_far -ge $num_txs ]; then
+			echo "  Target transaction count reached, stopping load test..."
+			kill $LOAD_PID 2>/dev/null || true
+			break
+		fi
+	done
+
+	# Kill load test if still running
+	if kill -0 $LOAD_PID 2>/dev/null; then
+		echo "Load test still running after timeout, terminating..."
+		kill $LOAD_PID 2>/dev/null || true
+	fi
+
+	# Wait a bit for final transactions to settle
+	echo "Waiting 10 seconds for final transactions to settle..."
+	sleep 10
+
+	# Final verification
+	echo ""
+	echo "=== Final Verification ==="
+
+	final_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
+	total_txs_mined=$((final_nonce - initial_nonce))
+
+	echo "Test results:"
+	echo "  Initial nonce: $initial_nonce"
+	echo "  Final nonce: $final_nonce"
+	echo "  Total transactions mined: $total_txs_mined / $num_txs"
+
+	# Check if ALL transactions were mined
+	if [ $total_txs_mined -ge $num_txs ]; then
+		echo ""
+		echo "✅ Combined load test with producer rotation PASSED"
+		echo "   All $total_txs_mined transactions were successfully mined during block producer rotations"
+		return 0
+	else
+		echo ""
+		echo "❌ Combined load test with producer rotation FAILED"
+		echo "   Only $total_txs_mined out of $num_txs transactions were mined"
+		echo "   Check /tmp/polycli_rotation_test.log for details"
+		return 1
+	fi
+}
+
 # Run all tests
 test_block_hash_consensus || exit 1
 test_post_veblop_hf_behavior || exit 1
@@ -401,6 +530,7 @@ test_network_latency_resilience || exit 1
 test_extreme_network_latency_recovery || exit 1
 test_block_producer_rotation || exit 1
 test_polycli_load_test || exit 1
+test_polycli_load_with_rotation || exit 1
 
 echo ""
 echo "🎉 All stateless sync tests passed successfully!"
