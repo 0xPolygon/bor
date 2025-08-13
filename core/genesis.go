@@ -484,6 +484,21 @@ func (g *Genesis) ToBlock() *types.Block {
 	return g.toBlockWithRoot(root)
 }
 
+// isBorHFConfigEmpty checks if a Bor HF Config is effectively empty (has no meaningful HF configuration)
+func isBorHFConfigEmpty(bor *params.BorConfig) bool {
+	if bor == nil {
+		return true
+	}
+
+	// Check if any block numbers are set
+	if bor.JaipurBlock != nil || bor.DelhiBlock != nil || bor.IndoreBlock != nil ||
+		bor.AhmedabadBlock != nil || bor.BhilaiBlock != nil || bor.VeBlopBlock != nil {
+		return false
+	}
+
+	return true
+}
+
 // toBlockWithRoot constructs the genesis block with the given genesis state root.
 func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 	head := &types.Header{
@@ -525,7 +540,7 @@ func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 
 		// Polygon/bor: EIP-4895 (withdrawals) not supported. Only set empty
 		// withdrawal hash if we're not using bor consensus (e.g. dev mode).
-		if conf.IsShanghai(num) && conf.Bor == nil {
+		if conf.IsShanghai(num) && (conf.Bor == nil || isBorHFConfigEmpty(conf.Bor)) {
 			head.WithdrawalsHash = &types.EmptyWithdrawalsHash
 			withdrawals = make([]*types.Withdrawal, 0)
 		}
@@ -548,7 +563,7 @@ func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 
 		// Polygon/bor: EIP-7685 (requests) not supported. Only set empty
 		// withdrawal hash if we're not using bor consensus (e.g. dev mode).
-		if conf.IsPrague(num) && conf.Bor == nil {
+		if conf.IsPrague(num) && (conf.Bor == nil || isBorHFConfigEmpty(conf.Bor)) {
 			head.RequestsHash = &types.EmptyRequestsHash
 		}
 	}
