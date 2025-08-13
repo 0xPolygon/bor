@@ -36,21 +36,22 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 
 	// First, try to fetch from KV db
 	data, _ = db.Get(borReceiptKey(number, hash))
+	if data != nil {
+		return data
+	}
 
-	if data == nil {
-		err := db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
-			// Check if the data is in ancients
-			if isCanon(reader, number, hash) {
-				data, _ = reader.Ancient(freezerBorReceiptTable, number)
-
-				return nil
-			}
+	err := db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
+		// Check if the data is in ancients
+		if isCanon(reader, number, hash) {
+			data, _ = reader.Ancient(freezerBorReceiptTable, number)
 
 			return nil
-		})
-		if err != nil {
-			log.Warn("during ReadBorReceiptRLP", "number", number, "hash", hash, "err", err)
 		}
+
+		return nil
+	})
+	if err != nil {
+		log.Warn("during ReadBorReceiptRLP", "number", number, "hash", hash, "err", err)
 	}
 
 	return data
