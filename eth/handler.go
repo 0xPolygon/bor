@@ -181,14 +181,17 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// * the last snap sync is not finished while user specifies a full sync this
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
-		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-		} else if !h.chain.HasState(fullBlock.Root) {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
-		}
+		// Disable switching to snap sync as it's disabled momentarily.
+		/*
+			fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
+			if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
+			} else if !h.chain.HasState(fullBlock.Root) {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+			}
+		*/
 	} else {
 		head := h.chain.CurrentBlock()
 		if head.Number.Uint64() > 0 && h.chain.HasState(head.Root) {
