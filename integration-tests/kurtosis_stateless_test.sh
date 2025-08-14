@@ -412,7 +412,7 @@ test_polycli_load_with_rotation() {
 
 	# Record initial state
 	test_account="0x97538585a02A3f1B1297EB9979cE1b34ff953f1E"
-	num_txs=6000  # More transactions for longer test
+	num_txs=6000 # More transactions for longer test
 	initial_nonce=$(cast nonce "$test_account" --rpc-url "$first_rpc_url")
 
 	echo "Initial account nonce: $initial_nonce"
@@ -428,7 +428,7 @@ test_polycli_load_with_rotation() {
 		--requests $num_txs \
 		--rate-limit 100 \
 		--mode t \
-		--gas-price 35000000000 > /tmp/polycli_rotation_test.log 2>&1 &
+		--gas-price 35000000000 >/tmp/polycli_rotation_test.log 2>&1 &
 
 	LOAD_PID=$!
 	echo "Load test started with PID: $LOAD_PID"

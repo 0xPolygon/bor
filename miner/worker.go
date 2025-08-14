@@ -1541,7 +1541,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
-	// If the block is a veblop block, we will never create an empty block
+	// If the block is a veblop block, we will never try to create a commit for an empty block.
 	isVeblop := w.chainConfig.Bor.IsVeBlop(work.header.Number)
 	if !noempty && !w.noempty.Load() && !isVeblop {
 		_ = w.commit(work.copy(), nil, false, start)
