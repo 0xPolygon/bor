@@ -72,8 +72,8 @@ github.com/0xPolygon/cometbft v0.2.1-polygon h1:nUQdqsEJ+/nhuTmOpPRtparnS5CX8AAG
 github.com/0xPolygon/cometbft v0.2.1-polygon/go.mod h1:65PwuxvivN0GbqxcMLQ2ze5hCXvZQrR8/ds/jOBg4f8=
 github.com/0xPolygon/cosmos-sdk v0.2.4-polygon h1:1pJOhOxRDwczrXJSsm4lnPdSA+zeSMqRiTMu4srhCd0=
 github.com/0xPolygon/cosmos-sdk v0.2.4-polygon/go.mod h1:MUPRoLUpv+cU34cpS5o5JTlioaqwukoiCraTOJkJHbM=
-github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1 h1:XV7f44uAJ1p1w9j15uzm2S8VOSusHFJ1UWvkUj0EK7g=
-github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1/go.mod h1:JEUSu9moNZQ4kU3ir1DKD5eU4bllmAexrGWjmb9k8qU=
+github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 h1:+6AxZcMTWHaRHV0HILf/rADWexzB4FJckdO/DnUlk+s=
+github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6/go.mod h1:4p0P6o0ro+FizakJUYS9SeM94RNbv0thLmkHRw5o5as=
 github.com/0xPolygon/crand v1.0.3 h1:BYYflmgLhmGPEgqtopG4muq6wV6DOkwD8uPymNz5WeQ=
 github.com/0xPolygon/crand v1.0.3/go.mod h1:km4366oC7EVFl1xNUCwzxUXNM10swZqd8LZ0E5SgbAE=
 github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250811121528-fe9529a9fa7f h1:hxqyhlmeGjB4tge/0qe9MR7+bCZs1Ei4nZg382H4OeA=
