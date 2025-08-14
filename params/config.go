@@ -506,7 +506,10 @@ var (
 		VerkleBlock:             nil,
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
-		Bor:                     &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	AllDevChainProtocolChanges = &ChainConfig{
@@ -532,7 +535,10 @@ var (
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
 		},
-		Bor: &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	AllDevChainProtocolChanges1 = &ChainConfig{
@@ -555,7 +561,10 @@ var (
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
 		},
-		Bor: &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
@@ -586,7 +595,10 @@ var (
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  nil,
 		Clique:                  &CliqueConfig{Period: 0, Epoch: 30000},
-		Bor:                     &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// TestChainConfig contains every protocol change (EIPs) introduced
@@ -624,7 +636,9 @@ var (
 		Bor: &BorConfig{
 			Sprint: map[string]uint64{
 				"0": 4},
-			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// MergedTestChainConfig contains every protocol change (EIPs) introduced
@@ -663,6 +677,7 @@ var (
 			Sprint: map[string]uint64{
 				"0": 4},
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
 		},
 	}
 
