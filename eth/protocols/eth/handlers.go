@@ -361,6 +361,23 @@ func serviceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 		receipts = append(receipts, results)
 		bytes += len(results)
+
+		// Fetch state-sync transaction receipt
+		borReceipt := chain.GetBorReceiptRLPByHash(hash)
+		if borReceipt == nil {
+			// Either header is not available, or it's a non sprint start block, or
+			// no state-sync happened at this block. As there's no way to confirm,
+			// there's no point in appending a nil receipt to the final response.
+			continue
+		}
+		var err error
+		borReceipt, err = stateSyncReceiptToNetwork69(borReceipt)
+		if err != nil {
+			log.Error("Error in state-sync receipt conversion", "hash", hash, "err", err)
+			continue
+		}
+		receipts = append(receipts, borReceipt)
+		bytes += len(borReceipt)
 	}
 
 	return receipts

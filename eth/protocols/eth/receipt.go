@@ -433,6 +433,30 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 	return out.Bytes(), nil
 }
 
+// stateSyncReceiptToNetwork69 takes a rlp-encoded receipt of a state-sync
+// transaction and applies type-encoding to match the eth/69 format.
+func stateSyncReceiptToNetwork69(blockReceipt rlp.RawValue) ([]byte, error) {
+	var (
+		out bytes.Buffer
+		enc = rlp.NewEncoderBuffer(&out)
+	)
+
+	// Extract the receipt content
+	content, _, err := rlp.SplitList(blockReceipt)
+	if err != nil {
+		return nil, fmt.Errorf("invalid state-sync RLP received: %v", err)
+	}
+
+	// Create an eth/69 format receipt [TxType, PostStateOrStatus, GasUsed, Logs]
+	receiptList := enc.List()
+	enc.WriteUint64(0) // TxType is always 0 for state-sync transactions
+	enc.Write(content) // Write receipt data
+	enc.ListEnd(receiptList)
+
+	enc.Flush()
+	return out.Bytes(), nil
+}
+
 // txTypesInBody parses the transactions list of an encoded block body, returning just the types.
 func txTypesInBody(body rlp.RawValue) (iter.Seq[byte], error) {
 	bodyFields, _, err := rlp.SplitList(body)
