@@ -502,6 +502,15 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		hasher := trie.NewStackTrie(nil)
 		hashes := make([]common.Hash, len(res.List))
 		for i := range res.List {
+			r := res.List[i].EncodeForStorage()
+			var receipt types.Receipt
+			err := rlp.DecodeBytes(r, &receipt)
+			if err == nil {
+				// Exclude state-sync transactions from receipt root calculations
+				if receipt.GasUsed == 0 {
+					continue
+				}
+			}
 			hashes[i] = types.DeriveSha(res.List[i], hasher)
 		}
 
