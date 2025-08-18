@@ -5,7 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io/ioutil" // nolint: staticcheck
+	"io/ioutil"
 	_log "log"
 	"math/big"
 	"os"
