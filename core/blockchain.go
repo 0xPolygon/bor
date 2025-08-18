@@ -1956,7 +1956,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	if statedb.Witness() != nil {
 		var witBuf bytes.Buffer
-		if err := statedb.Witness().EncodeCompressed(&witBuf); err != nil {
+		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
