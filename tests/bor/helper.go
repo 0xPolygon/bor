@@ -397,10 +397,7 @@ func loadSpanFromFile(t *testing.T) *borTypes.Span {
 	}
 
 	res := &borTypes.Span{}
-<<<<<<< HEAD
 
-=======
->>>>>>> origin/develop
 	if err := json.Unmarshal(spanData, res); err != nil {
 		t.Fatalf("%s", err)
 	}
