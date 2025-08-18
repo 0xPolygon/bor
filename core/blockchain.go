@@ -1724,14 +1724,38 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 				log.Info("Wrote genesis to ancients")
 			}
 		}
-		// BOR: Retrieve all the bor receipts and also maintain the array of headers
-		// for bor specific reorg check.
-		borReceipts := []rlp.RawValue{}
+
+		// Separate out bor receipts (i.e. receipts of state-sync transactions)
+		var borReceipts = make([]rlp.RawValue, len(receiptChain))
+		for i, receipts := range receiptChain {
+			// Decode the receipts for each block
+			var decoded []types.ReceiptForStorage
+			if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
+				log.Warn("Failed to decode state-sync receipt", "number", blockChain[i].NumberU64(), "err", err)
+				continue
+			}
+			// Find if there's a state-sync transaction receipt present
+			if len(decoded) > 0 && decoded[len(decoded)-1].GasUsed == 0 {
+				// Encode the state-sync transaction separately
+				encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
+				if err != nil {
+					log.Warn("Failed to encode state-sync receipt", "number", blockChain[i].NumberU64(), "err", err)
+					continue
+				}
+				borReceipts[i] = encodedStateSyncReceipt
+
+				// Encode the remaining receipts
+				encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
+				if err != nil {
+					log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", blockChain[i].NumberU64(), "err", err)
+					continue
+				}
+				receiptChain[i] = encodedReceipts
+			}
+		}
 
 		var headers []*types.Header
-
 		for _, block := range blockChain {
-			borReceipts = append(borReceipts, bc.GetBorReceiptRLPByHash(block.Hash()))
 			headers = append(headers, block.Header())
 		}
 
