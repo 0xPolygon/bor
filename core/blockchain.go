@@ -1918,14 +1918,16 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
 
 			var borReceipt types.ReceiptForStorage
-			if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
-				// Derive rest of fields for bor receipts before writing
-				txIndex, logIndex := getReceiptAndLogCount(receiptChain[i])
-				types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
-				borReceipt.Status = types.ReceiptStatusSuccessful
+			if len(borReceiptRaw) > 0 {
+				if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
+					// Derive rest of fields for bor receipts before writing
+					txIndex, logIndex := getReceiptAndLogCount(receiptChain[i])
+					types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
+					borReceipt.Status = types.ReceiptStatusSuccessful
 
-				rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
-				rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
+					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+				}
 			}
 
 			// Write everything belongs to the blocks into the database. So that
