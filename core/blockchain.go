@@ -68,7 +68,7 @@ var (
 	headSafeBlockGauge      = metrics.NewRegisteredGauge("chain/head/safe", nil)
 
 	chainInfoGauge   = metrics.NewRegisteredGaugeInfo("chain/info", nil)
-	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil)
+	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil) //nolint:unused
 
 	accountReadTimer   = metrics.NewRegisteredResettingTimer("chain/account/reads", nil)
 	accountHashTimer   = metrics.NewRegisteredResettingTimer("chain/account/hashes", nil)
@@ -90,8 +90,8 @@ var (
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 
-	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil)
-	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil)
+	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:unused
+	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:unused
 
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
 	triedbCommitTimer        = metrics.NewRegisteredResettingTimer("chain/triedb/commits", nil)
@@ -104,7 +104,7 @@ var (
 
 	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
 	blockValidationTimer               = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:golint,unused
+	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
 	blockExecutionTimer                = metrics.NewRegisteredTimer("chain/execution", nil)
 	blockWriteTimer                    = metrics.NewRegisteredTimer("chain/write", nil)
 	blockExecutionParallelCounter      = metrics.NewRegisteredCounter("chain/execution/parallel", nil)
@@ -338,9 +338,8 @@ type BlockChain struct {
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
 	wg            sync.WaitGroup
-	quit          chan struct{} // shutdown signal, closed in Stop.
-	stopping      atomic.Bool   // false if chain is running, true when stopped
-	procInterrupt atomic.Bool   // interrupt signaler for block processing
+	stopping      atomic.Bool // false if chain is running, true when stopped
+	procInterrupt atomic.Bool // interrupt signaler for block processing
 
 	engine                       consensus.Engine
 	validator                    Validator // Block and state validator interface
@@ -923,7 +922,7 @@ func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 		bc.historyPrunePoint.Store(predefinedPoint)
 		return nil
 
-	// nolint:gosimple
+	// nolint:staticcheck
 	case history.KeepPostMerge:
 		if freezerTail == 0 && latest != 0 {
 			// This is the case where a user is trying to run with --history.chain
@@ -2629,7 +2628,6 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		// Report the import stats before returning the various results
 		stats.processed++
 		stats.usedGas += usedGas
-		witness = witness
 
 		var snapDiffItems, snapBufItems common.StorageSize
 		if bc.snaps != nil {
