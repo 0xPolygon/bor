@@ -487,6 +487,14 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	if err := msg.Decode(res); err != nil {
 		return err
 	}
+
+	// Construct a copy of receipt packet to handle state sync transaction receipts
+	// during receipt root calculation.
+	resWithoutStateSync := new(ReceiptsPacket[L])
+	if err := msg.Decode(resWithoutStateSync); err != nil {
+		return err
+	}
+
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
 	buffers := new(receiptListBuffers)
@@ -496,18 +504,13 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 
 	metadata := func() interface{} {
 		hasher := trie.NewStackTrie(nil)
-		hashes := make([]common.Hash, len(res.List))
-		for i := range res.List {
-			r := res.List[i].EncodeForStorage()
-			var receipt types.Receipt
-			err := rlp.DecodeBytes(r, &receipt)
-			if err == nil {
-				// Exclude state-sync transactions from receipt root calculations
-				if receipt.GasUsed == 0 {
-					continue
-				}
-			}
-			hashes[i] = types.DeriveSha(res.List[i], hasher)
+		hashes := make([]common.Hash, len(resWithoutStateSync.List))
+		for i := range resWithoutStateSync.List {
+			// The receipt root of a block doesn't include receipts from state-sync
+			// transactions specific to polygon. Exclude them for calculating the
+			// hashes of all receipts.
+			resWithoutStateSync.List[i].ExcludeStateSync()
+			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
 		}
 
 		return hashes

@@ -337,6 +337,15 @@ func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
+// ExcludeStateSync removes the state sync transaction from the list. We use
+// the property of zero gas used to identify a state-sync transaction in the
+// list.
+func (rl *ReceiptList68) ExcludeStateSync() {
+	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
+		rl.items = rl.items[:len(rl.items)-1]
+	}
+}
+
 // ReceiptList69 is the block receipt list as downloaded by eth/69.
 // This implements types.DerivableList for validation purposes.
 type ReceiptList69 struct {
@@ -401,6 +410,15 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 	}
 	w.ListEnd(outer)
 	return w.Flush()
+}
+
+// ExcludeStateSync removes the state sync transaction from the list. We use
+// the property of zero gas used to identify a state-sync transaction in the
+// list.
+func (rl *ReceiptList69) ExcludeStateSync() {
+	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
+		rl.items = rl.items[:len(rl.items)-1]
+	}
 }
 
 // blockReceiptsToNetwork69 takes a slice of rlp-encoded receipts, and transactions,
