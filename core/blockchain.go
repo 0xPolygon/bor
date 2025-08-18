@@ -1732,14 +1732,17 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			var decoded []types.ReceiptForStorage
 			if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
 				log.Warn("Failed to decode state-sync receipt", "number", blockChain[i].NumberU64(), "err", err)
+				borReceipts[i] = rlp.RawValue{}
 				continue
 			}
-			// Find if there's a state-sync transaction receipt present
+			// Find if there's a state-sync transaction receipt present. They are always
+			// appended at the end of list and can be identified by 0 gas usage.
 			if len(decoded) > 0 && decoded[len(decoded)-1].GasUsed == 0 {
 				// Encode the state-sync transaction separately
 				encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
 				if err != nil {
 					log.Warn("Failed to encode state-sync receipt", "number", blockChain[i].NumberU64(), "err", err)
+					borReceipts[i] = rlp.RawValue{}
 					continue
 				}
 				borReceipts[i] = encodedStateSyncReceipt
@@ -1751,6 +1754,8 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 					continue
 				}
 				receiptChain[i] = encodedReceipts
+			} else {
+				borReceipts[i] = rlp.RawValue{}
 			}
 		}
 
