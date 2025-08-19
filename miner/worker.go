@@ -501,7 +501,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	if w.chainConfig.Bor != nil {
 		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
 	} else {
-		veblopTimeout = time.Duration(1) * time.Second // Default fallback
+		veblopTimeout = time.Duration(2) * time.Second // Default fallback
 	}
 
 	veblopTimer := time.NewTimer(veblopTimeout)
@@ -550,7 +550,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 		case <-veblopTimer.C:
 			currentBlock := w.chain.CurrentBlock()
-			if !w.chainConfig.Bor.IsVeBlop(currentBlock.Number) {
+			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsVeBlop(currentBlock.Number) {
 				veblopTimer.Reset(veblopTimeout)
 				continue
 			}
@@ -564,7 +564,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				commit(false, commitInterruptNewHead)
 			}
 
-			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			if w.chainConfig.Bor != nil {
+				veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			}
 			veblopTimer.Reset(veblopTimeout)
 
 		case <-timer.C:
@@ -1212,7 +1214,13 @@ mainloop:
 				reads := env.mvReadMapList[i-1]
 
 				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
+				var burntContract string
+				if w.chainConfig.Bor != nil {
+					burntContract = w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())
+				} else {
+					burntContract = "0x0000000000000000000000000000000000000000"
+				}
+				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(burntContract), state.BalancePath)]
 
 				if ok1 || ok2 {
 					delayFlag = false
@@ -1547,7 +1555,10 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
 	// If the block is a veblop block, we will never try to create a commit for an empty block.
-	isVeblop := w.chainConfig.Bor.IsVeBlop(work.header.Number)
+	var isVeblop bool
+	if w.chainConfig.Bor != nil {
+		isVeblop = w.chainConfig.Bor.IsVeBlop(work.header.Number)
+	}
 	if !noempty && !w.noempty.Load() && !isVeblop {
 		_ = w.commit(work.copy(), nil, false, start)
 	}

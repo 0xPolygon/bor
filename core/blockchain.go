@@ -3740,7 +3740,7 @@ func (bc *BlockChain) verifyPendingHeaders() {
 	chainConfig := bc.Config()
 
 	// We don't need to verify headers before VeBlop
-	if !chainConfig.Bor.IsVeBlop(currentHead.Number) {
+	if chainConfig.Bor == nil || !chainConfig.Bor.IsVeBlop(currentHead.Number) {
 		return // VeBlop is not enabled yet
 	}
 
