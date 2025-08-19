@@ -24,6 +24,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -418,6 +419,7 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 func (rl *ReceiptList69) ExcludeStateSync() {
 	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
 		rl.items = rl.items[:len(rl.items)-1]
+		log.Info("Excluded state-sync receipt from list for receipt root calculation")
 	}
 }
 

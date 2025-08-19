@@ -1690,6 +1690,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 				log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
 				return receipts, encodedStateSyncReceipt
 			}
+			log.Info("Receipts split into state-sync and non state-sync", "total count", len(decoded), "number", number, "hash", hash)
 			return encodedReceipts, encodedStateSyncReceipt
 		}
 		return receipts, rlp.RawValue{}
@@ -1788,6 +1789,8 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			log.Error("Error importing chain data to ancients", "err", err)
 			return 0, err
 		}
+		lastHeader := headers[len(headers)-1]
+		log.Info("Written bor receipt and look up entries in ancient db", "last imported", lastHeader.Number, "hash", lastHeader.Hash())
 		size += writeSize
 
 		// Write tx indices if any condition is satisfied:
@@ -1927,6 +1930,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+					log.Info("Written bor receipt and look up entries in kvdb", "number", block.NumberU64(), "hash", block.Hash())
 				}
 			}
 

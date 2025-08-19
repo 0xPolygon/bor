@@ -360,6 +360,8 @@ func serviceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			}
 		}
 
+		s := false
+
 		// Fetch state-sync transaction receipt
 		borReceipt := chain.GetBorReceiptRLPByHash(hash)
 		if borReceipt != nil {
@@ -367,10 +369,13 @@ func serviceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			borReceipt, err = stateSyncReceiptToNetwork69(borReceipt)
 			if err == nil {
 				results = append(results, borReceipt...)
+				s = true
 			} else {
 				log.Error("Error in state-sync receipt conversion", "hash", hash, "err", err)
 			}
 		}
+
+		log.Info("All receipts fetched", "hash", hash, "count", len(results), "state-sync", s)
 
 		receipts = append(receipts, results)
 		bytes += len(results)
