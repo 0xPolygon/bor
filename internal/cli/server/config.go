@@ -164,6 +164,12 @@ type Config struct {
 
 	// HealthConfig has health check related settings
 	Health *HealthConfig `hcl:"health,block" toml:"health,block"`
+
+	// VMTrace Name of tracer which should record internal VM operations (costly)
+	VMTrace string `hcl:"vmtrace,optional" toml:"vmtrace,optional"`
+
+	// VMTraceJsonConfig Tracer configuration (JSON)
+	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
 }
 
 type HistoryConfig struct {
@@ -1545,6 +1551,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
+	n.VMTrace = c.VMTrace
+	n.VMTraceJsonConfig = c.VMTraceJsonConfig
 
 	// Blind fork acceptance configs
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation
