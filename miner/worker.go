@@ -497,7 +497,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer timer.Stop()
 	<-timer.C // discard the initial tick
 
-	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+	var veblopTimeout time.Duration
+	if w.chainConfig.Bor != nil {
+		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+	} else {
+		veblopTimeout = time.Duration(1) * time.Second // Default fallback
+	}
 
 	veblopTimer := time.NewTimer(veblopTimeout)
 	defer veblopTimer.Stop()
