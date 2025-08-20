@@ -464,6 +464,7 @@ func createMockHeimdall(ctrl *gomock.Controller, span0, span1 *borTypes.Span) *m
 	h.EXPECT().Close().AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(span0, nil).AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(span1, nil).AnyTimes()
+	h.EXPECT().GetLatestSpan(gomock.Any()).Return(span1, nil).AnyTimes()
 	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(&checkpoint.Checkpoint{}, nil).AnyTimes()
 	h.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
 
