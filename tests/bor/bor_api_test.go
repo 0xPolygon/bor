@@ -13,11 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/eth"
-	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
-	"github.com/ethereum/go-ethereum/node"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/stretchr/testify/assert"
@@ -104,14 +100,6 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	txReceipts, err := publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(4))
 	assert.Nil(t, err)
 
-	// Add safety check to prevent panic
-	if len(txReceipts) < 2 {
-		t.Logf("Expected 2 transaction receipts, but got %d", len(txReceipts))
-		t.Logf("txReceipts: %+v", txReceipts)
-		t.Skip("Skipping test - insufficient transaction receipts")
-		return
-	}
-
 	assert.Equal(t, txHash, txReceipts[1]["transactionHash"].(common.Hash))
 }
 
@@ -145,14 +133,24 @@ func testGetTransactionByBlockNumberAndIndex(t *testing.T, publicTransactionPool
 // This Testcase tests functions for RPC API calls.
 // NOTE : Changes to this function might affect the child testcases.
 func TestAPIs(t *testing.T) {
-	stack, _ := node.New(&node.DefaultConfig)
-	backend, _ := eth.New(stack, &ethconfig.Defaults)
+	// Use the established pattern from other Bor tests
+	updateGenesis := func(gen *core.Genesis) {
+		gen.Alloc[addrr] = types.Account{Balance: big.NewInt(1000000)}
+		// Disable blob-related forks to avoid "calculating blob fee on unsupported fork" panic
+		gen.Config.CancunBlock = nil
+		gen.Config.Bor.Period = map[string]uint64{
+			"0": 1,
+		}
+		gen.Config.Bor.BurntContract = map[string]string{"0": "0x000000000000000000000000000000000000dead"}
+	}
+	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
+
+	backend := init.ethereum
 	db := backend.ChainDb()
+	genesisBlock := init.genesis.ToBlock()
+	testBorConfig := init.genesis.Config.Bor
 
-	genesis := core.GenesisBlockForTesting(db, addrr, big.NewInt(1000000))
-	testBorConfig := params.TestChainConfig.Bor
-
-	chain, receipts := core.GenerateChain(params.TestChainConfig, genesis, ethash.NewFaker(), db, 6, func(i int, gen *core.BlockGen) {
+	chain, receipts := core.GenerateChain(init.genesis.Config, genesisBlock, ethash.NewFaker(), db, 6, func(i int, gen *core.BlockGen) {
 		switch i {
 
 		case 1: // 1 normal transaction on block 2
@@ -220,18 +218,12 @@ func TestAPIs(t *testing.T) {
 
 		blockBatch := db.NewBatch()
 
-		// Safety check to prevent panic when Bor config is not available
-		if testBorConfig == nil {
-			t.Logf("Warning: Bor config is nil, skipping Bor-specific logic for block %d", i)
-			continue
-		}
-
 		if i%int(testBorConfig.CalculateSprint(block.NumberU64())-1) != 0 {
 			// if it is not sprint start write all the transactions as normal transactions.
 			rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), receipts[i])
 		} else {
 			// check for blocks with receipts. Since in state-sync block, we have 1 normal txn and 1 state-sync txn.
-			if len(receipts[i]) > 1 {
+			if len(receipts[i]) > 0 {
 				// We write receipts for the normal transaction.
 				rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), receipts[i][:1])
 
@@ -252,9 +244,6 @@ func TestAPIs(t *testing.T) {
 
 				rawdb.WriteBorTxLookupEntry(blockBatch, block.Hash(), block.NumberU64())
 
-			} else if len(receipts[i]) > 0 {
-				// Only normal transaction receipts, write them normally
-				rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), receipts[i])
 			}
 
 		}

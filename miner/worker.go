@@ -497,12 +497,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer timer.Stop()
 	<-timer.C // discard the initial tick
 
-	var veblopTimeout time.Duration
-	if w.chainConfig.Bor != nil {
-		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
-	} else {
-		veblopTimeout = time.Duration(2) * time.Second // Default fallback
-	}
+	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
 
 	veblopTimer := time.NewTimer(veblopTimeout)
 	defer veblopTimer.Stop()
@@ -564,9 +559,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				commit(false, commitInterruptNewHead)
 			}
 
-			if w.chainConfig.Bor != nil {
-				veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
-			}
+			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
 			veblopTimer.Reset(veblopTimeout)
 
 		case <-timer.C:
@@ -1214,13 +1207,7 @@ mainloop:
 				reads := env.mvReadMapList[i-1]
 
 				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-				var burntContract string
-				if w.chainConfig.Bor != nil {
-					burntContract = w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())
-				} else {
-					burntContract = "0x0000000000000000000000000000000000000000"
-				}
-				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(burntContract), state.BalancePath)]
+				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
 
 				if ok1 || ok2 {
 					delayFlag = false

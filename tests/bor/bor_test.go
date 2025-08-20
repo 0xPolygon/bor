@@ -771,7 +771,11 @@ func TestSignerNotFound(t *testing.T) {
 	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t,
 		*err.(*bor.UnauthorizedSignerError),
-		bor.UnauthorizedSignerError{Number: 0, Signer: newAddr.Bytes()})
+		bor.UnauthorizedSignerError{
+			Number:         1,
+			Signer:         newAddr.Bytes(),
+			AllowedSigners: borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators,
+		})
 }
 
 // TestEIP1559Transition tests the following:
@@ -1002,7 +1006,6 @@ func TestEIP1559Transition(t *testing.T) {
 }
 
 func TestBurnContract(t *testing.T) {
-	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	var (
 		aa = common.HexToAddress("0x000000000000000000000000000000000000aaaa")
@@ -1218,7 +1221,6 @@ func TestBurnContract(t *testing.T) {
 }
 
 func TestBurnContractContractFetch(t *testing.T) {
-	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	config := params.BorUnittestChainConfig
 	config.Bor.BurntContract = map[string]string{
