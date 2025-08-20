@@ -14,7 +14,7 @@ import (
 	ethapi "github.com/ethereum/go-ethereum/internal/ethapi"
 	override "github.com/ethereum/go-ethereum/internal/ethapi/override"
 	rpc "github.com/ethereum/go-ethereum/rpc"
-	gomock "go.uber.org/mock/gomock"
+	"github.com/golang/mock/gomock"
 )
 
 // MockCaller is a mock of Caller interface.

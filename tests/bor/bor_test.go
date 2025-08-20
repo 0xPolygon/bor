@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gomock "go.uber.org/mock/gomock"
 	"golang.org/x/crypto/sha3"
 
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -383,11 +383,7 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 	defer _bor.Close()
 
 	span0 := createMockSpan(addr, chain.Config().ChainID.String())
-<<<<<<< HEAD
-	currentSpan := loadSpanFromFile(t)
-=======
 	res := loadSpanFromFile(t)
->>>>>>> origin/develop
 
 	// Create mock heimdall client
 	ctrl := gomock.NewController(t)
@@ -410,15 +406,9 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 		insertNewBlock(t, chain, block)
 	}
 
-<<<<<<< HEAD
-	valsetVals := valset.HeimdallToValSetValidators(currentSpan.ValidatorSet.Validators)
-
-	spanner = getMockedSpanner(t, valsetVals)
-=======
 	borValSet := borSpan.ConvertHeimdallValSetToBorValSet(res.ValidatorSet)
 
 	spanner = getMockedSpanner(t, borValSet.Validators)
->>>>>>> origin/develop
 	_bor.SetSpanner(spanner)
 
 	// Check validator set at the first block of a new span.
@@ -429,13 +419,8 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 
 	require.Equal(t, 3, len(validators))
 	for i, validator := range validators {
-<<<<<<< HEAD
-		require.Equal(t, validator.Address.Bytes(), valsetVals[i].Address.Bytes())
-		require.Equal(t, validator.VotingPower, valsetVals[i].VotingPower)
-=======
 		require.Equal(t, validator.Address.Bytes(), borValSet.Validators[i].Address.Bytes())
 		require.Equal(t, validator.VotingPower, borValSet.Validators[i].VotingPower)
->>>>>>> origin/develop
 	}
 }
 
@@ -652,17 +637,11 @@ func TestOutOfTurnSigning(t *testing.T) {
 
 	span0 := createMockSpan(addr, chain.Config().ChainID.String())
 
-<<<<<<< HEAD
-	heimdallSpan := loadSpanFromFile(t)
-	proposer := valset.NewValidator(addr, 10)
-	heimdallSpan.ValidatorSet.Validators = append(heimdallSpan.ValidatorSet.Validators, proposer)
-=======
 	res := loadSpanFromFile(t)
 	res.ValidatorSet.Validators = append(res.ValidatorSet.Validators, &stakeTypes.Validator{
 		Signer:      addr.String(),
 		VotingPower: 10,
 	})
->>>>>>> origin/develop
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -680,11 +659,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 
 	setDifficulty := func(header *types.Header) {
 		if IsSprintStart(header.Number.Uint64()) {
-<<<<<<< HEAD
-			header.Difficulty = big.NewInt(int64(len(valsetVals)))
-=======
 			header.Difficulty = big.NewInt(int64(len(res.ValidatorSet.Validators)))
->>>>>>> origin/develop
 		}
 	}
 
@@ -723,27 +698,16 @@ func TestOutOfTurnSigning(t *testing.T) {
 	const turn = 1
 
 	setDifficulty = func(header *types.Header) {
-<<<<<<< HEAD
-		header.Difficulty = big.NewInt(int64(len(valsetVals)) - turn)
-	}
-
-	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, valsetVals, setParentTime, setDifficulty)
-=======
 		header.Difficulty = big.NewInt(int64(len(res.ValidatorSet.Validators)) - turn)
 	}
 
 	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false, setParentTime, setDifficulty)
->>>>>>> origin/develop
 	_, err := chain.InsertChain([]*types.Block{block})
 	require.Equal(t,
 		bor.BlockTooSoonError{Number: spanSize, Succession: expectedSuccessionNumber},
 		*err.(*bor.BlockTooSoonError))
 
-<<<<<<< HEAD
-	expectedDifficulty := uint64(len(valsetVals) - expectedSuccessionNumber - turn) // len(validators) - succession
-=======
 	expectedDifficulty := uint64(len(res.ValidatorSet.Validators) - expectedSuccessionNumber - turn) // len(validators) - succession
->>>>>>> origin/develop
 	header := block.Header()
 
 	diff := bor.CalcProducerDelay(header.Number.Uint64(), expectedSuccessionNumber, init.genesis.Config.Bor)
@@ -780,11 +744,7 @@ func TestSignerNotFound(t *testing.T) {
 
 	span0 := createMockSpan(addr, chain.Config().ChainID.String())
 
-<<<<<<< HEAD
-	heimdallSpan := loadSpanFromFile(t)
-=======
 	res := loadSpanFromFile(t)
->>>>>>> origin/develop
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -806,11 +766,7 @@ func TestSignerNotFound(t *testing.T) {
 		return crypto.Sign(crypto.Keccak256(data), newKey)
 	})
 
-<<<<<<< HEAD
-	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, valsetVals)
-=======
 	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false)
->>>>>>> origin/develop
 
 	_, err := chain.InsertChain([]*types.Block{block})
 	require.Equal(t,

@@ -99,3 +99,10 @@ func ConvertHeimdallValidatorsToBorValidatorsByRef(heimdallValidators []*stakeTy
 	}
 	return validators
 }
+
+type HeimdallSpanEvent struct {
+	ID            uint64         `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	StartBlock    uint64         `protobuf:"varint,2,opt,name=start_block,json=startBlock,proto3" json:"start_block,omitempty"`
+	EndBlock      uint64         `protobuf:"varint,3,opt,name=end_block,json=endBlock,proto3" json:"end_block,omitempty"`
+	BlockProducer common.Address `protobuf:"bytes,4,opt,name=block_producer,json=blockProducer,proto3" json:"block_producer"`
+}

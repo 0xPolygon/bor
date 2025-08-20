@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 
-	"go.uber.org/mock/gomock"
+	"github.com/golang/mock/gomock"
 )
 
 var (

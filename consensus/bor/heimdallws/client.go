@@ -9,41 +9,79 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/gorilla/websocket"
 )
 
+type HeimdallEvent string
+
+const (
+	MilestoneEventType  HeimdallEvent = "milestone"
+	milestoneEventQuery string        = "tm.event='NewBlock' AND milestone.number>0"
+	SpanEventType       HeimdallEvent = "span"
+	spanEventQuery      string        = "tm.event='NewBlock' AND span.id>0"
+)
+
+type eventSubscription struct {
+	conn *websocket.Conn
+	done chan struct{}
+}
+
 // HeimdallWSClient represents a websocket client with auto-reconnection.
 type HeimdallWSClient struct {
-	conn   *websocket.Conn
-	url    string // store the URL for reconnection
-	events chan *milestone.Milestone
-	done   chan struct{}
-	mu     sync.Mutex
+	subscriptions map[HeimdallEvent]eventSubscription
+	url           string // store the URL for reconnection
+	done          chan struct{}
+	mu            sync.Mutex
 }
 
 // NewHeimdallWSClient creates a new WS client for Heimdall.
 func NewHeimdallWSClient(url string) (*HeimdallWSClient, error) {
 	return &HeimdallWSClient{
-		conn:   nil,
-		url:    url,
-		events: make(chan *milestone.Milestone),
-		done:   make(chan struct{}),
+		subscriptions: make(map[HeimdallEvent]eventSubscription),
+		url:           url,
+		done:          make(chan struct{}),
 	}, nil
 }
 
-// SubscribeMilestoneEvents sends the subscription request and starts processing incoming messages.
-func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan *milestone.Milestone {
-	c.tryUntilSubscribeMilestoneEvents(ctx)
+func (c *HeimdallWSClient) GetSubscription(eventName HeimdallEvent) (eventSubscription, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// Start the goroutine to read messages.
-	go c.readMessages(ctx)
-
-	return c.events
+	sub, ok := c.subscriptions[eventName]
+	return sub, ok
 }
 
-// retry until subscribe
-func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context) {
+// SubscribeMilestoneEvents sends the subscription request and starts processing incoming messages
+// for milestone events, returning a channel to receive incoming events.
+func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan *milestone.Milestone {
+	c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+
+	events := make(chan *milestone.Milestone)
+
+	// Start the goroutine to read messages.
+	go c.readMilestoneMessages(ctx, events)
+
+	return events
+}
+
+// SubscribeSpanEvents sends the subscription request and starts processing incoming messages
+// for span events, returning a channel to receive incoming events.
+func (c *HeimdallWSClient) SubscribeSpanEvents(ctx context.Context) <-chan *span.HeimdallSpanEvent {
+	c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+
+	events := make(chan *span.HeimdallSpanEvent)
+
+	// Start the goroutine to read messages.
+	go c.readSpanMessages(ctx, events)
+
+	return events
+}
+
+// tryUntilSubscribeHeimdallEvents endlessly tries to subscribe and establish a websocket connection
+// for the given heimdall event type.
+func (c *HeimdallWSClient) tryUntilSubscribeHeimdallEvents(ctx context.Context, eventQuery string, eventType HeimdallEvent) {
 	firstTime := true
 	for {
 		if !firstTime {
@@ -54,22 +92,29 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		// Check for context cancellation.
 		select {
 		case <-ctx.Done():
-			log.Info("Context cancelled during reconnection")
+			log.Info("Context cancelled during reconnection", "event", eventType)
 			return
 		case <-c.done:
-			log.Info("Client unsubscribed during reconnection")
+			log.Info("Client unsubscribed during reconnection", "event", eventType)
 			return
 		default:
 		}
 
+		sub, ok := c.GetSubscription(eventType)
+		if ok {
+			select {
+			case <-sub.done:
+				log.Info("Client unsubscribed during reconnection", "event", eventType)
+				return
+			default:
+			}
+		}
+
 		conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
 		if err != nil {
-			log.Error("failed to dial websocket on heimdall ws subscription", "err", err)
+			log.Error("failed to dial websocket on heimdall ws subscription", "event", eventType, "err", err)
 			continue
 		}
-		c.mu.Lock()
-		c.conn = conn
-		c.mu.Unlock()
 
 		// Build the subscription request.
 		req := subscriptionRequest{
@@ -77,20 +122,37 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			Method:  "subscribe",
 			ID:      0,
 		}
-		req.Params.Query = "tm.event='NewBlock' AND milestone.number>0"
+		req.Params.Query = eventQuery
 
-		if err := c.conn.WriteJSON(req); err != nil {
-			log.Error("failed to send subscription request on heimdall ws subscription", "err", err)
+		if err := conn.WriteJSON(req); err != nil {
+			log.Error("failed to send subscription request on heimdall ws subscription", "event", eventType, "err", err)
 			continue
 		}
-		log.Info("Successfully connected on heimdall ws subscription")
+
+		c.mu.Lock()
+		milestoneEvent := eventSubscription{
+			conn: conn,
+			done: make(chan struct{}),
+		}
+		c.subscriptions[eventType] = milestoneEvent
+		c.mu.Unlock()
+
+		log.Info("Successfully connected on heimdall ws subscription", "event", eventType)
 		return
 	}
 }
 
-// readMessages continuously reads messages from the websocket, handling reconnections if necessary.
-func (c *HeimdallWSClient) readMessages(ctx context.Context) {
-	defer close(c.events)
+// readMilestoneMessages continuously reads messages from the websocket for milestone
+// event type, handling reconnections if necessary.
+func (c *HeimdallWSClient) readMilestoneMessages(ctx context.Context, events chan *milestone.Milestone) {
+	defer close(events)
+
+	sub, ok := c.GetSubscription(MilestoneEventType)
+	if !ok || sub.conn == nil {
+		c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+		sub, _ = c.GetSubscription(MilestoneEventType)
+	}
+
 	for {
 		// Check if the context or unsubscribe signal is set.
 		select {
@@ -98,22 +160,27 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			return
 		case <-c.done:
 			return
+		case <-sub.done:
+			return
 		default:
 			// continue to process messages
 		}
 
-		if err := c.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-			log.Error("failed to set read deadline on heimdall ws subscription", "err", err)
+		conn := sub.conn
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Error("failed to set read deadline on heimdall ws subscription", "eventType", MilestoneEventType, "err", err)
 
-			c.tryUntilSubscribeMilestoneEvents(ctx)
+			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+			sub, _ = c.GetSubscription(MilestoneEventType)
 			continue
 		}
 
-		_, message, err := c.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
+			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "eventType", MilestoneEventType, "error", err)
 
-			c.tryUntilSubscribeMilestoneEvents(ctx)
+			c.tryUntilSubscribeHeimdallEvents(ctx, milestoneEventQuery, MilestoneEventType)
+			sub, _ = c.GetSubscription(MilestoneEventType)
 			continue
 		}
 
@@ -166,29 +233,139 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 
 		// Deliver the milestone event, respecting context cancellation.
 		select {
-		case c.events <- m:
+		case events <- m:
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// Unsubscribe signals the reader goroutine to stop.
-func (c *HeimdallWSClient) Unsubscribe(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	select {
-	case <-c.done:
-		// Already unsubscribed.
-	default:
-		close(c.done)
+// readSpanMessages continuously reads messages from the websocket for span
+// event type, handling reconnections if necessary.
+func (c *HeimdallWSClient) readSpanMessages(ctx context.Context, events chan *span.HeimdallSpanEvent) {
+	defer close(events)
+
+	sub, ok := c.GetSubscription(SpanEventType)
+	if !ok || sub.conn == nil {
+		c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+		sub, _ = c.GetSubscription(SpanEventType)
 	}
-	return nil
+
+	for {
+		// Check if the context or unsubscribe signal is set.
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		case <-sub.done:
+			return
+		default:
+			// continue to process messages
+		}
+
+		conn := sub.conn
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Error("failed to set read deadline on heimdall ws subscription", "eventType", SpanEventType, "err", err)
+
+			c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+			sub, _ = c.GetSubscription(SpanEventType)
+			continue
+		}
+
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
+
+			c.tryUntilSubscribeHeimdallEvents(ctx, spanEventQuery, SpanEventType)
+			sub, _ = c.GetSubscription(SpanEventType)
+			continue
+		}
+
+		var resp wsResponse
+		if err := json.Unmarshal(message, &resp); err != nil {
+			log.Error("failed to unmarshal span event message", "error", err)
+			// Skip messages that don't match the expected format.
+			continue
+		}
+
+		// Find the span event.
+		var spanEvent *wsEvent
+		for _, event := range resp.Result.Data.Value.FinalizeBlock.Events {
+			if event.Type == "span" {
+				// In this case their types are set to the types of the respective iteration values
+				// and their scope is the block of the "for" statement; they are re-used in each iteration.
+				e := event
+				spanEvent = &e
+				break
+			}
+		}
+		if spanEvent == nil {
+			continue
+		}
+
+		// Map attributes for easier lookup.
+		attrs := make(map[string]string)
+		for _, attr := range spanEvent.Attributes {
+			attrs[attr.Key] = attr.Value
+		}
+
+		// Build the span object from attributes.
+		span := &span.HeimdallSpanEvent{
+			BlockProducer: common.HexToAddress(attrs["block_producer"]),
+		}
+		if id, err := strconv.ParseUint(attrs["id"], 10, 64); err == nil {
+			span.ID = id
+		}
+		if startBlock, err := strconv.ParseUint(attrs["start_block"], 10, 64); err == nil {
+			span.StartBlock = startBlock
+		}
+		if endBlock, err := strconv.ParseUint(attrs["end_block"], 10, 64); err == nil {
+			span.EndBlock = endBlock
+		}
+
+		// Deliver the span event, respecting context cancellation.
+		select {
+		case events <- span:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
-// Close cleanly terminates the websocket connection.
-func (c *HeimdallWSClient) Close() error {
+// Unsubscribe terminates websocket listener for given `eventType` and stops all read routines.
+func (c *HeimdallWSClient) Unsubscribe(eventType HeimdallEvent) {
+	sub, ok := c.GetSubscription(eventType)
+	if !ok {
+		return
+	}
+
+	// Close the subscription for the event
+	if err := sub.conn.Close(); err != nil {
+		log.Error("Failed to close websocket connection", "eventType", eventType, "err", err)
+	}
+
+	// Send a close signal to exit all read loops
+	close(sub.done)
+
+	// Delete the subscription
+	c.mu.Lock()
+	delete(c.subscriptions, eventType)
+	c.mu.Unlock()
+}
+
+// Close cleanly terminates all existing websocket listeners and connections.
+func (c *HeimdallWSClient) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.conn.Close()
+
+	// Close the global channel sending a signal to all subscribers
+	close(c.done)
+
+	for eventType, subscription := range c.subscriptions {
+		if err := subscription.conn.Close(); err != nil {
+			log.Error("Failed to close websocket connection", "eventType", eventType, "err", err)
+		}
+		close(subscription.done)
+	}
 }

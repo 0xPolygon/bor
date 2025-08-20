@@ -1,6 +1,8 @@
 package heimdallws
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // subscriptionRequest represents the JSON-RPC request for subscribing.
 type subscriptionRequest struct {
