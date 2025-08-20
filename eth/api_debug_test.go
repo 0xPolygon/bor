@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var dumper = spew.ConfigState{Indent: "    "}
@@ -314,28 +315,52 @@ func TestGetModifiedAccounts(t *testing.T) {
 	// Create a debug API instance.
 	api := NewDebugAPI(&Ethereum{blockchain: blockChain})
 
+	// After merging go-ethereum v1.16.x, block processing now marks a burn
+	// sink address (0x0000…dEaD) as “modified” due to base-fee burn accounting.
+	// We ignore the burn sink in the addresses length checks here
+	burnAddr := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	filterOutBurn := func(addrs []common.Address) []common.Address {
+		return slices.DeleteFunc(addrs, func(a common.Address) bool { return a == burnAddr })
+	}
+
 	// Test GetModifiedAccountsByNumber
 	t.Run("GetModifiedAccountsByNumber", func(t *testing.T) {
 		addrs, err := api.GetModifiedAccountsByNumber(uint64(genBlocks), nil)
 		assert.NoError(t, err)
-		assert.Len(t, addrs, len(accounts)+1) // +1 for the coinbase
+
+		// The coinbase for this block (defaults to 0x0 if not set in the generator).
+		header := blockChain.GetHeaderByNumber(uint64(genBlocks))
+		require.NotNil(t, header)
+
+		// Ignore the burn sink in length checks
+		filtered := filterOutBurn(addrs)
+
+		// assert our accounts are present
 		for _, account := range accounts {
-			if !slices.Contains(addrs, account.addr) {
-				t.Fatalf("account %s not found in modified accounts", account.addr.Hex())
-			}
+			assert.Contains(t, filtered, account.addr, "expected account missing from modified set")
 		}
+		// assert coinbase account is present
+		assert.Contains(t, filtered, header.Coinbase, "coinbase should be part of modified accounts")
+
+		// expect exactly our 4 accounts + coinbase (burn address filtered out)
+		assert.Len(t, filtered, len(accounts)+1)
 	})
 
 	// Test GetModifiedAccountsByHash
 	t.Run("GetModifiedAccountsByHash", func(t *testing.T) {
 		header := blockChain.GetHeaderByNumber(uint64(genBlocks))
+		require.NotNil(t, header)
+
 		addrs, err := api.GetModifiedAccountsByHash(header.Hash(), nil)
 		assert.NoError(t, err)
-		assert.Len(t, addrs, len(accounts)+1) // +1 for the coinbase
+
+		filtered := filterOutBurn(addrs)
+
 		for _, account := range accounts {
-			if !slices.Contains(addrs, account.addr) {
-				t.Fatalf("account %s not found in modified accounts", account.addr.Hex())
-			}
+			assert.Contains(t, filtered, account.addr, "expected account missing from modified set")
 		}
+		assert.Contains(t, filtered, header.Coinbase, "coinbase should be part of modified accounts")
+
+		assert.Len(t, filtered, len(accounts)+1)
 	})
 }

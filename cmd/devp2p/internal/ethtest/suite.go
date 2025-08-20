@@ -532,7 +532,8 @@ func (s *Suite) TestMaliciousStatus(t *utesting.T) {
 		ProtocolVersion: uint32(conn.negotiatedProtoVersion),
 		NetworkID:       s.chain.config.ChainID.Uint64(),
 		TD:              new(big.Int).SetBytes(randBuf(2048)),
-		Head:            s.chain.Head().Hash(),
+		LatestBlock:     s.chain.Head().NumberU64(),
+		LatestBlockHash: s.chain.Head().Hash(),
 		Genesis:         s.chain.GetBlock(0).Hash(),
 		ForkID:          s.chain.ForkID(),
 	}

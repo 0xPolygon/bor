@@ -88,7 +88,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "syncmode",
-		Usage:   `Blockchain sync mode ("full" or "snap")`,
+		Usage:   `Blockchain sync mode (only "full" sync supported)`,
 		Value:   &c.cliConfig.SyncMode,
 		Default: c.cliConfig.SyncMode,
 	})

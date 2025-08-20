@@ -84,6 +84,7 @@ func NewStateTrie(id *ID, db database.NodeDatabase) (*StateTrie, error) {
 		return nil, err
 	}
 	tr := &StateTrie{
+		//nolint:govet
 		trie:        *trie,
 		db:          db,
 		secKeyCache: make(map[common.Hash][]byte),

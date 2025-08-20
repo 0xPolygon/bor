@@ -524,28 +524,53 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 	defer peer.close()
 
 	// Collect the hashes to request, and the response to expect
-	var (
-		hashes   []common.Hash
-		receipts []*ReceiptList68
-	)
+	var hashes []common.Hash
 
-	for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
-		block := backend.chain.GetBlockByNumber(i)
-		hashes = append(hashes, block.Hash())
-		trs := backend.chain.GetReceiptsByHash(block.Hash())
-		receipts = append(receipts, NewReceiptList68(trs))
-	}
+	switch protocol {
+	case ETH69:
+		var receipts []*ReceiptList69
+		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
+			block := backend.chain.GetBlockByNumber(i)
+			hashes = append(hashes, block.Hash())
+			trs := backend.chain.GetReceiptsByHash(block.Hash())
+			receipts = append(receipts, NewReceiptList69(trs))
+		}
 
-	// Send the hash request and verify the response
-	p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
-		RequestId:          123,
-		GetReceiptsRequest: hashes,
-	})
-	if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket[*ReceiptList68]{
-		RequestId: 123,
-		List:      receipts,
-	}); err != nil {
-		t.Errorf("receipts mismatch: %v", err)
+		// Send request and verify ETH69 response
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
+			RequestId:          123,
+			GetReceiptsRequest: hashes,
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket[*ReceiptList69]{
+			RequestId: 123,
+			List:      receipts,
+		}); err != nil {
+			t.Errorf("receipts mismatch (ETH69): %v", err)
+		}
+
+	case ETH68:
+		var receipts []*ReceiptList68
+		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
+			block := backend.chain.GetBlockByNumber(i)
+			hashes = append(hashes, block.Hash())
+			trs := backend.chain.GetReceiptsByHash(block.Hash())
+			receipts = append(receipts, NewReceiptList68(trs))
+		}
+
+		// Send request and verify ETH68 response
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
+			RequestId:          123,
+			GetReceiptsRequest: hashes,
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket[*ReceiptList68]{
+			RequestId: 123,
+			List:      receipts,
+		}); err != nil {
+			t.Errorf("receipts mismatch (ETH68): %v", err)
+		}
+
+	default:
+		t.Fatalf("unsupported protocol version: %d", protocol)
 	}
 }
 

@@ -339,18 +339,32 @@ func (mr *MockDatabaseMockRecorder) Stat() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stat", reflect.TypeOf((*MockDatabase)(nil).Stat))
 }
 
-// Sync mocks base method.
-func (m *MockDatabase) Sync() error {
+// SyncKeyValue mocks base method.
+func (m *MockDatabase) SyncKeyValue() error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Sync")
+	ret := m.ctrl.Call(m, "SyncKeyValue")
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// Sync indicates an expected call of Sync.
-func (mr *MockDatabaseMockRecorder) Sync() *gomock.Call {
+// SyncKeyValue indicates an expected call of SyncKeyValue.
+func (mr *MockDatabaseMockRecorder) SyncKeyValue() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Sync", reflect.TypeOf((*MockDatabase)(nil).Sync))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncKeyValue", reflect.TypeOf((*MockDatabase)(nil).SyncKeyValue))
+}
+
+// SyncAncient mocks base method.
+func (m *MockDatabase) SyncAncient() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncAncient")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SyncAncient indicates an expected call of SyncAncient.
+func (mr *MockDatabaseMockRecorder) SyncAncient() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncAncient", reflect.TypeOf((*MockDatabase)(nil).SyncAncient))
 }
 
 // Tail mocks base method.

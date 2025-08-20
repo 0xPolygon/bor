@@ -1195,13 +1195,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
 
-	// sync mode. It can either be "fast", "full" or "snap". We disable
-	// for now the "light" mode.
+	// Choose the sync mode. Only "full" sync is supported
 	switch c.SyncMode {
 	case "full":
 		n.SyncMode = downloader.FullSync
 	case "snap":
-		n.SyncMode = downloader.SnapSync
+		log.Info("Snap sync is momentarily disabled in bor, switching to full sync")
+		n.SyncMode = downloader.FullSync
 	default:
 		return nil, fmt.Errorf("sync mode '%s' not found", c.SyncMode)
 	}
