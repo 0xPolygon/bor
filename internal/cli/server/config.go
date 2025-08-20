@@ -1002,6 +1002,8 @@ func DefaultConfig() *Config {
 			LogNoHistory:       ethconfig.Defaults.LogNoHistory,
 			StateHistory:       params.FullImmutabilityThreshold,
 		},
+		VMTrace:           "",
+		VMTraceJsonConfig: "{}",
 		Health: &HealthConfig{
 			MaxGoRoutineThreshold:  0,
 			WarnGoRoutineThreshold: 0,
