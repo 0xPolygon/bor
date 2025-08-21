@@ -42,7 +42,7 @@ const (
 )
 
 func TestMiningAfterLocking(t *testing.T) {
-	t.Skip("FIXME")
+	t.Skip("FIXME: this test is broken since upstream v1.16.1, fix it")
 
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 
