@@ -22,7 +22,7 @@ func (ec *Client) GetRootHash(ctx context.Context, startBlockNumber uint64, endB
 	return rootHash, nil
 }
 
-// GetRootHash returns the merkle root of the block headers
+// GetVoteOnHash returns the vote on hash
 func (ec *Client) GetVoteOnHash(ctx context.Context, startBlockNumber uint64, endBlockNumber uint64, hash string, milestoneID string) (bool, error) {
 	var value bool
 	if err := ec.c.CallContext(ctx, &value, "bor_getVoteOnHash", startBlockNumber, endBlockNumber, hash, milestoneID); err != nil {

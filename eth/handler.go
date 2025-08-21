@@ -730,7 +730,7 @@ type PeerStats struct {
 	Td     uint64 `json:"td"`     // Total difficulty of the peer
 }
 
-// PeerStats returns the current head height and td of all the connected peers
+// GetPeerStats returns the current head height and td of all the connected peers
 // along with few additional identifiers.
 func (h *handler) GetPeerStats() []*PeerStats {
 	info := make([]*PeerStats, 0, len(h.peers.peers))
