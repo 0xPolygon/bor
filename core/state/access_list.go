@@ -167,6 +167,9 @@ func (al *accessList) DeleteAddress(address common.Address) {
 
 // Equal returns true if the two access lists are identical
 func (al *accessList) Equal(other *accessList) bool {
+	al.mu.RLock()
+	defer al.mu.RUnlock()
+
 	if !maps.Equal(al.addresses, other.addresses) {
 		return false
 	}
