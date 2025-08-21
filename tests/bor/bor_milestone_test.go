@@ -1392,9 +1392,9 @@ func waitBothPeered(t *testing.T, a, b *node.Node, timeout time.Duration) {
 	for time.Now().Before(deadline) {
 		ap := a.Server().Peers()
 		bp := b.Server().Peers()
-		// Both must see at least one peer (each other)
+		// both nodes must see at least one peer (each other)
 		if len(ap) >= 1 && len(bp) >= 1 {
-			// give the subprotocol handshake (eth/66+) a tick
+			// give time to the handshake protocol (eth/66+)
 			time.Sleep(500 * time.Millisecond)
 			return
 		}
