@@ -1,17 +1,17 @@
 # Bor Overview
 Bor is the official Golang implementation of the Polygon PoS blockchain. It is a fork of [geth](https://github.com/ethereum/go-ethereum) and is EVM compatible (upto London fork).
 
-[![API Reference](https://pkg.go.dev/badge/github.com/maticnetwork/bor)](https://pkg.go.dev/github.com/maticnetwork/bor)
-[![Go Report Card](https://goreportcard.com/badge/github.com/maticnetwork/bor)](https://goreportcard.com/report/github.com/maticnetwork/bor)
-![MIT License](https://img.shields.io/github/license/maticnetwork/bor)
+[![API Reference](https://pkg.go.dev/badge/github.com/0xPolygon/bor)](https://pkg.go.dev/github.com/0xPolygon/bor)
+[![Go Report Card](https://goreportcard.com/badge/github.com/0xPolygon/bor)](https://goreportcard.com/report/github.com/0xPolygon/bor)
+![MIT License](https://img.shields.io/github/license/0xPolygon/bor)
 [![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.com/invite/0xpolygonrnd)
 [![Twitter Follow](https://img.shields.io/twitter/follow/0xPolygon.svg?style=social)](https://twitter.com/0xPolygon)
 
 ### Installing bor using packaging
 
-The easiest way to get started with bor is to install the packages using the command below. Please take a look at the [releases](https://github.com/maticnetwork/bor/releases) section to find the latest stable version of bor.
+The easiest way to get started with bor is to install the packages using the command below. Please take a look at the [releases](https://github.com/0xPolygon/bor/releases) section to find the latest stable version of bor.
     
-    curl -L https://raw.githubusercontent.com/maticnetwork/install/main/bor.sh | bash -s -- v2.0.0 <network> <node_type>
+    curl -L https://raw.githubusercontent.com/0xPolygon/install/main/bor.sh | bash -s -- v2.0.0 <network> <node_type>
 
 The network accepts `mainnet`, or `amoy` and the node type accepts `validator` or `sentry` or `archive`. The installation script does the following things:
 - Create a new user named `bor`.

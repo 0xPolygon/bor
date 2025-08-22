@@ -8,9 +8,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 
+	protoV1 "github.com/0xPolygon/polyproto/heimdall"
 	"github.com/ethereum/go-ethereum/log"
 	grpcRetry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
-	protoV1 "github.com/maticnetwork/polyproto/heimdall"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	checkpointTypes "github.com/0xPolygon/heimdall-v2/x/checkpoint/types"

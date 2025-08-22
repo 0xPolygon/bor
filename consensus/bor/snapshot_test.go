@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/maticnetwork/crand"
+	"github.com/0xPolygon/crand"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 

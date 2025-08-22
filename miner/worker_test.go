@@ -19,6 +19,7 @@ package miner
 import (
 	"math/big"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -913,6 +914,82 @@ func TestCommitInterruptPending(t *testing.T) {
 	w.stop()
 }
 
+// TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
+// large number of transactions into the pool and captures the time taken for `pending` to return the list
+// of pending transactions. The purpose is just to compare the performance on different branches.
+func TestBenchmarkPending(t *testing.T) {
+	t.Skip("This test is just for benchmarking against other branches and shouldn't be used in normal CI process")
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+		txInTxpool  = 20000
+		txs         = make([]*types.Transaction, 0, txInTxpool)
+	)
+
+	chainConfig = params.BorUnittestChainConfig
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+
+	// Disable the commit interrupt as this will cause a reset on every block which we don't want
+	// for this test.
+	testConfig := DefaultTestConfig()
+	testConfig.CommitInterruptFlag = false
+	w, b, _ := newTestWorker(t, testConfig, chainConfig, engine, rawdb.NewMemoryDatabase(), true, 0)
+	defer func() {
+		w.close()
+		engine.Close()
+		db.Close()
+		ctrl.Finish()
+	}()
+
+	// nonce starts from 0 because have no txs yet
+	initNonce := uint64(0)
+
+	for i := 0; i < txInTxpool; i++ {
+		tx := b.newRandomTxWithNonce(false, initNonce+uint64(i))
+		txs = append(txs, tx)
+	}
+
+	wrapped := make([]*types.Transaction, len(txs))
+	copy(wrapped, txs)
+
+	// Set the interrupt to true by default so that it'll stop block building early on
+	// even before entering commit transactions.
+	w.interruptBlockBuilding.Store(true)
+
+	b.TxPool().Add(wrapped, false)
+
+	// Create a chain head subscription for tests
+	chainHeadCh := make(chan core.ChainHeadEvent, 10)
+	w.chain.SubscribeChainHeadEvent(chainHeadCh)
+
+	durations := make([]time.Duration, 0)
+
+	// Start mining!
+	w.start()
+	go func() {
+		for {
+			<-chainHeadCh
+			// Wait for a few ms so that run reorg is triggered
+			time.Sleep(10 * time.Millisecond)
+
+			// Make a call to pending and capture the time
+			start := time.Now()
+			b.txPool.Pending(txpool.PendingFilter{}, nil)
+			durations = append(durations, time.Since(start))
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	time.Sleep(5 * time.Second)
+	w.stop()
+
+	t.Log("Durations:", durations)
+}
+
 func BenchmarkBorMining(b *testing.B) {
 	chainConfig := params.BorUnittestChainConfig
 
@@ -1131,5 +1208,163 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 		case <-time.After(time.Duration(blockPeriod) * time.Second):
 			b.Fatalf("timeout")
 		}
+	}
+}
+
+func TestVeblopTimerTriggersStaleBlock(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	// Enable VeBlop from genesis
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	chainConfig.Bor.VeBlopBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// VeBlop period is 1 second in test config
+	// Set recommit to 10s to ensure it never fires during our 4s test
+	config := DefaultTestConfig()
+	config.Recommit = 10 * time.Second
+
+	w, _, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Track each task creation
+	var taskTimes []time.Time
+	var taskMu sync.Mutex
+
+	w.newTaskHook = func(task *task) {
+		taskMu.Lock()
+		defer taskMu.Unlock()
+		taskTimes = append(taskTimes, time.Now())
+		t.Logf("Task %d created at %v", len(taskTimes), time.Now())
+	}
+
+	w.start()
+
+	// Wait for initial task creation
+	time.Sleep(500 * time.Millisecond)
+
+	taskMu.Lock()
+	initialTasks := len(taskTimes)
+	taskMu.Unlock()
+
+	// Wait exactly 4 seconds (4 VeBlop periods)
+	time.Sleep(4 * time.Second)
+
+	w.stop()
+
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	// We should have exactly 4 additional tasks (one per second)
+	additionalTasks := len(taskTimes) - initialTasks
+	if additionalTasks != 4 {
+		t.Errorf("Expected exactly 4 VeBlop tasks in 4 seconds, got %d", additionalTasks)
+	}
+
+	// Verify each interval is approximately 1 second
+	for i := initialTasks + 1; i < len(taskTimes); i++ {
+		interval := taskTimes[i].Sub(taskTimes[i-1])
+		// Allow 200ms tolerance for system scheduling
+		if interval < 800*time.Millisecond || interval > 1200*time.Millisecond {
+			t.Errorf("Task %d interval %v is not ~1s", i, interval)
+		}
+	}
+}
+
+func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	// Enable VeBlop from genesis
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	chainConfig.Bor.VeBlopBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// VeBlop period is 1s, recommit is 10s (won't fire during test)
+	config := DefaultTestConfig()
+	config.Recommit = 10 * time.Second
+
+	w, _, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Track task creation
+	var taskCount int32
+
+	// Skip sealing to keep pending tasks
+	w.skipSealHook = func(task *task) bool {
+		return true
+	}
+
+	w.newTaskHook = func(task *task) {
+		count := atomic.AddInt32(&taskCount, 1)
+		t.Logf("Task %d created at %v", count, time.Now())
+	}
+
+	w.start()
+
+	// Wait for initial tasks
+	time.Sleep(500 * time.Millisecond)
+	initialCount := atomic.LoadInt32(&taskCount)
+
+	// Add pending tasks to block VeBlop
+	w.pendingMu.Lock()
+	for i := 0; i < 5; i++ {
+		w.pendingTasks[common.Hash{byte(i)}] = &task{
+			block: types.NewBlock(
+				&types.Header{Number: big.NewInt(1), Time: uint64(time.Now().Unix())},
+				&types.Body{}, nil, nil,
+			),
+		}
+	}
+	w.pendingMu.Unlock()
+
+	// Wait 3 seconds - VeBlop should be blocked, no new tasks
+	time.Sleep(3 * time.Second)
+	blockedCount := atomic.LoadInt32(&taskCount)
+
+	// Clear pending tasks
+	w.pendingMu.Lock()
+	w.pendingTasks = make(map[common.Hash]*task)
+	w.pendingMu.Unlock()
+
+	// Wait 3 seconds - VeBlop should resume, ~3 new tasks
+	time.Sleep(3 * time.Second)
+
+	w.stop()
+
+	finalCount := atomic.LoadInt32(&taskCount)
+
+	// Check results
+	tasksWhileBlocked := blockedCount - initialCount
+	tasksAfterClearing := finalCount - blockedCount
+
+	t.Logf("Initial: %d, While blocked: %d, After clearing: %d",
+		initialCount, tasksWhileBlocked, tasksAfterClearing)
+
+	// Should have no tasks while blocked
+	if tasksWhileBlocked != 0 {
+		t.Errorf("Expected 0 tasks while pending tasks exist, got %d", tasksWhileBlocked)
+	}
+
+	// Should have ~3 tasks after clearing (1 per second)
+	if tasksAfterClearing < 2 || tasksAfterClearing > 4 {
+		t.Errorf("Expected 2-4 tasks after clearing pending, got %d", tasksAfterClearing)
 	}
 }

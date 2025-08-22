@@ -3,7 +3,6 @@
 package ethconfig
 
 import (
-	"encoding/json"
 	"math/big"
 	"time"
 
@@ -17,8 +16,8 @@ import (
 	"github.com/ethereum/go-ethereum/miner"
 )
 
-// MarshalJSON marshals as JSON.
-func (c Config) MarshalJSON() ([]byte, error) {
+// MarshalTOML marshals as TOML.
+func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            uint64
@@ -81,7 +80,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
 		WitnessPruneThreshold                uint64
-		WitnessPruneInterval                 uint64
+		WitnessPruneInterval                 time.Duration
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -146,11 +145,11 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	enc.FastForwardThreshold = c.FastForwardThreshold
 	enc.WitnessPruneThreshold = c.WitnessPruneThreshold
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
-	return json.Marshal(&enc)
+	return &enc, nil
 }
 
-// UnmarshalJSON unmarshals from JSON.
-func (c *Config) UnmarshalJSON(input []byte) error {
+// UnmarshalTOML unmarshals from TOML.
+func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
 		Genesis                              *core.Genesis `toml:",omitempty"`
 		NetworkId                            *uint64
@@ -213,10 +212,10 @@ func (c *Config) UnmarshalJSON(input []byte) error {
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
 		WitnessPruneThreshold                *uint64
-		WitnessPruneInterval                 *uint64
+		WitnessPruneInterval                 *time.Duration
 	}
 	var dec Config
-	if err := json.Unmarshal(input, &dec); err != nil {
+	if err := unmarshal(&dec); err != nil {
 		return err
 	}
 	if dec.Genesis != nil {

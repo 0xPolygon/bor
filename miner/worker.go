@@ -88,6 +88,11 @@ var (
 	sealedBlocksCounter      = metrics.NewRegisteredCounter("worker/sealedBlocks", nil)
 	sealedEmptyBlocksCounter = metrics.NewRegisteredCounter("worker/sealedEmptyBlocks", nil)
 	txCommitInterruptCounter = metrics.NewRegisteredCounter("worker/txCommitInterrupt", nil)
+
+	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
+	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
+	// commitTransactionsTimer measures time taken to execute transactions
+	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -492,6 +497,11 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer timer.Stop()
 	<-timer.C // discard the initial tick
 
+	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+
+	veblopTimer := time.NewTimer(veblopTimeout)
+	defer veblopTimer.Stop()
+
 	// commit aborts in-flight transaction execution with given signal and resubmits a new one.
 	commit := func(noempty bool, s int32) {
 		if interrupt != nil {
@@ -505,6 +515,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			return
 		}
 		timer.Reset(recommit)
+		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
 	}
 	// clearPending cleans the stale pending tasks.
@@ -532,18 +543,34 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
+		case <-veblopTimer.C:
+			currentBlock := w.chain.CurrentBlock()
+			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsVeBlop(currentBlock.Number) {
+				veblopTimer.Reset(veblopTimeout)
+				continue
+			}
+
+			w.pendingMu.RLock()
+			hasPendingTasks := len(w.pendingTasks) > 0
+			w.pendingMu.RUnlock()
+
+			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
+				timestamp = time.Now().Unix()
+				commit(false, commitInterruptNewHead)
+			}
+
+			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			veblopTimer.Reset(veblopTimeout)
+
 		case <-timer.C:
 			// If sealing is running resubmit a new work cycle periodically to pull in
 			// higher priced transactions. Disable this overhead for pending blocks.
 			if w.IsRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
-				// TODO: In veblop, short circuit prevents the non-producers from producing blocks when
-				// the primary producer is down. Figure out a way to keep short circuiting but allow the non-producers to produce blocks.
-
 				// Short circuit if no new transaction arrives.
-				// if w.newTxs.Load() == 0 {
-				// 	timer.Reset(recommit)
-				// 	continue
-				// }
+				if w.newTxs.Load() == 0 {
+					timer.Reset(recommit)
+					continue
+				}
 				commit(true, commitInterruptResubmit)
 			}
 
@@ -933,6 +960,10 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 }
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, minTip *uint256.Int) error {
+	defer func(t0 time.Time) {
+		commitTransactionsTimer.Update(time.Since(t0))
+	}(time.Now())
+
 	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
@@ -1388,8 +1419,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
+		heapInitTime := time.Now()
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		txHeapInitTimer.Update(time.Since(heapInitTime))
 
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
 			return err
@@ -1508,7 +1541,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
-	if !noempty && !w.noempty.Load() {
+	// If the block is a veblop block, we will never try to create a commit for an empty block.
+	var isVeblop bool
+	if w.chainConfig.Bor != nil {
+		isVeblop = w.chainConfig.Bor.IsVeBlop(work.header.Number)
+	}
+	if !noempty && !w.noempty.Load() && !isVeblop {
 		_ = w.commit(work.copy(), nil, false, start)
 	}
 	// Fill pending transactions from the txpool into the block.

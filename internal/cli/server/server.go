@@ -45,7 +45,7 @@ import (
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 
-	protobor "github.com/maticnetwork/polyproto/bor"
+	protobor "github.com/0xPolygon/polyproto/bor"
 )
 
 type Server struct {

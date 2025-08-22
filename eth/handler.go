@@ -113,7 +113,7 @@ type handlerConfig struct {
 	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
 	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
 	witnessPruneThreshold   uint64                 // Minimum necessary distance between local header and latest non pruned witness
-	witnessPruneInterval    uint64                 // The time interval between each witness prune routine
+	witnessPruneInterval    time.Duration          // The time interval between each witness prune routine
 }
 
 type handler struct {
@@ -206,14 +206,17 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// * the last snap sync is not finished while user specifies a full sync this
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
-		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-		} else if !h.chain.HasState(fullBlock.Root) {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
-		}
+		// Disable switching to snap sync as it's disabled momentarily.
+		/*
+			fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
+			if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
+			} else if !h.chain.HasState(fullBlock.Root) {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+			}
+		*/
 	} else {
 		// This is snap sync mode
 		head := h.chain.CurrentBlock()
@@ -294,7 +297,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	h.chainSync = newChainSyncer(h)
 
 	if config.witnessProtocol {
-		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, time.Duration(config.witnessPruneInterval)*time.Second)
+		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, config.witnessPruneInterval)
 		h.witPruner.Start()
 	}
 

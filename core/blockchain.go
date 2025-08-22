@@ -1956,7 +1956,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	if statedb.Witness() != nil {
 		var witBuf bytes.Buffer
-		if err := statedb.Witness().EncodeCompressed(&witBuf); err != nil {
+		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
@@ -3740,7 +3740,7 @@ func (bc *BlockChain) verifyPendingHeaders() {
 	chainConfig := bc.Config()
 
 	// We don't need to verify headers before VeBlop
-	if !chainConfig.Bor.IsVeBlop(currentHead.Number) {
+	if chainConfig.Bor == nil || !chainConfig.Bor.IsVeBlop(currentHead.Number) {
 		return // VeBlop is not enabled yet
 	}
 

@@ -39,7 +39,7 @@ Modify the RUN git clone line in the Dockerfile for repo “retesteth” to chan
 Modify the Dockerfile so that the eth client points to bor  
 e.g. : `https://github.com/ethereum/retesteth/blob/master/Dockerfile#L41`
 from `RUN git clone --depth 1 -b master https://github.com/ethereum/go-ethereum.git /geth`
-to: `RUN git clone --depth 1 -b master https://github.com/maticnetwork/bor.git /geth`
+to: `RUN git clone --depth 1 -b master https://github.com/0xPolygon/bor.git /geth`
 
 - build docker image
 `sudo ./dretesteth.sh build`

@@ -6,9 +6,9 @@ import (
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 	"github.com/ethereum/go-ethereum/p2p"
 
-	protobor "github.com/maticnetwork/polyproto/bor"
-	protocommon "github.com/maticnetwork/polyproto/common"
-	protoutil "github.com/maticnetwork/polyproto/utils"
+	protobor "github.com/0xPolygon/polyproto/bor"
+	protocommon "github.com/0xPolygon/polyproto/common"
+	protoutil "github.com/0xPolygon/polyproto/utils"
 )
 
 func PeerInfoToPeer(info *p2p.PeerInfo) *proto.Peer {

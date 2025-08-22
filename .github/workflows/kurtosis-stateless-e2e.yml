@@ -29,47 +29,54 @@ jobs:
         with:
           tool-cache: true
 
-      - name: Checkout Bor
-        uses: actions/checkout@v4
-        with:
-          path: bor
-
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
 
-      - name: Pre kurtosis run
-        uses: ./bor/.github/actions/kurtosis-pre-run
+      - name: Checkout bor
+        uses: actions/checkout@v5
         with:
-          docker_username: ${{ secrets.DOCKERHUB }}
-          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+          path: bor
 
-      - name: Build Bor Docker Image
-        run: |
-          cd bor
-          docker build -t bor:local --file Dockerfile .
-
-      - name: Checkout Heimdall-v2
-        uses: actions/checkout@v4
+      - name: Checkout heimdall-v2
+        uses: actions/checkout@v5
         with:
           repository: 0xPolygon/heimdall-v2
           ref: stateless_sync
           path: heimdall-v2
 
-      - name: Build Heimdall-v2 Docker Image
-        run: |
-          cd heimdall-v2
-          docker build -t heimdall-v2:local --file Dockerfile .
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: main
+          path: pos-workflows
 
-      - name: Checkout Kurtosis
-        uses: actions/checkout@v4
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
           ref: stateless
           path: kurtosis-pos
 
+      - name: Pre kurtosis run
+        uses: ./pos-workflows/.github/actions/kurtosis-pre-run
+        with:
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Build bor docker image
+        run: |
+          cd bor
+          docker build -t bor:local --file Dockerfile .
+
+      - name: Build heimdall-v2 docker image
+        run: |
+          cd heimdall-v2
+          docker build -t heimdall-v2:local --file Dockerfile .
+
       - name: Copy kurtosis config
-        run: cp ./bor/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
+        run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
 
       - name: Kurtosis run
         run: |
@@ -77,20 +84,18 @@ jobs:
           kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
-        run: |
-          cd kurtosis-pos
-          kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
+        run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Run stateless sync tests
         run: |
-          cd bor
-          bash integration-tests/kurtosis_stateless_test.sh
+          cd pos-workflows
+          bash tests/stateless_tests/kurtosis_stateless_test.sh
 
       - name: Test state syncs (post VeBlop HF)
-        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,matic,pol --recursive tests/"
+        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,l1,l2 --recursive tests/"
 
       - name: Post kurtosis run
         if: always()
-        uses: ./bor/.github/actions/kurtosis-post-run
+        uses: ./pos-workflows/.github/actions/kurtosis-post-run
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

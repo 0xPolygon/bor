@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -349,7 +350,7 @@ func (p *ethPeer) reconstructWitness(pages []wit.WitnessPageResponse) (*stateles
 	}
 
 	wit := new(stateless.Witness)
-	if err := wit.DecodeCompressed(reconstructedWitnessRLPBytes); err != nil {
+	if err := rlp.DecodeBytes(reconstructedWitnessRLPBytes, wit); err != nil {
 		p.witPeer.Peer.Log().Warn("RequestWitnesses adapter failed to decode witness page RLP", "err", err)
 		return nil, err
 	}
