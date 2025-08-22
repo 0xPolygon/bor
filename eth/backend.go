@@ -307,16 +307,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
-	// Set blockchain reference for fork detection in whitelist service
-	if err == nil {
-		checker.SetBlockchain(eth.blockchain)
-	}
-
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
 	if err != nil {
 		return nil, err
 	}
+
+	// Set blockchain reference for fork detection in whitelist service
+	checker.SetBlockchain(eth.blockchain)
+
+	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
+	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
 
 	// bor: this is nor present in geth
 	/*
