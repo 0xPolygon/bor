@@ -2267,6 +2267,20 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 	abort, results := bc.engine.VerifyHeaders(bc, headers)
 	defer close(abort)
 
+	errChans := make([]chan error, len(chain))
+	for i := range errChans {
+		errChans[i] = make(chan error, 1)
+	}
+	go func() {
+		for i := 0; i < len(headers); i++ {
+			err := <-results
+			errChans[i] <- err
+		}
+		for i := range errChans {
+			close(errChans[i])
+		}
+	}()
+
 	// Check the validity of incoming chain
 	isValid, err := bc.forker.ValidateReorg(bc.CurrentBlock(), headers)
 	if err != nil {
@@ -2292,18 +2306,16 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 			// Check if block is already known before attempting to process
 			if bc.HasBlock(block.Hash(), block.NumberU64()) {
-				log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
 				// Count as processed since we're skipping it
 				processed.Add(1)
-				// We need to ensure the header verification result for this block is consumed
-				// even though we are skipping the processing.
-				if err := <-results; err != nil {
-					// If header verification failed for this known block (shouldn't happen often),
-					// it might indicate a deeper issue, but we can't proceed with the chain.
+				log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+				// Ensure the header verification result for this block is consumed
+				if err := <-errChans[i]; err != nil {
 					log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
 					processed.Store(processed.Load() - 1)
 					return fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 				}
+				return nil
 			}
 
 			// If the chain is terminating, don't even bother starting up.
@@ -2311,9 +2323,39 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 				return errInsertionInterrupted
 			}
 
-			// Wait for the block's verification to complete
-			if err := <-results; err != nil {
-				if err == consensus.ErrUnknownAncestor {
+			// Get the witness for this block if available
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+
+			// Process the block using stateless execution first (parallelizable)
+			statedb, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if perr != nil {
+				// If we hit a stateless state-root mismatch, and the parent is in-batch, wait for parent and retry once
+				parentInBatchRetry := i > 0 && chain[i-1].Hash() == block.ParentHash()
+				if parentInBatchRetry && strings.Contains(perr.Error(), "stateless self-validation state root mismatch") {
+					bs.WaitForParent(block.ParentHash())
+					statedb, perr = bc.ProcessBlockWithWitnesses(block, witness)
+				}
+				if perr != nil {
+					return perr
+				}
+			}
+			statedb.SetWitness(witness)
+
+			// Determine if parent is part of this batch directly before this block
+			parentInBatch := i > 0 && chain[i-1].Hash() == block.ParentHash()
+
+			// If parent is in this batch, wait until parent has been committed before we proceed to commit
+			if parentInBatch {
+				bs.WaitForParent(block.ParentHash())
+			}
+
+			// Now handle header verification result post-processing
+			hErr := <-errChans[i]
+			if hErr != nil {
+				if hErr == consensus.ErrUnknownAncestor {
 					// In parallel import, ErrUnknownAncestor might occur if parent block
 					// is still being processed by another goroutine. Handle differently based on context.
 					parentNum := block.NumberU64() - 1
@@ -2366,18 +2408,18 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 								"parentHash", parentHash)
 							// Wait for parent to complete processing
 							bs.WaitForParent(parentHash)
-							// After parent completes, retry the header verification
-							// This ensures proper dependency ordering in parallel processing
-							log.Debug("Parent processing completed, continuing with block",
-								"blockNum", block.NumberU64(),
-								"parentHash", parentHash)
+							// After parent completes, retry the header verification to ensure correctness
+							if verr := bc.engine.VerifyHeader(bc, block.Header()); verr != nil {
+								return verr
+							}
+							// Parent complete and header ok; proceed
 						} else {
 							// Parent should be complete but still getting unknown ancestor
 							// This indicates a genuine missing parent scenario
 							log.Error("Parent block processing completed but still unknown ancestor",
 								"blockNum", block.NumberU64(),
 								"parentHash", parentHash)
-							return err
+							return hErr
 						}
 					} else if i == 0 {
 						// First block in batch - parent might not be in our chain yet
@@ -2385,54 +2427,28 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 						log.Debug("First block in batch has unknown ancestor, continuing",
 							"blockNum", block.NumberU64(),
 							"parentHash", block.ParentHash())
+						return hErr
 					} else {
 						// Other cases - return the error
-						return err
+						return hErr
 					}
 				} else {
 					// Non-ancestor related errors should still fail the import
 					log.Warn("Block verification failed during parallel insert",
 						"blockNum", block.NumberU64(),
 						"hash", block.Hash(),
-						"err", err)
-					return err
+						"err", hErr)
+					return hErr
 				}
 			}
 
-			// Get the witness for this block if available
-			var witness *stateless.Witness
-			if i < len(witnesses) {
-				witness = witnesses[i]
-			}
-
-		retry:
-			// Process the block using stateless execution
-			statedb, err := bc.ProcessBlockWithWitnesses(block, witness)
-			if err != nil {
-				// if there is an error in calculation of state root, let's wait for the previous block to be processed
-				if errors.Is(err, fmt.Errorf("stateless self-validation state root mismatch")) {
-					log.Warn("Stateless self-validation state root mismatch, waiting for previous block to be processed", "block", block.NumberU64(), "hash", block.Hash(), "err", err)
-
-					// If this is not the first block, wait for the previous block to be processed
-					if i > 0 {
-						if !bs.IsComplete(block.Header().ParentHash) {
-							log.Warn("Waiting for previous block to be processed", "block", block.NumberU64(), "hash", block.Hash(), "previousBlock", chain[i-1].Hash())
-							bs.WaitForParent(block.Header().ParentHash)
-							goto retry
-						}
-					}
-				}
-			}
-
-			statedb.SetWitness(witness)
-
-			// Write the block to the chain without committing state
-			if _, err := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); err != nil {
-				return err
+			// Write the block to the chain without committing state to disk trie
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); werr != nil {
+				return werr
 			}
 
 			processed.Add(1)
-			// Mark the block as processed
+			// Mark the block as processed and committed for children
 			bs.MarkComplete(block.Hash())
 			stats.processed = int(processed.Load())
 
@@ -2442,6 +2458,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 	}
 
+	wg.Wait()
 	return int(processed.Load()), nil
 }
 
