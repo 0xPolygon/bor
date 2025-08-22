@@ -1,48 +1,59 @@
-name: i386 linux tests
-
 on:
   push:
-    branches: [ master ]
+    branches:
+      - master
+      - develop
   pull_request:
-    branches: [ master ]
+    branches:
+      - master
+      - develop
   workflow_dispatch:
 
 jobs:
   lint:
     name: Lint
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
 
-    # Cache build tools to avoid downloading them each time
-    - uses: actions/cache@v4
-      with:
-        path: build/cache
-        key: ${{ runner.os }}-build-tools-cache-${{ hashFiles('build/checksums.txt') }}
+      # Cache build tools to avoid downloading them each time
+      - uses: actions/cache@v5
+        with:
+          path: build/cache
+          key: ${{ runner.os }}-build-tools-cache-${{ hashFiles('build/checksums.txt') }}
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: 1.24.3
-        cache: false
-
-    - name: Run linters
-      run: |
-        go run build/ci.go lint
-        go run build/ci.go check_generate
-        go run build/ci.go check_baddeps
-
-  build:
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.24.0
+          go-version: 1.24.6
           cache: false
+
+      - name: Run linters
+        run: |
+          go run build/ci.go lint
+          go run build/ci.go check_generate
+          go run build/ci.go check_baddeps
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go:
+          - '1.24.6'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+
       - name: Run tests
-        run: go test -short ./...
-        env:
-          GOOS: linux
-          GOARCH: 386
+        run: go test ./...
