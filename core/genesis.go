@@ -545,7 +545,7 @@ func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 			withdrawals = make([]*types.Withdrawal, 0)
 		}
 
-		if conf.IsCancun(num) {
+		if conf.IsCancun(num) && (conf.Bor == nil || isBorHFConfigEmpty(conf.Bor)) {
 			// EIP-4788: The parentBeaconBlockRoot of the genesis block is always
 			// the zero hash. This is because the genesis block does not have a parent
 			// by definition.
