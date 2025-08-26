@@ -586,7 +586,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 // mainLoop is responsible for generating and submitting sealing work based on
 // the received event. It can support two modes: automatically generate task and
 // submit it or return task according to given parameters for various proposes.
-// nolint: gocognit, contextcheck
+// nolint:gocognit, contextcheck
 func (w *worker) mainLoop() {
 	defer w.wg.Done()
 	defer w.txsSub.Unsubscribe()

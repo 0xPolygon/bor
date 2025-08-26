@@ -698,7 +698,7 @@ func testGetSealingWork(t *testing.T, chainConfig *params.ChainConfig, engine co
 	}
 }
 
-// nolint: paralleltest
+// nolint:paralleltest
 // TestCommitInterruptExperimentBor_NormalFlow tests the commit interrupt experiment for bor consensus by inducing
 // an artificial delay at transaction level. It runs the normal mining flow triggered via new head.
 func TestCommitInterruptExperimentBor_NormalFlow(t *testing.T) {
@@ -711,7 +711,7 @@ func TestCommitInterruptExperimentBor_NormalFlow(t *testing.T) {
 	testCommitInterruptExperimentBor(t, 100, 10)
 }
 
-// nolint: thelper
+// nolint:thelper
 // testCommitInterruptExperimentBor is a helper function for testing the commit interrupt experiment for bor consensus.
 func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	var (
@@ -833,7 +833,7 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 	assert.Equal(t, len(w.current.txs), 2)
 }
 
-// nolint: paralleltest
+// nolint:paralleltest
 // TestCommitInterruptPending tests setting interrupting the block building very early on
 // in the fill transactions phase. The test is just to ensure that commit work works when
 // it started the block production late.
@@ -1073,7 +1073,7 @@ func BenchmarkBorMining(b *testing.B) {
 
 // uses core.NewParallelBlockChain to use the dependencies present in the block header
 // params.BorUnittestChainConfig contains the NapoliBlock as big.NewInt(5), so the first 4 blocks will not have metadata.
-// nolint: gocognit
+// nolint:gocognit
 func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 	chainConfig := params.BorUnittestChainConfig
 

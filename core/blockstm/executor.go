@@ -295,7 +295,7 @@ func NewParallelExecutor(tasks []ExecTask, profile bool, metadata bool, numProcs
 	return pe
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func (pe *ParallelExecutor) Prepare() error {
 	prevSenderTx := make(map[common.Address]int)
 
@@ -414,7 +414,7 @@ func (pe *ParallelExecutor) Close(wait bool) {
 	}
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func (pe *ParallelExecutor) Step(res *ExecResult) (result ParallelExecutionResult, err error) {
 	tx := res.ver.TxnIndex
 
@@ -427,7 +427,7 @@ func (pe *ParallelExecutor) Step(res *ExecResult) (result ParallelExecutionResul
 		return
 	}
 
-	// nolint: nestif
+	// nolint:nestif
 	if execErr, ok := res.err.(ErrExecAbortError); ok {
 		addedDependencies := false
 

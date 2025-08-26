@@ -105,7 +105,7 @@ func (c *AttachCommand) Run(args []string) int {
 
 // remoteConsole will connect to a remote bor instance, attaching a JavaScript
 // console to it.
-// nolint: unparam
+// nolint:unparam
 func (c *AttachCommand) remoteConsole() error {
 	// Attach to a remotely running geth instance and start the JavaScript console
 	path := node.DefaultDataDir()

@@ -130,7 +130,7 @@ func TestGetSignerSuccessionNumber_SignerNotFound(t *testing.T) {
 	require.Equal(t, dummySignerAddress.Bytes(), e.Signer)
 }
 
-// nolint: unparam
+// nolint:unparam
 func buildRandomValidatorSet(numVals int) []*valset.Validator {
 	validators := make([]*valset.Validator, numVals)
 	valAddrs := randomAddresses(numVals)

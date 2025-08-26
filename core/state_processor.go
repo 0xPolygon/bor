@@ -19,6 +19,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"sync/atomic"
 
@@ -32,6 +33,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+const maxSystemCallRet = 64 << 20 // 64 MiB
 
 // StateProcessor is a basic Processor, which takes care of transitioning
 // state from one point to another.
@@ -381,8 +384,12 @@ func processRequestsSystemCall(requests *[][]byte, evm *vm.EVM, requestType byte
 	if len(ret) == 0 {
 		return nil // skip empty output
 	}
+	if len(ret) > maxSystemCallRet || len(ret) > math.MaxInt-1 {
+		return fmt.Errorf("system call output too large")
+	}
 	// Append prefixed requestsData to the requests list.
-	requestsData := make([]byte, len(ret)+1)
+	requestsData := []byte{requestType}
+	requestsData = append(requestsData, ret...)
 	requestsData[0] = requestType
 	copy(requestsData[1:], ret)
 	*requests = append(*requests, requestsData)

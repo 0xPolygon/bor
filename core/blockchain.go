@@ -79,8 +79,8 @@ var (
 	storageUpdateTimer = metrics.NewRegisteredResettingTimer("chain/storage/updates", nil)
 	storageCommitTimer = metrics.NewRegisteredResettingTimer("chain/storage/commits", nil)
 
-	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:golint,unused
-	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:golint,unused
+	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
+	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
 	triedbCommitTimer        = metrics.NewRegisteredResettingTimer("chain/triedb/commits", nil)
@@ -93,7 +93,7 @@ var (
 
 	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
 	blockValidationTimer               = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:golint,unused
+	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
 	blockExecutionTimer                = metrics.NewRegisteredTimer("chain/execution", nil)
 	blockWriteTimer                    = metrics.NewRegisteredTimer("chain/write", nil)
 	blockExecutionParallelCounter      = metrics.NewRegisteredCounter("chain/execution/parallel", nil)
@@ -845,7 +845,7 @@ func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 		bc.historyPrunePoint.Store(predefinedPoint)
 		return nil
 
-	// nolint:gosimple
+	// nolint:staticcheck
 	case history.KeepPostMerge:
 		if freezerTail == 0 && latest != 0 {
 			// This is the case where a user is trying to run with --history.chain
