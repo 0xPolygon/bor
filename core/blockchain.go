@@ -312,6 +312,7 @@ type BlockChain struct {
 	parallelProcessor            Processor // Parallel block transaction processor interface
 	parallelSpeculativeProcesses int       // Number of parallel speculative processes
 	enforceParallelProcessor     bool
+	parallelImport               atomic.Bool // Whether we are currently doing parallel stateless import
 	forker                       *ForkChoice
 	vmConfig                     vm.Config
 	logger                       *tracing.Hooks
@@ -2299,6 +2300,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 	var processed atomic.Int32
 
 	bs := NewBlockState() // Block state tracker to manage parallel block processing
+	bc.parallelImport.Store(true)
 	for i, block := range chain {
 		wg.Add(1)
 		go func(block *types.Block, i int) error {
@@ -2459,6 +2461,16 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 	}
 
 	wg.Wait()
+	bc.parallelImport.Store(false)
+
+	// Defer the validation of witness pre-state for all blocks in this batch now that headers/parents are imported
+	for i, block := range chain {
+		if i < len(witnesses) && witnesses[i] != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
+			}
+		}
+	}
 	return int(processed.Load()), nil
 }
 
@@ -3768,9 +3780,12 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	// Validate witness.
-	if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
-		log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
-		return nil, fmt.Errorf("witness validation failed: %w", err)
+	// During parallel import, defer pre-state validation to the end of the batch.
+	if !bc.parallelImport.Load() {
+		if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
+			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+			return nil, fmt.Errorf("witness validation failed: %w", err)
+		}
 	}
 
 	// Remove critical computed fields from the block to force true recalculation
