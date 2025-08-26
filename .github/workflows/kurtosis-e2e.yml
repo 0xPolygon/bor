@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.1.4
+          ref: v1.1.5
           path: kurtosis-pos
 
       - name: Pre kurtosis run
@@ -84,6 +84,15 @@ jobs:
 
       - name: Test state syncs
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,l1,l2 --recursive tests/"
+
+      - name: Run RPC tests
+        run: |
+          export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
+          export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
+
+          cd pos-workflows/tests/rpc_tests
+          go mod tidy
+          go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
       - name: Run smoke tests (Checkpoints and Milestones)
         run: bash ./pos-workflows/tests/kurtosis_smoke_test.sh

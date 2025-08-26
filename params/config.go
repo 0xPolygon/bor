@@ -252,10 +252,14 @@ var (
 		LondonBlock:         big.NewInt(22640000),
 		ShanghaiBlock:       big.NewInt(41874000),
 		CancunBlock:         big.NewInt(45648608),
+		PragueBlock:         big.NewInt(48467456),
 		Bor: &BorConfig{
-			JaipurBlock: big.NewInt(22770000),
-			DelhiBlock:  big.NewInt(29638656),
-			IndoreBlock: big.NewInt(37075456),
+			JaipurBlock:    big.NewInt(22770000),
+			DelhiBlock:     big.NewInt(29638656),
+			IndoreBlock:    big.NewInt(37075456),
+			AhmedabadBlock: big.NewInt(48467456),
+			BhilaiBlock:    big.NewInt(48467456),
+			VeBlopBlock:    big.NewInt(48473856),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"37075456": 128,
 			},
@@ -502,7 +506,10 @@ var (
 		VerkleBlock:             nil,
 		Ethash:                  new(EthashConfig),
 		Clique:                  nil,
-		Bor:                     &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	AllDevChainProtocolChanges = &ChainConfig{
@@ -528,7 +535,10 @@ var (
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
 		},
-		Bor: &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	AllDevChainProtocolChanges1 = &ChainConfig{
@@ -551,7 +561,10 @@ var (
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
 		},
-		Bor: &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
@@ -582,7 +595,10 @@ var (
 		TerminalTotalDifficulty: big.NewInt(math.MaxInt64),
 		Ethash:                  nil,
 		Clique:                  &CliqueConfig{Period: 0, Epoch: 30000},
-		Bor:                     &BorConfig{BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+		Bor: &BorConfig{
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// TestChainConfig contains every protocol change (EIPs) introduced
@@ -620,7 +636,9 @@ var (
 		Bor: &BorConfig{
 			Sprint: map[string]uint64{
 				"0": 4},
-			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"}},
+			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
+		},
 	}
 
 	// MergedTestChainConfig contains every protocol change (EIPs) introduced
@@ -659,6 +677,7 @@ var (
 			Sprint: map[string]uint64{
 				"0": 4},
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			Period:        map[string]uint64{"0": 2},
 		},
 	}
 
@@ -839,6 +858,7 @@ type BorConfig struct {
 	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
 	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	VeBlopBlock                     *big.Int               `json:"veblopBlock"`                // VeBlop switch block (nil = no fork, 0 = already on veblop)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -884,6 +904,10 @@ func (c *BorConfig) IsAhmedabad(number *big.Int) bool {
 
 func (c *BorConfig) IsBhilai(number *big.Int) bool {
 	return isBlockForked(c.BhilaiBlock, number)
+}
+
+func (c *BorConfig) IsVeBlop(number *big.Int) bool {
+	return isBlockForked(c.VeBlopBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized

@@ -85,6 +85,7 @@ func (h *ethHandler) fetchWhitelistMilestone(ctx context.Context, bor *bor.Bor) 
 
 // handleMilestone verify and process the fetched milestone
 func (h *ethHandler) handleMilestone(ctx context.Context, eth *Ethereum, milestone *milestone.Milestone, verifier *borVerifier) error {
+	h.downloader.UpdateFastForwardBlockFromMilestone(h.chain.DB(), milestone)
 	// Verify if the milestone fetched can be added to the local whitelist entry or not. If verified,
 	// the hash of the end block of the milestone is returned else appropriate error is returned.
 	_, err := verifier.verify(ctx, eth, h, milestone.StartBlock, milestone.EndBlock, milestone.Hash.String()[2:], false)

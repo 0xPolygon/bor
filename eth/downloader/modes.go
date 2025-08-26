@@ -23,12 +23,14 @@ import "fmt"
 type SyncMode uint32
 
 const (
-	FullSync SyncMode = iota // Synchronise the entire blockchain history from full blocks
-	SnapSync                 // Download the chain and the state via compact snapshots
+	FullSync             SyncMode = iota // Synchronise the entire blockchain history from full blocks
+	SnapSync                             // Download the chain and the state via compact snapshots
+	StatelessSync                        // Start syncing from an arbitrary block without requiring history
+	BytecodeOnlySnapSync                 // Internal mode: Download only bytecodes via snap sync before stateless sync
 )
 
 func (mode SyncMode) IsValid() bool {
-	return mode == FullSync || mode == SnapSync
+	return mode == FullSync || mode == SnapSync || mode == StatelessSync || mode == BytecodeOnlySnapSync
 }
 
 // String implements the stringer interface.
@@ -38,6 +40,10 @@ func (mode SyncMode) String() string {
 		return "full"
 	case SnapSync:
 		return "snap"
+	case StatelessSync:
+		return "stateless"
+	case BytecodeOnlySnapSync:
+		return "bytecode"
 	default:
 		return "unknown"
 	}
@@ -49,6 +55,10 @@ func (mode SyncMode) MarshalText() ([]byte, error) {
 		return []byte("full"), nil
 	case SnapSync:
 		return []byte("snap"), nil
+	case StatelessSync:
+		return []byte("stateless"), nil
+	case BytecodeOnlySnapSync:
+		return []byte("bytecode"), nil
 	default:
 		return nil, fmt.Errorf("unknown sync mode %d", mode)
 	}
@@ -60,8 +70,12 @@ func (mode *SyncMode) UnmarshalText(text []byte) error {
 		*mode = FullSync
 	case "snap":
 		*mode = SnapSync
+	case "stateless":
+		*mode = StatelessSync
+	case "bytecode":
+		*mode = BytecodeOnlySnapSync
 	default:
-		return fmt.Errorf(`unknown sync mode %q, want "full" or "snap"`, text)
+		return fmt.Errorf(`unknown sync mode %q, want "full", "snap", or "stateless"`, text)
 	}
 
 	return nil

@@ -13,6 +13,14 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
+	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 type mockHeimdall struct {
@@ -55,8 +63,23 @@ func (m *mockHeimdall) Close() {}
 func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
 	t.Parallel()
 
-	// create an empty ethHandler
-	handler := &ethHandler{}
+	// create a minimal blockchain for the test
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  core.GenesisAlloc{},
+	}
+	chain, _ := core.NewBlockChain(db, nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil, nil)
+	defer chain.Stop()
+
+	// create a downloader with the blockchain
+	mux := new(event.TypeMux)
+	mockDownloader := downloader.New(db, mux, chain, nil, func(string) {}, func() {}, whitelist.NewService(db), 0, false)
+
+	// create an ethHandler with the mock downloader
+	handler := &ethHandler{
+		downloader: mockDownloader,
+	}
 
 	// create a mock checkpoint verification function and use it to create a verifier
 	verify := func(ctx context.Context, eth *Ethereum, handler *ethHandler, start uint64, end uint64, hash string, isCheckpoint bool) (string, error) {

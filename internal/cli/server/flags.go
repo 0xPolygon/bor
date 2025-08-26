@@ -88,7 +88,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "syncmode",
-		Usage:   `Blockchain sync mode (only "full" sync supported)`,
+		Usage:   `Blockchain sync mode (only "full" or "stateless" sync supported)`,
 		Value:   &c.cliConfig.SyncMode,
 		Default: c.cliConfig.SyncMode,
 	})
@@ -1010,6 +1010,44 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Enforce block processing via Block STM",
 		Value:   &c.cliConfig.ParallelEVM.Enforce,
 		Default: c.cliConfig.ParallelEVM.Enforce,
+	})
+
+	// Witness Protocol Flags
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.enable",
+		Usage:   "Enable witness protocol",
+		Value:   &c.cliConfig.Witness.Enable,
+		Default: c.cliConfig.Witness.Enable,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.syncwithwitnesses",
+		Usage:   "Sync blocks with witnesses",
+		Value:   &c.cliConfig.Witness.SyncWithWitnesses,
+		Default: c.cliConfig.Witness.SyncWithWitnesses,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.producewitnesses",
+		Usage:   "Produce witnesses while syncing",
+		Value:   &c.cliConfig.Witness.ProduceWitnesses,
+		Default: c.cliConfig.Witness.ProduceWitnesses,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "witness.fastforwardthreshold",
+		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",
+		Value:   &c.cliConfig.Witness.FastForwardThreshold,
+		Default: c.cliConfig.Witness.FastForwardThreshold,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "witness.prunethreshold",
+		Usage:   "Maximum distance between local header and latest non pruned witness after a pruning routine",
+		Value:   &c.cliConfig.Witness.PruneThreshold,
+		Default: c.cliConfig.Witness.PruneThreshold,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "witness.pruneinterval",
+		Usage:   "The time interval between each witness prune routine",
+		Value:   &c.cliConfig.Witness.PruneInterval,
+		Default: c.cliConfig.Witness.PruneInterval,
 	})
 
 	f.Uint64Flag(&flagset.Uint64Flag{

@@ -121,6 +121,9 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 
 // Close terminates the transaction pool and all its subpools.
 func (p *TxPool) Close() error {
+	if p == nil {
+		return nil
+	}
 	var errs []error
 
 	// Terminate the reset loop and wait for it to finish
@@ -261,6 +264,9 @@ func (p *TxPool) loop(head *types.Header) {
 // SetGasTip updates the minimum gas tip required by the transaction pool for a
 // new transaction, and drops all transactions below this threshold.
 func (p *TxPool) SetGasTip(tip *big.Int) {
+	if p == nil {
+		return
+	}
 	for _, subpool := range p.subpools {
 		subpool.SetGasTip(tip)
 	}
@@ -269,6 +275,9 @@ func (p *TxPool) SetGasTip(tip *big.Int) {
 // Has returns an indicator whether the pool has a transaction cached with the
 // given hash.
 func (p *TxPool) Has(hash common.Hash) bool {
+	if p == nil {
+		return false
+	}
 	for _, subpool := range p.subpools {
 		if subpool.Has(hash) {
 			return true
@@ -279,6 +288,9 @@ func (p *TxPool) Has(hash common.Hash) bool {
 
 // Get returns a transaction if it is contained in the pool, or nil otherwise.
 func (p *TxPool) Get(hash common.Hash) *types.Transaction {
+	if p == nil {
+		return nil
+	}
 	for _, subpool := range p.subpools {
 		if tx := subpool.Get(hash); tx != nil {
 			return tx
@@ -332,6 +344,9 @@ func (p *TxPool) GetBlobs(vhashes []common.Hash) ([]*kzg4844.Blob, []*kzg4844.Pr
 // Note, if sync is set the method will block until all internal maintenance
 // related to the add is finished. Only use this during tests for determinism.
 func (p *TxPool) Add(txs []*types.Transaction, sync bool) []error {
+	if p == nil {
+		return []error{fmt.Errorf("stateless client: txpool disabled")}
+	}
 	// Split the input transactions between the subpools. It shouldn't really
 	// happen that we receive merged batches, but better graceful than strange
 	// errors.
@@ -381,6 +396,9 @@ func (p *TxPool) Add(txs []*types.Transaction, sync bool) []error {
 // reduce allocations and load on downstream subsystems. The retrieval is halted
 // if interrupt is set (during block building timeout).
 func (p *TxPool) Pending(filter PendingFilter, interrupt *atomic.Bool) map[common.Address][]*LazyTransaction {
+	if p == nil {
+		return make(map[common.Address][]*LazyTransaction)
+	}
 	txs := make(map[common.Address][]*LazyTransaction)
 	for _, subpool := range p.subpools {
 		for addr, set := range subpool.Pending(filter, interrupt) {
@@ -393,6 +411,12 @@ func (p *TxPool) Pending(filter PendingFilter, interrupt *atomic.Bool) map[commo
 // SubscribeTransactions registers a subscription for new transaction events,
 // supporting feeding only newly seen or also resurrected transactions.
 func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) event.Subscription {
+	if p == nil {
+		return event.NewSubscription(func(quit <-chan struct{}) error {
+			<-quit
+			return nil
+		})
+	}
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
 		subs[i] = subpool.SubscribeTransactions(ch, reorgs)
@@ -427,6 +451,9 @@ func (p *TxPool) Nonce(addr common.Address) uint64 {
 // Stats retrieves the current pool stats, namely the number of pending and the
 // number of queued (non-executable) transactions.
 func (p *TxPool) Stats() (int, int) {
+	if p == nil {
+		return 0, 0
+	}
 	var runnable, blocked int
 	for _, subpool := range p.subpools {
 		run, block := subpool.Stats()

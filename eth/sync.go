@@ -194,13 +194,20 @@ func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
 }
 
 func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
-	// Enforce full sync as snap sync is disabled momentarily
-	head := cs.handler.chain.CurrentBlock()
-	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
-	return downloader.FullSync, td
-	/*
+	// Enforce full or stateless sync as snap sync is disabled momentarily.
+	// Only exception is if we're in stateless sync mode.
+	if !cs.handler.statelessSync.Load() {
+		head := cs.handler.chain.CurrentBlock()
+		td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
+
+		if cs.handler.statelessSync.Load() {
+			return downloader.StatelessSync, td
+		} else {
+			return downloader.FullSync, td
+		}
+	} else {
 		// If we're in snap sync mode, return that directly
-		if cs.handler.snapSync.Load() {
+		if cs.handler.snapSync.Load() && !cs.handler.statelessSync.Load() {
 			block := cs.handler.chain.CurrentSnapBlock()
 			td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
 			return downloader.SnapSync, td
@@ -209,7 +216,7 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 		// We are probably in full sync, but we might have rewound to before the
 		// snap sync pivot, check if we should re-enable snap sync.
 		head := cs.handler.chain.CurrentBlock()
-		if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil {
+		if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil && !cs.handler.statelessSync.Load() {
 			if head.Number.Uint64() < *pivot {
 				block := cs.handler.chain.CurrentSnapBlock()
 				td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
@@ -221,7 +228,7 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 		// We are in a full sync, but the associated head state is missing. To complete
 		// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 		// persistent state is corrupted, just mismatch with the head block.
-		if !cs.handler.chain.HasState(head.Root) {
+		if !cs.handler.chain.HasState(head.Root) && !cs.handler.statelessSync.Load() {
 			block := cs.handler.chain.CurrentSnapBlock()
 			td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
 			log.Info("Reenabled snap sync as chain is stateless")
@@ -231,8 +238,12 @@ func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
 		// Nope, we're really full syncing
 		td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
 
-		return downloader.FullSync, td
-	*/
+		if cs.handler.statelessSync.Load() {
+			return downloader.StatelessSync, td
+		} else {
+			return downloader.FullSync, td
+		}
+	}
 }
 
 // startSync launches doSync in a new goroutine.
@@ -277,7 +288,7 @@ func (h *handler) doSync(op *chainSyncOp) error {
 		// degenerate connectivity, but it should be healthy for the mainnet too to
 		// more reliably update peers or the local TD state.
 		if block := h.chain.GetBlock(head.Hash(), head.Number.Uint64()); block != nil {
-			h.BroadcastBlock(block, false)
+			h.BroadcastBlock(block, nil, false)
 		}
 	}
 	return nil

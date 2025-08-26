@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gomock "go.uber.org/mock/gomock"
 	"golang.org/x/crypto/sha3"
 
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -702,7 +702,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 	}
 
 	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false, setParentTime, setDifficulty)
-	_, err := chain.InsertChain([]*types.Block{block})
+	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t,
 		bor.BlockTooSoonError{Number: spanSize, Succession: expectedSuccessionNumber},
 		*err.(*bor.BlockTooSoonError))
@@ -717,7 +717,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 
 	block = types.NewBlockWithHeader(header)
 
-	_, err = chain.InsertChain([]*types.Block{block})
+	_, err = chain.InsertChain([]*types.Block{block}, false)
 	require.NotNil(t, err)
 	require.Equal(t,
 		bor.WrongDifficultyError{Number: spanSize, Expected: expectedDifficulty, Actual: 3, Signer: newAddr.Bytes()},
@@ -727,7 +727,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 	sign(t, header, signerKey, init.genesis.Config.Bor)
 	block = types.NewBlockWithHeader(header)
 
-	_, err = chain.InsertChain([]*types.Block{block})
+	_, err = chain.InsertChain([]*types.Block{block}, false)
 	require.Nil(t, err)
 }
 
@@ -768,10 +768,14 @@ func TestSignerNotFound(t *testing.T) {
 
 	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false)
 
-	_, err := chain.InsertChain([]*types.Block{block})
+	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t,
 		*err.(*bor.UnauthorizedSignerError),
-		bor.UnauthorizedSignerError{Number: 0, Signer: newAddr.Bytes()})
+		bor.UnauthorizedSignerError{
+			Number:         1,
+			Signer:         newAddr.Bytes(),
+			AllowedSigners: borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators,
+		})
 }
 
 // TestEIP1559Transition tests the following:
@@ -858,7 +862,7 @@ func TestEIP1559Transition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -913,7 +917,7 @@ func TestEIP1559Transition(t *testing.T) {
 		b.AddTx(tx)
 	})
 
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -982,7 +986,7 @@ func TestEIP1559Transition(t *testing.T) {
 
 	})
 
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -1002,7 +1006,6 @@ func TestEIP1559Transition(t *testing.T) {
 }
 
 func TestBurnContract(t *testing.T) {
-	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	var (
 		aa = common.HexToAddress("0x000000000000000000000000000000000000aaaa")
@@ -1083,7 +1086,7 @@ func TestBurnContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -1137,7 +1140,7 @@ func TestBurnContract(t *testing.T) {
 		b.AddTx(tx)
 	})
 
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -1184,7 +1187,7 @@ func TestBurnContract(t *testing.T) {
 		b.AddTx(tx)
 	})
 
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -1218,7 +1221,6 @@ func TestBurnContract(t *testing.T) {
 }
 
 func TestBurnContractContractFetch(t *testing.T) {
-	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	config := params.BorUnittestChainConfig
 	config.Bor.BurntContract = map[string]string{
@@ -1441,7 +1443,7 @@ func TestTransitionWithoutEIP155(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -1603,7 +1605,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 
 	// Build block 1 normally
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
-	i, err := chain.InsertChain([]*types.Block{block})
+	i, err := chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #1")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #1")
@@ -1626,7 +1628,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	// The building + sealing time should be slightly greater than the waiting time
 	require.Greater(t, blockAnnouncementTime, waitingTime, fmt.Sprintf("block announcement time is less than waiting time"))
 	// Block verified and imported successfully
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #2")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #2")
 
@@ -1638,13 +1640,13 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
 	require.Greater(t, block.Time(), headerTime, "block time should be greated than expected header time")
 	// Block verified and imported successfully
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #3")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #3")
 
 	// Build block 4 normally
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #4")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #4")
@@ -1663,7 +1665,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	}
 	signer, err := hex.DecodeString(privKey)
 	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTimeWithoutSleep)
-	i, err = chain.InsertChain([]*types.Block{tempBlock})
+	i, err = chain.InsertChain([]*types.Block{tempBlock}, false)
 	// No error is expected here because block will be added to future chain and is
 	// technically valid (according to insert chain function)
 	require.NoError(t, err, "error inserting block #5")
@@ -1674,7 +1676,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 
 	// Build block 5 again normally
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #5")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #5")
@@ -1688,7 +1690,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, setTime)
 	// Consensus verification will fail and this error will float up unlike future block error
 	// as we've tweaked the header time which is not allowed.
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t, bor.ErrInvalidTimestamp, err, "incorrect error while inserting block #5")
 	require.Equal(t, 0, i, "incorrect number of blocks inserted while inserting block #5")
 }
@@ -1776,7 +1778,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		header.Difficulty = new(big.Int).SetUint64(3)
 	}
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime, updateDiff)
-	i, err := chain.InsertChain([]*types.Block{block})
+	i, err := chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #1")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #1")
 
@@ -1801,7 +1803,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		header.Time = block.Time() - 1
 	}
 	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTime, updateHeader)
-	i, err = chain.InsertChain([]*types.Block{tempBlock})
+	i, err = chain.InsertChain([]*types.Block{tempBlock}, false)
 	require.Equal(t, bor.ErrInvalidTimestamp, err, "incorrect error while inserting block #2")
 	require.Equal(t, 0, i, "incorrect number of blocks inserted while inserting block #2")
 
@@ -1836,7 +1838,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 	// The building + sealing time should be greater than ideal time (6s for tertiary validator)
 	// as early block announcement is not allowed for non-primary validators.
 	require.GreaterOrEqual(t, blockAnnouncementTime, expectedBlockBuildingTime, fmt.Sprintf("block #2 announcement happened before header time for non-primary validator"))
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #2")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #2")
 
@@ -1865,7 +1867,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 	err = engine.VerifyHeader(chain, block.Header())
 	require.NoError(t, err, "error verifying block #3")
 
-	i, err = chain.InsertChain([]*types.Block{block})
+	i, err = chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #3")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #3")
 

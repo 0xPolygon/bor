@@ -41,17 +41,15 @@ const maxSystemCallRet = 64 << 20 // 64 MiB
 //
 // StateProcessor implements Processor.
 type StateProcessor struct {
-	config     *params.ChainConfig // Chain configuration options
-	chain      *HeaderChain        // Canonical header chain
-	blockchain *BlockChain
+	config *params.ChainConfig // Chain configuration options
+	chain  *HeaderChain        // Canonical header chain
 }
 
 // NewStateProcessor initialises a new StateProcessor.
-func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain, blockchain *BlockChain) *StateProcessor {
+func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StateProcessor {
 	return &StateProcessor{
-		config:     config,
-		chain:      chain,
-		blockchain: blockchain,
+		config: config,
+		chain:  chain,
 	}
 }
 
@@ -62,7 +60,7 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain, blockchai
 // Process returns the receipts and logs accumulated during the process and
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
-func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, interruptCtx context.Context) (*ProcessResult, error) {
+func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
 	var (
 		receipts    types.Receipts
 		usedGas     = new(uint64)
@@ -92,7 +90,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	if hooks := cfg.Tracer; hooks != nil {
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
-	context = NewEVMBlockContext(header, p.chain, nil)
+	context = NewEVMBlockContext(header, p.chain, author)
 	evm := vm.NewEVM(context, tracingStateDB, p.config, cfg)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
@@ -148,9 +146,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	// Note that we specifically need `Blockchain` for `ChainHeaderReader` interface as it's
-	// typecasted in bor consensus for setting state-sync events.
-	p.chain.engine.Finalize(p.blockchain, header, tracingStateDB, block.Body())
+	p.chain.engine.Finalize(p.chain, header, statedb, block.Body())
 
 	return &ProcessResult{
 		Receipts: receipts,

@@ -71,7 +71,7 @@ func (basic *snapshotTestBasic) prepare(t *testing.T) (*BlockChain, []*types.Blo
 	if err != nil {
 		t.Fatalf("Failed to create persistent key-value database: %v", err)
 	}
-	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false)
+	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to create persistent freezer database: %v", err)
 	}
@@ -98,7 +98,7 @@ func (basic *snapshotTestBasic) prepare(t *testing.T) (*BlockChain, []*types.Blo
 	}
 	var startPoint uint64
 	for _, point := range breakpoints {
-		if _, err := chain.InsertChain(blocks[startPoint:point]); err != nil {
+		if _, err := chain.InsertChain(blocks[startPoint:point], false); err != nil {
 			t.Fatalf("Failed to import canonical chain start: %v", err)
 		}
 		startPoint = point
@@ -117,7 +117,7 @@ func (basic *snapshotTestBasic) prepare(t *testing.T) (*BlockChain, []*types.Blo
 			}
 		}
 	}
-	if _, err := chain.InsertChain(blocks[startPoint:]); err != nil {
+	if _, err := chain.InsertChain(blocks[startPoint:], false); err != nil {
 		t.Fatalf("Failed to import canonical chain tail: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func (snaptest *crashSnapshotTest) test(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create persistent key-value database: %v", err)
 	}
-	newdb, err := rawdb.NewDatabaseWithFreezer(pdb, snaptest.ancient, "", false, false, false)
+	newdb, err := rawdb.NewDatabaseWithFreezer(pdb, snaptest.ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to create persistent freezer database: %v", err)
 	}
@@ -315,12 +315,13 @@ func (snaptest *gappedSnapshotTest) test(t *testing.T) {
 		TrieTimeLimit:  5 * time.Minute,
 		SnapshotLimit:  0,
 		StateScheme:    snaptest.scheme,
+		TriesInMemory:  128,
 	}
 	newchain, err := NewBlockChain(snaptest.db, cacheConfig, snaptest.gspec, nil, snaptest.engine, vm.Config{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to recreate chain: %v", err)
 	}
-	newchain.InsertChain(gappedBlocks)
+	newchain.InsertChain(gappedBlocks, false)
 	newchain.Stop()
 
 	// Restart the chain with enabling the snapshot
@@ -387,13 +388,14 @@ func (snaptest *wipeCrashSnapshotTest) test(t *testing.T) {
 		TrieTimeLimit:  5 * time.Minute,
 		SnapshotLimit:  0,
 		StateScheme:    snaptest.scheme,
+		TriesInMemory:  128,
 	}
 	newchain, err := NewBlockChain(snaptest.db, config, snaptest.gspec, nil, snaptest.engine, vm.Config{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to recreate chain: %v", err)
 	}
 	newBlocks, _ := GenerateChain(snaptest.gspec.Config, blocks[len(blocks)-1], snaptest.engine, snaptest.genDb, snaptest.newBlocks, func(i int, b *BlockGen) {})
-	newchain.InsertChain(newBlocks)
+	newchain.InsertChain(newBlocks, false)
 	newchain.Stop()
 
 	// Restart the chain, the wiper should start working
@@ -404,6 +406,7 @@ func (snaptest *wipeCrashSnapshotTest) test(t *testing.T) {
 		SnapshotLimit:  256,
 		SnapshotWait:   false, // Don't wait rebuild
 		StateScheme:    snaptest.scheme,
+		TriesInMemory:  128,
 	}
 	tmp, err := NewBlockChain(snaptest.db, config, snaptest.gspec, nil, snaptest.engine, vm.Config{}, nil, nil, nil)
 	if err != nil {

@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -385,6 +386,9 @@ func (b *backendMock) GetLogs(ctx context.Context, blockHash common.Hash, number
 	return nil, nil
 }
 func (b *backendMock) GetTd(ctx context.Context, hash common.Hash) *big.Int { return nil }
+func (b *backendMock) GetTdByNumber(ctx context.Context, blockNr rpc.BlockNumber) *big.Int {
+	return nil
+}
 func (b *backendMock) GetEVM(ctx context.Context, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
 	return nil
 }
@@ -471,6 +475,13 @@ func (b backendMock) PeerStats() interface{} {
 	return nil
 }
 
+func (b *backendMock) GetWitnesses(ctx context.Context, startBlock uint64, endBlock uint64) ([]*stateless.Witness, error) {
+	return nil, nil
+}
+
+func (b *backendMock) StoreWitness(ctx context.Context, hash common.Hash, witness *stateless.Witness) error {
+	return nil
+}
 func (b backendMock) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Subscription {
 	return nil
 }
@@ -479,7 +490,3 @@ func (b *backendMock) CurrentView() *filtermaps.ChainView { return nil }
 func (b *backendMock) NewMatcherBackend() filtermaps.MatcherBackend { return nil }
 
 func (b *backendMock) HistoryPruningCutoff() uint64 { return 0 }
-
-func (b backendMock) GetTdByNumber(ctx context.Context, blockNr rpc.BlockNumber) *big.Int {
-	panic("not implemented")
-}

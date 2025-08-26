@@ -364,7 +364,6 @@ func latestSpanUrl(urlString string) (*url.URL, error) {
 func stateSyncURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
 	t := time.Unix(to, 0).UTC()
 	formattedTime := t.Format(time.RFC3339Nano)
-
 	queryParams := fmt.Sprintf(fetchStateSyncEventsFormat, fromID, formattedTime, stateFetchLimit)
 
 	return makeURL(urlString, fetchStateSyncEventsPath, queryParams)

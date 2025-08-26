@@ -5,13 +5,12 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/golang/mock/gomock"
-
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
@@ -27,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/triedb"
+	gomock "go.uber.org/mock/gomock"
 )
 
 type DefaultBorMiner struct {
@@ -51,12 +51,22 @@ func NewBorDefaultMiner(t *testing.T) *DefaultBorMiner {
 	// Mock span 0 for heimdall
 	span0 := createMockSpanForTest(common.Address{0x1}, "1337")
 
+	validators := make([]*valset.Validator, len(span0.ValidatorSet.Validators))
+	for i, v := range span0.ValidatorSet.Validators {
+		validators[i] = &valset.Validator{
+			Address:     common.HexToAddress(v.Signer),
+			VotingPower: v.VotingPower,
+		}
+	}
+
 	spanner := bor.NewMockSpanner(ctrl)
 	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, nil).AnyTimes()
 
 	heimdallClient := mocks.NewMockIHeimdallClient(ctrl)
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 	heimdallClient.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(&span0, nil).AnyTimes()
+	heimdallClient.EXPECT().GetLatestSpan(gomock.Any()).Return(&span0, nil).AnyTimes()
+	heimdallClient.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
 	heimdallClient.EXPECT().Close().Times(1)
 
 	genesisContracts := bor.NewMockGenesisContract(ctrl)
@@ -105,7 +115,7 @@ func createBorMiner(t *testing.T, ethAPIMock api.Caller, spanner bor.Spanner, he
 	}
 
 	// Create Miner
-	miner := New(backend, &config, chainConfig, mux, engine, nil)
+	miner := New(backend, &config, chainConfig, mux, engine, nil, false)
 
 	cleanup := func(skipMiner bool) {
 		bc.Stop()

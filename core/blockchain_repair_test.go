@@ -1809,7 +1809,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 	if err != nil {
 		t.Fatalf("Failed to create persistent key-value database: %v", err)
 	}
-	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false)
+	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to create persistent freezer database: %v", err)
 	}
@@ -1828,6 +1828,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 			TrieTimeLimit:  5 * time.Minute,
 			SnapshotLimit:  0, // Disable snapshot by default
 			StateScheme:    scheme,
+			TriesInMemory:  128,
 		}
 	)
 	defer engine.Close()
@@ -1845,7 +1846,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 		sideblocks, _ = GenerateChain(gspec.Config, gspec.ToBlock(), engine, rawdb.NewMemoryDatabase(), tt.sidechainBlocks, func(i int, b *BlockGen) {
 			b.SetCoinbase(common.Address{0x01})
 		})
-		if _, err := chain.InsertChain(sideblocks); err != nil {
+		if _, err := chain.InsertChain(sideblocks, false); err != nil {
 			t.Fatalf("Failed to import side chain: %v", err)
 		}
 	}
@@ -1853,7 +1854,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 		b.SetCoinbase(common.Address{0x02})
 		b.SetDifficulty(big.NewInt(1000000))
 	})
-	if _, err := chain.InsertChain(canonblocks[:tt.commitBlock]); err != nil {
+	if _, err := chain.InsertChain(canonblocks[:tt.commitBlock], false); err != nil {
 		t.Fatalf("Failed to import canonical chain start: %v", err)
 	}
 	if tt.commitBlock > 0 {
@@ -1866,7 +1867,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 			}
 		}
 	}
-	if _, err := chain.InsertChain(canonblocks[tt.commitBlock:]); err != nil {
+	if _, err := chain.InsertChain(canonblocks[tt.commitBlock:], false); err != nil {
 		t.Fatalf("Failed to import canonical chain tail: %v", err)
 	}
 	// Force run a freeze cycle
@@ -1894,7 +1895,7 @@ func testRepairWithScheme(t *testing.T, tt *rewindTest, snapshots bool, scheme s
 	if err != nil {
 		t.Fatalf("Failed to reopen persistent key-value database: %v", err)
 	}
-	db, err = rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false)
+	db, err = rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to reopen persistent freezer database: %v", err)
 	}
@@ -1959,7 +1960,7 @@ func testIssue23496(t *testing.T, scheme string) {
 	if err != nil {
 		t.Fatalf("Failed to create persistent key-value database: %v", err)
 	}
-	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false)
+	db, err := rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to create persistent freezer database: %v", err)
 	}
@@ -1983,13 +1984,13 @@ func testIssue23496(t *testing.T, scheme string) {
 	})
 
 	// Insert block B1 and commit the state into disk
-	if _, err := chain.InsertChain(blocks[:1]); err != nil {
+	if _, err := chain.InsertChain(blocks[:1], false); err != nil {
 		t.Fatalf("Failed to import canonical chain start: %v", err)
 	}
 	chain.triedb.Commit(blocks[0].Root(), false)
 
 	// Insert block B2 and commit the snapshot into disk
-	if _, err := chain.InsertChain(blocks[1:2]); err != nil {
+	if _, err := chain.InsertChain(blocks[1:2], false); err != nil {
 		t.Fatalf("Failed to import canonical chain start: %v", err)
 	}
 	if err := chain.snaps.Cap(blocks[1].Root(), 0); err != nil {
@@ -1997,13 +1998,13 @@ func testIssue23496(t *testing.T, scheme string) {
 	}
 
 	// Insert block B3 and commit the state into disk
-	if _, err := chain.InsertChain(blocks[2:3]); err != nil {
+	if _, err := chain.InsertChain(blocks[2:3], false); err != nil {
 		t.Fatalf("Failed to import canonical chain start: %v", err)
 	}
 	chain.triedb.Commit(blocks[2].Root(), false)
 
 	// Insert the remaining blocks
-	if _, err := chain.InsertChain(blocks[3:]); err != nil {
+	if _, err := chain.InsertChain(blocks[3:], false); err != nil {
 		t.Fatalf("Failed to import canonical chain tail: %v", err)
 	}
 
@@ -2017,7 +2018,7 @@ func testIssue23496(t *testing.T, scheme string) {
 	if err != nil {
 		t.Fatalf("Failed to reopen persistent key-value database: %v", err)
 	}
-	db, err = rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false)
+	db, err = rawdb.NewDatabaseWithFreezer(pdb, ancient, "", false, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to reopen persistent freezer database: %v", err)
 	}
@@ -2044,7 +2045,7 @@ func testIssue23496(t *testing.T, scheme string) {
 	}
 
 	// Reinsert B2-B4
-	if _, err := chain.InsertChain(blocks[1:]); err != nil {
+	if _, err := chain.InsertChain(blocks[1:], false); err != nil {
 		t.Fatalf("Failed to import canonical chain tail: %v", err)
 	}
 	if head := chain.CurrentHeader(); head.Number.Uint64() != uint64(4) {

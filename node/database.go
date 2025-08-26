@@ -41,6 +41,7 @@ type openOptions struct {
 	DisableFreeze bool
 	IsLastOffset  bool
 
+	Stateless bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -60,7 +61,7 @@ func openDatabase(o openOptions) (ethdb.Database, error) {
 	if len(o.AncientsDirectory) == 0 {
 		return kvdb, nil
 	}
-	frdb, err := rawdb.NewDatabaseWithFreezer(kvdb, o.AncientsDirectory, o.Namespace, o.ReadOnly, o.DisableFreeze, o.IsLastOffset)
+	frdb, err := rawdb.NewDatabaseWithFreezer(kvdb, o.AncientsDirectory, o.Namespace, o.ReadOnly, o.DisableFreeze, o.IsLastOffset, o.Stateless)
 	if err != nil {
 		kvdb.Close()
 		return nil, err

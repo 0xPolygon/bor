@@ -77,7 +77,7 @@ func TestGenesisContractChange(t *testing.T) {
 			ParentHash: root,
 			Number:     big.NewInt(num),
 		}
-		b.Finalize(chain, h, statedb, &types.Body{Withdrawals: nil, Transactions: nil, Uncles: nil})
+		b.Finalize(chain.HeaderChain(), h, statedb, &types.Body{Withdrawals: nil, Transactions: nil, Uncles: nil})
 
 		// write state to database
 		root, err := statedb.Commit(0, false, true)
@@ -161,4 +161,136 @@ func TestEncodeSigHeaderJaipur(t *testing.T) {
 	// Jaipur NOT enabled and BaseFee set
 	hash = SealHash(h, &params.BorConfig{JaipurBlock: big.NewInt(10)})
 	require.Equal(t, hash, hashWithoutBaseFee)
+}
+
+func TestCalcProducerDelayVeBlop(t *testing.T) {
+	t.Parallel()
+
+	// Test cases for VeBlop condition in CalcProducerDelay
+	testCases := []struct {
+		name        string
+		blockNumber uint64
+		succession  int
+		config      *params.BorConfig
+		expected    uint64
+		description string
+	}{
+		{
+			name:        "VeBlop enabled - early return with period only",
+			blockNumber: 100,
+			succession:  2,
+			config: &params.BorConfig{
+				Period: map[string]uint64{
+					"0": 5, // 5 second period
+				},
+				Sprint: map[string]uint64{
+					"0": 10,
+				},
+				ProducerDelay: map[string]uint64{
+					"0": 3,
+				},
+				BackupMultiplier: map[string]uint64{
+					"0": 2,
+				},
+				VeBlopBlock: big.NewInt(50), // VeBlop enabled at block 50
+			},
+			expected:    5, // Should return period (5) without additional calculations
+			description: "When VeBlop is enabled, should return period without producer delay or backup multiplier",
+		},
+		{
+			name:        "VeBlop enabled - genesis block",
+			blockNumber: 0,
+			succession:  1,
+			config: &params.BorConfig{
+				Period: map[string]uint64{
+					"0": 3,
+				},
+				Sprint: map[string]uint64{
+					"0": 10,
+				},
+				ProducerDelay: map[string]uint64{
+					"0": 5,
+				},
+				BackupMultiplier: map[string]uint64{
+					"0": 4,
+				},
+				VeBlopBlock: big.NewInt(0), // VeBlop enabled from genesis
+			},
+			expected:    3, // Should return period (3) only
+			description: "When VeBlop is enabled from genesis, should return period without additional calculations",
+		},
+		{
+			name:        "VeBlop not enabled - sprint start with succession",
+			blockNumber: 100, // Sprint start (100 % 10 == 0)
+			succession:  2,
+			config: &params.BorConfig{
+				Period: map[string]uint64{
+					"0": 5,
+				},
+				Sprint: map[string]uint64{
+					"0": 10,
+				},
+				ProducerDelay: map[string]uint64{
+					"0": 3,
+				},
+				BackupMultiplier: map[string]uint64{
+					"0": 2,
+				},
+				VeBlopBlock: big.NewInt(200), // VeBlop enabled at block 200 (after current block)
+			},
+			expected:    7, // producer delay (3) + succession (2) * backup multiplier (2) = 3 + 4 = 7
+			description: "When VeBlop is not enabled and it's sprint start, should use producer delay plus backup multiplier",
+		},
+		{
+			name:        "VeBlop not enabled - non-sprint start with succession",
+			blockNumber: 25, // Not sprint start (25 % 10 != 0)
+			succession:  1,
+			config: &params.BorConfig{
+				Period: map[string]uint64{
+					"0": 4,
+				},
+				Sprint: map[string]uint64{
+					"0": 10,
+				},
+				ProducerDelay: map[string]uint64{
+					"0": 6,
+				},
+				BackupMultiplier: map[string]uint64{
+					"0": 3,
+				},
+				VeBlopBlock: big.NewInt(100), // VeBlop not enabled yet
+			},
+			expected:    7, // period (4) + succession (1) * backup multiplier (3) = 4 + 3 = 7
+			description: "When VeBlop is not enabled and it's not sprint start, should use period plus backup multiplier",
+		},
+		{
+			name:        "VeBlop nil - sprint start without succession",
+			blockNumber: 50, // Sprint start (50 % 10 == 0)
+			succession:  0,
+			config: &params.BorConfig{
+				Period: map[string]uint64{
+					"0": 4,
+				},
+				Sprint: map[string]uint64{
+					"0": 10,
+				},
+				ProducerDelay: map[string]uint64{
+					"0": 7,
+				},
+				BackupMultiplier: map[string]uint64{
+					"0": 2,
+				},
+				VeBlopBlock: nil, // VeBlop not configured (nil)
+			},
+			expected:    7, // producer delay since it's sprint start, no succession multiplier
+			description: "When VeBlop is nil and it's sprint start without succession, should use producer delay",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := CalcProducerDelay(tc.blockNumber, tc.succession, tc.config)
+			require.Equal(t, tc.expected, result, tc.description)
+		})
+	}
 }
