@@ -737,21 +737,7 @@ func (c *Bor) performSpanCheck(chain consensus.ChainHeaderReader, targetHeader *
 		log.Info("Span check complete", "foundNewSpan", foundNewSpan)
 
 		return nil
-	} else if missingTargetSignature == nil && targetHeaderAuthor != parentHeaderAuthor {
-		log.Info("Updating latest span due to different author", "target block", targetHeader.Number.Uint64(), "parentHeader", targetHeader.ParentHash, "parentHeaderAuthor", parentHeaderAuthor, "targetHeaderAuthor", targetHeaderAuthor)
-
-		// We don't want to wait for a new span forever if the target header author is different from the parent header author, because it would lead to a deadlock if the header is signed by a malicious producer who is not in the validator set.
-		foundNewSpan, err := c.spanStore.waitForNewSpan(targetHeader.Number.Uint64(), parentHeaderAuthor, veblopBlockTimeout)
-		if err != nil {
-			log.Warn("Error while waiting for new span", "error", err)
-			return err
-		}
-
-		log.Info("Span check complete", "foundNewSpan", foundNewSpan)
-
-		return nil
 	}
-
 	return nil
 }
 

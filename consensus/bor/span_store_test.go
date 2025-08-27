@@ -10,6 +10,7 @@ import (
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
@@ -77,6 +78,10 @@ func (h *MockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types
 
 func (h *MockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
 	return h.GetSpan(ctx, 2)
+}
+
+func (h *MockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 
 func TestSpanStore_SpanById(t *testing.T) {
@@ -386,6 +391,10 @@ func (h *MockOverlappingHeimdallClient) FetchMilestoneID(ctx context.Context, mi
 }
 func (h *MockOverlappingHeimdallClient) Close() {
 	panic("implement me")
+}
+
+func (h *MockOverlappingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
@@ -945,6 +954,10 @@ func (d *dynamicHeimdallClient) FetchMilestoneID(ctx context.Context, milestoneI
 }
 func (d *dynamicHeimdallClient) Close() {}
 
+func (d *dynamicHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
+}
+
 func makeTestSpan(id, start, end uint64, producerAddr string) *types.Span {
 	producer := stakeTypes.Validator{
 		ValId:            id,
@@ -962,6 +975,256 @@ func makeTestSpan(id, start, end uint64, producerAddr string) *types.Span {
 		},
 		SelectedProducers: []stakeTypes.Validator{producer},
 	}
+}
+
+// MockSyncStatusClient allows testing of waitUntilHeimdallIsSynced
+type MockSyncStatusClient struct {
+	mu              sync.Mutex
+	syncStatus      *ctypes.SyncInfo
+	statusCallCount int
+}
+
+func (m *MockSyncStatusClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
+	// Create a basic span for testing
+	validators := []*stakeTypes.Validator{
+		{
+			ValId:            1,
+			Signer:           "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a",
+			VotingPower:      100,
+			ProposerPriority: 0,
+		},
+	}
+	validatorSet := stakeTypes.ValidatorSet{
+		Validators: validators,
+		Proposer:   validators[0],
+	}
+	selectedProducers := []stakeTypes.Validator{
+		{
+			ValId:            1,
+			Signer:           "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a",
+			VotingPower:      100,
+			ProposerPriority: 0,
+		},
+	}
+
+	if spanID == 0 {
+		return &types.Span{
+			Id:                0,
+			StartBlock:        0,
+			EndBlock:          255,
+			ValidatorSet:      validatorSet,
+			SelectedProducers: selectedProducers,
+		}, nil
+	}
+	return &types.Span{
+		Id:                spanID,
+		StartBlock:        256 + (spanID-1)*6400,
+		EndBlock:          255 + spanID*6400,
+		ValidatorSet:      validatorSet,
+		SelectedProducers: selectedProducers,
+	}, nil
+}
+
+func (m *MockSyncStatusClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
+	return m.GetSpan(ctx, 1)
+}
+
+func (m *MockSyncStatusClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statusCallCount++
+	return m.syncStatus, nil
+}
+
+func (m *MockSyncStatusClient) SetSyncStatus(status *ctypes.SyncInfo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.syncStatus = status
+}
+
+func (m *MockSyncStatusClient) GetStatusCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.statusCallCount
+}
+
+// Implement other required methods
+func (m *MockSyncStatusClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchNoAckMilestone(ctx context.Context, milestoneID string) error {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchLastNoAckMilestone(ctx context.Context) (string, error) {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) FetchMilestoneID(ctx context.Context, milestoneID string) error {
+	panic("not implemented")
+}
+func (m *MockSyncStatusClient) Close() {}
+
+func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
+	t.Run("heimdall already synced", func(t *testing.T) {
+		mockClient := &MockSyncStatusClient{}
+		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: false})
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for the background goroutine to update status
+		time.Sleep(250 * time.Millisecond)
+
+		startTime := time.Now()
+
+		// Call spanByBlockNumber which internally calls waitUntilHeimdallIsSynced
+		span, err := spanStore.spanByBlockNumber(t.Context(), 100)
+
+		elapsed := time.Since(startTime)
+
+		require.NoError(t, err)
+		require.NotNil(t, span)
+		require.Less(t, elapsed, 100*time.Millisecond, "Should not wait when heimdall is synced")
+	})
+
+	t.Run("heimdall catching up then synced", func(t *testing.T) {
+		mockClient := &MockSyncStatusClient{}
+		// Start with catching up
+		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for the background goroutine to set initial status
+		time.Sleep(250 * time.Millisecond)
+
+		// Change status to synced after a delay
+		go func() {
+			time.Sleep(400 * time.Millisecond)
+			mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: false})
+		}()
+
+		startTime := time.Now()
+
+		// This should wait until heimdall is synced
+		span, err := spanStore.spanByBlockNumber(t.Context(), 100)
+
+		elapsed := time.Since(startTime)
+
+		require.NoError(t, err)
+		require.NotNil(t, span)
+		require.Greater(t, elapsed, 400*time.Millisecond, "Should wait for heimdall to sync")
+		require.Less(t, elapsed, 800*time.Millisecond, "Should not wait too long")
+	})
+
+	t.Run("nil sync status then synced", func(t *testing.T) {
+		mockClient := &MockSyncStatusClient{}
+		// Start with nil status (simulating initial state)
+		mockClient.SetSyncStatus(nil)
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for the background goroutine to set initial status
+		time.Sleep(250 * time.Millisecond)
+
+		// Set proper sync status after delay
+		go func() {
+			time.Sleep(400 * time.Millisecond)
+			mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: false})
+		}()
+
+		startTime := time.Now()
+
+		// This should wait until heimdall status is available and synced
+		span, err := spanStore.spanByBlockNumber(t.Context(), 100)
+
+		elapsed := time.Since(startTime)
+
+		require.NoError(t, err)
+		require.NotNil(t, span)
+		require.Greater(t, elapsed, 400*time.Millisecond, "Should wait for heimdall status")
+		require.Less(t, elapsed, 800*time.Millisecond, "Should not wait too long")
+	})
+
+	t.Run("context cancellation during wait", func(t *testing.T) {
+		mockClient := &MockSyncStatusClient{}
+		// Keep it in catching up state
+		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for the background goroutine to set initial status
+		time.Sleep(250 * time.Millisecond)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+
+		startTime := time.Now()
+
+		// This should return when context is cancelled
+		_, _ = spanStore.spanByBlockNumber(ctx, 100)
+
+		elapsed := time.Since(startTime)
+
+		// The function should return due to context cancellation
+		// Note: The function might still succeed if it manages to get the span before context expires
+		require.Less(t, elapsed, 500*time.Millisecond, "Should stop waiting when context is cancelled")
+	})
+
+	t.Run("multiple concurrent calls wait properly", func(t *testing.T) {
+		mockClient := &MockSyncStatusClient{}
+		// Start with catching up
+		mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: true})
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for the background goroutine to set initial status
+		time.Sleep(250 * time.Millisecond)
+
+		// Change to synced after delay
+		go func() {
+			time.Sleep(400 * time.Millisecond)
+			mockClient.SetSyncStatus(&ctypes.SyncInfo{CatchingUp: false})
+		}()
+
+		var wg sync.WaitGroup
+		results := make([]time.Duration, 3)
+
+		// Launch multiple concurrent calls
+		for i := 0; i < 3; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				startTime := time.Now()
+				span, err := spanStore.spanByBlockNumber(t.Context(), uint64(100+idx*100))
+				results[idx] = time.Since(startTime)
+				require.NoError(t, err)
+				require.NotNil(t, span)
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All calls should have waited approximately the same amount
+		for _, elapsed := range results {
+			require.Greater(t, elapsed, 400*time.Millisecond, "Should wait for sync")
+			require.Less(t, elapsed, 800*time.Millisecond, "Should not wait too long")
+		}
+	})
 }
 
 func TestSpanStore_WaitForNewSpan(t *testing.T) {

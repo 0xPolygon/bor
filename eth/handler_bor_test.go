@@ -8,6 +8,7 @@ import (
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	"github.com/stretchr/testify/require"
 
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
@@ -59,6 +60,10 @@ func (m *mockHeimdall) FetchMilestoneCount(ctx context.Context) (int64, error) {
 }
 
 func (m *mockHeimdall) Close() {}
+
+func (m *mockHeimdall) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
+}
 
 func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
 	t.Parallel()

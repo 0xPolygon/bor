@@ -15,6 +15,7 @@ import (
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	clerkTypes "github.com/0xPolygon/heimdall-v2/x/clerk/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
@@ -77,6 +78,8 @@ const (
 
 	fetchSpanFormat = "bor/spans/%d"
 	fetchLatestSpan = "bor/spans/latest"
+
+	fetchStatus = "/status"
 )
 
 // StateSyncEvents fetches the state sync events from heimdall
@@ -229,6 +232,22 @@ func (h *HeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error)
 		return 0, err
 	}
 	return response.Count, nil
+}
+
+func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	ctx = WithRequestType(ctx, StatusRequest)
+
+	url, err := statusURL(h.urlString)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := FetchWithRetry[ctypes.SyncInfo](ctx, h.client, url, h.closeCh)
+	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
 }
 
 // FetchWithRetry returns data from heimdall with retry
@@ -392,6 +411,10 @@ func checkpointCountURL(urlString string) (*url.URL, error) {
 
 func milestoneCountURL(urlString string) (*url.URL, error) {
 	return makeURL(urlString, fetchMilestoneCount, "")
+}
+
+func statusURL(urlString string) (*url.URL, error) {
+	return makeURL(urlString, fetchStatus, "")
 }
 
 func makeURL(urlString, rawPath, rawQuery string) (*url.URL, error) {

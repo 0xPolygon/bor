@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -398,6 +399,7 @@ func getFakeBorFromConfig(t *testing.T, chainConfig *params.ChainConfig) (consen
 	heimdallClientMock.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(&span0, nil).AnyTimes()
 	heimdallClientMock.EXPECT().GetLatestSpan(gomock.Any()).Return(&span0, nil).AnyTimes()
 	heimdallClientMock.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallClientMock.EXPECT().Close().AnyTimes()
 
 	contractMock := bor.NewMockGenesisContract(ctrl)
@@ -1010,6 +1012,7 @@ func BenchmarkBorMining(b *testing.B) {
 	}, nil).AnyTimes()
 
 	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 
 	heimdallClientMock.EXPECT().Close().Times(1)
@@ -1109,6 +1112,7 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 	}, nil).AnyTimes()
 
 	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 	heimdallClientMock.EXPECT().Close().Times(1)
 

@@ -13,6 +13,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	lru "github.com/hashicorp/golang-lru"
 
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 )
 
@@ -34,6 +36,7 @@ type SpanStore struct {
 	chainId           string
 	lastUsedSpan      atomic.Pointer[borTypes.Span]
 	latestKnownSpanId uint64
+	heimdallStatus    atomic.Pointer[ctypes.SyncInfo]
 
 	// cancel function to stop the background routine
 	cancel context.CancelFunc
@@ -61,6 +64,10 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 				if err != nil {
 					log.Error("Failed to update latest span", "err", err)
 				}
+				err = store.updateHeimdallStatus(ctx)
+				if err != nil {
+					log.Error("Failed to update heimdall status", "err", err)
+				}
 				select {
 				case <-ctx.Done():
 					return
@@ -83,6 +90,46 @@ func (s *SpanStore) getLatestSpan(ctx context.Context) (*borTypes.Span, error) {
 		return nil, err
 	}
 	return s.latestSpanCache.Load(), nil
+}
+
+func (s *SpanStore) updateHeimdallStatus(ctx context.Context) (err error) {
+	var syncInfo *ctypes.SyncInfo
+	if s.heimdallClient == nil {
+		syncInfo = &ctypes.SyncInfo{CatchingUp: false}
+	} else {
+		syncInfo, err = s.heimdallClient.FetchStatus(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	s.heimdallStatus.Store(syncInfo)
+	return nil
+}
+
+func (s *SpanStore) waitUntilHeimdallIsSynced(ctx context.Context) {
+	log.Info("Waiting for heimdall to be synced", "heimdallClient", s.heimdallClient)
+	// If there's no heimdall client, don't wait
+	if s.heimdallClient == nil {
+		return
+	}
+
+	timeout := 200 * time.Millisecond
+
+	for {
+		syncInfo := s.heimdallStatus.Load()
+		if syncInfo == nil || syncInfo.CatchingUp {
+			log.Warn("Heimdall isn't synced, waiting for update", "syncInfo", syncInfo)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(timeout):
+				s.updateHeimdallStatus(ctx)
+				continue
+			}
+		}
+
+		return
+	}
 }
 
 func (s *SpanStore) updateLatestSpan(ctx context.Context) error {
@@ -173,6 +220,8 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 // asked for a future span. This is safe to assume as we don't have a way to find out span id for a future block
 // unless we hardcode the span length (which we don't want to).
 func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (res *borTypes.Span, err error) {
+	s.waitUntilHeimdallIsSynced(ctx)
+
 	// As we don't persist latest known span to db, we loose the value on restarts. This leads to multiple heimdall calls
 	// which can be avoided. Hence we estimate the span id from block number which updates the latest known span id. Note
 	// that we still check if the block number lies in the range of span before returning it.
