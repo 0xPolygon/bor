@@ -149,6 +149,12 @@ type Config struct {
 
 	// HistoryConfig has historical data retention related settings
 	History *HistoryConfig `hcl:"history,block" toml:"history,block"`
+
+	// VMTrace Name of tracer which should record internal VM operations (costly)
+	VMTrace string `hcl:"vmtrace,optional" toml:"vmtrace,optional"`
+
+	// VMTraceJsonConfig Tracer configuration (JSON)
+	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
 }
 
 type HistoryConfig struct {
@@ -867,6 +873,8 @@ func DefaultConfig() *Config {
 			LogNoHistory:       ethconfig.Defaults.LogNoHistory,
 			StateHistory:       params.FullImmutabilityThreshold,
 		},
+		VMTrace:           "",
+		VMTraceJsonConfig: "{}",
 	}
 }
 
@@ -1305,6 +1313,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
+	n.VMTrace = c.VMTrace
+	n.VMTraceJsonConfig = c.VMTraceJsonConfig
 
 	return &n, nil
 }

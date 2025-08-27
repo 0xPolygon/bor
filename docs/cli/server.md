@@ -228,6 +228,10 @@ The ```bor server``` command runs the Bor client.
 
 - ```vmodule```: Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
 
+- ```vmtrace```: Name of a tracer to record internal VM operations during blockchain synchronization (costly)
+
+- ```vmtrace.jsonconfig```: Tracer configuration (JSON) (default: {})
+
 ### P2P Options
 
 - ```bind```: Network binding address (default: 0.0.0.0)

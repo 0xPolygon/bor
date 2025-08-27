@@ -5,6 +5,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/internal/cli"
 	"github.com/ethereum/go-ethereum/params"
+
+	// Force-load the tracer engines to trigger registration
+	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/live"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 )
 
 func main() {

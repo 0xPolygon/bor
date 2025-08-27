@@ -82,6 +82,15 @@ func ApplyMessage(
 	// about the transaction and calling mechanisms.
 	vmenv := vm.NewEVM(blockContext, state, chainConfig, vm.Config{})
 
+	if tracer := vmenv.Config.Tracer; tracer != nil {
+		if tracer.OnSystemCallStartV2 != nil {
+			tracer.OnSystemCallStartV2(vmenv.GetVMContext())
+		}
+		if tracer.OnSystemCallEnd != nil {
+			defer tracer.OnSystemCallEnd()
+		}
+	}
+
 	// nolint : contextcheck
 	// Apply the transaction to the current state (included in the env)
 	ret, gasLeft, err := vmenv.Call(

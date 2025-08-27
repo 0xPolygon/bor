@@ -131,6 +131,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Logging.Vmodule,
 		Group:   "Logging",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace",
+		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly)",
+		Value:   &c.cliConfig.VMTrace,
+		Default: c.cliConfig.VMTrace,
+		Group:   "Logging",
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace.jsonconfig",
+		Usage:   "Tracer configuration (JSON)",
+		Value:   &c.cliConfig.VMTraceJsonConfig,
+		Default: c.cliConfig.VMTraceJsonConfig,
+		Group:   "Logging",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "log.json",
 		Usage:   "Format logs with JSON",
