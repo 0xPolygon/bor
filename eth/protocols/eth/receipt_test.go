@@ -84,6 +84,11 @@ func init() {
 }
 
 func TestReceiptList69(t *testing.T) {
+	// Create a mock isStateSyncReceipt function
+	isStateSyncReceipt := func(index int) bool {
+		return false
+	}
+
 	for i, test := range receiptsTests {
 		// encode receipts from types.ReceiptForStorage object.
 		canonDB, _ := rlp.EncodeToBytes(test.input)
@@ -93,7 +98,7 @@ func TestReceiptList69(t *testing.T) {
 		canonBody, _ := rlp.EncodeToBytes(blockBody)
 
 		// convert from storage encoding to network encoding
-		network, err := blockReceiptsToNetwork69(canonDB, canonBody)
+		network, err := blockReceiptsToNetwork69(canonDB, canonBody, isStateSyncReceipt)
 		if err != nil {
 			t.Fatalf("test[%d]: blockReceiptsToNetwork69 error: %v", i, err)
 		}

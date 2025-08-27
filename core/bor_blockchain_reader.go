@@ -66,3 +66,9 @@ func (bc *BlockChain) GetBorReceiptRLPByHash(hash common.Hash) rlp.RawValue {
 
 	return receiptRLP
 }
+
+// GetRawBorReceipt retrieves the raw state-sync transaction receipt of the given block
+// without any derived fields (to be sent over p2p).
+func (bc *BlockChain) GetRawBorReceipt(hash common.Hash, number uint64) *types.Receipt {
+	return rawdb.ReadRawBorReceipt(bc.db, hash, number)
+}

@@ -23,6 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
@@ -341,35 +342,64 @@ func serviceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			lookups >= 2*maxReceiptsServe {
 			break
 		}
+
+		// In order to include state-sync transaction receipts, which resides in a separate
+		// table in db, we assemble the raw receipts first instead of directly fetching the
+		// rlp encoded receipts. This is needed in order to construct the final encoded
+		// network packet.
+		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if number == nil {
+			continue
+		}
+
 		// Retrieve the requested block's receipts
-		results := chain.GetReceiptsRLP(hash)
-		if results == nil {
+		normalReceipts := chain.GetRawReceipts(hash, *number)
+		borReceipt := chain.GetRawBorReceipt(hash, *number)
+
+		// Check if receipts are nil due to non existence or something else
+		if normalReceipts == nil && borReceipt == nil {
+			// Don't append empty receipt data for this block if either the local header is nil
+			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
 				continue
 			}
-		} else {
-			body := chain.GetBodyRLP(hash)
-			if body == nil {
-				continue
-			}
-			var err error
-			results, err = blockReceiptsToNetwork69(results, body)
-			if err != nil {
-				log.Error("Error in block receipts conversion", "hash", hash, "err", err)
-				continue
-			}
+
+			// Append an empty entry for this block and continue
+			receipts = append(receipts, nil)
+			continue
 		}
 
-		// Fetch state-sync transaction receipt
-		borReceipt := chain.GetBorReceiptRLPByHash(hash)
+		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
+		var blockReceipts types.Receipts = make(types.Receipts, 0)
+		if normalReceipts != nil {
+			blockReceipts = append(blockReceipts, normalReceipts...)
+		}
 		if borReceipt != nil {
-			var err error
-			borReceipt, err = stateSyncReceiptToNetwork69(borReceipt)
-			if err == nil {
-				results = append(results, borReceipt...)
-			} else {
-				log.Error("Error in state-sync receipt conversion", "hash", hash, "err", err)
+			blockReceipts = append(blockReceipts, borReceipt)
+		}
+
+		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
+		isStateSyncReceipt := func(index int) bool {
+			if index >= len(blockReceipts) {
+				return false
 			}
+			return blockReceipts[index].CumulativeGasUsed == 0
+		}
+
+		// Encode the final list and convert to network format
+		encodedBlockReceipts, err := rlp.EncodeToBytes(blockReceipts)
+		if err != nil {
+			continue
+		}
+		body := chain.GetBodyRLP(hash)
+		if body == nil {
+			continue
+		}
+
+		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
+		if err != nil {
+			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+			continue
 		}
 
 		receipts = append(receipts, results)

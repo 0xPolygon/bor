@@ -423,8 +423,9 @@ func (rl *ReceiptList69) ExcludeStateSync() {
 
 // blockReceiptsToNetwork69 takes a slice of rlp-encoded receipts, and transactions,
 // and applies the type-encoding on the receipts (for non-legacy receipts).
-// e.g. for non-legacy receipts: receipt-data -> {tx-type || receipt-data}
-func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, error) {
+// e.g. for non-legacy receipts: receipt-data -> {tx-type || receipt-data}. It also
+// handles state-sync transaction receipts and encodes them in the same format.
+func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue, isStateSyncReceipt func(index int) bool) ([]byte, error) {
 	txTypesIter, err := txTypesInBody(blockBody)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block body: %v", err)
@@ -439,38 +440,18 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 	)
 	outer := enc.List()
 	for i := 0; it.Next(); i++ {
-		txType, _ := nextTxType()
 		content, _, _ := rlp.SplitList(it.Value())
 		receiptList := enc.List()
-		enc.WriteUint64(uint64(txType))
+		if isStateSyncReceipt(i) {
+			enc.WriteUint64(uint64(0)) // TxType is always 0 for state-sync transactions
+		} else {
+			txType, _ := nextTxType()
+			enc.WriteUint64(uint64(txType))
+		}
 		enc.Write(content)
 		enc.ListEnd(receiptList)
 	}
 	enc.ListEnd(outer)
-	enc.Flush()
-	return out.Bytes(), nil
-}
-
-// stateSyncReceiptToNetwork69 takes a rlp-encoded receipt of a state-sync
-// transaction and applies type-encoding to match the eth/69 format.
-func stateSyncReceiptToNetwork69(blockReceipt rlp.RawValue) ([]byte, error) {
-	var (
-		out bytes.Buffer
-		enc = rlp.NewEncoderBuffer(&out)
-	)
-
-	// Extract the receipt content
-	content, _, err := rlp.SplitList(blockReceipt)
-	if err != nil {
-		return nil, fmt.Errorf("invalid state-sync RLP received: %v", err)
-	}
-
-	// Create an eth/69 format receipt [TxType, PostStateOrStatus, GasUsed, Logs]
-	receiptList := enc.List()
-	enc.WriteUint64(0) // TxType is always 0 for state-sync transactions
-	enc.Write(content) // Write receipt data
-	enc.ListEnd(receiptList)
-
 	enc.Flush()
 	return out.Bytes(), nil
 }
