@@ -2294,6 +2294,11 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		return 0, whitelist.ErrMismatch
 	}
 
+	// Small-batch fast path: sequential import for len<=5
+	if len(chain) <= 5 {
+		return bc.insertChainStatelessSequential(chain, witnesses, errChans, &stats)
+	}
+
 	var wg sync.WaitGroup
 
 	// In stateless mode, we process blocks parallely without committing the state
@@ -2423,16 +2428,6 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 								"parentHash", parentHash)
 							return hErr
 						}
-					} else if i == 0 {
-						// First block in batch - parent might not be in our chain yet
-						// This is acceptable for the first block as it connects to existing chain
-						log.Debug("First block in batch has unknown ancestor, continuing",
-							"blockNum", block.NumberU64(),
-							"parentHash", block.ParentHash())
-						return hErr
-					} else {
-						// Other cases - return the error
-						return hErr
 					}
 				} else {
 					// Non-ancestor related errors should still fail the import
@@ -2464,6 +2459,103 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 	bc.parallelImport.Store(false)
 
 	// Defer the validation of witness pre-state for all blocks in this batch now that headers/parents are imported
+	for i, block := range chain {
+		if i < len(witnesses) && witnesses[i] != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
+			}
+		}
+	}
+	return int(processed.Load()), nil
+}
+
+// insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
+func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
+	var processed atomic.Int32
+	for i, block := range chain {
+		// Known block short-circuit
+		if bc.HasBlock(block.Hash(), block.NumberU64()) {
+			processed.Add(1)
+			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+			if err := <-errChans[i]; err != nil {
+				// If header verification failed for this known block (shouldn't happen often),
+				// it might indicate a deeper issue, but we can't proceed with the chain.
+				log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+				return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
+			}
+			continue
+		}
+		if bc.insertStopped() {
+			return int(processed.Load()), errInsertionInterrupted
+		}
+		var witness *stateless.Witness
+		if i < len(witnesses) {
+			witness = witnesses[i]
+		}
+		statedb, perr := bc.ProcessBlockWithWitnesses(block, witness)
+		if perr != nil {
+			return int(processed.Load()), perr
+		}
+		statedb.SetWitness(witness)
+		hErr := <-errChans[i]
+		if hErr != nil {
+			if hErr == consensus.ErrUnknownAncestor {
+				// For stateless nodes, check if this is a reorg situation
+				parentNum := block.NumberU64() - 1
+				existingBlock := bc.GetBlockByNumber(parentNum)
+				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
+					// We have a different block at the parent's height - this could be a reorg
+					log.Info("Conflicting block detected in stateless sync",
+						"blockNum", block.NumberU64(),
+						"parentNum", parentNum,
+						"existingParent", existingBlock.Hash(),
+						"expectedParent", block.ParentHash())
+
+					// Verify the existing parent block to see if it's valid
+					// This helps avoid unnecessary rewinds if the existing block is correct
+					existingHeader := existingBlock.Header()
+					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
+
+					// Check if the existing parent is valid
+					if verifyErr == nil {
+						// Existing parent is valid, so the new block is on a wrong fork
+						log.Info("Existing parent block is valid, rejecting new fork",
+							"existingParent", existingBlock.Hash(),
+							"rejectedParent", block.ParentHash())
+						return int(processed.Load()), fmt.Errorf("rejecting block %d: existing parent %s is valid",
+							block.NumberU64(), existingBlock.Hash())
+					}
+					// Existing parent is invalid, we need to rewind and accept the new chain
+					log.Info("Existing parent block is invalid, accepting reorg",
+						"existingParent", existingBlock.Hash(),
+						"newParent", block.ParentHash(),
+						"verifyErr", verifyErr)
+
+					// For stateless nodes, we need to rewind and let the sync continue
+					// This will cause the correct parent block to be fetched and imported
+					if err := bc.SetHead(parentNum - 1); err != nil {
+						return int(processed.Load()), fmt.Errorf("failed to rewind for reorg: %w", err)
+					}
+
+					// Return to let the downloader retry with the correct chain
+					return int(processed.Load()), fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+				} else if i != 0 {
+					// Not the first block and no reorg detected
+					return int(processed.Load()), hErr
+				}
+			} else {
+				return int(processed.Load()), hErr
+			}
+		}
+
+		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); werr != nil {
+			return int(processed.Load()), werr
+		}
+		processed.Add(1)
+		stats.processed = int(processed.Load())
+		stats.report(chain, i, 0, 0, 0, 0, true, true)
+	}
+	// End-of-batch witness validation
 	for i, block := range chain {
 		if i < len(witnesses) && witnesses[i] != nil {
 			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
