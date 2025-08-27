@@ -1638,7 +1638,12 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.
 			return receipts, nil
 		}
 
-		// Encode back the remaining receipts
+		// If no receipts left, return
+		if len(decoded[:len(decoded)-1]) == 0 {
+			return nil, encodedStateSyncReceipt
+		}
+
+		// Encode back the normal (non state-sync) receipts and return
 		encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
 		if err != nil {
 			log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
