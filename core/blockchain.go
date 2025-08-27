@@ -1684,7 +1684,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 				return receipts, rlp.RawValue{}
 			}
 
-			// Encode the remaining receipts
+			// Encode back the remaining receipts
 			encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
 			if err != nil {
 				log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
