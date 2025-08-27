@@ -5,7 +5,7 @@ go 1.24.6
 
 require (
 	github.com/0xPolygon/crand v1.0.3
-	github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250808133002-2a5044148f79
+	github.com/0xPolygon/heimdall-v2 v0.2.16-beta.0.20250811121528-fe9529a9fa7f
 	github.com/0xPolygon/polyproto v0.0.7
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.2
 	github.com/BurntSushi/toml v1.4.0
@@ -350,10 +350,10 @@ require (
 )
 
 replace (
-	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.1
+	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 // Same as heimdall-v2.
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
-	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.2.0-polygon
-	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.3-polygon
+	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.2.1-polygon
+	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.4-polygon
 	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20250804100633-1c7ddc53676b
 	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0

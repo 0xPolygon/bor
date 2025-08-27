@@ -854,7 +854,7 @@ func TestEIP1559Transition(t *testing.T) {
 	diskdb := rawdb.NewMemoryDatabase()
 	gspec.MustCommit(diskdb, triedb.NewDatabase(diskdb, triedb.HashDefaults))
 
-	chain, err := core.NewBlockChain(diskdb, nil, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(diskdb, gspec, engine, core.DefaultConfig())
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -1079,7 +1079,7 @@ func TestBurnContract(t *testing.T) {
 	diskdb := rawdb.NewMemoryDatabase()
 	gspec.MustCommit(diskdb, triedb.NewDatabase(diskdb, triedb.HashDefaults))
 
-	chain, err := core.NewBlockChain(diskdb, nil, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(diskdb, gspec, engine, core.DefaultConfig())
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -1437,7 +1437,7 @@ func TestTransitionWithoutEIP155(t *testing.T) {
 	diskdb := rawdb.NewMemoryDatabase()
 	gspec.MustCommit(diskdb, triedb.NewDatabase(diskdb, triedb.HashDefaults))
 
-	chain, err := core.NewBlockChain(diskdb, nil, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(diskdb, gspec, engine, core.DefaultConfig())
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}

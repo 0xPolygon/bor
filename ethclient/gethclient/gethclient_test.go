@@ -18,7 +18,6 @@ package gethclient
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"math/big"
 	"strings"
@@ -434,18 +433,18 @@ func testSubscribePendingTransactions(t *testing.T, client *rpc.Client) {
 
 	// Subscribe to Transactions
 	ch1 := make(chan common.Hash)
-	ec.SubscribePendingTransactions(context.Background(), ch1)
+	ec.SubscribePendingTransactions(t.Context(), ch1)
 
 	// Subscribe to Transactions
 	ch2 := make(chan *types.Transaction)
-	ec.SubscribeFullPendingTransactions(context.Background(), ch2)
+	ec.SubscribeFullPendingTransactions(t.Context(), ch2)
 
 	// Send a transaction
 	chainID, err := ethcl.ChainID(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	nonce, err := ethcl.NonceAt(context.Background(), testAddr, nil)
+	nonce, err := ethcl.NonceAt(t.Context(), testAddr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,13 +507,13 @@ func testTraceTransactions(t *testing.T, client *rpc.Client) {
 	ec := New(client)
 	for _, txHash := range testTxHashes {
 		// Struct logger
-		_, err := ec.TraceTransaction(context.Background(), txHash, nil)
+		_, err := ec.TraceTransaction(t.Context(), txHash, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Struct logger
-		_, err = ec.TraceTransaction(context.Background(), txHash,
+		_, err = ec.TraceTransaction(t.Context(), txHash,
 			&tracers.TraceConfig{},
 		)
 		if err != nil {

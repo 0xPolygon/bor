@@ -67,8 +67,33 @@
                 "target": 6,
                 "baseFeeUpdateFraction": 5007716
             }
+        },
+      "bor": {
+        "jaipurBlock": 2,
+        "delhiBlock" :3,
+        "indoreBlock": 3,
+        "ahmedabadBlock": 3,
+        "bhilaiBlock": 3,
+        "period": {
+          "0": 1
+        },
+        "producerDelay": {
+          "0": 6
+        },
+        "sprint": {
+          "0": 4,
+          "32": 2
+        },
+        "backupMultiplier": {
+          "0": 1
+        },
+        "validatorContract": "0x0000000000000000000000000000000000001000",
+        "stateReceiverContract": "0x0000000000000000000000000000000000001001",
+        "burntContract": {
+          "0": "0x0000000000000000000000000000000000000000"
         }
       }
+    }
   },
   "context": {
     "number": "115",

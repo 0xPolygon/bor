@@ -287,7 +287,7 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	response := serviceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+	response := ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -329,9 +329,9 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 	return receipts
 }
 
-// serviceGetReceiptsQuery69 assembles the response to a receipt query.
+// ServiceGetReceiptsQuery69 assembles the response to a receipt query.
 // It does not send the bloom filters for the receipts
-func serviceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest) []rlp.RawValue {
+func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest) []rlp.RawValue {
 	// Gather state data until the fetch or network limits is reached
 	var (
 		bytes    int

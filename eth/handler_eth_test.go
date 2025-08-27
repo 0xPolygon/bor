@@ -55,10 +55,6 @@ func (h *testEthHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		h.blockBroadcasts.Send(packet.Block)
 		return nil
 
-	case *eth.NewPooledTransactionHashesPacket67:
-		h.txAnnounces.Send(([]common.Hash)(*packet))
-		return nil
-
 	case *eth.NewPooledTransactionHashesPacket:
 		h.txAnnounces.Send(packet.Hashes)
 		return nil
@@ -267,7 +263,11 @@ func testRecvTransactions(t *testing.T, protocol uint) {
 		return eth.Handle((*ethHandler)(handler.handler), peer)
 	})
 	// Run the handshake locally to avoid spinning up a source handler
-	if err := src.Handshake(1, handler.chain, eth.BlockRangeUpdatePacket{}); err != nil {
+	if err := src.Handshake(1, handler.chain, eth.BlockRangeUpdatePacket{
+		EarliestBlock:   0,
+		LatestBlock:     handler.chain.CurrentBlock().Number.Uint64(),
+		LatestBlockHash: handler.chain.CurrentBlock().Hash(),
+	}); err != nil {
 		t.Fatalf("failed to run protocol handshake")
 	}
 	// Send the transaction to the sink and verify that it's added to the tx pool
@@ -323,7 +323,11 @@ func testSendTransactions(t *testing.T, protocol uint) {
 		return eth.Handle((*ethHandler)(handler.handler), peer)
 	})
 	// Run the handshake locally to avoid spinning up a source handler
-	if err := sink.Handshake(1, handler.chain, eth.BlockRangeUpdatePacket{}); err != nil {
+	if err := sink.Handshake(1, handler.chain, eth.BlockRangeUpdatePacket{
+		EarliestBlock:   0,
+		LatestBlock:     handler.chain.CurrentBlock().Number.Uint64(),
+		LatestBlockHash: handler.chain.CurrentBlock().Hash(),
+	}); err != nil {
 		t.Fatalf("failed to run protocol handshake")
 	}
 	// After the handshake completes, the source handler should stream the sink
@@ -344,7 +348,7 @@ func testSendTransactions(t *testing.T, protocol uint) {
 	seen := make(map[common.Hash]struct{})
 	for len(seen) < len(insert) {
 		switch protocol {
-		case 67, 68:
+		case 69, 68:
 			select {
 			case hashes := <-anns:
 				for _, hash := range hashes {
@@ -471,7 +475,11 @@ func testSendTransactionAnnouncementsOnly(t *testing.T, protocol uint) {
 		return eth.Handle((*ethHandler)(source.handler), peer)
 	})
 
-	if err := sinkPeer.Handshake(1, source.chain, eth.BlockRangeUpdatePacket{}); err != nil {
+	if err := sinkPeer.Handshake(1, source.chain, eth.BlockRangeUpdatePacket{
+		EarliestBlock:   0,
+		LatestBlock:     source.chain.CurrentBlock().Number.Uint64(),
+		LatestBlockHash: source.chain.CurrentBlock().Hash(),
+	}); err != nil {
 		t.Fatalf("failed to run protocol handshake: %v", err)
 	}
 
@@ -502,7 +510,7 @@ func testSendTransactionAnnouncementsOnly(t *testing.T, protocol uint) {
 	timeout := false
 	for len(seen) < len(txs) && !timeout {
 		switch protocol {
-		case 67, 68:
+		case 69, 68:
 			select {
 			case hashes := <-anns:
 				for _, hash := range hashes {
@@ -618,7 +626,10 @@ func testBroadcastBlock(t *testing.T, peers, bcasts int) {
 
 // Tests that a propagated malformed block (uncles or transactions don't match
 // with the hashes in the header) gets discarded and not broadcast forward.
-func TestBroadcastMalformedBlock69(t *testing.T) { testBroadcastMalformedBlock(t, eth.ETH69) }
+func TestBroadcastMalformedBlock69(t *testing.T) {
+	testBroadcastMalformedBlock(t, eth.ETH69)
+}
+
 func TestBroadcastMalformedBlock68(t *testing.T) { testBroadcastMalformedBlock(t, eth.ETH68) }
 
 func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
@@ -644,7 +655,11 @@ func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
 		return eth.Handle((*ethHandler)(source.handler), peer)
 	})
 
-	if err := sink.Handshake(1, source.chain, eth.BlockRangeUpdatePacket{}); err != nil {
+	if err := sink.Handshake(1, source.chain, eth.BlockRangeUpdatePacket{
+		EarliestBlock:   1,
+		LatestBlock:     source.chain.CurrentBlock().Number.Uint64(),
+		LatestBlockHash: source.chain.CurrentBlock().Hash(),
+	}); err != nil {
 		t.Fatalf("failed to run protocol handshake")
 	}
 	// After the handshake completes, the source handler should stream the sink

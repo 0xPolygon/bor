@@ -283,6 +283,7 @@ func (ps *peerSet) close() {
 	defer ps.lock.Unlock()
 
 	for _, p := range ps.peers {
+		//nolint:typecheck
 		p.Disconnect(p2p.DiscQuitting)
 	}
 	if !ps.closed {
