@@ -1623,7 +1623,7 @@ const (
 // splitReceipts separates out the state-sync receipt from the whole receipt list
 // of a block and returns the encoded lists back separately.
 func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
-	var decoded []types.ReceiptForStorage
+	var decoded []*types.ReceiptForStorage
 	if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
 		log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
 		return receipts, nil
