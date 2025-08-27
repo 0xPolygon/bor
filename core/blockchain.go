@@ -1620,6 +1620,35 @@ const (
 	SideStatTy
 )
 
+// splitReceipts separates out the state-sync receipt from the whole receipt list
+// of a block and returns the encoded lists back separately.
+func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
+	var decoded []types.ReceiptForStorage
+	if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
+		log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
+		return receipts, nil
+	}
+	// Find if there's a state-sync transaction receipt present. They are always
+	// appended at the end of list and can be identified by 0 gas usage.
+	if len(decoded) > 0 && decoded[len(decoded)-1].CumulativeGasUsed == 0 {
+		// Encode the state-sync transaction separately
+		encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
+		if err != nil {
+			log.Warn("Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
+			return receipts, nil
+		}
+
+		// Encode back the remaining receipts
+		encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
+		if err != nil {
+			log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
+			return receipts, encodedStateSyncReceipt
+		}
+		return encodedReceipts, encodedStateSyncReceipt
+	}
+	return receipts, nil
+}
+
 // InsertReceiptChain attempts to complete an already existing header chain with
 // transaction and receipt data.
 func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain []rlp.RawValue, ancientLimit uint64) (int, error) {
@@ -1665,35 +1694,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		start = time.Now()
 		size  = int64(0)
 	)
-
-	// splitReceipts separates out the state-sync receipt from the whole receipt list
-	// of a block and returns the encoded lists back separately.
-	splitReceipts := func(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
-		var decoded []types.ReceiptForStorage
-		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
-			log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
-			return receipts, rlp.RawValue{}
-		}
-		// Find if there's a state-sync transaction receipt present. They are always
-		// appended at the end of list and can be identified by 0 gas usage.
-		if len(decoded) > 0 && decoded[len(decoded)-1].CumulativeGasUsed == 0 {
-			// Encode the state-sync transaction separately
-			encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
-			if err != nil {
-				log.Warn("Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
-				return receipts, rlp.RawValue{}
-			}
-
-			// Encode back the remaining receipts
-			encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
-			if err != nil {
-				log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
-				return receipts, encodedStateSyncReceipt
-			}
-			return encodedReceipts, encodedStateSyncReceipt
-		}
-		return receipts, rlp.RawValue{}
-	}
 
 	getReceiptAndLogCount := func(receipts rlp.RawValue) (int, int) {
 		// Decode the receipts for each block
