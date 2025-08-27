@@ -107,7 +107,6 @@ func (s *SpanStore) updateHeimdallStatus(ctx context.Context) (err error) {
 }
 
 func (s *SpanStore) waitUntilHeimdallIsSynced(ctx context.Context) {
-	log.Info("Waiting for heimdall to be synced", "heimdallClient", s.heimdallClient)
 	// If there's no heimdall client, don't wait
 	if s.heimdallClient == nil {
 		return
