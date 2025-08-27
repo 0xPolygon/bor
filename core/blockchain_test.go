@@ -4924,7 +4924,6 @@ func TestSplitReceipts(t *testing.T) {
 		name             string
 		normalReceipts   []types.ReceiptForStorage
 		stateSyncReceipt *types.ReceiptForStorage
-		encoded          rlp.RawValue
 	}{
 		// Both nil
 		{
