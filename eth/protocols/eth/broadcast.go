@@ -158,7 +158,7 @@ func (p *Peer) announceTransactions() {
 				meta := p.txpool.GetMetadata(queue[count])
 				// BOR specific - DO NOT REMOVE
 				// Skip PIP-15 bundled transactions
-				if tx != nil && meta != nil && tx.GetOptions() == nil {
+				if meta != nil && tx.GetOptions() == nil {
 					pending = append(pending, queue[count])
 					pendingTypes = append(pendingTypes, meta.Type)
 					pendingSizes = append(pendingSizes, uint32(meta.Size))

@@ -789,9 +789,7 @@ func (s *Service) reportHistory(conn *connWrapper, list []uint64) error {
 		header, _ := s.backend.HeaderByNumber(context.Background(), rpc.BlockNumber(number))
 		if header != nil {
 			history[len(history)-1-i] = s.assembleBlockStats(header)
-			if history[len(history)-1-i] != nil {
-				continue
-			}
+			continue
 		}
 		// Ran out of blocks, cut the report short and send
 		history = history[len(history)-i:]

@@ -57,7 +57,7 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:           downloader.FullSync,
+	SyncMode:           downloader.SnapSync,
 	HistoryMode:        history.KeepAll,
 	NetworkId:          0, // enable auto configuration of networkID == chainID
 	TxLookupLimit:      2350000,

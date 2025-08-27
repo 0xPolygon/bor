@@ -94,7 +94,7 @@ func TestFlagsWithConfig(t *testing.T) {
 	require.Equal(t, c.config.Gpo.MaxPrice, big.NewInt(5000000000000))
 }
 
-// TestFlagsWithConfigAndFlags tests all types of flags passed via both
+// TestFlagsWithConfig tests all types of flags passed via both
 // config file and cli args. The cli args should overwrite the
 // value of flag.
 func TestFlagsWithConfigAndFlags(t *testing.T) {

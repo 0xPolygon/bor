@@ -1,0 +1,27 @@
+polygon_pos_package:
+  network_params:
+    el_block_interval_seconds: 1
+
+  participants:
+    # 3 validator nodes.
+    - kind: validator
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      count: 3
+
+    # 1 rpc node.
+    - kind: rpc
+      cl_type: heimdall-v2
+      cl_image: heimdall-v2:local
+      el_type: bor
+      el_image: bor:local
+      count: 1
+
+  additional_services:
+    - prometheus_grafana
+    - test_runner
+
+  test_runner_params:
+    image: leovct/e2e:6f827b8

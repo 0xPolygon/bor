@@ -1374,11 +1374,6 @@ func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 
 	addr := ctx.String(MinerEtherbaseFlag.Name)
 
-	// If no etherbase is specified, return.
-	if addr == "" {
-		return
-	}
-
 	if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
 		addr = addr[2:]
 	}

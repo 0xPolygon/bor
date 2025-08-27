@@ -918,7 +918,6 @@ func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, receiptLi
 
 	validate := func(index int, header *types.Header) error {
 		if receiptListHashes[index] != header.ReceiptHash {
-			log.Info("Receipt hash mismatch", "expected", header.ReceiptHash, "got", receiptListHashes[index])
 			return errInvalidReceipt
 		}
 

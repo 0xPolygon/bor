@@ -43,21 +43,21 @@ type BorBlockLogsFilter struct {
 // figure out whether a particular block is interesting or not.
 func NewBorBlockLogsRangeFilter(backend Backend, borConfig *params.BorConfig, begin, end int64, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
 	// Create a generic filter and convert it into a range filter
-	f := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
-	f.begin = begin
-	f.end = end
+	filter := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
+	filter.begin = begin
+	filter.end = end
 
-	return f
+	return filter
 }
 
 // NewBorBlockLogsFilter creates a new filter which directly inspects the contents of
 // a block to figure out whether it is interesting or not.
 func NewBorBlockLogsFilter(backend Backend, borConfig *params.BorConfig, block common.Hash, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
 	// Create a generic filter and convert it into a block filter
-	f := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
-	f.block = block
+	filter := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
+	filter.block = block
 
-	return f
+	return filter
 }
 
 // newBorBlockLogsFilter creates a generic filter that can either filter based on a block hash,
@@ -142,15 +142,8 @@ func (f *BorBlockLogsFilter) unindexedLogs(ctx context.Context, end uint64) ([]*
 }
 
 // borBlockLogs returns the logs matching the filter criteria within a single block.
-func (f *BorBlockLogsFilter) borBlockLogs(_ context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
-	// After upstream merge from geth v1.16.1, range filters can depend on per-receipt bloom.
-	// Bor receipts written by tests (or older code) may omit Bloom.
-	// To keep compatibility, compute the Bloom on-the-fly, when missing.
-	bloom := receipt.Bloom
-	if (bloom == (types.Bloom{})) && len(receipt.Logs) > 0 {
-		bloom = types.CreateBloom(receipt)
-	}
-	if bloomFilter(bloom, f.addresses, f.topics) {
+func (f *BorBlockLogsFilter) borBlockLogs(ctx context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
+	if bloomFilter(receipt.Bloom, f.addresses, f.topics) {
 		logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
 	}
 

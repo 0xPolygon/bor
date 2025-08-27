@@ -68,7 +68,7 @@ var (
 	headSafeBlockGauge      = metrics.NewRegisteredGauge("chain/head/safe", nil)
 
 	chainInfoGauge   = metrics.NewRegisteredGaugeInfo("chain/info", nil)
-	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil) //nolint:unused
+	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil)
 
 	accountReadTimer   = metrics.NewRegisteredResettingTimer("chain/account/reads", nil)
 	accountHashTimer   = metrics.NewRegisteredResettingTimer("chain/account/hashes", nil)
@@ -90,8 +90,8 @@ var (
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 
-	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:unused
-	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:unused
+	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil)
+	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil)
 
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
 	triedbCommitTimer        = metrics.NewRegisteredResettingTimer("chain/triedb/commits", nil)
@@ -104,7 +104,7 @@ var (
 
 	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
 	blockValidationTimer               = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
+	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:golint,unused
 	blockExecutionTimer                = metrics.NewRegisteredTimer("chain/execution", nil)
 	blockWriteTimer                    = metrics.NewRegisteredTimer("chain/write", nil)
 	blockExecutionParallelCounter      = metrics.NewRegisteredCounter("chain/execution/parallel", nil)
@@ -338,8 +338,9 @@ type BlockChain struct {
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
 	wg            sync.WaitGroup
-	stopping      atomic.Bool // false if chain is running, true when stopped
-	procInterrupt atomic.Bool // interrupt signaler for block processing
+	quit          chan struct{} // shutdown signal, closed in Stop.
+	stopping      atomic.Bool   // false if chain is running, true when stopped
+	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
 	engine                       consensus.Engine
 	validator                    Validator // Block and state validator interface
@@ -922,7 +923,7 @@ func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 		bc.historyPrunePoint.Store(predefinedPoint)
 		return nil
 
-	// nolint:staticcheck
+	// nolint:gosimple
 	case history.KeepPostMerge:
 		if freezerTail == 0 && latest != 0 {
 			// This is the case where a user is trying to run with --history.chain
@@ -1665,52 +1666,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		size  = int64(0)
 	)
 
-	// splitReceipts separates out the state-sync receipt from the whole receipt list
-	// of a block and returns the encoded lists back separately.
-	splitReceipts := func(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
-		var decoded []types.ReceiptForStorage
-		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
-			log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
-			return receipts, rlp.RawValue{}
-		}
-		// Find if there's a state-sync transaction receipt present. They are always
-		// appended at the end of list and can be identified by 0 gas usage.
-		if len(decoded) > 0 && decoded[len(decoded)-1].GasUsed == 0 {
-			// Encode the state-sync transaction separately
-			encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
-			if err != nil {
-				log.Warn("Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
-				return receipts, rlp.RawValue{}
-			}
-
-			// Encode the remaining receipts
-			encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
-			if err != nil {
-				log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
-				return receipts, encodedStateSyncReceipt
-			}
-			log.Info("Receipts split into state-sync and non state-sync", "total count", len(decoded), "number", number, "hash", hash)
-			return encodedReceipts, encodedStateSyncReceipt
-		}
-		return receipts, rlp.RawValue{}
-	}
-
-	getReceiptAndLogCount := func(receipts rlp.RawValue) (int, int) {
-		// Decode the receipts for each block
-		var decoded []types.ReceiptForStorage
-		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
-			log.Warn("Failed to decode block receipts", "err", err)
-			return 0, 0
-		}
-
-		logs := 0
-		for _, receipt := range decoded {
-			logs += len(receipt.Logs)
-		}
-
-		return len(decoded), logs
-	}
-
 	// updateHead updates the head snap sync block if the inserted blocks are better
 	// and returns an indicator whether the inserted blocks are canonical.
 	updateHead := func(head *types.Block, headers []*types.Header) bool {
@@ -1769,15 +1724,14 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 				log.Info("Wrote genesis to ancients")
 			}
 		}
-
-		// Separate out bor receipts (i.e. receipts of state-sync transactions)
-		var borReceipts = make([]rlp.RawValue, len(receiptChain))
-		for i, receipts := range receiptChain {
-			receiptChain[i], borReceipts[i] = splitReceipts(receipts, blockChain[i].NumberU64(), blockChain[i].Hash())
-		}
+		// BOR: Retrieve all the bor receipts and also maintain the array of headers
+		// for bor specific reorg check.
+		borReceipts := []rlp.RawValue{}
 
 		var headers []*types.Header
+
 		for _, block := range blockChain {
+			borReceipts = append(borReceipts, bc.GetBorReceiptRLPByHash(block.Hash()))
 			headers = append(headers, block.Header())
 		}
 
@@ -1788,8 +1742,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			log.Error("Error importing chain data to ancients", "err", err)
 			return 0, err
 		}
-		lastHeader := headers[len(headers)-1]
-		log.Info("Written bor receipt and look up entries in ancient db", "last imported", lastHeader.Number, "hash", lastHeader.Hash())
 		size += writeSize
 
 		// Write tx indices if any condition is satisfied:
@@ -1807,10 +1759,8 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		for i, block := range blockChain {
 			if bc.txIndexer == nil || bc.txIndexer.limit == 0 || ancientLimit <= bc.txIndexer.limit || block.NumberU64() >= ancientLimit-bc.txIndexer.limit {
 				rawdb.WriteTxLookupEntriesByBlock(batch, block)
-				rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
 			} else if rawdb.ReadTxIndexTail(bc.db) != nil {
 				rawdb.WriteTxLookupEntriesByBlock(batch, block)
-				rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
 			}
 
 			stats.processed++
@@ -1908,30 +1858,11 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 					skipPresenceCheck = true
 				}
 			}
-
-			// Separate out bor receipts (i.e. receipts of state-sync transactions)
-			var borReceiptRaw rlp.RawValue
-			receiptChain[i], borReceiptRaw = splitReceipts(receiptChain[i], block.NumberU64(), block.Hash())
-
 			// Write all the data out into the database
 			// TODO v1.16.1: Which of the two?
 			rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
 			rawdb.WriteBlock(batch, block)
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
-
-			var borReceipt types.ReceiptForStorage
-			if len(borReceiptRaw) > 0 {
-				if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
-					// Derive rest of fields for bor receipts before writing
-					txIndex, logIndex := getReceiptAndLogCount(receiptChain[i])
-					types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
-					borReceipt.Status = types.ReceiptStatusSuccessful
-
-					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
-					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
-					log.Info("Written bor receipt and look up entries in kvdb", "number", block.NumberU64(), "hash", block.Hash())
-				}
-			}
 
 			// Write everything belongs to the blocks into the database. So that
 			// we can ensure all components of body is completed(body, receipts)
@@ -2698,6 +2629,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		// Report the import stats before returning the various results
 		stats.processed++
 		stats.usedGas += usedGas
+		witness = witness
 
 		var snapDiffItems, snapBufItems common.StorageSize
 		if bc.snaps != nil {

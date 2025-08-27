@@ -24,7 +24,6 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -338,15 +337,6 @@ func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
-// ExcludeStateSync removes the state sync transaction from the list. We use
-// the property of zero gas used to identify a state-sync transaction in the
-// list.
-func (rl *ReceiptList68) ExcludeStateSync() {
-	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
-		rl.items = rl.items[:len(rl.items)-1]
-	}
-}
-
 // ReceiptList69 is the block receipt list as downloaded by eth/69.
 // This implements types.DerivableList for validation purposes.
 type ReceiptList69 struct {
@@ -413,16 +403,6 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
-// ExcludeStateSync removes the state sync transaction from the list. We use
-// the property of zero gas used to identify a state-sync transaction in the
-// list.
-func (rl *ReceiptList69) ExcludeStateSync() {
-	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
-		rl.items = rl.items[:len(rl.items)-1]
-		log.Info("Excluded state-sync receipt from list for receipt root calculation")
-	}
-}
-
 // blockReceiptsToNetwork69 takes a slice of rlp-encoded receipts, and transactions,
 // and applies the type-encoding on the receipts (for non-legacy receipts).
 // e.g. for non-legacy receipts: receipt-data -> {tx-type || receipt-data}
@@ -449,30 +429,6 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 		enc.ListEnd(receiptList)
 	}
 	enc.ListEnd(outer)
-	enc.Flush()
-	return out.Bytes(), nil
-}
-
-// stateSyncReceiptToNetwork69 takes a rlp-encoded receipt of a state-sync
-// transaction and applies type-encoding to match the eth/69 format.
-func stateSyncReceiptToNetwork69(blockReceipt rlp.RawValue) ([]byte, error) {
-	var (
-		out bytes.Buffer
-		enc = rlp.NewEncoderBuffer(&out)
-	)
-
-	// Extract the receipt content
-	content, _, err := rlp.SplitList(blockReceipt)
-	if err != nil {
-		return nil, fmt.Errorf("invalid state-sync RLP received: %v", err)
-	}
-
-	// Create an eth/69 format receipt [TxType, PostStateOrStatus, GasUsed, Logs]
-	receiptList := enc.List()
-	enc.WriteUint64(0) // TxType is always 0 for state-sync transactions
-	enc.Write(content) // Write receipt data
-	enc.ListEnd(receiptList)
-
 	enc.Flush()
 	return out.Bytes(), nil
 }

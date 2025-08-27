@@ -267,12 +267,6 @@ var parallelizabilityTimer = metrics.NewRegisteredTimer("block/parallelizability
 // transactions failed to execute due to insufficient gas it will return an error.
 // nolint:gocognit
 func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, interruptCtx context.Context) (*ProcessResult, error) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error("recovered from panic during parallel execution", "err", r)
-		}
-	}()
-
 	var (
 		receipts    types.Receipts
 		header      = block.Header()

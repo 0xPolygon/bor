@@ -307,15 +307,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
 	// Set blockchain reference for fork detection in whitelist service
-	checker.SetBlockchain(eth.blockchain)
+	if err == nil {
+		checker.SetBlockchain(eth.blockchain)
+	}
 
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
+	if err != nil {
+		return nil, err
+	}
 
 	// bor: this is nor present in geth
 	/*
@@ -530,6 +531,33 @@ func (s *Ethereum) isLocalBlock(header *types.Header) bool {
 	}
 
 	return false
+}
+
+// shouldPreserve checks whether we should preserve the given block
+// during the chain reorg depending on whether the author of block
+// is a local account.
+func (s *Ethereum) shouldPreserve(header *types.Header) bool {
+	// The reason we need to disable the self-reorg preserving for clique
+	// is it can be probable to introduce a deadlock.
+	//
+	// e.g. If there are 7 available signers
+	//
+	// r1   A
+	// r2     B
+	// r3       C
+	// r4         D
+	// r5   A      [X] F G
+	// r6    [X]
+	//
+	// In the round5, the in-turn signer E is offline, so the worst case
+	// is A, F and G sign the block of round5 and reject the block of opponents
+	// and in the round6, the last available signer B is offline, the whole
+	// network is stuck.
+	if _, ok := s.engine.(*clique.Clique); ok {
+		return false
+	}
+
+	return s.isLocalBlock(header)
 }
 
 // SetEtherbase sets the mining reward address.
