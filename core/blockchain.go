@@ -2061,7 +2061,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		if emitHeadEvent {
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 			// BOR state sync feed related changes
-			for _, data := range bc.stateSyncData {
+			for _, data := range bc.GetStateSync() {
 				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 			}
 			// BOR
@@ -2466,7 +2466,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		}
 
 		// BOR state sync feed related changes
-		for _, data := range bc.stateSyncData {
+		for _, data := range bc.GetStateSync() {
 			bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 		}
 		// BOR

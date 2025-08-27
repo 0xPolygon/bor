@@ -319,6 +319,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
 		msg, err := TransactionToMessage(tx, types.MakeSigner(p.config, header.Number, header.Time), header.BaseFee)
 		if err != nil {
 			log.Error("error creating message", "err", err)
@@ -408,12 +411,12 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	var requests [][]byte
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	p.engine.Finalize(p.bc, header, statedb, block.Body())
+	receipts = p.engine.Finalize(p.bc, header, statedb, block.Body(), receipts)
 
 	return &ProcessResult{
 		Receipts: receipts,
 		Requests: requests,
-		Logs:     allLogs,
+		Logs:     statedb.Logs(),
 		GasUsed:  *usedGas,
 	}, nil
 }
