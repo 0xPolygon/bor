@@ -1676,7 +1676,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 		// Find if there's a state-sync transaction receipt present. They are always
 		// appended at the end of list and can be identified by 0 gas usage.
-		if len(decoded) > 0 && decoded[len(decoded)-1].GasUsed == 0 {
+		if len(decoded) > 0 && decoded[len(decoded)-1].CumulativeGasUsed == 0 {
 			// Encode the state-sync transaction separately
 			encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
 			if err != nil {
