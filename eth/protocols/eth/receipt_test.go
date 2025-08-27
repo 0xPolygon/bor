@@ -18,6 +18,7 @@ package eth
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -65,6 +66,26 @@ var receiptsTests = []struct {
 	},
 }
 
+var stateSyncReceiptsTests = []struct {
+	normalReceipts   []types.ReceiptForStorage
+	stateSyncReceipt *types.ReceiptForStorage
+	txs              []*types.Transaction
+	root             common.Hash
+}{
+	// Only state-sync receipt
+	{
+		normalReceipts:   nil,
+		stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		txs:              []*types.Transaction{types.NewBorTransaction()},
+	},
+	// Normal + state-sync receipts
+	{
+		normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+		stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		txs:              []*types.Transaction{types.NewTx(&types.LegacyTx{}), types.NewBorTransaction()},
+	},
+}
+
 func init() {
 	for i := range receiptsTests {
 		// derive basic fields
@@ -80,6 +101,22 @@ func init() {
 			receipts[j] = &r
 		}
 		receiptsTests[i].root = types.DeriveSha(receipts, trie.NewStackTrie(nil))
+	}
+
+	for i := range stateSyncReceiptsTests {
+		// derive basic fields for normal receipts skipping the state-sync receipts
+		for j := range stateSyncReceiptsTests[i].normalReceipts {
+			r := (*types.Receipt)(&stateSyncReceiptsTests[i].normalReceipts[j])
+			txType := stateSyncReceiptsTests[i].txs[j].Type()
+			miniDeriveFields(r, txType)
+		}
+		// compute expected root excluding the state-sync transaction
+		receipts := make(types.Receipts, len(stateSyncReceiptsTests[i].normalReceipts))
+		for j, sr := range stateSyncReceiptsTests[i].normalReceipts {
+			r := types.Receipt(sr)
+			receipts[j] = &r
+		}
+		stateSyncReceiptsTests[i].root = types.DeriveSha(receipts, trie.NewStackTrie(nil))
 	}
 }
 
@@ -119,6 +156,68 @@ func TestReceiptList69(t *testing.T) {
 
 		// compute root hash from ReceiptList69 and compare.
 		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
+		if responseHash != test.root {
+			t.Fatalf("test[%d]: wrong root hash from ReceiptList69\nhave: %v\nwant: %v", i, responseHash, test.root)
+		}
+	}
+}
+
+func TestStateSyncReceiptList69(t *testing.T) {
+	// The tests tries to replicate behaviour of how the getReceipts query would
+	// handle normal and state-sync receipts.
+	for i, test := range stateSyncReceiptsTests {
+		// Merge both receipts
+		var blockReceipts = make([]types.ReceiptForStorage, 0)
+		if test.normalReceipts != nil {
+			blockReceipts = append(blockReceipts, test.normalReceipts...)
+		}
+		if test.stateSyncReceipt != nil {
+			blockReceipts = append(blockReceipts, *test.stateSyncReceipt)
+		}
+
+		t.Log("blockReceipts:", blockReceipts)
+
+		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
+		isStateSyncReceipt := func(index int) bool {
+			if index >= len(blockReceipts) {
+				return false
+			}
+			return blockReceipts[index].CumulativeGasUsed == 0
+		}
+
+		// encode receipts from types.ReceiptForStorage object.
+		canonDB, _ := rlp.EncodeToBytes(blockReceipts)
+
+		// encode block body from types object.
+		blockBody := types.Body{Transactions: test.txs}
+		canonBody, _ := rlp.EncodeToBytes(blockBody)
+
+		// convert from storage encoding to network encoding
+		network, err := blockReceiptsToNetwork69(canonDB, canonBody, isStateSyncReceipt)
+		if err != nil {
+			t.Fatalf("test[%d]: blockReceiptsToNetwork69 error: %v", i, err)
+		}
+
+		// parse as Receipts response list from network encoding
+		var rl ReceiptList69
+		if err := rlp.DecodeBytes(network, &rl); err != nil {
+			t.Fatalf("test[%d]: can't decode network receipts: %v", i, err)
+		}
+		rlStorageEnc := rl.EncodeForStorage()
+		if !bytes.Equal(rlStorageEnc, canonDB) {
+			t.Fatalf("test[%d]: re-encoded receipts not equal\nhave: %x\nwant: %x", i, rlStorageEnc, canonDB)
+		}
+		rlNetworkEnc, _ := rlp.EncodeToBytes(&rl)
+		if !bytes.Equal(rlNetworkEnc, network) {
+			t.Fatalf("test[%d]: re-encoded network receipt list not equal\nhave: %x\nwant: %x", i, rlNetworkEnc, network)
+		}
+
+		// Exclude the state-sync receipt from root hash calculations
+		rl.ExcludeStateSync()
+
+		// compute root hash from ReceiptList69 and compare.
+		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
+		fmt.Println("root:", responseHash, "expected", test.root)
 		if responseHash != test.root {
 			t.Fatalf("test[%d]: wrong root hash from ReceiptList69\nhave: %v\nwant: %v", i, responseHash, test.root)
 		}
