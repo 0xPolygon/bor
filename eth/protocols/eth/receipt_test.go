@@ -18,7 +18,6 @@ package eth
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -175,8 +174,6 @@ func TestStateSyncReceiptList69(t *testing.T) {
 			blockReceipts = append(blockReceipts, *test.stateSyncReceipt)
 		}
 
-		t.Log("blockReceipts:", blockReceipts)
-
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
 		isStateSyncReceipt := func(index int) bool {
 			if index >= len(blockReceipts) {
@@ -217,7 +214,6 @@ func TestStateSyncReceiptList69(t *testing.T) {
 
 		// compute root hash from ReceiptList69 and compare.
 		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
-		fmt.Println("root:", responseHash, "expected", test.root)
 		if responseHash != test.root {
 			t.Fatalf("test[%d]: wrong root hash from ReceiptList69\nhave: %v\nwant: %v", i, responseHash, test.root)
 		}
