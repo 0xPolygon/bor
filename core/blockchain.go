@@ -2195,6 +2195,7 @@ type BlockState struct {
 	mu        sync.Mutex
 	completed map[common.Hash]bool
 	cond      *sync.Cond
+	aborted   bool
 }
 
 func NewBlockState() *BlockState {
@@ -2211,18 +2212,26 @@ func (bs *BlockState) IsComplete(hash common.Hash) bool {
 	return bs.completed[hash]
 }
 
-func (bs *BlockState) WaitForParent(hash common.Hash) {
+func (bs *BlockState) WaitForParentOrAbort(hash common.Hash) bool {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
-	for !bs.completed[hash] {
+	for !bs.completed[hash] && !bs.aborted {
 		bs.cond.Wait()
 	}
+	return bs.aborted
 }
 
 func (bs *BlockState) MarkComplete(hash common.Hash) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	bs.completed[hash] = true
+	bs.cond.Broadcast()
+}
+
+func (bs *BlockState) Abort() {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.aborted = true
 	bs.cond.Broadcast()
 }
 
@@ -2266,7 +2275,8 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		headers[i] = block.Header()
 	}
 	abort, results := bc.engine.VerifyHeaders(bc, headers)
-	defer close(abort)
+	var abortCloser sync.Once
+	defer abortCloser.Do(func() { close(abort) })
 
 	errChans := make([]chan error, len(chain))
 	for i := range errChans {
@@ -2306,9 +2316,21 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 	bs := NewBlockState() // Block state tracker to manage parallel block processing
 	bc.parallelImport.Store(true)
+
+	// Error channel for worker failures and abort coordination
+	errs := make(chan error, len(chain))
+	var abortOnce sync.Once
+	abortAll := func() {
+		abortOnce.Do(func() {
+			// stop header verification from producing more results
+			abortCloser.Do(func() { close(abort) })
+			// unblock any WaitForParent waiters
+			bs.Abort()
+		})
+	}
 	for i, block := range chain {
 		wg.Add(1)
-		go func(block *types.Block, i int) error {
+		go func(block *types.Block, i int) {
 			defer wg.Done()
 
 			// Check if block is already known before attempting to process
@@ -2320,14 +2342,17 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 				if err := <-errChans[i]; err != nil {
 					log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
 					processed.Store(processed.Load() - 1)
-					return fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
+					abortAll()
+					errs <- fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 				}
-				return nil
+				return
 			}
 
 			// If the chain is terminating, don't even bother starting up.
 			if bc.insertStopped() {
-				return errInsertionInterrupted
+				abortAll()
+				errs <- errInsertionInterrupted
+				return
 			}
 
 			// Get the witness for this block if available
@@ -2342,11 +2367,15 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 				// If we hit a stateless state-root mismatch, and the parent is in-batch, wait for parent and retry once
 				parentInBatchRetry := i > 0 && chain[i-1].Hash() == block.ParentHash()
 				if parentInBatchRetry && strings.Contains(perr.Error(), "stateless self-validation state root mismatch") {
-					bs.WaitForParent(block.ParentHash())
+					if bs.WaitForParentOrAbort(block.ParentHash()) { // aborted
+						return
+					}
 					statedb, perr = bc.ProcessBlockWithWitnesses(block, witness)
 				}
 				if perr != nil {
-					return perr
+					abortAll()
+					errs <- perr
+					return
 				}
 			}
 			statedb.SetWitness(witness)
@@ -2356,7 +2385,9 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 			// If parent is in this batch, wait until parent has been committed before we proceed to commit
 			if parentInBatch {
-				bs.WaitForParent(block.ParentHash())
+				if bs.WaitForParentOrAbort(block.ParentHash()) { // aborted
+					return
+				}
 			}
 
 			// Now handle header verification result post-processing
@@ -2377,7 +2408,6 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 							"expectedParent", block.ParentHash())
 
 						// Verify the existing parent block to see if it's valid
-						// This helps avoid unnecessary rewinds if the existing block is correct
 						existingHeader := existingBlock.Header()
 						verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
 
@@ -2387,8 +2417,9 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 							log.Info("Existing parent block is valid, rejecting new fork",
 								"existingParent", existingBlock.Hash(),
 								"rejectedParent", block.ParentHash())
-							return fmt.Errorf("rejecting block %d: existing parent %s is valid",
-								block.NumberU64(), existingBlock.Hash())
+							abortAll()
+							errs <- fmt.Errorf("rejecting block %d: existing parent %s is valid", block.NumberU64(), existingBlock.Hash())
+							return
 						}
 
 						// Existing parent is invalid, we need to rewind and accept the new chain
@@ -2398,35 +2429,42 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 							"verifyErr", verifyErr)
 
 						// For stateless nodes, we need to rewind and let the sync continue
-						// This will cause the correct parent block to be fetched and imported
 						if err := bc.SetHead(parentNum - 1); err != nil {
-							return fmt.Errorf("failed to rewind for reorg: %w", err)
+							abortAll()
+							errs <- fmt.Errorf("failed to rewind for reorg: %w", err)
+							return
 						}
 
 						// Return to let the downloader retry with the correct chain
-						return fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+						abortAll()
+						errs <- fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+						return
 					} else if existingBlock == nil && i > 0 {
 						// Parent is missing but should be in the current batch being processed
-						// Check if parent is being processed in parallel
 						parentHash := block.ParentHash()
 						if !bs.IsComplete(parentHash) {
 							log.Debug("Parent block still being processed, waiting for completion",
 								"blockNum", block.NumberU64(),
 								"parentHash", parentHash)
 							// Wait for parent to complete processing
-							bs.WaitForParent(parentHash)
+							if bs.WaitForParentOrAbort(parentHash) { // aborted
+								return
+							}
 							// After parent completes, retry the header verification to ensure correctness
 							if verr := bc.engine.VerifyHeader(bc, block.Header()); verr != nil {
-								return verr
+								abortAll()
+								errs <- verr
+								return
 							}
 							// Parent complete and header ok; proceed
 						} else {
 							// Parent should be complete but still getting unknown ancestor
-							// This indicates a genuine missing parent scenario
 							log.Error("Parent block processing completed but still unknown ancestor",
 								"blockNum", block.NumberU64(),
 								"parentHash", parentHash)
-							return hErr
+							abortAll()
+							errs <- hErr
+							return
 						}
 					}
 				} else {
@@ -2435,13 +2473,17 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 						"blockNum", block.NumberU64(),
 						"hash", block.Hash(),
 						"err", hErr)
-					return hErr
+					abortAll()
+					errs <- hErr
+					return
 				}
 			}
 
 			// Write the block to the chain without committing state to disk trie
 			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); werr != nil {
-				return werr
+				abortAll()
+				errs <- werr
+				return
 			}
 
 			processed.Add(1)
@@ -2450,12 +2492,12 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 			stats.processed = int(processed.Load())
 
 			stats.report(chain, i, 0, 0, 0, 0, true, true)
-			return nil
 		}(block, i)
 
 	}
 
 	wg.Wait()
+	close(errs)
 	bc.parallelImport.Store(false)
 
 	// Defer the validation of witness pre-state for all blocks in this batch now that headers/parents are imported
@@ -2464,6 +2506,12 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
+		}
+	}
+	// Return the first error if any
+	for err := range errs {
+		if err != nil {
+			return int(processed.Load()), err
 		}
 	}
 	return int(processed.Load()), nil
@@ -2532,7 +2580,6 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 						"verifyErr", verifyErr)
 
 					// For stateless nodes, we need to rewind and let the sync continue
-					// This will cause the correct parent block to be fetched and imported
 					if err := bc.SetHead(parentNum - 1); err != nil {
 						return int(processed.Load()), fmt.Errorf("failed to rewind for reorg: %w", err)
 					}
