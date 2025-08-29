@@ -212,11 +212,46 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
 
 			<-witReqSem
-			witRes.Response.Done <- nil
+			// Check if the Response is nil before accessing the Done channel.
+			if witRes.Response != nil && witRes.Response.Done != nil {
+				witRes.Response.Done <- nil
+				lastWitRes = witRes.Response
+			}
 			witReqsWg.Done()
-			lastWitRes = witRes.Response
 		}
-		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter received all responses", "peer", p.ID())
+		p.witPeer.Peer.Log().Trace("RequestWitnesses adapter finished receiving responses", "peer", p.ID())
+
+		// Check if we successfully received and processed witness data from the peer.
+		// This prevents nil pointer dereference by checking multiple failure scenarios.
+		// - len(receivedWitPages) == 0: No witness pages received at all.
+		// - len(reconstructedWitness) == 0: No witness data reconstructed from the received pages.
+		// - lastWitRes == nil: Same as len(reconstructedWitness) == 0, because if we have even one valid witness, lastWitRes will not be nil.
+		if len(receivedWitPages) == 0 || len(reconstructedWitness) == 0 || lastWitRes == nil {
+			p.witPeer.Peer.Log().Warn("Empty witness response received from peer", "peer", p.ID(), "requestedHashes", hashes)
+
+			doneCh := make(chan error)
+			go func() {
+				<-doneCh
+			}()
+
+			emptyWitnesses := make([]*stateless.Witness, 0)
+			emptyRes := &eth.Response{
+				Req:  wrapperReq.Request,
+				Res:  emptyWitnesses,
+				Meta: nil,
+				Time: 0,
+				Done: doneCh,
+			}
+
+			select {
+			case dlResCh <- emptyRes:
+				p.witPeer.Peer.Log().Trace("RequestWitnesses sent empty response because of empty witness data received from peer", "peer", p.ID())
+			case <-wrapperReq.Request.Cancel:
+				p.witPeer.Peer.Log().Trace("RequestWitnesses cancelled before sending empty response", "peer", p.ID())
+				return
+			}
+			return
+		}
 
 		var witnesses []*stateless.Witness
 		var responseHashes []common.Hash
@@ -241,7 +276,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 			Res:  witnesses,
 			Meta: lastWitRes.Meta,
 			Time: lastWitRes.Time,
-			Done: doneCh, // sends a ephemeral doneCh to keep compatibility
+			Done: doneCh, // Send an ephemeral doneCh to keep compatibility.
 		}
 
 		// Forward the adapted response to the downloader's channel,
@@ -302,6 +337,13 @@ func (p *ethPeer) receiveWitnessPage(
 			}()
 		}
 	}()
+
+	// Check if the Response is nil.
+	if witReqRes.Response == nil {
+		p.witPeer.Peer.Log().Warn("RequestWitnesses received nil response from peer", "peer", p.ID())
+		return errors.New("received nil response")
+	}
+
 	witPacketPtr, ok := witReqRes.Response.Res.(*wit.WitnessPacketRLPPacket)
 	if !ok {
 		p.witPeer.Peer.Log().Error("RequestWitnesses received unexpected response type", "type", fmt.Sprintf("%T", witReqRes.Response), "peer", p.ID())
