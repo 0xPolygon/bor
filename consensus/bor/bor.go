@@ -1081,9 +1081,10 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
+		vmCfg := *chain.(*core.BlockChain).GetVMConfig()
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
-			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
+			if err := c.checkAndCommitSpan(wrappedState, header, cx, vmCfg); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return nil
 			}
@@ -1091,7 +1092,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 		if c.HeimdallClient != nil {
 			// commit states
-			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
+			stateSyncData, err = c.CommitStates(wrappedState, header, cx, vmCfg)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
 				return nil
@@ -1226,6 +1227,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
+		vmCfg := *chain.(*core.BlockChain).GetVMConfig()
 
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
@@ -1233,11 +1235,14 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 				log.Error("Error while committing span", "error", err)
 				return nil, nil, 0, err
 			}
+		if err = c.checkAndCommitSpan(state, header, cx, vmCfg); err != nil {
+			log.Error("Error while committing span", "error", err)
+			return nil, err
 		}
 
 		if c.HeimdallClient != nil {
 			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
+			stateSyncData, err = c.CommitStates(state, header, cx, vmCfg)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
 				return nil, nil, 0, err
@@ -1468,6 +1473,7 @@ func (c *Bor) checkAndCommitSpan(
 	state vm.StateDB,
 	header *types.Header,
 	chain core.ChainContext,
+	vmCfg vm.Config,
 ) error {
 	var ctx = context.Background()
 	headerNumber := header.Number.Uint64()
@@ -1484,7 +1490,7 @@ func (c *Bor) checkAndCommitSpan(
 	tempState.IntermediateRoot(false)
 
 	if c.needToCommitSpan(span, headerNumber) {
-		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
+		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain, vmCfg)
 	}
 
 	return nil
@@ -1523,6 +1529,7 @@ func (c *Bor) FetchAndCommitSpan(
 	state vm.StateDB,
 	header *types.Header,
 	chain core.ChainContext,
+	vmCfg vm.Config,
 ) error {
 	var (
 		minSpan    borTypes.Span
@@ -1586,7 +1593,7 @@ func (c *Bor) FetchAndCommitSpan(
 		)
 	}
 
-	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain)
+	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, vmCfg)
 }
 
 // CommitStates commit states
@@ -1594,6 +1601,7 @@ func (c *Bor) CommitStates(
 	state vm.StateDB,
 	header *types.Header,
 	chain statefull.ChainContext,
+	vmCfg vm.Config,
 ) ([]*types.StateSyncData, error) {
 	fetchStart := time.Now()
 	number := header.Number.Uint64()
@@ -1707,7 +1715,7 @@ func (c *Bor) CommitStates(
 		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
 		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
 		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
-		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain)
+		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, vmCfg)
 		if err != nil {
 			return nil, err
 		}
