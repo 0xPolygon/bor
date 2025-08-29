@@ -1625,16 +1625,17 @@ const (
 func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
 	var decoded []*types.ReceiptForStorage
 	if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
-		log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
+		log.Warn("[debug] Failed to decode block receipts", "number", number, "hash", hash, "err", err)
 		return receipts, nil
 	}
 	// Find if there's a state-sync transaction receipt present. They are always
 	// appended at the end of list and can be identified by 0 gas usage.
 	if len(decoded) > 0 && decoded[len(decoded)-1].CumulativeGasUsed == 0 {
+		log.Info("[debug] separating state-sync receipt from normal receipts")
 		// Encode the state-sync transaction separately
 		encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
 		if err != nil {
-			log.Warn("Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
+			log.Warn("[debug] Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
 			return receipts, nil
 		}
 
@@ -1646,7 +1647,7 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.
 		// Encode back the normal (non state-sync) receipts and return
 		encodedReceipts, err := rlp.EncodeToBytes(decoded[:len(decoded)-1])
 		if err != nil {
-			log.Warn("Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
+			log.Warn("[debug] Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
 			return receipts, encodedStateSyncReceipt
 		}
 		return encodedReceipts, encodedStateSyncReceipt
@@ -1793,6 +1794,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			log.Error("Error importing chain data to ancients", "err", err)
 			return 0, err
 		}
+		log.Info("[debug] inserted normal + state-sync receipts to ancient db")
 		size += writeSize
 
 		// Write tx indices if any condition is satisfied:
@@ -1932,6 +1934,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+					log.Info("[debug] done writing bor receipts in kvdb", "number", block.NumberU64())
 				}
 			}
 

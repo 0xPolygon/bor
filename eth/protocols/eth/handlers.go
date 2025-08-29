@@ -299,6 +299,7 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes    int
 		receipts []rlp.RawValue
 	)
+	log.Error("[debug] getReceipts called over eth/68")
 
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
@@ -378,6 +379,8 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			blockReceipts = append(blockReceipts, borReceipt)
 		}
 
+		log.Info("[debug] got receipts to deliver", "number", *number, "len", len(blockReceipts), "stateSyncReceiptPresent", borReceipt != nil)
+
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
 		isStateSyncReceipt := func(index int) bool {
 			if index >= len(blockReceipts) {
@@ -400,6 +403,10 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if err != nil {
 			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
 			continue
+		}
+
+		if borReceipt != nil {
+			log.Info("[debug] encoded all receipts before sending")
 		}
 
 		receipts = append(receipts, results)
