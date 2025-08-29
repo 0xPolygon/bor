@@ -343,6 +343,7 @@ func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
 // list.
 func (rl *ReceiptList68) ExcludeStateSync() {
 	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
+		log.Info("[debug] excluding state-sync receipts from receipt root calculation in eth/68")
 		rl.items = rl.items[:len(rl.items)-1]
 	}
 }
@@ -418,7 +419,7 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 // list.
 func (rl *ReceiptList69) ExcludeStateSync() {
 	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
-		log.Info("[debug] excluding state-sync receipts from receipt root calculation")
+		log.Info("[debug] excluding state-sync receipts from receipt root calculation in eth/69")
 		rl.items = rl.items[:len(rl.items)-1]
 	}
 }

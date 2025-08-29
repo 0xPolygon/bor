@@ -1650,6 +1650,7 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.
 			log.Warn("[debug] Failed to encode remaining receipts after excluding state-sync receipt", "number", number, "hash", hash, "err", err)
 			return receipts, encodedStateSyncReceipt
 		}
+		log.Info("[debug] done separating receipts", "normal", decoded[:len(decoded)-1], "state-sync", 1, "number", number)
 		return encodedReceipts, encodedStateSyncReceipt
 	}
 	return receipts, nil
@@ -1694,6 +1695,8 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			}
 		}
 	}
+
+	log.Info("[debug] inserting receipt chain", "start", blockChain[0].NumberU64(), "end", blockChain[len(blockChain)-1].NumberU64())
 
 	var (
 		stats = struct{ processed, ignored int32 }{}
@@ -1924,6 +1927,10 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			rawdb.WriteBlock(batch, block)
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
 
+			num := block.NumberU64()
+			if num == 5136 || num == 5168 || num == 5344 {
+				log.Info("[debug] about to write bor receipts in writeBlockWithState", "number", num, "len", len(borReceiptRaw))
+			}
 			var borReceipt types.ReceiptForStorage
 			if len(borReceiptRaw) > 0 {
 				if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
@@ -1952,6 +1959,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 			stats.processed++
 		}
+		log.Info("[debug] written receipt chain", "start", blockChain[0].NumberU64(), "end", blockChain[len(blockChain)-1].NumberU64())
 		// Write everything belongs to the blocks into the database. So that
 		// we can ensure all components of body is completed(body, receipts,
 		// tx indexes)
@@ -1970,22 +1978,29 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 	// Write downloaded chain data and corresponding receipt chain data
 	if len(ancientBlocks) > 0 {
+		log.Info("[debug] about to write receipt chain in ancient db", "start", ancientBlocks[0].NumberU64(), "end", ancientBlocks[len(ancientBlocks)-1].NumberU64())
 		if n, err := writeAncient(ancientBlocks, ancientReceipts); err != nil {
 			if err == errInsertionInterrupted {
+				log.Info("[debug] insertion interrupted when writing receipt chain in ancient db")
 				return 0, nil
 			}
-
+			log.Error("[debug] failed to write receipt chain in ancient db", "err", err)
 			return n, err
 		}
+		log.Info("[debug] done writing receipt chain in ancient db", "start", ancientBlocks[0].NumberU64(), "end", ancientBlocks[len(ancientBlocks)-1].NumberU64())
 	}
 	if len(liveBlocks) > 0 {
+		log.Info("[debug] about to write receipt chain in live db", "start", liveBlocks[0].NumberU64(), "end", liveBlocks[len(liveBlocks)-1].NumberU64())
 		if n, err := writeLive(liveBlocks, liveReceipts); err != nil {
 			if err == errInsertionInterrupted {
+				log.Info("[debug] insertion interrupted when writing receipt chain in live db")
 				return 0, nil
 			}
 
+			log.Error("[debug] failed to write receipt chain in live db", "err", err)
 			return n, err
 		}
+		log.Info("[debug] done writing receipt chain in live db", "start", liveBlocks[0].NumberU64(), "end", liveBlocks[len(liveBlocks)-1].NumberU64())
 	}
 	var (
 		head = blockChain[len(blockChain)-1]
@@ -2000,7 +2015,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		context = append(context, []interface{}{"ignored", stats.ignored}...)
 	}
 
-	log.Debug("Imported new block receipts", context...)
+	log.Info("Imported new block receipts", context...)
 
 	return 0, nil
 }
@@ -2082,6 +2097,10 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			// DeriveFieldsForBorLogs will fill those fields for websocket subscriptions
 			types.DeriveFieldsForBorLogs(stateSyncLogs, block.Hash(), block.NumberU64(), uint(len(receipts)), uint(len(logs)))
 
+			num := block.NumberU64()
+			if num == 5136 || num == 5168 || num == 5344 {
+				log.Info("[debug] about to write bor receipts in writeBlockWithState", "number", num)
+			}
 			// Write bor receipt
 			rawdb.WriteBorReceipt(blockBatch, block.Hash(), block.NumberU64(), &types.ReceiptForStorage{
 				Status: types.ReceiptStatusSuccessful, // make receipt status successful
