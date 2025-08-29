@@ -227,7 +227,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		// - len(reconstructedWitness) == 0: No witness data reconstructed from the received pages.
 		// - lastWitRes == nil: Same as len(reconstructedWitness) == 0, because if we have even one valid witness, lastWitRes will not be nil.
 		if len(receivedWitPages) == 0 || len(reconstructedWitness) == 0 || lastWitRes == nil {
-			p.witPeer.Peer.Log().Warn("Empty witness response received from peer", "peer", p.ID(), "requestedHashes", hashes)
+			p.witPeer.Peer.Log().Warn("Empty response received for witnesses requested from peer", "peer", p.ID(), "requestedHashes", hashes)
 
 			doneCh := make(chan error)
 			go func() {
