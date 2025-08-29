@@ -3739,9 +3739,9 @@ func (bc *BlockChain) verifyPendingHeaders() {
 
 	chainConfig := bc.Config()
 
-	// We don't need to verify headers before VeBlop
-	if chainConfig.Bor == nil || !chainConfig.Bor.IsVeBlop(currentHead.Number) {
-		return // VeBlop is not enabled yet
+	// We don't need to verify headers before Rio
+	if chainConfig.Bor == nil || !chainConfig.Bor.IsRio(currentHead.Number) {
+		return // Rio is not enabled yet
 	}
 
 	// Collect headers from finalized block + 1 to current head

@@ -163,7 +163,7 @@ func TestEncodeSigHeaderJaipur(t *testing.T) {
 	require.Equal(t, hash, hashWithoutBaseFee)
 }
 
-func TestCalcProducerDelayVeBlop(t *testing.T) {
+func TestCalcProducerDelayRio(t *testing.T) {
 	t.Parallel()
 
 	// Test cases for VeBlop condition in CalcProducerDelay
@@ -192,7 +192,7 @@ func TestCalcProducerDelayVeBlop(t *testing.T) {
 				BackupMultiplier: map[string]uint64{
 					"0": 2,
 				},
-				VeBlopBlock: big.NewInt(50), // VeBlop enabled at block 50
+				RioBlock: big.NewInt(50), // VeBlop enabled at block 50
 			},
 			expected:    5, // Should return period (5) without additional calculations
 			description: "When VeBlop is enabled, should return period without producer delay or backup multiplier",
@@ -214,7 +214,7 @@ func TestCalcProducerDelayVeBlop(t *testing.T) {
 				BackupMultiplier: map[string]uint64{
 					"0": 4,
 				},
-				VeBlopBlock: big.NewInt(0), // VeBlop enabled from genesis
+				RioBlock: big.NewInt(0), // VeBlop enabled from genesis
 			},
 			expected:    3, // Should return period (3) only
 			description: "When VeBlop is enabled from genesis, should return period without additional calculations",
@@ -236,7 +236,7 @@ func TestCalcProducerDelayVeBlop(t *testing.T) {
 				BackupMultiplier: map[string]uint64{
 					"0": 2,
 				},
-				VeBlopBlock: big.NewInt(200), // VeBlop enabled at block 200 (after current block)
+				RioBlock: big.NewInt(200), // VeBlop enabled at block 200 (after current block)
 			},
 			expected:    7, // producer delay (3) + succession (2) * backup multiplier (2) = 3 + 4 = 7
 			description: "When VeBlop is not enabled and it's sprint start, should use producer delay plus backup multiplier",
@@ -258,7 +258,7 @@ func TestCalcProducerDelayVeBlop(t *testing.T) {
 				BackupMultiplier: map[string]uint64{
 					"0": 3,
 				},
-				VeBlopBlock: big.NewInt(100), // VeBlop not enabled yet
+				RioBlock: big.NewInt(100), // VeBlop not enabled yet
 			},
 			expected:    7, // period (4) + succession (1) * backup multiplier (3) = 4 + 3 = 7
 			description: "When VeBlop is not enabled and it's not sprint start, should use period plus backup multiplier",
@@ -280,7 +280,7 @@ func TestCalcProducerDelayVeBlop(t *testing.T) {
 				BackupMultiplier: map[string]uint64{
 					"0": 2,
 				},
-				VeBlopBlock: nil, // VeBlop not configured (nil)
+				RioBlock: nil, // VeBlop not configured (nil)
 			},
 			expected:    7, // producer delay since it's sprint start, no succession multiplier
 			description: "When VeBlop is nil and it's sprint start without succession, should use producer delay",

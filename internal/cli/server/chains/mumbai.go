@@ -36,7 +36,7 @@ var mumbaiTestnet = &Chain{
 				IndoreBlock:    big.NewInt(37075456),
 				AhmedabadBlock: big.NewInt(48467456),
 				BhilaiBlock:    big.NewInt(48467456),
-				VeBlopBlock:    big.NewInt(48473856),
+				RioBlock:       big.NewInt(48473856),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"37075456": 128,
 				},

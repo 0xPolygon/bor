@@ -194,7 +194,7 @@ func CalcProducerDelay(number uint64, succession int, c *params.BorConfig) uint6
 	delay := c.CalculatePeriod(number)
 
 	// Since there is only one producer in veblop, we don't need to add producer delay and backup multiplier
-	if c.IsVeBlop(big.NewInt(int64(number))) {
+	if c.IsRio(big.NewInt(int64(number))) {
 		return delay
 	}
 
@@ -543,7 +543,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 		return snapshot, nil
 	}
 
-	if c.config.IsVeBlop(targetHeader.Number) {
+	if c.config.IsRio(targetHeader.Number) {
 		return c.getVeBlopSnapshot(chain, targetHeader, parents, checkNewSpan)
 	}
 
@@ -853,7 +853,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	header.Extra = header.Extra[:types.ExtraVanityLength]
 
 	// get validator set if number
-	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsVeBlop(header.Number) {
+	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsRio(header.Number) {
 		span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
 		if err != nil {
 			return err
@@ -968,7 +968,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 		// check and commit span
-		if !c.config.IsVeBlop(header.Number) {
+		if !c.config.IsRio(header.Number) {
 			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return
@@ -1060,7 +1060,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 
 		// check and commit span
-		if !c.config.IsVeBlop(header.Number) {
+		if !c.config.IsRio(header.Number) {
 			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return nil, err

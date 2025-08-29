@@ -4837,7 +4837,7 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		// Create a config with VeBlop enabled
 		config := *params.TestChainConfig
 		config.Bor = &params.BorConfig{
-			VeBlopBlock: big.NewInt(0), // Enable VeBlop from genesis
+			RioBlock: big.NewInt(0), // Enable Rio from genesis
 		}
 
 		genesis := &Genesis{

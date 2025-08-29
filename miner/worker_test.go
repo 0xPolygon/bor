@@ -1226,7 +1226,7 @@ func TestVeblopTimerTriggersStaleBlock(t *testing.T) {
 	// Enable VeBlop from genesis
 	chainConfig = &params.ChainConfig{}
 	*chainConfig = *params.BorUnittestChainConfig
-	chainConfig.Bor.VeBlopBlock = big.NewInt(0)
+	chainConfig.Bor.RioBlock = big.NewInt(0)
 
 	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
 	defer engine.Close()
@@ -1295,7 +1295,7 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	// Enable VeBlop from genesis
 	chainConfig = &params.ChainConfig{}
 	*chainConfig = *params.BorUnittestChainConfig
-	chainConfig.Bor.VeBlopBlock = big.NewInt(0)
+	chainConfig.Bor.RioBlock = big.NewInt(0)
 
 	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
 	defer engine.Close()

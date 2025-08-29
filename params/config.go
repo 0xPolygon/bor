@@ -259,7 +259,7 @@ var (
 			IndoreBlock:    big.NewInt(37075456),
 			AhmedabadBlock: big.NewInt(48467456),
 			BhilaiBlock:    big.NewInt(48467456),
-			VeBlopBlock:    big.NewInt(48473856),
+			RioBlock:       big.NewInt(48473856),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"37075456": 128,
 			},
@@ -858,7 +858,7 @@ type BorConfig struct {
 	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
 	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	VeBlopBlock                     *big.Int               `json:"veblopBlock"`                // VeBlop switch block (nil = no fork, 0 = already on veblop)
+	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -906,8 +906,8 @@ func (c *BorConfig) IsBhilai(number *big.Int) bool {
 	return isBlockForked(c.BhilaiBlock, number)
 }
 
-func (c *BorConfig) IsVeBlop(number *big.Int) bool {
-	return isBlockForked(c.VeBlopBlock, number)
+func (c *BorConfig) IsRio(number *big.Int) bool {
+	return isBlockForked(c.RioBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
