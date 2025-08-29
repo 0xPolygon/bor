@@ -18,5 +18,5 @@ type Spanner interface {
 	GetCurrentSpan(ctx context.Context, headerHash common.Hash) (*borTypes.Span, error)
 	GetCurrentValidatorsByHash(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error)
 	GetCurrentValidatorsByBlockNrOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash, blockNumber uint64) ([]*valset.Validator, error)
-	CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext) error
+	CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext, vmCfg vm.Config) error
 }

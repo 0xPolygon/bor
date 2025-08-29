@@ -43,9 +43,9 @@ func (m *MockSpanner) EXPECT() *MockSpannerMockRecorder {
 }
 
 // CommitSpan mocks base method.
-func (m *MockSpanner) CommitSpan(arg0 context.Context, arg1 borTypes.Span, arg2, arg3 []types.MinimalVal, arg4 vm.StateDB, arg5 *types0.Header, arg6 core.ChainContext) error {
+func (m *MockSpanner) CommitSpan(arg0 context.Context, arg1 borTypes.Span, arg2, arg3 []types.MinimalVal, arg4 vm.StateDB, arg5 *types0.Header, arg6 core.ChainContext, arg7 vm.Config) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CommitSpan", arg0, arg1, arg2, arg3, arg4, arg5, arg6)
+	ret := m.ctrl.Call(m, "CommitSpan", arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
 	ret0, _ := ret[0].(error)
 	return ret0
 }

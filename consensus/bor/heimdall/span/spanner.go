@@ -290,7 +290,7 @@ func (c *ChainSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHas
 
 const method = "commitSpan"
 
-func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext) error {
+func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span, validators, producers []stakeTypes.MinimalVal, state vm.StateDB, header *types.Header, chainContext core.ChainContext, vmCfg vm.Config) error {
 	// get validators bytes
 	validatorBytes, err := rlp.EncodeToBytes(validators)
 	if err != nil {
@@ -328,7 +328,7 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span
 	msg := statefull.GetSystemMessage(c.validatorContractAddress, data)
 
 	// apply message
-	_, err = statefull.ApplyMessage(ctx, msg, state, header, c.chainConfig, chainContext)
+	_, err = statefull.ApplyCommitSpanMessage(ctx, msg, state, header, c.chainConfig, chainContext, vmCfg)
 
 	return err
 }

@@ -64,14 +64,112 @@ func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	}
 }
 
-// apply message
+// apply message - default system call behavior
 func ApplyMessage(
+	ctx context.Context,
+	msg Callmsg,
+	state vm.StateDB,
+	header *types.Header,
+	chainConfig *params.ChainConfig,
+	chainContext core.ChainContext,
+) (uint64, error) {
+	return applyMessageInternal(ctx, msg, state, header, chainConfig, chainContext, vm.Config{})
+}
+
+// ApplyStateSyncMessage - apply state sync transaction with proper tx tracing and receipt generation
+func ApplyStateSyncMessage(
+	ctx context.Context,
+	msg Callmsg,
+	state vm.StateDB,
+	header *types.Header,
+	chainConfig *params.ChainConfig,
+	chainContext core.ChainContext,
+	vmConfig vm.Config,
+	txHash common.Hash,
+) (uint64, error) {
+	// Handle state sync transaction tracing
+	vmenv := vm.NewEVM(core.NewEVMBlockContext(header, chainContext, &header.Coinbase), state, chainConfig, vmConfig)
+
+	if tracer := vmenv.Config.Tracer; tracer != nil && tracer.OnTxStart != nil {
+		// Create a transaction object representing the system call being executed
+		// This is a synthetic transaction for the state sync system call.
+		// The original Ethereum transaction hash (txHash parameter) will be used in the receipt.
+		tx := types.NewTransaction(0, *msg.To(), msg.Value(), msg.Gas(), msg.GasPrice(), msg.Data())
+		tracer.OnTxStart(vmenv.GetVMContext(), tx, msg.From())
+	}
+
+	// Execute the message
+	gasUsed, err := applyMessageInternal(ctx, msg, state, header, chainConfig, chainContext, vmConfig)
+
+	// Handle post-execution tracing with receipt generation
+	if tracer := vmenv.Config.Tracer; tracer != nil && tracer.OnTxEnd != nil {
+		receipt := &types.Receipt{
+			Type:              types.LegacyTxType,
+			PostState:         nil,
+			Status:            types.ReceiptStatusSuccessful,
+			CumulativeGasUsed: gasUsed,
+			TxHash:            txHash,
+			GasUsed:           gasUsed,
+			BlockHash:         header.Hash(),
+			BlockNumber:       header.Number,
+			TransactionIndex:  0,
+		}
+
+		if err != nil {
+			receipt.Status = types.ReceiptStatusFailed
+		}
+
+		// Get logs for the transaction from the state DB
+		if stateDB, ok := state.(interface {
+			GetLogs(common.Hash, uint64, common.Hash) []*types.Log
+		}); ok {
+			receipt.Logs = stateDB.GetLogs(txHash, header.Number.Uint64(), header.Hash())
+		}
+		receipt.Bloom = types.CreateBloom(receipt)
+
+		tracer.OnTxEnd(receipt, err)
+	}
+
+	return gasUsed, err
+}
+
+// ApplyCommitSpanMessage - apply commit span message with system call tracing
+func ApplyCommitSpanMessage(
+	ctx context.Context,
+	msg Callmsg,
+	state vm.StateDB,
+	header *types.Header,
+	chainConfig *params.ChainConfig,
+	chainContext core.ChainContext,
+	vmConfig vm.Config,
+) (uint64, error) {
+	// Handle commit span system call tracing
+	vmenv := vm.NewEVM(core.NewEVMBlockContext(header, chainContext, &header.Coinbase), state, chainConfig, vmConfig)
+
+	if tracer := vmenv.Config.Tracer; tracer != nil && tracer.OnSystemCallStartV2 != nil {
+		tracer.OnSystemCallStartV2(vmenv.GetVMContext())
+	}
+
+	// Execute the message
+	gasUsed, err := applyMessageInternal(ctx, msg, state, header, chainConfig, chainContext, vmConfig)
+
+	// Handle post-execution tracing
+	if tracer := vmenv.Config.Tracer; tracer != nil && tracer.OnSystemCallEnd != nil {
+		tracer.OnSystemCallEnd()
+	}
+
+	return gasUsed, err
+}
+
+// applyMessageInternal - internal core message application logic without tracing
+func applyMessageInternal(
 	_ context.Context,
 	msg Callmsg,
 	state vm.StateDB,
 	header *types.Header,
 	chainConfig *params.ChainConfig,
 	chainContext core.ChainContext,
+	vmConfig vm.Config,
 ) (uint64, error) {
 	initialGas := msg.Gas()
 
@@ -80,16 +178,7 @@ func ApplyMessage(
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
-	vmenv := vm.NewEVM(blockContext, state, chainConfig, vm.Config{})
-
-	if tracer := vmenv.Config.Tracer; tracer != nil {
-		if tracer.OnSystemCallStartV2 != nil {
-			tracer.OnSystemCallStartV2(vmenv.GetVMContext())
-		}
-		if tracer.OnSystemCallEnd != nil {
-			defer tracer.OnSystemCallEnd()
-		}
-	}
+	vmenv := vm.NewEVM(blockContext, state, chainConfig, vmConfig)
 
 	// nolint : contextcheck
 	// Apply the transaction to the current state (included in the env)
