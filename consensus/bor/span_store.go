@@ -59,14 +59,24 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 
 	if heimdallClient != nil {
 		go func() {
+			errorLogInterval := 10 * time.Second
+			var lastSpanErrorLogTime time.Time
+			var lastHeimdallErrorLogTime time.Time
+
 			for {
 				err := store.updateLatestSpan(ctx)
 				if err != nil {
-					log.Error("Failed to update latest span", "err", err)
+					if time.Since(lastSpanErrorLogTime) >= errorLogInterval {
+						log.Error("Failed to update latest span", "err", err)
+						lastSpanErrorLogTime = time.Now()
+					}
 				}
 				err = store.updateHeimdallStatus(ctx)
 				if err != nil {
-					log.Error("Failed to update heimdall status", "err", err)
+					if time.Since(lastHeimdallErrorLogTime) >= errorLogInterval {
+						log.Error("Failed to update heimdall status", "err", err)
+						lastHeimdallErrorLogTime = time.Now()
+					}
 				}
 				select {
 				case <-ctx.Done():
@@ -113,11 +123,16 @@ func (s *SpanStore) waitUntilHeimdallIsSynced(ctx context.Context) {
 	}
 
 	timeout := 200 * time.Millisecond
+	logInterval := 10 * time.Second
+	var lastLogTime time.Time
 
 	for {
 		syncInfo := s.heimdallStatus.Load()
 		if syncInfo == nil || syncInfo.CatchingUp {
-			log.Warn("Heimdall isn't synced, waiting for update", "syncInfo", syncInfo)
+			if time.Since(lastLogTime) >= logInterval {
+				log.Warn("Heimdall isn't synced, waiting for update", "syncInfo", syncInfo)
+				lastLogTime = time.Now()
+			}
 			select {
 			case <-ctx.Done():
 				return
