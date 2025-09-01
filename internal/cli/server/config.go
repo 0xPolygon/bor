@@ -147,6 +147,9 @@ type Config struct {
 	// ParallelEVM has the parallel evm related settings
 	ParallelEVM *ParallelEVMConfig `hcl:"parallelevm,block" toml:"parallelevm,block"`
 
+	// Parallel stateless import (download path) toggle
+	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
+
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 
@@ -824,6 +827,7 @@ func DefaultConfig() *Config {
 			SpeculativeProcesses: 8,
 			Enforce:              false,
 		},
+		EnableParallelStatelessImport: false,
 	}
 }
 
@@ -1249,6 +1253,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
+
+	// Parallel stateless import toggle
+	n.EnableParallelStatelessImport = c.EnableParallelStatelessImport
 
 	return &n, nil
 }

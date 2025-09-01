@@ -237,6 +237,9 @@ type Config struct {
 
 	// The time interval between each witness prune routine
 	WitnessPruneInterval uint64
+
+	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
+	EnableParallelStatelessImport bool
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

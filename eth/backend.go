@@ -279,6 +279,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, checker)
 	}
 
+	// Set parallel stateless import toggle on blockchain
+	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
+		eth.blockchain.ParallelStatelessImportEnable()
+	}
+
 	// Set blockchain reference for fork detection in whitelist service
 	if err == nil {
 		checker.SetBlockchain(eth.blockchain)

@@ -1012,6 +1012,14 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.ParallelEVM.Enforce,
 	})
 
+	// parallel stateless import toggle
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "parallelstatelessimport",
+		Usage:   "Enable parallel stateless block import",
+		Value:   &c.cliConfig.EnableParallelStatelessImport,
+		Default: c.cliConfig.EnableParallelStatelessImport,
+	})
+
 	// Witness Protocol Flags
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "witnessprotocol",
