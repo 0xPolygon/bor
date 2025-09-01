@@ -103,6 +103,9 @@ var (
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 
+	statelessParallelImportTimer   = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
+	statelessSequentialImportTimer = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
+
 	blockReorgMeter     = metrics.NewRegisteredMeter("chain/reorg/executes", nil)
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
 	blockReorgDropMeter = metrics.NewRegisteredMeter("chain/reorg/drop", nil)
@@ -2282,7 +2285,10 @@ func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop f
 }
 
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
-func (bc *BlockChain) parallelStatelessImport(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
+func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
+	log.Debug("Perfoming parallel stateless import", "chain length", len(chain))
+	start := time.Now()
+	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
 	var wg sync.WaitGroup
 	var processed atomic.Int32
 
@@ -2509,11 +2515,14 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		return bc.insertChainStatelessSequential(chain, witnesses, errChans, &stats)
 	}
 
-	return bc.parallelStatelessImport(chain, witnesses, errChans, &stats, stopHeaders)
+	return bc.insertChainStatelessParallel(chain, witnesses, errChans, &stats, stopHeaders)
 }
 
 // insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
 func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
+	log.Debug("Perfoming sequential stateless import", "chain length", len(chain))
+	start := time.Now()
+	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
 	var processed atomic.Int32
 	for i, block := range chain {
 		// Known block short-circuit
