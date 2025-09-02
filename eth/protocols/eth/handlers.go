@@ -337,6 +337,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 	var (
 		bytes    int
 		receipts []rlp.RawValue
+		count    []uint64
 	)
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
@@ -378,6 +379,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if borReceipt != nil {
 			blockReceipts = append(blockReceipts, borReceipt)
 		}
+		count = append(count, uint64(len(blockReceipts)))
 
 		log.Info("[debug] got receipts to deliver", "number", *number, "len", len(blockReceipts), "stateSyncReceiptPresent", borReceipt != nil)
 
@@ -413,11 +415,11 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes += len(results)
 	}
 
-	for _, r := range receipts {
+	for i, r := range receipts {
 		var decoded ReceiptList69
 		err := rlp.DecodeBytes(r, &decoded)
 		if err != nil {
-			log.Error("[debug] failed to decode final receipt response", "err", err)
+			log.Error("[debug] failed to decode final receipt response", "err", err, "count", count[i])
 		}
 		log.Info("[debug] done decoding receipt response")
 	}

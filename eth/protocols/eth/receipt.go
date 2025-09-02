@@ -92,8 +92,10 @@ func (r *Receipt) decodeDatabase(txType byte, s *rlp.Stream) error {
 func (r *Receipt) decodeInnerList(s *rlp.Stream, readTxType, readBloom bool) error {
 	_, err := s.List()
 	if err != nil {
+		log.Info("[debug] error decoding inner list")
 		return err
 	}
+	log.Info("[debug] starting inner list")
 	if readTxType {
 		r.TxType, err = s.Uint8()
 		if err != nil {
@@ -118,7 +120,13 @@ func (r *Receipt) decodeInnerList(s *rlp.Stream, readTxType, readBloom bool) err
 	if err != nil {
 		return fmt.Errorf("invalid logs: %w", err)
 	}
-	return s.ListEnd()
+	err = s.ListEnd()
+	if err == nil {
+		log.Info("[debug] closing inner list")
+	} else {
+		log.Info("[debug] error closing inner list", "err", err)
+	}
+	return err
 }
 
 // encodeForStorage produces the the storage encoding, i.e. the result matches
@@ -390,6 +398,7 @@ func (rl *ReceiptList69) EncodeIndex(i int, out *bytes.Buffer) {
 // DecodeRLP decodes a list receipts from the network format.
 func (rl *ReceiptList69) DecodeRLP(s *rlp.Stream) error {
 	if _, err := s.List(); err != nil {
+		log.Info("[debug] error decoding outer list")
 		return err
 	}
 	for i := 0; s.MoreDataInList(); i++ {
