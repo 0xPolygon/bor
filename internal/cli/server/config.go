@@ -138,9 +138,6 @@ type Config struct {
 	// ParallelEVM has the parallel evm related settings
 	ParallelEVM *ParallelEVMConfig `hcl:"parallelevm,block" toml:"parallelevm,block"`
 
-	// Parallel stateless import (download path) toggle
-	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
-
 	// Witness has the witness related settings
 	Witness *WitnessConfig `hcl:"witness,block" toml:"witness,block"`
 
@@ -645,6 +642,9 @@ type WitnessConfig struct {
 	// ProduceWitnesses enables producing witnesses while syncing
 	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
 
+	// Parallel stateless import (download path) toggle
+	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
+
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 
@@ -856,14 +856,14 @@ func DefaultConfig() *Config {
 			SpeculativeProcesses: 8,
 			Enforce:              false,
 		},
-		EnableParallelStatelessImport: false,
 		Witness: &WitnessConfig{
-			Enable:               false,
-			SyncWithWitnesses:    false,
-			ProduceWitnesses:     false,
-			FastForwardThreshold: 6400,
-			PruneThreshold:       64000,
-			PruneInterval:        120 * time.Second,
+			Enable:                        false,
+			SyncWithWitnesses:             false,
+			ProduceWitnesses:              false,
+			EnableParallelStatelessImport: false,
+			FastForwardThreshold:          6400,
+			PruneThreshold:                64000,
+			PruneInterval:                 120 * time.Second,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
@@ -1298,6 +1298,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
 	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.EnableParallelStatelessImport = c.Witness.EnableParallelStatelessImport
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
 	n.WitnessPruneThreshold = c.Witness.PruneThreshold
 	n.WitnessPruneInterval = c.Witness.PruneInterval
@@ -1309,9 +1310,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
-
-	// Parallel stateless import toggle
-	n.EnableParallelStatelessImport = c.EnableParallelStatelessImport
 
 	return &n, nil
 }

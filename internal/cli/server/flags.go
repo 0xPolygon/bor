@@ -1012,14 +1012,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.ParallelEVM.Enforce,
 	})
 
-	// parallel stateless import toggle
-	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "parallelstatelessimport",
-		Usage:   "Enable parallel stateless block import",
-		Value:   &c.cliConfig.EnableParallelStatelessImport,
-		Default: c.cliConfig.EnableParallelStatelessImport,
-	})
-
 	// Witness Protocol Flags
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "witness.enable",
@@ -1038,6 +1030,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Produce witnesses while syncing",
 		Value:   &c.cliConfig.Witness.ProduceWitnesses,
 		Default: c.cliConfig.Witness.ProduceWitnesses,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.parallelstatelessimport",
+		Usage:   "Enable parallel stateless block import",
+		Value:   &c.cliConfig.Witness.EnableParallelStatelessImport,
+		Default: c.cliConfig.Witness.EnableParallelStatelessImport,
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
