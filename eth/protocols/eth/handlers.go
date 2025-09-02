@@ -413,6 +413,8 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes += len(results)
 	}
 
+	log.Info("[debug] sending final receipt response", "receipts", receipts)
+
 	return receipts
 }
 
