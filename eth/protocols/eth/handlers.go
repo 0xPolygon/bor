@@ -345,6 +345,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		receipts []rlp.RawValue
 		count    []uint64
 		data     []ReceiptData
+		numbers  []uint64
 	)
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
@@ -358,8 +359,10 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// network packet.
 		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
 		if number == nil {
+			log.Info("[debug] continue because block number not found")
 			continue
 		}
+		numbers = append(numbers, *number)
 
 		// Retrieve the requested block's receipts
 		normalReceipts := chain.GetRawReceipts(hash, *number)
@@ -422,6 +425,8 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		receipts = append(receipts, results)
 		bytes += len(results)
 	}
+
+	log.Info("[debug] done processing receipts query", "count", len(numbers), "blocks", numbers)
 
 	for i, r := range receipts {
 		var decoded ReceiptList69
