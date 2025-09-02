@@ -19,6 +19,7 @@ package eth
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -334,10 +335,16 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 // It does not send the bloom filters for the receipts
 func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest) []rlp.RawValue {
 	// Gather state data until the fetch or network limits is reached
+	type ReceiptData struct {
+		number          uint64
+		encodedReceipts []byte
+		body            []byte
+	}
 	var (
 		bytes    int
 		receipts []rlp.RawValue
 		count    []uint64
+		data     []ReceiptData
 	)
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
@@ -400,6 +407,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if body == nil {
 			continue
 		}
+		data = append(data, ReceiptData{*number, encodedBlockReceipts, body})
 
 		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
 		if err != nil {
@@ -420,6 +428,14 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		err := rlp.DecodeBytes(r, &decoded)
 		if err != nil {
 			log.Error("[debug] failed to decode final receipt response", "err", err, "count", count[i])
+			if file, err := os.OpenFile("receipt_test_data.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+				if jsonData, err := json.Marshal(data[i]); err == nil {
+					file.Write(jsonData)
+					file.Write([]byte("\n"))
+				}
+				file.Close()
+				log.Info("[debug] written data to file")
+			}
 		}
 		log.Info("[debug] done decoding receipt response")
 	}
