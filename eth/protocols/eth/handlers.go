@@ -421,7 +421,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 		log.Info("[debug] done decoding receipt response")
 	}
-	log.Info("[debug] sending final receipt response", "receipts", receipts)
+	log.Info("[debug] sending final receipt response")
 
 	return receipts
 }
