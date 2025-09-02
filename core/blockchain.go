@@ -2283,7 +2283,7 @@ func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop f
 
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
 func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
-	log.Debug("Perfoming parallel stateless import", "chain length", len(chain))
+	log.Info("Perfoming parallel stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
 	var wg sync.WaitGroup
@@ -2517,7 +2517,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 // insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
 func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
-	log.Debug("Perfoming sequential stateless import", "chain length", len(chain))
+	log.Info("Perfoming sequential stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
 	var processed atomic.Int32
