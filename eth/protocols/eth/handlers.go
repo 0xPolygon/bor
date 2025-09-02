@@ -418,6 +418,8 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			if jsonData, err := json.Marshal(data); err == nil {
 				file.Write(jsonData)
 				file.Write([]byte("\n"))
+			} else {
+				log.Error("[debug] error json marshal", "err", err)
 			}
 			file.Close()
 			log.Info("[debug] written data to file", "number", *number)
