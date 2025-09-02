@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -335,11 +336,6 @@ func ServiceGetReceiptsQuery68(chain *core.BlockChain, query GetReceiptsRequest)
 // It does not send the bloom filters for the receipts
 func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest) []rlp.RawValue {
 	// Gather state data until the fetch or network limits is reached
-	type ReceiptData struct {
-		number          uint64
-		encodedReceipts []byte
-		body            []byte
-	}
 	var (
 		bytes    int
 		receipts []rlp.RawValue
@@ -413,23 +409,31 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if body == nil {
 			continue
 		}
-		data := ReceiptData{*number, encodedBlockReceipts, body}
-		if file, err := os.OpenFile("receipt_test_data.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-			if jsonData, err := json.Marshal(data); err == nil {
-				fmt.Println("json data", jsonData)
-				file.Write(jsonData)
-				file.Write([]byte("\n"))
-				log.Info("[debug] written data to file", "number", *number)
-			} else {
-				log.Error("[debug] error json marshal", "err", err)
-			}
-			file.Close()
-		}
 
 		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
 		if err != nil {
 			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
 			continue
+		}
+
+		var decoded ReceiptList69
+		err = rlp.DecodeBytes(results, &decoded)
+		if err != nil {
+			log.Error("[debug] failed to decode final receipt response", "err", err, "total receipts", len(blockReceipts), "number", *number)
+			for _, br := range blockReceipts {
+				log.Info("receipt", "status", br.Status, "gas used", br.CumulativeGasUsed, "logs", br.Logs)
+			}
+			name := strconv.Itoa(int(*number))
+			file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				log.Info("[debug] opened file to write for block", "filename", name)
+				file.Write(encodedBlockReceipts)
+				file.Write([]byte("\n"))
+				file.Write(body)
+				file.Close()
+			} else {
+				log.Info("[debug] error opening file", "filename", name)
+			}
 		}
 
 		if borReceipt != nil {
@@ -439,18 +443,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		receipts = append(receipts, results)
 		bytes += len(results)
 	}
-
-	log.Info("[debug] done processing receipts query", "count", len(numbers), "blocks", numbers)
-
-	for i, r := range receipts {
-		var decoded ReceiptList69
-		err := rlp.DecodeBytes(r, &decoded)
-		if err != nil {
-			log.Error("[debug] failed to decode final receipt response", "err", err, "count", count[i])
-		}
-		log.Info("[debug] done decoding receipt response")
-	}
-	log.Info("[debug] sending final receipt response")
 
 	return receipts
 }

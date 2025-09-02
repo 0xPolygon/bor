@@ -450,21 +450,26 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue, isStateSync
 		enc   = rlp.NewEncoderBuffer(&out)
 		it, _ = rlp.NewListIterator(blockReceipts)
 	)
+
+	var txTypes []uint64 = make([]uint64, 0)
 	outer := enc.List()
 	for i := 0; it.Next(); i++ {
 		content, _, _ := rlp.SplitList(it.Value())
 		receiptList := enc.List()
 		if isStateSyncReceipt(i) {
 			enc.WriteUint64(uint64(0)) // TxType is always 0 for state-sync transactions
+			txTypes = append(txTypes, 0)
 		} else {
 			txType, _ := nextTxType()
 			enc.WriteUint64(uint64(txType))
+			txTypes = append(txTypes, uint64(txType))
 		}
 		enc.Write(content)
 		enc.ListEnd(receiptList)
 	}
 	enc.ListEnd(outer)
 	enc.Flush()
+	log.Info("[debug] done encoding receipts", "tx types", txTypes)
 	return out.Bytes(), nil
 }
 
