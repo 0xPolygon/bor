@@ -519,9 +519,11 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) error {
+	log.Info("[debug] received a new receipts packet")
 	// A batch of receipts arrived to one of our previous requests
 	res := new(ReceiptsPacket[L])
 	if err := msg.Decode(res); err != nil {
+		log.Error("[debug] failed to decode initial receipt packet", "err", err)
 		return err
 	}
 
@@ -529,6 +531,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	// during receipt root calculation.
 	resWithoutStateSync := new(ReceiptsPacket[L])
 	if err := msg.Decode(resWithoutStateSync); err != nil {
+		log.Error("[debug] failed to decode duplicate receipt packet", "err", err)
 		return err
 	}
 
@@ -549,6 +552,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 			resWithoutStateSync.List[i].ExcludeStateSync()
 			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
 		}
+		log.Info("[debug] done with calculating receipt root")
 
 		return hashes
 	}
@@ -556,6 +560,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	for i := range res.List {
 		enc = append(enc, res.List[i].EncodeForStorage())
 	}
+	log.Info("[debug] receipt encoding done, dispatching response")
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: ReceiptsMsg,
