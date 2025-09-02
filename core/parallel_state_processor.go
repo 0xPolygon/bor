@@ -290,8 +290,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	shouldDelayFeeCal := true
 
-	coinbase, _ := p.bc.Engine().Author(header)
-
 	blockTxDependency := block.GetTxDependency()
 
 	deps := GetDeps(blockTxDependency)
@@ -306,7 +304,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	blockContext := NewEVMBlockContext(header, p.bc, author)
-	context := NewEVMBlockContext(header, p.bc.hc, nil)
+	coinbase := blockContext.Coinbase
+
+	context := NewEVMBlockContext(header, p.bc.hc, author)
 
 	vmenv := vm.NewEVM(context, statedb, p.config, cfg)
 
