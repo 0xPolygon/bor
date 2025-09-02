@@ -344,7 +344,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes    int
 		receipts []rlp.RawValue
 		count    []uint64
-		data     []ReceiptData
 		numbers  []uint64
 	)
 	for lookups, hash := range query {
@@ -398,7 +397,11 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			if index >= len(blockReceipts) {
 				return false
 			}
-			return blockReceipts[index].CumulativeGasUsed == 0
+			val := blockReceipts[index].CumulativeGasUsed == 0
+			if val == true {
+				log.Info("[debug] marked as state-sync")
+			}
+			return val
 		}
 
 		// Encode the final list and convert to network format
@@ -410,7 +413,15 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if body == nil {
 			continue
 		}
-		data = append(data, ReceiptData{*number, encodedBlockReceipts, body})
+		data := ReceiptData{*number, encodedBlockReceipts, body}
+		if file, err := os.OpenFile("receipt_test_data.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			if jsonData, err := json.Marshal(data); err == nil {
+				file.Write(jsonData)
+				file.Write([]byte("\n"))
+			}
+			file.Close()
+			log.Info("[debug] written data to file", "number", *number)
+		}
 
 		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
 		if err != nil {
@@ -433,14 +444,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		err := rlp.DecodeBytes(r, &decoded)
 		if err != nil {
 			log.Error("[debug] failed to decode final receipt response", "err", err, "count", count[i])
-			if file, err := os.OpenFile("receipt_test_data.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-				if jsonData, err := json.Marshal(data[i]); err == nil {
-					file.Write(jsonData)
-					file.Write([]byte("\n"))
-				}
-				file.Close()
-				log.Info("[debug] written data to file")
-			}
 		}
 		log.Info("[debug] done decoding receipt response")
 	}
