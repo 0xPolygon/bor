@@ -624,7 +624,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	s.lock.Lock()
 	s.root = root
 	s.healer = &healTask{
-		scheduler: state.NewStateSync(root, s.db, s.onHealState, s.scheme),
+		scheduler: state.NewStateSync(root, s.db, s.onHealState, s.scheme, s.bytecodeOnlyMode),
 		trieTasks: make(map[string]common.Hash),
 		codeTasks: make(map[common.Hash]struct{}),
 	}
@@ -637,16 +637,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	// Retrieve the previous sync status from LevelDB and abort if already synced
 	s.loadSyncStatus()
 
-	// In bytecode-only mode, we always need to do a fresh scan for new contracts
-	if s.bytecodeOnlyMode {
-		// Clear any existing tasks and force a fresh scan
-		s.lock.Lock()
-		s.tasks = nil
-		s.snapped = false
-		s.lock.Unlock()
-		// Create fresh tasks for scanning
-		s.loadSyncStatus()
-	} else if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+	if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
 		log.Debug("Snapshot sync already completed")
 		return nil
 	}
@@ -716,22 +707,10 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.cleanStorageTasks()
 		s.cleanAccountTasks()
 
-		// Check for sync completion
-		if len(s.tasks) == 0 && s.snapped {
-			// In bytecode-only mode, only check if bytecode tasks are complete
-			if s.bytecodeOnlyMode {
-				if len(s.healer.codeTasks) == 0 {
-					log.Info("Bytecode-only sync completed", "codeTasks", len(s.healer.codeTasks))
-					return nil
-				}
-				log.Debug("Bytecode-only sync continuing", "codeTasks", len(s.healer.codeTasks))
-			} else {
-				// Normal mode: check all healing tasks
-				if s.healer.scheduler.Pending() == 0 {
-					return nil
-				}
-			}
+		if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+			return nil
 		}
+
 		// Assign all the data retrieval tasks to any free peers
 		s.assignAccountTasks(accountResps, accountReqFails, cancel)
 		s.assignBytecodeTasks(bytecodeResps, bytecodeReqFails, cancel)
@@ -800,8 +779,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 func (s *Syncer) loadSyncStatus() {
 	var progress SyncProgress
 
-	// In bytecode-only mode, always start fresh to scan for new contracts
-	if status := rawdb.ReadSnapshotSyncStatus(s.db); status != nil && !s.bytecodeOnlyMode {
+	if status := rawdb.ReadSnapshotSyncStatus(s.db); status != nil {
 		if err := json.Unmarshal(status, &progress); err != nil {
 			log.Error("Failed to decode snap sync status", "err", err)
 		} else {
@@ -917,11 +895,6 @@ func (s *Syncer) loadSyncStatus() {
 			genTrie:        tr,
 		})
 
-		if s.bytecodeOnlyMode {
-			log.Info("Created account sync task for bytecode-only mode", "from", next, "last", last)
-		} else {
-			log.Debug("Created account sync task", "from", next, "last", last)
-		}
 		next = common.BigToHash(new(big.Int).Add(last.Big(), common.Big1))
 	}
 }
@@ -1470,11 +1443,6 @@ func (s *Syncer) assignStorageTasks(success chan *storageResponse, fail chan *st
 func (s *Syncer) assignTrienodeHealTasks(success chan *trienodeHealResponse, fail chan *trienodeHealRequest, cancel chan struct{}) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-
-	// Skip trie node healing entirely in bytecode-only mode
-	if s.bytecodeOnlyMode {
-		return
-	}
 
 	// Sort the peers by download capacity to use faster ones if many available
 	idlers := &capacitySort{
@@ -2489,7 +2457,10 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 		}
 	}
 
-	s.commitHealer(false)
+	// In bytecode-only mode, skip persisting trie nodes to disk
+	if !s.bytecodeOnlyMode {
+		s.commitHealer(false)
+	}
 
 	// Calculate the processing rate of one filled trie node
 	rate := float64(fills) / (float64(time.Since(start)) / float64(time.Second))
@@ -3323,6 +3294,11 @@ func (s *Syncer) onHealByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) e
 // can be persisted blindly and can be fixed later in the generation stage.
 // Note it's not concurrent safe, please handle the concurrent issue outside.
 func (s *Syncer) onHealState(paths [][]byte, value []byte) error {
+	// In bytecode-only mode, skip persisting flat state data
+	if s.bytecodeOnlyMode {
+		return nil
+	}
+
 	if len(paths) == 1 {
 		var account types.StateAccount
 		if err := rlp.DecodeBytes(value, &account); err != nil {

@@ -32,7 +32,7 @@ func newChainReaderFake(getTd func(hash common.Hash, number uint64) *big.Int) *c
 	return &chainReaderFake{getTd: getTd}
 }
 
-// nolint: tparallel
+// nolint:tparallel
 func TestForkChoice(t *testing.T) {
 	t.Parallel()
 
@@ -75,7 +75,7 @@ func TestForkChoice(t *testing.T) {
 		{"tdd(current) = tdd(incoming), number(current) = number(incoming), hash(incoming) > hash(current)", headerD, headerE, true},
 	}
 
-	// nolint: paralleltest
+	// nolint:paralleltest
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			res, err := mockForker.ReorgNeeded(tc.current, tc.incoming)

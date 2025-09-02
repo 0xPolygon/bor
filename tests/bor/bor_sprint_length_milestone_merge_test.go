@@ -6,7 +6,7 @@ package bor
 import (
 	"crypto/ecdsa"
 	"encoding/csv"
-	"fmt" // nolint: staticcheck
+	"fmt" // nolint:staticcheck
 	_log "log"
 	"math"
 	"os"
@@ -315,7 +315,7 @@ func SprintLengthMilestoneReorgIndividual2NodesHelper(t *testing.T, index int, t
 	(*wg).Done()
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func SetupValidatorsAndTest2NodesSprintLengthMilestone(t *testing.T, tt map[string]interface{}) (uint64, uint64) {
 	t.Helper()
 

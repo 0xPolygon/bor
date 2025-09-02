@@ -83,22 +83,31 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 	wg.Add(1)
 
 	// Initialize the fake handler and add a fake checkpoint handler function
+	type gRPCGatewayCheckpointV2 struct {
+		Proposer   common.Address `json:"proposer"`
+		StartBlock string         `json:"start_block"`
+		EndBlock   string         `json:"end_block"`
+		RootHash   string         `json:"root_hash"`
+		BorChainID string         `json:"bor_chain_id"`
+		Timestamp  string         `json:"timestamp"`
+	}
+
+	type gRPCGatewayCheckpointResponseV2 struct {
+		Result gRPCGatewayCheckpointV2 `json:"checkpoint"`
+	}
+
 	handler := &HttpHandlerFake{}
 	handler.handleFetchCheckpoint = func(w http.ResponseWriter, _ *http.Request) {
-		// Create a properly formatted checkpoint response with string fields
-		// and base64-encoded root hash as expected by the UnmarshalJSON method
-		response := map[string]interface{}{
-			"checkpoint": map[string]interface{}{
-				"proposer":     "0x0000000000000000000000000000000000000000",
-				"start_block":  "0",
-				"end_block":    "512",
-				"root_hash":    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // Base64 encoded zero hash
-				"bor_chain_id": "15001",
-				"timestamp":    "0",
+		err := json.NewEncoder(w).Encode(gRPCGatewayCheckpointResponseV2{
+			Result: gRPCGatewayCheckpointV2{
+				Proposer:   common.Address{},
+				StartBlock: "0",
+				EndBlock:   "512",
+				RootHash:   "dGVzdA==",
+				BorChainID: "15001",
+				Timestamp:  "0",
 			},
-		}
-
-		err := json.NewEncoder(w).Encode(response)
+		})
 
 		if err != nil {
 			w.WriteHeader(500) // Return 500 Internal Server Error.
@@ -118,11 +127,11 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 
 	// Create a new heimdall client and use same port for connection
 	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
-	_, err = client.FetchCheckpoint(context.Background(), -1)
+	_, err = client.FetchCheckpoint(t.Context(), -1)
 	require.NoError(t, err, "expect no error in fetching checkpoint")
 
 	// Shutdown the server
-	err = srv.Shutdown(context.TODO())
+	err = srv.Shutdown(t.Context())
 	require.NoError(t, err, "expect no error in shutting down mock heimdall server")
 
 	// Wait for `wg.Done()` to be called in the mock server's routine.
@@ -140,24 +149,34 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 	wg.Add(1)
 
 	// Initialize the fake handler and add a fake milestone handler function
+	type gRPCGatewayMilestoneV2 struct {
+		Proposer        common.Address `json:"proposer"`
+		StartBlock      string         `json:"start_block"`
+		EndBlock        string         `json:"end_block"`
+		Hash            string         `json:"hash"`
+		BorChainID      string         `json:"bor_chain_id"`
+		MilestoneID     string         `json:"milestone_id"`
+		Timestamp       string         `json:"timestamp"`
+		TotalDifficulty string         `json:"total_difficulty"`
+	}
+
+	type gRPCGatewayMilestoneResponseV2 struct {
+		Result gRPCGatewayMilestoneV2 `json:"milestone"`
+	}
+
 	handler := &HttpHandlerFake{}
 	handler.handleFetchMilestone = func(w http.ResponseWriter, _ *http.Request) {
-		// Create a properly formatted milestone response with string fields
-		// and base64-encoded hash as expected by the UnmarshalJSON method
-		response := map[string]interface{}{
-			"milestone": map[string]interface{}{
-				"proposer":         "0x0000000000000000000000000000000000000000",
-				"start_block":      "0",
-				"end_block":        "512",
-				"hash":             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // Base64 encoded zero hash
-				"bor_chain_id":     "15001",
-				"milestone_id":     "1",
-				"timestamp":        "0",
-				"total_difficulty": "0",
+		err := json.NewEncoder(w).Encode(gRPCGatewayMilestoneResponseV2{
+			Result: gRPCGatewayMilestoneV2{
+				Proposer:        common.Address{},
+				StartBlock:      "0",
+				EndBlock:        "512",
+				Hash:            "dGVzdA==",
+				BorChainID:      "15001",
+				Timestamp:       "0",
+				TotalDifficulty: "0",
 			},
-		}
-
-		err := json.NewEncoder(w).Encode(response)
+		})
 
 		if err != nil {
 			w.WriteHeader(500) // Return 500 Internal Server Error.
@@ -177,11 +196,11 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 
 	// Create a new heimdall client and use same port for connection
 	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
-	_, err = client.FetchMilestone(context.Background())
+	_, err = client.FetchMilestone(t.Context())
 	require.NoError(t, err, "expect no error in fetching milestone")
 
 	// Shutdown the server
-	err = srv.Shutdown(context.TODO())
+	err = srv.Shutdown(t.Context())
 	require.NoError(t, err, "expect no error in shutting down mock heimdall server")
 
 	// Wait for `wg.Done()` to be called in the mock server's routine.
@@ -233,7 +252,7 @@ func TestFetchShutdown(t *testing.T) {
 	// Create a new heimdall client and use same port for connection
 	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 
 	// Expect this to fail due to timeout
 	_, err = client.FetchCheckpoint(ctx, -1)
@@ -250,7 +269,7 @@ func TestFetchShutdown(t *testing.T) {
 		w.WriteHeader(500) // Return 500 Internal Server Error.
 	}
 
-	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond) // Use some high value for timeout
+	ctx, cancel = context.WithTimeout(t.Context(), 50*time.Millisecond) // Use some high value for timeout
 
 	// Cancel the context after a delay until we make request
 	go func(cancel context.CancelFunc) {
@@ -277,11 +296,11 @@ func TestFetchShutdown(t *testing.T) {
 	}()
 
 	// Expect this to fail due to shutdown
-	_, err = client.FetchCheckpoint(context.Background(), -1)
+	_, err = client.FetchCheckpoint(t.Context(), -1)
 	require.Equal(t, ErrShutdownDetected.Error(), err.Error(), "expect the function error to be a shutdown detected error")
 
 	// Shutdown the server
-	err = srv.Shutdown(context.TODO())
+	err = srv.Shutdown(t.Context())
 	require.NoError(t, err, "expect no error in shutting down mock heimdall server")
 
 	// Wait for `wg.Done()` to be called in the mock server's routine.
@@ -293,7 +312,7 @@ func TestFetchShutdown(t *testing.T) {
 func TestContext(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel1 := context.WithTimeout(t.Context(), 1*time.Second)
 
 	// Case1: Done is not yet closed, so Err returns nil.
 	require.NoError(t, ctx.Err(), "expect nil error")
@@ -316,7 +335,7 @@ func TestContext(t *testing.T) {
 	}(ctx, wg)
 
 	// Case3: Check normal case
-	ctx, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel2 := context.WithTimeout(t.Context(), 3*time.Second)
 
 	wg.Add(1)
 
@@ -340,7 +359,7 @@ func TestContext(t *testing.T) {
 	}
 
 	// Case4: Check if cancellation is being handled
-	ctx, cancel3 := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel3 := context.WithTimeout(t.Context(), 1*time.Second)
 
 	wg.Add(1)
 

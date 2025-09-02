@@ -702,9 +702,9 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		for _, table := range ancient.sizes {
 			stats = append(stats, []string{
 				fmt.Sprintf("Ancient store (%s)",
-					//nolint: staticcheck
+					//nolint:staticcheck
 					strings.Title(ancient.name)),
-				//nolint: staticcheck
+				//nolint:staticcheck
 				strings.Title(table.name),
 				table.size.String(),
 				fmt.Sprintf("%d", ancient.count()),
@@ -737,7 +737,7 @@ var knownMetadataKeys = [][]byte{
 	snapshotGeneratorKey, snapshotRecoveryKey, txIndexTailKey, fastTxLookupLimitKey,
 	uncleanShutdownKey, badBlockKey, transitionStatusKey, skeletonSyncStatusKey,
 	persistentStateIDKey, trieJournalKey, snapshotSyncStatusKey, snapSyncStatusFlagKey,
-	filterMapsRangeKey,
+	filterMapsRangeKey, bytecodeSyncLastBlockKey,
 }
 
 // printChainMetadata prints out chain metadata to stderr.

@@ -767,7 +767,6 @@ func (api *BlockChainAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rp
 
 // GetTdByHash returns a map containing the total difficulty (hex-encoded) for the given block hash.
 func (api *BlockChainAPI) GetTdByHash(ctx context.Context, hash common.Hash) map[string]interface{} {
-
 	td := api.b.GetTd(ctx, hash)
 	if td == nil {
 		return nil
@@ -909,7 +908,7 @@ func applyMessageWithEVM(ctx context.Context, evm *vm.EVM, msg *core.Message, ti
 	}()
 
 	// Execute the message.
-	result, err := core.ApplyMessage(evm, msg, gp, context.Background())
+	result, err := core.ApplyMessage(evm, msg, gp, nil)
 
 	// If the timer caused an abort, return an appropriate error message
 	if evm.Cancelled() {
@@ -1562,7 +1561,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
 			evm.Context.BlobBaseFee = new(big.Int)
 		}
-		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit), context.Background())
+		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit), nil)
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("failed to apply transaction: %v err: %v", args.ToTransaction(types.LegacyTxType).Hash(), err)
 		}

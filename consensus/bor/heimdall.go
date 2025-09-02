@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 )
 
 //go:generate mockgen -source=heimdall.go -destination=../../tests/bor/mocks/IHeimdallClient.go -package=mocks
@@ -19,6 +20,7 @@ type IHeimdallClient interface {
 	FetchCheckpointCount(ctx context.Context) (int64, error)
 	FetchMilestone(ctx context.Context) (*milestone.Milestone, error)
 	FetchMilestoneCount(ctx context.Context) (int64, error)
+	FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error)
 	Close()
 }
 

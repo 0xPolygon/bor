@@ -339,7 +339,7 @@ var (
 	big199680 = big.NewInt(199680)
 )
 
-// nolint: gofmt
+// nolint:gofmt
 // modexpMultComplexity implements bigModexp multComplexity formula, as defined in EIP-198
 //
 //	def mult_complexity(x):

@@ -97,15 +97,6 @@ type Config struct {
 	// Ethstats is the address of the ethstats server to send telemetry
 	Ethstats string `hcl:"ethstats,optional" toml:"ethstats,optional"`
 
-	// WitnessProtocol enables the wit/0 protocol
-	WitnessProtocol bool `hcl:"witnessprotocol,optional" toml:"witnessprotocol,optional"`
-
-	// SyncWithWitnesses enables syncing blocks with witnesses
-	SyncWithWitnesses bool `hcl:"syncwithwitnesses,optional" toml:"syncwithwitnesses,optional"`
-
-	// SyncAndProduceWitnesses enables producing witnesses while syncing
-	SyncAndProduceWitnesses bool `hcl:"syncandproducewitnesses,optional" toml:"syncandproducewitnesses,optional"`
-
 	// Logging has the logging related settings
 	Logging *LoggingConfig `hcl:"log,block" toml:"log,block"`
 
@@ -150,11 +141,32 @@ type Config struct {
 	// Parallel stateless import (download path) toggle
 	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
 
+	// Witness has the witness related settings
+	Witness *WitnessConfig `hcl:"witness,block" toml:"witness,block"`
+
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 
 	// Pprof has the pprof related settings
 	Pprof *PprofConfig `hcl:"pprof,block" toml:"pprof,block"`
+
+	// HistoryConfig has historical data retention related settings
+	History *HistoryConfig `hcl:"history,block" toml:"history,block"`
+}
+
+type HistoryConfig struct {
+	// TransactionHistory denotes the maximum number of blocks from head whose tx indices are reserved.
+	TransactionHistory uint64 `hcl:"transactions,block" toml:"transactions,block"`
+
+	// LogHistory denotes the maximum number of blocks from head where a log search index is maintained.
+	LogHistory uint64 `hcl:"logs,block" toml:"logs,block"`
+
+	// LogNoHistory denotes whether log search index is maintained or not.
+	LogNoHistory bool `hcl:"logs.disable,block" toml:"logs.disable,block"`
+
+	// StateHistory denotes number of recent blocks to retain state history for (only relevant
+	// in state.scheme=path)
+	StateHistory uint64 `hcl:"state,block" toml:"state,block"`
 }
 
 type LoggingConfig struct {
@@ -623,6 +635,26 @@ type ParallelEVMConfig struct {
 	Enforce bool `hcl:"enforce,optional" toml:"enforce,optional"`
 }
 
+type WitnessConfig struct {
+	// Enable enables the wit/1 protocol
+	Enable bool `hcl:"enable,optional" toml:"enable,optional"`
+
+	// SyncWithWitnesses enables syncing blocks with witnesses
+	SyncWithWitnesses bool `hcl:"syncwithwitnesses,optional" toml:"syncwithwitnesses,optional"`
+
+	// ProduceWitnesses enables producing witnesses while syncing
+	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
+
+	// Minimum necessary distance between local header and peer to fast forward
+	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
+
+	// Minimum necessary distance between local header and latest non pruned witness
+	PruneThreshold uint64 `hcl:"prunethreshold,optional" toml:"prunethreshold,optional"`
+
+	// The time interval between each witness prune routine
+	PruneInterval time.Duration `hcl:"pruneinterval,optional" toml:"pruneinterval,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                   "mainnet",
@@ -635,9 +667,6 @@ func DefaultConfig() *Config {
 		Ancient:                 "",
 		DBEngine:                "pebble",
 		KeyStoreDir:             "",
-		WitnessProtocol:         false,
-		SyncWithWitnesses:       false,
-		SyncAndProduceWitnesses: false,
 		Logging: &LoggingConfig{
 			Vmodule:             "",
 			Json:                false,
@@ -700,7 +729,7 @@ func DefaultConfig() *Config {
 			GasCeil:             miner.DefaultConfig.GasCeil,
 			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:           "",
-			Recommit:            1 * time.Second,
+			Recommit:            125 * time.Second,
 			CommitInterruptFlag: true,
 		},
 		Gpo: &GpoConfig{
@@ -828,6 +857,20 @@ func DefaultConfig() *Config {
 			Enforce:              false,
 		},
 		EnableParallelStatelessImport: false,
+		Witness: &WitnessConfig{
+			Enable:               false,
+			SyncWithWitnesses:    false,
+			ProduceWitnesses:     false,
+			FastForwardThreshold: 6400,
+			PruneThreshold:       64000,
+			PruneInterval:        120 * time.Second,
+		},
+		History: &HistoryConfig{
+			TransactionHistory: ethconfig.Defaults.TransactionHistory,
+			LogHistory:         ethconfig.Defaults.LogHistory,
+			LogNoHistory:       ethconfig.Defaults.LogNoHistory,
+			StateHistory:       params.FullImmutabilityThreshold,
+		},
 	}
 }
 
@@ -1153,10 +1196,20 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
 		n.NoPrefetch = c.Cache.NoPrefetch
 		n.Preimages = c.Cache.Preimages
+		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
+	}
+
+	// History
+	{
+		// TODO: uncomment this when txlookuplimit is completely removed
+		// n.TransactionHistory = c.History.TransactionHistory
+		n.LogHistory = c.History.LogHistory
+		n.LogNoHistory = c.History.LogNoHistory
+		n.StateHistory = c.History.StateHistory
 	}
 
 	// LevelDB
@@ -1178,13 +1231,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
 
-	// sync mode. It can either be "full", "snap" or "stateless". We disable
-	// for now the "light" mode.
+	// Choose the sync mode. Only "full" or "stateless" sync is supported
 	switch c.SyncMode {
 	case "full":
 		n.SyncMode = downloader.FullSync
 	case "snap":
-		n.SyncMode = downloader.SnapSync
+		log.Info("Snap sync is momentarily disabled in bor, switching to full sync")
+		n.SyncMode = downloader.FullSync
 	case "stateless":
 		n.SyncMode = downloader.StatelessSync
 		log.Info("Using Stateless Sync mode - syncing from latest checkpoint without history")
@@ -1236,15 +1289,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.ParallelEVM.SpeculativeProcesses = c.ParallelEVM.SpeculativeProcesses
 	n.ParallelEVM.Enforce = c.ParallelEVM.Enforce
 
-	n.WitnessProtocol = c.WitnessProtocol
+	n.WitnessProtocol = c.Witness.Enable
 	if c.SyncMode == "stateless" {
-		if !c.WitnessProtocol {
+		if !c.Witness.Enable {
 			log.Warn("Witness protocol is disabled, overriding to true for stateless sync")
 		}
 		n.WitnessProtocol = true
 	}
-	n.SyncWithWitnesses = c.SyncWithWitnesses
-	n.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
+	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
+	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.FastForwardThreshold = c.Witness.FastForwardThreshold
+	n.WitnessPruneThreshold = c.Witness.PruneThreshold
+	n.WitnessPruneInterval = c.Witness.PruneInterval
 
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit
 
@@ -1313,7 +1369,7 @@ func ambiguousAddrRecovery(ks *keystore.KeyStore, err *keystore.AmbiguousAddrErr
 
 	for _, a := range err.Matches {
 		if err := ks.Unlock(a, auth); err == nil {
-			// nolint: gosec, exportloopref
+			// nolint:gosec, exportloopref
 			match = &a
 			break
 		}

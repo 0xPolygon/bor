@@ -14,6 +14,7 @@ import (
 	reflect "reflect"
 
 	types "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	clerk "github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	checkpoint "github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	milestone "github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
@@ -114,6 +115,21 @@ func (m *MockIHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, e
 func (mr *MockIHeimdallClientMockRecorder) FetchMilestoneCount(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchMilestoneCount", reflect.TypeOf((*MockIHeimdallClient)(nil).FetchMilestoneCount), ctx)
+}
+
+// FetchStatus mocks base method.
+func (m *MockIHeimdallClient) FetchStatus(ctx context.Context) (*coretypes.SyncInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FetchStatus", ctx)
+	ret0, _ := ret[0].(*coretypes.SyncInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FetchStatus indicates an expected call of FetchStatus.
+func (mr *MockIHeimdallClientMockRecorder) FetchStatus(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchStatus", reflect.TypeOf((*MockIHeimdallClient)(nil).FetchStatus), ctx)
 }
 
 // GetLatestSpan mocks base method.

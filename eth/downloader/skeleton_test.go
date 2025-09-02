@@ -95,7 +95,7 @@ func newSkeletonTestPeer(id string, headers []*types.Header) *skeletonTestPeer {
 	}
 }
 
-// newSkeletonTestPeer creates a new mock peer to test the skeleton sync with,
+// newSkeletonTestPeerWithHook creates a new mock peer to test the skeleton sync with,
 // and sets an optional serve hook that can return headers for delivery instead
 // of the predefined chain. Useful for emulating malicious behavior that would
 // otherwise require dedicated peer types.
@@ -213,6 +213,10 @@ func (p *skeletonTestPeer) RequestReceipts([]common.Hash, chan *eth.Response) (*
 
 func (p *skeletonTestPeer) RequestWitnesses([]common.Hash, chan *eth.Response) (*eth.Request, error) {
 	panic("skeleton sync must not request witnesses")
+}
+
+func (p *skeletonTestPeer) SupportsWitness() bool {
+	return false
 }
 
 // Tests various sync initializations based on previous leftovers in the database

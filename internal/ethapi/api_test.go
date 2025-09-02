@@ -999,7 +999,7 @@ func TestEstimateGas(t *testing.T) {
 		},
 	}
 	for i, tc := range testSuite {
-		result, err := api.EstimateGas(context.Background(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &tc.blockNumber}, &tc.overrides, &tc.blockOverrides)
+		result, err := api.EstimateGas(t.Context(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &tc.blockNumber}, &tc.overrides, &tc.blockOverrides)
 		if tc.expectErr != nil {
 			if err == nil {
 				t.Errorf("test %d: want error %v, have nothing", i, tc.expectErr)
@@ -1345,7 +1345,7 @@ func TestCall(t *testing.T) {
 		},
 	}
 	for _, tc := range testSuite {
-		result, err := api.Call(context.Background(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &tc.blockNumber}, &tc.overrides, &tc.blockOverrides)
+		result, err := api.Call(t.Context(), tc.call, &rpc.BlockNumberOrHash{BlockNumber: &tc.blockNumber}, &tc.overrides, &tc.blockOverrides)
 		if tc.expectErr != nil {
 			if err == nil {
 				t.Errorf("test %s: want error %v, have nothing", tc.name, tc.expectErr)
@@ -2683,7 +2683,7 @@ func TestSimulateV1(t *testing.T) {
 			if tc.validation != nil && *tc.validation {
 				opts.Validation = true
 			}
-			result, err := api.SimulateV1(context.Background(), opts, &tc.tag)
+			result, err := api.SimulateV1(t.Context(), opts, &tc.tag)
 			if tc.expectErr != nil {
 				if err == nil {
 					t.Fatalf("test %s: want error %v, have nothing", tc.name, tc.expectErr)
@@ -2740,7 +2740,7 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 		b.AddTx(tx)
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
 	if err != nil {
 		t.Fatalf("failed to get state and header: %v", err)
@@ -2823,7 +2823,7 @@ func TestSimulateV1TxSender(t *testing.T) {
 				sender3: {Balance: big.NewInt(params.Ether)},
 			},
 		}
-		ctx = context.Background()
+		ctx = t.Context()
 	)
 	backend := newTestBackend(t, 0, gspec, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {})
 	stateDB, baseHeader, err := backend.StateAndHeaderByNumberOrHash(ctx, rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber))
@@ -2897,7 +2897,7 @@ func TestSignTransaction(t *testing.T) {
 		b.SetPoS()
 	})
 	api := NewTransactionAPI(b, nil)
-	res, err := api.FillTransaction(context.Background(), TransactionArgs{
+	res, err := api.FillTransaction(t.Context(), TransactionArgs{
 		From:  &b.acc.Address,
 		To:    &to,
 		Value: (*hexutil.Big)(big.NewInt(1)),
@@ -2906,7 +2906,7 @@ func TestSignTransaction(t *testing.T) {
 		t.Fatalf("failed to fill tx defaults: %v\n", err)
 	}
 
-	res, err = api.SignTransaction(context.Background(), argsFromTransaction(res.Tx, b.acc.Address))
+	res, err = api.SignTransaction(t.Context(), argsFromTransaction(res.Tx, b.acc.Address))
 	if err != nil {
 		t.Fatalf("failed to sign tx: %v\n", err)
 	}
@@ -2935,7 +2935,7 @@ func TestSignTransaction(t *testing.T) {
 // 		b.SetPoS()
 // 	})
 // 	api := NewTransactionAPI(b, nil)
-// 	res, err := api.FillTransaction(context.Background(), TransactionArgs{
+// 	res, err := api.FillTransaction(t.Context(), TransactionArgs{
 // 		From:       &b.acc.Address,
 // 		To:         &to,
 // 		Value:      (*hexutil.Big)(big.NewInt(1)),
@@ -2945,7 +2945,7 @@ func TestSignTransaction(t *testing.T) {
 // 		t.Fatalf("failed to fill tx defaults: %v\n", err)
 // 	}
 
-// 	_, err = api.SignTransaction(context.Background(), argsFromTransaction(res.Tx, b.acc.Address))
+// 	_, err = api.SignTransaction(t.Context(), argsFromTransaction(res.Tx, b.acc.Address))
 // 	if err != nil {
 // 		t.Fatalf("should not fail on blob transaction")
 // 	}
@@ -2966,7 +2966,7 @@ func TestSignTransaction(t *testing.T) {
 // 		b.SetPoS()
 // 	})
 // 	api := NewTransactionAPI(b, nil)
-// 	res, err := api.FillTransaction(context.Background(), TransactionArgs{
+// 	res, err := api.FillTransaction(t.Context(), TransactionArgs{
 // 		From:       &b.acc.Address,
 // 		To:         &to,
 // 		Value:      (*hexutil.Big)(big.NewInt(1)),
@@ -2976,7 +2976,7 @@ func TestSignTransaction(t *testing.T) {
 // 		t.Fatalf("failed to fill tx defaults: %v\n", err)
 // 	}
 
-// 	_, err = api.SendTransaction(context.Background(), argsFromTransaction(res.Tx, b.acc.Address))
+// 	_, err = api.SendTransaction(t.Context(), argsFromTransaction(res.Tx, b.acc.Address))
 // 	if err == nil {
 // 		t.Errorf("sending tx should have failed")
 // 	} else if !errors.Is(err, errBlobTxNotSupported) {
@@ -3144,7 +3144,7 @@ func TestSignTransaction(t *testing.T) {
 // 	}
 // 	for _, tc := range suite {
 // 		t.Run(tc.name, func(t *testing.T) {
-// 			res, err := api.FillTransaction(context.Background(), tc.args)
+// 			res, err := api.FillTransaction(t.Context(), tc.args)
 // 			if len(tc.err) > 0 {
 // 				if err == nil {
 // 					t.Fatalf("missing error. want: %s", tc.err)
@@ -3506,7 +3506,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 	backend.setPendingBlock(pending)
 	api := NewBlockChainAPI(backend)
 	blockHashes := make([]common.Hash, genBlocks+1)
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := 0; i <= genBlocks; i++ {
 		header, err := backend.HeaderByNumber(ctx, rpc.BlockNumber(i))
 		if err != nil {
@@ -3687,18 +3687,18 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 		)
 		if tt.blockHash != nil {
 			if tt.reqHeader {
-				result = api.GetHeaderByHash(context.Background(), *tt.blockHash)
+				result = api.GetHeaderByHash(t.Context(), *tt.blockHash)
 				rpc = "eth_getHeaderByHash"
 			} else {
-				result, err = api.GetBlockByHash(context.Background(), *tt.blockHash, tt.fullTx)
+				result, err = api.GetBlockByHash(t.Context(), *tt.blockHash, tt.fullTx)
 				rpc = "eth_getBlockByHash"
 			}
 		} else {
 			if tt.reqHeader {
-				result, err = api.GetHeaderByNumber(context.Background(), tt.blockNumber)
+				result, err = api.GetHeaderByNumber(t.Context(), tt.blockNumber)
 				rpc = "eth_getHeaderByNumber"
 			} else {
-				result, err = api.GetBlockByNumber(context.Background(), tt.blockNumber, tt.fullTx)
+				result, err = api.GetBlockByNumber(t.Context(), tt.blockNumber, tt.fullTx)
 				rpc = "eth_getBlockByNumber"
 			}
 		}
@@ -3863,7 +3863,7 @@ func setupTransactionsToApiTest(t *testing.T) (*TransactionAPI, []common.Hash, [
 func mockStateSyncTxOnCurrentBlock(t *testing.T, backend *testBackend) common.Hash {
 	// State Sync Tx Setup
 	var stateSyncLogs []*types.Log
-	block, err := backend.BlockByHash(context.Background(), backend.CurrentBlock().Hash())
+	block, err := backend.BlockByHash(t.Context(), backend.CurrentBlock().Hash())
 	if err != nil {
 		t.Errorf("failed to get current block: %v", err)
 	}
@@ -3891,7 +3891,7 @@ func TestRPCGetTransactionReceipt(t *testing.T) {
 			result interface{}
 			err    error
 		)
-		result, err = api.GetTransactionReceipt(context.Background(), tt.txHash)
+		result, err = api.GetTransactionReceipt(t.Context(), tt.txHash)
 		if err != nil {
 			t.Errorf("test %d: want no error, have %v", i, err)
 			continue
@@ -3909,7 +3909,7 @@ func TestRPCGetTransactionByHash(t *testing.T) {
 			result interface{}
 			err    error
 		)
-		result, err = api.GetTransactionByHash(context.Background(), tt.txHash)
+		result, err = api.GetTransactionByHash(t.Context(), tt.txHash)
 		if err != nil {
 			t.Errorf("test %d: want no error, have %v", i, err)
 			continue
@@ -3923,7 +3923,7 @@ func TestRPCGetBlockTransactionCountByHash(t *testing.T) {
 		api, _, _ = setupTransactionsToApiTest(t)
 	)
 
-	cnt, err := api.GetBlockTransactionCountByHash(context.Background(), api.b.CurrentBlock().Hash())
+	cnt, err := api.GetBlockTransactionCountByHash(t.Context(), api.b.CurrentBlock().Hash())
 	if err != nil {
 		t.Errorf("failed to get block transaction count by hash: %v", err)
 	}
@@ -3938,12 +3938,12 @@ func TestRPCGetTransactionByBlockHashAndIndex(t *testing.T) {
 		api, _, _ = setupTransactionsToApiTest(t)
 	)
 
-	createContractWithAccessList, err := api.GetTransactionByBlockHashAndIndex(context.Background(), api.b.CurrentBlock().Hash(), 0)
+	createContractWithAccessList, err := api.GetTransactionByBlockHashAndIndex(t.Context(), api.b.CurrentBlock().Hash(), 0)
 	if err != nil {
 		t.Errorf("failed to get transaction by block hash and index: %v", err)
 	}
 
-	stateSyncTx, err := api.GetTransactionByBlockHashAndIndex(context.Background(), api.b.CurrentBlock().Hash(), 1)
+	stateSyncTx, err := api.GetTransactionByBlockHashAndIndex(t.Context(), api.b.CurrentBlock().Hash(), 1)
 	if err != nil {
 		t.Errorf("failed to get transaction by block hash and index: %v", err)
 	}
@@ -3972,7 +3972,7 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 func TestRPCGetTransactionReceiptsByBlock(t *testing.T) {
 	api, blockNrOrHash, testSuite := setupBlocksToApiTest(t)
 
-	receipts, err := api.GetTransactionReceiptsByBlock(context.Background(), blockNrOrHash)
+	receipts, err := api.GetTransactionReceiptsByBlock(t.Context(), blockNrOrHash)
 	if err != nil {
 		t.Fatal("api error")
 	}
@@ -3991,7 +3991,7 @@ func TestRPCGetTransactionReceiptsByBlock(t *testing.T) {
 func TestRPCGetBlockReceipts(t *testing.T) {
 	api, blockNrOrHash, testSuite := setupBlocksToApiTest(t)
 
-	receipts, err := api.GetBlockReceipts(context.Background(), blockNrOrHash)
+	receipts, err := api.GetBlockReceipts(t.Context(), blockNrOrHash)
 	if err != nil {
 		t.Fatal("api error")
 	}
@@ -4079,7 +4079,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 
 	api := NewBlockChainAPI(backend)
 	blockHashes := make([]common.Hash, genBlocks+1)
-	ctx := context.Background()
+	ctx := t.Context()
 	for i := 0; i <= genBlocks; i++ {
 		header, err := backend.HeaderByNumber(ctx, rpc.BlockNumber(i))
 		if err != nil {
@@ -4328,7 +4328,7 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 		}
 	)
 	// Call CreateAccessList
-	result, err := api.CreateAccessList(context.Background(), args, nil, overrides)
+	result, err := api.CreateAccessList(t.Context(), args, nil, overrides)
 	if err != nil {
 		t.Fatalf("Failed to create access list: %v", err)
 	}

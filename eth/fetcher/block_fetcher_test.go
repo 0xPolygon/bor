@@ -152,7 +152,7 @@ func (f *fetcherTester) chainHeight() uint64 {
 	return f.blocks[f.hashes[len(f.hashes)-1]].NumberU64()
 }
 
-// insertChain injects a new headers into the simulated chain.
+// insertHeaders injects a new headers into the simulated chain.
 func (f *fetcherTester) insertHeaders(headers []*types.Header) (int, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -1036,23 +1036,6 @@ func (f *fetcherTester) makeWitnessFetcher(peer string, blocks map[common.Hash]*
 		}()
 
 		return ethReqShim, nil
-	}
-}
-
-// verifyWitnessingEvent verifies that a witness request arrives within a timeout.
-func verifyWitnessingEvent(t *testing.T, witnessing chan *wit.Request, arrive bool) {
-	if arrive {
-		select {
-		case <-witnessing:
-		case <-time.After(time.Second):
-			t.Fatalf("witness request timeout")
-		}
-	} else {
-		select {
-		case <-witnessing:
-			t.Fatalf("unexpected witness request")
-		case <-time.After(100 * time.Millisecond):
-		}
 	}
 }
 

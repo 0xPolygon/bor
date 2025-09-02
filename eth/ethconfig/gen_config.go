@@ -80,7 +80,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
 		WitnessPruneThreshold                uint64
-		WitnessPruneInterval                 uint64
+		WitnessPruneInterval                 time.Duration
 		EnableParallelStatelessImport        bool
 	}
 	var enc Config
@@ -214,7 +214,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
 		WitnessPruneThreshold                *uint64
-		WitnessPruneInterval                 *uint64
+		WitnessPruneInterval                 *time.Duration
 		EnableParallelStatelessImport        *bool
 	}
 	var dec Config

@@ -80,8 +80,8 @@ var (
 	storageUpdateTimer = metrics.NewRegisteredResettingTimer("chain/storage/updates", nil)
 	storageCommitTimer = metrics.NewRegisteredResettingTimer("chain/storage/commits", nil)
 
-	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:golint,unused
-	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:golint,unused
+	accountReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
+	storageReadSingleTimer = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
 	triedbCommitTimer        = metrics.NewRegisteredResettingTimer("chain/triedb/commits", nil)
@@ -94,7 +94,7 @@ var (
 
 	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
 	blockValidationTimer               = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:golint,unused
+	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
 	blockExecutionTimer                = metrics.NewRegisteredTimer("chain/execution", nil)
 	blockWriteTimer                    = metrics.NewRegisteredTimer("chain/write", nil)
 	blockExecutionParallelCounter      = metrics.NewRegisteredCounter("chain/execution/parallel", nil)
@@ -113,12 +113,12 @@ var (
 	blockPrefetchExecuteTimer   = metrics.NewRegisteredTimer("chain/prefetch/executes", nil)
 	blockPrefetchInterruptMeter = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
 
-	errInsertionInterrupted     = errors.New("insertion is interrupted")
-	errChainStopped             = errors.New("blockchain is stopped")
-	errInvalidOldChain          = errors.New("invalid old chain")
-	errInvalidNewChain          = errors.New("invalid new chain")
-	errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
-	errWitnessComputationFailed = errors.New("witness computation failed or was cancelled") // New error
+	errInsertionInterrupted = errors.New("insertion is interrupted")
+	errChainStopped         = errors.New("blockchain is stopped")
+	errInvalidOldChain      = errors.New("invalid old chain")
+	errInvalidNewChain      = errors.New("invalid new chain")
+	// errWitnessTimeout           = errors.New("timeout waiting for witness computation")     // New error
+	// errWitnessComputationFailed = errors.New("witness computation failed or was cancelled") // New error
 )
 
 const (
@@ -236,12 +236,6 @@ var DefaultCacheConfig = defaultCacheConfig
 type txLookup struct {
 	lookup      *rawdb.LegacyTxLookupEntry
 	transaction *types.Transaction
-}
-
-// witnessResult holds the outcome of a witness computation.
-type witnessResult struct {
-	witness *stateless.Witness
-	err     error
 }
 
 // BlockChain represents the canonical chain given a database with a genesis
@@ -873,7 +867,7 @@ func (bc *BlockChain) initializeHistoryPruning(latest uint64) error {
 		bc.historyPrunePoint.Store(predefinedPoint)
 		return nil
 
-	// nolint:gosimple
+	// nolint:staticcheck
 	case history.KeepPostMerge:
 		if freezerTail == 0 && latest != 0 {
 			// This is the case where a user is trying to run with --history.chain
@@ -1971,7 +1965,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	if statedb.Witness() != nil {
 		var witBuf bytes.Buffer
-		if err := statedb.Witness().EncodeCompressed(&witBuf); err != nil {
+		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
@@ -1995,6 +1989,9 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			return []*types.Log{}, err
 		}
 	}
+
+	rawdb.WriteBytecodeSyncLastBlock(bc.db, block.NumberU64())
+
 	// If node is running in path mode, skip explicit gc operation
 	// which is unnecessary in this mode.
 	if bc.triedb.Scheme() == rawdb.PathScheme {
@@ -3542,7 +3539,14 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 			return errInvalidNewChain
 		}
 	}
+
 	// Ensure the user sees large reorgs
+	if len(oldChain) == 0 && len(newChain) == 0 {
+		// No actual reorg, same block
+		log.Info("No reorg needed; old and new head are identical", "number", oldHead.Number, "hash", oldHead.Hash())
+		return nil
+	}
+
 	if len(oldChain) > 0 && len(newChain) > 0 {
 		bc.chain2HeadFeed.Send(Chain2HeadEvent{
 			Type:     Chain2HeadReorgEvent,
@@ -4006,9 +4010,9 @@ func (bc *BlockChain) verifyPendingHeaders() {
 
 	chainConfig := bc.Config()
 
-	// We don't need to verify headers before VeBlop
-	if !chainConfig.Bor.IsVeBlop(currentHead.Number) {
-		return // VeBlop is not enabled yet
+	// We don't need to verify headers before Rio
+	if chainConfig.Bor == nil || !chainConfig.Bor.IsRio(currentHead.Number) {
+		return // Rio is not enabled yet
 	}
 
 	// Collect headers from finalized block + 1 to current head

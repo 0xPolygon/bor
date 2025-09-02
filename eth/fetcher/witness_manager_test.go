@@ -24,18 +24,6 @@ func createTestBlock(number uint64) *types.Block {
 	return types.NewBlock(header, nil, nil, trie.NewStackTrie(nil))
 }
 
-func createTestWitness() *stateless.Witness {
-	// Create a witness with a valid header using the proper constructor
-	header := &types.Header{
-		Number: big.NewInt(101),
-	}
-	witness, err := stateless.NewWitness(header, nil)
-	if err != nil {
-		panic(err) // This shouldn't happen in tests
-	}
-	return witness
-}
-
 func createTestWitnessForBlock(block *types.Block) *stateless.Witness {
 	// Create a witness with the same header as the block
 	witness, err := stateless.NewWitness(block.Header(), nil)

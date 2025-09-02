@@ -31,7 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// nolint: gofmt
+// nolint:gofmt
 // handler handles JSON-RPC messages. There is one handler per connection. Note that
 // handler is not safe for concurrent use. Message handling never blocks indefinitely
 // because RPCs are processed on background goroutines launched by handler.
@@ -507,7 +507,7 @@ func (h *handler) handleCallMsg(ctx *callProc, msg *jsonrpcMessage) *jsonrpcMess
 			if resp.Error.Data != nil {
 				logctx = append(logctx, "errdata", formatErrorData(resp.Error.Data))
 			}
-			h.log.Warn("Served "+msg.Method, logctx...)
+			h.log.Debug("Served "+msg.Method, logctx...)
 		} else {
 			h.log.Debug("Served "+msg.Method, logctx...)
 		}

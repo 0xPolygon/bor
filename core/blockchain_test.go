@@ -4695,10 +4695,9 @@ func TestPragueRequests(t *testing.T) {
 
 // mockChainValidator is a mock implementation of ethereum.ChainValidator for testing
 type mockChainValidator struct {
-	hasMilestone     bool
-	milestoneNumber  uint64
-	milestoneHash    common.Hash
-	shouldFailHeader map[uint64]bool // block numbers that should fail verification
+	hasMilestone    bool
+	milestoneNumber uint64
+	milestoneHash   common.Hash
 }
 
 func (m *mockChainValidator) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
@@ -4838,7 +4837,7 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		// Create a config with VeBlop enabled
 		config := *params.TestChainConfig
 		config.Bor = &params.BorConfig{
-			VeBlopBlock: big.NewInt(0), // Enable VeBlop from genesis
+			RioBlock: big.NewInt(0), // Enable Rio from genesis
 		}
 
 		genesis := &Genesis{

@@ -18,9 +18,13 @@ func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64,
 	log.Info("Fetching state sync events", "fromID", fromID, "to", to)
 
 	var err error
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
 	// Start the timer and set the request type on the context.
 	start := time.Now()
-	ctx = heimdall.WithRequestType(ctx, heimdall.StateSyncRequest)
+	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.StateSyncRequest)
 
 	// Defer the metrics call.
 	defer func() {
@@ -51,7 +55,7 @@ func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64,
 			EventRecord: clerk.EventRecord{
 				ID:       event.Id,
 				Contract: common.HexToAddress(event.Contract),
-				Data:     event.Data[2:],
+				Data:     event.Data,
 				TxHash:   common.HexToHash(event.TxHash),
 				LogIndex: event.LogIndex,
 				ChainID:  event.BorChainId,

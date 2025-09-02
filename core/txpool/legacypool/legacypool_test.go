@@ -30,7 +30,8 @@ import (
 	"testing"
 	"time"
 
-	crand2 "github.com/maticnetwork/crand"
+	crand2 "github.com/0xPolygon/crand"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -604,14 +605,14 @@ func TestChainFork(t *testing.T) {
 	resetState()
 
 	tx := transaction(0, 100000, key)
-	if _, err := pool.add(tx); err != nil {
+	if _, err := pool.add(tx, true); err != nil {
 		t.Error("didn't expect error", err)
 	}
 	pool.removeTx(tx.Hash(), true, true)
 
 	// reset the pool's internal state
 	resetState()
-	if _, err := pool.add(tx); err != nil {
+	if _, err := pool.add(tx, true); err != nil {
 		t.Error("didn't expect error", err)
 	}
 }
@@ -638,10 +639,10 @@ func TestDoubleNonce(t *testing.T) {
 	tx3, _ := types.SignTx(types.NewTransaction(0, common.Address{}, big.NewInt(100), 1000000, big.NewInt(1), nil), signer, key)
 
 	// Add the first two transaction, ensure higher priced stays only
-	if replace, err := pool.add(tx1); err != nil || replace {
+	if replace, err := pool.add(tx1, true); err != nil || replace {
 		t.Errorf("first transaction insert failed (%v) or reported replacement (%v)", err, replace)
 	}
-	if replace, err := pool.add(tx2); err != nil || !replace {
+	if replace, err := pool.add(tx2, true); err != nil || !replace {
 		t.Errorf("second transaction insert failed (%v) or not reported replacement (%v)", err, replace)
 	}
 
@@ -658,7 +659,7 @@ func TestDoubleNonce(t *testing.T) {
 	// pool.pendingMu.RUnlock()
 
 	// Add the third transaction and ensure it's not saved (smaller price)
-	pool.add(tx3)
+	pool.add(tx3, true)
 	<-pool.requestPromoteExecutables(newAccountSet(signer, addr))
 
 	// pool.pendingMu.RLock()
@@ -687,7 +688,7 @@ func TestMissingNonce(t *testing.T) {
 	testAddBalance(pool, addr, big.NewInt(100000000000000))
 
 	tx := transaction(1, 100000, key)
-	if _, err := pool.add(tx); err != nil {
+	if _, err := pool.add(tx, true); err != nil {
 		t.Error("didn't expect error", err)
 	}
 
@@ -2884,6 +2885,33 @@ func TestSetCodeTransactionsReorg(t *testing.T) {
 	}
 }
 
+// TestPendingWithCommitInterrupt is a simple test to check the behaviour of the public
+// `Pending` method when interrupt is set (during block building).
+func TestPendingWithCommitInterrupt(t *testing.T) {
+	t.Parallel()
+
+	// Create a test account and fund it
+	pool, key := setupPool()
+	defer pool.Close()
+
+	account := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, account, big.NewInt(1000000000000))
+
+	if err := pool.addRemoteSync(transaction(0, 100000, key)); err != nil {
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	// Ensure the transaction is present in the pool
+	pending := pool.Pending(txpool.PendingFilter{}, nil)
+	require.Equal(t, 1, len(pending), "expected non-empty pending pool")
+
+	// Define interrupt and set it so that pending returns an empty list
+	interrupt := new(atomic.Bool)
+	interrupt.Store(true)
+	pending = pool.Pending(txpool.PendingFilter{}, interrupt)
+	require.Equal(t, 0, len(pending), "expected empty list due to interrupt")
+}
+
 // Benchmarks the speed of validating the contents of the pending queue of the
 // transaction pool.
 func BenchmarkPendingDemotion100(b *testing.B)   { benchmarkPendingDemotion(b, 100) }
@@ -3021,7 +3049,7 @@ func BenchmarkPoolAccountMultiBatchInsertRace(b *testing.B) {
 		for {
 			select {
 			case <-t.C:
-				pending = pool.Pending(txpool.PendingFilter{})
+				pending = pool.Pending(txpool.PendingFilter{}, nil)
 			case <-done:
 				break loop
 			}
@@ -3076,7 +3104,7 @@ func BenchmarkPoolAccountMultiBatchInsertNoLockRace(b *testing.B) {
 		var pending map[common.Address][]*txpool.LazyTransaction
 
 		for range t.C {
-			pending = pool.Pending(txpool.PendingFilter{})
+			pending = pool.Pending(txpool.PendingFilter{}, nil)
 
 			if len(pending) >= b.N/2 {
 				close(done)
@@ -3152,7 +3180,7 @@ func BenchmarkPoolAccountsBatchInsertRace(b *testing.B) {
 		for {
 			select {
 			case <-t.C:
-				pending = pool.Pending(txpool.PendingFilter{})
+				pending = pool.Pending(txpool.PendingFilter{}, nil)
 			case <-done:
 				break loop
 			}
@@ -3201,7 +3229,7 @@ func BenchmarkPoolAccountsBatchInsertNoLockRace(b *testing.B) {
 		var pending map[common.Address][]*txpool.LazyTransaction
 
 		for range t.C {
-			pending = pool.Pending(txpool.PendingFilter{})
+			pending = pool.Pending(txpool.PendingFilter{}, nil)
 
 			if len(pending) >= b.N/2 {
 				close(done)
@@ -3250,7 +3278,7 @@ func TestPoolMultiAccountBatchInsertRace(t *testing.T) {
 		)
 
 		for range t.C {
-			pending = pool.Pending(txpool.PendingFilter{})
+			pending = pool.Pending(txpool.PendingFilter{}, nil)
 			total = len(pending)
 
 			if total >= n {

@@ -134,47 +134,6 @@ func (w *Witness) AddState(nodes map[string]struct{}) {
 	maps.Copy(w.State, nodes)
 }
 
-// Optimize removes duplicate data and compresses the witness structure.
-func (w *Witness) Optimize() {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-
-	// Remove duplicate state nodes by normalizing them
-	normalizedState := make(map[string]struct{})
-	for node := range w.State {
-		// Remove empty or redundant state nodes
-		if len(node) > 0 {
-			normalizedState[node] = struct{}{}
-		}
-	}
-	w.State = normalizedState
-}
-
-// Size returns the approximate size of the witness in bytes.
-// this is only used in testing
-func (w *Witness) Size() int {
-	size := 0
-
-	// Context header size
-	if w.context != nil {
-		size += 32 + 8 + 32 + 32 // hash + number + parentHash + root
-	}
-
-	// Headers size
-	for _, header := range w.Headers {
-		if header != nil {
-			size += 32 + 8 + 32 + 32 // hash + number + parentHash + root
-		}
-	}
-
-	// State size
-	for node := range w.State {
-		size += len(node)
-	}
-
-	return size
-}
-
 // Copy deep-copies the witness object.  Witness.Block isn't deep-copied as it
 // is never mutated by Witness
 func (w *Witness) Copy() *Witness {

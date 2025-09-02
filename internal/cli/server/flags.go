@@ -88,7 +88,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "syncmode",
-		Usage:   `Blockchain sync mode ("full", "snap", or "stateless")`,
+		Usage:   `Blockchain sync mode (only "full" or "stateless" sync supported)`,
 		Value:   &c.cliConfig.SyncMode,
 		Default: c.cliConfig.SyncMode,
 	})
@@ -458,7 +458,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "txlookuplimit",
-		Usage:   "Number of recent blocks to maintain transactions index for",
+		Usage:   "Number of recent blocks to maintain transactions index for (soon to be deprecated, use history.transactions instead)",
 		Value:   &c.cliConfig.Cache.TxLookupLimit,
 		Default: c.cliConfig.Cache.TxLookupLimit,
 		Group:   "Cache",
@@ -1022,22 +1022,40 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 
 	// Witness Protocol Flags
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "witnessprotocol",
+		Name:    "witness.enable",
 		Usage:   "Enable witness protocol",
-		Value:   &c.cliConfig.WitnessProtocol,
-		Default: c.cliConfig.WitnessProtocol,
+		Value:   &c.cliConfig.Witness.Enable,
+		Default: c.cliConfig.Witness.Enable,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "syncwithwitnesses",
+		Name:    "witness.syncwithwitnesses",
 		Usage:   "Sync blocks with witnesses",
-		Value:   &c.cliConfig.SyncWithWitnesses,
-		Default: c.cliConfig.SyncWithWitnesses,
+		Value:   &c.cliConfig.Witness.SyncWithWitnesses,
+		Default: c.cliConfig.Witness.SyncWithWitnesses,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "syncandproducewitnesses",
+		Name:    "witness.producewitnesses",
 		Usage:   "Produce witnesses while syncing",
-		Value:   &c.cliConfig.SyncAndProduceWitnesses,
-		Default: c.cliConfig.SyncAndProduceWitnesses,
+		Value:   &c.cliConfig.Witness.ProduceWitnesses,
+		Default: c.cliConfig.Witness.ProduceWitnesses,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "witness.fastforwardthreshold",
+		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",
+		Value:   &c.cliConfig.Witness.FastForwardThreshold,
+		Default: c.cliConfig.Witness.FastForwardThreshold,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "witness.prunethreshold",
+		Usage:   "Maximum distance between local header and latest non pruned witness after a pruning routine",
+		Value:   &c.cliConfig.Witness.PruneThreshold,
+		Default: c.cliConfig.Witness.PruneThreshold,
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "witness.pruneinterval",
+		Usage:   "The time interval between each witness prune routine",
+		Value:   &c.cliConfig.Witness.PruneInterval,
+		Default: c.cliConfig.Witness.PruneInterval,
 	})
 
 	f.Uint64Flag(&flagset.Uint64Flag{
@@ -1084,6 +1102,32 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// 	Value:   &c.cliConfig.Pprof.CPUProfile,
 	// 	Default: c.cliConfig.Pprof.CPUProfile,
 	// })
+
+	// Historical data retention related flags
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "history.transactions",
+		Usage:   "Number of recent blocks to maintain transactions index for (default = about 2 months, 0 = entire chain)",
+		Value:   &c.cliConfig.History.TransactionHistory,
+		Default: c.cliConfig.History.TransactionHistory,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "history.logs",
+		Usage:   "Number of recent blocks to maintain log search index for (default = about 2 months, 0 = entire chain)",
+		Value:   &c.cliConfig.History.LogHistory,
+		Default: c.cliConfig.History.LogHistory,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "history.logs.disable",
+		Usage:   "Do not maintain log search index",
+		Value:   &c.cliConfig.History.LogNoHistory,
+		Default: c.cliConfig.History.LogNoHistory,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "history.state",
+		Usage:   "Number of recent blocks to retain state history for, only relevant in state.scheme=path (default = 90,000 blocks, 0 = entire chain)",
+		Value:   &c.cliConfig.History.StateHistory,
+		Default: c.cliConfig.History.StateHistory,
+	})
 
 	return f
 }

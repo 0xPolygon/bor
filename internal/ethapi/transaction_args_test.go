@@ -236,15 +236,13 @@ func TestSetFeeDefaults(t *testing.T) {
 		*/
 	}
 
-	ctx := context.Background()
-
 	for i, test := range tests {
 		if err := b.setFork(test.fork); err != nil {
 			t.Fatalf("failed to set fork: %v", err)
 		}
 
 		got := test.in
-		err := got.setFeeDefaults(ctx, b, b.CurrentHeader())
+		err := got.setFeeDefaults(t.Context(), b, b.CurrentHeader())
 		if err != nil {
 			if test.err == nil {
 				t.Fatalf("test %d (%s): unexpected error: %s", i, test.name, err)
@@ -440,12 +438,12 @@ func (b *backendMock) GetVoteOnHash(ctx context.Context, starBlockNr uint64, end
 }
 
 func (b *backendMock) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	//nolint: nilnil
+	//nolint:nilnil
 	return nil, nil
 }
 
 func (b *backendMock) GetBorBlockLogs(ctx context.Context, hash common.Hash) ([]*types.Log, error) {
-	// nolint: nilnil
+	// nolint:nilnil
 	return nil, nil
 }
 

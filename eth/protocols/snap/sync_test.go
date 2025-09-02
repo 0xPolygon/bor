@@ -2123,7 +2123,7 @@ func newDbConfig(scheme string) *triedb.Config {
 // TestBytecodeOnlyMode tests the bytecode-only sync mode
 func TestBytecodeOnlyMode(t *testing.T) {
 	t.Parallel()
-	
+
 	testBytecodeOnlyMode(t, rawdb.HashScheme)
 	testBytecodeOnlyMode(t, rawdb.PathScheme)
 }
@@ -2172,25 +2172,25 @@ func testBytecodeOnlyMode(t *testing.T, scheme string) {
 // TestBytecodeOnlyModeSimple tests basic bytecode-only sync functionality
 func TestBytecodeOnlyModeSimple(t *testing.T) {
 	t.Parallel()
-	
+
 	// Test that SetBytecodeOnlyMode can be called
 	scheme := rawdb.HashScheme
 	db := rawdb.NewMemoryDatabase()
 	syncer := NewSyncer(db, scheme)
-	
+
 	// Enable bytecode-only mode
 	syncer.SetBytecodeOnlyMode(true)
-	
+
 	// Verify the mode is set
 	syncer.lock.Lock()
 	if !syncer.bytecodeOnlyMode {
 		t.Error("Expected bytecode-only mode to be enabled")
 	}
 	syncer.lock.Unlock()
-	
+
 	// Disable bytecode-only mode
 	syncer.SetBytecodeOnlyMode(false)
-	
+
 	// Verify the mode is unset
 	syncer.lock.Lock()
 	if syncer.bytecodeOnlyMode {
@@ -2202,7 +2202,7 @@ func TestBytecodeOnlyModeSimple(t *testing.T) {
 // TestBytecodeOnlyModeFiltering tests that bytecode-only mode affects sync behavior
 func TestBytecodeOnlyModeFiltering(t *testing.T) {
 	t.Parallel()
-	
+
 	var (
 		once   sync.Once
 		cancel = make(chan struct{})

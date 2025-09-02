@@ -8,6 +8,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.heimdall```: URL of Heimdall service (default: http://localhost:1317)
 
+- ```bor.heimdallWS```: Address of Heimdall ws subscription service
+
 - ```bor.heimdallgRPC```: Address of Heimdall gRPC service
 
 - ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
@@ -60,6 +62,14 @@ The ```bor server``` command runs the Bor client.
 
 - ```grpc.addr```: Address and port to bind the GRPC server (default: :3131)
 
+- ```history.logs```: Number of recent blocks to maintain log search index for (default = about 2 months, 0 = entire chain) (default: 2350000)
+
+- ```history.logs.disable```: Do not maintain log search index (default: false)
+
+- ```history.state```: Number of recent blocks to retain state history for, only relevant in state.scheme=path (default = 90,000 blocks, 0 = entire chain) (default: 90000)
+
+- ```history.transactions```: Number of recent blocks to maintain transactions index for (default = about 2 months, 0 = entire chain) (default: 2350000)
+
 - ```identity```: Name/Identity of the node
 
 - ```keystore```: Path of the directory where keystores are located
@@ -90,7 +100,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode ("full" or "snap") (default: full)
+- ```syncmode```: Blockchain sync mode (only "full" sync supported) (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
@@ -130,7 +140,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```fdlimit```: Raise the open file descriptor resource limit (default = system fd limit) (default: 0)
 
-- ```txlookuplimit```: Number of recent blocks to maintain transactions index for (default: 2350000)
+- ```txlookuplimit```: Number of recent blocks to maintain transactions index for (soon to be deprecated, use history.transactions instead) (default: 2350000)
 
 ### ExtraDB Options
 

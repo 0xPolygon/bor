@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/maticnetwork/crand"
+	"github.com/0xPolygon/crand"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
@@ -130,7 +130,7 @@ func TestGetSignerSuccessionNumber_SignerNotFound(t *testing.T) {
 	require.Equal(t, dummySignerAddress.Bytes(), e.Signer)
 }
 
-// nolint: unparam
+// nolint:unparam
 func buildRandomValidatorSet(numVals int) []*valset.Validator {
 	validators := make([]*valset.Validator, numVals)
 	valAddrs := randomAddresses(numVals)

@@ -61,8 +61,8 @@ var Defaults = Config{
 	HistoryMode:           history.KeepAll,
 	NetworkId:             0, // enable auto configuration of networkID == chainID
 	TxLookupLimit:         2350000,
-	TransactionHistory:    2350000,
-	LogHistory:            2350000,
+	TransactionHistory:    2350000, // Note: used in bor cli
+	LogHistory:            2350000, // Note: used in bor cli
 	StateHistory:          params.FullImmutabilityThreshold,
 	DatabaseCache:         512,
 	TrieCleanCache:        154,
@@ -77,9 +77,9 @@ var Defaults = Config{
 	RPCEVMTimeout:         5 * time.Second,
 	GPO:                   FullNodeGPO,
 	RPCTxFeeCap:           1, // 1 ether
-	FastForwardThreshold:  100,
-	WitnessPruneThreshold: 6400,
-	WitnessPruneInterval:  120,
+	FastForwardThreshold:  6400,
+	WitnessPruneThreshold: 64000,
+	WitnessPruneInterval:  120 * time.Second,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -236,7 +236,7 @@ type Config struct {
 	WitnessPruneThreshold uint64
 
 	// The time interval between each witness prune routine
-	WitnessPruneInterval uint64
+	WitnessPruneInterval time.Duration
 
 	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
 	EnableParallelStatelessImport bool
@@ -254,6 +254,8 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, chainConfig.Bor.ValidatorContract, chainConfig.Bor.StateReceiverContract, blockchainAPI)
 		spanner := span.NewChainSpanner(blockchainAPI, contract.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
 
+		log.Info("Creating consensus engine", "withoutHeimdall", ethConfig.WithoutHeimdall)
+
 		if ethConfig.WithoutHeimdall {
 			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor), nil
 		} else {
@@ -263,10 +265,11 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 
 			var heimdallClient bor.IHeimdallClient
 			if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
-				// TODO HV2: Uncomment once FetchMilestoneID is implemented
+				// TODO: Running heimdall from bor is not tested yet.
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
+				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
 			} else if ethConfig.HeimdallgRPCAddress != "" {
-				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress)
+				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress, ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			} else {
 				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			}

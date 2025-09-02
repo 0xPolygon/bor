@@ -390,3 +390,4 @@ jobs:
             packaging/deb/bor-pbss-amoy-**.deb 
             packaging/deb/bor-amoy-**.deb.checksum
             packaging/deb/bor-pbss-amoy-**.deb.checksum
+            builder/files/genesis-amoy.json

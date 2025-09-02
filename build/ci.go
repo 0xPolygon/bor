@@ -235,8 +235,8 @@ func buildFlags(env build.Environment, staticLinking bool, buildTags []string) (
 	// cgo-linker further down.
 	ld = append(ld, "--buildid=none")
 	if env.Commit != "" {
-		ld = append(ld, "-X", "github.com/maticnetwork/bor/internal/version.gitCommit="+env.Commit)
-		ld = append(ld, "-X", "github.com/maticnetwork/bor/internal/version.gitDate="+env.Date)
+		ld = append(ld, "-X", "github.com/0xPolygon/bor/internal/version.gitCommit="+env.Commit)
+		ld = append(ld, "-X", "github.com/0xPolygon/bor/internal/version.gitDate="+env.Date)
 	}
 	// Strip DWARF on darwin. This used to be required for certain things,
 	// and there is no downside to this, so we just keep doing it.

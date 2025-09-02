@@ -15,6 +15,7 @@ import (
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	clerkTypes "github.com/0xPolygon/heimdall-v2/x/clerk/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
@@ -23,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 )
@@ -43,16 +43,6 @@ const (
 	stateFetchLimit      = 50
 	retryCall            = 5 * time.Second
 )
-
-type StateSyncEventsResponse struct {
-	Height string                       `json:"height"`
-	Result []*clerk.EventRecordWithTime `json:"result"`
-}
-
-type SpanResponse struct {
-	Height string            `json:"height"`
-	Result span.HeimdallSpan `json:"result"`
-}
 
 type HeimdallClient struct {
 	urlString string
@@ -79,7 +69,6 @@ func NewHeimdallClient(urlString string, timeout time.Duration) *HeimdallClient 
 const (
 	fetchStateSyncEventsFormat = "from_id=%d&to_time=%s&pagination.limit=%d"
 	fetchStateSyncEventsPath   = "clerk/time"
-	fetchStateSyncList         = "clerk/event-records/list"
 
 	fetchCheckpoint      = "/checkpoints/%s"
 	fetchCheckpointCount = "/checkpoints/count"
@@ -88,8 +77,12 @@ const (
 	fetchMilestoneCount = "/milestones/count"
 
 	fetchSpanFormat = "bor/spans/%d"
+	fetchLatestSpan = "bor/spans/latest"
+
+	fetchStatus = "/status"
 )
 
+// StateSyncEvents fetches the state sync events from heimdall
 func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
@@ -103,7 +96,8 @@ func (h *HeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to 
 
 		ctx = WithRequestType(ctx, StateSyncRequest)
 
-		response, err := FetchWithRetry[clerkTypes.RecordListResponse](ctx, h.client, url, h.closeCh)
+		request := &Request{client: h.client, url: url, start: time.Now()}
+		response, err := Fetch[clerkTypes.RecordListResponse](ctx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -153,22 +147,24 @@ func (h *HeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Spa
 	if err != nil {
 		return nil, err
 	}
+
 	return response.Span, nil
 }
 
 func (h *HeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	url, err := latestSpanURL(h.urlString)
+	url, err := latestSpanUrl(h.urlString)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx = WithRequestType(ctx, LatestSpanRequest)
+	ctx = WithRequestType(ctx, SpanRequest)
 
-	response, err := FetchWithRetry[types.QuerySpanByIdResponse](ctx, h.client, url, h.closeCh)
+	response, err := FetchWithRetry[types.QueryLatestSpanResponse](ctx, h.client, url, h.closeCh)
 	if err != nil {
 		return nil, err
 	}
-	return response.Span, nil
+
+	return &response.Span, nil
 }
 
 // FetchCheckpoint fetches the checkpoint from heimdall
@@ -224,19 +220,34 @@ func (h *HeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error
 
 // FetchMilestoneCount fetches the milestone count from heimdall
 func (h *HeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	ctx = WithRequestType(ctx, MilestoneCountRequest)
+
 	url, err := milestoneCountURL(h.urlString)
 	if err != nil {
 		return 0, err
 	}
 
-	ctx = WithRequestType(ctx, MilestoneCountRequest)
-
 	response, err := FetchWithRetry[milestone.MilestoneCountResponse](ctx, h.client, url, h.closeCh)
 	if err != nil {
 		return 0, err
 	}
-
 	return response.Count, nil
+}
+
+func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	ctx = WithRequestType(ctx, StatusRequest)
+
+	url, err := statusURL(h.urlString)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := FetchWithRetry[ctypes.SyncInfo](ctx, h.client, url, h.closeCh)
+	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
 }
 
 // FetchWithRetry returns data from heimdall with retry
@@ -346,6 +357,8 @@ func Fetch[T any](ctx context.Context, request *Request) (*T, error) {
 		tValue := reflect.ValueOf(result).Elem()
 		tValue.Set(reflect.ValueOf(p).Elem())
 
+		isSuccessful = true
+
 		return result, nil
 	}
 
@@ -363,8 +376,8 @@ func spanURL(urlString string, spanID uint64) (*url.URL, error) {
 	return makeURL(urlString, fmt.Sprintf(fetchSpanFormat, spanID), "")
 }
 
-func latestSpanURL(urlString string) (*url.URL, error) {
-	return makeURL(urlString, "bor/spans/latest", "")
+func latestSpanUrl(urlString string) (*url.URL, error) {
+	return makeURL(urlString, fetchLatestSpan, "")
 }
 
 func stateSyncURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
@@ -373,10 +386,6 @@ func stateSyncURL(urlString string, fromID uint64, to int64) (*url.URL, error) {
 	queryParams := fmt.Sprintf(fetchStateSyncEventsFormat, fromID, formattedTime, stateFetchLimit)
 
 	return makeURL(urlString, fetchStateSyncEventsPath, queryParams)
-}
-
-func stateSyncListURL(urlString string) (*url.URL, error) {
-	return makeURL(urlString, fetchStateSyncList, "")
 }
 
 func checkpointURL(urlString string, number int64) (*url.URL, error) {
@@ -402,6 +411,10 @@ func checkpointCountURL(urlString string) (*url.URL, error) {
 
 func milestoneCountURL(urlString string) (*url.URL, error) {
 	return makeURL(urlString, fetchMilestoneCount, "")
+}
+
+func statusURL(urlString string) (*url.URL, error) {
+	return makeURL(urlString, fetchStatus, "")
 }
 
 func makeURL(urlString, rawPath, rawQuery string) (*url.URL, error) {
@@ -457,6 +470,11 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 }
 
 func internalFetchWithTimeout(ctx context.Context, client http.Client, url *url.URL) ([]byte, error) {
+	if client.Timeout == 0 {
+		// If no timeout is set, use a default timeout
+		client.Timeout = 1 * time.Second
+	}
+	client.Timeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, client.Timeout)
 	defer cancel()
 

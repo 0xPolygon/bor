@@ -9,6 +9,7 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/ethereum/go-ethereum/common"
+	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -166,7 +167,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.IncludeIds(span.ValidatorSet.Validators)
+				v.IncludeIds(borSpan.ConvertHeimdallValSetToBorValSet(span.ValidatorSet).Validators)
 			}
 			snap.ValidatorSet = v
 		}
@@ -174,33 +175,6 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 
 	snap.Number += uint64(len(headers))
 	snap.Hash = headers[len(headers)-1].Hash()
-
-	return snap, nil
-}
-
-func (s *Snapshot) applyNumber(number uint64, c *Bor) (*Snapshot, error) {
-	if s.Number != number-1 {
-		return nil, errOutOfRangeChain
-	}
-
-	snap := s.copy()
-
-	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
-	if err != nil {
-		return nil, err
-	}
-	producers := make([]*valset.Validator, len(span.SelectedProducers))
-	for i, validator := range span.SelectedProducers {
-		producers[i] = &valset.Validator{
-			Address:     validator.Address,
-			VotingPower: validator.VotingPower,
-		}
-	}
-	v := getUpdatedValidatorSet(snap.ValidatorSet.Copy(), producers)
-
-	v.IncrementProposerPriority(1)
-
-	snap.ValidatorSet = v
 
 	return snap, nil
 }
