@@ -413,6 +413,14 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes += len(results)
 	}
 
+	for _, r := range receipts {
+		var decoded ReceiptList69
+		err := rlp.DecodeBytes(r, &decoded)
+		if err != nil {
+			log.Error("[debug] failed to decode final receipt response", "err", err)
+		}
+		log.Info("[debug] done decoding receipt response")
+	}
 	log.Info("[debug] sending final receipt response", "receipts", receipts)
 
 	return receipts
