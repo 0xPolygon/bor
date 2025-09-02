@@ -416,6 +416,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		data := ReceiptData{*number, encodedBlockReceipts, body}
 		if file, err := os.OpenFile("receipt_test_data.json", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
 			if jsonData, err := json.Marshal(data); err == nil {
+				fmt.Println("json data", jsonData)
 				file.Write(jsonData)
 				file.Write([]byte("\n"))
 				log.Info("[debug] written data to file", "number", *number)
