@@ -423,15 +423,13 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			for _, br := range blockReceipts {
 				log.Info("receipt", "status", br.Status, "gas used", br.CumulativeGasUsed, "logs", br.Logs)
 			}
-			name := "debug_" + strconv.Itoa(int(*number))
+			name := "receipts_" + strconv.Itoa(int(*number))
 			_, err := os.Stat(name)
 			if err != nil {
 				file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 				if err == nil {
 					log.Info("[debug] opened file to write for block", "filename", name)
 					file.Write(encodedBlockReceipts)
-					file.Write([]byte("\n"))
-					file.Write(body)
 					file.Close()
 					log.Info("[debug] done writing to file")
 				} else {
