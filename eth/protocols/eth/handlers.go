@@ -351,14 +351,16 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			log.Error("Failed to decode normal receipts", "err", err)
 			continue
 		}
-		var stateSyncReceiptStorage = new(types.ReceiptForStorage)
-		if err := rlp.DecodeBytes(r2, stateSyncReceiptStorage); err != nil {
+		var stateSyncReceiptStorage types.ReceiptForStorage
+		if err := rlp.DecodeBytes(r2, &stateSyncReceiptStorage); err != nil {
 			log.Error("Failed to decode state-sync receipts", "err", err)
 			continue
 		}
 
+		// *types.Receipt)(&storageReceipt)
+
 		// Check if receipts are nil due to non existence or something else
-		if normalReceiptsStorage == nil && stateSyncReceiptStorage == nil {
+		if normalReceiptsStorage == nil {
 			// Don't append empty receipt data for this block if either the local header is nil
 			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
@@ -375,8 +377,8 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if normalReceiptsStorage != nil {
 			blockReceipts = append(blockReceipts, normalReceiptsStorage...)
 		}
-		if stateSyncReceiptStorage != nil {
-			blockReceipts = append(blockReceipts, stateSyncReceiptStorage)
+		if r2 != nil {
+			blockReceipts = append(blockReceipts, &stateSyncReceiptStorage)
 		}
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
