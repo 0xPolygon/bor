@@ -186,7 +186,7 @@ func newTestHandlerWithBlocks(blocks int) *testHandler {
 	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
 
 	_, bs, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), blocks, nil)
-	if _, err := chain.InsertChain(bs); err != nil {
+	if _, err := chain.InsertChain(bs, false); err != nil {
 		panic(err)
 	}
 

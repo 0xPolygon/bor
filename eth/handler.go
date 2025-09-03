@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -39,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/fetcher"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
@@ -99,19 +101,25 @@ type txPool interface {
 // handlerConfig is the collection of initialization parameters to create a full
 // node network handler.
 type handlerConfig struct {
-	NodeID              enode.ID            // P2P node ID used for tx propagation topology
-	Database            ethdb.Database      // Database for direct sync insertions
-	Chain               *core.BlockChain    // Blockchain to serve data from
-	TxPool              txPool              // Transaction pool to propagate from
-	Network             uint64              // Network identifier to advertise
-	Sync                downloader.SyncMode // Whether to snap or full sync
-	BloomCache          uint64              // Megabytes to alloc for snap sync bloom
-	EventMux            *event.TypeMux      // Legacy event mux, deprecate for `feed`
-	checker             ethereum.ChainValidator
-	RequiredBlocks      map[uint64]common.Hash // Hard coded map of required block hashes for sync challenges
-	EthAPI              *ethapi.BlockChainAPI  // EthAPI to interact
-	enableBlockTracking bool                   // Whether to log information collected while tracking block lifecycle
-	txAnnouncementOnly  bool                   // Whether to only announce txs to peers
+	NodeID                  enode.ID            // P2P node ID used for tx propagation topology
+	Database                ethdb.Database      // Database for direct sync insertions
+	Chain                   *core.BlockChain    // Blockchain to serve data from
+	TxPool                  txPool              // Transaction pool to propagate from
+	Network                 uint64              // Network identifier to advertise
+	Sync                    downloader.SyncMode // Whether to snap or full sync
+	BloomCache              uint64              // Megabytes to alloc for snap sync bloom
+	EventMux                *event.TypeMux      // Legacy event mux, deprecate for `feed`
+	checker                 ethereum.ChainValidator
+	RequiredBlocks          map[uint64]common.Hash // Hard coded map of required block hashes for sync challenges
+	EthAPI                  *ethapi.BlockChainAPI  // EthAPI to interact
+	enableBlockTracking     bool                   // Whether to log information collected while tracking block lifecycle
+	txAnnouncementOnly      bool                   // Whether to only announce txs to peers
+	witnessProtocol         bool                   // Whether to enable witness protocol
+	syncWithWitnesses       bool                   // Whether to sync blocks with witnesses
+	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
+	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
+	witnessPruneThreshold   uint64                 // Minimum necessary distance between local header and latest non pruned witness
+	witnessPruneInterval    time.Duration          // The time interval between each witness prune routine
 }
 
 type handler struct {
@@ -119,8 +127,9 @@ type handler struct {
 	networkID  uint64
 	forkFilter forkid.Filter // Fork ID filter, constant across the lifetime of the node
 
-	snapSync atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
-	synced   atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
+	snapSync      atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
+	statelessSync atomic.Bool // Flag whether stateless sync is enabled
+	synced        atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
 
 	database ethdb.Database
 	txpool   txPool
@@ -145,6 +154,10 @@ type handler struct {
 	enableBlockTracking bool
 	txAnnouncementOnly  bool
 
+	// Witness protocol related fields
+	syncWithWitnesses       bool
+	syncAndProduceWitnesses bool // Whether to sync blocks and produce witnesses simultaneously
+
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
 
@@ -153,6 +166,8 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+
+	witPruner *witPruner
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
@@ -163,23 +178,33 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 
 	h := &handler{
-		nodeID:              config.NodeID,
-		networkID:           config.Network,
-		forkFilter:          forkid.NewFilter(config.Chain),
-		eventMux:            config.EventMux,
-		database:            config.Database,
-		txpool:              config.TxPool,
-		chain:               config.Chain,
-		peers:               newPeerSet(),
-		ethAPI:              config.EthAPI,
-		requiredBlocks:      config.RequiredBlocks,
-		enableBlockTracking: config.enableBlockTracking,
-		txAnnouncementOnly:  config.txAnnouncementOnly,
-		quitSync:            make(chan struct{}),
-		handlerDoneCh:       make(chan struct{}),
-		handlerStartCh:      make(chan struct{}),
+		nodeID:                  config.NodeID,
+		networkID:               config.Network,
+		forkFilter:              forkid.NewFilter(config.Chain),
+		eventMux:                config.EventMux,
+		database:                config.Database,
+		txpool:                  config.TxPool,
+		chain:                   config.Chain,
+		peers:                   newPeerSet(),
+		ethAPI:                  config.EthAPI,
+		requiredBlocks:          config.RequiredBlocks,
+		enableBlockTracking:     config.enableBlockTracking,
+		txAnnouncementOnly:      config.txAnnouncementOnly,
+		quitSync:                make(chan struct{}),
+		handlerDoneCh:           make(chan struct{}),
+		handlerStartCh:          make(chan struct{}),
+		syncWithWitnesses:       config.syncWithWitnesses,
+		syncAndProduceWitnesses: config.syncAndProduceWitnesses,
 	}
-	if config.Sync == downloader.FullSync {
+
+	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
+
+	if config.Sync == downloader.StatelessSync {
+		// For stateless sync, we don't need to check state availability since
+		// we'll be verifying blocks using witnesses
+		h.statelessSync.Store(true)
+		log.Info("Enabled stateless sync")
+	} else if config.Sync == downloader.FullSync {
 		// The database seems empty as the current block is the genesis. Yet the snap
 		// block is ahead, so snap sync was enabled for this node at a certain point.
 		// The scenarios where this can happen is
@@ -188,15 +213,19 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// * the last snap sync is not finished while user specifies a full sync this
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
-		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-		} else if !h.chain.HasState(fullBlock.Root) {
-			h.snapSync.Store(true)
-			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
-		}
+		// Disable switching to snap sync as it's disabled momentarily.
+		/*
+			fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
+			if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
+			} else if !h.chain.HasState(fullBlock.Root) {
+				h.snapSync.Store(true)
+				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+			}
+		*/
 	} else {
+		// This is snap sync mode
 		head := h.chain.CurrentBlock()
 		if head.Number.Uint64() > 0 && h.chain.HasState(head.Root) {
 			// Print warning log if database is not empty to run snap sync.
@@ -207,13 +236,22 @@ func newHandler(config *handlerConfig) (*handler, error) {
 			log.Info("Enabled snap sync", "head", head.Number, "hash", head.Hash())
 		}
 	}
+
 	// If snap sync is requested but snapshots are disabled, fail loudly
 	if h.snapSync.Load() && (config.Chain.Snapshots() == nil && config.Chain.TrieDB().Scheme() == rawdb.HashScheme) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
-	// Construct the downloader (long sync)
-	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, nil, h.removePeer, h.enableSyncedFeatures, config.checker)
 
+	// Construct the downloader (long sync)
+	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, nil, h.removePeer, h.enableSyncedFeatures, config.checker, config.fastForwardThreshold, config.syncAndProduceWitnesses)
+	if ttd := h.chain.Config().TerminalTotalDifficulty; ttd != nil {
+		head := h.chain.CurrentBlock()
+		if td := h.chain.GetTd(head.Hash(), head.Number.Uint64()); td.Cmp(ttd) >= 0 {
+			log.Info("Chain post-TTD, sync via beacon client")
+		} else {
+			log.Warn("Chain pre-merge, sync via PoW (ensure beacon client is ready)")
+		}
+	}
 	// Construct the fetcher (short sync)
 	validator := func(header *types.Header) error {
 		// Reject all the PoS style headers in the first place. No matter
@@ -230,18 +268,18 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	heighter := func() uint64 {
 		return h.chain.CurrentBlock().Number.Uint64()
 	}
-	inserter := func(blocks types.Blocks) (int, error) {
-		// If snap sync is running, deny importing weird blocks. This is a problematic
-		// clause when starting up a new network, because snap-syncing miners might not
-		// accept each others' blocks until a restart. Unfortunately we haven't figured
-		// out a way yet where nodes can decide unilaterally whether the network is new
-		// or not. This should be fixed if we figure out a solution.
+	inserter := func(blocks types.Blocks, witnesses []*stateless.Witness) (int, error) {
+		// If sync is running, deny importing weird blocks.
 		if !h.synced.Load() {
 			log.Warn("Syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
 			return 0, nil
 		}
 
-		return h.chain.InsertChain(blocks)
+		if h.statelessSync.Load() {
+			return h.chain.InsertChainStateless(blocks, witnesses)
+		} else {
+			return h.chain.InsertChainWithWitnesses(blocks, config.witnessProtocol, witnesses)
+		}
 	}
 
 	// If snap sync is requested but snapshots are disabled, fail loudly
@@ -249,7 +287,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.enableBlockTracking)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -264,6 +302,11 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
 	h.chainSync = newChainSyncer(h)
+
+	if config.witnessProtocol {
+		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, config.witnessPruneInterval)
+		h.witPruner.Start()
+	}
 
 	return h, nil
 }
@@ -320,6 +363,14 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		return err
 	}
 
+	// If the peer has a `wit` extension, wait for it to connect so we can have
+	// a uniform initialization/teardown mechanism
+	wit, err := h.peers.waitWitExtension(peer)
+	if err != nil {
+		peer.Log().Error("Witness extension barrier failed", "err", err)
+		return err
+	}
+
 	// Execute the Ethereum handshake
 	if err := peer.Handshake(h.networkID, h.chain, h.blockRange.currentRange()); err != nil {
 		peer.Log().Debug("Ethereum handshake failed", "err", err)
@@ -345,7 +396,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	peer.Log().Debug("Ethereum peer connected", "name", peer.Name())
 
 	// Register the peer locally
-	if err := h.peers.registerPeer(peer, snap); err != nil {
+	if err := h.peers.registerPeer(peer, snap, wit); err != nil {
 		peer.Log().Error("Ethereum peer registration failed", "err", err)
 		return err
 	}
@@ -356,7 +407,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		return errors.New("peer dropped during handling")
 	}
 	// Register the peer in the downloader. If the downloader considers it banned, we disconnect
-	if err := h.downloader.RegisterPeer(peer.ID(), peer.Version(), peer); err != nil {
+	if err := h.downloader.RegisterPeer(p.ID(), p.Version(), p); err != nil {
 		peer.Log().Error("Failed to register peer in eth syncer", "err", err)
 		return err
 	}
@@ -441,6 +492,24 @@ func (h *handler) runSnapExtension(peer *snap.Peer, handler snap.Handler) error 
 			}
 		}
 		peer.Log().Debug("Snapshot extension registration failed", "err", err)
+		return err
+	}
+
+	return handler(peer)
+}
+
+// runWitExtension registers a `wit` peer into the joint eth/wit peerset and
+// starts handling inbound messages. As `wit` is only a satellite protocol to
+// `eth`, all subsystem registrations and lifecycle management will be done by
+// the main `eth` handler to prevent strange races.
+func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
+	if !h.incHandlers() {
+		return p2p.DiscQuitting
+	}
+	defer h.decHandlers()
+
+	if err := h.peers.registerWitExtension(peer); err != nil {
+		peer.Log().Debug("Witness extension registration failed", "err", err)
 		return err
 	}
 
@@ -533,9 +602,18 @@ func (h *handler) Stop() {
 	log.Info("Ethereum protocol stopped")
 }
 
+// TODO(@pratikspatil024) - use this to broadcast the witness
+// BroadcastWitness broadcasts the witness to all peers who are not aware of it
+func (h *handler) BroadcastWitness(witness *stateless.Witness) {
+	// broadcast the witness to all peers who are not aware of it
+	for _, peer := range h.peers.peersWithoutWitness(witness.Headers[0].Hash()) {
+		peer.Peer.AsyncSendNewWitness(witness)
+	}
+}
+
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
-func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
+func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness, propagate bool) {
 	// Disable the block propagation if it's the post-merge block.
 	if beacon, ok := h.chain.Engine().(*beacon.Beacon); ok {
 		if beacon.IsPoSHeader(block.Header()) {
@@ -545,6 +623,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 
 	hash := block.Hash()
 	peers := h.peers.peersWithoutBlock(hash)
+	peersWithoutWitness := h.peers.peersWithoutWitness(hash)
 
 	// If propagation is requested, send to a subset of the peer
 	if propagate {
@@ -569,8 +648,27 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 
 		// Send the block to a subset of our peers
 		transfer := peers[:int(math.Sqrt(float64(len(peers))))]
+		sentBlockPeers := make(map[string]bool)
 		for _, peer := range transfer {
 			peer.AsyncSendNewBlock(block, td)
+			sentBlockPeers[peer.Peer.ID()] = true
+		}
+
+		if witness != nil {
+			transfer := peersWithoutWitness[:int(math.Sqrt(float64(len(peersWithoutWitness))))]
+			for _, peer := range transfer {
+				log.Debug("Sending witness to peer", "hash", witness.Header().Hash(), "peer", peer.Peer.ID())
+				if !sentBlockPeers[peer.Peer.ID()] {
+					p := h.peers.peer(peer.Peer.ID())
+					if p != nil {
+						p.AsyncSendNewBlock(block, td)
+					}
+				}
+
+				// TODO - send witness to peer instead of witness hash once we have a working broadcast witness
+				// peer.Peer.AsyncSendNewWitness(witness)
+				peer.Peer.AsyncSendNewWitnessHash(witness.Header().Hash(), witness.Header().Number.Uint64())
+			}
 		}
 
 		// Send the block to the trusted and static peers
@@ -589,8 +687,22 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 			peer.AsyncSendNewBlockHash(block)
 		}
 
+		for _, peer := range peersWithoutWitness {
+			log.Debug("Announcing block hash to peer", "peer", peer.Peer.ID(), "hash", block.Header().Hash(), "number", block.NumberU64())
+			peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+		}
+
 		log.Debug("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
+}
+
+func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
+	for _, peer := range ethPeers {
+		if peer.ID() == id {
+			return true
+		}
+	}
+	return false
 }
 
 // BroadcastTransactions will propagate a batch of transactions
@@ -684,8 +796,8 @@ func (h *handler) minedBroadcastLoop() {
 				delay := common.PrettyDuration(time.Millisecond * time.Duration(delayInMs))
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", time.Now().Unix(), "delay", delay, "delayInMs", delayInMs)
 			}
-			h.BroadcastBlock(ev.Block, true)  // First propagate block to peers
-			h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
+			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
+			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
 		}
 	}
 }
@@ -730,7 +842,7 @@ type PeerStats struct {
 	Td     uint64 `json:"td"`     // Total difficulty of the peer
 }
 
-// PeerStats returns the current head height and td of all the connected peers
+// GetPeerStats returns the current head height and td of all the connected peers
 // along with few additional identifiers.
 func (h *handler) GetPeerStats() []*PeerStats {
 	info := make([]*PeerStats, 0, len(h.peers.peers))

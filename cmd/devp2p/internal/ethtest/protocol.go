@@ -55,6 +55,7 @@ const (
 	baseProto Proto = iota
 	ethProto
 	snapProto
+	witProto
 )
 
 // getProto returns the protocol a certain message code is associated with

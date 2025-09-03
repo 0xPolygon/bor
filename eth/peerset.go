@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/p2p"
 )
 
@@ -44,6 +45,10 @@ var (
 	// errSnapWithoutEth is returned if a peer attempts to connect only on the
 	// snap protocol without advertising the eth main protocol.
 	errSnapWithoutEth = errors.New("peer connected on snap without compatible eth support")
+
+	// errWitWithoutEth is returned if a peer attempts to connect only on the
+	// wit protocol without advertising the eth main protocol.
+	errWitWithoutEth = errors.New("peer connected on wit without compatible eth support")
 )
 
 // peerSet represents the collection of active peers currently participating in
@@ -51,9 +56,13 @@ var (
 type peerSet struct {
 	peers     map[string]*ethPeer // Peers connected on the `eth` protocol
 	snapPeers int                 // Number of `snap` compatible peers for connection prioritization
+	witPeers  int                 // Number of `wit` compatible peers for connection prioritization
 
 	snapWait map[string]chan *snap.Peer // Peers connected on `eth` waiting for their snap extension
 	snapPend map[string]*snap.Peer      // Peers connected on the `snap` protocol, but not yet on `eth`
+
+	witWait map[string]chan *wit.Peer // Peers connected on `eth` waiting for their wit extension
+	witPend map[string]*wit.Peer      // Peers connected on the `wit` protocol, but not yet on `eth`
 
 	lock   sync.RWMutex
 	closed bool
@@ -66,6 +75,8 @@ func newPeerSet() *peerSet {
 		peers:    make(map[string]*ethPeer),
 		snapWait: make(map[string]chan *snap.Peer),
 		snapPend: make(map[string]*snap.Peer),
+		witWait:  make(map[string]chan *wit.Peer),
+		witPend:  make(map[string]*wit.Peer),
 		quitCh:   make(chan struct{}),
 	}
 }
@@ -100,6 +111,40 @@ func (ps *peerSet) registerSnapExtension(peer *snap.Peer) error {
 	}
 
 	ps.snapPend[id] = peer
+
+	return nil
+}
+
+// registerWitExtension unblocks an already connected `eth` peer waiting for its
+// `wit` extension, or if no such peer exists, tracks the extension for the time
+// being until the `eth` main protocol starts looking for it.
+func (ps *peerSet) registerWitExtension(peer *wit.Peer) error {
+	// Reject the peer if it advertises `wit` without `eth` as `wit` is only a
+	// satellite protocol meaningful with the chain selection of `eth`
+	if !peer.RunningCap(eth.ProtocolName, eth.ProtocolVersions) {
+		return fmt.Errorf("%w: have %v", errWitWithoutEth, peer.Caps())
+	}
+	// Ensure nobody can double connect
+	ps.lock.Lock()
+	defer ps.lock.Unlock()
+
+	id := peer.ID()
+	if _, ok := ps.peers[id]; ok {
+		return errPeerAlreadyRegistered // avoid connections with the same id as existing ones
+	}
+
+	if _, ok := ps.witPend[id]; ok {
+		return errPeerAlreadyRegistered // avoid connections with the same id as pending ones
+	}
+	// Inject the peer into an `eth` counterpart is available, otherwise save for later
+	if wait, ok := ps.witWait[id]; ok {
+		delete(ps.witWait, id)
+		wait <- peer
+
+		return nil
+	}
+
+	ps.witPend[id] = peer
 
 	return nil
 }
@@ -148,9 +193,51 @@ func (ps *peerSet) waitSnapExtension(peer *eth.Peer) (*snap.Peer, error) {
 	}
 }
 
+// waitWitExtension blocks until all satellite protocols are connected and tracked
+// by the peerset.
+func (ps *peerSet) waitWitExtension(peer *eth.Peer) (*wit.Peer, error) {
+	// If the peer does not support a compatible `wit`, don't wait
+	if !peer.RunningCap(wit.ProtocolName, wit.ProtocolVersions) {
+		return nil, nil
+	}
+
+	// Ensure nobody can double connect
+	ps.lock.Lock()
+
+	id := peer.ID()
+	if _, ok := ps.peers[id]; ok {
+		ps.lock.Unlock()
+		return nil, errPeerAlreadyRegistered // avoid connections with the same id as existing ones
+	}
+
+	// If `wit` already connected, retrieve the peer from the pending set
+	if wit, ok := ps.witPend[id]; ok {
+		delete(ps.witPend, id)
+
+		ps.lock.Unlock()
+
+		return wit, nil
+	}
+
+	// Otherwise wait for `wit` to connect concurrently
+	wait := make(chan *wit.Peer)
+	ps.witWait[id] = wait
+	ps.lock.Unlock()
+
+	select {
+	case p := <-wait:
+		return p, nil
+	case <-ps.quitCh:
+		ps.lock.Lock()
+		delete(ps.witWait, id)
+		ps.lock.Unlock()
+		return nil, errPeerSetClosed
+	}
+}
+
 // registerPeer injects a new `eth` peer into the working set, or returns an error
 // if the peer is already known.
-func (ps *peerSet) registerPeer(peer *eth.Peer, ext *snap.Peer) error {
+func (ps *peerSet) registerPeer(peer *eth.Peer, extSnap *snap.Peer, extWit *wit.Peer) error {
 	// Start tracking the new peer
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
@@ -167,9 +254,13 @@ func (ps *peerSet) registerPeer(peer *eth.Peer, ext *snap.Peer) error {
 	eth := &ethPeer{
 		Peer: peer,
 	}
-	if ext != nil {
-		eth.snapExt = &snapPeer{ext}
+	if extSnap != nil {
+		eth.snapExt = &snapPeer{extSnap}
 		ps.snapPeers++
+	}
+	if extWit != nil {
+		eth.witPeer = &witPeer{extWit}
+		ps.witPeers++
 	}
 
 	ps.peers[id] = eth
@@ -203,6 +294,36 @@ func (ps *peerSet) peer(id string) *ethPeer {
 	defer ps.lock.RUnlock()
 
 	return ps.peers[id]
+}
+
+func (ps *peerSet) getOnePeerWithWitness(hash common.Hash) *ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	for _, p := range ps.peers {
+		if p.witPeer != nil && p.witPeer.Peer.KnownWitnessContainsHash(hash) {
+			return p
+		}
+	}
+	return nil
+}
+
+// peersWithoutWitness retrives a list of peers that do nor have a given witness
+// in their set of known hashes so it might be propagated to them.
+// This is used to avoid sending the same witness to the same peer multiple times.
+func (ps *peerSet) peersWithoutWitness(hash common.Hash) []*witPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	list := make([]*witPeer, 0, len(ps.peers))
+
+	for _, p := range ps.peers {
+		if p.witPeer != nil && !p.witPeer.Peer.KnownWitnessContainsHash(hash) {
+			list = append(list, p.witPeer)
+		}
+	}
+
+	return list
 }
 
 // peersWithoutBlock retrieves a list of peers that do not have a given block in

@@ -142,11 +142,11 @@ func TestEmptyStateSync(t *testing.T) {
 	dbA := triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil)
 	dbB := triedb.NewDatabase(rawdb.NewMemoryDatabase(), &triedb.Config{PathDB: pathdb.Defaults})
 
-	sync := NewStateSync(types.EmptyRootHash, rawdb.NewMemoryDatabase(), nil, dbA.Scheme())
+	sync := NewStateSync(types.EmptyRootHash, rawdb.NewMemoryDatabase(), nil, dbA.Scheme(), false)
 	if paths, nodes, codes := sync.Missing(1); len(paths) != 0 || len(nodes) != 0 || len(codes) != 0 {
 		t.Errorf("content requested for empty state: %v, %v, %v", nodes, paths, codes)
 	}
-	sync = NewStateSync(types.EmptyRootHash, rawdb.NewMemoryDatabase(), nil, dbB.Scheme())
+	sync = NewStateSync(types.EmptyRootHash, rawdb.NewMemoryDatabase(), nil, dbB.Scheme(), false)
 	if paths, nodes, codes := sync.Missing(1); len(paths) != 0 || len(nodes) != 0 || len(codes) != 0 {
 		t.Errorf("content requested for empty state: %v, %v, %v", nodes, paths, codes)
 	}
@@ -197,7 +197,7 @@ func testIterativeStateSync(t *testing.T, count int, commit bool, bypath bool, s
 
 	// Create a destination state and sync with the scheduler
 	dstDb := rawdb.NewMemoryDatabase()
-	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme())
+	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme(), false)
 
 	var (
 		nodeElements []stateElement
@@ -340,7 +340,7 @@ func testIterativeDelayedStateSync(t *testing.T, scheme string) {
 
 	// Create a destination state and sync with the scheduler
 	dstDb := rawdb.NewMemoryDatabase()
-	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme())
+	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme(), false)
 
 	var (
 		nodeElements []stateElement
@@ -468,7 +468,7 @@ func testIterativeRandomStateSync(t *testing.T, count int, scheme string) {
 
 	// Create a destination state and sync with the scheduler
 	dstDb := rawdb.NewMemoryDatabase()
-	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme())
+	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme(), false)
 
 	nodeQueue := make(map[string]stateElement)
 	codeQueue := make(map[common.Hash]struct{})
@@ -577,7 +577,7 @@ func testIterativeRandomDelayedStateSync(t *testing.T, scheme string) {
 
 	// Create a destination state and sync with the scheduler
 	dstDb := rawdb.NewMemoryDatabase()
-	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme())
+	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme(), false)
 
 	nodeQueue := make(map[string]stateElement)
 	codeQueue := make(map[common.Hash]struct{})
@@ -707,7 +707,7 @@ func testIncompleteStateSync(t *testing.T, scheme string) {
 
 	// Create a destination state and sync with the scheduler
 	dstDb := rawdb.NewMemoryDatabase()
-	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme())
+	sched := NewStateSync(srcRoot, dstDb, nil, ndb.Scheme(), false)
 
 	var (
 		addedCodes  []common.Hash

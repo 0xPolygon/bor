@@ -69,7 +69,7 @@ func newTestBackend(blocks int) *testBackend {
 	return newTestBackendWithGenerator(blocks, false, false, nil)
 }
 
-// newTestBackend creates a chain with a number of explicitly defined blocks and
+// newTestBackendWithGenerator creates a chain with a number of explicitly defined blocks and
 // wraps it into a mock backend.
 func newTestBackendWithGenerator(blocks int, shanghai bool, cancun bool, generator func(int, *core.BlockGen)) *testBackend {
 	var (
@@ -114,7 +114,7 @@ func newTestBackendWithGenerator(blocks int, shanghai bool, cancun bool, generat
 	chain, _ := core.NewBlockChain(db, gspec, engine, nil)
 
 	_, bs, _ := core.GenerateChainWithGenesis(gspec, engine, blocks, generator)
-	if _, err := chain.InsertChain(bs); err != nil {
+	if _, err := chain.InsertChain(bs, false); err != nil {
 		panic(err)
 	}
 

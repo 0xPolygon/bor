@@ -778,6 +778,7 @@ func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.
 		db, _ = rawdb.Open(memorydb.New(), rawdb.OpenOptions{
 			MetricsNamespace: opt.MetricsNamespace,
 			ReadOnly:         opt.ReadOnly,
+			Stateless:        opt.Stateless,
 		})
 	} else {
 		opt.AncientsDirectory = n.ResolveAncient(name, opt.AncientsDirectory)
@@ -808,19 +809,44 @@ func (n *Node) OpenDatabase(name string, cache, handles int, namespace string, r
 }
 
 // OpenDatabaseWithFreezer opens an existing database with the given name (or
-// creates one if no previous can be found) from within the node's data directory.
-// If the node has no data directory, an in-memory database is returned.
-// Deprecated: use OpenDatabaseWithOptions instead.
-func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient string, namespace string, readonly, disableFreeze, isLastOffset bool) (ethdb.Database, error) {
-	return n.OpenDatabaseWithOptions(name, DatabaseOptions{
-		AncientsDirectory: n.ResolveAncient(name, ancient),
-		MetricsNamespace:  namespace,
-		Cache:             cache,
-		Handles:           handles,
-		ReadOnly:          readonly,
-		DisableFreeze:     disableFreeze,
-		IsLastOffset:      isLastOffset,
-	})
+// creates one if no previous can be found) from within the node's data directory,
+// also attaching a chain freezer to it that moves ancient chain data from the
+// database to immutable append-only files. If the node is an ephemeral one, a
+// memory database is returned.
+func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	if n.state == closedState {
+		return nil, ErrNodeStopped
+	}
+
+	var db ethdb.Database
+
+	var err error
+
+	if n.config.DataDir == "" {
+		db, err = rawdb.NewDatabaseWithFreezer(memorydb.New(), "", namespace, readonly, false, false, stateless)
+	} else {
+		db, err = openDatabase(internalOpenOptions{
+			directory: n.ResolvePath(name),
+			dbEngine:  n.config.DBEngine,
+			DatabaseOptions: DatabaseOptions{
+				MetricsNamespace: namespace,
+				Cache:            cache,
+				Handles:          handles,
+				ReadOnly:         readonly,
+				DisableFreeze:    disableFreeze,
+				IsLastOffset:     isLastOffset,
+				Stateless:        stateless,
+			},
+		})
+	}
+	if err == nil {
+		db = n.wrapDatabase(db)
+	}
+
+	return db, err
 }
 
 // ResolvePath returns the absolute path of a resource in the instance directory.

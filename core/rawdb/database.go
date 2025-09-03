@@ -270,13 +270,14 @@ func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
 // can be opened.
 //
 // Deprecated: use Open.
-func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset bool) (ethdb.Database, error) {
+func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
 	return Open(db, OpenOptions{
 		Ancient:          ancient,
 		MetricsNamespace: namespace,
 		ReadOnly:         readonly,
 		DisableFreeze:    disableFreeze,
 		IsLastOffset:     isLastOffset,
+		Stateless:        stateless,
 	})
 }
 
@@ -288,6 +289,12 @@ type OpenOptions struct {
 	ReadOnly         bool
 	DisableFreeze    bool
 	IsLastOffset     bool
+
+	Stateless bool
+	// Ephemeral means that filesystem sync operations should be avoided:
+	// data integrity in the face of a crash is not important. This option
+	// should typically be used in tests.
+	Ephemeral bool
 }
 
 // Open creates a high-level database wrapper for the given key-value store.
@@ -407,7 +414,8 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 				if ReadHeadHeaderHash(db) != common.BytesToHash(kvgenesis) {
 					// Key-value store contains more data than the genesis block, make sure we
 					// didn't freeze anything yet.
-					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 {
+					// Bor Change: Stateless client skip this check because of fast forward feature, which usually jumps #1 block
+					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 && !opts.Stateless {
 						printChainMetadata(db)
 						return nil, errors.New("ancient chain segments already extracted, please set --datadir.ancient to the correct path")
 					}
@@ -735,9 +743,9 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		for _, table := range ancient.sizes {
 			stats = append(stats, []string{
 				fmt.Sprintf("Ancient store (%s)",
-					//nolint: staticcheck
+					//nolint:staticcheck
 					strings.Title(ancient.name)),
-				//nolint: staticcheck
+				//nolint:staticcheck
 				strings.Title(table.name),
 				table.size.String(),
 				fmt.Sprintf("%d", ancient.count()),
@@ -770,7 +778,7 @@ var knownMetadataKeys = [][]byte{
 	snapshotGeneratorKey, snapshotRecoveryKey, txIndexTailKey, fastTxLookupLimitKey,
 	uncleanShutdownKey, badBlockKey, transitionStatusKey, skeletonSyncStatusKey,
 	persistentStateIDKey, trieJournalKey, snapshotSyncStatusKey, snapSyncStatusFlagKey,
-	filterMapsRangeKey, headStateHistoryIndexKey,
+	filterMapsRangeKey, headStateHistoryIndexKey, bytecodeSyncLastBlockKey,
 }
 
 // printChainMetadata prints out chain metadata to stderr.

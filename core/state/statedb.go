@@ -486,6 +486,10 @@ func (s *StateDB) AddEmptyMVHashMap() {
 	s.mvHashmap = mvh
 }
 
+func (s *StateDB) SetWitness(witness *stateless.Witness) {
+	s.witness = witness
+}
+
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
@@ -519,6 +523,13 @@ func (s *StateDB) StopPrefetcher() {
 		s.prefetcher.report()
 		s.prefetcher = nil
 	}
+}
+
+// ResetPrefetcher cleans the prefetcher from a State, commonly used in tempStates to track witness while no impacting block building
+// Do also remove mutations previously tracked to just look to the new ones
+func (s *StateDB) ResetPrefetcher() {
+	s.prefetcher = nil
+	s.mutations = make(map[common.Address]*mutation)
 }
 
 // setError remembers the first non-nil error it is called with.
@@ -997,10 +1008,6 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			return nil
 		}
 		s.AccountReads += time.Since(start)
-		// Short circuit if the account is not found
-		if acct == nil {
-			return nil
-		}
 		// Independent of where we loaded the data from, add it to the prefetcher.
 		// Whilst this would be a bit weird if snapshots are disabled, but we still
 		// want the trie nodes to end up in the prefetcher too, so just push through.
@@ -1008,6 +1015,10 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			if err = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
 				log.Error("Failed to prefetch account", "addr", addr, "err", err)
 			}
+		}
+		// Short circuit if the account is not found
+		if acct == nil {
+			return nil
 		}
 		// Insert into the live set
 		obj := newObject(s, addr, acct)

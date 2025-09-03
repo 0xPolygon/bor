@@ -5,7 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io/ioutil" // nolint:staticcheck
 	_log "log"
 	"math/big"
 	"os"
@@ -488,7 +488,7 @@ func SprintLengthReorgIndividual2NodesHelper(t *testing.T, index int, tt map[str
 	(*wg).Done()
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func SetupValidatorsAndTest(t *testing.T, tt map[string]uint64) (uint64, uint64) {
 	t.Helper()
 
@@ -624,7 +624,7 @@ func SetupValidatorsAndTest(t *testing.T, tt map[string]uint64) (uint64, uint64)
 	return 0, 0
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func SetupValidatorsAndTest2Nodes(t *testing.T, tt map[string]interface{}) (uint64, uint64) {
 	t.Helper()
 

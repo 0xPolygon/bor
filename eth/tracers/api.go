@@ -702,7 +702,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 
-		//nolint: nestif
+		//nolint:nestif
 		if stateSyncPresent && i == len(txs)-1 {
 			if *config.BorTraceEnabled {
 				callmsg := prepareCallMessage(*msg)
@@ -909,9 +909,9 @@ txloop:
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
 
-		// nolint: nestif
+		// nolint:nestif
 		if !ioflag {
-			//nolint: nestif
+			//nolint:nestif
 			if stateSyncPresent && i == len(txs)-1 {
 				if *config.BorTraceEnabled {
 					callmsg := prepareCallMessage(*msg)
@@ -1118,7 +1118,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			}
 		}
 		// Execute the transaction and flush any traces to disk
-		//nolint: nestif
+		//nolint:nestif
 		if stateSyncPresent && i == len(txs)-1 {
 			if *config.BorTraceEnabled {
 				callmsg := prepareCallMessage(*msg)

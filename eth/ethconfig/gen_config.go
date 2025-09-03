@@ -3,7 +3,6 @@
 package ethconfig
 
 import (
-	"encoding/json"
 	"math/big"
 	"time"
 
@@ -17,8 +16,8 @@ import (
 	"github.com/ethereum/go-ethereum/miner"
 )
 
-// MarshalJSON marshals as JSON.
-func (c Config) MarshalJSON() ([]byte, error) {
+// MarshalTOML marshals as TOML.
+func (c Config) MarshalTOML() (interface{}, error) {
 	type Config struct {
 		Genesis                 *core.Genesis `toml:",omitempty"`
 		NetworkId               uint64
@@ -70,9 +69,15 @@ func (c Config) MarshalJSON() ([]byte, error) {
 		UseHeimdallApp          bool
 		BorLogs                 bool
 		ParallelEVM             core.ParallelEVMConfig `toml:",omitempty"`
-		DevFakeAuthor           bool                   `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
-		OverrideVerkle          *big.Int               `toml:",omitempty"`
+		WitnessProtocol         bool
+		SyncWithWitnesses       bool
+		SyncAndProduceWitnesses bool
+		DevFakeAuthor           bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideVerkle          *big.Int `toml:",omitempty"`
 		EnableBlockTracking     bool
+		FastForwardThreshold    uint64
+		WitnessPruneThreshold   uint64
+		WitnessPruneInterval    time.Duration
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -125,14 +130,20 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	enc.UseHeimdallApp = c.UseHeimdallApp
 	enc.BorLogs = c.BorLogs
 	enc.ParallelEVM = c.ParallelEVM
+	enc.WitnessProtocol = c.WitnessProtocol
+	enc.SyncWithWitnesses = c.SyncWithWitnesses
+	enc.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
 	enc.DevFakeAuthor = c.DevFakeAuthor
 	enc.OverrideVerkle = c.OverrideVerkle
 	enc.EnableBlockTracking = c.EnableBlockTracking
-	return json.Marshal(&enc)
+	enc.FastForwardThreshold = c.FastForwardThreshold
+	enc.WitnessPruneThreshold = c.WitnessPruneThreshold
+	enc.WitnessPruneInterval = c.WitnessPruneInterval
+	return &enc, nil
 }
 
-// UnmarshalJSON unmarshals from JSON.
-func (c *Config) UnmarshalJSON(input []byte) error {
+// UnmarshalTOML unmarshals from TOML.
+func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	type Config struct {
 		Genesis                 *core.Genesis `toml:",omitempty"`
 		NetworkId               *uint64
@@ -184,12 +195,18 @@ func (c *Config) UnmarshalJSON(input []byte) error {
 		UseHeimdallApp          *bool
 		BorLogs                 *bool
 		ParallelEVM             *core.ParallelEVMConfig `toml:",omitempty"`
-		DevFakeAuthor           *bool                   `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
-		OverrideVerkle          *big.Int                `toml:",omitempty"`
+		WitnessProtocol         *bool
+		SyncWithWitnesses       *bool
+		SyncAndProduceWitnesses *bool
+		DevFakeAuthor           *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideVerkle          *big.Int `toml:",omitempty"`
 		EnableBlockTracking     *bool
+		FastForwardThreshold    *uint64
+		WitnessPruneThreshold   *uint64
+		WitnessPruneInterval    *time.Duration
 	}
 	var dec Config
-	if err := json.Unmarshal(input, &dec); err != nil {
+	if err := unmarshal(&dec); err != nil {
 		return err
 	}
 	if dec.Genesis != nil {
@@ -342,6 +359,15 @@ func (c *Config) UnmarshalJSON(input []byte) error {
 	if dec.ParallelEVM != nil {
 		c.ParallelEVM = *dec.ParallelEVM
 	}
+	if dec.WitnessProtocol != nil {
+		c.WitnessProtocol = *dec.WitnessProtocol
+	}
+	if dec.SyncWithWitnesses != nil {
+		c.SyncWithWitnesses = *dec.SyncWithWitnesses
+	}
+	if dec.SyncAndProduceWitnesses != nil {
+		c.SyncAndProduceWitnesses = *dec.SyncAndProduceWitnesses
+	}
 	if dec.DevFakeAuthor != nil {
 		c.DevFakeAuthor = *dec.DevFakeAuthor
 	}
@@ -350,6 +376,15 @@ func (c *Config) UnmarshalJSON(input []byte) error {
 	}
 	if dec.EnableBlockTracking != nil {
 		c.EnableBlockTracking = *dec.EnableBlockTracking
+	}
+	if dec.FastForwardThreshold != nil {
+		c.FastForwardThreshold = *dec.FastForwardThreshold
+	}
+	if dec.WitnessPruneThreshold != nil {
+		c.WitnessPruneThreshold = *dec.WitnessPruneThreshold
+	}
+	if dec.WitnessPruneInterval != nil {
+		c.WitnessPruneInterval = *dec.WitnessPruneInterval
 	}
 	return nil
 }

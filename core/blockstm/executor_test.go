@@ -310,7 +310,7 @@ func testExecutorComb(t *testing.T, totalTxs []int, numReads []int, numWrites []
 	fmt.Printf("Total exec duration: %v, total serial duration: %v, time reduced: %v, time reduced percent: %.2f%%\n", totalExecDuration, totalSerialDuration, totalSerialDuration-totalExecDuration, float64(totalSerialDuration-totalExecDuration)/float64(totalSerialDuration)*100)
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func testExecutorCombWithMetadata(t *testing.T, totalTxs []int, numReads []int, numWrites []int, numNonIOs []int, taskRunner TaskRunnerWithMetadata) {
 	t.Helper()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelDebug, false)))
@@ -422,7 +422,7 @@ func checkNoDroppedTx(pe *ParallelExecutor) error {
 	return nil
 }
 
-// nolint: unparam
+// nolint:unparam
 func runParallel(t *testing.T, tasks []ExecTask, validation PropertyCheck, metadata bool) time.Duration {
 	t.Helper()
 

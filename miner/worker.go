@@ -228,7 +228,7 @@ type worker struct {
 	newWorkCh          chan *newWorkReq
 	getWorkCh          chan *getWorkReq
 	taskCh             chan *task
-	resultCh           chan *types.Block
+	resultCh           chan *consensus.NewSealedBlockEvent
 	startCh            chan struct{}
 	exitCh             chan struct{}
 	resubmitIntervalCh chan time.Duration
@@ -287,10 +287,12 @@ type worker struct {
 	// in this case this feature will add all empty blocks into canonical chain
 	// non-stop and no real transaction will be included.
 	noempty atomic.Bool
+
+	makeWitness bool
 }
 
 //nolint:staticcheck
-func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool) *worker {
+func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool, makeWitness bool) *worker {
 	worker := &worker{
 		config:              config,
 		chainConfig:         chainConfig,
@@ -308,12 +310,13 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		newWorkCh:           make(chan *newWorkReq),
 		getWorkCh:           make(chan *getWorkReq),
 		taskCh:              make(chan *task),
-		resultCh:            make(chan *types.Block, resultQueueSize),
+		resultCh:            make(chan *consensus.NewSealedBlockEvent, resultQueueSize),
 		startCh:             make(chan struct{}, 1),
 		exitCh:              make(chan struct{}),
 		resubmitIntervalCh:  make(chan time.Duration),
 		resubmitAdjustCh:    make(chan *intervalAdjust, resubmitAdjustChanSize),
 		interruptCommitFlag: config.CommitInterruptFlag,
+		makeWitness:         makeWitness,
 	}
 	worker.noempty.Store(true)
 	// Subscribe for transaction insertion events (whether from network or resurrects)
@@ -495,6 +498,11 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer timer.Stop()
 	<-timer.C // discard the initial tick
 
+	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+
+	veblopTimer := time.NewTimer(veblopTimeout)
+	defer veblopTimer.Stop()
+
 	// commit aborts in-flight transaction execution with given signal and resubmits a new one.
 	commit := func(noempty bool, s int32) {
 		if interrupt != nil {
@@ -508,6 +516,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			return
 		}
 		timer.Reset(recommit)
+		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
 	}
 	// clearPending cleans the stale pending tasks.
@@ -534,6 +543,25 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
+
+		case <-veblopTimer.C:
+			currentBlock := w.chain.CurrentBlock()
+			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsRio(currentBlock.Number) {
+				veblopTimer.Reset(veblopTimeout)
+				continue
+			}
+
+			w.pendingMu.RLock()
+			hasPendingTasks := len(w.pendingTasks) > 0
+			w.pendingMu.RUnlock()
+
+			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
+				timestamp = time.Now().Unix()
+				commit(false, commitInterruptNewHead)
+			}
+
+			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			veblopTimer.Reset(veblopTimeout)
 
 		case <-timer.C:
 			// If sealing is running resubmit a new work cycle periodically to pull in
@@ -587,7 +615,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 // mainLoop is responsible for generating and submitting sealing work based on
 // the received event. It can support two modes: automatically generate task and
 // submit it or return task according to given parameters for various proposes.
-// nolint: gocognit, contextcheck
+// nolint:gocognit, contextcheck
 func (w *worker) mainLoop() {
 	defer w.wg.Done()
 	defer w.txsSub.Unsubscribe()
@@ -730,7 +758,7 @@ func (w *worker) taskLoop() {
 			w.pendingTasks[sealHash] = task
 			w.pendingMu.Unlock()
 
-			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh); err != nil {
+			if err := w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh); err != nil {
 				log.Warn("Block sealing failed", "err", err)
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
@@ -750,11 +778,18 @@ func (w *worker) resultLoop() {
 
 	for {
 		select {
-		case block := <-w.resultCh:
+		case newSealedBlockEvent := <-w.resultCh:
+
 			// Short circuit when receiving empty result.
+			if newSealedBlockEvent == nil {
+				continue
+			}
+			block := newSealedBlockEvent.Block
+			witness := newSealedBlockEvent.Witness
 			if block == nil {
 				continue
 			}
+
 			// Short circuit when receiving duplicate result caused by resubmitting.
 			if w.chain.HasBlock(block.Hash(), block.NumberU64()) {
 				continue
@@ -821,6 +856,11 @@ func (w *worker) resultLoop() {
 
 				logs = append(logs, receipt.Logs...)
 			}
+
+			if witness != nil {
+				witness.SetHeader(block.Header())
+			}
+
 			// Commit block and state to database.
 			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
 
@@ -833,7 +873,7 @@ func (w *worker) resultLoop() {
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
 			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block})
+			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness})
 
 			sealedBlocksCounter.Inc(1)
 
@@ -860,10 +900,10 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 			return nil, err
 		}
 		state.StartPrefetcher("miner", bundle)
+	} else {
+		// todo: @anshalshukla - check if witness is required
+		state.StartPrefetcher("miner", nil)
 	}
-
-	// todo: @anshalshukla - check if witness is required
-	state.StartPrefetcher("miner", nil)
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
@@ -1501,7 +1541,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	work, err = w.prepareWork(&generateParams{
 		timestamp: uint64(timestamp),
 		coinbase:  coinbase,
-	}, false)
+	}, w.makeWitness)
 
 	if err != nil {
 		return
@@ -1519,7 +1559,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
-	if !noempty && !w.noempty.Load() {
+	// If the block is a veblop block, we will never try to create a commit for an empty block.
+	var isRio bool
+	if w.chainConfig.Bor != nil {
+		isRio = w.chainConfig.Bor.IsRio(work.header.Number)
+	}
+	if !noempty && !w.noempty.Load() && !isRio {
 		_ = w.commit(work.copy(), nil, false, start)
 	}
 	// Fill pending transactions from the txpool into the block.

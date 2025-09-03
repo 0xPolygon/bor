@@ -28,6 +28,7 @@ const (
 	MilestoneNoAckRequest     requestType = "milestone-no-ack"
 	MilestoneLastNoAckRequest requestType = "milestone-last-no-ack"
 	MilestoneIDRequest        requestType = "milestone-id"
+	StatusRequest             requestType = "status"
 )
 
 func WithRequestType(ctx context.Context, reqType requestType) context.Context {

@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -174,11 +175,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		AncientsDirectory: config.DatabaseFreezer,
 		EraDirectory:      config.DatabaseEra,
 		MetricsNamespace:  "eth/db/chaindata/",
+		Stateless:         config.SyncMode == downloader.StatelessSync,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
 		return nil, err
 	}
+
 	scheme, err := rawdb.ParseStateScheme(config.StateScheme, chainDb)
 	if err != nil {
 		return nil, err
@@ -271,6 +274,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
 			},
+			Stateless: config.SyncMode == downloader.StatelessSync,
 		}
 	)
 
@@ -307,16 +311,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
-	// Set blockchain reference for fork detection in whitelist service
-	if err == nil {
-		checker.SetBlockchain(eth.blockchain)
-	}
-
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
 	if err != nil {
 		return nil, err
 	}
+
+	// Set blockchain reference for fork detection in whitelist service
+	checker.SetBlockchain(eth.blockchain)
+
+	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
+	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
 
 	// bor: this is nor present in geth
 	/*
@@ -358,9 +361,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// BOR changes
 	// Blob pool is removed from Subpool for Bor
-	eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, []txpool.SubPool{legacyPool})
-	if err != nil {
-		return nil, err
+	if eth.config.SyncMode != downloader.StatelessSync {
+		eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, []txpool.SubPool{legacyPool})
+		if err != nil {
+			return nil, err
+		}
+		// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
+		// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
+		eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
 	}
 
 	// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
@@ -380,27 +388,36 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := options.TrieCleanLimit + options.TrieDirtyLimit + options.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{
-		NodeID:              eth.p2pServer.Self().ID(),
-		Database:            chainDb,
-		Chain:               eth.blockchain,
-		TxPool:              eth.txPool,
-		Network:             config.NetworkId,
-		Sync:                config.SyncMode,
-		BloomCache:          uint64(cacheLimit),
-		EventMux:            eth.eventMux,
-		RequiredBlocks:      config.RequiredBlocks,
-		EthAPI:              blockChainAPI,
-		checker:             checker,
-		enableBlockTracking: eth.config.EnableBlockTracking,
-		txAnnouncementOnly:  eth.p2pServer.TxAnnouncementOnly,
+		NodeID:                  eth.p2pServer.Self().ID(),
+		Database:                chainDb,
+		Chain:                   eth.blockchain,
+		TxPool:                  eth.txPool,
+		Network:                 config.NetworkId,
+		Sync:                    config.SyncMode,
+		BloomCache:              uint64(cacheLimit),
+		EventMux:                eth.eventMux,
+		RequiredBlocks:          config.RequiredBlocks,
+		EthAPI:                  blockChainAPI,
+		checker:                 checker,
+		enableBlockTracking:     eth.config.EnableBlockTracking,
+		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
+		witnessProtocol:         eth.config.WitnessProtocol,
+		syncWithWitnesses:       eth.config.SyncWithWitnesses,
+		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
+		fastForwardThreshold:    config.FastForwardThreshold,
+		witnessPruneThreshold:   config.WitnessPruneThreshold,
+		witnessPruneInterval:    config.WitnessPruneInterval,
 	}); err != nil {
 		return nil, err
 	}
 
 	eth.dropper = newDropper(eth.p2pServer.MaxDialedConns(), eth.p2pServer.MaxInboundConns())
-	eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.eventMux, eth.engine, eth.isLocalBlock)
-	eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
-	eth.miner.SetPrioAddresses(config.TxPool.Locals)
+
+	if config.SyncMode != downloader.StatelessSync {
+		eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.eventMux, eth.engine, eth.isLocalBlock, eth.config.WitnessProtocol)
+		eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
+		eth.miner.SetPrioAddresses(config.TxPool.Locals)
+	}
 
 	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
 	if eth.APIBackend.allowUnprotectedTxs {
@@ -650,6 +667,9 @@ func (s *Ethereum) Protocols() []p2p.Protocol {
 	if s.config.SnapshotCache > 0 {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler))...)
 	}
+	if s.config.WitnessProtocol {
+		protos = append(protos, wit.MakeProtocols((*witHandler)(s.handler), s.networkID)...)
+	}
 
 	return protos
 }
@@ -686,8 +706,7 @@ var (
 )
 
 const (
-	whitelistTimeout      = 30 * time.Second
-	noAckMilestoneTimeout = 4 * time.Second
+	whitelistTimeout = 30 * time.Second
 )
 
 // StartCheckpointWhitelistService starts the goroutine to fetch checkpoints and update the
@@ -969,7 +988,9 @@ func (s *Ethereum) Stop() error {
 	<-ch
 	s.filterMaps.Stop()
 	s.txPool.Close()
-	s.miner.Close()
+	if s.miner != nil {
+		s.miner.Close()
+	}
 	s.blockchain.Stop()
 
 	// Clean shutdown marker as the last thing before closing db
@@ -1008,10 +1029,14 @@ func (s *Ethereum) SyncMode() downloader.SyncMode {
 	// We are in a full sync, but the associated head state is missing. To complete
 	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
 	// persistent state is corrupted, just mismatch with the head block.
-	if !s.blockchain.HasState(head.Root) {
+	if !s.blockchain.HasState(head.Root) && !s.handler.statelessSync.Load() {
 		log.Info("Reenabled snap sync as chain is stateless")
 		return downloader.SnapSync
 	}
 	// Nope, we're really full syncing
-	return downloader.FullSync
+	if s.handler.statelessSync.Load() {
+		return downloader.StatelessSync
+	} else {
+		return downloader.FullSync
+	}
 }

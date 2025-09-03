@@ -45,6 +45,8 @@ var ErrAlreadyProcessed = errors.New("already processed")
 // memory if the node was configured with a significant number of peers.
 const maxFetchesPerDepth = 16384
 
+const maxDepthStoredForBytecodeOnlySync = 6
+
 var (
 	// deletionGauge is the metric to track how many trie node deletions
 	// are performed in total during the sync process.
@@ -123,9 +125,10 @@ type nodeRequest struct {
 	path []byte      // Merkle path leading to this node for prioritization
 	data []byte      // Data content of the node, cached until all subtrees complete
 
-	parent   *nodeRequest // Parent state node referencing this entry
-	deps     int          // Number of dependencies before allowed to commit this node
-	callback LeafCallback // Callback to invoke if a leaf node it reached on this branch
+	parent      *nodeRequest // Parent state node referencing this entry
+	deps        int          // Number of dependencies before allowed to commit this node
+	callback    LeafCallback // Callback to invoke if a leaf node it reached on this branch
+	leadsToCode bool         // Whether this node is on a path that leads to bytecode
 }
 
 // codeRequest represents a scheduled or already in-flight bytecode retrieval request.
@@ -259,25 +262,27 @@ func (batch *syncMemBatch) delNode(owner common.Hash, path []byte) {
 // unknown trie hashes to retrieve, accepts node data associated with said hashes
 // and reconstructs the trie step by step until all is done.
 type Sync struct {
-	scheme   string                       // Node scheme descriptor used in database.
-	database ethdb.KeyValueReader         // Persistent database to check for existing entries
-	membatch *syncMemBatch                // Memory buffer to avoid frequent database writes
-	nodeReqs map[string]*nodeRequest      // Pending requests pertaining to a trie node path
-	codeReqs map[common.Hash]*codeRequest // Pending requests pertaining to a code hash
-	queue    *prque.Prque[int64, any]     // Priority queue with the pending requests
-	fetches  map[int]int                  // Number of active fetches per trie node depth
+	scheme           string                       // Node scheme descriptor used in database.
+	database         ethdb.KeyValueReader         // Persistent database to check for existing entries
+	membatch         *syncMemBatch                // Memory buffer to avoid frequent database writes
+	nodeReqs         map[string]*nodeRequest      // Pending requests pertaining to a trie node path
+	codeReqs         map[common.Hash]*codeRequest // Pending requests pertaining to a code hash
+	queue            *prque.Prque[int64, any]     // Priority queue with the pending requests
+	fetches          map[int]int                  // Number of active fetches per trie node depth
+	bytecodeOnlyMode bool                         // Whether to only sync bytecode
 }
 
 // NewSync creates a new trie data download scheduler.
-func NewSync(root common.Hash, database ethdb.KeyValueReader, callback LeafCallback, scheme string) *Sync {
+func NewSync(root common.Hash, database ethdb.KeyValueReader, callback LeafCallback, scheme string, bytecodeOnlyMode bool) *Sync {
 	ts := &Sync{
-		scheme:   scheme,
-		database: database,
-		membatch: newSyncMemBatch(scheme),
-		nodeReqs: make(map[string]*nodeRequest),
-		codeReqs: make(map[common.Hash]*codeRequest),
-		queue:    prque.New[int64, any](nil), // Ugh, can contain both string and hash, whyyy
-		fetches:  make(map[int]int),
+		scheme:           scheme,
+		database:         database,
+		membatch:         newSyncMemBatch(scheme),
+		nodeReqs:         make(map[string]*nodeRequest),
+		codeReqs:         make(map[common.Hash]*codeRequest),
+		queue:            prque.New[int64, any](nil), // Ugh, can contain both string and hash, whyyy
+		fetches:          make(map[int]int),
+		bytecodeOnlyMode: bytecodeOnlyMode,
 	}
 	ts.AddSubTrie(root, nil, common.Hash{}, nil, callback)
 
@@ -291,7 +296,13 @@ func (s *Sync) AddSubTrie(root common.Hash, path []byte, parent common.Hash, par
 	if root == types.EmptyRootHash {
 		return
 	}
+
+	// In bytecode-only mode, skip storage tries (which have non-empty owner)
 	owner, inner := ResolvePath(path)
+	if s.bytecodeOnlyMode && owner != (common.Hash{}) {
+		return
+	}
+
 	exist, inconsistent := s.hasNode(owner, inner, root)
 	if exist {
 		// The entire subtrie is already present in the database.
@@ -354,6 +365,11 @@ func (s *Sync) AddCodeEntry(hash common.Hash, path []byte, parent common.Hash, p
 
 		ancestor.deps++
 		req.parents = append(req.parents, ancestor)
+
+		// Mark the parent node as leading to code (will propagate up when committed)
+		if s.bytecodeOnlyMode {
+			ancestor.leadsToCode = true
+		}
 	}
 
 	s.scheduleCodeRequest(req)
@@ -698,9 +714,27 @@ func (s *Sync) children(req *nodeRequest, object node) ([]*nodeRequest, error) {
 // of the referencing parent requests complete due to this commit, they are also
 // committed themselves.
 func (s *Sync) commitNodeRequest(req *nodeRequest) error {
-	// Write the node content to the membatch
-	owner, path := ResolvePath(req.path)
-	s.membatch.addNode(owner, path, req.data, req.hash)
+	// In bytecode-only mode, check if we should persist this node
+	if s.bytecodeOnlyMode {
+		depth := len(req.path) / 2 // Each byte represents 2 nibbles
+
+		// Always store top-level nodes for efficient traversal
+		shouldStore := depth <= maxDepthStoredForBytecodeOnlySync || req.leadsToCode
+
+		if shouldStore {
+			owner, path := ResolvePath(req.path)
+			s.membatch.addNode(owner, path, req.data, req.hash)
+		}
+
+		// If this node leads to code, propagate to parent
+		if req.leadsToCode && req.parent != nil {
+			req.parent.leadsToCode = true
+		}
+	} else {
+		// Normal mode: store all nodes
+		owner, path := ResolvePath(req.path)
+		s.membatch.addNode(owner, path, req.data, req.hash)
+	}
 
 	// Removed the completed node request
 	delete(s.nodeReqs, string(req.path))

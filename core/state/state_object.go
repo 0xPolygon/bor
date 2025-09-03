@@ -531,9 +531,11 @@ func (s *stateObject) Code() []byte {
 	}
 	code, err := s.db.reader.Code(s.address, common.BytesToHash(s.CodeHash()))
 	if err != nil {
+		log.Error("Failed to load code", "address", s.address, "hash", fmt.Sprintf("%x", s.CodeHash()), "err", err)
 		s.db.setError(fmt.Errorf("can't load code hash %x: %v", s.CodeHash(), err))
 	}
 	if len(code) == 0 {
+		log.Error("Code is not found", "address", s.address, "hash", fmt.Sprintf("%x", s.CodeHash()))
 		s.db.setError(fmt.Errorf("code is not found %x", s.CodeHash()))
 	}
 	s.code = code

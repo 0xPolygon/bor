@@ -22,27 +22,13 @@ import (
 // requests to the mock heimdal server for specific functions. Add more handlers
 // according to requirements.
 type HttpHandlerFake struct {
-	handleFetchCheckpoint         http.HandlerFunc
-	handleFetchMilestone          http.HandlerFunc
-	handleFetchNoAckMilestone     http.HandlerFunc
-	handleFetchLastNoAckMilestone http.HandlerFunc
+	handleFetchCheckpoint http.HandlerFunc
+	handleFetchMilestone  http.HandlerFunc
 }
 
 func (h *HttpHandlerFake) GetCheckpointHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h.handleFetchCheckpoint.ServeHTTP(w, r)
-	}
-}
-
-func (h *HttpHandlerFake) GetNoAckMilestoneHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h.handleFetchNoAckMilestone.ServeHTTP(w, r)
-	}
-}
-
-func (h *HttpHandlerFake) GetLastNoAckMilestoneHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h.handleFetchLastNoAckMilestone.ServeHTTP(w, r)
 	}
 }
 
@@ -66,16 +52,6 @@ func CreateMockHeimdallServer(wg *sync.WaitGroup, port int, listener net.Listene
 		handler.GetMilestoneHandler()(w, r)
 	})
 
-	// Create a route for fetching milestone
-	mux.HandleFunc("/milestone/noAck/{id}", func(w http.ResponseWriter, r *http.Request) {
-		handler.GetNoAckMilestoneHandler()(w, r)
-	})
-
-	// Create a route for fetching milestone
-	mux.HandleFunc("/milestone/lastNoAck", func(w http.ResponseWriter, r *http.Request) {
-		handler.GetLastNoAckMilestoneHandler()(w, r)
-	})
-
 	// Add other routes as per requirement
 
 	// Create the server with given port and mux
@@ -84,18 +60,12 @@ func CreateMockHeimdallServer(wg *sync.WaitGroup, port int, listener net.Listene
 		Handler: mux,
 	}
 
-	// Close the listener using the port and immediately consume it below
-	err := listener.Close()
-	if err != nil {
-		return nil, err
-	}
-
 	go func() {
 		defer wg.Done()
 
-		// always returns error. ErrServerClosed on graceful close
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			fmt.Printf("error in server.ListenAndServe(): %v", err)
+		// Use the provided listener instead of closing it and creating a new one
+		if err := srv.Serve(listener); err != http.ErrServerClosed {
+			fmt.Printf("error in server.Serve(): %v", err)
 		}
 	}()
 
@@ -151,6 +121,9 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 	// Create mock heimdall server and pass handler instance for setting up the routes
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
+
+	// Add a small delay to ensure server is ready
+	time.Sleep(100 * time.Millisecond)
 
 	// Create a new heimdall client and use same port for connection
 	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
@@ -217,6 +190,9 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 	// Create mock heimdall server and pass handler instance for setting up the routes
 	srv, err := CreateMockHeimdallServer(wg, port, listener, handler)
 	require.NoError(t, err, "expect no error in starting mock heimdall server")
+
+	// Add a small delay to ensure server is ready
+	time.Sleep(100 * time.Millisecond)
 
 	// Create a new heimdall client and use same port for connection
 	client := NewHeimdallClient(fmt.Sprintf("http://localhost:%d", port), 5*time.Second)
