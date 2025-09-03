@@ -23,7 +23,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
@@ -344,17 +343,29 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 
 		// In order to include state-sync transaction receipts, which resides in a separate
-		// table in db, we assemble the raw receipts first instead of directly fetching the
-		// rlp encoded receipts. This is needed in order to construct the final encoded
-		// network packet.
-		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
-		if number == nil {
-			continue
+		// table in db, we need to separately fetch normal and state-sync transaction receipts.
+		// Later, decode them, merge them into a single unit and re-encode the final list to
+		// be sent over p2p.
+
+		// Fetch receipts of normal evm transactions
+		normalReceipts := chain.GetReceiptsRLP(hash)
+		var normalReceiptsDecoded []*types.ReceiptForStorage
+		if normalReceipts != nil {
+			if err := rlp.DecodeBytes(normalReceipts, &normalReceiptsDecoded); err != nil {
+				log.Error("Failed to decode normal receipts", "err", err)
+				continue
+			}
 		}
 
-		// Retrieve the requested block's receipts
-		normalReceipts := chain.GetRawReceipts(hash, *number)
-		borReceipt := chain.GetRawBorReceipt(hash, *number)
+		// Fetch state-sync transaction receipt (if any)
+		borReceipt := chain.GetBorReceiptRLPByHash(hash)
+		var borReceiptDecoded types.ReceiptForStorage
+		if borReceipt != nil {
+			if err := rlp.DecodeBytes(borReceipt, &borReceiptDecoded); err != nil {
+				log.Error("Failed to decode state-sync receipt", "err", err)
+				continue
+			}
+		}
 
 		// Check if receipts are nil due to non existence or something else
 		if normalReceipts == nil && borReceipt == nil {
@@ -370,12 +381,12 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 
 		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
-		var blockReceipts types.Receipts = make(types.Receipts, 0)
+		var blockReceipts []*types.ReceiptForStorage = make([]*types.ReceiptForStorage, 0)
 		if normalReceipts != nil {
-			blockReceipts = append(blockReceipts, normalReceipts...)
+			blockReceipts = append(blockReceipts, normalReceiptsDecoded...)
 		}
 		if borReceipt != nil {
-			blockReceipts = append(blockReceipts, borReceipt)
+			blockReceipts = append(blockReceipts, &borReceiptDecoded)
 		}
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
