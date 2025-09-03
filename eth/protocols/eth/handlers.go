@@ -529,11 +529,24 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
-	resWithoutStateSync := &ReceiptsPacket[L]{
-		RequestId: res.RequestId,
-		List:      make([]L, 0, len(res.List)),
+	// Encode back
+	packet, err := rlp.EncodeToBytes(res)
+	if err != nil {
+		log.Info("[debug] unable to re-encode receipt packet", "err", err)
+		return err
 	}
-	copy(resWithoutStateSync.List, res.List)
+
+	resWithoutStateSync := new(ReceiptsPacket[L])
+	if err := rlp.DecodeBytes(packet, resWithoutStateSync); err != nil {
+		log.Info("[debug] unable to decode re-encoded receipt packet", "err", err)
+		return err
+	}
+
+	// resWithoutStateSync := &ReceiptsPacket[L]{
+	// 	RequestId: res.RequestId,
+	// 	List:      make([]L, 0, len(res.List)),
+	// }
+	// copy(resWithoutStateSync.List, res.List)
 
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
