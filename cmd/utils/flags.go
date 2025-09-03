@@ -1388,6 +1388,11 @@ func setEtherbase(ctx *cli.Context, cfg *ethconfig.Config) {
 
 	addr := ctx.String(MinerEtherbaseFlag.Name)
 
+	// If no etherbase is specified, return.
+	if addr == "" {
+		return
+	}
+
 	if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
 		addr = addr[2:]
 	}
@@ -2274,7 +2279,7 @@ func MakeChainDatabase(ctx *cli.Context, stack *node.Node, readonly, disableFree
 
 		chainDb = remotedb.New(client)
 	default:
-		chainDb, err = stack.OpenDatabaseWithFreezer("chaindata", cache, handles, ctx.String(AncientFlag.Name), "", readonly, disableFreeze, false)
+		chainDb, err = stack.OpenDatabaseWithFreezer("chaindata", cache, handles, ctx.String(AncientFlag.Name), "", readonly, disableFreeze, false, false)
 	}
 
 	if err != nil {

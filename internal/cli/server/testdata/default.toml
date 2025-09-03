@@ -15,6 +15,7 @@ gcmode = "full"
 snapshot = true
 "bor.logs" = false
 ethstats = ""
+witnessprotocol = false
 devfakeauthor = false
 
 ["eth.requiredblocks"]
@@ -74,7 +75,7 @@ devfakeauthor = false
   extradata = ""
   gaslimit = 45000000
   gasprice = "25000000000"
-  recommit = "2m5s"
+  recommit = "125s"
   commitinterrupt = true
 
 [jsonrpc]

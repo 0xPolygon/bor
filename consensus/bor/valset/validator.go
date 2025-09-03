@@ -31,6 +31,14 @@ func NewValidator(address common.Address, votingPower int64) *Validator {
 	}
 }
 
+// func (v *Validator) MinimalVal() stakeTypes.MinimalVal {
+// 	return stakeTypes.MinimalVal{
+// 		ID:          v.ID,
+// 		VotingPower: uint64(v.VotingPower),
+// 		Signer:      v.Address,
+// 	}
+// }
+
 // Copy creates a new copy of the validator so we can mutate ProposerPriority.
 // Panics if the validator is nil.
 func (v *Validator) Copy() *Validator {
@@ -112,8 +120,8 @@ func (v *Validator) PowerBytes() []byte {
 }
 
 // MinimalVal returns block number of last validator update
-func (v *Validator) MinimalVal() MinimalVal {
-	return MinimalVal{
+func (v *Validator) MinimalVal() stakeTypes.MinimalVal {
+	return stakeTypes.MinimalVal{
 		ID:          v.ID,
 		Signer:      v.Address,
 		VotingPower: uint64(v.VotingPower),
@@ -152,7 +160,7 @@ type MinimalVal struct {
 }
 
 // SortMinimalValByAddress sorts validators
-func SortMinimalValByAddress(a []MinimalVal) []MinimalVal {
+func SortMinimalValByAddress(a []stakeTypes.MinimalVal) []stakeTypes.MinimalVal {
 	sort.Slice(a, func(i, j int) bool {
 		return bytes.Compare(a[i].Signer.Bytes(), a[j].Signer.Bytes()) < 0
 	})
@@ -161,7 +169,7 @@ func SortMinimalValByAddress(a []MinimalVal) []MinimalVal {
 }
 
 // ValidatorsToMinimalValidators converts array of validators to minimal validators
-func ValidatorsToMinimalValidators(vals []Validator) (minVals []MinimalVal) {
+func ValidatorsToMinimalValidators(vals []Validator) (minVals []stakeTypes.MinimalVal) {
 	for _, val := range vals {
 		minVals = append(minVals, val.MinimalVal())
 	}

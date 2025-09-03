@@ -263,7 +263,7 @@ func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
 // storage.
 //
 //nolint:gocognit
-func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset bool) (ethdb.Database, error) {
+func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
 	offset := resolveOffset(db, isLastOffset)
 	log.Info("Resolving ancient pruner offset", "isLastOffset", isLastOffset, "offset", offset)
 
@@ -381,7 +381,8 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 				if ReadHeadHeaderHash(db) != common.BytesToHash(kvgenesis) {
 					// Key-value store contains more data than the genesis block, make sure we
 					// didn't freeze anything yet.
-					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 {
+					// Bor Change: Stateless client skip this check because of fast forward feature, which usually jumps #1 block
+					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 && !stateless {
 						printChainMetadata(db)
 						return nil, errors.New("ancient chain segments already extracted, please set --datadir.ancient to the correct path")
 					}
@@ -701,9 +702,9 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		for _, table := range ancient.sizes {
 			stats = append(stats, []string{
 				fmt.Sprintf("Ancient store (%s)",
-					//nolint: staticcheck
+					//nolint:staticcheck
 					strings.Title(ancient.name)),
-				//nolint: staticcheck
+				//nolint:staticcheck
 				strings.Title(table.name),
 				table.size.String(),
 				fmt.Sprintf("%d", ancient.count()),
@@ -736,7 +737,7 @@ var knownMetadataKeys = [][]byte{
 	snapshotGeneratorKey, snapshotRecoveryKey, txIndexTailKey, fastTxLookupLimitKey,
 	uncleanShutdownKey, badBlockKey, transitionStatusKey, skeletonSyncStatusKey,
 	persistentStateIDKey, trieJournalKey, snapshotSyncStatusKey, snapSyncStatusFlagKey,
-	filterMapsRangeKey,
+	filterMapsRangeKey, bytecodeSyncLastBlockKey,
 }
 
 // printChainMetadata prints out chain metadata to stderr.

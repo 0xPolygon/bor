@@ -65,7 +65,7 @@ func (api *FilterAPI) NewDeposits(ctx context.Context, crit ethereum.StateSyncFi
 		stateSyncData := make(chan *types.StateSyncData, 10)
 		stateSyncSub := api.events.SubscribeNewDeposits(stateSyncData)
 
-		// nolint: gosimple
+		//nolint:staticcheck
 		for {
 			select {
 			case h := <-stateSyncData:

@@ -130,7 +130,7 @@ func (b *BootnodeCommand) Synopsis() string {
 }
 
 // Run implements the cli.Command interface
-// nolint: gocognit
+// nolint:gocognit
 func (b *BootnodeCommand) Run(args []string) int {
 	flags := b.Flags()
 	if err := flags.Parse(args); err != nil {
@@ -152,7 +152,7 @@ func (b *BootnodeCommand) Run(args []string) int {
 
 	// create a one time key
 	var nodeKey *ecdsa.PrivateKey
-	// nolint: nestif
+	// nolint:nestif
 	if b.nodeKey != "" {
 		// try to read the key either from file or command line
 		if _, err := os.Stat(b.nodeKey); errors.Is(err, os.ErrNotExist) {

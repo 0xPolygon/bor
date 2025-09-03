@@ -27,8 +27,11 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -42,6 +45,7 @@ import (
 var (
 	MaxBlockFetch   = 128 // Amount of blocks to be fetched per retrieval request
 	MaxHeaderFetch  = 192 // Amount of block headers to be fetched per retrieval request
+	MaxWitnessFetch = 1   // Amount of witnesses to be fetched per retrieval request
 	MaxSkeletonSize = 128 // Number of header fetches to need for a skeleton assembly
 	MaxReceiptFetch = 256 // Amount of transaction receipts to allow fetching per request
 
@@ -58,6 +62,8 @@ var (
 	fsMinFullBlocks   = 64              // Number of blocks to retrieve fully even in snap sync
 
 	maxValidationThreshold = uint64(1024) // Number of block difference from remote peer to start validation
+
+	fastForwardTimeout = 30 * time.Second // Timeout for waiting for fast forward block
 )
 
 var (
@@ -161,6 +167,17 @@ type Downloader struct {
 	syncStartBlock uint64    // Head snap block when Geth was started
 	syncStartTime  time.Time // Time instance when chain sync started
 	syncLogTime    time.Time // Time instance when status was last reported
+
+	// FastForward
+	FastForwardThreshold  uint64
+	latestCheckpointBlock uint64
+	fastForwardBlock      uint64
+	futureCandidateBlocks []uint64
+	fastForwardMu         sync.Mutex
+	fastForwardBlockCh    chan uint64
+
+	// syncAndProduceWitnesses
+	syncAndProduceWitnesses bool // Whether to produce witnesses while syncing
 }
 
 // LightChain encapsulates functions required to synchronise a light chain.
@@ -179,6 +196,9 @@ type LightChain interface {
 
 	// InsertHeaderChain inserts a batch of headers into the local chain.
 	InsertHeaderChain([]*types.Header) (int, error)
+
+	// InsertHeaderChainWithoutValidation inserts a batch of headers into the local chain without validation.
+	InsertHeaderChainWithoutValidation([]*types.Header) (int, error)
 
 	// SetHead rewinds the local chain to a new head.
 	SetHead(uint64) error
@@ -207,7 +227,10 @@ type BlockChain interface {
 	SnapSyncCommitHead(common.Hash) error
 
 	// InsertChain inserts a batch of blocks into the local chain.
-	InsertChain(types.Blocks) (int, error)
+	InsertChain(types.Blocks, bool) (int, error)
+
+	// InsertChainStateless inserts a batch of blocks into the local chain in stateless mode.
+	InsertChainStateless(types.Blocks, []*stateless.Witness) (int, error)
 
 	// InsertReceiptChain inserts a batch of receipts into the local chain.
 	InsertReceiptChain(types.Blocks, []types.Receipts, uint64) (int, error)
@@ -223,27 +246,31 @@ type BlockChain interface {
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
-// nolint: staticcheck
-func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, lightchain LightChain, dropPeer peerDropFn, success func(), whitelistService ethereum.ChainValidator) *Downloader {
+// nolint:staticcheck
+func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, lightchain LightChain, dropPeer peerDropFn, success func(), whitelistService ethereum.ChainValidator, fastForwardThreshold uint64, syncAndProduceWitnesses bool) *Downloader {
 	if lightchain == nil {
 		lightchain = chain
 	}
 
 	dl := &Downloader{
-		stateDB:                stateDb,
-		mux:                    mux,
-		queue:                  newQueue(blockCacheMaxItems, blockCacheInitialItems),
-		peers:                  newPeerSet(),
-		blockchain:             chain,
-		lightchain:             lightchain,
-		dropPeer:               dropPeer,
-		headerProcCh:           make(chan *headerTask, 1),
-		quitCh:                 make(chan struct{}),
-		SnapSyncer:             snap.NewSyncer(stateDb, chain.TrieDB().Scheme()),
-		stateSyncStart:         make(chan *stateSync),
-		syncStartBlock:         chain.CurrentSnapBlock().Number.Uint64(),
-		ChainValidator:         whitelistService,
-		maxValidationThreshold: maxValidationThreshold,
+		stateDB:                 stateDb,
+		mux:                     mux,
+		queue:                   newQueue(blockCacheMaxItems, blockCacheInitialItems),
+		peers:                   newPeerSet(),
+		blockchain:              chain,
+		lightchain:              lightchain,
+		dropPeer:                dropPeer,
+		headerProcCh:            make(chan *headerTask, 1),
+		quitCh:                  make(chan struct{}),
+		SnapSyncer:              snap.NewSyncer(stateDb, chain.TrieDB().Scheme()),
+		stateSyncStart:          make(chan *stateSync),
+		syncStartBlock:          chain.CurrentSnapBlock().Number.Uint64(),
+		ChainValidator:          whitelistService,
+		maxValidationThreshold:  maxValidationThreshold,
+		futureCandidateBlocks:   make([]uint64, 0),
+		fastForwardBlockCh:      make(chan uint64),
+		FastForwardThreshold:    fastForwardThreshold,
+		syncAndProduceWitnesses: syncAndProduceWitnesses,
 	}
 	// Create the post-merge skeleton syncer and start the process
 	dl.skeleton = newSkeleton(stateDb, dl.peers, dropPeer, newBeaconBackfiller(dl, success))
@@ -272,6 +299,8 @@ func (d *Downloader) Progress() ethereum.SyncProgress {
 		current = d.blockchain.CurrentBlock().Number.Uint64()
 	case d.blockchain != nil && mode == SnapSync:
 		current = d.blockchain.CurrentSnapBlock().Number.Uint64()
+	case d.blockchain != nil && mode == StatelessSync:
+		current = d.blockchain.CurrentBlock().Number.Uint64()
 	case d.lightchain != nil:
 		current = d.lightchain.CurrentHeader().Number.Uint64()
 	default:
@@ -435,11 +464,12 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 			snapshots.Disable()
 		}
 	}
+
 	// Reset the queue, peer set and wake channels to clean any internal leftover state
 	d.queue.Reset(blockCacheMaxItems, blockCacheInitialItems)
 	d.peers.Reset()
 
-	for _, ch := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh} {
+	for _, ch := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh, d.queue.witnessWakeCh} {
 		select {
 		case <-ch:
 		default:
@@ -556,14 +586,67 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 	// threshold (i.e. new chain). In that case we won't really fast sync
 	// anyway, but still need a valid pivot block to avoid some code hitting
 	// nil panics on access.
-	if mode == SnapSync && pivot == nil {
+	if (mode == SnapSync || mode == StatelessSync) && pivot == nil {
 		pivot = d.blockchain.CurrentBlock()
 	}
 
 	height := latest.Number.Uint64()
 
 	var origin uint64
-	if !beaconMode {
+	var needsBytecodeSync bool
+	if mode == StatelessSync {
+		d.SnapSyncer.SetBytecodeOnlyMode(true)
+		// Get the fast forward block first
+		startBlock := d.GetOrWaitFastForwardBlock(fastForwardTimeout)
+
+		// Check if we need to download bytecodes before starting stateless sync
+		needsBytecodeSync = d.needsBytecodeSync(startBlock)
+		if needsBytecodeSync {
+			log.Info("Starting bytecode-only snap sync before stateless sync", "startBlock", startBlock)
+
+			// We need the header at fastForwardBlock as the pivot for bytecode sync
+			// Request it from the peer since we might not have it locally
+			headers, _, err := d.fetchHeadersByNumber(p, startBlock, 1, 0, false)
+			if err != nil || len(headers) == 0 {
+				log.Warn("Failed to fetch fastForwardBlock header, using latest as fallback",
+					"fastForwardBlock", startBlock, "err", err)
+				// Fallback to latest if we can't get the specific block
+				headers = []*types.Header{latest}
+				startBlock = latest.Number.Uint64()
+			}
+			pivotHeader := headers[0]
+
+			if !d.blockchain.HasHeader(pivotHeader.Hash(), pivotHeader.Number.Uint64()) {
+				log.Info("Pivot header not found in local chain, inserting", "pivotHeader", pivotHeader.Number, "hash", pivotHeader.Hash())
+				_, err := d.blockchain.InsertHeaderChainWithoutValidation([]*types.Header{pivotHeader})
+				if err != nil {
+					return fmt.Errorf("failed to insert pivot header into local chain: %w", err)
+				}
+			}
+
+			pivot = pivotHeader
+		} else {
+			lastSyncedByteCodeBlock := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
+			if startBlock > lastSyncedByteCodeBlock && lastSyncedByteCodeBlock != 0 {
+				startBlock = lastSyncedByteCodeBlock
+			}
+
+			// Use shorter chain for ancestor search
+			if latest.Number.Uint64() > startBlock {
+				origin, err = d.findAncestorStatelessSearch(p, startBlock, 0)
+			} else {
+				origin, err = d.findAncestorStatelessSearch(p, latest.Number.Uint64(), 0)
+			}
+
+			if err != nil {
+				log.Info("Could not find common ancestor", "err", err)
+			} else if origin < startBlock {
+				startBlock = origin
+			}
+		}
+
+		origin = startBlock
+	} else if !beaconMode {
 		// In legacy mode, reach out to the network and find the ancestor
 		origin, err = d.findAncestor(p, latest)
 		if err != nil {
@@ -601,7 +684,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 	}
 
 	d.committed.Store(true)
-	if mode == SnapSync && pivot.Number.Uint64() != 0 {
+	if (mode == SnapSync || needsBytecodeSync) && pivot.Number.Uint64() != 0 {
 		d.committed.Store(false)
 	}
 	if mode == SnapSync {
@@ -659,7 +742,13 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		}
 	}
 	// Initiate the sync using a concurrent header and content retrieval algorithm
-	d.queue.Prepare(origin+1, mode)
+	// When doing bytecode sync in StatelessSync mode, use SnapSync for the queue
+	// to avoid expecting witnesses that won't be fetched
+	queueMode := mode
+	if mode == StatelessSync && needsBytecodeSync {
+		queueMode = SnapSync
+	}
+	d.queue.Prepare(origin+1, queueMode)
 
 	if d.syncInitHook != nil {
 		d.syncInitHook(origin, height)
@@ -681,17 +770,47 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		func() error { return d.processHeaders(origin+1, td, ttd, beaconMode) },
 	}
 
+	// Add witness fetcher if in FullSync or StatelessSync mode
+	if mode == StatelessSync && !needsBytecodeSync {
+		fetchers = append(fetchers, func() error { return d.fetchWitnesses(origin+1, beaconMode) })
+	}
+
 	if mode == SnapSync {
 		d.pivotLock.Lock()
 		d.pivotHeader = pivot
 		d.pivotLock.Unlock()
 
-		fetchers = append(fetchers, func() error { return d.processSnapSyncContent() })
+		fetchers = append(fetchers, func() error { return d.processSnapSyncContent(true) })
 	} else if mode == FullSync {
 		fetchers = append(fetchers, func() error { return d.processFullSyncContent(ttd, beaconMode) })
 	}
 
-	return d.spawnSync(fetchers)
+	if mode != StatelessSync {
+		return d.spawnSync(fetchers)
+	}
+
+	if needsBytecodeSync {
+		d.pivotLock.Lock()
+		d.pivotHeader = pivot
+		d.pivotLock.Unlock()
+
+		err := d.spawnSyncDominant(fetchers, func() error { return d.processSnapSyncContent(false) })
+		if err != nil {
+			return err
+		}
+
+		// Ensure snap syncer is fully terminated before proceeding
+		d.Cancel()
+
+		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, origin)
+
+		log.Info("Bytecode sync completed", "block", origin)
+		return nil
+	} else {
+		fetchers = append(fetchers, func() error { return d.processFullSyncContentStateless() })
+		d.committed.Store(true)
+		return d.spawnSync(fetchers)
+	}
 }
 
 // spawnSync runs d.process and all given fetcher functions to completion in
@@ -720,6 +839,55 @@ func (d *Downloader) spawnSync(fetchers []func() error) error {
 			}
 		}
 	}
+	d.queue.Close()
+	d.Cancel()
+
+	return err
+}
+
+// spawnSyncDominant runs d.process and all given fetcher functions to completion in
+// separate goroutines, but cancels all fetchers as soon as the dominantFetcher completes,
+// regardless of whether it returns an error or not.
+func (d *Downloader) spawnSyncDominant(fetchers []func() error, dominantFetcher func() error) error {
+	totalFetchers := len(fetchers) + 1
+	errc := make(chan error, totalFetchers)
+	d.cancelWg.Add(totalFetchers)
+
+	dominantFetcherDone := make(chan struct{})
+
+	// Start the dominant fetcher
+	go func() {
+		defer d.cancelWg.Done()
+		defer close(dominantFetcherDone)
+		errc <- dominantFetcher()
+	}()
+
+	// Start all regular fetchers
+	for _, fn := range fetchers {
+		go func() {
+			defer d.cancelWg.Done()
+			errc <- fn()
+		}()
+	}
+
+	var err error
+	completed := 0
+
+	// Wait for either dominant fetcher completion or any error
+	for completed < totalFetchers {
+		select {
+		case <-dominantFetcherDone:
+			// Dominant fetcher completed, cancel all others immediately
+			d.Cancel()
+			// Continue to collect remaining errors/completions
+		case got := <-errc:
+			completed++
+			if got != nil && err == nil && got != errCanceled {
+				err = got
+			}
+		}
+	}
+
 	d.queue.Close()
 	d.Cancel()
 
@@ -899,7 +1067,7 @@ func (d *Downloader) findAncestor(p *peerConnection, remoteHeader *types.Header)
 
 	mode := d.getMode()
 	switch mode {
-	case FullSync:
+	case FullSync, StatelessSync:
 		localHeight = d.blockchain.CurrentBlock().Number.Uint64()
 	case SnapSync:
 		localHeight = d.blockchain.CurrentSnapBlock().Number.Uint64()
@@ -936,6 +1104,10 @@ func (d *Downloader) findAncestor(p *peerConnection, remoteHeader *types.Header)
 		floor = int64(localHeight - maxForkAncestry)
 	}
 
+	if mode == StatelessSync {
+		return d.findAncestorStatelessSearch(p, remoteHeight, floor)
+	}
+
 	ancestor, err := d.findAncestorSpanSearch(p, mode, remoteHeight, localHeight, floor)
 	if err == nil {
 		return ancestor, nil
@@ -954,6 +1126,72 @@ func (d *Downloader) findAncestor(p *peerConnection, remoteHeader *types.Header)
 	}
 
 	return ancestor, nil
+}
+
+// findAncestorStatelessSearch searches for a common ancestor by fetching headers backwards
+// without skipping any blocks. This is necessary for stateless nodes which may have gaps
+// in their locally stored blocks.
+func (d *Downloader) findAncestorStatelessSearch(p *peerConnection, remoteHeight uint64, floor int64) (uint64, error) {
+	// If the remote height is 0, we are at the genesis block, so we can return 0
+	if remoteHeight == 0 {
+		return 0, nil
+	}
+
+	currentHeight := int64(remoteHeight)
+
+	// Keep fetching headers backwards until we find an ancestor or reach the floor
+	for currentHeight > floor {
+		// Calculate batch size
+		batchSize := MaxHeaderFetch
+		if currentHeight-floor < int64(batchSize) {
+			batchSize = int(currentHeight - floor)
+		}
+
+		// Calculate starting point for this batch
+		from := currentHeight - int64(batchSize) + 1
+		if from < floor {
+			from = floor
+		}
+
+		p.log.Trace("Stateless: fetching headers backwards", "from", from, "count", batchSize, "currentHeight", currentHeight)
+
+		// Fetch headers without skip (consecutive blocks)
+		headers, hashes, err := d.fetchHeadersByNumber(p, uint64(from), batchSize, 0, false)
+		if err != nil {
+			return 0, err
+		}
+
+		// Make sure the peer actually gave something valid
+		if len(headers) == 0 {
+			p.log.Warn("Empty head header set")
+			return 0, errEmptyHeaderSet
+		}
+
+		// Verify the headers are in order
+		for i, header := range headers {
+			expectNumber := from + int64(i)
+			if number := header.Number.Int64(); number != expectNumber {
+				p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+				return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
+			}
+		}
+
+		// Check headers from highest to lowest
+		for i := len(headers) - 1; i >= 0; i-- {
+			h := hashes[i]
+			n := headers[i].Number.Uint64()
+
+			if d.blockchain.HasHeader(h, n) {
+				p.log.Debug("Found common ancestor", "number", n, "hash", h)
+				return n, nil
+			}
+		}
+
+		// Move to the next batch
+		currentHeight = from - 1
+	}
+
+	return 0, errNoAncestorFound
 }
 
 func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, remoteHeight, localHeight uint64, floor int64) (uint64, error) {
@@ -994,7 +1232,7 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		var known bool
 
 		switch mode {
-		case FullSync:
+		case FullSync, StatelessSync:
 			known = d.blockchain.HasBlock(h, n)
 		case SnapSync:
 			known = d.blockchain.HasFastBlock(h, n)
@@ -1053,7 +1291,7 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		var known bool
 
 		switch mode {
-		case FullSync:
+		case FullSync, StatelessSync:
 			known = d.blockchain.HasBlock(h, n)
 		case SnapSync:
 			known = d.blockchain.HasFastBlock(h, n)
@@ -1151,6 +1389,12 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			for _, ch := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh} {
 				select {
 				case ch <- false:
+				case <-d.cancelCh:
+				}
+			}
+			if d.getMode() == StatelessSync {
+				select {
+				case d.queue.witnessWakeCh <- false:
 				case <-d.cancelCh:
 				}
 			}
@@ -1366,7 +1610,6 @@ func (d *Downloader) fetchReceipts(from uint64, beaconMode bool) error {
 	err := d.concurrentFetch((*receiptQueue)(d), beaconMode)
 
 	log.Debug("Receipt download terminated", "err", err)
-
 	return err
 }
 
@@ -1394,6 +1637,12 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 					case <-d.cancelCh:
 					}
 				}
+				if mode == StatelessSync {
+					select {
+					case d.queue.witnessWakeCh <- false:
+					case <-d.cancelCh:
+					}
+				}
 				// If we're in legacy sync mode, we need to check total difficulty
 				// violations from malicious peers. That is not needed in beacon
 				// mode and we can skip to terminating sync.
@@ -1416,6 +1665,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 						}
 					}
 				}
+
 				return nil
 			}
 			// Otherwise split the chunk of headers into batches and process them
@@ -1491,7 +1741,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 					}
 				}
 				// Unless we're doing light chains, schedule the headers for associated content retrieval
-				if mode == FullSync || mode == SnapSync {
+				if mode == FullSync || mode == SnapSync || mode == StatelessSync {
 					// If we've reached the allowed number of pending headers, stall a bit
 					for d.queue.PendingBodies() >= maxQueuedHeaders || d.queue.PendingReceipts() >= maxQueuedHeaders {
 						select {
@@ -1522,6 +1772,12 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 			for _, ch := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh} {
 				select {
 				case ch <- true:
+				default:
+				}
+			}
+			if mode == StatelessSync {
+				select {
+				case d.queue.witnessWakeCh <- true:
 				default:
 				}
 			}
@@ -1614,7 +1870,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	// Downloaded blocks are always regarded as trusted after the
 	// transition. Because the downloaded chain is guided by the
 	// consensus-layer.
-	if index, err := d.blockchain.InsertChain(blocks); err != nil {
+	if index, err := d.blockchain.InsertChain(blocks, d.syncAndProduceWitnesses); err != nil {
 		if index < len(results) {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "err", err)
 
@@ -1649,7 +1905,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 
 // processSnapSyncContent takes fetch results from the queue and writes them to the
 // database. It also controls the synchronisation of state nodes of the pivot block.
-func (d *Downloader) processSnapSyncContent() error {
+func (d *Downloader) processSnapSyncContent(processResults bool) error {
 	// Start syncing state of the reported head block. This should get us most of
 	// the state of the pivot block.
 	d.pivotLock.RLock()
@@ -1744,8 +2000,15 @@ func (d *Downloader) processSnapSyncContent() error {
 			// need to be taken into account, otherwise we're detecting the pivot move
 			// late and will drop peers due to unavailable state!!!
 			if height := latest.Number.Uint64(); height >= pivot.Number.Uint64()+2*uint64(fsMinFullBlocks)-uint64(reorgProtHeaderDelay) {
-				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", height-uint64(fsMinFullBlocks)+uint64(reorgProtHeaderDelay))
-				pivot = results[len(results)-1-fsMinFullBlocks+reorgProtHeaderDelay].Header // must exist as lower old pivot is uncommitted
+				newPivotNum := len(results) - 1 - fsMinFullBlocks + reorgProtHeaderDelay
+
+				if newPivotNum < 0 || newPivotNum > len(results)-1 {
+					newPivotNum = len(results) - 1
+				}
+
+				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", newPivotNum)
+
+				pivot = results[newPivotNum].Header // must exist as lower old pivot is uncommitted
 
 				d.pivotLock.Lock()
 				d.pivotHeader = pivot
@@ -1758,8 +2021,11 @@ func (d *Downloader) processSnapSyncContent() error {
 		}
 
 		P, beforeP, afterP := splitAroundPivot(pivot.Number.Uint64(), results)
-		if err := d.commitSnapSyncData(beforeP, sync); err != nil {
-			return err
+
+		if processResults {
+			if err := d.commitSnapSyncData(beforeP, sync); err != nil {
+				return err
+			}
 		}
 
 		if P != nil {
@@ -1779,8 +2045,10 @@ func (d *Downloader) processSnapSyncContent() error {
 					return sync.err
 				}
 
-				if err := d.commitPivotBlock(P); err != nil {
-					return err
+				if processResults {
+					if err := d.commitPivotBlock(P); err != nil {
+						return err
+					}
 				}
 
 				oldPivot = nil
@@ -1790,9 +2058,24 @@ func (d *Downloader) processSnapSyncContent() error {
 				continue
 			}
 		}
-		// Fast sync done, pivot commit done, full import
-		if err := d.importBlockResults(afterP); err != nil {
-			return err
+
+		if processResults {
+			// Fast sync done, pivot commit done, full import
+			if err := d.importBlockResults(afterP); err != nil {
+				return err
+			}
+		} else {
+			select {
+			case <-sync.done:
+				if sync.err != nil {
+					return sync.err
+				}
+				d.committed.Store(true)
+				return nil
+
+			case <-time.After(time.Second):
+				continue
+			}
 		}
 	}
 }
@@ -2006,4 +2289,243 @@ func (d *Downloader) reportSnapSyncProgress(force bool) {
 	log.Info("Syncing: chain download in progress", "synced", progress, "chain", syncedBytes, "headers", headers, "bodies", bodies, "receipts", receipts, "eta", common.PrettyDuration(eta))
 
 	d.syncLogTime = time.Now()
+}
+
+// processFullSyncContentStateless takes fetch results from the queue and imports them into the chain using stateless mode.
+func (d *Downloader) processFullSyncContentStateless() error {
+	for {
+		results := d.queue.Results(true)
+		if len(results) == 0 {
+			// If no results came back, but we are cancelling, return
+			select {
+			case <-d.cancelCh:
+				return errCanceled
+			default:
+			}
+			// If the queue got closed, return
+			// Note: This is not 100% reliable because the queue can be closed
+			// right after this check. Need to make Results return closed status.
+			if d.queue.Idle() {
+				return nil
+			}
+			// Otherwise continue waiting for results
+			continue
+		}
+		// Process the retrieved block segments
+		if err := d.importBlockResultsStateless(results); err != nil {
+			log.Warn("Block import failed", "err", err)
+			return err
+		}
+	}
+}
+
+func (d *Downloader) importBlockResultsStateless(results []*fetchResult) error {
+	// Check for any early exits
+	select {
+	case <-d.quitCh:
+		log.Debug("Downloader terminating, exiting block import")
+		return errTerminated
+	case <-d.cancelCh:
+		log.Debug("Downloader cancelled, exiting block import")
+		return errCanceled
+	default:
+	}
+	// Make sure we have something to import
+	if len(results) == 0 {
+		return nil
+	}
+	// Assemble the blocks from the fetch results
+	blocks := make([]*types.Block, len(results))
+	witnesses := make([]*stateless.Witness, len(results))
+	for i, result := range results {
+		// Construct block correctly
+		blockBody := types.Body{Transactions: result.Transactions, Uncles: result.Uncles, Withdrawals: result.Withdrawals}
+		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(blockBody)
+		// Extract witness (handle potential nil if fetch/decode failed or wasn't needed)
+		witnesses[i] = result.Witness
+	}
+	// Run the import hook if registered
+	if d.chainInsertHook != nil {
+		d.chainInsertHook(results)
+	}
+	// Import the batch of blocks
+	if index, err := d.blockchain.InsertChainStateless(blocks, witnesses); err != nil {
+		log.Warn("Invalid block body", "index", index, "hash", blocks[index].Hash(), "err", err)
+		return errInvalidBody // Or a more specific error if possible
+	}
+
+	return nil
+}
+
+// fetchWitnesses is a dedicated goroutine responsible for fetching block witnesses.
+func (d *Downloader) fetchWitnesses(from uint64, beaconMode bool) error {
+	log.Debug("Starting block witness fetcher", "from", from)
+	err := d.concurrentFetch((*witnessQueue)(d), beaconMode)
+	log.Debug("Block witness fetcher terminated", "from", from, "err", err)
+	return err
+}
+
+func (d *Downloader) UpdateFastForwardBlockFromMilestone(db ethdb.Database, milestone *milestone.Milestone) {
+	d.fastForwardMu.Lock()
+	defer d.fastForwardMu.Unlock()
+
+	// Fast Forward is just for stateless clients.
+	if d.getMode() != StatelessSync {
+		return
+	}
+
+	milestoneTd := big.NewInt(int64(milestone.TotalDifficulty))
+	existingTd := rawdb.ReadTd(db, milestone.Hash, milestone.EndBlock)
+	if existingTd != nil {
+		if existingTd.Cmp(milestoneTd) != 0 {
+			// If it doesn't match, we overwrite it with the new totalDifficulty.
+			// This can happen if the milestone was updated with a new totalDifficulty.
+			// This is expected in case of a reorg or a new milestone.
+			// We assume that the new totalDifficulty is correct and we overwrite the old one.
+			log.Warn("Milestone totalDifficulty mismatch, overwriting", "hash", milestone.Hash, "endBlock", milestone.EndBlock, "existingTd", existingTd, "newTd", milestoneTd)
+			rawdb.WriteTd(db, milestone.Hash, milestone.EndBlock, milestoneTd)
+		}
+		// else: match exists, do nothing (no overwrite).
+	} else {
+		rawdb.WriteTd(db, milestone.Hash, milestone.EndBlock, milestoneTd)
+	}
+
+	// For stateless nodes that are significantly behind, we should fast forward
+	// immediately rather than waiting for checkpoints
+	currentBlock := d.blockchain.CurrentBlock().Number.Uint64()
+	gap := int64(milestone.EndBlock) - int64(currentBlock)
+
+	// If we're more than FastForwardThreshold behind, fast forward immediately
+	// This prevents stateless nodes from getting stuck when they're far behind
+	if gap > int64(d.FastForwardThreshold) && milestone.EndBlock > d.fastForwardBlock {
+		log.Info("Fast forwarding stateless node due to large gap",
+			"currentBlock", currentBlock,
+			"milestoneEnd", milestone.EndBlock,
+			"gap", gap,
+			"threshold", d.FastForwardThreshold)
+		d.setFastForwardBlock(milestone.EndBlock)
+	} else if milestone.EndBlock > d.latestCheckpointBlock && d.latestCheckpointBlock > 0 {
+		d.futureCandidateBlocks = append(d.futureCandidateBlocks, milestone.EndBlock)
+	} else if milestone.EndBlock > d.fastForwardBlock {
+		d.setFastForwardBlock(milestone.EndBlock)
+	}
+}
+
+func (d *Downloader) UpdateFastForwardBlockFromCheckpoint(checkpoint *checkpoint.Checkpoint) {
+	d.fastForwardMu.Lock()
+	defer d.fastForwardMu.Unlock()
+
+	// Fast Forward just for stateless clients
+	if d.getMode() != StatelessSync {
+		return
+	}
+
+	if checkpoint.EndBlock > d.latestCheckpointBlock {
+		d.latestCheckpointBlock = checkpoint.EndBlock
+
+		// choose next fastforward block
+		nextFastForward := uint64(0)
+
+		found := false
+		for _, candidate := range d.futureCandidateBlocks {
+			if candidate <= d.latestCheckpointBlock && candidate > nextFastForward {
+				nextFastForward = candidate
+				found = true
+			}
+		}
+		if found {
+			d.setFastForwardBlock(nextFastForward)
+		}
+
+		// clean futureCandidateBlocks
+		filteredCandidates := make([]uint64, 0)
+		for _, candidate := range d.futureCandidateBlocks {
+			if candidate > nextFastForward {
+				filteredCandidates = append(filteredCandidates, candidate)
+			}
+		}
+		d.futureCandidateBlocks = filteredCandidates
+	}
+}
+
+func (d *Downloader) GetOrWaitFastForwardBlock(timeout time.Duration) uint64 {
+	localHeight := d.blockchain.CurrentBlock().Number.Uint64()
+
+	var fastForwardBlock uint64
+	if d.fastForwardBlock != 0 {
+		fastForwardBlock = d.fastForwardBlock
+	} else {
+		// wait until receive a fast forward block with a timeout
+		// This prevents indefinite blocking when no milestones/checkpoints are available
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case fastForwardBlock = <-d.fastForwardBlockCh:
+			// Got a fast forward block
+		case <-timer.C:
+			// Timeout - use current height + threshold as fallback
+			log.Warn("Timeout waiting for fast forward block, using fallback",
+				"localHeight", localHeight,
+				"threshold", d.FastForwardThreshold)
+			// Return local height to proceed with normal sync
+			return localHeight
+		}
+	}
+
+	distance := (int64(fastForwardBlock) - int64(localHeight))
+	if distance > int64(d.FastForwardThreshold) {
+		log.Debug("StatelessSync: FastForwarding", "fastForwardBlock", fastForwardBlock)
+		return fastForwardBlock
+	} else {
+		return localHeight
+	}
+}
+
+func (d *Downloader) setFastForwardBlock(nextFastForward uint64) {
+	d.fastForwardBlock = nextFastForward
+	select {
+	case d.fastForwardBlockCh <- d.fastForwardBlock:
+	default:
+	}
+}
+
+// needsBytecodeSync checks if bytecode-only snap sync is needed before stateless sync
+func (d *Downloader) needsBytecodeSync(fastForwardBlock uint64) bool {
+	// Get the current fast forward block to compare against completed block
+	currentBlock := d.blockchain.CurrentBlock().Number.Uint64()
+
+	// Check if the gap between current block and fast forward block is less than threshold
+	// If so, we don't need bytecode sync regardless of previous sync state
+	gap := int64(fastForwardBlock) - int64(currentBlock)
+	if gap <= int64(d.FastForwardThreshold) {
+		log.Debug("Bytecode sync skipped: gap less than FastForwardThreshold",
+			"currentBlock", currentBlock, "fastForwardBlock", fastForwardBlock,
+			"gap", gap, "threshold", d.FastForwardThreshold)
+		return false
+	}
+
+	// Read the last synced block from the database
+	lastSyncedByteCodeBlock := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
+
+	// If we haven't synced any bytecodes yet and gap is significant, we need to sync
+	if lastSyncedByteCodeBlock == 0 {
+		log.Info("Bytecode sync needed: no previous sync found",
+			"fastForwardBlock", fastForwardBlock, "currentBlock", currentBlock,
+			"gap", gap, "threshold", d.FastForwardThreshold)
+		return true
+	}
+
+	// If the fast forward block has moved beyond our last sync, we need to sync
+	gap = int64(fastForwardBlock) - int64(lastSyncedByteCodeBlock)
+	if gap > int64(d.FastForwardThreshold) {
+		log.Info("Bytecode sync needed: fast forward block moved",
+			"lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock,
+			"currentBlock", currentBlock, "gap", gap)
+		return true
+	}
+
+	// Bytecode sync is already complete up to or beyond the fast forward block
+	log.Info("Bytecode sync not needed", "lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock)
+	return false
 }

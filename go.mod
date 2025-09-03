@@ -20,6 +20,7 @@ require (
 	github.com/cespare/cp v1.1.1
 	github.com/cloudflare/cloudflare-go v0.97.0
 	github.com/cockroachdb/pebble v1.1.2
+	github.com/cometbft/cometbft v0.38.17
 	github.com/consensys/gnark-crypto v0.16.0
 	github.com/cosmos/cosmos-sdk v0.50.13
 	github.com/cosmos/gogoproto v1.7.0
@@ -61,6 +62,7 @@ require (
 	github.com/influxdata/influxdb1-client v0.0.0-20220302092344-a9ab5670611c
 	github.com/jackpal/go-nat-pmp v1.0.2
 	github.com/jedisct1/go-minisign v0.0.0-20230811132847-661be99b8267
+	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/json-iterator/go v1.1.12
 	github.com/karalabe/hid v1.0.1-0.20240306101548-573246063e52
 	github.com/kylelemons/godebug v1.1.0
@@ -90,9 +92,10 @@ require (
 	go.opentelemetry.io/otel/sdk v1.32.0
 	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/goleak v1.3.0
+	go.uber.org/mock v0.5.0
 	golang.org/x/crypto v0.36.0
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
-	golang.org/x/sync v0.12.0
+	golang.org/x/sync v0.15.0
 	golang.org/x/sys v0.31.0
 	golang.org/x/text v0.23.0
 	golang.org/x/time v0.9.0
@@ -220,7 +223,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/cockroachdb/apd/v2 v2.0.2 // indirect
-	github.com/cometbft/cometbft v0.38.17 // indirect
 	github.com/cometbft/cometbft-db v0.14.1 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
 	github.com/cosmos/cosmos-db v1.0.2 // indirect
@@ -358,8 +360,8 @@ require (
 replace (
 	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 // Same as heimdall-v2.
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
-	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.2.1-polygon
-	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.5-polygon
+	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.0-polygon
+	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.6-polygon
 	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor v1.14.14-0.20250804100633-1c7ddc53676b
 	github.com/ethereum/go-ethereum/common/math => github.com/0xPolygon/bor/common/math v1.5.5
 	go.mongodb.org/mongo-driver => go.mongodb.org/mongo-driver v1.14.0

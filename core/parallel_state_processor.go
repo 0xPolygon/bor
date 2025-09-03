@@ -265,7 +265,7 @@ var parallelizabilityTimer = metrics.NewRegisteredTimer("block/parallelizability
 // returns the amount of gas that was used in the process. If any of the
 // transactions failed to execute due to insufficient gas it will return an error.
 // nolint:gocognit
-func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, interruptCtx context.Context) (processResult *ProcessResult, err error) {
+func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (processResult *ProcessResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("recovered from panic during parallel execution", "err", r)
@@ -313,7 +313,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		metadata = true
 	}
 
-	blockContext := NewEVMBlockContext(header, p.bc, nil)
+	blockContext := NewEVMBlockContext(header, p.bc, author)
 	context := NewEVMBlockContext(header, p.bc.hc, nil)
 
 	vmenv := vm.NewEVM(context, statedb, p.config, cfg)
@@ -416,7 +416,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	var requests [][]byte
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	p.engine.Finalize(p.bc, header, statedb, block.Body())
+	p.engine.Finalize(p.bc.hc, header, statedb, block.Body())
 
 	return &ProcessResult{
 		Receipts: receipts,

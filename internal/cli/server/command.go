@@ -127,7 +127,7 @@ func (c *Command) extractFlags(args []string) error {
 
 	var tomlConfig *toml.Tree
 
-	// nolint: nestif
+	// nolint:nestif
 	// check for log-level and verbosity here
 	if configFilePath != "" {
 		tomlConfig, _ = toml.LoadFile(configFilePath)

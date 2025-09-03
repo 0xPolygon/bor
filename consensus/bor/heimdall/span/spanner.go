@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/big"
 
+	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/bor/abi"
@@ -13,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
@@ -22,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
-	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 )
 
 type ChainSpanner struct {
@@ -49,7 +50,7 @@ func NewChainSpanner(ethAPI api.Caller, validatorSet abi.ABI, chainConfig *param
 }
 
 // GetCurrentSpan get current span from contract
-func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash) (*borTypes.Span, error) {
+func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, state *state.StateDB) (*borTypes.Span, error) {
 	// block
 	blockNr := rpc.BlockNumberOrHashWithHash(headerHash, false)
 
@@ -68,11 +69,11 @@ func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Has
 	gas := (hexutil.Uint64)(uint64(math.MaxUint64 / 2))
 
 	// todo: would we like to have a timeout here?
-	result, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
+	result, err := c.ethAPI.CallWithState(ctx, ethapi.TransactionArgs{
 		Gas:  &gas,
 		To:   &toAddress,
 		Data: &msgData,
-	}, &blockNr, nil, nil)
+	}, &blockNr, state, nil, nil)
 	if err != nil {
 		return nil, err
 	}

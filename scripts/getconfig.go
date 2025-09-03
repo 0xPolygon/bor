@@ -397,7 +397,7 @@ func writeTempStaticTrustedTOML(path string) {
 func getStaticTrustedNodes(args []string) {
 	// if config flag is passed, it should be only a .toml file
 	t1, t2 := contains(args, "config")
-	// nolint: nestif
+	// nolint:nestif
 	if t1 {
 		path := args[t2+1]
 		if !checkFileExists(path) {
@@ -530,7 +530,7 @@ func dumpFlags(args []string) {
 	}
 }
 
-// nolint: gocognit
+// nolint:gocognit
 func commentFlags(path string, updatedArgs []string) {
 	const cache = "[cache]"
 
@@ -591,7 +591,7 @@ func commentFlags(path string, updatedArgs []string) {
 			}
 		}
 
-		// nolint: nestif
+		// nolint:nestif
 		if !(strings.HasPrefix(line, "[") || strings.HasPrefix(line, "  [") || strings.HasPrefix(line, "    [") || line == "" || ignoreLineFlag) {
 			flag := strings.Fields(line)[0]
 			if flag == "snapshot" {
@@ -666,7 +666,7 @@ func beautifyArgs(args []string) ([]string, []string) {
 	temp := []string{}
 
 	for _, val := range args {
-		// nolint: nestif
+		// nolint:nestif
 		if !(checkBoolFlags(val)) {
 			if strings.HasPrefix(val, "-") {
 				if strings.Contains(val, "=") {

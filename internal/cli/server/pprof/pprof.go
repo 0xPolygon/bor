@@ -130,7 +130,7 @@ func StartPProf(address string) {
 	log.Info("Starting pprof server", "addr", fmt.Sprintf("http://%s/debug/pprof", address))
 
 	go func() {
-		// nolint: gosec
+		// nolint:gosec
 		if err := http.ListenAndServe(address, nil); err != nil {
 			log.Error("Failure in running pprof server", "err", err)
 		}
