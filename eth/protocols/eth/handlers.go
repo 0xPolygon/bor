@@ -527,13 +527,11 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
-	// Construct a copy of receipt packet to handle state sync transaction receipts
-	// during receipt root calculation.
-	resWithoutStateSync := new(ReceiptsPacket[L])
-	if err := msg.Decode(resWithoutStateSync); err != nil {
-		log.Error("[debug] failed to decode duplicate receipt packet", "err", err)
-		return err
+	resWithoutStateSync := &ReceiptsPacket[L]{
+		RequestId: res.RequestId,
+		List:      make([]L, 0, len(res.List)),
 	}
+	copy(resWithoutStateSync.List, res.List)
 
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
