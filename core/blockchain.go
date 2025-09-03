@@ -1656,6 +1656,10 @@ const (
 // of a block and returns the encoded lists back separately. In case of errors or
 // empty receipt, it returns `nil` instead of `rlp.EncodeToBytes(nil)`.
 func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
+	if receipts == nil {
+		return nil, nil
+	}
+
 	var decoded []*types.ReceiptForStorage
 	if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
 		log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
@@ -1734,6 +1738,10 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	)
 
 	getReceiptAndLogCount := func(receipts rlp.RawValue) (int, int) {
+		if receipts == nil {
+			return 0, 0
+		}
+
 		// Decode the receipts for each block
 		var decoded []types.ReceiptForStorage
 		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
