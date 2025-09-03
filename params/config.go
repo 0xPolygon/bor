@@ -292,7 +292,7 @@ var (
 			},
 			Coinbase: map[string]string{
 				"0":        "0x0000000000000000000000000000000000000000",
-				"50000000": "0x000000000000000000000000000000000000ba5e",
+				"50000000": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
@@ -363,7 +363,7 @@ var (
 			},
 			Coinbase: map[string]string{
 				"0":        "0x0000000000000000000000000000000000000000",
-				"26201856": "0x000000000000000000000000000000000000ba5e",
+				"26201856": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis

@@ -61,7 +61,7 @@ var amoyTestnet = &Chain{
 				},
 				Coinbase: map[string]string{
 					"0":        "0x0000000000000000000000000000000000000000",
-					"26201856": "0x000000000000000000000000000000000000ba5e",
+					"26201856": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 				},
 				BlockAlloc: map[string]interface{}{
 					"11865856": map[string]interface{}{
