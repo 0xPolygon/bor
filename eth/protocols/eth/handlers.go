@@ -529,11 +529,17 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
-	// Construct a copy of receipt packet to handle state sync transaction receipts
-	// during receipt root calculation.
+	// The response in p2p packet can only be consumed once. As we need a copy of receipt
+	// to exclude state-sync transaction receipt from receipt root calculation, encode
+	// and decode the response back.
+	packet, err := rlp.EncodeToBytes(res)
+	if err != nil {
+		return fmt.Errorf("failed to re-encode receipt packet for making copy: %w", err)
+	}
+
 	resWithoutStateSync := new(ReceiptsPacket[L])
-	if err := msg.Decode(resWithoutStateSync); err != nil {
-		return err
+	if err := rlp.DecodeBytes(packet, resWithoutStateSync); err != nil {
+		return fmt.Errorf("failed to decode re-encoded receipt packet for making copy: %w", err)
 	}
 
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
