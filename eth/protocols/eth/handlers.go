@@ -19,13 +19,10 @@ package eth
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
@@ -339,8 +336,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 	var (
 		bytes    int
 		receipts []rlp.RawValue
-		count    []uint64
-		numbers  []uint64
 	)
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
@@ -348,23 +343,22 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			break
 		}
 
-		// In order to include state-sync transaction receipts, which resides in a separate
-		// table in db, we assemble the raw receipts first instead of directly fetching the
-		// rlp encoded receipts. This is needed in order to construct the final encoded
-		// network packet.
-		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
-		if number == nil {
-			log.Info("[debug] continue because block number not found")
+		r1 := chain.GetReceiptsRLP(hash)
+		r2 := chain.GetBorReceiptRLPByHash(hash)
+
+		var normalReceiptsStorage []*types.ReceiptForStorage
+		if err := rlp.DecodeBytes(r1, &normalReceiptsStorage); err != nil {
+			log.Error("Failed to decode normal receipts", "err", err)
 			continue
 		}
-		numbers = append(numbers, *number)
-
-		// Retrieve the requested block's receipts
-		normalReceipts := chain.GetRawReceipts(hash, *number)
-		borReceipt := chain.GetRawBorReceipt(hash, *number)
+		var stateSyncReceiptStorage = new(types.ReceiptForStorage)
+		if err := rlp.DecodeBytes(r2, stateSyncReceiptStorage); err != nil {
+			log.Error("Failed to decode state-sync receipts", "err", err)
+			continue
+		}
 
 		// Check if receipts are nil due to non existence or something else
-		if normalReceipts == nil && borReceipt == nil {
+		if normalReceiptsStorage == nil && stateSyncReceiptStorage == nil {
 			// Don't append empty receipt data for this block if either the local header is nil
 			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
@@ -377,16 +371,13 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 
 		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
-		var blockReceipts types.Receipts = make(types.Receipts, 0)
-		if normalReceipts != nil {
-			blockReceipts = append(blockReceipts, normalReceipts...)
+		var blockReceipts []*types.ReceiptForStorage = make([]*types.ReceiptForStorage, 0)
+		if normalReceiptsStorage != nil {
+			blockReceipts = append(blockReceipts, normalReceiptsStorage...)
 		}
-		if borReceipt != nil {
-			blockReceipts = append(blockReceipts, borReceipt)
+		if stateSyncReceiptStorage != nil {
+			blockReceipts = append(blockReceipts, stateSyncReceiptStorage)
 		}
-		count = append(count, uint64(len(blockReceipts)))
-
-		log.Info("[debug] got receipts to deliver", "number", *number, "len", len(blockReceipts), "stateSyncReceiptPresent", borReceipt != nil)
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
 		isStateSyncReceipt := func(index int) bool {
@@ -414,34 +405,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		if err != nil {
 			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
 			continue
-		}
-
-		var decoded ReceiptList69
-		err = rlp.DecodeBytes(results, &decoded)
-		if err != nil {
-			log.Error("[debug] failed to decode final receipt response", "err", err, "total receipts", len(blockReceipts), "number", *number)
-			for _, br := range blockReceipts {
-				log.Info("receipt", "status", br.Status, "gas used", br.CumulativeGasUsed, "logs", br.Logs)
-			}
-			name := "receipts_" + strconv.Itoa(int(*number))
-			_, err := os.Stat(name)
-			if err != nil {
-				file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-				if err == nil {
-					log.Info("[debug] opened file to write for block", "filename", name)
-					file.Write(encodedBlockReceipts)
-					file.Close()
-					log.Info("[debug] done writing to file")
-				} else {
-					log.Info("[debug] error opening file", "filename", name)
-				}
-			} else {
-				log.Info("[debug] skip as file exists")
-			}
-		}
-
-		if borReceipt != nil {
-			log.Info("[debug] encoded all receipts before sending")
 		}
 
 		receipts = append(receipts, results)
