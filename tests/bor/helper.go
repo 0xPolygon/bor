@@ -289,7 +289,8 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 	}
 
 	// Finalize and seal the block
-	block, err := _bor.FinalizeAndAssemble(chain, b.header, state, &types.Body{
+	var block *types.Block
+	block, b.receipts, err = _bor.FinalizeAndAssemble(chain, b.header, state, &types.Body{
 		Transactions: b.txs,
 	}, b.receipts)
 	if err != nil {
