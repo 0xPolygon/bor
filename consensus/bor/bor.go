@@ -879,7 +879,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 // rewards given.
 func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
 	headerNumber := header.Number.Uint64()
-	log.Info("######## Finalize called for block", "blockNumber", headerNumber)
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil
 	}
@@ -924,7 +923,6 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	}
 
 	if len(stateSyncData) > 0 && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		log.Info("############## Reached StateSync HF")
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})
@@ -1040,7 +1038,6 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// PIP-55 : Including state sync TX on block body
 	if len(stateSyncData) > 0 && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		log.Info("############## Reached StateSync HF")
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})

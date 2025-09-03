@@ -1662,8 +1662,6 @@ func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
 func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
 	feesWei := new(big.Int)
 
-	log.Info("######## Checking lenghts:", "lenTransactions", len(block.Transactions()), "lenReceipts", len(receipts))
-
 	for i, tx := range block.Transactions() {
 		minerFee, _ := tx.EffectiveGasTip(block.BaseFee())
 		feesWei.Add(feesWei, new(big.Int).Mul(new(big.Int).SetUint64(receipts[i].GasUsed), minerFee))
