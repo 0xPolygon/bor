@@ -145,24 +145,34 @@ type Trie interface {
 // state snapshot to provide functionalities for state access. It's meant to be a
 // long-live object and has a few caches inside for sharing between blocks.
 type CachingDB struct {
-	disk          ethdb.KeyValueStore
-	triedb        *triedb.Database
-	snap          *snapshot.Tree
-	codeCache     *lru.SizeConstrainedCache[common.Hash, []byte]
-	codeSizeCache *lru.Cache[common.Hash, int]
-	pointCache    *utils.PointCache
+	disk            ethdb.KeyValueStore
+	triedb          *triedb.Database
+	snap            *snapshot.Tree
+	codeCache       *lru.SizeConstrainedCache[common.Hash, []byte]
+	codeSizeCache   *lru.Cache[common.Hash, int]
+	pointCache      *utils.PointCache
+	useSnapInReader bool
 }
 
 // NewDatabase creates a state database with the provided data sources.
 func NewDatabase(triedb *triedb.Database, snap *snapshot.Tree) *CachingDB {
 	return &CachingDB{
-		disk:          triedb.Disk(),
-		triedb:        triedb,
-		snap:          snap,
-		codeCache:     lru.NewSizeConstrainedCache[common.Hash, []byte](codeCacheSize),
-		codeSizeCache: lru.NewCache[common.Hash, int](codeSizeCacheSize),
-		pointCache:    utils.NewPointCache(pointCacheSize),
+		disk:            triedb.Disk(),
+		triedb:          triedb,
+		snap:            snap,
+		codeCache:       lru.NewSizeConstrainedCache[common.Hash, []byte](codeCacheSize),
+		codeSizeCache:   lru.NewCache[common.Hash, int](codeSizeCacheSize),
+		pointCache:      utils.NewPointCache(pointCacheSize),
+		useSnapInReader: true,
 	}
+}
+
+func (db *CachingDB) DisableSnapInReader() {
+	db.useSnapInReader = false
+}
+
+func (db *CachingDB) EnableSnapInReader() {
+	db.useSnapInReader = true
 }
 
 // NewDatabaseForTesting is similar to NewDatabase, but it initializes the caching
@@ -178,7 +188,7 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	// Set up the state snapshot reader if available. This feature
 	// is optional and may be partially useful if it's not fully
 	// generated.
-	if db.snap != nil {
+	if db.snap != nil && db.useSnapInReader {
 		// If standalone state snapshot is available (hash scheme),
 		// then construct the legacy snap reader.
 		snap := db.snap.Snapshot(stateRoot)

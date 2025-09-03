@@ -70,6 +70,8 @@ type HeaderChain struct {
 
 	procInterrupt func() bool
 	engine        consensus.Engine
+
+	stateSyncData []*types.StateSyncData // State sync data
 }
 
 // NewHeaderChain creates a new HeaderChain structure. ProcInterrupt points
@@ -214,15 +216,24 @@ func (hc *HeaderChain) WriteHeaders(headers []*types.Header) (int, error) {
 	if len(headers) == 0 {
 		return 0, nil
 	}
+
+	newTD := new(big.Int)
+
 	ptd := hc.GetTd(headers[0].ParentHash, headers[0].Number.Uint64()-1)
 	if ptd == nil {
-		return 0, consensus.ErrUnknownAncestor
+		// If the header is fast forwarded, e.g. in stateless sync, we will check if the TD of the current header is already knwon from a milestone.
+		newTD = hc.GetTd(headers[0].Hash(), headers[0].Number.Uint64())
+		if newTD == nil {
+			return 0, consensus.ErrUnknownAncestor
+		}
+		newTD.Sub(newTD, headers[0].Difficulty)
+	} else {
+		newTD.Set(ptd) // Total difficulty of inserted chain
 	}
 
 	var (
-		newTD       = new(big.Int).Set(ptd) // Total difficulty of inserted chain
-		inserted    []rawdb.NumberHash      // Ephemeral lookup of number/hash for the chain
-		parentKnown = true                  // Set to true to force hc.HasHeader check the first iteration
+		inserted    []rawdb.NumberHash // Ephemeral lookup of number/hash for the chain
+		parentKnown = true             // Set to true to force hc.HasHeader check the first iteration
 		batch       = hc.chainDb.NewBatch()
 	)
 
@@ -735,4 +746,13 @@ func (hc *HeaderChain) Engine() consensus.Engine { return hc.engine }
 // a header chain does not have blocks available for retrieval.
 func (hc *HeaderChain) GetBlock(hash common.Hash, number uint64) *types.Block {
 	return nil
+}
+
+// SetStateSync set sync data in state_data
+func (hc *HeaderChain) SetStateSync(stateData []*types.StateSyncData) {
+	hc.stateSyncData = stateData
+}
+
+func (hc *HeaderChain) GetStateSync() []*types.StateSyncData {
+	return hc.stateSyncData
 }

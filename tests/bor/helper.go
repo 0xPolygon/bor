@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	gomock "go.uber.org/mock/gomock"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -52,6 +53,7 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 )
 
 var (
@@ -164,7 +166,7 @@ func buildEthereumInstance(t *testing.T, db ethdb.Database, updateGenesis ...fun
 func insertNewBlock(t *testing.T, chain *core.BlockChain, block *types.Block) {
 	t.Helper()
 
-	if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+	if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 		t.Fatalf("%s", err)
 	}
 }
@@ -304,21 +306,24 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 		panic(fmt.Sprintf("trie write error: %v", err))
 	}
 
-	res := make(chan *types.Block, 1)
+	res := make(chan *consensus.NewSealedBlockEvent, 1)
 	if skipSealing {
 		header := block.Header()
 		sign(t, header, signer, borConfig)
 		return types.NewBlock(header, block.Body(), b.receipts, trie.NewStackTrie(nil))
 	}
 
-	err = _bor.Seal(chain, block, res, nil)
+	// Create a nil witness for testing
+	var witness *stateless.Witness
+	err = _bor.Seal(chain, block, witness, res, nil)
 	if err != nil {
 		// an error case - sign manually
 		sign(t, header, signer, borConfig)
 		return types.NewBlockWithHeader(header)
 	}
 
-	return <-res
+	sealedEvent := <-res
+	return sealedEvent.Block
 }
 
 type blockGen struct {
@@ -370,7 +375,7 @@ func sign(t *testing.T, header *types.Header, signer []byte, c *params.BorConfig
 	copy(header.Extra[len(header.Extra)-extraSeal:], sig)
 }
 
-//nolint:unused,deadcode
+//nolint:unused
 func stateSyncEventsPayload(t *testing.T) []*clerk.EventRecordWithTime {
 	t.Helper()
 
@@ -387,7 +392,7 @@ func stateSyncEventsPayload(t *testing.T) []*clerk.EventRecordWithTime {
 	return res
 }
 
-//nolint:unused,deadcode
+//nolint:unused
 func loadSpanFromFile(t *testing.T) *borTypes.Span {
 	t.Helper()
 
@@ -397,6 +402,7 @@ func loadSpanFromFile(t *testing.T) *borTypes.Span {
 	}
 
 	res := &borTypes.Span{}
+
 	if err := json.Unmarshal(spanData, res); err != nil {
 		t.Fatalf("%s", err)
 	}
@@ -425,6 +431,7 @@ func getMockedHeimdallClient(t *testing.T, heimdallSpan *borTypes.Span) (*mocks.
 
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(heimdallSpan, nil).AnyTimes()
 	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
+	h.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 
 	return h, ctrl
 }
@@ -459,8 +466,10 @@ func createMockHeimdall(ctrl *gomock.Controller, span0, span1 *borTypes.Span) *m
 	h.EXPECT().Close().AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(span0, nil).AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(span1, nil).AnyTimes()
+	h.EXPECT().GetLatestSpan(gomock.Any()).Return(span1, nil).AnyTimes()
 	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(&checkpoint.Checkpoint{}, nil).AnyTimes()
 	h.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
+	h.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 
 	return h
 }
@@ -474,10 +483,11 @@ func getMockedSpanner(t *testing.T, validators []*valset.Validator) *bor.MockSpa
 		EndBlock:   0,
 	}
 
-	spanner := bor.NewMockSpanner(gomock.NewController(t))
+	ctrl := gomock.NewController(t)
+	spanner := bor.NewMockSpanner(ctrl)
 	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(validators, nil).AnyTimes()
 	spanner.EXPECT().GetCurrentValidatorsByBlockNrOrHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(validators, nil).AnyTimes()
-	spanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any()).Return(mockSpan, nil).AnyTimes()
+	spanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockSpan, nil).AnyTimes()
 	spanner.EXPECT().CommitSpan(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	return spanner
 }

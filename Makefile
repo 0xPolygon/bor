@@ -34,6 +34,7 @@ protoc:
 	protoc --go_out=. --go-grpc_out=. ./internal/cli/server/proto/*.proto
 
 generate-mocks:
+	go generate ./internal/ethapi
 	go generate ./consensus/bor
 	go generate ./eth/filters
 	go generate ./ethdb

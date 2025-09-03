@@ -172,7 +172,7 @@ func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 // It's important to note that any errors returned by the interpreter should be
 // considered a revert-and-consume-all-gas operation except for
 // ErrExecutionReverted which means revert-and-keep-gas-left.
-// nolint: gocognit
+// nolint:gocognit
 func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool, interrupt *atomic.Bool) (ret []byte, err error) {
 	// If `interrupt` is nil (which can be the case for some tests), set it to false to avoid
 	// checking it for every opcode.

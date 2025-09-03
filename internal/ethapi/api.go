@@ -778,6 +778,21 @@ func (api *BlockChainAPI) GetTdByHash(ctx context.Context, hash common.Hash) map
 	return resp
 }
 
+// OverrideAccount indicates the overriding fields of account during the execution
+// of a message call.
+// Note, state and stateDiff can't be specified at the same time. If state is
+// set, message execution will only use the data in the given state. Otherwise
+// if stateDiff is set, all diff will be applied first and then execute the call
+// message.
+type OverrideAccount struct {
+	Nonce            *hexutil.Uint64             `json:"nonce"`
+	Code             *hexutil.Bytes              `json:"code"`
+	Balance          *hexutil.Big                `json:"balance"`
+	State            map[common.Hash]common.Hash `json:"state"`
+	StateDiff        map[common.Hash]common.Hash `json:"stateDiff"`
+	MovePrecompileTo *common.Address             `json:"movePrecompileToAddress"`
+}
+
 // GetTdByNumber returns a map containing the total difficulty (hex-encoded) for the given block number.
 func (api *BlockChainAPI) GetTdByNumber(ctx context.Context, blockNr rpc.BlockNumber) map[string]interface{} {
 	td := api.b.GetTdByNumber(ctx, blockNr)

@@ -48,6 +48,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -458,7 +459,7 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks); err != nil {
+	if n, err := chain.InsertChain(blocks, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 
@@ -697,6 +698,14 @@ func (b testBackend) GetBorBlockLogs(ctx context.Context, hash common.Hash) ([]*
 	}
 
 	return receipt.Logs, nil
+}
+
+func (b testBackend) GetWitnesses(ctx context.Context, startBlock uint64, endBlock uint64) ([]*stateless.Witness, error) {
+	return nil, nil
+}
+
+func (b testBackend) StoreWitness(ctx context.Context, hash common.Hash, witness *stateless.Witness) error {
+	return nil
 }
 
 func (b testBackend) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {

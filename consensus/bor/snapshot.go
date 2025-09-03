@@ -137,7 +137,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 
 		// check if signer is in validator set
 		if !snap.ValidatorSet.HasAddress(signer) {
-			return nil, &UnauthorizedSignerError{number, signer.Bytes()}
+			return nil, &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 		}
 
 		if _, err = snap.GetSignerSuccessionNumber(signer); err != nil {
@@ -157,6 +157,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 
 			// get validators from headers and use that for new validator set
 			newVals, _ := valset.ParseValidators(validatorBytes)
+
 			v := getUpdatedValidatorSet(snap.ValidatorSet.Copy(), newVals)
 			v.IncrementProposerPriority(1)
 
@@ -191,7 +192,7 @@ func (s *Snapshot) GetSignerSuccessionNumber(signer common.Address) (int, error)
 	signerIndex, _ := s.ValidatorSet.GetByAddress(signer)
 
 	if signerIndex == -1 {
-		return -1, &UnauthorizedSignerError{s.Number, signer.Bytes()}
+		return -1, &UnauthorizedSignerError{s.Number, signer.Bytes(), s.ValidatorSet.Validators}
 	}
 
 	tempIndex := signerIndex

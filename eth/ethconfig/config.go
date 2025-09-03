@@ -57,26 +57,29 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:           downloader.SnapSync,
-	HistoryMode:        history.KeepAll,
-	NetworkId:          0, // enable auto configuration of networkID == chainID
-	TxLookupLimit:      2350000,
-	TransactionHistory: 2350000, // Note: used in bor cli
-	LogHistory:         2350000, // Note: used in bor cli
-	StateHistory:       params.FullImmutabilityThreshold,
-	DatabaseCache:      512,
-	TrieCleanCache:     154,
-	TrieDirtyCache:     256,
-	TrieTimeout:        60 * time.Minute,
-	SnapshotCache:      102,
-	FilterLogCacheSize: 32,
-	Miner:              miner.DefaultConfig,
-	TxPool:             legacypool.DefaultConfig,
-	BlobPool:           blobpool.DefaultConfig,
-	RPCGasCap:          50000000,
-	RPCEVMTimeout:      5 * time.Second,
-	GPO:                FullNodeGPO,
-	RPCTxFeeCap:        1, // 1 ether
+	SyncMode:              downloader.SnapSync,
+	HistoryMode:           history.KeepAll,
+	NetworkId:             0, // enable auto configuration of networkID == chainID
+	TxLookupLimit:         2350000,
+	TransactionHistory:    2350000, // Note: used in bor cli
+	LogHistory:            2350000, // Note: used in bor cli
+	StateHistory:          params.FullImmutabilityThreshold,
+	DatabaseCache:         512,
+	TrieCleanCache:        154,
+	TrieDirtyCache:        256,
+	TrieTimeout:           60 * time.Minute,
+	SnapshotCache:         102,
+	FilterLogCacheSize:    32,
+	Miner:                 miner.DefaultConfig,
+	TxPool:                legacypool.DefaultConfig,
+	BlobPool:              blobpool.DefaultConfig,
+	RPCGasCap:             50000000,
+	RPCEVMTimeout:         5 * time.Second,
+	GPO:                   FullNodeGPO,
+	RPCTxFeeCap:           1, // 1 ether
+	FastForwardThreshold:  6400,
+	WitnessPruneThreshold: 64000,
+	WitnessPruneInterval:  120 * time.Second,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -208,6 +211,15 @@ type Config struct {
 	// Parallel EVM (Block-STM) related config
 	ParallelEVM core.ParallelEVMConfig `toml:",omitempty"`
 
+	// WitnessProtocol enabless the wit protocol
+	WitnessProtocol bool
+
+	// SyncWithWitnesses enables syncing blocks with witnesses
+	SyncWithWitnesses bool
+
+	// SyncAndProduceWitnesses enables producing witnesses while syncing
+	SyncAndProduceWitnesses bool
+
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 
@@ -216,6 +228,15 @@ type Config struct {
 
 	// EnableBlockTracking allows logging of information collected while tracking block lifecycle
 	EnableBlockTracking bool
+
+	// Minimum necessary distance between local header and peer to fast forward
+	FastForwardThreshold uint64
+
+	// Minimum necessary distance between local header and latest non pruned witness
+	WitnessPruneThreshold uint64
+
+	// The time interval between each witness prune routine
+	WitnessPruneInterval time.Duration
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
@@ -230,6 +251,8 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, chainConfig.Bor.ValidatorContract, chainConfig.Bor.StateReceiverContract, blockchainAPI)
 		spanner := span.NewChainSpanner(blockchainAPI, contract.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
 
+		log.Info("Creating consensus engine", "withoutHeimdall", ethConfig.WithoutHeimdall)
+
 		if ethConfig.WithoutHeimdall {
 			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor), nil
 		} else {
@@ -243,7 +266,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
 				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
 			} else if ethConfig.HeimdallgRPCAddress != "" {
-				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress)
+				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress, ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			} else {
 				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			}

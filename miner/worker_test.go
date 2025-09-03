@@ -19,10 +19,12 @@ package miner
 import (
 	"math/big"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -44,11 +46,12 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/golang/mock/gomock"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
+	gomock "go.uber.org/mock/gomock"
 	"gotest.tools/assert"
 
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 )
 
@@ -75,6 +78,7 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool, isBor bool) {
 		chainConfig = *params.BorUnittestChainConfig
 
 		engine, ctrl = getFakeBorFromConfig(t, &chainConfig)
+		defer engine.Close()
 		defer ctrl.Finish()
 	} else {
 		if isClique {
@@ -117,7 +121,7 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool, isBor bool) {
 		select {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
-			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				t.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}
 		case <-time.After(5 * time.Second): // Worker needs 1s to include new changes.
@@ -134,7 +138,7 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool, isBor bool) {
 		select {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
-			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				t.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}
 		case <-time.After(3 * time.Second): // Worker needs 1s to include new changes.
@@ -320,7 +324,7 @@ func (b *testWorkerBackend) newStorageContractCallTx(to common.Address, nonce ui
 func newTestWorker(t TensingObject, config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, noempty bool, delay uint) (*worker, *testWorkerBackend, func()) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db)
 	backend.txPool.Add(pendingTxs, false)
-	w := newWorker(config, chainConfig, engine, backend, new(event.TypeMux), nil, false)
+	w := newWorker(config, chainConfig, engine, backend, new(event.TypeMux), nil, false, false)
 	w.setMockTxDelay(delay)
 	w.setEtherbase(testBankAddress)
 	// enable empty blocks
@@ -358,7 +362,7 @@ func TestGenerateAndImportBlock(t *testing.T) {
 		select {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
-			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				t.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}
 		case <-time.After(3 * time.Second): // Worker needs 1s to include new changes.
@@ -378,6 +382,14 @@ func getFakeBorFromConfig(t *testing.T, chainConfig *params.ChainConfig) (consen
 	// Mock span 0 for heimdall
 	span0 := createMockSpanForTest(TestBankAddress, chainConfig.ChainID.String())
 
+	validators := make([]*valset.Validator, len(span0.ValidatorSet.Validators))
+	for i, v := range span0.ValidatorSet.Validators {
+		validators[i] = &valset.Validator{
+			Address:     common.HexToAddress(v.Signer),
+			VotingPower: v.VotingPower,
+		}
+	}
+
 	spanner := bor.NewMockSpanner(ctrl)
 	spanner.EXPECT().GetCurrentValidatorsByHash(gomock.Any(), gomock.Any(), gomock.Any()).Return(borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(span0.ValidatorSet.Validators), nil).AnyTimes()
 
@@ -385,6 +397,9 @@ func getFakeBorFromConfig(t *testing.T, chainConfig *params.ChainConfig) (consen
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 
 	heimdallClientMock.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(&span0, nil).AnyTimes()
+	heimdallClientMock.EXPECT().GetLatestSpan(gomock.Any()).Return(&span0, nil).AnyTimes()
+	heimdallClientMock.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallClientMock.EXPECT().Close().AnyTimes()
 
 	contractMock := bor.NewMockGenesisContract(ctrl)
@@ -698,7 +713,7 @@ func testGetSealingWork(t *testing.T, chainConfig *params.ChainConfig, engine co
 	}
 }
 
-// nolint: paralleltest
+// nolint:paralleltest
 // TestCommitInterruptExperimentBor_NormalFlow tests the commit interrupt experiment for bor consensus by inducing
 // an artificial delay at transaction level. It runs the normal mining flow triggered via new head.
 func TestCommitInterruptExperimentBor_NormalFlow(t *testing.T) {
@@ -711,7 +726,7 @@ func TestCommitInterruptExperimentBor_NormalFlow(t *testing.T) {
 	testCommitInterruptExperimentBor(t, 100, 10)
 }
 
-// nolint: thelper
+// nolint:thelper
 // testCommitInterruptExperimentBor is a helper function for testing the commit interrupt experiment for bor consensus.
 func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	var (
@@ -728,6 +743,7 @@ func testCommitInterruptExperimentBor(t *testing.T, delay uint, txCount int) {
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 
 	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
 
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), true, delay)
 	defer func() {
@@ -776,6 +792,7 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 
 	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
 
 	// Set the mock tx delay to 500ms
 	w, b, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), true, 500)
@@ -833,7 +850,7 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 	assert.Equal(t, len(w.current.txs), 2)
 }
 
-// nolint: paralleltest
+// nolint:paralleltest
 // TestCommitInterruptPending tests setting interrupting the block building very early on
 // in the fill transactions phase. The test is just to ensure that commit work works when
 // it started the block production late.
@@ -995,6 +1012,7 @@ func BenchmarkBorMining(b *testing.B) {
 	}, nil).AnyTimes()
 
 	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
 
 	heimdallClientMock.EXPECT().Close().Times(1)
@@ -1058,7 +1076,7 @@ func BenchmarkBorMining(b *testing.B) {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
 
-			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}
 
@@ -1073,7 +1091,7 @@ func BenchmarkBorMining(b *testing.B) {
 
 // uses core.NewParallelBlockChain to use the dependencies present in the block header
 // params.BorUnittestChainConfig contains the NapoliBlock as big.NewInt(5), so the first 4 blocks will not have metadata.
-// nolint: gocognit
+// nolint:gocognit
 func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 	chainConfig := params.BorUnittestChainConfig
 
@@ -1094,8 +1112,8 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 	}, nil).AnyTimes()
 
 	heimdallClientMock := mocks.NewMockIHeimdallClient(ctrl)
+	heimdallClientMock.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	heimdallWSClient := mocks.NewMockIHeimdallWSClient(ctrl)
-
 	heimdallClientMock.EXPECT().Close().Times(1)
 
 	contractMock := bor.NewMockGenesisContract(ctrl)
@@ -1166,7 +1184,7 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
 
-			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+			if _, err := chain.InsertChain([]*types.Block{block}, false); err != nil {
 				b.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}
 
@@ -1194,5 +1212,163 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 		case <-time.After(time.Duration(blockPeriod) * time.Second):
 			b.Fatalf("timeout")
 		}
+	}
+}
+
+func TestVeblopTimerTriggersStaleBlock(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	// Enable VeBlop from genesis
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// VeBlop period is 1 second in test config
+	// Set recommit to 10s to ensure it never fires during our 4s test
+	config := DefaultTestConfig()
+	config.Recommit = 10 * time.Second
+
+	w, _, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Track each task creation
+	var taskTimes []time.Time
+	var taskMu sync.Mutex
+
+	w.newTaskHook = func(task *task) {
+		taskMu.Lock()
+		defer taskMu.Unlock()
+		taskTimes = append(taskTimes, time.Now())
+		t.Logf("Task %d created at %v", len(taskTimes), time.Now())
+	}
+
+	w.start()
+
+	// Wait for initial task creation
+	time.Sleep(500 * time.Millisecond)
+
+	taskMu.Lock()
+	initialTasks := len(taskTimes)
+	taskMu.Unlock()
+
+	// Wait exactly 4 seconds (4 VeBlop periods)
+	time.Sleep(4 * time.Second)
+
+	w.stop()
+
+	taskMu.Lock()
+	defer taskMu.Unlock()
+
+	// We should have exactly 4 additional tasks (one per second)
+	additionalTasks := len(taskTimes) - initialTasks
+	if additionalTasks != 4 {
+		t.Errorf("Expected exactly 4 VeBlop tasks in 4 seconds, got %d", additionalTasks)
+	}
+
+	// Verify each interval is approximately 1 second
+	for i := initialTasks + 1; i < len(taskTimes); i++ {
+		interval := taskTimes[i].Sub(taskTimes[i-1])
+		// Allow 200ms tolerance for system scheduling
+		if interval < 800*time.Millisecond || interval > 1200*time.Millisecond {
+			t.Errorf("Task %d interval %v is not ~1s", i, interval)
+		}
+	}
+}
+
+func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	// Enable VeBlop from genesis
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// VeBlop period is 1s, recommit is 10s (won't fire during test)
+	config := DefaultTestConfig()
+	config.Recommit = 10 * time.Second
+
+	w, _, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Track task creation
+	var taskCount int32
+
+	// Skip sealing to keep pending tasks
+	w.skipSealHook = func(task *task) bool {
+		return true
+	}
+
+	w.newTaskHook = func(task *task) {
+		count := atomic.AddInt32(&taskCount, 1)
+		t.Logf("Task %d created at %v", count, time.Now())
+	}
+
+	w.start()
+
+	// Wait for initial tasks
+	time.Sleep(500 * time.Millisecond)
+	initialCount := atomic.LoadInt32(&taskCount)
+
+	// Add pending tasks to block VeBlop
+	w.pendingMu.Lock()
+	for i := 0; i < 5; i++ {
+		w.pendingTasks[common.Hash{byte(i)}] = &task{
+			block: types.NewBlock(
+				&types.Header{Number: big.NewInt(1), Time: uint64(time.Now().Unix())},
+				&types.Body{}, nil, nil,
+			),
+		}
+	}
+	w.pendingMu.Unlock()
+
+	// Wait 3 seconds - VeBlop should be blocked, no new tasks
+	time.Sleep(3 * time.Second)
+	blockedCount := atomic.LoadInt32(&taskCount)
+
+	// Clear pending tasks
+	w.pendingMu.Lock()
+	w.pendingTasks = make(map[common.Hash]*task)
+	w.pendingMu.Unlock()
+
+	// Wait 3 seconds - VeBlop should resume, ~3 new tasks
+	time.Sleep(3 * time.Second)
+
+	w.stop()
+
+	finalCount := atomic.LoadInt32(&taskCount)
+
+	// Check results
+	tasksWhileBlocked := blockedCount - initialCount
+	tasksAfterClearing := finalCount - blockedCount
+
+	t.Logf("Initial: %d, While blocked: %d, After clearing: %d",
+		initialCount, tasksWhileBlocked, tasksAfterClearing)
+
+	// Should have no tasks while blocked
+	if tasksWhileBlocked != 0 {
+		t.Errorf("Expected 0 tasks while pending tasks exist, got %d", tasksWhileBlocked)
+	}
+
+	// Should have ~3 tasks after clearing (1 per second)
+	if tasksAfterClearing < 2 || tasksAfterClearing > 4 {
+		t.Errorf("Expected 2-4 tasks after clearing pending, got %d", tasksAfterClearing)
 	}
 }

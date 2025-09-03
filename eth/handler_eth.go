@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
@@ -119,8 +120,23 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 		}
 	}
 
+	var witnessRequester func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error)
+	if h.statelessSync.Load() || h.syncWithWitnesses {
+		// Create a witness requester that uses the wit.Peer's RequestWitness method
+		witnessRequester = func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+			// Get the ethPeer from the peerSet
+			ethPeer := h.peers.getOnePeerWithWitness(hash)
+			if ethPeer == nil {
+				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+			}
+
+			// Request witnesses using the wit peer
+			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
+		}
+	}
+
 	for i := 0; i < len(unknownHashes); i++ {
-		h.blockFetcher.Notify(peer.ID(), unknownHashes[i], unknownNumbers[i], time.Now(), peer.RequestOneHeader, peer.RequestBodies)
+		h.blockFetcher.Notify(peer.ID(), unknownHashes[i], unknownNumbers[i], time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
 	}
 
 	return nil
@@ -129,8 +145,34 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // handleBlockBroadcast is invoked from a peer's message handler when it transmits a
 // block broadcast for the local node to process.
 func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td *big.Int) error {
-	// Schedule the block for import
-	h.blockFetcher.Enqueue(peer.ID(), block)
+	// If stateless sync is enabled, use the dedicated injectNeedWitness channel.
+	// Otherwise, use the original Enqueue optimization.
+	if h.statelessSync.Load() || h.syncWithWitnesses {
+		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
+
+		// Create a witness requester closure *only if* the peer supports the protocol.
+		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+			// Get the ethPeer from the peerSet
+			ethPeer := h.peers.getOnePeerWithWitness(hash)
+			if ethPeer == nil {
+				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+			}
+
+			// Request witnesses using the wit peer
+			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
+		}
+
+		// Call the new fetcher method to inject the block
+		if err := h.blockFetcher.InjectBlockWithWitnessRequirement(peer.ID(), block, witnessRequester); err != nil {
+			// Log the error if injection failed (e.g., channel full)
+			log.Debug("Failed to inject block requiring witness", "hash", block.Hash(), "peer", peer.ID(), "err", err)
+			// Return nil? Or the error? Let's return nil as dropping isn't a peer protocol error.
+			return nil
+		}
+	} else {
+		// Not in stateless mode, use the direct Enqueue optimization.
+		h.blockFetcher.Enqueue(peer.ID(), block)
+	}
 
 	// Assuming the block is importable by the peer, but possibly not yet done so,
 	// calculate the head hash and TD that the peer truly must have.

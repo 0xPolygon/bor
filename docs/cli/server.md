@@ -8,6 +8,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.heimdall```: URL of Heimdall service (default: http://localhost:1317)
 
+- ```bor.heimdallWS```: Address of Heimdall ws subscription service
+
 - ```bor.heimdallgRPC```: Address of Heimdall gRPC service
 
 - ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
@@ -98,11 +100,13 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode ("full" or "snap") (default: full)
+- ```syncmode```: Blockchain sync mode (only "full" sync supported) (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
+
+- ```witnessprotocol```: Enable witness protocol (default: false)
 
 ### Account Management Options
 

@@ -87,7 +87,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	} else {
 		// in case of milestone(isCheckpoint==false) get the hash of endBlock
 		block, err := handler.ethAPI.GetBlockByNumber(ctx, rpc.BlockNumber(end), false)
-		if err != nil {
+		if err != nil || block == nil || block["hash"] == nil {
 			log.Debug("Failed to get end block hash while whitelisting milestone", "number", end, "err", err)
 			return hash, fmt.Errorf("%w: %v", errEndBlock, err)
 		}
@@ -176,7 +176,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 // reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
 // and inserts the chain finalized by checkpoint/milestone.
 func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
-	if eth.Miner().Mining() {
+	if eth.Miner() != nil && eth.Miner().Mining() {
 		ch := make(chan struct{})
 		eth.Miner().Stop(ch)
 
@@ -264,7 +264,7 @@ func insertFinalized(eth *Ethereum, canonicalChain []*types.Block) {
 
 	// Perform the canonical chain insertion
 	log.Info("Inserting canonical chain", "from", canonicalChain[0].NumberU64(), "hash", canonicalChain[0].Hash(), "to", canonicalChain[len(canonicalChain)-1].NumberU64(), "hash", canonicalChain[len(canonicalChain)-1].Hash())
-	_, err := eth.BlockChain().InsertChain(canonicalChain)
+	_, err := eth.BlockChain().InsertChain(canonicalChain, eth.config.SyncAndProduceWitnesses)
 	if err != nil {
 		log.Warn("Failed to insert canonical chain", "err", err)
 		return

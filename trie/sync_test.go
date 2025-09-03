@@ -146,7 +146,7 @@ func TestEmptySync(t *testing.T) {
 	emptyD, _ := New(TrieID(types.EmptyRootHash), dbD)
 
 	for i, trie := range []*Trie{emptyA, emptyB, emptyC, emptyD} {
-		sync := NewSync(trie.Hash(), memorydb.New(), nil, []*testDb{dbA, dbB, dbC, dbD}[i].Scheme())
+		sync := NewSync(trie.Hash(), memorydb.New(), nil, []*testDb{dbA, dbB, dbC, dbD}[i].Scheme(), false)
 		if paths, nodes, codes := sync.Missing(1); len(paths) != 0 || len(nodes) != 0 || len(codes) != 0 {
 			t.Errorf("test %d: content requested for empty trie: %v, %v, %v", i, paths, nodes, codes)
 		}
@@ -173,7 +173,7 @@ func testIterativeSync(t *testing.T, count int, bypath bool, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -259,7 +259,7 @@ func testIterativeDelayedSync(t *testing.T, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -336,7 +336,7 @@ func testIterativeRandomSync(t *testing.T, count int, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -410,7 +410,7 @@ func testIterativeRandomDelayedSync(t *testing.T, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -491,7 +491,7 @@ func testDuplicateAvoidanceSync(t *testing.T, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -572,7 +572,7 @@ func testIncompleteSync(t *testing.T, scheme string) {
 
 	// Create a destination trie and sync with the scheduler
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -673,7 +673,7 @@ func testSyncOrdering(t *testing.T, scheme string) {
 
 	// Create a destination trie and sync with the scheduler, tracking the requests
 	diskdb := rawdb.NewMemoryDatabase()
-	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme())
+	sched := NewSync(srcTrie.Hash(), diskdb, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -758,7 +758,7 @@ func syncWith(t *testing.T, root common.Hash, db ethdb.Database, srcDb *testDb) 
 
 func syncWithHookWriter(t *testing.T, root common.Hash, db ethdb.Database, srcDb *testDb, hookWriter ethdb.KeyValueWriter) {
 	// Create a destination trie and sync with the scheduler
-	sched := NewSync(root, db, nil, srcDb.Scheme())
+	sched := NewSync(root, db, nil, srcDb.Scheme(), false)
 
 	// The code requests are ignored here since there is no code
 	// at the testing trie.
@@ -1067,4 +1067,225 @@ func testSyncAbort(t *testing.T, scheme string) {
 	}
 	syncWith(t, rootC, destDisk, srcTrieDB)
 	checkTrieContents(t, destDisk, scheme, srcTrie.Hash().Bytes(), stateC, true)
+}
+
+// TestBytecodeOnlyMode tests that in bytecode-only mode, only nodes leading to bytecode are stored
+func TestBytecodeOnlyMode(t *testing.T) {
+	testBytecodeOnlyMode(t, rawdb.HashScheme)
+	testBytecodeOnlyMode(t, rawdb.PathScheme)
+}
+
+func testBytecodeOnlyMode(t *testing.T, scheme string) {
+	t.Helper()
+	// Create a source trie with both account data and code
+	var (
+		srcDisk   = rawdb.NewMemoryDatabase()
+		srcTrieDB = newTestDatabase(srcDisk, scheme)
+		srcTrie   = NewEmpty(srcTrieDB)
+		srcData   = make(map[string][]byte)
+	)
+
+	// Add some accounts without code
+	for i := byte(0); i < 10; i++ {
+		key := common.LeftPadBytes([]byte{1, i}, 32)
+		val := []byte{i}
+		srcTrie.Update(key, val)
+		srcData[string(key)] = val
+	}
+
+	// Commit the trie
+	root, nodes := srcTrie.Commit(false)
+	if err := srcTrieDB.Update(root, types.EmptyRootHash, trienode.NewWithNodeSet(nodes)); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcTrieDB.Commit(root); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test normal sync mode first
+	{
+		destDisk := rawdb.NewMemoryDatabase()
+		sched := NewSync(root, destDisk, nil, scheme, false)
+		syncWithScheduler(t, sched, srcTrieDB)
+
+		// Count nodes in normal mode
+		normalNodeCount := countTrieNodes(t, destDisk, scheme)
+		t.Logf("Normal sync stored %d nodes", normalNodeCount)
+
+		// Verify all data is accessible
+		checkTrieContents(t, destDisk, scheme, root.Bytes(), srcData, true)
+	}
+
+	// Test bytecode-only mode
+	{
+		destDisk := rawdb.NewMemoryDatabase()
+		sched := NewSync(root, destDisk, nil, scheme, true)
+		syncWithScheduler(t, sched, srcTrieDB)
+
+		// Count nodes in bytecode-only mode
+		bytecodeNodeCount := countTrieNodes(t, destDisk, scheme)
+		t.Logf("Bytecode-only sync stored %d nodes", bytecodeNodeCount)
+
+		// Also count source nodes for comparison
+		srcNodeCount := countTrieNodes(t, srcDisk, scheme)
+		t.Logf("Source trie has %d nodes", srcNodeCount)
+
+		// In bytecode-only mode, we should store fewer nodes (only top-level ones)
+		if bytecodeNodeCount >= srcNodeCount {
+			t.Errorf("Bytecode-only mode stored too many nodes: %d >= %d", bytecodeNodeCount, srcNodeCount)
+		}
+	}
+}
+
+// TestBytecodeOnlyModeSkipsStorageTries tests that storage tries are skipped in bytecode-only mode
+func TestBytecodeOnlyModeSkipsStorageTries(t *testing.T) {
+	testBytecodeOnlyModeSkipsStorageTries(t, rawdb.HashScheme)
+	testBytecodeOnlyModeSkipsStorageTries(t, rawdb.PathScheme)
+}
+
+func testBytecodeOnlyModeSkipsStorageTries(t *testing.T, scheme string) {
+	t.Helper()
+	// This test verifies that AddSubTrie skips storage tries in bytecode-only mode
+
+	// Create test database
+	destDisk := rawdb.NewMemoryDatabase()
+
+	// Helper function to convert bytes to hex nibbles (like keybytesToHex but without terminator)
+	bytesToNibbles := func(str []byte) []byte {
+		l := len(str) * 2
+		nibbles := make([]byte, l)
+		for i, b := range str {
+			nibbles[i*2] = b / 16
+			nibbles[i*2+1] = b % 16
+		}
+		return nibbles
+	}
+
+	// Test normal mode first - storage tries should be added
+	{
+		sched := NewSync(types.EmptyRootHash, destDisk, nil, scheme, false)
+
+		// Add a main trie (empty path means account trie)
+		mainRoot := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+		sched.AddSubTrie(mainRoot, []byte{}, common.Hash{}, []byte{}, nil)
+
+		// Add a storage trie (path includes owner hash in nibbles)
+		storageRoot := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+		owner := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+		// Create a path that indicates this is a storage trie (owner hash as nibbles)
+		storagePath := bytesToNibbles(owner.Bytes())
+		sched.AddSubTrie(storageRoot, storagePath, storageRoot, []byte{}, nil)
+
+		// Check that both tries were scheduled
+		if len(sched.nodeReqs) != 2 {
+			t.Errorf("Normal mode: expected 2 node requests, got %d", len(sched.nodeReqs))
+		}
+	}
+
+	// Test bytecode-only mode - storage tries should be skipped
+	{
+		sched := NewSync(types.EmptyRootHash, destDisk, nil, scheme, true)
+
+		// Add a main trie (empty path means account trie)
+		mainRoot := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+		sched.AddSubTrie(mainRoot, []byte{}, common.Hash{}, []byte{}, nil)
+
+		// Add a storage trie (path includes owner hash in nibbles) - should be skipped
+		storageRoot := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+		owner := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+		// Create a path that indicates this is a storage trie (owner hash as nibbles)
+		storagePath := bytesToNibbles(owner.Bytes())
+		sched.AddSubTrie(storageRoot, storagePath, storageRoot, []byte{}, nil)
+
+		// Check that only the main trie was scheduled
+		if len(sched.nodeReqs) != 1 {
+			t.Errorf("Bytecode-only mode: expected 1 node request, got %d", len(sched.nodeReqs))
+		}
+
+		// Verify the scheduled node is the main trie
+		for _, req := range sched.nodeReqs {
+			if req.hash != mainRoot {
+				t.Errorf("Unexpected node scheduled: %x", req.hash)
+			}
+		}
+	}
+
+	t.Log("Bytecode-only mode successfully skipped storage tries")
+}
+
+// Helper function to sync with a specific scheduler
+func syncWithScheduler(t *testing.T, sched *Sync, srcDb *testDb) {
+	t.Helper()
+	// Get root from scheduler's nodeReqs
+	var root common.Hash
+	for _, req := range sched.nodeReqs {
+		if len(req.path) == 0 {
+			root = req.hash
+			break
+		}
+	}
+
+	reader, err := srcDb.NodeReader(root)
+	if err != nil {
+		t.Fatalf("State is not available %x", root)
+	}
+
+	for {
+		paths, nodes, codes := sched.Missing(0)
+		if len(paths) == 0 && len(codes) == 0 {
+			break
+		}
+
+		// Process nodes
+		for i, path := range paths {
+			owner, inner := ResolvePath([]byte(path))
+			data, err := reader.Node(owner, inner, nodes[i])
+			if err != nil {
+				t.Fatalf("Failed to retrieve node data for %x: %v", nodes[i], err)
+			}
+			if err := sched.ProcessNode(NodeSyncResult{path, data}); err != nil {
+				t.Fatalf("Failed to process node result: %v", err)
+			}
+		}
+
+		// Process codes
+		for _, hash := range codes {
+			// For test purposes, use dummy code
+			data := []byte{0x60, 0x60, 0x60, 0x40, 0x52}
+			if err := sched.ProcessCode(CodeSyncResult{hash, data}); err != nil {
+				t.Fatalf("Failed to process code result: %v", err)
+			}
+		}
+
+		// Commit
+		batch := sched.database.(ethdb.Database).NewBatch()
+		if err := sched.Commit(batch); err != nil {
+			t.Fatalf("Failed to commit: %v", err)
+		}
+		batch.Write()
+	}
+}
+
+// Helper function to count trie nodes in database
+func countTrieNodes(t *testing.T, db ethdb.Database, scheme string) int {
+	t.Helper()
+	count := 0
+	it := db.NewIterator(nil, nil)
+	defer it.Release()
+
+	for it.Next() {
+		// Count based on scheme
+		if scheme == rawdb.HashScheme {
+			// In hash scheme, trie nodes are stored with simple hash keys
+			if len(it.Key()) == common.HashLength {
+				count++
+			}
+		} else {
+			// In path scheme, check for trie node prefix
+			if rawdb.IsAccountTrieNode(it.Key()) || rawdb.IsStorageTrieNode(it.Key()) {
+				count++
+			}
+		}
+	}
+	return count
 }

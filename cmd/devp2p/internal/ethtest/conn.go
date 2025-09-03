@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/rlpx"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -221,6 +222,39 @@ func (c *Conn) ReadSnap() (any, error) {
 			msg = new(snap.TrieNodesPacket)
 		default:
 			panic(fmt.Errorf("unhandled snap code: %d", code))
+		}
+		if err := rlp.DecodeBytes(data, msg); err != nil {
+			return nil, fmt.Errorf("could not rlp decode message: %v", err)
+		}
+		return msg, nil
+	}
+}
+
+// TODO(@pratikspatil024) - use this (not needed now, as this is just for the test suite)
+// ReadWit reads a wit/0 response with the given id from the connection.
+func (c *Conn) ReadWit() (any, error) {
+	c.SetReadDeadline(time.Now().Add(timeout))
+	for {
+		code, data, _, err := c.Conn.Read()
+		if err != nil {
+			return nil, err
+		}
+		if getProto(code) != witProto {
+			// Read until snap message.
+			continue
+		}
+		code -= baseProtoLen + ethProtoLen
+
+		var msg any
+		switch int(code) {
+		case wit.GetMsgWitness:
+			msg = new(wit.GetWitnessPacket)
+		case wit.MsgWitness:
+			msg = new(wit.WitnessPacketRLPPacket)
+		case wit.NewWitnessMsg:
+			msg = new(wit.NewWitnessPacket)
+		default:
+			panic(fmt.Sprintf("unhandled wit msg code %d", code))
 		}
 		if err := rlp.DecodeBytes(data, msg); err != nil {
 			return nil, fmt.Errorf("could not rlp decode message: %v", err)
