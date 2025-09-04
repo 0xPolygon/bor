@@ -610,3 +610,62 @@ func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash,
 
 	return nil
 }
+
+func (b *EthAPIBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
+	blockHeader, err := b.HeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	witnessRlpEncoded := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+	if len(witnessRlpEncoded) == 0 {
+		return nil, nil
+	}
+
+	var decodedWitness stateless.Witness
+	stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
+	if err := decodedWitness.DecodeRLP(stream); err != nil {
+		log.Error("Failed to decode witness", "blockNumber", number, "blockHash", blockHeader.Hash(), "error", err)
+		return nil, err
+	}
+
+	return &decodedWitness, nil
+}
+
+func (b *EthAPIBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
+	blockHeader, err := b.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	witnessRlpEncoded := rawdb.ReadWitness(b.eth.blockchain.DB(), hash)
+	if len(witnessRlpEncoded) == 0 {
+		return nil, nil
+	}
+
+	var decodedWitness stateless.Witness
+	stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
+	if err := decodedWitness.DecodeRLP(stream); err != nil {
+		log.Error("Failed to decode witness", "blockHash", hash, "error", err)
+		return nil, err
+	}
+
+	return &decodedWitness, nil
+}
+
+func (b *EthAPIBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
+	if blockNumber, ok := blockNrOrHash.Number(); ok {
+		return b.WitnessByNumber(ctx, blockNumber)
+	}
+	if blockHash, ok := blockNrOrHash.Hash(); ok {
+		return b.WitnessByHash(ctx, blockHash)
+	}
+
+	return nil, errors.New("invalid block number or hash")
+}
