@@ -422,7 +422,9 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		}
 
 		body := types.Body{Transactions: b.txs, Uncles: b.uncles, Withdrawals: b.withdrawals}
-		block, err := b.engine.FinalizeAndAssemble(cm, b.header, statedb, &body, b.receipts)
+		var block *types.Block
+		var err error
+		block, b.receipts, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, &body, b.receipts)
 		if err != nil {
 			panic(err)
 		}
@@ -533,7 +535,9 @@ func GenerateVerkleChain(config *params.ChainConfig, parent *types.Block, engine
 			Uncles:       b.uncles,
 			Withdrawals:  b.withdrawals,
 		}
-		block, err := b.engine.FinalizeAndAssemble(cm, b.header, statedb, body, b.receipts)
+		var block *types.Block
+		var err error
+		block, b.receipts, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, body, b.receipts)
 		if err != nil {
 			panic(err)
 		}

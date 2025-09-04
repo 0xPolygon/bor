@@ -3,7 +3,6 @@ package bor
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -950,13 +949,13 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
-func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body) {
+func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return
+		return nil
 	}
 	if header.RequestsHash != nil {
-		return
+		return nil
 	}
 
 	var (
@@ -971,7 +970,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		if !c.config.IsRio(header.Number) {
 			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
-				return
+				return nil
 			}
 		}
 
@@ -980,7 +979,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
-				return
+				return nil
 			}
 		}
 
@@ -994,12 +993,42 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	// in tracing if it's enabled.
 	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
 		log.Error("Error changing contract code", "error", err)
-		return
+		return nil
 	}
 
-	// Set state sync data to blockchain
-	hc := chain.(*core.HeaderChain)
-	hc.SetStateSync(stateSyncData)
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, wrappedState, receipts)
+	} else {
+		// set state sync
+		hc := chain.(*core.HeaderChain)
+		hc.SetStateSync(stateSyncData)
+	}
+	return receipts
+}
+
+func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateSyncData, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: stateSyncData,
+	})
+	body.Transactions = append(body.Transactions, stateSyncTx)
+	allLogs := state.Logs()
+	logsFromReceiptCount := countLogsFromReceipts(receipts)
+	stateSyncLogs := allLogs[logsFromReceiptCount:]
+
+	stateSyncReceipt := &types.Receipt{
+		Type:              types.StateSyncTxType,
+		PostState:         header.Root.Bytes(),
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: header.GasUsed,
+		TxHash:            stateSyncTx.Hash(),
+		Logs:              stateSyncLogs,
+		BlockNumber:       header.Number,
+		TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
+	}
+	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
+	receipts = append(receipts, stateSyncReceipt)
+
+	return receipts
 }
 
 func decodeGenesisAlloc(i interface{}) (types.GenesisAlloc, error) {
@@ -1042,13 +1071,13 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, error) {
+func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return nil, consensus.ErrUnexpectedWithdrawals
+		return nil, nil, consensus.ErrUnexpectedWithdrawals
 	}
 	if header.RequestsHash != nil {
-		return nil, consensus.ErrUnexpectedRequests
+		return nil, nil, consensus.ErrUnexpectedRequests
 	}
 
 	var (
@@ -1063,7 +1092,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		if !c.config.IsRio(header.Number) {
 			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 
@@ -1072,14 +1101,14 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 			stateSyncData, err = c.CommitStates(state, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
 		log.Error("Error changing contract code", "error", err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// No block rewards in PoA, so the state remains as it is
@@ -1088,15 +1117,19 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
 
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, state, receipts)
+	} else {
+		// set state sync
+		bc := chain.(core.BorStateSyncer)
+		bc.SetStateSync(stateSyncData)
+	}
+
 	// Assemble block
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
-	// set state sync
-	bc := chain.(core.BorStateSyncer)
-	bc.SetStateSync(stateSyncData)
-
 	// return the final block for sealing
-	return block, nil
+	return block, receipts, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -1515,7 +1548,7 @@ func (c *Bor) CommitStates(
 		stateData := types.StateSyncData{
 			ID:       eventRecord.ID,
 			Contract: eventRecord.Contract,
-			Data:     hex.EncodeToString(eventRecord.Data),
+			Data:     eventRecord.Data,
 			TxHash:   eventRecord.TxHash,
 		}
 
@@ -1647,4 +1680,14 @@ func getUpdatedValidatorSet(oldValidatorSet *valset.ValidatorSet, newVals []*val
 
 func IsSprintStart(number, sprint uint64) bool {
 	return number%sprint == 0
+}
+
+func countLogsFromReceipts(receipts []*types.Receipt) int {
+	total := 0
+	for _, receipt := range receipts {
+		if receipt != nil {
+			total += len(receipt.Logs)
+		}
+	}
+	return total
 }

@@ -1934,7 +1934,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			return blockLogs[i].Index < blockLogs[j].Index
 		})
 
-		if len(blockLogs) > len(logs) {
+		// After StateSync HF we dont write bor receipts separately
+		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
 			stateSyncLogs = blockLogs[len(logs):] // get state-sync logs from `state.Logs()`
 
 			// State sync logs don't have tx index, tx hash and other necessary fields
@@ -2107,7 +2108,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		if emitHeadEvent {
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 			// BOR state sync feed related changes
-			for _, data := range bc.stateSyncData {
+			for _, data := range bc.GetStateSync() {
 				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 			}
 			// BOR
@@ -2707,7 +2708,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		// BOR state sync feed related changes
-		for _, data := range bc.stateSyncData {
+		for _, data := range bc.GetStateSync() {
 			bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 		}
 		// BOR

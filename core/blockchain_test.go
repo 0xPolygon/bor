@@ -4191,6 +4191,9 @@ func TestCreateThenDeletePreByzantium(t *testing.T) {
 		EIP155Block:    big.NewInt(10),
 		EIP158Block:    big.NewInt(10),
 		ByzantiumBlock: big.NewInt(1_700_000),
+		Bor: &params.BorConfig{
+			StateSyncBlock: big.NewInt(0),
+		},
 	})
 }
 func TestCreateThenDeletePostByzantium(t *testing.T) {

@@ -1495,7 +1495,9 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		reqHash := types.CalcRequestsHash(requests)
 		work.header.RequestsHash = &reqHash
 	}
-	block, err := w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
+
+	var block *types.Block
+	block, work.receipts, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
 
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1645,7 +1647,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// https://github.com/ethereum/go-ethereum/issues/24299
 		env := env.copy()
 		// Withdrawals are set to nil here, because this is only called in PoW.
-		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
+		var block *types.Block
+		var err error
+		block, env.receipts, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
 			Transactions: env.txs,
 		}, env.receipts)
 

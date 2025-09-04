@@ -6,6 +6,6 @@ import "github.com/ethereum/go-ethereum/common"
 type StateSyncData struct {
 	ID       uint64
 	Contract common.Address
-	Data     string
-	TxHash   common.Hash
+	Data     []byte
+	TxHash   common.Hash // L1 TxHash
 }
