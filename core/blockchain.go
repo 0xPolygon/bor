@@ -103,8 +103,10 @@ var (
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 
-	statelessParallelImportTimer   = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
-	statelessSequentialImportTimer = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
+	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
+	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
+	statelessParallelImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/stateless/parallel/blocks", nil)
+	statelessSequentialImportBlocksCounter = metrics.NewRegisteredCounter("chain/imports/stateless/sequential/blocks", nil)
 
 	blockReorgMeter     = metrics.NewRegisteredMeter("chain/reorg/executes", nil)
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
@@ -2286,6 +2288,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 	log.Info("Perfoming parallel stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
+	statelessParallelImportBlocksCounter.Inc(int64(len(chain)))
 	var wg sync.WaitGroup
 	var processed atomic.Int32
 
@@ -2524,6 +2527,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 	log.Info("Perfoming sequential stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
+	statelessSequentialImportBlocksCounter.Inc(int64(len(chain)))
 	var processed atomic.Int32
 	for i, block := range chain {
 		// Known block short-circuit
