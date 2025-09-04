@@ -1934,7 +1934,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			return blockLogs[i].Index < blockLogs[j].Index
 		})
 
-		// After StateSync HF we dont write bor receipts separetely
+		// After StateSync HF we dont write bor receipts separately
 		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
 			stateSyncLogs = blockLogs[len(logs):] // get state-sync logs from `state.Logs()`
 
