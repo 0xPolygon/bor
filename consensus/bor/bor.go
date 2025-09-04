@@ -997,7 +997,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		return nil
 	}
 
-	if len(stateSyncData) > 0 && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})
@@ -1114,7 +1114,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	header.UncleHash = types.CalcUncleHash(nil)
 
 	// PIP-55 : Including state sync TX on block body
-	if len(stateSyncData) > 0 && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})

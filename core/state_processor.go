@@ -149,12 +149,22 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	receiptsCountBeforeFinalize := len(receipts)
 	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
+
+	// apply state sync logs
+	if p.config.Bor != nil && p.config.Bor.IsStateSync(block.Number()) {
+		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
+
+		if appliedNewStateSyncReceipt {
+			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+	}
 
 	return &ProcessResult{
 		Receipts: receipts,
 		Requests: requests,
-		Logs:     tracingStateDB.Logs(),
+		Logs:     allLogs,
 		GasUsed:  *usedGas,
 	}, nil
 }

@@ -411,7 +411,17 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	var requests [][]byte
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	receiptsCountBeforeFinalize := len(receipts)
 	receipts = p.engine.Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
+
+	// apply state sync logs
+	if p.config.Bor != nil && p.config.Bor.IsStateSync(block.Number()) {
+		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
+
+		if appliedNewStateSyncReceipt {
+			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+	}
 
 	return &ProcessResult{
 		Receipts: receipts,

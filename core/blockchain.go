@@ -1934,7 +1934,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			return blockLogs[i].Index < blockLogs[j].Index
 		})
 
-		if len(blockLogs) > len(logs) {
+		// After StateSync HF we dont write bor receipts separetely
+		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
 			stateSyncLogs = blockLogs[len(logs):] // get state-sync logs from `state.Logs()`
 
 			// State sync logs don't have tx index, tx hash and other necessary fields
