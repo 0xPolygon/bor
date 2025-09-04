@@ -426,7 +426,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	return &ProcessResult{
 		Receipts: receipts,
 		Requests: requests,
-		Logs:     statedb.Logs(),
+		Logs:     allLogs,
 		GasUsed:  *usedGas,
 	}, nil
 }
