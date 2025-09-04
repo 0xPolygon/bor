@@ -168,3 +168,10 @@ func (w *Witness) SetHeader(header *types.Header) {
 		w.context = header
 	}
 }
+
+func (w *Witness) HeaderReader() HeaderReader {
+	if w == nil {
+		return nil
+	}
+	return w.chain
+}

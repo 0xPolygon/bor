@@ -2452,7 +2452,11 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 	// Defer the validation of witness pre-state for all blocks now that headers/parents are imported
 	for i, block := range chain {
 		if i < len(witnesses) && witnesses[i] != nil {
-			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[i].HeaderReader() != nil {
+				headerReader = witnesses[i].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
 		}
@@ -2606,7 +2610,11 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 	// End-of-batch witness validation
 	for i, block := range chain {
 		if i < len(witnesses) && witnesses[i] != nil {
-			if err := stateless.ValidateWitnessPreState(witnesses[i], bc); err != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[i].HeaderReader() != nil {
+				headerReader = witnesses[i].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
 		}
@@ -2942,7 +2950,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
 			// 1. Validate the witness.
-			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], bc); err != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[it.processed()-1].HeaderReader() != nil {
+				headerReader = witnesses[it.processed()-1].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], headerReader); err != nil {
 				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
@@ -3929,7 +3941,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Validate witness.
 	// During parallel import, defer pre-state validation to the end of the batch.
 	if !bc.parallelStatelessImportEnabled.Load() {
-		if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
+		var headerReader stateless.HeaderReader
+		if witness.HeaderReader() != nil {
+			headerReader = witness.HeaderReader()
+		} else {
+			headerReader = bc
+		}
+		if err := stateless.ValidateWitnessPreState(witness, headerReader); err != nil {
 			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 			return nil, fmt.Errorf("witness validation failed: %w", err)
 		}
