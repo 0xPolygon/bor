@@ -3,7 +3,6 @@ package bor
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1565,7 +1564,7 @@ func (c *Bor) CommitStates(
 		stateData := types.StateSyncData{
 			ID:       eventRecord.ID,
 			Contract: eventRecord.Contract,
-			Data:     hex.EncodeToString(eventRecord.Data),
+			Data:     eventRecord.Data,
 			TxHash:   eventRecord.TxHash,
 		}
 

@@ -78,17 +78,12 @@ func (tx *StateSyncTx) encode(buf *bytes.Buffer) error {
 	if tx == nil {
 		return errors.New("nil StateSyncTx")
 	}
-	enc := make([]encStateSyncData, 0, len(tx.StateSyncData))
+	enc := make([]StateSyncData, 0, len(tx.StateSyncData))
 	for _, d := range tx.StateSyncData {
 		if d == nil {
 			continue
 		}
-		enc = append(enc, encStateSyncData{
-			ID:       d.ID,
-			Contract: d.Contract,
-			Data:     []byte(d.Data),
-			TxHash:   d.TxHash,
-		})
+		enc = append(enc, *d)
 	}
 	return rlp.Encode(buf, enc)
 }
@@ -97,7 +92,7 @@ func (tx *StateSyncTx) decode(b []byte) error {
 	if tx == nil {
 		return errors.New("nil StateSyncTx")
 	}
-	var dec []encStateSyncData
+	var dec []StateSyncData
 	if err := rlp.DecodeBytes(b, &dec); err != nil {
 		return err
 	}
@@ -106,7 +101,7 @@ func (tx *StateSyncTx) decode(b []byte) error {
 		tx.StateSyncData[i] = &StateSyncData{
 			ID:       e.ID,
 			Contract: e.Contract,
-			Data:     string(e.Data),
+			Data:     e.Data,
 			TxHash:   e.TxHash,
 		}
 	}
