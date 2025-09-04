@@ -997,32 +997,37 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	}
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
-		})
-		body.Transactions = append(body.Transactions, stateSyncTx)
-		allLogs := wrappedState.Logs()
-		logsFromReceiptCount := countLogsFromReceipts(receipts)
-		stateSyncLogs := allLogs[logsFromReceiptCount:]
-
-		stateSyncReceipt := &types.Receipt{
-			Type:              types.StateSyncTxType,
-			PostState:         header.Root.Bytes(),
-			Status:            types.ReceiptStatusSuccessful,
-			CumulativeGasUsed: header.GasUsed,
-			TxHash:            stateSyncTx.Hash(),
-			Logs:              stateSyncLogs,
-			BlockNumber:       header.Number,
-			TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
-		}
-		stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
-
-		receipts = append(receipts, stateSyncReceipt)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, wrappedState, receipts)
 	} else {
 		// set state sync
 		hc := chain.(*core.HeaderChain)
 		hc.SetStateSync(stateSyncData)
 	}
+	return receipts
+}
+
+func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateSyncData, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: stateSyncData,
+	})
+	body.Transactions = append(body.Transactions, stateSyncTx)
+	allLogs := state.Logs()
+	logsFromReceiptCount := countLogsFromReceipts(receipts)
+	stateSyncLogs := allLogs[logsFromReceiptCount:]
+
+	stateSyncReceipt := &types.Receipt{
+		Type:              types.StateSyncTxType,
+		PostState:         header.Root.Bytes(),
+		Status:            types.ReceiptStatusSuccessful,
+		CumulativeGasUsed: header.GasUsed,
+		TxHash:            stateSyncTx.Hash(),
+		Logs:              stateSyncLogs,
+		BlockNumber:       header.Number,
+		TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
+	}
+	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
+	receipts = append(receipts, stateSyncReceipt)
+
 	return receipts
 }
 
@@ -1112,29 +1117,8 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
 
-	// PIP-55 : Including state sync TX on block body
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
-		})
-		body.Transactions = append(body.Transactions, stateSyncTx)
-		allLogs := state.Logs()
-		logsFromReceiptCount := countLogsFromReceipts(receipts)
-		stateSyncLogs := allLogs[logsFromReceiptCount:]
-
-		stateSyncReceipt := &types.Receipt{
-			Type:              types.StateSyncTxType,
-			PostState:         header.Root.Bytes(),
-			Status:            types.ReceiptStatusSuccessful,
-			CumulativeGasUsed: header.GasUsed,
-			TxHash:            stateSyncTx.Hash(),
-			Logs:              stateSyncLogs,
-			BlockNumber:       header.Number,
-			TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
-		}
-		stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
-
-		receipts = append(receipts, stateSyncReceipt)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, state, receipts)
 	} else {
 		// set state sync
 		bc := chain.(core.BorStateSyncer)
