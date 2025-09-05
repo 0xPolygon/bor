@@ -110,13 +110,21 @@ func (m *milestone) IsValidPeer(fetchHeadersByNumber func(number uint64, amount 
 	}
 
 	// Fork detection: Check if we have a local fork - if so, allow sync to recover
-	if m.blockchain != nil && m.doExist {
-		localHead := m.blockchain.CurrentBlock()
-		if localHead != nil && localHead.Number.Uint64() >= m.Number {
-			localBlock := m.blockchain.GetBlockByNumber(m.Number)
-			if localBlock != nil && localBlock.Hash() != m.Hash {
+	// Read finality fields under lock protection to avoid race conditions
+	m.finality.RLock()
+	blockchain := m.blockchain
+	doExist := m.doExist
+	hash := m.Hash
+	number := m.Number
+	m.finality.RUnlock()
+
+	if blockchain != nil && doExist {
+		localHead := blockchain.CurrentBlock()
+		if localHead != nil && localHead.Number.Uint64() >= number {
+			localBlock := blockchain.GetBlockByNumber(number)
+			if localBlock != nil && localBlock.Hash() != hash {
 				log.Info("Fork detected, allowing peer sync for recovery",
-					"local", localBlock.Hash(), "milestone", m.Hash, "block", m.Number)
+					"local", localBlock.Hash(), "milestone", hash, "block", number)
 				MilestonePeerMeter.Mark(int64(1))
 				return true, nil
 			}

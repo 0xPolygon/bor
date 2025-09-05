@@ -89,7 +89,9 @@ func NewService(db ethdb.Database) *Service {
 // SetBlockchain sets the blockchain reference for the milestone service
 func (s *Service) SetBlockchain(blockchain ChainReader) {
 	if milestone, ok := s.milestoneService.(*milestone); ok {
+		milestone.finality.Lock()
 		milestone.blockchain = blockchain
+		milestone.finality.Unlock()
 	}
 }
 

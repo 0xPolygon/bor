@@ -35,7 +35,7 @@ type SpanStore struct {
 
 	chainId           string
 	lastUsedSpan      atomic.Pointer[borTypes.Span]
-	latestKnownSpanId uint64
+	latestKnownSpanId atomic.Uint64
 	heimdallStatus    atomic.Pointer[ctypes.SyncInfo]
 
 	// cancel function to stop the background routine
@@ -222,8 +222,8 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 	}
 
 	s.store.Add(spanId, currentSpan)
-	if currentSpan.Id > s.latestKnownSpanId {
-		s.latestKnownSpanId = currentSpan.Id
+	if currentSpan.Id > s.latestKnownSpanId.Load() {
+		s.latestKnownSpanId.Store(currentSpan.Id)
 	}
 
 	return currentSpan, nil
