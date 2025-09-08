@@ -54,7 +54,16 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 
 	// If we don't have an explicit author (i.e. not mining), extract from the header
 	if author == nil {
-		beneficiary, _ = chain.Engine().Author(header) // Ignore error, we're past header validation
+		if chain.Config().Bor != nil && chain.Config().Bor.IsRio(header.Number) {
+			beneficiary = common.HexToAddress(chain.Config().Bor.CalculateCoinbase(header.Number.Uint64()))
+
+			// In case of coinbase is not set post Rio, use the default coinbase
+			if beneficiary == (common.Address{}) {
+				beneficiary, _ = chain.Engine().Author(header)
+			}
+		} else {
+			beneficiary, _ = chain.Engine().Author(header) // Ignore error, we're past header validation
+		}
 	} else {
 		beneficiary = *author
 	}

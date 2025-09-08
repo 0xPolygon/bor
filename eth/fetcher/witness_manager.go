@@ -516,7 +516,10 @@ func (m *witnessManager) tick() {
 func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *blockAnnounce) {
 	resCh := make(chan *eth.Response)
 
+	m.mu.Lock()
 	announcedAt := announce.time // Capture the original 'ready-to-fetch' time for logging/timestamping
+	m.mu.Unlock()
+
 	witnessFetchMeter.Mark(1)
 
 	req, err := announce.fetchWitness(hash, resCh)
