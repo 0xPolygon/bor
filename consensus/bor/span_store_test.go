@@ -1336,7 +1336,7 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 func TestSpanStore_ConcurrentAccess(t *testing.T) {
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const numGoroutines = 20
 	var wg sync.WaitGroup
