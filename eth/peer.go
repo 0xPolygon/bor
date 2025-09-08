@@ -174,14 +174,14 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	var mapsMu sync.RWMutex
 	var buildRequestMu sync.RWMutex
 
-	// non-blocking build first requests
-	witReqsWg.Add(1)
-	go func() {
-		p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
-		witReqsWg.Done()
-	}()
+	// Build all the initial requests synchronously.
+	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+	if buildWitReqErr != nil {
+		p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
+		return nil, buildWitReqErr
+	}
 
-	// closes witResCh after all requests are done
+	// Close the witResCh after all the requests are done.
 	go func() {
 		defer close(witReqResCh)
 		witReqsWg.Wait()
@@ -332,7 +332,10 @@ func (p *ethPeer) receiveWitnessPage(
 			// non blocking call to avoid race condition because of semaphore
 			witReqsWg.Add(1) // protecting from not finishing before requests are built
 			go func() {
-				p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+				if buildWitReqErr != nil {
+					p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
+				}
 				witReqsWg.Done()
 			}()
 		}
@@ -373,7 +376,10 @@ func (p *ethPeer) receiveWitnessPage(
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built
 		go func() {
-			p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+			if buildWitReqErr != nil {
+				p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
+			}
 			witReqsWg.Done()
 		}()
 	}
@@ -481,7 +487,7 @@ func (p *ethPeer) doWitnessRequest(
 	request := []wit.WitnessPageRequest{{Hash: hash, Page: page}}
 	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
 	if err != nil {
-		p.witPeer.Peer.Log().Error("RequestWitnesses failed to make wit request", "peer", p.ID(), "err", err)
+		p.witPeer.Peer.Log().Error("Error in making wit request", "peer", p.ID(), "err", err)
 		return err
 	}
 	go func() {
