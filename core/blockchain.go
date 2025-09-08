@@ -1820,6 +1820,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		var borReceipts = make([]rlp.RawValue, len(receiptChain))
 		for i, receipts := range receiptChain {
 			receiptChain[i], borReceipts[i] = splitReceipts(receipts, blockChain[i].NumberU64(), blockChain[i].Hash())
+			if len(borReceipts[i]) > 0 {
+				log.Info("[debug] writing bor receipts to ancient db", "len", len(borReceipts[i]), "number", blockChain[i].NumberU64(), "hash", blockChain[i].Hash())
+			}
 		}
 
 		var headers []*types.Header
@@ -1971,8 +1974,10 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 					types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
 					borReceipt.Status = types.ReceiptStatusSuccessful
 
+					borReceipt.Print()
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+					log.Info("[debug] written bor receipts into block", "number", block.NumberU64(), "hash", block.Hash())
 				}
 			}
 

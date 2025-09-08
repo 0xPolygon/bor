@@ -339,6 +339,20 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 // that omits the Bloom field. The Bloom field is recomputed by DeriveFields.
 type ReceiptForStorage Receipt
 
+func (r *ReceiptForStorage) Print() {
+	log.Info("**** Receipt Details ***")
+	log.Info("Metadata", "type", r.Type, "status", r.Status)
+	if len(r.Logs) > 0 {
+		log.Info("*** Logs ***")
+		for _, l := range r.Logs {
+			log.Info("Log metadata", "addr", l.Address, "len(data)", len(l.Data), "index", l.Index)
+		}
+		log.Info("*** Logs done ***")
+	} else {
+		log.Info("*** Empty logs")
+	}
+}
+
 // EncodeRLP implements rlp.Encoder, and flattens all content fields of a receipt
 // into an RLP stream.
 func (r *ReceiptForStorage) EncodeRLP(_w io.Writer) error {
