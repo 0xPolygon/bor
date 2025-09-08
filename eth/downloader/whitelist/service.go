@@ -90,8 +90,8 @@ func NewService(db ethdb.Database) *Service {
 func (s *Service) SetBlockchain(blockchain ChainReader) {
 	if milestone, ok := s.milestoneService.(*milestone); ok {
 		milestone.finality.Lock()
+		defer milestone.finality.Unlock()
 		milestone.blockchain = blockchain
-		milestone.finality.Unlock()
 	}
 }
 

@@ -123,8 +123,7 @@ func (m *milestone) IsValidPeer(fetchHeadersByNumber func(number uint64, amount 
 		if localHead != nil && localHead.Number.Uint64() >= number {
 			localBlock := blockchain.GetBlockByNumber(number)
 			if localBlock != nil && localBlock.Hash() != hash {
-				log.Info("Fork detected, allowing peer sync for recovery",
-					"local", localBlock.Hash(), "milestone", hash, "block", number)
+				log.Info("Fork detected, allowing peer sync for recovery", "localBlockHash", localBlock.Hash(), "milestoneHash", hash, "blockNumber", number)
 				MilestonePeerMeter.Mark(int64(1))
 				return true, nil
 			}
