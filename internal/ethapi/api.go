@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -1232,6 +1233,55 @@ func RPCMarshalBlock(block *types.Block, inclTx bool, fullTx bool, config *param
 		fields["withdrawals"] = block.Withdrawals()
 	}
 	return fields
+}
+
+// RPCMarshalWitness converts the given witness to the RPC output.
+func RPCMarshalWitness(witness *stateless.Witness) map[string]interface{} {
+	if witness == nil {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"context": RPCMarshalHeader(witness.Header()),
+	}
+
+	// Marshal headers array.
+	if len(witness.Headers) > 0 {
+		headers := make([]map[string]interface{}, len(witness.Headers))
+		for i, header := range witness.Headers {
+			headers[i] = RPCMarshalHeader(header)
+		}
+		result["headers"] = headers
+	}
+
+	// Marshal codes as hex strings (since they're bytecode).
+	if len(witness.Codes) > 0 {
+		codes := make([]hexutil.Bytes, 0, len(witness.Codes))
+		for code := range witness.Codes {
+			codes = append(codes, hexutil.Bytes(code))
+		}
+		result["codes"] = codes
+	}
+
+	// Marshal state nodes as hex strings (since they're trie nodes).
+	if len(witness.State) > 0 {
+		state := make([]hexutil.Bytes, 0, len(witness.State))
+		for node := range witness.State {
+			state = append(state, hexutil.Bytes(node))
+		}
+		result["state"] = state
+	}
+
+	// Add metadata.
+	result["codesCount"] = len(witness.Codes)
+	result["stateNodesCount"] = len(witness.State)
+
+	// Add pre-state root if available.
+	if len(witness.Headers) > 0 {
+		result["preStateRoot"] = witness.Root()
+	}
+
+	return result
 }
 
 // RPCTransaction represents a transaction that will serialize to the RPC representation of a transaction

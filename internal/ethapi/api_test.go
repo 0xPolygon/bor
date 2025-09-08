@@ -4445,15 +4445,17 @@ func TestBorWitnessAPI_Integration(t *testing.T) {
 		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(1))
 		require.NoError(t, err)
 		require.NotNil(t, result, "Should find the stored witness")
-		require.NotNil(t, result.Header(), "Witness should have a context header")
-		require.Equal(t, testBlockHash, result.Header().Hash(), "Witness should be for the correct block")
+		require.NotNil(t, result["context"], "Witness should have a context header")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
 	})
 
 	t.Run("BorAPI_GetWitnessByHash_WithStoredWitness", func(t *testing.T) {
 		result, err := borApi.GetWitnessByHash(t.Context(), testBlockHash)
 		require.NoError(t, err)
 		require.NotNil(t, result, "Should find the stored witness")
-		require.Equal(t, testBlockHash, result.Header().Hash(), "Witness should be for the correct block")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
 	})
 
 	t.Run("BorAPI_GetWitnessByBlockNumberOrHash_WithStoredWitness", func(t *testing.T) {
@@ -4464,7 +4466,8 @@ func TestBorWitnessAPI_Integration(t *testing.T) {
 		result, err = borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithHash(testBlockHash, false))
 		require.NoError(t, err)
 		require.NotNil(t, result, "Should find the stored witness by hash")
-		require.Equal(t, testBlockHash, result.Header().Hash(), "Witness should be for the correct block")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
 	})
 
 	t.Run("BorAPI_GetWitnessByNumber_NoWitness", func(t *testing.T) {

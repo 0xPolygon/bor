@@ -5,7 +5,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -112,16 +111,28 @@ func (api *BorAPI) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlo
 }
 
 // GetWitnessByNumber returns the witness for the given block number.
-func (api *BorAPI) GetWitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
-	return api.b.WitnessByNumber(ctx, number)
+func (api *BorAPI) GetWitnessByNumber(ctx context.Context, number rpc.BlockNumber) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByNumber(ctx, number)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
 }
 
 // GetWitnessByHash returns the witness for the given block hash.
-func (api *BorAPI) GetWitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
-	return api.b.WitnessByHash(ctx, hash)
+func (api *BorAPI) GetWitnessByHash(ctx context.Context, hash common.Hash) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByHash(ctx, hash)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
 }
 
 // GetWitnessByBlockNumberOrHash returns the witness for the given block number or hash.
-func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
-	return api.b.WitnessByNumberOrHash(ctx, blockNrOrHash)
+func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByNumberOrHash(ctx, blockNrOrHash)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
 }
