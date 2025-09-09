@@ -344,13 +344,9 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 
 		logMore := false
-		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
-		if number != nil {
-			if common.IsStateSyncBlock(*number) {
-				logMore = true
-			}
-		} else {
-			log.Warn("[debug] nil block number for hash while serving receipts", "hash", hash)
+		number := *rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if common.IsStateSyncBlock(number) {
+			logMore = true
 		}
 
 		// In order to include state-sync transaction receipts, which resides in a separate
