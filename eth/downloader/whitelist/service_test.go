@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -1280,4 +1281,60 @@ func TestMilestoneSetBlockchain(t *testing.T) {
 	// Verify blockchain is set
 	require.NotNil(t, milestone.blockchain, "Blockchain should be set")
 	require.Equal(t, blockchain, milestone.blockchain, "Blockchain should match what was set")
+}
+
+func TestMilestone_IsValidPeer_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	db := rawdb.NewMemoryDatabase()
+	service := NewMockService(db)
+	milestone := service.milestoneService.(*milestone)
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+
+	// Simple mock fetchHeadersByNumber function.
+	fetchHeaders := func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error) {
+		header := &types.Header{Number: big.NewInt(int64(number))}
+		return []*types.Header{header}, []common.Hash{common.HexToHash("0x123")}, nil
+	}
+
+	// Test concurrent access: readers call IsValidPeer while writer calls Process.
+	// This tests the race condition fix in the finality fields access.
+
+	// Writer goroutine - updates the milestone data.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 10; i++ {
+			blockNum := uint64(100 + i)
+			hash := common.BytesToHash([]byte{byte(i)})
+			milestone.Process(blockNum, hash)
+			time.Sleep(time.Microsecond) // Small delay to increase race probability.
+		}
+	}()
+
+	// Reader goroutines - call IsValidPeer concurrently.
+	for i := range numGoroutines - 1 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			// This should not race with Process() calls due to our lock protection fix.
+			// The race was in accessing m.doExist, m.Number, m.Hash, m.blockchain fields.
+			_, err := milestone.IsValidPeer(fetchHeaders)
+
+			// We don't care about the specific result, just that no race occurs.
+			// Error is expected due to mock setup, but no race condition should happen.
+			_ = err // Ignore error, we're testing for race conditions, not functionality
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify final state is consistent after concurrent access.
+	doExist, finalNumber, finalHash := milestone.Get()
+	require.True(t, doExist, "Milestone should exist after processing")
+	require.Equal(t, uint64(110), finalNumber, "Final milestone number should be 110")
+	require.NotEqual(t, common.Hash{}, finalHash, "Final milestone hash should not be empty")
 }
