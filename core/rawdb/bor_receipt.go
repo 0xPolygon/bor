@@ -126,6 +126,7 @@ func WriteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64, b
 
 // DeleteBorReceipt removes receipt data associated with a block hash.
 func DeleteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
+	log.Error("[debug] ********** ABOUT TO DELETE BOR RECEIPT **********", "number", number, "hash", hash)
 	key := borReceiptKey(number, hash)
 
 	if err := db.Delete(key); err != nil {
