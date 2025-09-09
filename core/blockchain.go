@@ -130,6 +130,35 @@ var (
 	// errWitnessComputationFailed = errors.New("witness computation failed or was cancelled") // New error
 )
 
+type StateSyncData struct {
+	number uint64
+	hash   common.Hash
+}
+
+var ss = make([]StateSyncData, 0)
+var ssMu sync.Mutex
+
+func PrintSSDetails(prefix string, db ethdb.Reader) {
+	ssMu.Lock()
+	if len(ss) > 0 {
+		log.Info("[debug] "+prefix+" trying to read state-sync events from db", "len", len(ss))
+		for _, event := range ss {
+			data := rawdb.ReadBorReceiptRLP(db, event.hash, event.number)
+			if data == nil {
+				log.Info("[debug] nil receipt in db", "number", event.number, "hash", event.hash)
+				continue
+			}
+			var storageReceipt types.ReceiptForStorage
+			if err := rlp.DecodeBytes(data, &storageReceipt); err != nil {
+				log.Error("[debug] error decoding reciept", "number", event.number, "hash", event.hash, "err", err)
+				continue
+			}
+			storageReceipt.Print()
+		}
+	}
+	ssMu.Unlock()
+}
+
 const (
 	bodyCacheLimit      = 256
 	blockCacheLimit     = 256
@@ -1731,12 +1760,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 	}
 
-	type StateSyncData struct {
-		number uint64
-		hash   common.Hash
-	}
-	var ss = make([]StateSyncData, 0)
-
 	var (
 		stats = struct{ processed, ignored int32 }{}
 		start = time.Now()
@@ -1988,7 +2011,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
 					log.Info("[debug] written bor receipts into block", "number", block.NumberU64(), "hash", block.Hash())
+					ssMu.Lock()
 					ss = append(ss, StateSyncData{number: block.NumberU64(), hash: block.Hash()})
+					ssMu.Unlock()
 				}
 			}
 
@@ -2018,24 +2043,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			}
 		}
 
-		if len(ss) > 0 {
-			log.Info("[debug] trying to read state-sync events from db", "len", len(ss))
-			for _, event := range ss {
-				data := rawdb.ReadBorReceiptRLP(bc.db, event.hash, event.number)
-				if data == nil {
-					log.Info("[debug] nil receipt in db", "number", event.number, "hash", event.hash)
-					continue
-				}
-				var storageReceipt types.ReceiptForStorage
-				if err := rlp.DecodeBytes(data, &storageReceipt); err != nil {
-					log.Error("[debug] error decoding reciept", "number", event.number, "hash", event.hash, "err", err)
-					continue
-				}
-				storageReceipt.Print()
-			}
-		}
-
 		updateHead(blockChain[len(blockChain)-1], headers)
+
+		PrintSSDetails("[receipts]", bc.db)
 
 		return 0, nil
 	}
@@ -3014,6 +3024,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 			// Only count canonical blocks for GC processing time
 			bc.gcproc += proctime
+
+			PrintSSDetails("[chain]", bc.db)
 
 		case SideStatTy:
 			log.Debug("Inserted forked block", "number", block.Number(), "hash", block.Hash(),
