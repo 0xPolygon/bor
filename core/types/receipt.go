@@ -340,7 +340,7 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 type ReceiptForStorage Receipt
 
 func (r *ReceiptForStorage) Print() {
-	log.Info("*** Receipt metadata", "type", r.Type, "status", r.Status, "len(logs)", len(r.Logs))
+	log.Info("[debug] receipt metadata", "type", r.Type, "status", r.Status, "len(logs)", len(r.Logs))
 }
 
 // EncodeRLP implements rlp.Encoder, and flattens all content fields of a receipt
