@@ -2197,51 +2197,6 @@ func (bc *BlockChain) InsertChainWithWitnesses(chain types.Blocks, makeWitness b
 	return n, err
 }
 
-// BlockState tracks the completion state of blocks during insertion.
-type BlockState struct {
-	mu        sync.Mutex
-	completed map[common.Hash]bool
-	cond      *sync.Cond
-	aborted   bool
-}
-
-func NewBlockState() *BlockState {
-	bs := &BlockState{
-		completed: make(map[common.Hash]bool),
-	}
-	bs.cond = sync.NewCond(&bs.mu)
-	return bs
-}
-
-func (bs *BlockState) IsComplete(hash common.Hash) bool {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	return bs.completed[hash]
-}
-
-func (bs *BlockState) WaitForParentOrAbort(hash common.Hash) bool {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	for !bs.completed[hash] && !bs.aborted {
-		bs.cond.Wait()
-	}
-	return bs.aborted
-}
-
-func (bs *BlockState) MarkComplete(hash common.Hash) {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	bs.completed[hash] = true
-	bs.cond.Broadcast()
-}
-
-func (bs *BlockState) Abort() {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	bs.aborted = true
-	bs.cond.Broadcast()
-}
-
 // verifyContiguousBlocks checks that the provided blocks are ordered and linked.
 func verifyContiguousBlocks(chain types.Blocks) error {
 	for i := 1; i < len(chain); i++ {
@@ -2285,191 +2240,171 @@ func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop f
 
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
 func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
-	log.Info("Perfoming parallel stateless import", "chain length", len(chain))
+	log.Info("Performing parallel stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
 	statelessParallelImportBlocksCounter.Inc(int64(len(chain)))
-	var wg sync.WaitGroup
-	var processed atomic.Int32
 
-	bs := NewBlockState() // Track parent completion within this batch
-
-	errChan := make(chan error, len(chain))
-	var abortOnce sync.Once
-	// abortAll stops header verification and unblocks waiters
-	abortAll := func() {
-		abortOnce.Do(func() {
-			stopHeaders()
-			bs.Abort()
-		})
+	// Parallel stateless execution with a worker pool
+	type execResult struct {
+		sdb        *state.StateDB
+		err        error
+		needsRetry bool
+		witness    *stateless.Witness
 	}
+	results := make([]execResult, len(chain))
+	workCh := make(chan int, len(chain))
+	var wg sync.WaitGroup
+	numWorkers := runtime.GOMAXPROCS(0)
 
-	// Worker launcher
-	for i, block := range chain {
+	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
-		idx := i
-		blk := block
 		go func() {
 			defer wg.Done()
-
-			// Skip known blocks but still consume header verification result
-			if bc.HasBlock(blk.Hash(), blk.NumberU64()) {
-				processed.Add(1)
-				log.Trace("Skipping known block in InsertChainStateless", "number", blk.NumberU64(), "hash", blk.Hash())
-				if idx < len(errChans) {
-					if err := <-errChans[idx]; err != nil {
-						log.Warn("Header verification failed for known block", "number", blk.NumberU64(), "hash", blk.Hash(), "err", err)
-						processed.Store(processed.Load() - 1)
-						abortAll()
-						errChan <- fmt.Errorf("header verification failed for known block %d (%s): %w", blk.NumberU64(), blk.Hash(), err)
-					}
+			for idx := range workCh {
+				blk := chain[idx]
+				// Known block: skip execution
+				if bc.HasBlock(blk.Hash(), blk.NumberU64()) {
+					continue
 				}
-				return
-			}
-
-			if bc.insertStopped() {
-				abortAll()
-				errChan <- errInsertionInterrupted
-				return
-			}
-
-			// Select witness if provided
-			var witness *stateless.Witness
-			if idx < len(witnesses) {
-				witness = witnesses[idx]
-			}
-
-			// Stateless execution first
-			statedb, perr := bc.ProcessBlockWithWitnesses(blk, witness)
-			if perr != nil {
-				parentInBatchRetry := idx > 0 && chain[idx-1].Hash() == blk.ParentHash()
-				if parentInBatchRetry && strings.Contains(perr.Error(), "stateless self-validation state root mismatch") {
-					if bs.WaitForParentOrAbort(blk.ParentHash()) { // aborted
-						return
-					}
-					statedb, perr = bc.ProcessBlockWithWitnesses(blk, witness)
+				if bc.insertStopped() {
+					results[idx].err = errInsertionInterrupted
+					continue
 				}
+				var witness *stateless.Witness
+				if idx < len(witnesses) {
+					witness = witnesses[idx]
+				}
+				sdb, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
-					abortAll()
-					errChan <- perr
-					return
-				}
-			}
-			statedb.SetWitness(witness)
-
-			// Wait for parent commit if parent is in this batch
-			if idx > 0 && chain[idx-1].Hash() == blk.ParentHash() {
-				if bs.WaitForParentOrAbort(blk.ParentHash()) { // aborted
-					return
-				}
-			}
-
-			// Check header verification result
-			var hErr error
-			if idx < len(errChans) {
-				hErr = <-errChans[idx]
-			}
-			if hErr != nil {
-				if hErr == consensus.ErrUnknownAncestor {
-					parentNum := blk.NumberU64() - 1
-					existingBlock := bc.GetBlockByNumber(parentNum)
-					if existingBlock != nil && existingBlock.Hash() != blk.ParentHash() {
-						log.Info("Conflicting block detected in stateless sync",
-							"blockNum", blk.NumberU64(),
-							"parentNum", parentNum,
-							"existingParent", existingBlock.Hash(),
-							"expectedParent", blk.ParentHash())
-						existingHeader := existingBlock.Header()
-						verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
-						if verifyErr == nil {
-							log.Info("Existing parent block is valid, rejecting new fork",
-								"existingParent", existingBlock.Hash(),
-								"rejectedParent", blk.ParentHash())
-							abortAll()
-							errChan <- fmt.Errorf("rejecting block %d: existing parent %s is valid", blk.NumberU64(), existingBlock.Hash())
-							return
-						}
-						log.Info("Existing parent block is invalid, accepting reorg",
-							"existingParent", existingBlock.Hash(),
-							"newParent", blk.ParentHash(),
-							"verifyErr", verifyErr)
-						if err := bc.SetHead(parentNum - 1); err != nil {
-							abortAll()
-							errChan <- fmt.Errorf("failed to rewind for reorg: %w", err)
-							return
-						}
-						abortAll()
-						errChan <- fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-						return
-					} else if existingBlock == nil && idx > 0 {
-						parentHash := blk.ParentHash()
-						if !bs.IsComplete(parentHash) {
-							log.Debug("Parent block still being processed, waiting for completion",
-								"blockNum", blk.NumberU64(),
-								"parentHash", parentHash)
-							if bs.WaitForParentOrAbort(parentHash) { // aborted
-								return
-							}
-							if verr := bc.engine.VerifyHeader(bc, blk.Header()); verr != nil {
-								abortAll()
-								errChan <- verr
-								return
-							}
-						} else {
-							log.Error("Parent block processing completed but still unknown ancestor",
-								"blockNum", blk.NumberU64(),
-								"parentHash", parentHash)
-							abortAll()
-							errChan <- hErr
-							return
-						}
+					// If stateless self-validation depends on parent's commit, mark for retry in writer stage
+					if idx > 0 && strings.Contains(perr.Error(), "stateless self-validation state root mismatch") {
+						results[idx].needsRetry = true
+						results[idx].witness = witness
+						continue
 					}
-				} else {
-					log.Warn("Block verification failed during parallel insert",
-						"blockNum", blk.NumberU64(),
-						"hash", blk.Hash(),
-						"err", hErr)
-					abortAll()
-					errChan <- hErr
-					return
+					results[idx].err = perr
+					continue
 				}
+				if witness != nil {
+					sdb.SetWitness(witness)
+				}
+				results[idx].sdb = sdb
 			}
-
-			// Write block without trie commit
-			if _, werr := bc.writeBlockAndSetHead(blk, nil, nil, statedb, false, true); werr != nil {
-				abortAll()
-				errChan <- werr
-				return
-			}
-
-			processed.Add(1)
-			bs.MarkComplete(blk.Hash())
-			stats.processed = int(processed.Load())
-			stats.report(chain, idx, 0, 0, 0, 0, true, true)
 		}()
 	}
 
+	for i := range chain {
+		workCh <- i
+	}
+	close(workCh)
 	wg.Wait()
-	close(errChan)
 
-	// Defer the validation of witness pre-state for all blocks now that headers/parents are imported
+	// Sequentially verify headers and write blocks
+	var processed atomic.Int32
 	for i, block := range chain {
+		if bc.HasBlock(block.Hash(), block.NumberU64()) {
+			processed.Add(1)
+			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+			if i < len(errChans) {
+				if err := <-errChans[i]; err != nil {
+					stopHeaders()
+					return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
+				}
+			}
+			stats.processed = int(processed.Load())
+			stats.report(chain, i, 0, 0, 0, 0, true, true)
+			continue
+		}
+
+		if resErr := results[i].err; resErr != nil {
+			stopHeaders()
+			return int(processed.Load()), resErr
+		}
+
+		// Handle deferred retry for stateless self-validation root mismatch
+		if results[i].needsRetry {
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+			sdb, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if perr != nil {
+				stopHeaders()
+				return int(processed.Load()), perr
+			}
+			if witness != nil {
+				sdb.SetWitness(witness)
+			}
+			results[i].sdb = sdb
+		}
+
+		var hErr error
+		if i < len(errChans) {
+			hErr = <-errChans[i]
+		}
+		if hErr != nil {
+			if hErr == consensus.ErrUnknownAncestor {
+				parentNum := block.NumberU64() - 1
+				existingBlock := bc.GetBlockByNumber(parentNum)
+				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
+					log.Info("Conflicting block detected in stateless sync",
+						"blockNum", block.NumberU64(),
+						"parentNum", parentNum,
+						"existingParent", existingBlock.Hash(),
+						"expectedParent", block.ParentHash())
+					existingHeader := existingBlock.Header()
+					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
+					if verifyErr == nil {
+						log.Info("Existing parent block is valid, rejecting new fork",
+							"existingParent", existingBlock.Hash(),
+							"rejectedParent", block.ParentHash())
+						stopHeaders()
+						return int(processed.Load()), fmt.Errorf("rejecting block %d: existing parent %s is valid", block.NumberU64(), existingBlock.Hash())
+					}
+					log.Info("Existing parent block is invalid, accepting reorg",
+						"existingParent", existingBlock.Hash(),
+						"newParent", block.ParentHash(),
+						"verifyErr", verifyErr)
+					if err := bc.SetHead(parentNum - 1); err != nil {
+						stopHeaders()
+						return int(processed.Load()), fmt.Errorf("failed to rewind for reorg: %w", err)
+					}
+					stopHeaders()
+					return int(processed.Load()), fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+				}
+				if i != 0 {
+					stopHeaders()
+					return int(processed.Load()), hErr
+				}
+			} else {
+				stopHeaders()
+				return int(processed.Load()), hErr
+			}
+		}
+
+		// Validate witness pre-state for this block (if present) before writing
 		if i < len(witnesses) && witnesses[i] != nil {
 			var headerReader stateless.HeaderReader = bc
 			if witnesses[i].HeaderReader() != nil {
 				headerReader = witnesses[i].HeaderReader()
 			}
 			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+				stopHeaders()
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
 		}
+
+		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+			stopHeaders()
+			return int(processed.Load()), werr
+		}
+
+		processed.Add(1)
+		stats.processed = int(processed.Load())
+		stats.report(chain, i, 0, 0, 0, 0, true, true)
 	}
 
-	for err := range errChan {
-		if err != nil {
-			return int(processed.Load()), err
-		}
-	}
 	return int(processed.Load()), nil
 }
 
