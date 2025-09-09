@@ -23,6 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
@@ -342,6 +343,16 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			break
 		}
 
+		logMore := false
+		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if number != nil {
+			if common.IsStateSyncBlock(*number) {
+				logMore = true
+			}
+		} else {
+			log.Warn("[debug] nil block number for hash while serving receipts", "hash", hash)
+		}
+
 		// In order to include state-sync transaction receipts, which resides in a separate
 		// table in db, we need to separately fetch normal and state-sync transaction receipts.
 		// Later, decode them, merge them into a single unit and re-encode the final list to
@@ -352,7 +363,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		var normalReceiptsDecoded []*types.ReceiptForStorage
 		if normalReceipts != nil {
 			if err := rlp.DecodeBytes(normalReceipts, &normalReceiptsDecoded); err != nil {
-				log.Error("Failed to decode normal receipts", "err", err)
+				log.Error("[debug] Failed to decode normal receipts", "err", err)
 				continue
 			}
 		}
@@ -362,7 +373,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		var borReceiptDecoded types.ReceiptForStorage
 		if borReceipt != nil {
 			if err := rlp.DecodeBytes(borReceipt, &borReceiptDecoded); err != nil {
-				log.Error("Failed to decode state-sync receipt", "err", err)
+				log.Error("[debug] Failed to decode state-sync receipt", "err", err)
 				continue
 			}
 		}
@@ -372,9 +383,13 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			// Don't append empty receipt data for this block if either the local header is nil
 			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
+				log.Warn("[debug] nil header or not empty root hash while serving receipts", "hash", hash, "number", number)
 				continue
 			}
 
+			if logMore {
+				log.Info("[debug] both normal and state-sync receipts are nil", "hash", hash, "number", number)
+			}
 			// Append an empty entry for this block and continue
 			receipts = append(receipts, nil)
 			continue
@@ -387,6 +402,14 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		}
 		if borReceipt != nil {
 			blockReceipts = append(blockReceipts, &borReceiptDecoded)
+			if logMore {
+				log.Info("[debug] state-sync receipt found, printing details", "hash", hash, "number", number)
+				borReceiptDecoded.Print()
+			}
+		} else {
+			if logMore {
+				log.Info("[debug] block should have state-sync but no state-sync in db", "hash", hash, "number", number)
+			}
 		}
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
@@ -400,16 +423,22 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		// Encode the final list and convert to network format
 		encodedBlockReceipts, err := rlp.EncodeToBytes(blockReceipts)
 		if err != nil {
+			if logMore {
+				log.Error("[debug] error encoding final receipts", "hash", hash, "number", number, "err", err)
+			}
 			continue
 		}
 		body := chain.GetBodyRLP(hash)
 		if body == nil {
+			if logMore {
+				log.Warn("[debug] nil body while serving receipts", "hash", hash, "number", number)
+			}
 			continue
 		}
 
 		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
 		if err != nil {
-			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+			log.Error("[debug] Error in block receipts conversion", "hash", hash, "err", err)
 			continue
 		}
 

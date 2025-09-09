@@ -42,6 +42,18 @@ const (
 	AddressLength = 20
 )
 
+// Blocks in a devnet containing state-sync transactions
+var StateSyncBlocks []uint64 = []uint64{640, 896, 992, 1408, 1440, 1456, 1472, 1680, 1744}
+
+func IsStateSyncBlock(number uint64) bool {
+	for _, b := range StateSyncBlocks {
+		if b == number {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	hashT    = reflect.TypeOf(Hash{})
 	addressT = reflect.TypeOf(Address{})
