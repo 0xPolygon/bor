@@ -1332,3 +1332,38 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		require.True(t, found)
 	})
 }
+
+func TestSpanStore_ConcurrentAccess(t *testing.T) {
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	defer spanStore.Close()
+	ctx := t.Context()
+
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+
+	// Test concurrent access to spanById which updates the latestKnownSpanId.
+	for i := range numGoroutines {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			spanId := uint64(id + 1)
+			span, err := spanStore.spanById(ctx, spanId)
+			require.NoError(t, err)
+			require.Equal(t, spanId, span.Id)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify that the final state is consistent.
+	finalLatestSpanId := spanStore.latestKnownSpanId.Load()
+	require.Equal(t, uint64(numGoroutines), finalLatestSpanId, "Latest span ID should be the highest processed span")
+
+	// Verify that all spans are accessible.
+	for i := range numGoroutines {
+		spanId := uint64(i + 1)
+		span, err := spanStore.spanById(ctx, spanId)
+		require.NoError(t, err)
+		require.Equal(t, spanId, span.Id)
+	}
+}
