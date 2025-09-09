@@ -2449,8 +2449,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		return 0, whitelist.ErrMismatch
 	}
 
-	// Small-batch fast path: sequential import for len<=5
-	if len(chain) <= 5 || !bc.parallelStatelessImportEnabled.Load() {
+	if !bc.parallelStatelessImportEnabled.Load() {
 		return bc.insertChainStatelessSequential(chain, witnesses, errChans, &stats)
 	}
 
