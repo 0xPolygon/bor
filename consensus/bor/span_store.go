@@ -215,6 +215,11 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 			log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
 			return nil, err
 		}
+
+		if len(currentSpan.SelectedProducers) == 0 {
+			log.Warn("Span from Heimdall has empty SelectedProducers", "spanId", spanId, "selectedProducers", currentSpan.SelectedProducers, "validators", currentSpan.ValidatorSet.Validators, "startBlock", currentSpan.StartBlock, "endBlock", currentSpan.EndBlock)
+			return nil, fmt.Errorf("span %d has empty SelectedProducers, possibly incomplete", spanId)
+		}
 	}
 
 	if currentSpan == nil {
@@ -241,7 +246,7 @@ func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (
 	// that we still check if the block number lies in the range of span before returning it.
 	estimatedSpanId := s.estimateSpanId(blockNumber)
 	defer func() {
-		if res != nil && err == nil {
+		if res != nil && len(res.SelectedProducers) > 0 && err == nil {
 			s.lastUsedSpan.Store(res)
 		}
 	}()
