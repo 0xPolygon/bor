@@ -2238,6 +2238,41 @@ func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop f
 	return stop, errChans
 }
 
+func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index int, hErr error) error {
+	if hErr == consensus.ErrUnknownAncestor {
+		parentNum := block.NumberU64() - 1
+		existingBlock := bc.GetBlockByNumber(parentNum)
+		if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
+			log.Info("Conflicting block detected in stateless sync",
+				"blockNum", block.NumberU64(),
+				"parentNum", parentNum,
+				"existingParent", existingBlock.Hash(),
+				"expectedParent", block.ParentHash())
+			existingHeader := existingBlock.Header()
+			verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
+			if verifyErr == nil {
+				log.Info("Existing parent block is valid, rejecting new fork",
+					"existingParent", existingBlock.Hash(),
+					"rejectedParent", block.ParentHash())
+				return fmt.Errorf("rejecting block %d: existing parent %s is valid", block.NumberU64(), existingBlock.Hash())
+			}
+			log.Info("Existing parent block is invalid, accepting reorg",
+				"existingParent", existingBlock.Hash(),
+				"newParent", block.ParentHash(),
+				"verifyErr", verifyErr)
+			if err := bc.SetHead(parentNum - 1); err != nil {
+				return fmt.Errorf("failed to rewind for reorg: %w", err)
+			}
+			return fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+		}
+		if index != 0 {
+			return hErr
+		}
+		return nil
+	}
+	return hErr
+}
+
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
 func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
 	log.Info("Performing parallel stateless import", "chain length", len(chain))
@@ -2344,42 +2379,9 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			hErr = <-errChans[i]
 		}
 		if hErr != nil {
-			if hErr == consensus.ErrUnknownAncestor {
-				parentNum := block.NumberU64() - 1
-				existingBlock := bc.GetBlockByNumber(parentNum)
-				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
-					log.Info("Conflicting block detected in stateless sync",
-						"blockNum", block.NumberU64(),
-						"parentNum", parentNum,
-						"existingParent", existingBlock.Hash(),
-						"expectedParent", block.ParentHash())
-					existingHeader := existingBlock.Header()
-					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
-					if verifyErr == nil {
-						log.Info("Existing parent block is valid, rejecting new fork",
-							"existingParent", existingBlock.Hash(),
-							"rejectedParent", block.ParentHash())
-						stopHeaders()
-						return int(processed.Load()), fmt.Errorf("rejecting block %d: existing parent %s is valid", block.NumberU64(), existingBlock.Hash())
-					}
-					log.Info("Existing parent block is invalid, accepting reorg",
-						"existingParent", existingBlock.Hash(),
-						"newParent", block.ParentHash(),
-						"verifyErr", verifyErr)
-					if err := bc.SetHead(parentNum - 1); err != nil {
-						stopHeaders()
-						return int(processed.Load()), fmt.Errorf("failed to rewind for reorg: %w", err)
-					}
-					stopHeaders()
-					return int(processed.Load()), fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-				}
-				if i != 0 {
-					stopHeaders()
-					return int(processed.Load()), hErr
-				}
-			} else {
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
 				stopHeaders()
-				return int(processed.Load()), hErr
+				return int(processed.Load()), err
 			}
 		}
 
@@ -2490,51 +2492,8 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 		statedb.SetWitness(witness)
 		hErr := <-errChans[i]
 		if hErr != nil {
-			if hErr == consensus.ErrUnknownAncestor {
-				// For stateless nodes, check if this is a reorg situation
-				parentNum := block.NumberU64() - 1
-				existingBlock := bc.GetBlockByNumber(parentNum)
-				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
-					// We have a different block at the parent's height - this could be a reorg
-					log.Info("Conflicting block detected in stateless sync",
-						"blockNum", block.NumberU64(),
-						"parentNum", parentNum,
-						"existingParent", existingBlock.Hash(),
-						"expectedParent", block.ParentHash())
-
-					// Verify the existing parent block to see if it's valid
-					// This helps avoid unnecessary rewinds if the existing block is correct
-					existingHeader := existingBlock.Header()
-					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
-
-					// Check if the existing parent is valid
-					if verifyErr == nil {
-						// Existing parent is valid, so the new block is on a wrong fork
-						log.Info("Existing parent block is valid, rejecting new fork",
-							"existingParent", existingBlock.Hash(),
-							"rejectedParent", block.ParentHash())
-						return int(processed.Load()), fmt.Errorf("rejecting block %d: existing parent %s is valid",
-							block.NumberU64(), existingBlock.Hash())
-					}
-					// Existing parent is invalid, we need to rewind and accept the new chain
-					log.Info("Existing parent block is invalid, accepting reorg",
-						"existingParent", existingBlock.Hash(),
-						"newParent", block.ParentHash(),
-						"verifyErr", verifyErr)
-
-					// For stateless nodes, we need to rewind and let the sync continue
-					if err := bc.SetHead(parentNum - 1); err != nil {
-						return int(processed.Load()), fmt.Errorf("failed to rewind for reorg: %w", err)
-					}
-
-					// Return to let the downloader retry with the correct chain
-					return int(processed.Load()), fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-				} else if i != 0 {
-					// Not the first block and no reorg detected
-					return int(processed.Load()), hErr
-				}
-			} else {
-				return int(processed.Load()), hErr
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
+				return int(processed.Load()), err
 			}
 		}
 
