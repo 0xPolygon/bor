@@ -29,17 +29,32 @@ type finalityService interface {
 	Purge()
 }
 
+func isIncorrectMilestone(number uint64, hash common.Hash) bool {
+	var (
+		incorrectEnd  = uint64(76273070)
+		incorrectHash = common.HexToHash("7910a20918558674edb87759a2bb08b31af0de0e4eef0d8909be75af3591748f")
+	)
+	if number == incorrectEnd && hash == incorrectHash {
+		log.Info("Ignoring validating against incorrect milestone", "number", incorrectEnd, "hash", incorrectHash)
+		return true
+	}
+	return false
+}
+
 // IsValidPeer checks if the chain we're about to receive from a peer is valid or not
 // in terms of reorgs. We won't reorg beyond the last bor finality submitted to mainchain.
 func (f *finality[T]) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
 	// We want to validate the chain by comparing the last finalized block
 	f.RLock()
-
 	doExist := f.doExist
 	number := f.Number
 	hash := f.Hash
-
 	f.RUnlock()
+
+	// Ignore validating against incorrect milestone
+	if isIncorrectMilestone(number, hash) {
+		return true, nil
+	}
 
 	return isValidPeer(fetchHeadersByNumber, doExist, number, hash)
 }
@@ -52,7 +67,18 @@ func (f *finality[T]) IsValidChain(currentHeader *types.Header, chain []*types.H
 		return false, nil
 	}
 
-	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash)
+	f.RLock()
+	doExist := f.doExist
+	number := f.Number
+	hash := f.Hash
+	f.RUnlock()
+
+	// Ignore validating against incorrect milestone
+	if isIncorrectMilestone(number, hash) {
+		return true, nil
+	}
+
+	return isValidChain(currentHeader, chain, doExist, number, hash)
 }
 
 // reportWhitelist logs the block number and hash if a new and unique entry is being inserted

@@ -109,8 +109,12 @@ func (m *milestone) IsValidPeer(fetchHeadersByNumber func(number uint64, amount 
 		return true, nil
 	}
 
+	m.finality.RLock()
+	doExist := m.doExist
+	m.finality.RUnlock()
+
 	// Fork detection: Check if we have a local fork - if so, allow sync to recover
-	if m.blockchain != nil && m.doExist {
+	if m.blockchain != nil && doExist {
 		localHead := m.blockchain.CurrentBlock()
 		if localHead != nil && localHead.Number.Uint64() >= m.Number {
 			localBlock := m.blockchain.GetBlockByNumber(m.Number)

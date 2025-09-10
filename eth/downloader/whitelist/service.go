@@ -25,18 +25,19 @@ type Service struct {
 }
 
 func NewService(db ethdb.Database) *Service {
+	// Fetch last whitelisted checkpoint entry from db. Ignore in case of error or if
+	// the whitelisted entry has empty hash.
 	var checkpointDoExist = true
-
 	checkpointNumber, checkpointHash, err := rawdb.ReadFinality[*rawdb.Checkpoint](db)
-
-	if err != nil {
+	if err != nil || checkpointHash == (common.Hash{}) {
 		checkpointDoExist = false
 	}
 
+	// Fetch last whitelisted milestone entry from db. Ignore in case of error or if
+	// the whitelisted entry has empty hash.
 	var milestoneDoExist = true
-
 	milestoneNumber, milestoneHash, err := rawdb.ReadFinality[*rawdb.Milestone](db)
-	if err != nil {
+	if err != nil || milestoneHash == (common.Hash{}) {
 		milestoneDoExist = false
 	}
 
