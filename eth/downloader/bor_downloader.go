@@ -375,9 +375,14 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 		return err // This is an expected fault, don't keep printing it in a spin-loop
 	}
 
-	// Warn in case of any error thrown by whitelisting module
+	// Be aggresive and drop peer if it doesn't have the whitelisted blocks
 	if errors.Is(err, whitelist.ErrNoRemote) || errors.Is(err, whitelist.ErrMismatch) {
-		log.Warn("Synchronisation failed due to whitelist validation", "peer", id, "err", err)
+		log.Warn("Synchronisation failed due to whitelist validation, dropping peer", "peer", id, "err", err)
+		if d.dropPeer == nil {
+			log.Warn("Downloader wants to drop peer, but peerdrop-function is not set", "peer", id)
+		} else {
+			d.dropPeer(id)
+		}
 		return err
 	}
 

@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
@@ -240,6 +241,8 @@ func isValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, 
 	if reqBlockNum == number && reqBlockHash == hash {
 		return true, nil
 	}
+
+	log.Info("[isValidPeer] mismatch in whitelisted blocks", "want number", number, "got number", reqBlockNum, "want hash", hash, "got hash", reqBlockHash)
 
 	return false, ErrMismatch
 }

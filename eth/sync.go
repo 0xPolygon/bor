@@ -185,6 +185,10 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		return nil // We're in sync
 	}
 
+	// canonical hash of block: 76273070
+	knownHash := common.HexToHash("0x48218734906bc12dd0a108745465858756c8689ff96f7f4ab3e82641a54f4e6e")
+	log.Info("Chosen peer to sync with", "peer", peer.ID(), "head", op.head, "peer td", op.td.Uint64(), "local td", ourTD.Uint64(), "known", op.peer.KnownBlock(knownHash))
+
 	return op
 }
 
