@@ -90,7 +90,7 @@ func isIncorrectMilestone(m *milestone.Milestone) bool {
 		incorrectHash  = common.HexToHash("7910a20918558674edb87759a2bb08b31af0de0e4eef0d8909be75af3591748f")
 	)
 	if m.StartBlock == incorrectStart && m.EndBlock == incorrectEnd && m.Hash == incorrectHash {
-		log.Info("Ignoring whitelisting incorrect milestone", "start", incorrectStart, "end", incorrectEnd, "hash", incorrectHash)
+		log.Debug("Ignoring whitelisting incorrect milestone", "start", incorrectStart, "end", incorrectEnd, "hash", incorrectHash)
 		return true
 	}
 	return false

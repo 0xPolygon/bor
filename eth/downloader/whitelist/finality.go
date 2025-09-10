@@ -35,7 +35,7 @@ func isIncorrectMilestone(number uint64, hash common.Hash) bool {
 		incorrectHash = common.HexToHash("7910a20918558674edb87759a2bb08b31af0de0e4eef0d8909be75af3591748f")
 	)
 	if number == incorrectEnd && hash == incorrectHash {
-		log.Info("Ignoring validating against incorrect milestone", "number", incorrectEnd, "hash", incorrectHash)
+		log.Debug("Ignoring validating against incorrect milestone", "number", incorrectEnd, "hash", incorrectHash)
 		return true
 	}
 	return false
