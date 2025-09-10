@@ -2,6 +2,7 @@
 package rawdb
 
 import (
+	"bytes"
 	"fmt"
 
 	json "github.com/json-iterator/go"
@@ -55,13 +56,30 @@ func (m *Milestone) block() (uint64, common.Hash) {
 func ReadFinality[T BlockFinality[T]](db ethdb.KeyValueReader) (uint64, common.Hash, error) {
 	lastTV, key := getKey[T]()
 
+	log.Info("About to read finality from db", "key", string(key), "checkpoint", bytes.Equal(key, lastCheckpoint), "milestone", bytes.Equal(key, lastMilestone))
 	data, err := db.Get(key)
 	if err != nil {
+		log.Error("Unable to read from db")
 		return 0, common.Hash{}, fmt.Errorf("%w: empty response for %s", err, string(key))
 	}
 
 	if len(data) == 0 {
+		log.Error("Empty data read from db")
 		return 0, common.Hash{}, fmt.Errorf("%w for %s", ErrEmptyLastFinality, string(key))
+	}
+
+	var dataCopy = make([]byte, len(data))
+	copy(dataCopy, data)
+	type Temp struct {
+		Block uint64
+		Hash  common.Hash
+	}
+	var t Temp
+	err = json.Unmarshal(dataCopy, &t)
+	if err == nil {
+		log.Info("Unmarshalled last whitelisted entry", "key", string(key), "block", t.Block, "hash", t.Hash)
+	} else {
+		log.Info("Error unmarshaling copy")
 	}
 
 	if err = json.Unmarshal(data, lastTV); err != nil {
@@ -72,6 +90,7 @@ func ReadFinality[T BlockFinality[T]](db ethdb.KeyValueReader) (uint64, common.H
 	}
 
 	block, hash := lastTV.block()
+	log.Info("Last entry", "number", block, "hash", hash)
 
 	return block, hash, nil
 }
