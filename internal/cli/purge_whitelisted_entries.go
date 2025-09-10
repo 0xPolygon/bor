@@ -58,7 +58,6 @@ func (c *PurgeWhitelistedEntriesCommand) Run(args []string) int {
 	}
 
 	c.UI.Output("Starting to prune whitelisted entries. Opening database at path: " + datadir)
-	c.UI.Output("")
 
 	// Open the underlying key value database
 	node, err := node.New(&node.Config{
@@ -77,6 +76,7 @@ func (c *PurgeWhitelistedEntriesCommand) Run(args []string) int {
 
 	// Purge all whitelisted entries from db
 	rawdb.PurgeWhitelistedEntriesFromDb(chaindb)
+	c.UI.Output("Finished purge attempt for local whitelisted entries")
 
 	chaindb.Close()
 	return 0
