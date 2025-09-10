@@ -713,6 +713,16 @@ func (l *pricedList) Discard(slots int) (types.Transactions, bool) {
 	l.reheapMu.Lock()
 	defer l.reheapMu.Unlock()
 
+	// Prevent makeslice panic by capping slots at a reasonable maximum
+	// This prevents integer overflow issues that can cause runtime panics
+	const maxSlots = 1000000 // 1 million slots max
+	if slots > maxSlots {
+		slots = maxSlots
+	}
+	if slots < 0 {
+		slots = 0
+	}
+
 	drop := make(types.Transactions, 0, slots) // Remote underpriced transactions to drop
 
 	for slots > 0 {

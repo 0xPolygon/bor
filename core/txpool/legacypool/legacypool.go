@@ -799,7 +799,27 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 
 		// New transaction is better than our worse ones, make room for it.
 		// If we can't make enough room for new one, abort the operation.
-		drop, success := pool.priced.Discard(pool.all.Slots() - int(pool.config.GlobalSlots+pool.config.GlobalQueue) + numSlots(tx))
+		// Prevent integer overflow by capping the calculation
+		currentSlots := pool.all.Slots()
+		maxAllowedSlots := int(pool.config.GlobalSlots + pool.config.GlobalQueue)
+		newTxSlots := numSlots(tx)
+
+		// Cap the calculation to prevent integer overflow
+		slotsToDiscard := currentSlots - maxAllowedSlots + newTxSlots
+		if slotsToDiscard < 0 {
+			slotsToDiscard = 0
+		}
+
+		// Log potential overflow conditions for debugging
+		if currentSlots > maxAllowedSlots*2 {
+			log.Warn("Transaction pool slots significantly exceed limits",
+				"currentSlots", currentSlots,
+				"maxAllowedSlots", maxAllowedSlots,
+				"newTxSlots", newTxSlots,
+				"slotsToDiscard", slotsToDiscard)
+		}
+
+		drop, success := pool.priced.Discard(slotsToDiscard)
 
 		// Special case, we still can't make the room for the new remote one.
 		if !success {
@@ -2014,7 +2034,14 @@ func (t *lookup) hasAuth(addr common.Address) bool {
 
 // numSlots calculates the number of slots needed for a single transaction.
 func numSlots(tx *types.Transaction) int {
-	return int((tx.Size() + txSlotSize - 1) / txSlotSize)
+	size := tx.Size()
+	// Prevent integer overflow by capping the size at a reasonable maximum
+	// This prevents the makeslice panic when creating slices with extremely large capacities
+	const maxTxSize = 1024 * 1024 * 1024 // 1GB max transaction size
+	if size > maxTxSize {
+		size = maxTxSize
+	}
+	return int((size + txSlotSize - 1) / txSlotSize)
 }
 
 // Clear implements txpool.SubPool, removing all tracked txs from the pool
