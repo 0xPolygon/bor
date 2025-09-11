@@ -109,8 +109,22 @@ func ReadBorReceipt(db ethdb.Reader, hash common.Hash, number uint64, config *pa
 	return borReceipt
 }
 
+func IsStateSyncBlock(number uint64) bool {
+	var stateSyncBlocks []uint64 = []uint64{608, 640, 896, 992, 1408, 1440, 1456, 1472, 1680, 1744}
+	for _, n := range stateSyncBlocks {
+		if n == number {
+			return true
+		}
+	}
+	return false
+}
+
 // WriteBorReceipt stores all the bor receipt belonging to a block.
 func WriteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64, borReceipt *types.ReceiptForStorage) {
+	if IsStateSyncBlock(number) {
+		log.Info("[debug] *** Writing bor receipts", "number", hash, "number", number)
+		borReceipt.Print()
+	}
 	// Convert the bor receipt into their storage form and serialize them
 	bytes, err := rlp.EncodeToBytes(borReceipt)
 	if err != nil {
@@ -125,7 +139,9 @@ func WriteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64, b
 
 // DeleteBorReceipt removes receipt data associated with a block hash.
 func DeleteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
-	log.Error("[debug] ********** ABOUT TO DELETE BOR RECEIPT **********", "number", number, "hash", hash)
+	if IsStateSyncBlock(number) {
+		log.Info("[debug] *** Deleting bor receipt", "number", number, "hash", hash)
+	}
 	key := borReceiptKey(number, hash)
 
 	if err := db.Delete(key); err != nil {
