@@ -819,6 +819,10 @@ func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *
 
 		// Re-process the milestone periodically in case a fork is imported right after the previous milestone
 		case <-ticker.C:
+			if milestone == nil {
+				continue
+			}
+
 			err := ethHandler.handleMilestone(ctx, s, milestone, newBorVerifier())
 			if err != nil {
 				log.Error("error handling milestone ws event", "err", err)
