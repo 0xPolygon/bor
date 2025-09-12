@@ -100,13 +100,25 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode (only "full" sync supported) (default: full)
+- ```syncmode```: Blockchain sync mode (only "full" or "stateless" sync supported) (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
 
-- ```witnessprotocol```: Enable witness protocol (default: false)
+- ```witness.enable```: Enable witness protocol (default: false)
+
+- ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
+
+- ```witness.producewitnesses```: Produce witnesses while syncing (default: false)
+
+- ```witness.pruneinterval```: The time interval between each witness prune routine (default: 2m0s)
+
+- ```witness.prunethreshold```: Maximum distance between local header and latest non pruned witness after a pruning routine (default: 64000)
+
+- ```witness.syncwithwitnesses```: Sync blocks with witnesses (default: false)
+
+- ```witness.witnessapi```: Enable witness API endpoints (by default disabled) (default: false)
 
 ### Account Management Options
 
