@@ -1031,6 +1031,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.ProduceWitnesses,
 		Default: c.cliConfig.Witness.ProduceWitnesses,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.witnessapi",
+		Usage:   "Enable witness API endpoints (by default disabled)",
+		Value:   &c.cliConfig.Witness.WitnessAPI,
+		Default: c.cliConfig.Witness.WitnessAPI,
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
 		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",

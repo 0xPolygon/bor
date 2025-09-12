@@ -642,6 +642,9 @@ type WitnessConfig struct {
 	// ProduceWitnesses enables producing witnesses while syncing
 	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
 
+	// WitnessAPI enables witness API endpoints
+	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
+
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 
@@ -857,6 +860,7 @@ func DefaultConfig() *Config {
 			Enable:               false,
 			SyncWithWitnesses:    false,
 			ProduceWitnesses:     false,
+			WitnessAPI:           false,
 			FastForwardThreshold: 6400,
 			PruneThreshold:       64000,
 			PruneInterval:        120 * time.Second,
@@ -1294,6 +1298,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
 	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.WitnessAPIEnabled = c.Witness.WitnessAPI
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
 	n.WitnessPruneThreshold = c.Witness.PruneThreshold
 	n.WitnessPruneInterval = c.Witness.PruneInterval

@@ -56,7 +56,6 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/blocktest"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
@@ -718,18 +717,17 @@ func (b testBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNumber
 		return nil, nil
 	}
 
-	witnessRlpEncoded := rawdb.ReadWitness(b.ChainDb(), blockHeader.Hash())
-	if len(witnessRlpEncoded) == 0 {
+	rlpEncodedWitness := rawdb.ReadWitness(b.ChainDb(), blockHeader.Hash())
+	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}
 
-	var decodedWitness stateless.Witness
-	stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
-	if err := decodedWitness.DecodeRLP(stream); err != nil {
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
 		return nil, err
 	}
 
-	return &decodedWitness, nil
+	return witness, nil
 }
 
 func (b testBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
@@ -741,18 +739,17 @@ func (b testBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stat
 		return nil, nil
 	}
 
-	witnessRlpEncoded := rawdb.ReadWitness(b.ChainDb(), hash)
-	if len(witnessRlpEncoded) == 0 {
+	rlpEncodedWitness := rawdb.ReadWitness(b.ChainDb(), hash)
+	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}
 
-	var decodedWitness stateless.Witness
-	stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
-	if err := decodedWitness.DecodeRLP(stream); err != nil {
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
 		return nil, err
 	}
 
-	return &decodedWitness, nil
+	return witness, nil
 }
 
 func (b testBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
@@ -4431,12 +4428,10 @@ func TestBorWitnessAPI_Integration(t *testing.T) {
 		witnessData := rawdb.ReadWitness(backend.ChainDb(), testBlockHash)
 		require.NotEmpty(t, witnessData, "Witness data should be stored in database")
 
-		var decodedWitness stateless.Witness
-		stream := rlp.NewStream(bytes.NewReader(witnessData), 0)
-		err := decodedWitness.DecodeRLP(stream)
+		witness, err := stateless.GetWitnessFromRlp(witnessData)
 		require.NoError(t, err)
-		require.NotNil(t, decodedWitness.Header())
-		require.Equal(t, testBlockHash, decodedWitness.Header().Hash())
+		require.NotNil(t, witness.Header())
+		require.Equal(t, testBlockHash, witness.Header().Hash())
 	})
 
 	borApi := NewBorAPI(backend)

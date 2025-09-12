@@ -17,6 +17,7 @@
 package stateless
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // HeaderReader is an interface to pull in headers in place of block hashes for the witness.
@@ -167,4 +169,14 @@ func (w *Witness) SetHeader(header *types.Header) {
 	if w != nil {
 		w.context = header
 	}
+}
+
+// GetWitnessFromRlp decodes a witness from its RLP encoded form.
+func GetWitnessFromRlp(rlpEncodedWitness []byte) (*Witness, error) {
+	var witness Witness
+	stream := rlp.NewStream(bytes.NewReader(rlpEncodedWitness), 0)
+	if err := witness.DecodeRLP(stream); err != nil {
+		return nil, err
+	}
+	return &witness, nil
 }

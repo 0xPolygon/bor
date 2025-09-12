@@ -80,6 +80,7 @@ var Defaults = Config{
 	FastForwardThreshold:  6400,
 	WitnessPruneThreshold: 64000,
 	WitnessPruneInterval:  120 * time.Second,
+	WitnessAPIEnabled:     false,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -237,6 +238,9 @@ type Config struct {
 
 	// The time interval between each witness prune routine
 	WitnessPruneInterval time.Duration
+
+	// WitnessAPIEnabled enables witness API endpoints
+	WitnessAPIEnabled bool
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
