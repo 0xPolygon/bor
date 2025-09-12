@@ -212,7 +212,11 @@ func (m *witnessManager) loop() {
 		// Handle witness timer triggers
 		case <-timerChan: // Listen on the conditional channel
 			lastTick = time.Now()
-			log.Debug("[wm] Witness timer triggered", "time", lastTick, "pendingCount", len(m.pending))
+			// Check pending count under mutex protection
+			m.mu.Lock()
+			pendingCount := len(m.pending)
+			m.mu.Unlock()
+			log.Debug("[wm] Witness timer triggered", "time", lastTick, "pendingCount", pendingCount)
 			m.tick()
 
 		// Handle periodic cleanup of the unavailable witness cache
@@ -813,6 +817,7 @@ func (m *witnessManager) cleanupUnavailableCache() {
 // This is called from BlockFetcher's FilterHeaders case for empty blocks.
 func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *types.Block) {
 	m.mu.Lock()
+
 	hash := block.Hash()
 	log.Debug("[wm] Handling filter result (empty block check)", "hash", hash, "peer", announce.origin)
 
@@ -824,6 +829,7 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 	}
 
 	m.mu.Unlock()
+
 	// Check if witness is known to be unavailable
 	if m.isWitnessUnavailable(hash) {
 		log.Debug("[wm] Witness for filter result block known to be unavailable, discarding", "hash", hash)
@@ -854,7 +860,6 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 			witness: cached.witness,
 		}
 		m.witnessCache.Delete(hash)
-
 		log.Debug("[wm] Found cached witness for filter result block, using it", "hash", hash, "cachedPeer", cached.peer)
 		m.safeEnqueue(op)
 		return
@@ -874,9 +879,11 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 			fetchWitness: announce.fetchWitness,
 		},
 	}
+
 	m.mu.Lock()
 	m.pending[hash] = state
 	m.mu.Unlock()
+
 	m.rescheduleWitness()
 }
 
