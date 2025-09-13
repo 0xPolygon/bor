@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
@@ -19,7 +20,14 @@ var (
 	ErrNoRemoteCheckpoint = errors.New("remote peer doesn't have a checkpoint")
 )
 
+var (
+	// maxForkCorrectnessLimit defines the maximum number of blocks to iterate backwards
+	// in db for checking fork correctness instead of blindly accepting the chain.
+	maxForkCorrectnessLimit = uint64(256)
+)
+
 type Service struct {
+	db ethdb.Database
 	checkpointService
 	milestoneService
 }
@@ -54,6 +62,7 @@ func NewService(db ethdb.Database) *Service {
 	}
 
 	return &Service{
+		db,
 		&checkpoint{
 			finality[*rawdb.Checkpoint]{
 				doExist:  checkpointDoExist,
@@ -145,7 +154,65 @@ func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Heade
 		return milestoneBool, err
 	}
 
+	// Check for fork correctness
+	if len(chain) > 0 {
+		return s.checkForkCorrectness(chain[0]), nil
+	}
+
 	return true, nil
+}
+
+// checkForkCorrectness checks if the chain being imported belongs to the correct fork
+// by iterating backwards until the last whitelisted milestone or checkpoint. This helps
+// in cases where the chain being imported doesn't overlap with any whitelisted entry and
+// we have to blindly accept it.
+func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
+	if firstBlock == nil {
+		return true
+	}
+	headerNumber := firstBlock.Number.Uint64()
+
+	// Fetch the latest whitelisted entry
+	doExist, number, hash := s.milestoneService.Get()
+	if !doExist {
+		return true
+	}
+	// TODO: add checkpoint here
+
+	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
+	if headerNumber-number > maxForkCorrectnessLimit {
+		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
+		return true
+	}
+
+	// Only perform checks if first block being imported is ahead of last whitelisted entry. We can
+	// skip checking for fork correctness otherwise as chain would be already validated before.
+	if headerNumber > number {
+		parentNumber := headerNumber - 1
+		parentHash := firstBlock.ParentHash
+		for {
+			// Fetch the parent block by number and hash
+			header := rawdb.ReadHeader(s.db, parentHash, parentNumber)
+			if header == nil {
+				// This shouldn't happen as the db should have all blocks before the first block
+				// Log the issue and accept blindly (falling back to previous behaviour instead of rejecting)
+				log.Warn("Missing parent block while checking fork correctness", "number", parentNumber, "hash", parentHash, "import block", headerNumber, "import hash", firstBlock.Hash())
+				return true
+			}
+
+			// Check if we're at the whitelisted block
+			if header.Number.Uint64() == number {
+				// Check if hash matches and return
+				return header.Hash() == hash
+			}
+
+			// Header not reached yet, move to parent
+			parentHash = header.ParentHash
+			parentNumber--
+		}
+	}
+
+	return true
 }
 
 func (s *Service) GetMilestoneIDsList() []string {
