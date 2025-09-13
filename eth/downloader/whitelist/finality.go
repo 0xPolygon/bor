@@ -101,8 +101,8 @@ func (f *finality[T]) Process(block uint64, hash common.Hash) {
 	}
 }
 
-// Get returns the existing whitelisted
-// entries of checkpoint of the form (doExist,block number,block hash.)
+// Get returns the existing whitelisted entries of the form
+// (doExist, block number, block hash).
 func (f *finality[T]) Get() (bool, uint64, common.Hash) {
 	f.RLock()
 	defer f.RUnlock()
@@ -120,7 +120,7 @@ func (f *finality[T]) Get() (bool, uint64, common.Hash) {
 	return true, block, hash
 }
 
-// Purge purges the whitlisted checkpoint
+// Purge removes the whitelisted checkpoint
 func (f *finality[T]) Purge() {
 	f.Lock()
 	defer f.Unlock()
