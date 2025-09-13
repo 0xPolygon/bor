@@ -32,6 +32,7 @@ type Service struct {
 	checkpointService
 	milestoneService
 
+	lastValidForkBlock    uint64 // Last known valid block for fork correctness check
 	forkValidationCache   map[common.Hash]bool
 	forkValidationCacheMu sync.RWMutex
 }
@@ -96,6 +97,7 @@ func NewService(db ethdb.Database) *Service {
 			MaxCapacity:           10,
 			blockchain:            nil, // Will be set after blockchain creation
 		},
+		lastValidForkBlock:  0,
 		forkValidationCache: make(map[common.Hash]bool, maxForkCorrectnessLimit),
 	}
 }
@@ -202,8 +204,13 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 		}
 	}
 
+	var lastKnownValidBlock uint64 = number
+	if s.lastValidForkBlock > number {
+		lastKnownValidBlock = s.lastValidForkBlock
+	}
+
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
-	if headerNumber-number > maxForkCorrectnessLimit {
+	if headerNumber-lastKnownValidBlock > maxForkCorrectnessLimit {
 		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
 		return true
 	}
@@ -227,6 +234,7 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 				// Cache suggests that this fork is already validated. Accept the fork
 				// and update the cache.
 				s.updateForkValidationCache(blocksChecked)
+				s.lastValidForkBlock = headerNumber
 				return true
 			}
 			// Fetch the parent block by number and hash
@@ -246,6 +254,7 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 					// If valid, cache the blocks checked already to avoid re-checking
 					// them in next import.
 					s.updateForkValidationCache(blocksChecked)
+					s.lastValidForkBlock = headerNumber
 				}
 				return res
 			} else {
