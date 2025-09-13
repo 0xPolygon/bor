@@ -67,18 +67,12 @@ func (f *finality[T]) IsValidChain(currentHeader *types.Header, chain []*types.H
 		return false, nil
 	}
 
-	f.RLock()
-	doExist := f.doExist
-	number := f.Number
-	hash := f.Hash
-	f.RUnlock()
-
 	// Ignore validating against incorrect milestone
-	if isIncorrectMilestone(number, hash) {
+	if isIncorrectMilestone(f.Number, f.Hash) {
 		return true, nil
 	}
 
-	return isValidChain(currentHeader, chain, doExist, number, hash)
+	return isValidChain(currentHeader, chain, f.doExist, f.Number, f.Hash)
 }
 
 // reportWhitelist logs the block number and hash if a new and unique entry is being inserted
