@@ -51,16 +51,15 @@ func (m *MockChainReader) SetBlock(number uint64, block *types.Block) {
 // NewMockService creates a new mock whitelist service
 func NewMockService(db ethdb.Database) *Service {
 	return &Service{
-
-		&checkpoint{
+		db: db,
+		checkpointService: &checkpoint{
 			finality[*rawdb.Checkpoint]{
 				doExist:  false,
 				interval: 256,
 				db:       db,
 			},
 		},
-
-		&milestone{
+		milestoneService: &milestone{
 			finality: finality[*rawdb.Milestone]{
 				doExist:  false,
 				interval: 256,
@@ -71,6 +70,8 @@ func NewMockService(db ethdb.Database) *Service {
 			FutureMilestoneOrder: make([]uint64, 0),
 			MaxCapacity:          10,
 		},
+		lastValidForkBlock:  0,
+		forkValidationCache: make(map[common.Hash]bool, maxForkCorrectnessLimit),
 	}
 }
 
