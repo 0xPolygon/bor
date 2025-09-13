@@ -3,6 +3,7 @@ package whitelist
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -30,6 +31,9 @@ type Service struct {
 	db ethdb.Database
 	checkpointService
 	milestoneService
+
+	forkValidationCache   map[common.Hash]bool
+	forkValidationCacheMu sync.RWMutex
 }
 
 func NewService(db ethdb.Database) *Service {
@@ -62,8 +66,8 @@ func NewService(db ethdb.Database) *Service {
 	}
 
 	return &Service{
-		db,
-		&checkpoint{
+		db: db,
+		checkpointService: &checkpoint{
 			finality[*rawdb.Checkpoint]{
 				doExist:  checkpointDoExist,
 				Number:   checkpointNumber,
@@ -73,8 +77,7 @@ func NewService(db ethdb.Database) *Service {
 				name:     "checkpoint",
 			},
 		},
-
-		&milestone{
+		milestoneService: &milestone{
 			finality: finality[*rawdb.Milestone]{
 				doExist:  milestoneDoExist,
 				Number:   milestoneNumber,
@@ -93,6 +96,7 @@ func NewService(db ethdb.Database) *Service {
 			MaxCapacity:           10,
 			blockchain:            nil, // Will be set after blockchain creation
 		},
+		forkValidationCache: make(map[common.Hash]bool, maxForkCorrectnessLimit),
 	}
 }
 
@@ -137,10 +141,12 @@ func (s *Service) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
 
 func (s *Service) ProcessMilestone(endBlockNum uint64, endBlockHash common.Hash) {
 	s.milestoneService.Process(endBlockNum, endBlockHash)
+	s.resetForkValidationCache()
 }
 
 func (s *Service) ProcessCheckpoint(endBlockNum uint64, endBlockHash common.Hash) {
 	s.checkpointService.Process(endBlockNum, endBlockHash)
+	s.resetForkValidationCache()
 }
 
 func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Header) (bool, error) {
@@ -202,12 +208,27 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 		return true
 	}
 
+	// Track all blocks iterated for caching
+	var blocksChecked []common.Hash = make([]common.Hash, 0, maxForkCorrectnessLimit)
+
+	// Acquire lock over the cache
+	s.forkValidationCacheMu.Lock()
+	defer s.forkValidationCacheMu.Unlock()
+
 	// Only perform checks if first block being imported is ahead of last whitelisted entry. We can
 	// skip checking for fork correctness otherwise as chain would be already validated before.
 	if headerNumber > number {
 		parentNumber := headerNumber - 1
 		parentHash := firstBlock.ParentHash
+		blocksChecked = append(blocksChecked, firstBlock.Hash())
 		for {
+			// Check against cache if this block has been already validated
+			if s.forkValidationCache[parentHash] {
+				// Cache suggests that this fork is already validated. Accept the fork
+				// and update the cache.
+				s.updateForkValidationCache(blocksChecked)
+				return true
+			}
 			// Fetch the parent block by number and hash
 			header := rawdb.ReadHeader(s.db, parentHash, parentNumber)
 			if header == nil {
@@ -220,7 +241,15 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 			// Check if we're at the whitelisted block
 			if header.Number.Uint64() == number {
 				// Check if hash matches and return
-				return header.Hash() == hash
+				res := header.Hash() == hash
+				if res {
+					// If valid, cache the blocks checked already to avoid re-checking
+					// them in next import.
+					s.updateForkValidationCache(blocksChecked)
+				}
+				return res
+			} else {
+				blocksChecked = append(blocksChecked, header.Hash())
 			}
 
 			// Header not reached yet, move to parent
@@ -230,6 +259,21 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 	}
 
 	return true
+}
+
+// updateForkValidationCache inserts all block hashes which have been
+// validated to the cache. Caller must hold the lock over the cache.
+func (s *Service) updateForkValidationCache(blocks []common.Hash) {
+	for _, hash := range blocks {
+		s.forkValidationCache[hash] = true
+	}
+}
+
+// resetForkValidationCache resets the cache when a new block is whitelisted.
+func (s *Service) resetForkValidationCache() {
+	s.forkValidationCacheMu.Lock()
+	s.forkValidationCache = make(map[common.Hash]bool, maxForkCorrectnessLimit)
+	s.forkValidationCacheMu.Unlock()
 }
 
 func (s *Service) GetMilestoneIDsList() []string {
