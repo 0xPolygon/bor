@@ -172,12 +172,29 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 	}
 	headerNumber := firstBlock.Number.Uint64()
 
-	// Fetch the latest whitelisted entry
-	doExist, number, hash := s.milestoneService.Get()
-	if !doExist {
+	// Recent most whitelisted entry
+	var (
+		number uint64
+		hash   common.Hash
+	)
+
+	// Fetch the latest whitelisted entry using both checkpoint and milestone
+	milestoneExists, milestoneNumber, milestoneHash := s.milestoneService.Get()
+	checkpointExists, checkpointNumber, checkpointHash := s.checkpointService.Get()
+	if !milestoneExists && !checkpointExists {
 		return true
 	}
-	// TODO: add checkpoint here
+	if milestoneExists {
+		number = milestoneNumber
+		hash = milestoneHash
+	}
+	if checkpointExists {
+		// Only choose checkpoint if it's more recent than last milestone
+		if checkpointNumber > number {
+			number = checkpointNumber
+			hash = checkpointHash
+		}
+	}
 
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
 	if headerNumber-number > maxForkCorrectnessLimit {
