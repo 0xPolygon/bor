@@ -1451,7 +1451,6 @@ func TestForkCorrectness(t *testing.T) {
 	// A26 (m) is the milestone entry. Currently, it matches with the database entry but we'll try
 	// to explicitly change the database entry to A26' which belongs to a different fork. All the
 	// chains on top of A26' should be rejected.
-	fmt.Println("outage...")
 	chain4 := createMockChain(26, 27, chain3[0].Hash()) // A25 -> A26' -> A27'
 	// Firstly, delete the old header
 	rawdb.DeleteHeader(db, chain3[1].Hash(), chain3[1].Number.Uint64())
@@ -1462,7 +1461,6 @@ func TestForkCorrectness(t *testing.T) {
 		res := s.checkForkCorrectness(chain4[1])
 		require.Equal(t, false, res, "expected chain to be invalid due to mismatch with milestone")
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
-		fmt.Println("outage", chain3[0].Number.Uint64(), s.lastValidForkBlock)
 		require.Equal(t, chain3[0].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
 	})
 }
