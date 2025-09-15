@@ -1331,3 +1331,8 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 		f.wm.forget(hash)
 	}
 }
+
+// GetWitnessManager returns the witness manager for external access
+func (f *BlockFetcher) GetWitnessManager() *witnessManager {
+	return f.wm
+}

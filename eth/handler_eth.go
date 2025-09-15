@@ -20,12 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
@@ -130,8 +132,62 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Request witnesses using the wit peer
-			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
+			// Create verification callback for page count verification
+			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) {
+				// Get random peers for verification
+				getRandomPeers := func() []string {
+					allPeers := h.peers.getAllPeers()
+					randomPeers := make([]string, 0, len(allPeers))
+					for _, peer := range allPeers {
+						if peer.SupportsWitness() {
+							randomPeers = append(randomPeers, peer.ID())
+						}
+					}
+					// Shuffle the peers to get random selection
+					for i := len(randomPeers) - 1; i > 0; i-- {
+						j := rand.Intn(i + 1)
+						randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
+					}
+					return randomPeers
+				}
+
+				// Get witness page count from a peer
+				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
+					peer := h.peers.peer(peerID)
+					if peer == nil || !peer.SupportsWitness() {
+						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
+					}
+
+					// Create a temporary channel to get the page count
+					resCh := make(chan *eth.Response, 1)
+					req, err := peer.RequestWitnesses([]common.Hash{hash}, resCh)
+					if err != nil {
+						return 0, err
+					}
+					defer req.Close()
+
+					// Wait for response with timeout
+					select {
+					case res := <-resCh:
+						if res == nil {
+							return 0, fmt.Errorf("no response from peer %s", peerID)
+						}
+						// Extract page count from response
+						if witPacket, ok := res.Res.(*wit.WitnessPacketRLPPacket); ok && len(witPacket.WitnessPacketResponse) > 0 {
+							return witPacket.WitnessPacketResponse[0].TotalPages, nil
+						}
+						return 0, fmt.Errorf("invalid response format from peer %s", peerID)
+					case <-time.After(5 * time.Second):
+						return 0, fmt.Errorf("timeout waiting for response from peer %s", peerID)
+					}
+				}
+
+				// Trigger verification in witness manager
+				h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+			}
+
+			// Request witnesses using the wit peer with verification
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, verifyPageCount)
 		}
 	}
 
@@ -158,8 +214,62 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Request witnesses using the wit peer
-			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
+			// Create verification callback for page count verification
+			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) {
+				// Get random peers for verification
+				getRandomPeers := func() []string {
+					allPeers := h.peers.getAllPeers()
+					randomPeers := make([]string, 0, len(allPeers))
+					for _, peer := range allPeers {
+						if peer.SupportsWitness() {
+							randomPeers = append(randomPeers, peer.ID())
+						}
+					}
+					// Shuffle the peers to get random selection
+					for i := len(randomPeers) - 1; i > 0; i-- {
+						j := rand.Intn(i + 1)
+						randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
+					}
+					return randomPeers
+				}
+
+				// Get witness page count from a peer
+				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
+					peer := h.peers.peer(peerID)
+					if peer == nil || !peer.SupportsWitness() {
+						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
+					}
+
+					// Create a temporary channel to get the page count
+					resCh := make(chan *eth.Response, 1)
+					req, err := peer.RequestWitnesses([]common.Hash{hash}, resCh)
+					if err != nil {
+						return 0, err
+					}
+					defer req.Close()
+
+					// Wait for response with timeout
+					select {
+					case res := <-resCh:
+						if res == nil {
+							return 0, fmt.Errorf("no response from peer %s", peerID)
+						}
+						// Extract page count from response
+						if witPacket, ok := res.Res.(*wit.WitnessPacketRLPPacket); ok && len(witPacket.WitnessPacketResponse) > 0 {
+							return witPacket.WitnessPacketResponse[0].TotalPages, nil
+						}
+						return 0, fmt.Errorf("invalid response format from peer %s", peerID)
+					case <-time.After(5 * time.Second):
+						return 0, fmt.Errorf("timeout waiting for response from peer %s", peerID)
+					}
+				}
+
+				// Trigger verification in witness manager
+				h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+			}
+
+			// Request witnesses using the wit peer with verification
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, verifyPageCount)
 		}
 
 		// Call the new fetcher method to inject the block

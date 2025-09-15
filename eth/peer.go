@@ -159,6 +159,11 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil)
+}
+
+// RequestWitnessesWithVerification requests witnesses with optional page count verification
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string)) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -209,7 +214,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, verifyPageCount)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -313,6 +318,7 @@ func (p *ethPeer) receiveWitnessPage(
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
+	verifyPageCount func(common.Hash, uint64, string),
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -372,6 +378,11 @@ func (p *ethPeer) receiveWitnessPage(
 		mapsMu.Lock()
 		witTotalPages[page.Hash] = page.TotalPages
 		mapsMu.Unlock()
+
+		// Trigger page count verification if callback is provided
+		if verifyPageCount != nil {
+			verifyPageCount(page.Hash, page.TotalPages, p.ID())
+		}
 
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built
