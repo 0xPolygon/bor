@@ -159,6 +159,8 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		}
 
 		reorgToFinalized(eth, head, rewindTo, canonicalChain)
+
+		return hash, errHashMismatch
 	}
 
 	// fetch the end block hash
