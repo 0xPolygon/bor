@@ -164,23 +164,21 @@ func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Heade
 		return milestoneBool, err
 	}
 
-	// Check for fork correctness
-	if len(chain) > 0 {
-		return s.checkForkCorrectness(chain[0]), nil
-	}
-
-	return true, nil
+	// At last, check for fork correctness
+	return s.checkForkCorrectness(chain), nil
 }
 
 // checkForkCorrectness checks if the chain being imported belongs to the correct fork
 // by iterating backwards until the last whitelisted milestone or checkpoint. This helps
 // in cases where the chain being imported doesn't overlap with any whitelisted entry and
 // we have to blindly accept it.
-func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
-	if firstBlock == nil {
+func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
+	if len(chain) == 0 {
 		return true
 	}
+	firstBlock := chain[0]
 	headerNumber := firstBlock.Number.Uint64()
+	lastHeaderNumber := chain[len(chain)-1].Number.Uint64()
 
 	// Recent most whitelisted entry
 	var (
@@ -219,6 +217,10 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 
 	// Track all blocks iterated for caching
 	var blocksChecked []common.Hash = make([]common.Hash, 0, DefaultMaxForkCorrectnessLimit)
+	// Cache the incoming chain by default
+	for _, header := range chain {
+		blocksChecked = append(blocksChecked, header.Hash())
+	}
 
 	// Acquire lock over the cache
 	s.forkValidationCacheMu.Lock()
@@ -229,14 +231,13 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 	if headerNumber > number {
 		parentNumber := headerNumber - 1
 		parentHash := firstBlock.ParentHash
-		blocksChecked = append(blocksChecked, firstBlock.Hash())
 		for {
 			// Check against cache if this block has been already validated
 			if s.forkValidationCache[parentHash] {
 				// Cache suggests that this fork is already validated. Accept the fork
 				// and update the cache.
 				s.updateForkValidationCache(blocksChecked)
-				s.lastValidForkBlock = headerNumber
+				s.lastValidForkBlock = lastHeaderNumber
 				return true
 			}
 			// Fetch the parent block by number and hash
@@ -256,7 +257,7 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 					// If valid, cache the blocks checked already to avoid re-checking
 					// them in next import.
 					s.updateForkValidationCache(blocksChecked)
-					s.lastValidForkBlock = headerNumber
+					s.lastValidForkBlock = lastHeaderNumber
 				}
 				return res
 			} else {
