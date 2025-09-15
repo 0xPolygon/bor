@@ -1037,6 +1037,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.EnableParallelStatelessImport,
 		Default: c.cliConfig.Witness.EnableParallelStatelessImport,
 	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "witness.parallelstatelessimportworkers",
+		Usage:   "Number of workers to use for parallel stateless import (0 = GOMAXPROCS)",
+		Value:   &c.cliConfig.Witness.ParallelStatelessImportWorkers,
+		Default: c.cliConfig.Witness.ParallelStatelessImportWorkers,
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
 		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",

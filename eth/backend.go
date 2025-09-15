@@ -273,6 +273,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Set parallel stateless import toggle on blockchain
 	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
 		eth.blockchain.ParallelStatelessImportEnable()
+		if config.EnableParallelStatelessImportWorkers > 0 {
+			eth.blockchain.SetParallelStatelessImportWorkers(config.EnableParallelStatelessImportWorkers)
+		}
 	}
 
 	if err != nil {

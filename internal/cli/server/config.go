@@ -645,6 +645,9 @@ type WitnessConfig struct {
 	// Parallel stateless import (download path) toggle
 	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
 
+	// Number of workers (CPUs) to use for parallel stateless import. If 0, uses GOMAXPROCS.
+	ParallelStatelessImportWorkers int `hcl:"parallelstatelessimportworkers,optional" toml:"parallelstatelessimportworkers,optional"`
+
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 
@@ -857,13 +860,14 @@ func DefaultConfig() *Config {
 			Enforce:              false,
 		},
 		Witness: &WitnessConfig{
-			Enable:                        false,
-			SyncWithWitnesses:             false,
-			ProduceWitnesses:              false,
-			EnableParallelStatelessImport: false,
-			FastForwardThreshold:          6400,
-			PruneThreshold:                64000,
-			PruneInterval:                 120 * time.Second,
+			Enable:                         false,
+			SyncWithWitnesses:              false,
+			ProduceWitnesses:               false,
+			EnableParallelStatelessImport:  true,
+			ParallelStatelessImportWorkers: 0,
+			FastForwardThreshold:           6400,
+			PruneThreshold:                 64000,
+			PruneInterval:                  120 * time.Second,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,

@@ -240,6 +240,10 @@ type Config struct {
 
 	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
 	EnableParallelStatelessImport bool
+
+	// EnableParallelStatelessImportWorkers sets the number of workers (CPUs) used for parallel stateless import.
+	// If 0, defaults to GOMAXPROCS.
+	EnableParallelStatelessImportWorkers int
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

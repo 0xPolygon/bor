@@ -33,6 +33,11 @@ var (
 	ErrNoGenesis = errors.New("genesis not found in chain")
 
 	errSideChainReceipts = errors.New("side blocks can't be accepted as ancient chain data")
+
+	// ErrStatelessStateRootMismatch indicates a mismatch between locally computed
+	// state root and the cross-validated (remote) state root during stateless
+	// self-validation.
+	ErrStatelessStateRootMismatch = errors.New("stateless self-validation state root mismatch")
 )
 
 // List of evm-call-message pre-checking errors. All state transition messages will

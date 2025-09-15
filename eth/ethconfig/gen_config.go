@@ -82,6 +82,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		WitnessPruneThreshold                uint64
 		WitnessPruneInterval                 time.Duration
 		EnableParallelStatelessImport        bool
+		EnableParallelStatelessImportWorkers int
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -147,6 +148,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.WitnessPruneThreshold = c.WitnessPruneThreshold
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
 	enc.EnableParallelStatelessImport = c.EnableParallelStatelessImport
+	enc.EnableParallelStatelessImportWorkers = c.EnableParallelStatelessImportWorkers
 	return &enc, nil
 }
 

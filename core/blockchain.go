@@ -312,6 +312,7 @@ type BlockChain struct {
 	parallelSpeculativeProcesses   int       // Number of parallel speculative processes
 	enforceParallelProcessor       bool
 	parallelStatelessImportEnabled atomic.Bool // Whether parallel stateless import is enabled via config
+	parallelStatelessImportWorkers int         // Number of workers to use for parallel stateless import
 	forker                         *ForkChoice
 	vmConfig                       vm.Config
 	logger                         *tracing.Hooks
@@ -591,6 +592,13 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 // ParallelStatelessImportEnable enables parallel stateless import.
 func (bc *BlockChain) ParallelStatelessImportEnable() {
 	bc.parallelStatelessImportEnabled.Store(true)
+}
+
+// SetParallelStatelessImportWorkers sets the number of workers used by parallel stateless import.
+func (bc *BlockChain) SetParallelStatelessImportWorkers(n int) {
+	if n > 0 {
+		bc.parallelStatelessImportWorkers = n
+	}
 }
 
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
@@ -2291,6 +2299,9 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 	workCh := make(chan int, len(chain))
 	var wg sync.WaitGroup
 	numWorkers := runtime.GOMAXPROCS(0)
+	if bc.parallelStatelessImportEnabled.Load() && bc.parallelStatelessImportWorkers > 0 {
+		numWorkers = bc.parallelStatelessImportWorkers
+	}
 
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
@@ -2313,7 +2324,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				sdb, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
 					// If stateless self-validation depends on parent's commit, mark for retry in writer stage
-					if idx > 0 && strings.Contains(perr.Error(), "stateless self-validation state root mismatch") {
+					if idx > 0 && errors.Is(perr, ErrStatelessStateRootMismatch) {
 						results[idx].needsRetry = true
 						results[idx].witness = witness
 						continue
@@ -3870,7 +3881,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 	if crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
-		err = fmt.Errorf("stateless self-validation state root mismatch: remote %x != local %x", block.Root(), crossStateRoot)
+		err = fmt.Errorf("%w: remote %x != local %x", ErrStatelessStateRootMismatch, block.Root(), crossStateRoot)
 		return nil, err
 	}
 	if crossReceiptRoot != block.ReceiptHash() {
