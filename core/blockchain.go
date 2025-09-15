@@ -1232,10 +1232,8 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 			}
 			// Remove the hash <-> number mapping from the active store.
 			rawdb.DeleteHeaderNumber(db, hash)
-			// Remove the witness data if in stateless sync mode.
-			if bc.cacheConfig.Stateless {
-				rawdb.DeleteWitness(db, hash)
-			}
+			// Remove the witness. Witnesses can exist in both stateless and full sync modes.
+			rawdb.DeleteWitness(db, hash)
 		} else {
 			// Remove relative body and receipts from the active store.
 			// The header, total difficulty and canonical hash will be
@@ -1244,10 +1242,8 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 			rawdb.DeleteReceipts(db, hash, num)
 			rawdb.DeleteBorReceipt(db, hash, num)
 			rawdb.DeleteBorTxLookupEntry(db, hash, num)
-			// Remove the witness data if in stateless sync mode.
-			if bc.cacheConfig.Stateless {
-				rawdb.DeleteWitness(db, hash)
-			}
+			// Remove the witness. Witnesses can exist in both stateless and full sync modes.
+			rawdb.DeleteWitness(db, hash)
 		}
 		// Todo(rjl493456442) txlookup, log index, etc
 	}
