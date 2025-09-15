@@ -22,9 +22,9 @@ var (
 )
 
 var (
-	// maxForkCorrectnessLimit defines the maximum number of blocks to iterate backwards
-	// in db for checking fork correctness instead of blindly accepting the chain.
-	maxForkCorrectnessLimit = uint64(256)
+	// DefaultMaxForkCorrectnessLimit defines the default max number of blocks to iterate
+	// backwards in db for checking fork correctness instead of blindly accepting the chain.
+	DefaultMaxForkCorrectnessLimit = uint64(256)
 )
 
 type Service struct {
@@ -32,9 +32,10 @@ type Service struct {
 	checkpointService
 	milestoneService
 
-	lastValidForkBlock    uint64 // Last known valid block for fork correctness check
-	forkValidationCache   map[common.Hash]bool
-	forkValidationCacheMu sync.RWMutex
+	maxForkCorrectnessLimit uint64 // Maximum number of blocks to iterate backwards for fork correctness check
+	lastValidForkBlock      uint64 // Last known valid block for fork correctness check
+	forkValidationCache     map[common.Hash]bool
+	forkValidationCacheMu   sync.RWMutex
 }
 
 func NewService(db ethdb.Database) *Service {
@@ -97,8 +98,9 @@ func NewService(db ethdb.Database) *Service {
 			MaxCapacity:           10,
 			blockchain:            nil, // Will be set after blockchain creation
 		},
-		lastValidForkBlock:  0,
-		forkValidationCache: make(map[common.Hash]bool, maxForkCorrectnessLimit),
+		maxForkCorrectnessLimit: DefaultMaxForkCorrectnessLimit,
+		lastValidForkBlock:      0,
+		forkValidationCache:     make(map[common.Hash]bool, DefaultMaxForkCorrectnessLimit),
 	}
 }
 
@@ -210,13 +212,13 @@ func (s *Service) checkForkCorrectness(firstBlock *types.Header) bool {
 	}
 
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
-	if headerNumber-lastKnownValidBlock > maxForkCorrectnessLimit {
+	if headerNumber-lastKnownValidBlock > s.maxForkCorrectnessLimit {
 		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
 		return true
 	}
 
 	// Track all blocks iterated for caching
-	var blocksChecked []common.Hash = make([]common.Hash, 0, maxForkCorrectnessLimit)
+	var blocksChecked []common.Hash = make([]common.Hash, 0, DefaultMaxForkCorrectnessLimit)
 
 	// Acquire lock over the cache
 	s.forkValidationCacheMu.Lock()
@@ -281,7 +283,7 @@ func (s *Service) updateForkValidationCache(blocks []common.Hash) {
 // resetForkValidationCache resets the cache when a new block is whitelisted.
 func (s *Service) resetForkValidationCache() {
 	s.forkValidationCacheMu.Lock()
-	s.forkValidationCache = make(map[common.Hash]bool, maxForkCorrectnessLimit)
+	s.forkValidationCache = make(map[common.Hash]bool, DefaultMaxForkCorrectnessLimit)
 	s.forkValidationCacheMu.Unlock()
 }
 
