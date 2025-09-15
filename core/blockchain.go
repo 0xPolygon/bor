@@ -1225,13 +1225,17 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 		// Ignore the error here since light client won't hit this path
 		frozen, _ := bc.db.Ancients()
 		if num+1 <= frozen {
-			// Truncate all relative data(header, total difficulty, body, receipt
+			// Truncate all relative data (header, total difficulty, body, receipt
 			// and canonical hash) from ancient store.
 			if _, err := bc.db.TruncateHead(num); err != nil {
 				log.Crit("Failed to truncate ancient data", "number", num, "err", err)
 			}
 			// Remove the hash <-> number mapping from the active store.
 			rawdb.DeleteHeaderNumber(db, hash)
+			// Remove the witness data if in stateless sync mode.
+			if bc.cacheConfig.Stateless {
+				rawdb.DeleteWitness(db, hash)
+			}
 		} else {
 			// Remove relative body and receipts from the active store.
 			// The header, total difficulty and canonical hash will be
@@ -1240,6 +1244,10 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 			rawdb.DeleteReceipts(db, hash, num)
 			rawdb.DeleteBorReceipt(db, hash, num)
 			rawdb.DeleteBorTxLookupEntry(db, hash, num)
+			// Remove the witness data if in stateless sync mode.
+			if bc.cacheConfig.Stateless {
+				rawdb.DeleteWitness(db, hash)
+			}
 		}
 		// Todo(rjl493456442) txlookup, log index, etc
 	}

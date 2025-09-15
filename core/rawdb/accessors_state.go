@@ -276,7 +276,10 @@ func WriteStateHistory(db ethdb.AncientWriter, id uint64, meta []byte, accountIn
 
 func ReadWitness(db ethdb.KeyValueReader, blockHash common.Hash) []byte {
 	log.Debug("ReadWitness", "blockHash", blockHash)
-	data, _ := db.Get(witnessKey(blockHash))
+	data, err := db.Get(witnessKey(blockHash))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
 	return data
 }
 
@@ -286,7 +289,6 @@ func ReadWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-
 	number := binary.BigEndian.Uint64(data)
 	return &number
 }

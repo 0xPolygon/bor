@@ -197,6 +197,9 @@ func (p *Peer) KnownWitnessesCount() int {
 
 // KnownWitnessesContains checks if a witness is known to be known by this peer.
 func (p *Peer) KnownWitnessesContains(witness *stateless.Witness) bool {
+	if witness == nil {
+		return false
+	}
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 	return p.knownWitnesses.Contains(witness.Header().Hash())
