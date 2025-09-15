@@ -5421,6 +5421,14 @@ func TestStatelessInsertChainInvalidInputs(t *testing.T) {
 		wantErr bool
 	}{
 		{
+			name: "empty chain insertion",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, _, _ := createTestBlockAndWitness(t)
+				return chain, []*types.Block{}, []*stateless.Witness{}
+			},
+			wantErr: false,
+		},
+		{
 			name: "explicit nil witness",
 			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
 				chain, block, _ := createTestBlockAndWitness(t)
