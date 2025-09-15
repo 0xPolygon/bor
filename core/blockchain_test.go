@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -47,6 +48,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 )
 
 // So we can deterministically seed different blockchains
@@ -5323,45 +5325,187 @@ func TestStatelessInsertChain(t *testing.T) {
 	}
 }
 
-// TestStatelessInsertChainInvalidInputs tests invalid or edge inputs for InsertChainStateless
+// corruptWitnessState corrupts witness by completely replacing all state with invalid data
+func corruptWitnessState(witness *stateless.Witness) *stateless.Witness {
+	corrupted := witness.Copy()
+
+	// Completely replace all state with obviously invalid data
+	// This will cause failures when any state access is attempted
+	corrupted.State = map[string]struct{}{
+		"invalid_state_node_1": {},
+		"invalid_state_node_2": {},
+		"corrupted_data_here":  {},
+	}
+
+	return corrupted
+}
+
+// corruptWitnessHeaders corrupts witness headers with wrong state root
+func corruptWitnessHeaders(witness *stateless.Witness) *stateless.Witness {
+	corrupted := witness.Copy()
+	if len(corrupted.Headers) > 0 {
+		wrongHeader := types.CopyHeader(corrupted.Headers[0])
+		wrongHeader.Root = common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef") // Incorrect state root
+		corrupted.Headers[0] = wrongHeader
+	}
+	return corrupted
+}
+
+// clearWitnessState removes all state data from witness
+func clearWitnessState(witness *stateless.Witness) *stateless.Witness {
+	cleared := witness.Copy()
+	cleared.State = make(map[string]struct{})
+	return cleared
+}
+
+// createEmptyHeaderWitness creates a witness with empty headers
+func createEmptyHeaderWitness(header *types.Header) *stateless.Witness {
+	witness := &stateless.Witness{
+		Headers: []*types.Header{}, // Empty headers
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+	witness.SetHeader(header)
+	return witness
+}
+
+// createTestBlockAndWitness creates a fresh block and witness for testing
+func createTestBlockAndWitness(t *testing.T) (*BlockChain, *types.Block, *stateless.Witness) {
+	t.Helper()
+
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+
+	// Create stateful chain for witness generation
+	engine := ethash.NewFaker()
+	cacheConfig := &CacheConfig{TriesInMemory: 0}
+	stateFullChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create full-state chain: %v", err)
+	}
+	defer stateFullChain.Stop()
+
+	// Generate block with transaction
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		// Use transaction nonce 0 since each test uses a fresh account state
+		tx, _ := types.SignTx(types.NewTransaction(0, common.HexToAddress("0x1234"), big.NewInt(1000), 21000, big.NewInt(2000000000), nil), types.HomesteadSigner{}, key)
+		b.AddTx(tx)
+	})
+	block := blocks[0]
+
+	// Generate witness
+	witness, _, err := stateFullChain.insertChain(types.Blocks{block}, true, true)
+	if err != nil {
+		t.Fatalf("failed to build witness: %v", err)
+	}
+
+	// Create fresh stateless chain
+	statelessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create stateless chain: %v", err)
+	}
+
+	return statelessChain, block, witness
+}
+
+// TestStatelessInsertChainInvalidInputs tests invalid or edge inputs for sequential and parallel stateless insertions
 func TestStatelessInsertChainInvalidInputs(t *testing.T) {
-	// Create test chain
-	var (
-		engine = ethash.NewFaker()
-		gspec  = &Genesis{
-			Config: params.TestChainConfig,
-		}
-	)
-
-	// Create blockchain with stateless config
-	cacheConfig := &CacheConfig{
-		TriesInMemory: 0,
+	adversarialTests := []struct {
+		name    string
+		setupFn func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness)
+		wantErr bool
+	}{
+		{
+			name: "explicit nil witness",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, _ := createTestBlockAndWitness(t)
+				return chain, []*types.Block{block}, []*stateless.Witness{nil}
+			},
+			wantErr: true,
+		},
+		{
+			name: "corrupted witness state data",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				corruptedWitness := corruptWitnessState(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{corruptedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness missing required trie nodes",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				clearedWitness := clearWitnessState(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{clearedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness with incorrect state root in headers",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				corruptedWitness := corruptWitnessHeaders(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{corruptedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness with empty headers",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, _ := createTestBlockAndWitness(t)
+				emptyHeaderWitness := createEmptyHeaderWitness(block.Header())
+				return chain, []*types.Block{block}, []*stateless.Witness{emptyHeaderWitness}
+			},
+			wantErr: true,
+		},
 	}
-	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("failed to create chain: %v", err)
+
+	for _, tt := range adversarialTests {
+		t.Run(tt.name, func(t *testing.T) {
+			testInsertMethod := func(t *testing.T, methodName string, isParallel bool) {
+				chain, blocks, witnesses := tt.setupFn(t)
+				defer chain.Stop()
+
+				headers := make([]*types.Header, len(blocks))
+				for i, block := range blocks {
+					headers[i] = block.Header()
+				}
+
+				stats := &insertStats{startTime: mclock.Now()}
+
+				var err error
+				if isParallel {
+					stopHeaders, errChans := chain.prepareHeaderVerification(headers)
+					defer stopHeaders()
+					_, err = chain.insertChainStatelessParallel(blocks, witnesses, errChans, stats, stopHeaders)
+				} else {
+					_, errChans := chain.prepareHeaderVerification(headers)
+					_, err = chain.insertChainStatelessSequential(blocks, witnesses, errChans, stats)
+				}
+
+				if tt.wantErr {
+					require.Error(t, err, methodName+" expected error but got none")
+					t.Logf("%s got expected error: %v", methodName, err)
+				} else {
+					require.NoError(t, err, methodName+" unexpected error")
+				}
+			}
+
+			t.Run("sequential", func(t *testing.T) {
+				testInsertMethod(t, "insertChainStatelessSequential", false)
+			})
+
+			t.Run("parallel", func(t *testing.T) {
+				testInsertMethod(t, "insertChainStatelessParallel", true)
+			})
+		})
 	}
-	defer chain.Stop()
-
-	// Test 1: Empty chain should return 0 without error
-	_, err = chain.InsertChainStateless(types.Blocks{}, nil)
-	if err != nil {
-		t.Fatalf("expected no error for empty chain, got: %v", err)
-	}
-
-	// Test 2: Verify the method exists and handles stateless mode correctly
-	// The actual stateless execution would require proper witnesses with state proofs,
-	// which is complex to set up in a unit test. This test verifies:
-	// - The InsertChainStateless method exists
-	// - It properly handles empty input
-	// - It's only available when TriesInMemory = 0 (stateless mode)
-
-	// Verify we're in stateless mode (TriesInMemory = 0)
-	if chain.cacheConfig.TriesInMemory != 0 {
-		t.Error("Expected blockchain to be configured for stateless mode (TriesInMemory = 0)")
-	}
-
-	t.Log("InsertChainStateless method exists and handles stateless mode configuration correctly")
 }
 
 // TestStatelessSetHeadBeyondRoot tests setHeadBeyondRoot in stateless mode
