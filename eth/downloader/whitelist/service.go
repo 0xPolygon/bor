@@ -210,7 +210,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 	}
 
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
-	if headerNumber-lastKnownValidBlock > s.maxForkCorrectnessLimit {
+	if headerNumber > lastKnownValidBlock && headerNumber-lastKnownValidBlock > s.maxForkCorrectnessLimit {
 		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
 		return true
 	}
