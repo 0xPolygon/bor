@@ -123,13 +123,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.BorLogs,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "disable-blind-fork-acceptance",
+		Name:    "disable-blind-fork-validation",
 		Usage:   `Disable additional fork validation and accept blind forks without tracing back to last whitelisted entry`,
 		Value:   &c.cliConfig.DisableBlindForkValidation,
 		Default: c.cliConfig.DisableBlindForkValidation,
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "max-blind-fork-acceptance-limit",
+		Name:    "max-blind-fork-validation-limit",
 		Usage:   `Maximum number of blocks to traverse back in the database when validating blind forks`,
 		Value:   &c.cliConfig.MaxBlindForkValidationLimit,
 		Default: c.cliConfig.MaxBlindForkValidationLimit,
