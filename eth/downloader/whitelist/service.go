@@ -40,9 +40,6 @@ type Service struct {
 }
 
 func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindForkValidationLimit uint64) *Service {
-	if disableBlindForkValidation {
-		log.Info("Disabling blind fork validation")
-	}
 	if maxBlindForkValidationLimit == 0 {
 		maxBlindForkValidationLimit = DefaultMaxForkCorrectnessLimit
 		log.Info("Invalid max blind fork validation limit, falling back to default", "limit", DefaultMaxForkCorrectnessLimit)
@@ -52,6 +49,11 @@ func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindFork
 	var forkValidationCacheSize = maxBlindForkValidationLimit
 	if forkValidationCacheSize > 2*DefaultMaxForkCorrectnessLimit {
 		forkValidationCacheSize = 2 * DefaultMaxForkCorrectnessLimit
+	}
+
+	if disableBlindForkValidation {
+		forkValidationCacheSize = 0
+		log.Info("Disabling blind fork validation")
 	}
 
 	// Fetch last whitelisted checkpoint entry from db. Ignore in case of error or if
