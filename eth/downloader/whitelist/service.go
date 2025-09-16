@@ -294,7 +294,7 @@ func (s *Service) updateForkValidationCache(blocks []common.Hash) {
 // resetForkValidationCache resets the cache when a new block is whitelisted.
 func (s *Service) resetForkValidationCache() {
 	s.forkValidationCacheMu.Lock()
-	s.forkValidationCache = make(map[common.Hash]bool, DefaultMaxForkCorrectnessLimit)
+	clear(s.forkValidationCache)
 	s.forkValidationCacheMu.Unlock()
 }
 
