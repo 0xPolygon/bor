@@ -40,6 +40,7 @@ type Service struct {
 }
 
 func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindForkValidationLimit uint64) *Service {
+	log.Info("[debug] initializing whitelist service", "disableBlindForkValidation", disableBlindForkValidation, "maxBlindForkValidationLimit", maxBlindForkValidationLimit)
 	if disableBlindForkValidation {
 		log.Info("Disabling blind fork validation")
 	}
