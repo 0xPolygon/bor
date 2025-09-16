@@ -180,6 +180,11 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 	headerNumber := firstBlock.Number.Uint64()
 	lastHeaderNumber := chain[len(chain)-1].Number.Uint64()
 
+	s.forkValidationCacheMu.Lock()
+	cacheSize := uint64(len(s.forkValidationCache))
+	s.forkValidationCacheMu.Unlock()
+	log.Info("[debug] checking fork correctness", "start", headerNumber, "end", lastHeaderNumber, "cache", cacheSize, "last valid", s.lastValidForkBlock)
+
 	// Recent most whitelisted entry
 	var (
 		number uint64
@@ -190,6 +195,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 	milestoneExists, milestoneNumber, milestoneHash := s.milestoneService.Get()
 	checkpointExists, checkpointNumber, checkpointHash := s.checkpointService.Get()
 	if !milestoneExists && !checkpointExists {
+		log.Info("[debug] no whitelisted entry exists, skipping fork correctness check")
 		return true
 	}
 	if milestoneExists {
@@ -211,7 +217,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 
 	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
 	if headerNumber > lastKnownValidBlock && headerNumber-lastKnownValidBlock > s.maxForkCorrectnessLimit {
-		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
+		log.Info("[debug] skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
 		return true
 	}
 
@@ -238,6 +244,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 				// and update the cache.
 				s.updateForkValidationCache(blocksChecked)
 				s.lastValidForkBlock = lastHeaderNumber
+				log.Info("[debug] fork correctness validated from cache", "last valid", s.lastValidForkBlock)
 				return true
 			}
 			// Fetch the parent block by number and hash
@@ -245,7 +252,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 			if header == nil {
 				// This shouldn't happen as the db should have all blocks before the first block
 				// Log the issue and accept blindly (falling back to previous behaviour instead of rejecting)
-				log.Warn("Missing parent block while checking fork correctness", "number", parentNumber, "hash", parentHash, "import block", headerNumber, "import hash", firstBlock.Hash())
+				log.Warn("[debug] missing parent block while checking fork correctness", "number", parentNumber, "hash", parentHash, "import block", headerNumber, "import hash", firstBlock.Hash())
 				return true
 			}
 
@@ -258,6 +265,9 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 					// them in next import.
 					s.updateForkValidationCache(blocksChecked)
 					s.lastValidForkBlock = lastHeaderNumber
+					log.Info("[debug] fork correctness validated from header", "last valid", s.lastValidForkBlock)
+				} else {
+					log.Info("[debug] fork correctness failed", "number", number, "expected", hash, "got", header.Hash())
 				}
 				return res
 			} else {
