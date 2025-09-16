@@ -113,7 +113,7 @@ func (f *finality[T]) Get() (bool, uint64, common.Hash) {
 
 	block, hash, err := rawdb.ReadFinality[T](f.db)
 	if err != nil {
-		fmt.Println("Error while reading whitelisted state from Db", "err", err)
+		log.Debug("Unable to find whitelist entry from db", "err", err)
 		return false, f.Number, f.Hash
 	}
 
