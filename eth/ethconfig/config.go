@@ -216,6 +216,12 @@ type Config struct {
 
 	// EnableBlockTracking allows logging of information collected while tracking block lifecycle
 	EnableBlockTracking bool
+
+	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
+	DisableBlindForkValidation bool
+
+	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
+	MaxBlindForkValidationLimit uint64
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

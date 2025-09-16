@@ -32,13 +32,28 @@ type Service struct {
 	checkpointService
 	milestoneService
 
-	maxForkCorrectnessLimit uint64 // Maximum number of blocks to iterate backwards for fork correctness check
-	lastValidForkBlock      uint64 // Last known valid block for fork correctness check
-	forkValidationCache     map[common.Hash]bool
-	forkValidationCacheMu   sync.RWMutex
+	disableBlindForkValidation bool   // Flag to disable additional fork validation and accept blind forks without tracing back to last whitelisted entry
+	maxForkCorrectnessLimit    uint64 // Maximum number of blocks to iterate backwards for fork correctness check
+	lastValidForkBlock         uint64 // Last known valid block for fork correctness check
+	forkValidationCache        map[common.Hash]bool
+	forkValidationCacheMu      sync.RWMutex
 }
 
-func NewService(db ethdb.Database) *Service {
+func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindForkValidationLimit uint64) *Service {
+	if disableBlindForkValidation {
+		log.Info("Disabling blind fork validation")
+	}
+	if maxBlindForkValidationLimit == 0 {
+		maxBlindForkValidationLimit = DefaultMaxForkCorrectnessLimit
+		log.Info("Invalid max blind fork validation limit, falling back to default", "limit", DefaultMaxForkCorrectnessLimit)
+	}
+
+	// Avoid allocating large map if the limit set by user is too high (allow 2x of the default limit)
+	var forkValidationCacheSize = maxBlindForkValidationLimit
+	if forkValidationCacheSize > 2*DefaultMaxForkCorrectnessLimit {
+		forkValidationCacheSize = 2 * DefaultMaxForkCorrectnessLimit
+	}
+
 	// Fetch last whitelisted checkpoint entry from db. Ignore in case of error or if
 	// the whitelisted entry has empty hash.
 	var checkpointDoExist = true
@@ -98,9 +113,10 @@ func NewService(db ethdb.Database) *Service {
 			MaxCapacity:           10,
 			blockchain:            nil, // Will be set after blockchain creation
 		},
-		maxForkCorrectnessLimit: DefaultMaxForkCorrectnessLimit,
-		lastValidForkBlock:      0,
-		forkValidationCache:     make(map[common.Hash]bool, DefaultMaxForkCorrectnessLimit),
+		disableBlindForkValidation: disableBlindForkValidation,
+		maxForkCorrectnessLimit:    maxBlindForkValidationLimit,
+		lastValidForkBlock:         0,
+		forkValidationCache:        make(map[common.Hash]bool, forkValidationCacheSize),
 	}
 }
 
@@ -164,6 +180,10 @@ func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Heade
 		return milestoneBool, err
 	}
 
+	if s.disableBlindForkValidation {
+		return true, nil
+	}
+
 	// At last, check for fork correctness
 	return s.checkForkCorrectness(chain), nil
 }
@@ -222,7 +242,7 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 	}
 
 	// Track all blocks iterated for caching
-	var blocksChecked []common.Hash = make([]common.Hash, 0, DefaultMaxForkCorrectnessLimit)
+	var blocksChecked []common.Hash = make([]common.Hash, 0, s.maxForkCorrectnessLimit)
 	// Cache the incoming chain by default
 	for _, header := range chain {
 		blocksChecked = append(blocksChecked, header.Hash())
