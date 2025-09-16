@@ -258,6 +258,8 @@ func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
 					// them in next import.
 					s.updateForkValidationCache(blocksChecked)
 					s.lastValidForkBlock = lastHeaderNumber
+				} else {
+					log.Debug("Rejecting invalid fork after validating against last whitelisted entry", "number", number, "expected", hash, "got", header.Hash())
 				}
 				return res
 			} else {
