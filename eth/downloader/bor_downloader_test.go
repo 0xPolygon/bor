@@ -94,7 +94,7 @@ func newTesterWithNotification(t *testing.T, success func()) *downloadTester {
 	}
 
 	//nolint: staticcheck
-	tester.downloader = New(db, new(event.TypeMux), tester.chain, nil, tester.dropPeer, success, whitelist.NewService(db))
+	tester.downloader = New(db, new(event.TypeMux), tester.chain, nil, tester.dropPeer, success, whitelist.NewService(db, false, 0))
 
 	return tester
 }

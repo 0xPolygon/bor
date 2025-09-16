@@ -258,7 +258,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		vmConfig.Tracer = t
 	}
 
-	checker := whitelist.NewService(chainDb)
+	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
