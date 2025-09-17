@@ -43,7 +43,7 @@ func reportCheckpointMetrics(result bool, chain bool, peer bool) {
 		if result {
 			CheckpointChainMeter.Mark(int64(1))
 		} else {
-			CheckpointPeerMeter.Mark(int64(-1))
+			CheckpointChainMeter.Mark(int64(-1))
 		}
 	}
 
