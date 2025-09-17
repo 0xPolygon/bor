@@ -1597,6 +1597,9 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		// Set the accesslist to the last al
 		args.AccessList = &accessList
 		msg := args.ToMessage(header.BaseFee, true, true)
+		msg.GasPrice = big.NewInt(0)
+		msg.GasFeeCap = big.NewInt(0)
+		msg.GasTipCap = big.NewInt(0)
 
 		// Apply the transaction with the access list tracer
 		tracer := logger.NewAccessListTracer(accessList, addressesToExclude)
