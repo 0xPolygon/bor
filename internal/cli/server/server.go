@@ -549,7 +549,12 @@ func (s *Server) getBorInfo() map[string]any {
 		borInfo["current_block_timestamp"] = time.Unix(int64(currentBlock.Time), 0).UTC().Format(time.RFC3339Nano)
 		borInfo["peer_count"] = s.backend.PeerCount()
 		borInfo["sync_mode"] = s.backend.SyncMode()
-		borInfo["sync_status"] = s.backend.Synced()
+
+		if s.backend.Synced() {
+			borInfo["sync_status"] = "synced"
+		} else {
+			borInfo["sync_status"] = "not_synced"
+		}
 	}
 
 	return borInfo
