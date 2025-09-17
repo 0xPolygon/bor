@@ -3,16 +3,18 @@ package server
 import (
 	"crypto/ecdsa"
 	"fmt"
+
 	// "math"
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	// godebug "runtime/debug"
+	godebug "runtime/debug"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
 	"github.com/imdario/mergo"
@@ -587,6 +589,16 @@ type CacheConfig struct {
 
 	// Raise the open file descriptor resource limit (default = system fd limit)
 	FDLimit int `hcl:"fdlimit,optional" toml:"fdlimit,optional"`
+
+	// GC settings
+	// GoMemLimit sets the soft memory limit for the runtime
+	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
+
+	// GoGC sets the initial garbage collection target percentage
+	GoGC int `hcl:"gogc,optional" toml:"gogc,optional"`
+
+	// GoDebug sets debugging variables for the runtime
+	GoDebug string `hcl:"godebug,optional" toml:"godebug,optional"`
 }
 
 type ExtraDBConfig struct {
@@ -818,6 +830,9 @@ func DefaultConfig() *Config {
 			FilterLogCacheSize: ethconfig.Defaults.FilterLogCacheSize,
 			TrieTimeout:        60 * time.Minute,
 			FDLimit:            0,
+			GoMemLimit:         "",  // Empty means no limit
+			GoGC:               100, // Go default is 100%
+			GoDebug:            "",  // Empty means no debug flags
 		},
 		ExtraDB: &ExtraDBConfig{
 			// These are LevelDB defaults, specifying here for clarity in code and in logging.
@@ -1184,11 +1199,34 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 				cache = allowance
 			}
 		}
-		// Tune the garbage collector
-		// gogc := math.Max(20, math.Min(100, 100/(float64(cache)/1024)))
+		// Apply configurable garbage collection settings with validation
+		if c.Cache.GoMemLimit != "" {
+			if err := validateGoMemLimit(c.Cache.GoMemLimit); err != nil {
+				log.Warn("Invalid GOMEMLIMIT value, skipping", "value", c.Cache.GoMemLimit, "error", err)
+			} else {
+				os.Setenv("GOMEMLIMIT", c.Cache.GoMemLimit)
+				log.Info("Set GOMEMLIMIT", "value", c.Cache.GoMemLimit)
+			}
+		}
 
-		// log.Debug("Sanitizing Go's GC trigger", "percent", int(gogc))
-		// godebug.SetGCPercent(int(gogc))
+		// Sanitize GOGC value to reasonable bounds
+		sanitizedGoGC := sanitizeGoGC(c.Cache.GoGC)
+		if sanitizedGoGC != c.Cache.GoGC {
+			log.Warn("GOGC value sanitized", "original", c.Cache.GoGC, "sanitized", sanitizedGoGC)
+		}
+		if sanitizedGoGC != 100 { // Only set if different from default
+			godebug.SetGCPercent(sanitizedGoGC)
+			log.Info("Set GOGC", "percent", sanitizedGoGC)
+		}
+
+		if c.Cache.GoDebug != "" {
+			if err := validateGoDebug(c.Cache.GoDebug); err != nil {
+				log.Warn("Invalid GODEBUG value, skipping", "value", c.Cache.GoDebug, "error", err)
+			} else {
+				os.Setenv("GODEBUG", c.Cache.GoDebug)
+				log.Info("Set GODEBUG", "value", c.Cache.GoDebug)
+			}
+		}
 
 		n.DatabaseCache = calcPerc(c.Cache.PercDatabase)
 		n.SnapshotCache = calcPerc(c.Cache.PercSnapshot)
@@ -1665,4 +1703,101 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+// validateGoMemLimit validates GOMEMLIMIT values
+func validateGoMemLimit(value string) error {
+	// GOMEMLIMIT can be:
+	// - A number followed by optional unit (B, KB, MB, GB, TB, PB)
+	// - "off" to disable soft limit
+	if value == "off" {
+		return nil
+	}
+
+	// Parse the value to validate format
+	if matched, _ := regexp.MatchString(`^[0-9]+(\.[0-9]+)?[KMGTPE]?[iB]?$`, value); !matched {
+		return fmt.Errorf("invalid GOMEMLIMIT format, expected number with optional unit (e.g., '8GB', '1024MB')")
+	}
+
+	return nil
+}
+
+// sanitizeGoGC clamps GOGC values to reasonable bounds
+func sanitizeGoGC(value int) int {
+	const (
+		minGoGC = 10
+		maxGoGC = 2000
+	)
+
+	if value < minGoGC {
+		return minGoGC
+	}
+	if value > maxGoGC {
+		return maxGoGC
+	}
+	return value
+}
+
+// validateGoDebug validates GODEBUG values for known debug variables
+func validateGoDebug(value string) error {
+	// Known GODEBUG variables (not exhaustive, but covers common ones)
+	knownVars := map[string]bool{
+		"gctrace":            true, // GC trace
+		"gcpacertrace":       true, // GC pacer trace
+		"madvdontneed":       true, // Memory management
+		"scavenge":           true, // Scavenger debug
+		"asyncpreempt":       true, // Async preemption
+		"cgocheck":           true, // CGO check
+		"schedtrace":         true, // Scheduler trace
+		"scheddetail":        true, // Scheduler detail
+		"tracebackancestors": true, // Traceback ancestors
+		"httpmuxgo121":       true, // HTTP mux
+		"netdns":             true, // DNS resolution
+		"tls13":              true, // TLS 1.3
+		"panicnil":           true, // Panic on nil
+		"invalidptr":         true, // Invalid pointer checking
+		"sbrk":               true, // Memory allocation
+		"efence":             true, // Electric fence
+		"inittrace":          true, // Init trace
+		"cpu.all":            true, // CPU features
+	}
+
+	// Split by comma and validate each key=value pair
+	pairs := strings.Split(value, ",")
+	for _, pair := range pairs {
+		if strings.TrimSpace(pair) == "" {
+			continue
+		}
+
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid GODEBUG format: '%s', expected key=value", pair)
+		}
+
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		if key == "" {
+			return fmt.Errorf("empty GODEBUG variable name in: '%s'", pair)
+		}
+
+		// Validate value (most GODEBUG vars use 0/1 or numeric values)
+		if val == "" {
+			return fmt.Errorf("empty GODEBUG value for '%s'", key)
+		}
+
+		// Warn about unknown variables but don't fail (Go may add new ones)
+		if !knownVars[key] {
+			log.Warn("Unknown GODEBUG variable", "var", key, "value", val)
+		}
+
+		// Validate numeric values where appropriate
+		if key == "gctrace" || key == "gcpacertrace" || key == "schedtrace" || key == "cgocheck" {
+			if _, err := strconv.Atoi(val); err != nil {
+				return fmt.Errorf("GODEBUG variable '%s' expects numeric value, got '%s'", key, val)
+			}
+		}
+	}
+
+	return nil
 }
