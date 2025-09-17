@@ -2294,9 +2294,11 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		err        error
 		needsRetry bool
 		witness    *stateless.Witness
+		gasUsed    uint64
 	}
 	results := make([]execResult, len(chain))
 	workCh := make(chan int, len(chain))
+	var snapDiffItems, snapBufItems common.StorageSize
 	var wg sync.WaitGroup
 	numWorkers := runtime.GOMAXPROCS(0)
 	if bc.parallelStatelessImportEnabled.Load() && bc.parallelStatelessImportWorkers > 0 {
@@ -2321,7 +2323,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				if idx < len(witnesses) {
 					witness = witnesses[idx]
 				}
-				sdb, perr := bc.ProcessBlockWithWitnesses(blk, witness)
+				sdb, gasUsed, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
 					// If stateless self-validation depends on parent's commit, mark for retry in writer stage
 					if idx > 0 && errors.Is(perr, ErrStatelessStateRootMismatch) {
@@ -2336,6 +2338,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 					sdb.SetWitness(witness)
 				}
 				results[idx].sdb = sdb
+				results[idx].gasUsed = gasUsed
 			}
 		}()
 	}
@@ -2359,7 +2362,13 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				}
 			}
 			stats.processed = int(processed.Load())
-			stats.report(chain, i, 0, 0, 0, 0, true, true)
+			stats.usedGas += block.GasUsed()
+
+			if bc.snaps != nil {
+				snapDiffItems, snapBufItems = bc.snaps.Size()
+			}
+			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
 			continue
 		}
 
@@ -2374,7 +2383,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			if i < len(witnesses) {
 				witness = witnesses[i]
 			}
-			sdb, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			sdb, gasUsed, perr := bc.ProcessBlockWithWitnesses(block, witness)
 			if perr != nil {
 				stopHeaders()
 				return int(processed.Load()), perr
@@ -2383,6 +2392,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				sdb.SetWitness(witness)
 			}
 			results[i].sdb = sdb
+			results[i].gasUsed = gasUsed
 		}
 
 		var hErr error
@@ -2415,7 +2425,12 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 
 		processed.Add(1)
 		stats.processed = int(processed.Load())
-		stats.report(chain, i, 0, 0, 0, 0, true, true)
+		stats.usedGas += results[i].gasUsed
+		if bc.snaps != nil {
+			snapDiffItems, snapBufItems = bc.snaps.Size()
+		}
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
 	}
 
 	return int(processed.Load()), nil
@@ -2496,7 +2511,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 		if i < len(witnesses) {
 			witness = witnesses[i]
 		}
-		statedb, perr := bc.ProcessBlockWithWitnesses(block, witness)
+		statedb, gasUsed, perr := bc.ProcessBlockWithWitnesses(block, witness)
 		if perr != nil {
 			return int(processed.Load()), perr
 		}
@@ -2513,7 +2528,13 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 		}
 		processed.Add(1)
 		stats.processed = int(processed.Load())
-		stats.report(chain, i, 0, 0, 0, 0, true, true)
+		stats.usedGas += gasUsed
+		var snapDiffItems, snapBufItems common.StorageSize
+		if bc.snaps != nil {
+			snapDiffItems, snapBufItems = bc.snaps.Size()
+		}
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
 	}
 	// End-of-batch witness validation
 	for i, block := range chain {
@@ -3108,7 +3129,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
 		// Run the stateless self-cross-validation
-		crossStateRoot, crossReceiptRoot, _, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, diskdb)
+		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, diskdb)
 		if err != nil {
 			return nil, fmt.Errorf("stateless self-validation failed: %v", err)
 		}
@@ -3841,9 +3862,9 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 }
 
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
-func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, error) {
+func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, uint64, error) {
 	if witness == nil {
-		return nil, errors.New("nil witness")
+		return nil, 0, errors.New("nil witness")
 	}
 
 	// Validate witness.
@@ -3857,7 +3878,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		}
 		if err := stateless.ValidateWitnessPreState(witness, headerReader); err != nil {
 			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
-			return nil, fmt.Errorf("witness validation failed: %w", err)
+			return nil, 0, fmt.Errorf("witness validation failed: %w", err)
 		}
 	}
 
@@ -3871,25 +3892,25 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
-	crossStateRoot, crossReceiptRoot, statedb, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	crossStateRoot, crossReceiptRoot, statedb, gasUsed, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
 
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
 		log.Error("Stateless self-validation failed", "block", block.Number(), "hash", block.Hash(), "error", err)
-		return nil, err
+		return nil, 0, err
 	}
 	if crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
 		err = fmt.Errorf("%w: remote %x != local %x", ErrStatelessStateRootMismatch, block.Root(), crossStateRoot)
-		return nil, err
+		return nil, 0, err
 	}
 	if crossReceiptRoot != block.ReceiptHash() {
 		log.Error("Stateless self-validation receipt root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossReceiptRoot, "local", block.ReceiptHash())
 		err = fmt.Errorf("stateless self-validation receipt root mismatch: remote %x != local %x", block.ReceiptHash(), crossReceiptRoot)
-		return nil, err
+		return nil, 0, err
 	}
-	return statedb, nil
+	return statedb, gasUsed, nil
 }
 
 // startHeaderVerificationLoop starts a background goroutine that periodically
