@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -29,7 +30,9 @@ import (
 	"github.com/ethereum/go-ethereum/metrics/influxdb"
 	"github.com/ethereum/go-ethereum/metrics/prometheus"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/hellofresh/health-go/v5"
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"go.opentelemetry.io/otel"
@@ -60,6 +63,9 @@ type Server struct {
 
 	// tracerAPI to trace block executions
 	tracerAPI *tracers.API
+
+	// Bor health service.
+	healthService *health.Health
 }
 
 type serverOption func(srv *Server, config *Config) error
@@ -292,6 +298,9 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 	// Set the node instance
 	srv.node = stack
 
+	// Register the health service endpoint.
+	srv.registerHealthServiceEndpoint()
+
 	// start the node
 	if err := srv.node.Start(); err != nil {
 		return nil, err
@@ -507,4 +516,99 @@ func (s *Server) GetLatestBlockNumber() *big.Int {
 
 func (s *Server) GetGrpcAddr() string {
 	return s.config.GRPC.Addr[1:]
+}
+
+// setupHealthService initializes the health service for Bor.
+func (s *Server) setupHealthService() error {
+	h, err := health.New(
+		health.WithComponent(health.Component{
+			Name:    "bor",
+			Version: params.VersionWithMeta,
+		}),
+		health.WithSystemInfo(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create health service: %w", err)
+	}
+	s.healthService = h
+	return nil
+}
+
+// getBorInfo returns Bor-specific information.
+func (s *Server) getBorInfo() map[string]any {
+	borInfo := map[string]any{}
+
+	if s.config != nil {
+		borInfo["chain_id"] = s.config.chain.Genesis.Config.ChainID.Uint64()
+	}
+
+	if s.backend != nil {
+		currentBlock := s.backend.BlockChain().CurrentBlock()
+		borInfo["current_block_hash"] = currentBlock.Hash().Hex()
+		borInfo["current_block_number"] = currentBlock.Number.Uint64()
+		borInfo["current_block_timestamp"] = time.Unix(int64(currentBlock.Time), 0).UTC().Format(time.RFC3339Nano)
+		borInfo["peer_count"] = s.backend.PeerCount()
+		borInfo["sync_mode"] = s.backend.SyncMode()
+		borInfo["sync_status"] = s.backend.Synced()
+	}
+
+	return borInfo
+}
+
+// customHealthServiceHandler wraps the health-go handler and adds Bor-specific information on top of it.
+func (s *Server) customHealthServiceHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &responseRecorder{
+			ResponseWriter: w,
+			body:           make([]byte, 0),
+		}
+
+		s.healthService.Handler().ServeHTTP(recorder, r)
+
+		var healthResponse map[string]any
+		if err := json.Unmarshal(recorder.body, &healthResponse); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(recorder.statusCode)
+			w.Write(recorder.body)
+			return
+		}
+
+		// Remove the "status" field from health-go as it's always "OK" and not useful.
+		delete(healthResponse, "status")
+
+		healthResponse["bor_info"] = s.getBorInfo()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(recorder.statusCode)
+
+		if err := json.NewEncoder(w).Encode(healthResponse); err != nil {
+			log.Error("Failed to encode enhanced health response", "error", err)
+			w.Write(recorder.body)
+		}
+	})
+}
+
+// responseRecorder captures the response from health-go handler.
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+	body       []byte
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+}
+
+func (r *responseRecorder) Write(data []byte) (int, error) {
+	r.body = append(r.body, data...)
+	return len(data), nil
+}
+
+// registerHealthServiceEndpoint registers the /health service endpoint.
+func (s *Server) registerHealthServiceEndpoint() {
+	if err := s.setupHealthService(); err != nil {
+		log.Error("Failed to setup health service", "error", err)
+		return
+	}
+	s.node.RegisterHandler("Health service endpoint", "/health", s.customHealthServiceHandler())
 }
