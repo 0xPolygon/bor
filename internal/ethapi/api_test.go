@@ -4068,7 +4068,7 @@ func TestAccessListWorksForAnyEmptyAddress(t *testing.T) {
 	from := common.BytesToAddress([]byte("deadbeef"))
 	block := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 	overrides := override.StateOverride{}
-	res, err := api.CreateAccessList(context.Background(), TransactionArgs{
+	res, err := api.CreateAccessList(t.Context(), TransactionArgs{
 		From: &from,
 		Data: hex2Bytes("0x608060806080608155"),
 	}, &block, &overrides)
