@@ -41,7 +41,7 @@ func (w *checkpoint) IsValidChain(currentHeader *types.Header, chain []*types.He
 func reportCheckpointMetrics(result bool, chain bool, peer bool) {
 	if chain {
 		if result {
-			CheckpointChainMeter.Mark(int64(1))ßß
+			CheckpointChainMeter.Mark(int64(1))
 		} else {
 			CheckpointChainMeter.Mark(int64(-1))
 		}
