@@ -491,6 +491,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.GoDebug,
 		Group:   "Cache",
 	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "cache.maxdifflayers",
+		Usage:   "Maximum diff layers allowed in pathdb layer tree (min: 1, max: 128)",
+		Value:   &c.cliConfig.Cache.MaxDiffLayers,
+		Default: c.cliConfig.Cache.MaxDiffLayers,
+		Group:   "Cache",
+	})
 
 	// LevelDB options
 	f.Uint64Flag(&flagset.Uint64Flag{

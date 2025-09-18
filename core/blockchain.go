@@ -174,6 +174,7 @@ type CacheConfig struct {
 	TriesInMemory       uint64        // Number of recent tries to keep in memory
 	StateHistory        uint64        // Number of blocks from head whose state histories are reserved.
 	StateScheme         string        // Scheme used to store ethereum states and merkle tree nodes on top
+	MaxDiffLayers       int           // Maximum diff layers allowed in the pathdb layer tree
 
 	SnapshotNoBuild bool // Whether the background generation is allowed
 	SnapshotWait    bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
@@ -201,6 +202,7 @@ func (c *CacheConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			StateHistory:    c.StateHistory,
 			CleanCacheSize:  c.TrieCleanLimit * 1024 * 1024,
 			WriteBufferSize: c.TrieDirtyLimit * 1024 * 1024,
+			MaxDiffLayers:   c.MaxDiffLayers,
 		}
 	}
 	return config
@@ -216,6 +218,7 @@ var defaultCacheConfig = &CacheConfig{
 	SnapshotWait:   true,
 	TriesInMemory:  128,
 	StateScheme:    rawdb.HashScheme,
+	MaxDiffLayers:  128, // Default max diff layers
 }
 
 // DefaultCacheConfigWithScheme returns a deep copied default cache config with

@@ -122,12 +122,17 @@ type tester struct {
 }
 
 func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int) *tester {
+	return newTesterWithMaxDiffLayers(t, historyLimit, isVerkle, layers, 128)
+}
+
+func newTesterWithMaxDiffLayers(t *testing.T, historyLimit uint64, isVerkle bool, layers int, maxDiffLayers int) *tester {
 	var (
 		disk, _ = rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), t.TempDir(), "", false, false, false, false)
 		db      = New(disk, &Config{
 			StateHistory:    historyLimit,
 			CleanCacheSize:  256 * 1024,
 			WriteBufferSize: 256 * 1024,
+			MaxDiffLayers:   maxDiffLayers,
 		}, isVerkle)
 
 		obj = &tester{
@@ -442,14 +447,8 @@ func (t *tester) bottomIndex() int {
 }
 
 func TestDatabaseRollback(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	// Verify state histories
-	tester := newTester(t, 0, false, 32)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 0, false, 32, 4)
 	defer tester.release()
 
 	if err := tester.verifyHistory(); err != nil {
@@ -476,14 +475,9 @@ func TestDatabaseRollback(t *testing.T) {
 }
 
 func TestDatabaseRecoverable(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
+	// Use 4 diff layers for faster testing.
 	var (
-		tester = newTester(t, 0, false, 12)
+		tester = newTesterWithMaxDiffLayers(t, 0, false, 12, 4)
 		index  = tester.bottomIndex()
 	)
 	defer tester.release()
@@ -521,13 +515,8 @@ func TestDatabaseRecoverable(t *testing.T) {
 }
 
 func TestDisable(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	tester := newTester(t, 0, false, 32)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 0, false, 32, 4)
 	defer tester.release()
 
 	stored := crypto.Keccak256Hash(rawdb.ReadAccountTrieNode(tester.db.diskdb, nil))
@@ -563,13 +552,8 @@ func TestDisable(t *testing.T) {
 }
 
 func TestCommit(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	tester := newTester(t, 0, false, 12)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 0, false, 12, 4)
 	defer tester.release()
 
 	if err := tester.db.Commit(tester.lastHash(), false); err != nil {
@@ -593,13 +577,8 @@ func TestCommit(t *testing.T) {
 }
 
 func TestJournal(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	tester := newTester(t, 0, false, 12)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 0, false, 12, 4)
 	defer tester.release()
 
 	if err := tester.db.Journal(tester.lastHash()); err != nil {
@@ -623,13 +602,8 @@ func TestJournal(t *testing.T) {
 }
 
 func TestCorruptedJournal(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	tester := newTester(t, 0, false, 12)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 0, false, 12, 4)
 	defer tester.release()
 
 	if err := tester.db.Journal(tester.lastHash()); err != nil {
@@ -671,13 +645,8 @@ func TestCorruptedJournal(t *testing.T) {
 // truncating the tail histories. This ensures that the ID of the persistent state
 // always falls within the range of [oldest-history-id, latest-history-id].
 func TestTailTruncateHistory(t *testing.T) {
-	// Redefine the diff layer depth allowance for faster testing.
-	maxDiffLayers = 4
-	defer func() {
-		maxDiffLayers = 128
-	}()
-
-	tester := newTester(t, 10, false, 12)
+	// Use 4 diff layers for faster testing.
+	tester := newTesterWithMaxDiffLayers(t, 10, false, 12, 4)
 	defer tester.release()
 
 	tester.db.Close()

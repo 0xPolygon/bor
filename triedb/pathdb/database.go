@@ -52,10 +52,6 @@ const (
 	defaultBufferSize = 64 * 1024 * 1024
 )
 
-var (
-	// maxDiffLayers is the maximum diff layers allowed in the layer tree.
-	maxDiffLayers = 128
-)
 
 // layer is the interface implemented by all state layers which includes some
 // public methods and some additional methods for internal usage.
@@ -113,6 +109,7 @@ type Config struct {
 	StateHistory    uint64 // Number of recent blocks to maintain state history for
 	CleanCacheSize  int    // Maximum memory allowance (in bytes) for caching clean nodes
 	WriteBufferSize int    // Maximum memory allowance (in bytes) for write buffer
+	MaxDiffLayers   int    // Maximum diff layers allowed in the layer tree
 	ReadOnly        bool   // Flag whether the database is opened in read only mode.
 }
 
@@ -123,6 +120,21 @@ func (c *Config) sanitize() *Config {
 	if conf.WriteBufferSize > maxBufferSize {
 		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.WriteBufferSize), "updated", common.StorageSize(maxBufferSize))
 		conf.WriteBufferSize = maxBufferSize
+	}
+	// Sanitize MaxDiffLayers value to reasonable bounds
+	const (
+		minMaxDiffLayers = 1   // Minimum diff layers
+		maxMaxDiffLayers = 256 // Maximum diff layers
+		defaultMaxDiffLayers = 128 // Default max diff layers
+	)
+	if conf.MaxDiffLayers == 0 {
+		conf.MaxDiffLayers = defaultMaxDiffLayers
+	} else if conf.MaxDiffLayers < minMaxDiffLayers {
+		log.Warn("Sanitizing invalid MaxDiffLayers", "provided", conf.MaxDiffLayers, "updated", minMaxDiffLayers)
+		conf.MaxDiffLayers = minMaxDiffLayers
+	} else if conf.MaxDiffLayers > maxMaxDiffLayers {
+		log.Warn("Sanitizing invalid MaxDiffLayers", "provided", conf.MaxDiffLayers, "updated", maxMaxDiffLayers)
+		conf.MaxDiffLayers = maxMaxDiffLayers
 	}
 	return &conf
 }
@@ -136,6 +148,7 @@ func (c *Config) fields() []interface{} {
 	list = append(list, "cache", common.StorageSize(c.CleanCacheSize))
 	list = append(list, "buffer", common.StorageSize(c.WriteBufferSize))
 	list = append(list, "history", c.StateHistory)
+	list = append(list, "maxdifflayers", c.MaxDiffLayers)
 	return list
 }
 
@@ -144,6 +157,7 @@ var Defaults = &Config{
 	StateHistory:    params.FullImmutabilityThreshold,
 	CleanCacheSize:  defaultCleanSize,
 	WriteBufferSize: defaultBufferSize,
+	MaxDiffLayers:   128, // Default max diff layers
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -318,12 +332,12 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	if err := db.tree.add(root, parentRoot, block, nodes, states); err != nil {
 		return err
 	}
-	// Keep 128 diff layers in the memory, persistent layer is 129th.
+	// Keep configured diff layers in the memory, persistent layer is next.
 	// - head layer is paired with HEAD state
 	// - head-1 layer is paired with HEAD-1 state
-	// - head-127 layer(bottom-most diff layer) is paired with HEAD-127 state
-	// - head-128 layer(disk layer) is paired with HEAD-128 state
-	return db.tree.cap(root, maxDiffLayers)
+	// - head-(MaxDiffLayers-1) layer(bottom-most diff layer) is paired with HEAD-(MaxDiffLayers-1) state
+	// - head-MaxDiffLayers layer(disk layer) is paired with HEAD-MaxDiffLayers state
+	return db.tree.cap(root, db.config.MaxDiffLayers)
 }
 
 // Commit traverses downwards the layer tree from a specified layer with the
