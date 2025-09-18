@@ -40,6 +40,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```dev.period```: Block period to use in developer mode (0 = mine only if transaction pending) (default: 0)
 
+- ```disable-blind-fork-validation```: Disable additional fork validation and accept blind forks without tracing back to last whitelisted entry (default: false)
+
 - ```disable-bor-wallet```: Disable the personal wallet endpoints (default: true)
 
 - ```eth.requiredblocks```: Comma separated block number-to-hash mappings to require for peering (<number>=<hash>)
@@ -75,6 +77,8 @@ The ```bor server``` command runs the Bor client.
 - ```keystore```: Path of the directory where keystores are located
 
 - ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
+
+- ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
 
 - ```parallelevm.enable```: Enable Block STM (default: true)
 

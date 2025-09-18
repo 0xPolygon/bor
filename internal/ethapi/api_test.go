@@ -4062,6 +4062,22 @@ func TestRPCGetBlockReceipts(t *testing.T) {
 	}
 }
 
+func TestAccessListWorksForAnyEmptyAddress(t *testing.T) {
+	api, _, _ := setupBlocksToApiTest(t)
+
+	from := common.BytesToAddress([]byte("deadbeef"))
+	block := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	overrides := override.StateOverride{}
+	res, err := api.CreateAccessList(t.Context(), TransactionArgs{
+		From: &from,
+		Data: hex2Bytes("0x608060806080608155"),
+	}, &block, &overrides)
+
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, 1, res.Accesslist.StorageKeys())
+}
+
 func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, []struct {
 	txHash common.Hash
 	want   string

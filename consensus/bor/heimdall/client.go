@@ -159,7 +159,7 @@ func (h *HeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error)
 
 	ctx = WithRequestType(ctx, SpanRequest)
 
-	response, err := FetchWithRetry[types.QueryLatestSpanResponse](ctx, h.client, url, h.closeCh)
+	response, err := FetchOnce[types.QueryLatestSpanResponse](ctx, h.client, url, h.closeCh)
 	if err != nil {
 		return nil, err
 	}
@@ -242,12 +242,17 @@ func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, err
 		return nil, err
 	}
 
-	response, err := FetchWithRetry[ctypes.SyncInfo](ctx, h.client, url, h.closeCh)
+	response, err := FetchOnce[ctypes.SyncInfo](ctx, h.client, url, h.closeCh)
 	if err != nil {
 		return nil, err
 	}
 
 	return response, nil
+}
+
+func FetchOnce[T any](ctx context.Context, client http.Client, url *url.URL, closeCh chan struct{}) (*T, error) {
+	request := &Request{client: client, url: url, start: time.Now()}
+	return Fetch[T](ctx, request)
 }
 
 // FetchWithRetry returns data from heimdall with retry

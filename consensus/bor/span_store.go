@@ -109,6 +109,7 @@ func (s *SpanStore) updateHeimdallStatus(ctx context.Context) (err error) {
 	} else {
 		syncInfo, err = s.heimdallClient.FetchStatus(ctx)
 		if err != nil {
+			s.heimdallStatus.Store(nil)
 			return err
 		}
 	}
