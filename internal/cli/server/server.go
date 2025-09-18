@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -560,6 +562,57 @@ func (s *Server) getBorInfo() map[string]any {
 	return borInfo
 }
 
+func (s *Server) performHealthChecks(healthResponse map[string]any) (string, string) {
+	overallStatus := "OK"
+	var status []string
+	var statusMessage []string
+
+	if s.config == nil || s.config.Health == nil {
+		return overallStatus, ""
+	}
+
+	// Goroutines check.
+	if system, ok := healthResponse["system"].(map[string]any); ok {
+		if goroutinesCount, ok := system["goroutines_count"].(float64); ok {
+			// Check critical threshold first.
+			if s.config.Health.MaxGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.MaxGoRoutineThreshold {
+				status = append(status, "CRITICAL")
+				statusMessage = append(statusMessage, "Number of goroutines is greater than the maximum threshold.")
+			} else if s.config.Health.WarnGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.WarnGoRoutineThreshold {
+				// Only check warning threshold if we haven't already hit critical.
+				status = append(status, "WARN")
+				statusMessage = append(statusMessage, "Number of goroutines is greater than the warning threshold.")
+			}
+		}
+	}
+
+	// Peer check.
+	if borInfo, ok := healthResponse["bor_info"].(map[string]any); ok {
+		if peerCount, ok := borInfo["peer_count"].(int); ok {
+			// Check critical threshold first.
+			if s.config.Health.MinPeerThreshold != 0 && peerCount < s.config.Health.MinPeerThreshold {
+				status = append(status, "CRITICAL")
+				statusMessage = append(statusMessage, "Number of peers is less than the minimum threshold.")
+			} else if s.config.Health.WarnPeerThreshold != 0 && peerCount < s.config.Health.WarnPeerThreshold {
+				// Only check warning threshold if we haven't already hit critical.
+				status = append(status, "WARN")
+				statusMessage = append(statusMessage, "Number of peers is less than the warning threshold.")
+			}
+		}
+	}
+
+	switch {
+	case slices.Contains(status, "CRITICAL"):
+		overallStatus = "CRITICAL"
+	case slices.Contains(status, "WARN"):
+		overallStatus = "WARN"
+	default:
+		overallStatus = "OK"
+	}
+
+	return overallStatus, strings.Join(statusMessage, ", ")
+}
+
 // customHealthServiceHandler wraps the health-go handler and adds Bor-specific information on top of it.
 func (s *Server) customHealthServiceHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -582,6 +635,10 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 		delete(healthResponse, "status")
 
 		healthResponse["bor_info"] = s.getBorInfo()
+
+		status, statusMessage := s.performHealthChecks(healthResponse)
+		healthResponse["status"] = status
+		healthResponse["status_message"] = statusMessage
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(recorder.statusCode)
