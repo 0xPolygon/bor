@@ -1852,6 +1852,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			if len(borReceipts[i]) > 0 {
 				log.Info("[debug] writing bor receipts to ancient db", "len", len(borReceipts[i]), "number", blockChain[i].NumberU64(), "hash", blockChain[i].Hash())
 			}
+			if len(borReceipts[i]) == 0 && common.IsStateSyncBlock(blockChain[i].NumberU64()) {
+				log.Warn("[debug] state-sync block but missing state-sync receipt", "number", blockChain[i].NumberU64(), "hash", blockChain[i].Hash(), "len", len(receiptChain[i]))
+			}
 		}
 
 		var headers []*types.Header
@@ -1913,6 +1916,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 		// Sync the ancient store explicitly to ensure all data has been flushed to disk.
 		if err := bc.db.SyncAncient(); err != nil {
+			log.Error("Error syncing ancient store", "err", err)
 			return 0, err
 		}
 		// Update the current snap block because all block data is now present in DB.
@@ -2014,6 +2018,10 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 					ssMu.Lock()
 					ss = append(ss, StateSyncData{number: block.NumberU64(), hash: block.Hash()})
 					ssMu.Unlock()
+				}
+			} else {
+				if common.IsStateSyncBlock(block.NumberU64()) {
+					log.Info("[debug] state-sync block but missing state-sync receipt", "number", block.NumberU64(), "hash", block.Hash(), "len", len(receiptChain[i]))
 				}
 			}
 
