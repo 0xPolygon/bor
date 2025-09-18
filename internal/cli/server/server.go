@@ -625,9 +625,12 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 
 		var healthResponse map[string]any
 		if err := json.Unmarshal(recorder.body, &healthResponse); err != nil {
+			log.Error("Failed to unmarshal response: %v\n", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(recorder.statusCode)
-			w.Write(recorder.body)
+			if _, writeErr := w.Write(recorder.body); writeErr != nil {
+				log.Error("Failed to write fallback response: %v\n", writeErr)
+			}
 			return
 		}
 
@@ -645,7 +648,9 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 
 		if err := json.NewEncoder(w).Encode(healthResponse); err != nil {
 			log.Error("Failed to encode enhanced health response", "error", err)
-			w.Write(recorder.body)
+			if _, writeErr := w.Write(recorder.body); writeErr != nil {
+				log.Error("Failed to write fallback response: %v\n", writeErr)
+			}
 		}
 	})
 }
