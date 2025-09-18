@@ -1,5 +1,5 @@
 # Bor Overview
-Bor is the official Golang implementation of the Polygon PoS blockchain. It is a fork of [geth](https://github.com/ethereum/go-ethereum) and is EVM compatible (upto London fork).
+Bor is the official Golang implementation of the Polygon PoS blockchain. It is a fork of [geth](https://github.com/ethereum/go-ethereum) and is EVM compatible (up to London fork).
 
 [![API Reference](https://pkg.go.dev/badge/github.com/0xPolygon/bor)](https://pkg.go.dev/github.com/0xPolygon/bor)
 [![Go Report Card](https://goreportcard.com/badge/github.com/0xPolygon/bor)](https://goreportcard.com/report/github.com/0xPolygon/bor)
