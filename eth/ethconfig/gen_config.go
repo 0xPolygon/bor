@@ -218,6 +218,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		WitnessPruneThreshold                *uint64
 		WitnessPruneInterval                 *time.Duration
 		EnableParallelStatelessImport        *bool
+		EnableParallelStatelessImportWorkers *int
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -411,6 +412,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnableParallelStatelessImport != nil {
 		c.EnableParallelStatelessImport = *dec.EnableParallelStatelessImport
+	}
+	if dec.EnableParallelStatelessImportWorkers != nil {
+		c.EnableParallelStatelessImportWorkers = *dec.EnableParallelStatelessImportWorkers
 	}
 	return nil
 }

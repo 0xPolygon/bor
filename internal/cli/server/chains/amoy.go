@@ -64,6 +64,7 @@ var amoyTestnet = &Chain{
 					"0":        "0x0000000000000000000000000000000000000000",
 					"26272256": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 				},
+				SkipValidatorByteCheck: []uint64{26160367, 26161087, 26171567, 26173743, 26175647},
 				BlockAlloc: map[string]interface{}{
 					"11865856": map[string]interface{}{
 						// StateReceiver contract

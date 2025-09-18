@@ -40,6 +40,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```dev.period```: Block period to use in developer mode (0 = mine only if transaction pending) (default: 0)
 
+- ```disable-blind-fork-validation```: Disable additional fork validation and accept blind forks without tracing back to last whitelisted entry (default: false)
+
 - ```disable-bor-wallet```: Disable the personal wallet endpoints (default: true)
 
 - ```eth.requiredblocks```: Comma separated block number-to-hash mappings to require for peering (<number>=<hash>)
@@ -76,6 +78,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
 
+- ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
+
 - ```parallelevm.enable```: Enable Block STM (default: true)
 
 - ```parallelevm.enforce```: Enforce block processing via Block STM (default: false)
@@ -100,13 +104,25 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode (only "full" sync supported) (default: full)
+- ```syncmode```: Blockchain sync mode (only "full" or "stateless" sync supported) (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
 
-- ```witnessprotocol```: Enable witness protocol (default: false)
+- ```witness.enable```: Enable witness protocol (default: false)
+
+- ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
+
+- ```witness.producewitnesses```: Produce witnesses while syncing (default: false)
+
+- ```witness.pruneinterval```: The time interval between each witness prune routine (default: 2m0s)
+
+- ```witness.prunethreshold```: Maximum distance between local header and latest non pruned witness after a pruning routine (default: 64000)
+
+- ```witness.syncwithwitnesses```: Sync blocks with witnesses (default: false)
+
+- ```witness.witnessapi```: Enable witness API endpoints (by default disabled) (default: false)
 
 ### Account Management Options
 

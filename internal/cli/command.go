@@ -206,6 +206,11 @@ func Commands() map[string]MarkDownCommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"purge-whitelisted-entries": func() (MarkDownCommand, error) {
+			return &PurgeWhitelistedEntriesCommand{
+				Meta: meta,
+			}, nil
+		},
 	}
 }
 

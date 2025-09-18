@@ -23,6 +23,7 @@
         "ahmedabadBlock": 11865856,
         "bhilaiBlock": 22765056,
         "rioBlock": 26272256,
+        "skipValidatorByteCheck": [26160367, 26161087, 26171567, 26173743, 26175647],
         "stateSyncConfirmationDelay": {
           "0": 128
         },
