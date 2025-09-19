@@ -90,6 +90,9 @@ func newFetchResult(header *types.Header, syncMode SyncMode) *fetchResult {
 	if header.EmptyReceipts() && header.Number.Uint64()%16 != 0 {
 		fetchReceipts = false
 	}
+	if common.IsStateSyncBlock(header.Number.Uint64()) {
+		log.Info("[debug] creating fetch task for state-sync block", "fetch", fetchReceipts)
+	}
 	if syncMode == SnapSync && fetchReceipts {
 		item.pending.Store(item.pending.Load() | (1 << receiptType))
 	}
