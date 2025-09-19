@@ -1008,6 +1008,14 @@ func (mr *MockBackendMockRecorder) UnprotectedAllowed() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnprotectedAllowed", reflect.TypeOf((*MockBackend)(nil).UnprotectedAllowed))
 }
 
+func (m *MockBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCanonicalReceipt", tx, blockHash, blockNumber, blockIndex)
+	ret0, _ := ret[0].(*types.Receipt)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
 // WitnessByHash mocks base method.
 func (m *MockBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
 	m.ctrl.T.Helper()
@@ -1015,6 +1023,27 @@ func (m *MockBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*sta
 	ret0, _ := ret[0].(*stateless.Witness)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
+}
+
+func (mr *MockBackendMockRecorder) GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalReceipt", reflect.TypeOf((*MockBackend)(nil).GetCanonicalReceipt), tx, blockHash, blockNumber, blockIndex)
+}
+
+func (m *MockBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCanonicalTransaction", txHash)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(*types.Transaction)
+	ret2, _ := ret[2].(common.Hash)
+	ret3, _ := ret[3].(uint64)
+	ret4, _ := ret[4].(uint64)
+	return ret0, ret1, ret2, ret3, ret4
+}
+
+func (mr *MockBackendMockRecorder) GetCanonicalTransaction(txHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalTransaction", reflect.TypeOf((*MockBackend)(nil).GetCanonicalTransaction), txHash)
 }
 
 // WitnessByHash indicates an expected call of WitnessByHash.

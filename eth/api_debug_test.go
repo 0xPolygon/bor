@@ -18,24 +18,73 @@ package eth
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"fmt"
+	"math/big"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var dumper = spew.ConfigState{Indent: "    "}
+
+type Account struct {
+	key  *ecdsa.PrivateKey
+	addr common.Address
+}
+
+func newAccounts(n int) (accounts []Account) {
+	for i := 0; i < n; i++ {
+		key, _ := crypto.GenerateKey()
+		addr := crypto.PubkeyToAddress(key.PublicKey)
+		accounts = append(accounts, Account{key: key, addr: addr})
+	}
+	slices.SortFunc(accounts, func(a, b Account) int { return a.addr.Cmp(b.addr) })
+	return accounts
+}
+
+// newTestBlockChain creates a new test blockchain. OBS: After test is done, teardown must be
+// invoked in order to release associated resources.
+func newTestBlockChain(t *testing.T, n int, gspec *core.Genesis, generator func(i int, b *core.BlockGen)) *core.BlockChain {
+	engine := ethash.NewFaker()
+	// Generate blocks for testing
+	_, blocks, _ := core.GenerateChainWithGenesis(gspec, engine, n, generator)
+
+	// Import the canonical chain
+	options := &core.BlockChainConfig{
+		TrieCleanLimit: 256,
+		TrieDirtyLimit: 256,
+		TrieTimeLimit:  5 * time.Minute,
+		SnapshotLimit:  0,
+		Preimages:      true,
+		ArchiveMode:    true, // Archive mode
+	}
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, options)
+	if err != nil {
+		t.Fatalf("failed to create tester chain: %v", err)
+	}
+	if n, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
+	}
+	return chain
+}
 
 func accountRangeTest(t *testing.T, trie *state.Trie, statedb *state.StateDB, start common.Hash, requestedNum int, expectedNum int) state.Dump {
 	result := statedb.RawDump(&state.DumpConfig{
@@ -227,4 +276,91 @@ func TestStorageRangeAt(t *testing.T) {
 				test.start, test.limit, dumper.Sdump(result), dumper.Sdump(&test.want))
 		}
 	}
+}
+
+func TestGetModifiedAccounts(t *testing.T) {
+	t.Parallel()
+
+	// Initialize test accounts
+	accounts := newAccounts(4)
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+			accounts[1].addr: {Balance: big.NewInt(params.Ether)},
+			accounts[2].addr: {Balance: big.NewInt(params.Ether)},
+			accounts[3].addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	genBlocks := 1
+	signer := types.HomesteadSigner{}
+	blockChain := newTestBlockChain(t, genBlocks, genesis, func(_ int, b *core.BlockGen) {
+		// Transfer from account[0] to account[1]
+		//    value: 1000 wei
+		//    fee:   0 wei
+		for _, account := range accounts[:3] {
+			tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+				Nonce:    0,
+				To:       &accounts[3].addr,
+				Value:    big.NewInt(1000),
+				Gas:      params.TxGas,
+				GasPrice: b.BaseFee(),
+				Data:     nil}),
+				signer, account.key)
+			b.AddTx(tx)
+		}
+	})
+	defer blockChain.Stop()
+
+	// Create a debug API instance.
+	api := NewDebugAPI(&Ethereum{blockchain: blockChain})
+
+	// After merging go-ethereum v1.16.x, block processing now marks a burn
+	// sink address (0x0000…dEaD) as “modified” due to base-fee burn accounting.
+	// We ignore the burn sink in the addresses length checks here
+	burnAddr := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	filterOutBurn := func(addrs []common.Address) []common.Address {
+		return slices.DeleteFunc(addrs, func(a common.Address) bool { return a == burnAddr })
+	}
+
+	// Test GetModifiedAccountsByNumber
+	t.Run("GetModifiedAccountsByNumber", func(t *testing.T) {
+		addrs, err := api.GetModifiedAccountsByNumber(uint64(genBlocks), nil)
+		assert.NoError(t, err)
+
+		// The coinbase for this block (defaults to 0x0 if not set in the generator).
+		header := blockChain.GetHeaderByNumber(uint64(genBlocks))
+		require.NotNil(t, header)
+
+		// Ignore the burn sink in length checks
+		filtered := filterOutBurn(addrs)
+
+		// assert our accounts are present
+		for _, account := range accounts {
+			assert.Contains(t, filtered, account.addr, "expected account missing from modified set")
+		}
+		// assert coinbase account is present
+		assert.Contains(t, filtered, header.Coinbase, "coinbase should be part of modified accounts")
+
+		// expect exactly our 4 accounts + coinbase (burn address filtered out)
+		assert.Len(t, filtered, len(accounts)+1)
+	})
+
+	// Test GetModifiedAccountsByHash
+	t.Run("GetModifiedAccountsByHash", func(t *testing.T) {
+		header := blockChain.GetHeaderByNumber(uint64(genBlocks))
+		require.NotNil(t, header)
+
+		addrs, err := api.GetModifiedAccountsByHash(header.Hash(), nil)
+		assert.NoError(t, err)
+
+		filtered := filterOutBurn(addrs)
+
+		for _, account := range accounts {
+			assert.Contains(t, filtered, account.addr, "expected account missing from modified set")
+		}
+		assert.Contains(t, filtered, header.Coinbase, "coinbase should be part of modified accounts")
+
+		assert.Len(t, filtered, len(accounts)+1)
+	})
 }

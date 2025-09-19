@@ -34,10 +34,10 @@ import (
 
 const (
 	// Number of codehash->size associations to keep.
-	codeSizeCacheSize = 100000
+	codeSizeCacheSize = 1_000_000 // 4 megabytes in total
 
 	// Cache size granted for caching clean code.
-	codeCacheSize = 64 * 1024 * 1024
+	codeCacheSize = 256 * 1024 * 1024
 
 	// Number of address->curve point associations to keep.
 	pointCacheSize = 4096
@@ -195,16 +195,19 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 		if snap != nil {
 			readers = append(readers, newFlatReader(snap))
 		}
-	} else {
-		// If standalone state snapshot is not available, try to construct
-		// the state reader with database.
+	}
+	// Configure the state reader using the path database in path mode.
+	// This reader offers improved performance but is optional and only
+	// partially useful if the snapshot data in path database is not
+	// fully generated.
+	if db.TrieDB().Scheme() == rawdb.PathScheme {
 		reader, err := db.triedb.StateReader(stateRoot)
 		if err == nil {
-			readers = append(readers, newFlatReader(reader)) // state reader is optional
+			readers = append(readers, newFlatReader(reader))
 		}
 	}
-	// Set up the trie reader, which is expected to always be available
-	// as the gatekeeper unless the state is corrupted.
+	// Configure the trie reader, which is expected to be available as the
+	// gatekeeper unless the state is corrupted.
 	tr, err := newTrieReader(stateRoot, db.triedb, db.pointCache)
 	if err != nil {
 		return nil, err
@@ -216,6 +219,18 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 		return nil, err
 	}
 	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), combined), nil
+}
+
+// ReadersWithCacheStats creates a pair of state readers sharing the same internal cache and
+// same backing Reader, but exposing separate statistics.
+// and statistics.
+func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, error) {
+	reader, err := db.Reader(stateRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	shared := newReaderWithCache(reader)
+	return newReaderWithCacheStats(shared), newReaderWithCacheStats(shared), nil
 }
 
 // OpenTrie opens the main account trie at a specific root hash.

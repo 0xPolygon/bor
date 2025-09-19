@@ -127,6 +127,7 @@ func (s *stateObject) touch() {
 // subsequent reads to expand the same trie instead of reloading from disk.
 func (s *stateObject) getTrie() (Trie, error) {
 	if s.trie == nil {
+		// Assumes the primary account trie is already loaded
 		tr, err := s.db.db.OpenStorageTrie(s.db.originalRoot, s.address, s.data.Root, s.db.trie)
 		if err != nil {
 			return nil, err
@@ -388,7 +389,6 @@ func (s *stateObject) updateRoot() {
 // fulfills the storage diffs into the given accountUpdate struct.
 func (s *stateObject) commitStorage(op *accountUpdate) {
 	var (
-		buf    = crypto.NewKeccakState()
 		encode = func(val common.Hash) []byte {
 			if val == (common.Hash{}) {
 				return nil
@@ -405,7 +405,7 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		if val == s.originStorage[key] {
 			continue
 		}
-		hash := crypto.HashData(buf, key[:])
+		hash := crypto.Keccak256Hash(key[:])
 		if op.storages == nil {
 			op.storages = make(map[common.Hash][]byte)
 		}

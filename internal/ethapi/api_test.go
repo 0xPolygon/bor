@@ -441,21 +441,15 @@ type testBackend struct {
 }
 
 func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.Engine, generator func(i int, b *core.BlockGen)) *testBackend {
-	var (
-		cacheConfig = &core.CacheConfig{
-			TrieCleanLimit:    256,
-			TrieDirtyLimit:    256,
-			TrieTimeLimit:     5 * time.Minute,
-			SnapshotLimit:     0,
-			TrieDirtyDisabled: true, // Archive mode
-		}
-	)
+	options := core.DefaultConfig().WithArchive(true)
+	options.TxLookupLimit = 0 // index all txs
+
 	accman, acc := newTestAccountManager(t)
 	// gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
 	// Generate blocks for testing
 	db, blocks, _ := core.GenerateChainWithGenesis(gspec, engine, n, generator)
-	txlookupLimit := uint64(0)
-	chain, err := core.NewBlockChain(db, cacheConfig, gspec, nil, engine, vm.Config{}, nil, &txlookupLimit, nil)
+
+	chain, err := core.NewBlockChain(db, gspec, engine, options)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -600,17 +594,16 @@ func (b testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) even
 func (b testBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
 	panic("implement me")
 }
-func (b testBackend) GetTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
-	tx, blockHash, blockNumber, index := rawdb.ReadTransaction(b.db, txHash)
-	found := true
-	if tx == nil {
-		found = false
-	}
-	return found, tx, blockHash, blockNumber, index
-}
 func (b testBackend) GetPoolTransactions() (types.Transactions, error) { panic("implement me") }
 func (b testBackend) GetPoolTransaction(txHash common.Hash) *types.Transaction {
 	return nil
+}
+func (b testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
+	return tx != nil, tx, blockHash, blockNumber, index
+}
+func (b testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	return b.chain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 func (b testBackend) TxIndexDone() bool {
 	return true
@@ -4186,6 +4179,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x00000000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000de0a5fd640afa000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000de0a5fd640af6180000000000000000000000000000000000000000000000000de0b6b3a76403e8",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0x644a31c354391520d00e95b9affbbb010fc79ac268144ab8e28207f4cf51097e",
 					"transactionIndex": "0x0",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
@@ -4242,6 +4236,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x000000000000000000000000000000000000000000000000000000000000000b",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0xa228af0975b99799bd28331085a6966aba2fb5814a8d89aabc342462aa40429a",
 					"transactionIndex": "0x2",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
@@ -4279,6 +4274,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x0000000000000000000000000000000000000000000000000000000000a32f640000000000000000000000000000000000000000000000000de06892fa4b3d9800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de06892f9a80e340000000000000000000000000000000000000000000000000000000000a32f64",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0xc2cc458a65bc96f642d4a2063cce162b0da642613d801271bdbc4aa7e775f3ed",
 					"transactionIndex": "0x3",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",

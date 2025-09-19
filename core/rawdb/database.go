@@ -91,11 +91,6 @@ type nofreezedb struct {
 	ethdb.KeyValueStore
 }
 
-// HasAncient returns an error as we don't have a backing chain freezer.
-func (db *nofreezedb) HasAncient(kind string, number uint64) (bool, error) {
-	return false, errNotSupported
-}
-
 // Ancient returns an error as we don't have a backing chain freezer.
 func (db *nofreezedb) Ancient(kind string, number uint64) ([]byte, error) {
 	return nil, errNotSupported
@@ -146,8 +141,8 @@ func (db *nofreezedb) AncientOffSet() uint64 {
 	return 0
 }
 
-// Sync returns an error as we don't have a backing chain freezer.
-func (db *nofreezedb) Sync() error {
+// SyncAncient returns an error as we don't have a backing chain freezer.
+func (db *nofreezedb) SyncAncient() error {
 	return errNotSupported
 }
 
@@ -247,6 +242,18 @@ func resolveChainFreezerDir(ancient string) string {
 	return freezer
 }
 
+// resolveChainEraDir is a helper function which resolves the absolute path of era database.
+func resolveChainEraDir(chainFreezerDir string, era string) string {
+	switch {
+	case era == "":
+		return filepath.Join(chainFreezerDir, "era")
+	case !filepath.IsAbs(era):
+		return filepath.Join(chainFreezerDir, era)
+	default:
+		return era
+	}
+}
+
 // resolveOffset is a helper function which resolves the value of offset to use
 // while opening a chain freezer.
 func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
@@ -258,25 +265,51 @@ func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
 	}
 }
 
-// NewDatabaseWithFreezer creates a high level database on top of a given key-
-// value data store with a freezer moving immutable chain segments into cold
-// storage.
+// NewDatabaseWithFreezer creates a high level database on top of a given key-value store.
+// The passed ancient indicates the path of root ancient directory where the chain freezer
+// can be opened.
 //
-//nolint:gocognit
+// Deprecated: use Open.
 func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
-	offset := resolveOffset(db, isLastOffset)
-	log.Info("Resolving ancient pruner offset", "isLastOffset", isLastOffset, "offset", offset)
+	return Open(db, OpenOptions{
+		Ancient:          ancient,
+		MetricsNamespace: namespace,
+		ReadOnly:         readonly,
+		DisableFreeze:    disableFreeze,
+		IsLastOffset:     isLastOffset,
+		Stateless:        stateless,
+	})
+}
+
+// OpenOptions specifies options for opening the database.
+type OpenOptions struct {
+	Ancient          string // ancients directory
+	Era              string // era files directory
+	MetricsNamespace string // prefix added to freezer metric names
+	ReadOnly         bool
+	DisableFreeze    bool
+	IsLastOffset     bool
+
+	Stateless bool
+	// Ephemeral means that filesystem sync operations should be avoided:
+	// data integrity in the face of a crash is not important. This option
+	// should typically be used in tests.
+	Ephemeral bool
+}
+
+// Open creates a high-level database wrapper for the given key-value store.
+func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
+	offset := resolveOffset(db, opts.IsLastOffset)
+	log.Info("Resolving ancient pruner offset", "isLastOffset", opts.IsLastOffset, "offset", offset)
 
 	// Create the idle freezer instance. If the given ancient directory is empty,
 	// in-memory chain freezer is used (e.g. dev mode); otherwise the regular
 	// file-based freezer is created.
-	chainFreezerDir := ancient
+	chainFreezerDir := opts.Ancient
 	if chainFreezerDir != "" {
 		chainFreezerDir = resolveChainFreezerDir(chainFreezerDir)
 	}
-
-	// Create the idle freezer instance
-	frdb, err := newChainFreezer(chainFreezerDir, namespace, readonly, offset)
+	frdb, err := newChainFreezer(chainFreezerDir, opts.Era, opts.MetricsNamespace, opts.ReadOnly, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +415,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 					// Key-value store contains more data than the genesis block, make sure we
 					// didn't freeze anything yet.
 					// Bor Change: Stateless client skip this check because of fast forward feature, which usually jumps #1 block
-					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 && !stateless {
+					if kvblob, _ := db.Get(headerHashKey(1)); len(kvblob) == 0 && !opts.Stateless {
 						printChainMetadata(db)
 						return nil, errors.New("ancient chain segments already extracted, please set --datadir.ancient to the correct path")
 					}
@@ -400,7 +433,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 		}
 	}
 	// Freezer is consistent with the key-value database, permit combining the two
-	if !disableFreeze {
+	if !opts.DisableFreeze {
 		frdb.wg.Add(1)
 
 		go func() {
@@ -410,7 +443,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 	}
 
 	return &freezerdb{
-		ancientRoot:   ancient,
+		ancientRoot:   opts.Ancient,
 		KeyValueStore: db,
 		chainFreezer:  frdb,
 	}, nil
@@ -548,6 +581,9 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		filterMapLastBlock stat
 		filterMapBlockLV   stat
 
+		// Path-mode archive data
+		stateIndex stat
+
 		// Verkle statistics
 		verkleTries        stat
 		verkleStateLookups stat
@@ -627,6 +663,10 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		case bytes.HasPrefix(key, bloomBitsMetaPrefix) && len(key) < len(bloomBitsMetaPrefix)+8:
 			bloomBits.Add(size)
 
+		// Path-based historic state indexes
+		case bytes.HasPrefix(key, StateHistoryIndexPrefix) && len(key) >= len(StateHistoryIndexPrefix)+common.HashLength:
+			stateIndex.Add(size)
+
 		// Verkle trie data is detected, determine the sub-category
 		case bytes.HasPrefix(key, VerklePrefix):
 			remain := key[len(VerklePrefix):]
@@ -683,6 +723,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		{"Key-Value store", "Path trie state lookups", stateLookups.Size(), stateLookups.Count()},
 		{"Key-Value store", "Path trie account nodes", accountTries.Size(), accountTries.Count()},
 		{"Key-Value store", "Path trie storage nodes", storageTries.Size(), storageTries.Count()},
+		{"Key-Value store", "Path state history indexes", stateIndex.Size(), stateIndex.Count()},
 		{"Key-Value store", "Verkle trie nodes", verkleTries.Size(), verkleTries.Count()},
 		{"Key-Value store", "Verkle trie state lookups", verkleStateLookups.Size(), verkleStateLookups.Count()},
 		{"Key-Value store", "Trie preimages", preimages.Size(), preimages.Count()},
@@ -737,7 +778,7 @@ var knownMetadataKeys = [][]byte{
 	snapshotGeneratorKey, snapshotRecoveryKey, txIndexTailKey, fastTxLookupLimitKey,
 	uncleanShutdownKey, badBlockKey, transitionStatusKey, skeletonSyncStatusKey,
 	persistentStateIDKey, trieJournalKey, snapshotSyncStatusKey, snapSyncStatusFlagKey,
-	filterMapsRangeKey, bytecodeSyncLastBlockKey,
+	filterMapsRangeKey, headStateHistoryIndexKey, bytecodeSyncLastBlockKey,
 }
 
 // printChainMetadata prints out chain metadata to stderr.
@@ -816,7 +857,6 @@ func SafeDeleteRange(db ethdb.KeyValueStore, start, end []byte, hashScheme bool,
 
 	var (
 		count, deleted, skipped int
-		buff                    = crypto.NewKeccakState()
 		startTime               = time.Now()
 	)
 
@@ -829,7 +869,7 @@ func SafeDeleteRange(db ethdb.KeyValueStore, start, end []byte, hashScheme bool,
 
 	for it.Next() && bytes.Compare(end, it.Key()) > 0 {
 		// Prevent deletion for trie nodes in hash mode
-		if len(it.Key()) != 32 || crypto.HashData(buff, it.Value()) != common.BytesToHash(it.Key()) {
+		if len(it.Key()) != 32 || crypto.Keccak256Hash(it.Value()) != common.BytesToHash(it.Key()) {
 			if err := batch.Delete(it.Key()); err != nil {
 				return err
 			}

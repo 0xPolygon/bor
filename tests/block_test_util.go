@@ -152,15 +152,21 @@ func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *t
 	// Wrap the original engine within the beacon-engine
 	engine := beacon.New(ethash.NewFaker())
 
-	cache := &core.CacheConfig{TrieCleanLimit: 0, StateScheme: scheme, Preimages: true}
-	if snapshotter {
-		cache.SnapshotLimit = 1
-		cache.SnapshotWait = true
+	options := &core.BlockChainConfig{
+		TrieCleanLimit: 0,
+		StateScheme:    scheme,
+		Preimages:      true,
+		TxLookupLimit:  -1, // disable tx indexing
+		VmConfig: vm.Config{
+			Tracer:                  tracer,
+			StatelessSelfValidation: witness,
+		},
 	}
-	chain, err := core.NewBlockChain(db, cache, gspec, nil, engine, vm.Config{
-		Tracer:                  tracer,
-		StatelessSelfValidation: witness,
-	}, nil, nil, nil)
+	if snapshotter {
+		options.SnapshotLimit = 1
+		options.SnapshotWait = true
+	}
+	chain, err := core.NewBlockChain(db, gspec, engine, options)
 	if err != nil {
 		return err
 	}
@@ -190,8 +196,10 @@ func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *t
 	}
 	// Cross-check the snapshot-to-hash against the trie hash
 	if snapshotter {
-		if err := chain.Snapshots().Verify(chain.CurrentBlock().Root); err != nil {
-			return err
+		if chain.Snapshots() != nil {
+			if err := chain.Snapshots().Verify(chain.CurrentBlock().Root); err != nil {
+				return err
+			}
 		}
 	}
 

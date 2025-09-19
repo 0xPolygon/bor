@@ -201,12 +201,33 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 	return stack, cfg
 }
 
+// constructs the disclaimer text block which will be printed in the logs upon
+// startup when Geth is running in dev mode.
+func constructDevModeBanner(ctx *cli.Context, cfg gethConfig) string {
+	devModeBanner := `You are running Geth in --dev mode. Please note the following:
+
+  1. This mode is only intended for fast, iterative development without assumptions on
+     security or persistence.
+  2. The database is created in memory unless specified otherwise. Therefore, shutting down
+     your computer or losing power will wipe your entire block data and chain state for
+     your dev environment.
+  3. A random, pre-allocated developer account will be available and unlocked as
+     eth.coinbase, which can be used for testing. The random dev account is temporary,
+     stored on a ramdisk, and will be lost if your machine is restarted.
+  4. Mining is enabled by default. However, the client will only seal blocks if transactions
+     are pending in the mempool. The miner's minimum accepted gas price is 1.
+  5. Networking is disabled; there is no listen-address, the maximum number of peers is set
+     to 0, and discovery is disabled.
+`
+	return devModeBanner
+}
+
 // makeFullNode loads geth configuration and creates the Ethereum backend.
 func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 	stack, cfg := makeConfigNode(ctx)
-	if ctx.IsSet(utils.OverridePrague.Name) {
-		v := ctx.Uint64(utils.OverridePrague.Name)
-		cfg.Eth.OverridePrague = new(big.Int).SetUint64(v)
+	if ctx.IsSet(utils.OverrideOsaka.Name) {
+		v := ctx.Int64(utils.OverrideOsaka.Name)
+		cfg.Eth.OverrideOsaka = new(big.Int).SetInt64(v)
 	}
 	if ctx.IsSet(utils.OverrideVerkle.Name) {
 		v := ctx.Int64(utils.OverrideVerkle.Name)
@@ -260,6 +281,11 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 		}
 		catalyst.RegisterSimulatedBeaconAPIs(stack, simBeacon)
 		stack.RegisterLifecycle(simBeacon)
+
+		banner := constructDevModeBanner(ctx, cfg)
+		for _, line := range strings.Split(banner, "\n") {
+			log.Warn(line)
+		}
 	} else if ctx.IsSet(utils.BeaconApiFlag.Name) {
 		// Start blsync mode.
 		srv := rpc.NewServer("", 0, 0)

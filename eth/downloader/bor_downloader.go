@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -233,7 +234,7 @@ type BlockChain interface {
 	InsertChainStateless(types.Blocks, []*stateless.Witness) (int, error)
 
 	// InsertReceiptChain inserts a batch of receipts into the local chain.
-	InsertReceiptChain(types.Blocks, []types.Receipts, uint64) (int, error)
+	InsertReceiptChain(types.Blocks, []rlp.RawValue, uint64) (int, error)
 
 	// Snapshots returns the blockchain snapshot tree to paused it during sync.
 	Snapshots() *snapshot.Tree
@@ -722,7 +723,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 				d.ancientLimit = 0
 			}
 		}
-
+		// TODO v1.16.1: Should this downloader be changed according to this PR ? https://github.com/ethereum/go-ethereum/commit/90d44e715d4f44fdad582f458c5973b0e6463082
 		frozen, _ := d.stateDB.ItemAmountInAncient() // Ignore the error here since light client can also hit here.
 
 		// If a part of blockchain data has already been written into active store,
@@ -2128,7 +2129,7 @@ func (d *Downloader) commitSnapSyncData(results []*fetchResult, stateSync *state
 	)
 
 	blocks := make([]*types.Block, len(results))
-	receipts := make([]types.Receipts, len(results))
+	receipts := make([]rlp.RawValue, len(results))
 
 	for i, result := range results {
 		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(types.Body{
@@ -2156,7 +2157,7 @@ func (d *Downloader) commitPivotBlock(result *fetchResult) error {
 	log.Debug("Committing snap sync pivot as new head", "number", block.Number(), "hash", block.Hash())
 
 	// Commit the pivot block as the new head, will require full sync from here on
-	if _, err := d.blockchain.InsertReceiptChain([]*types.Block{block}, []types.Receipts{result.Receipts}, d.ancientLimit); err != nil {
+	if _, err := d.blockchain.InsertReceiptChain([]*types.Block{block}, []rlp.RawValue{result.Receipts}, d.ancientLimit); err != nil {
 		return err
 	}
 

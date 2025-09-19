@@ -405,12 +405,12 @@ type ExecutionPoolRequestTimeout struct {
 func (api *adminAPI) GetExecutionPoolSize() *ExecutionPoolSize {
 	var httpLimit int
 	if api.node.http.host != "" {
-		httpLimit = api.node.http.httpHandler.Load().(*rpcHandler).server.GetExecutionPoolSize()
+		httpLimit = api.node.http.httpHandler.Load().server.GetExecutionPoolSize()
 	}
 
 	var wsLimit int
 	if api.node.ws.host != "" {
-		wsLimit = api.node.ws.wsHandler.Load().(*rpcHandler).server.GetExecutionPoolSize()
+		wsLimit = api.node.ws.wsHandler.Load().server.GetExecutionPoolSize()
 	}
 
 	executionPoolSize := &ExecutionPoolSize{
@@ -424,12 +424,12 @@ func (api *adminAPI) GetExecutionPoolSize() *ExecutionPoolSize {
 func (api *adminAPI) GetExecutionPoolRequestTimeout() *ExecutionPoolRequestTimeout {
 	var httpLimit time.Duration
 	if api.node.http.host != "" {
-		httpLimit = api.node.http.httpHandler.Load().(*rpcHandler).server.GetExecutionPoolRequestTimeout()
+		httpLimit = api.node.http.httpHandler.Load().server.GetExecutionPoolRequestTimeout()
 	}
 
 	var wsLimit time.Duration
 	if api.node.ws.host != "" {
-		wsLimit = api.node.ws.wsHandler.Load().(*rpcHandler).server.GetExecutionPoolRequestTimeout()
+		wsLimit = api.node.ws.wsHandler.Load().server.GetExecutionPoolRequestTimeout()
 	}
 
 	executionPoolRequestTimeout := &ExecutionPoolRequestTimeout{
@@ -463,7 +463,7 @@ func (api *adminAPI) GetExecutionPoolRequestTimeout() *ExecutionPoolRequestTimeo
 func (api *adminAPI) SetWSExecutionPoolSize(n int) *ExecutionPoolSize {
 	if api.node.ws.host != "" {
 		api.node.ws.wsConfig.executionPoolSize = uint64(n)
-		api.node.ws.wsHandler.Load().(*rpcHandler).server.SetExecutionPoolSize(n)
+		api.node.ws.wsHandler.Load().server.SetExecutionPoolSize(n)
 		log.Warn("updating ws execution pool size", "threads", n)
 	}
 
@@ -473,7 +473,7 @@ func (api *adminAPI) SetWSExecutionPoolSize(n int) *ExecutionPoolSize {
 func (api *adminAPI) SetHttpExecutionPoolSize(n int) *ExecutionPoolSize {
 	if api.node.http.host != "" {
 		api.node.http.httpConfig.executionPoolSize = uint64(n)
-		api.node.http.httpHandler.Load().(*rpcHandler).server.SetExecutionPoolSize(n)
+		api.node.http.httpHandler.Load().server.SetExecutionPoolSize(n)
 		log.Warn("updating http execution pool size", "threads", n)
 	}
 

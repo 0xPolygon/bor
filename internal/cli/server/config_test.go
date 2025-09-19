@@ -156,5 +156,5 @@ func TestConfigStateScheme(t *testing.T) {
 	assert.NoError(t, err)
 
 	_, err = config.buildEth(nil, nil)
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }

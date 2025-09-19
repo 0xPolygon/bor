@@ -2117,7 +2117,7 @@ func newDbConfig(scheme string) *triedb.Config {
 	if scheme == rawdb.HashScheme {
 		return &triedb.Config{}
 	}
-	return &triedb.Config{PathDB: pathdb.Defaults}
+	return &triedb.Config{PathDB: &pathdb.Config{SnapshotNoBuild: true}}
 }
 
 // TestBytecodeOnlyMode tests the bytecode-only sync mode

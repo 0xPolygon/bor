@@ -113,6 +113,11 @@ var (
 		Usage:    "Root directory for ancient data (default = inside chaindata)",
 		Category: flags.EthCategory,
 	}
+	EraFlag = &flags.DirectoryFlag{
+		Name:     "datadir.era",
+		Usage:    "Root directory for era1 history (default = inside ancient/chain)",
+		Category: flags.EthCategory,
+	}
 	MinFreeDiskSpaceFlag = &flags.DirectoryFlag{
 		Name:     "datadir.minfreedisk",
 		Usage:    "Minimum free disk space in MB, once reached triggers auto shut down (default = --cache.gc converted to MB, 0 = disabled)",
@@ -147,7 +152,7 @@ var (
 	}
 	SepoliaFlag = &cli.BoolFlag{
 		Name:     "sepolia",
-		Usage:    "Sepolia network: pre-configured proof-of-work test network",
+		Usage:    "Sepolia network: pre-configured proof-of-stake test network",
 		Category: flags.EthCategory,
 	}
 	HoleskyFlag = &cli.BoolFlag{
@@ -253,9 +258,9 @@ var (
 		Value:    2048,
 		Category: flags.EthCategory,
 	}
-	OverridePrague = &cli.Uint64Flag{
-		Name:     "override.prague",
-		Usage:    "Manually specify the Prague fork timestamp, overriding the bundled setting",
+	OverrideOsaka = &cli.Uint64Flag{
+		Name:     "override.osaka",
+		Usage:    "Manually specify the Osaka fork timestamp, overriding the bundled setting",
 		Category: flags.EthCategory,
 	}
 	OverrideVerkle = &cli.Uint64Flag{
@@ -1017,11 +1022,18 @@ var (
 	DatabaseFlags = []cli.Flag{
 		DataDirFlag,
 		AncientFlag,
+		EraFlag,
 		RemoteDBFlag,
 		DBEngineFlag,
 		StateSchemeFlag,
 		HttpHeaderFlag,
 	}
+)
+
+// default account to prefund when running Geth in dev mode
+var (
+	DeveloperKey, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	DeveloperAddr   = crypto.PubkeyToAddress(DeveloperKey.PublicKey)
 )
 
 // MakeDataDir retrieves the currently requested data directory, terminating
@@ -1294,32 +1306,6 @@ func setIPC(ctx *cli.Context, cfg *node.Config) {
 		cfg.IPCPath = ""
 	case ctx.IsSet(IPCPathFlag.Name):
 		cfg.IPCPath = ctx.String(IPCPathFlag.Name)
-	}
-}
-
-// setLes shows the deprecation warnings for LES flags.
-func setLes(ctx *cli.Context, cfg *ethconfig.Config) {
-	if ctx.IsSet(LightServeFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightServeFlag.Name)
-	}
-
-	if ctx.IsSet(LightIngressFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightIngressFlag.Name)
-	}
-
-	if ctx.IsSet(LightEgressFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightEgressFlag.Name)
-	}
-
-	if ctx.IsSet(LightMaxPeersFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightMaxPeersFlag.Name)
-	}
-	if ctx.IsSet(LightNoPruneFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightNoPruneFlag.Name)
-	}
-
-	if ctx.IsSet(LightNoSyncServeFlag.Name) {
-		log.Warn("The light server has been deprecated, please remove this flag", "flag", LightNoSyncServeFlag.Name)
 	}
 }
 
@@ -1717,8 +1703,8 @@ func setRequiredBlocks(ctx *cli.Context, cfg *ethconfig.Config) {
 
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
-	// Avoid conflicting network flags
-	flags.CheckExclusive(ctx, MainnetFlag, DeveloperFlag, SepoliaFlag, HoleskyFlag, HoodiFlag)
+	// Avoid conflicting network flags, don't allow network id override on preset networks
+	flags.CheckExclusive(ctx, MainnetFlag, DeveloperFlag, SepoliaFlag, HoleskyFlag, HoodiFlag, NetworkIdFlag)
 	flags.CheckExclusive(ctx, DeveloperFlag, ExternalSignerFlag) // Can't use both ephemeral unlocked and external signer
 
 	// Set configurations from CLI flags
@@ -1728,7 +1714,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	setBlobPool(ctx, &cfg.BlobPool)
 	setMiner(ctx, &cfg.Miner)
 	setRequiredBlocks(ctx, cfg)
-	setLes(ctx, cfg)
 
 	// Cap the cache allowance and tune the garbage collector
 	mem, err := gopsutil.VirtualMemory()
@@ -1781,6 +1766,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.IsSet(AncientFlag.Name) {
 		cfg.DatabaseFreezer = ctx.String(AncientFlag.Name)
 	}
+	if ctx.IsSet(EraFlag.Name) {
+		cfg.DatabaseEra = ctx.String(EraFlag.Name)
+	}
 
 	// nolint:goconst
 	if gcmode := ctx.String(GCModeFlag.Name); gcmode != "full" && gcmode != "archive" {
@@ -1825,11 +1813,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 			cfg.TransactionHistory = 0
 			log.Warn("Disabled transaction unindexing for archive node")
 		}
-
-		if cfg.StateScheme != rawdb.HashScheme {
-			cfg.StateScheme = rawdb.HashScheme
-			log.Warn("Forcing hash state-scheme for archive mode")
-		}
 	}
 	if ctx.IsSet(LogHistoryFlag.Name) {
 		cfg.LogHistory = ctx.Uint64(LogHistoryFlag.Name)
@@ -1870,7 +1853,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		}
 	}
 	if ctx.IsSet(VMEnableDebugFlag.Name) {
-		// TODO(fjl): force-enable this in --dev mode
 		cfg.EnablePreimageRecording = ctx.Bool(VMEnableDebugFlag.Name)
 	}
 
@@ -1905,30 +1887,25 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Override any default configs for hard coded networks.
 	switch {
 	case ctx.Bool(MainnetFlag.Name):
-		if !ctx.IsSet(NetworkIdFlag.Name) {
-			cfg.NetworkId = 1
-		}
-
+		cfg.NetworkId = 1
 		cfg.Genesis = core.DefaultGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
+	case ctx.Bool(HoleskyFlag.Name):
+		cfg.NetworkId = 17000
+		cfg.Genesis = core.DefaultHoleskyGenesisBlock()
+		SetDNSDiscoveryDefaults(cfg, params.HoleskyGenesisHash)
 	case ctx.Bool(SepoliaFlag.Name):
-		if !ctx.IsSet(NetworkIdFlag.Name) {
-			cfg.NetworkId = 11155111
-		}
-
+		cfg.NetworkId = 11155111
 		cfg.Genesis = core.DefaultSepoliaGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.SepoliaGenesisHash)
 	case ctx.Bool(HoodiFlag.Name):
-		if !ctx.IsSet(NetworkIdFlag.Name) {
-			cfg.NetworkId = 560048
-		}
+		cfg.NetworkId = 560048
 		cfg.Genesis = core.DefaultHoodiGenesisBlock()
 		SetDNSDiscoveryDefaults(cfg, params.HoodiGenesisHash)
 	case ctx.Bool(DeveloperFlag.Name):
-		if !ctx.IsSet(NetworkIdFlag.Name) {
-			cfg.NetworkId = 1337
-		}
+		cfg.NetworkId = 1337
 		cfg.SyncMode = downloader.FullSync
+		cfg.EnablePreimageRecording = true
 		// Create new developer account or reuse existing one
 		var (
 			developer  accounts.Account
@@ -1961,9 +1938,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		} else if accs := ks.Accounts(); len(accs) > 0 {
 			developer = ks.Accounts()[0]
 		} else {
-			developer, err = ks.NewAccount(passphrase)
+			developer, err = ks.ImportECDSA(DeveloperKey, passphrase)
 			if err != nil {
-				Fatalf("Failed to create developer account: %v", err)
+				Fatalf("Failed to import developer account: %v", err)
 			}
 		}
 		// Make sure the address is configured as fee recipient, otherwise
@@ -1979,14 +1956,18 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 
 		log.Info("Using developer account", "address", developer.Address)
 
-		// Create a new developer genesis block or reuse existing one
+		// configure default developer genesis which will be used unless a
+		// datadir is specified and a chain is preexisting at that location.
 		cfg.Genesis = core.DeveloperGenesisBlock(ctx.Uint64(DeveloperGasLimitFlag.Name), &developer.Address)
+
+		// If a datadir is specified, ensure that any preexisting chain in that location
+		// has a configuration that is compatible with dev mode: it must be merged at genesis.
 		if ctx.IsSet(DataDirFlag.Name) {
 			chaindb := tryMakeReadOnlyDatabase(ctx, stack)
 			if rawdb.ReadCanonicalHash(chaindb, 0) != (common.Hash{}) {
-				cfg.Genesis = nil // fallback to db content
+				// signal fallback to preexisting chain on disk
+				cfg.Genesis = nil
 
-				//validate genesis has PoS enabled in block 0
 				genesis, err := core.ReadGenesis(chaindb)
 				if err != nil {
 					Fatalf("Could not read genesis from database: %v", err)
@@ -2073,11 +2054,11 @@ func MakeBeaconLightConfig(ctx *cli.Context) bparams.ClientConfig {
 		if c, err := hexutil.Decode(ctx.String(BeaconGenesisRootFlag.Name)); err == nil && len(c) <= 32 {
 			copy(config.GenesisValidatorsRoot[:len(c)], c)
 		} else {
-			Fatalf("Invalid hex string", "beacon.genesis.gvroot", ctx.String(BeaconGenesisRootFlag.Name), "error", err)
+			Fatalf("Could not parse --%s: %v", BeaconGenesisRootFlag.Name, err)
 		}
 		configFile := ctx.String(BeaconConfigFlag.Name)
 		if err := config.ChainConfig.LoadForks(configFile); err != nil {
-			Fatalf("Could not load beacon chain config", "file", configFile, "error", err)
+			Fatalf("Could not load beacon chain config '%s': %v", configFile, err)
 		}
 		log.Info("Using custom beacon chain config", "file", configFile)
 	} else {
@@ -2094,17 +2075,17 @@ func MakeBeaconLightConfig(ctx *cli.Context) bparams.ClientConfig {
 	// are saved to the specified file.
 	if ctx.IsSet(BeaconCheckpointFileFlag.Name) {
 		if _, err := config.SetCheckpointFile(ctx.String(BeaconCheckpointFileFlag.Name)); err != nil {
-			Fatalf("Could not load beacon checkpoint file", "beacon.checkpoint.file", ctx.String(BeaconCheckpointFileFlag.Name), "error", err)
+			Fatalf("Could not load beacon checkpoint file '%s': %v", ctx.String(BeaconCheckpointFileFlag.Name), err)
 		}
 	}
 	if ctx.IsSet(BeaconCheckpointFlag.Name) {
 		hex := ctx.String(BeaconCheckpointFlag.Name)
 		c, err := hexutil.Decode(hex)
 		if err != nil {
-			Fatalf("Invalid hex string", "beacon.checkpoint", hex, "error", err)
+			Fatalf("Could not parse --%s: %v", BeaconCheckpointFlag.Name, err)
 		}
 		if len(c) != 32 {
-			Fatalf("Invalid hex string length", "beacon.checkpoint", hex, "length", len(c))
+			Fatalf("Could not parse --%s: invalid length %d, want 32", BeaconCheckpointFlag.Name, len(c))
 		}
 		copy(config.Checkpoint[:len(c)], c)
 	}
@@ -2223,7 +2204,6 @@ func SetupMetrics(cfg *metrics.Config) {
 		log.Info("Enabling metrics export to InfluxDB")
 		go influxdb.InfluxDBWithTags(metrics.DefaultRegistry, 10*time.Second, endpoint, database, username, password, "geth.", tagsMap)
 	} else if enableExportV2 {
-		tagsMap := SplitTagsFlag(cfg.InfluxDBTags)
 		log.Info("Enabling metrics export to InfluxDB (v2)")
 		go influxdb.InfluxDBV2WithTags(metrics.DefaultRegistry, 10*time.Second, endpoint, token, bucket, organization, "geth.", tagsMap)
 	}
@@ -2279,7 +2259,15 @@ func MakeChainDatabase(ctx *cli.Context, stack *node.Node, readonly, disableFree
 
 		chainDb = remotedb.New(client)
 	default:
-		chainDb, err = stack.OpenDatabaseWithFreezer("chaindata", cache, handles, ctx.String(AncientFlag.Name), "", readonly, disableFreeze, false, false)
+		options := node.DatabaseOptions{
+			ReadOnly:          readonly,
+			Cache:             cache,
+			Handles:           handles,
+			AncientsDirectory: ctx.String(AncientFlag.Name),
+			MetricsNamespace:  "eth/db/chaindata/",
+			EraDirectory:      ctx.String(EraFlag.Name),
+		}
+		chainDb, err = stack.OpenDatabaseWithOptions("chaindata", options)
 	}
 
 	if err != nil {
@@ -2394,39 +2382,40 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 	if err != nil {
 		Fatalf("%v", err)
 	}
-	cache := &core.CacheConfig{
-		TrieCleanLimit:      ethconfig.Defaults.TrieCleanCache,
-		TrieCleanNoPrefetch: ctx.Bool(CacheNoPrefetchFlag.Name),
-		TrieDirtyLimit:      ethconfig.Defaults.TrieDirtyCache,
-		TrieDirtyDisabled:   ctx.String(GCModeFlag.Name) == "archive",
-		TrieTimeLimit:       ethconfig.Defaults.TrieTimeout,
-		SnapshotLimit:       ethconfig.Defaults.SnapshotCache,
-		Preimages:           ctx.Bool(CachePreimagesFlag.Name),
-		StateScheme:         scheme,
-		StateHistory:        ctx.Uint64(StateHistoryFlag.Name),
+	options := &core.BlockChainConfig{
+		TrieCleanLimit: ethconfig.Defaults.TrieCleanCache,
+		NoPrefetch:     ctx.Bool(CacheNoPrefetchFlag.Name),
+		TrieDirtyLimit: ethconfig.Defaults.TrieDirtyCache,
+		ArchiveMode:    ctx.String(GCModeFlag.Name) == "archive",
+		TrieTimeLimit:  ethconfig.Defaults.TrieTimeout,
+		SnapshotLimit:  ethconfig.Defaults.SnapshotCache,
+		Preimages:      ctx.Bool(CachePreimagesFlag.Name),
+		StateScheme:    scheme,
+		StateHistory:   ctx.Uint64(StateHistoryFlag.Name),
+		// Disable transaction indexing/unindexing.
+		TxLookupLimit: -1,
 	}
-	if cache.TrieDirtyDisabled && !cache.Preimages {
-		cache.Preimages = true
-
+	if options.ArchiveMode && !options.Preimages {
+		options.Preimages = true
 		log.Info("Enabling recording of key preimages since archive mode is used")
 	}
 
 	if !ctx.Bool(SnapshotFlag.Name) {
-		cache.SnapshotLimit = 0 // Disabled
+		options.SnapshotLimit = 0 // Disabled
 	} else if ctx.IsSet(CacheFlag.Name) || ctx.IsSet(CacheSnapshotFlag.Name) {
-		cache.SnapshotLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheSnapshotFlag.Name) / 100
+		options.SnapshotLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheSnapshotFlag.Name) / 100
 	}
 	// If we're in readonly, do not bother generating snapshot data.
 	if readonly {
-		cache.SnapshotNoBuild = true
+		options.SnapshotNoBuild = true
 	}
 
 	if ctx.IsSet(CacheFlag.Name) || ctx.IsSet(CacheTrieFlag.Name) {
-		cache.TrieCleanLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheTrieFlag.Name) / 100
+		options.TrieCleanLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheTrieFlag.Name) / 100
 	}
 
 	if ctx.IsSet(CacheFlag.Name) || ctx.IsSet(CacheGCFlag.Name) {
-		cache.TrieDirtyLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheGCFlag.Name) / 100
+		options.TrieDirtyLimit = ctx.Int(CacheFlag.Name) * ctx.Int(CacheGCFlag.Name) / 100
 	}
 	vmcfg := vm.Config{
 		EnablePreimageRecording: ctx.Bool(VMEnableDebugFlag.Name),
@@ -2441,8 +2430,9 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 			vmcfg.Tracer = t
 		}
 	}
-	// Disable transaction indexing/unindexing by default.
-	chain, err := core.NewBlockChain(chainDb, cache, gspec, nil, engine, vmcfg, nil, nil, nil)
+	options.VmConfig = vmcfg
+
+	chain, err := core.NewBlockChain(chainDb, gspec, engine, options)
 	if err != nil {
 		Fatalf("Can't create BlockChain: %v", err)
 	}

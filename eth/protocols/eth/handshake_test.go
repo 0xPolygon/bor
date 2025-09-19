@@ -18,6 +18,7 @@ package eth
 
 import (
 	"errors"
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -27,7 +28,7 @@ import (
 )
 
 // Tests that handshake failures are detected and reported correctly.
-func TestHandshake67(t *testing.T) { testHandshake(t, ETH67) }
+func TestHandshake69(t *testing.T) { testHandshake(t, ETH69) }
 func TestHandshake68(t *testing.T) { testHandshake(t, ETH68) }
 
 func testHandshake(t *testing.T, protocol uint) {
@@ -37,12 +38,27 @@ func testHandshake(t *testing.T, protocol uint) {
 	backend := newTestBackend(3)
 	defer backend.close()
 
-	var (
-		genesis = backend.chain.Genesis()
-		head    = backend.chain.CurrentBlock()
-		td      = backend.chain.GetTd(head.Hash(), head.Number.Uint64())
-		forkID  = forkid.NewID(backend.chain.Config(), backend.chain.Genesis(), backend.chain.CurrentHeader().Number.Uint64(), backend.chain.CurrentHeader().Time)
+	genesis := backend.chain.Genesis()
+	head := backend.chain.CurrentBlock()
+	forkID := forkid.NewID(
+		backend.chain.Config(),
+		backend.chain.Genesis(),
+		backend.chain.CurrentHeader().Number.Uint64(),
+		backend.chain.CurrentHeader().Time,
 	)
+
+	// Helper to build the protocol-specific Status packet
+	makeStatus := func(ver uint32, network uint64, td *big.Int, head, genesis common.Hash, fid forkid.ID) interface{} {
+		switch protocol {
+		case ETH68:
+			return StatusPacket68{ver, network, td, head, genesis, fid}
+		case ETH69:
+			return StatusPacket69{ver, network, td, genesis, fid, 1, 2, head}
+		default:
+			t.Fatalf("unsupported protocol version: %d", protocol)
+			return nil
+		}
+	}
 
 	tests := []struct {
 		code uint64
@@ -54,22 +70,27 @@ func testHandshake(t *testing.T, protocol uint) {
 			want: errNoStatusMsg,
 		},
 		{
-			code: StatusMsg, data: StatusPacket{10, 1, td, head.Hash(), genesis.Hash(), forkID},
+			code: StatusMsg,
+			data: makeStatus(10, 1, new(big.Int), head.Hash(), genesis.Hash(), forkID),
 			want: errProtocolVersionMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 999, td, head.Hash(), genesis.Hash(), forkID},
+			code: StatusMsg,
+			data: makeStatus(uint32(protocol), 999, new(big.Int), head.Hash(), genesis.Hash(), forkID),
 			want: errNetworkIDMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, td, head.Hash(), common.Hash{3}, forkID},
+			code: StatusMsg,
+			data: makeStatus(uint32(protocol), 1, new(big.Int), head.Hash(), common.Hash{3}, forkID),
 			want: errGenesisMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, td, head.Hash(), genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}},
+			code: StatusMsg,
+			data: makeStatus(uint32(protocol), 1, new(big.Int), head.Hash(), genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}),
 			want: errForkIDRejected,
 		},
 	}
+
 	for i, test := range tests {
 		// Create the two peers to shake with each other
 		app, net := p2p.MsgPipe()
@@ -82,7 +103,7 @@ func testHandshake(t *testing.T, protocol uint) {
 		// Send the junk test with one peer, check the handshake failure
 		go p2p.Send(app, test.code, test.data)
 
-		err := peer.Handshake(1, td, head.Hash(), genesis.Hash(), forkID, forkid.NewFilter(backend.chain))
+		err := peer.Handshake(1, backend.chain, BlockRangeUpdatePacket{})
 		if err == nil {
 			t.Errorf("test %d: protocol returned nil error, want %q", i, test.want)
 		} else if !errors.Is(err, test.want) {

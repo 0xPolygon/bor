@@ -45,11 +45,6 @@ import (
 const (
 	defaultDialTimeout = 15 * time.Second
 
-	// This is the fairness knob for the discovery mixer. When looking for peers, we'll
-	// wait this long for a single source of candidates before moving on and trying other
-	// sources.
-	discmixTimeout = 5 * time.Second
-
 	// Connectivity defaults.
 	defaultMaxPendingPeers = 50
 	defaultDialRatio       = 3
@@ -517,7 +512,9 @@ func (srv *Server) setupLocalNode() error {
 }
 
 func (srv *Server) setupDiscovery() error {
-	srv.discmix = enode.NewFairMix(discmixTimeout)
+	// Set up the discovery source mixer. Here, we don't care about the
+	// fairness of the mix, it's just for putting the
+	srv.discmix = enode.NewFairMix(0)
 
 	// Don't listen on UDP endpoint if DHT is disabled.
 	if srv.NoDiscovery {
@@ -554,7 +551,6 @@ func (srv *Server) setupDiscovery() error {
 			return err
 		}
 		srv.discv4 = ntab
-		srv.discmix.AddSource(ntab.RandomNodes())
 	}
 	if srv.Config.DiscoveryV5 {
 		cfg := discover.Config{
@@ -575,6 +571,19 @@ func (srv *Server) setupDiscovery() error {
 		if proto.DialCandidates != nil && !added[proto.Name] {
 			srv.discmix.AddSource(proto.DialCandidates)
 			added[proto.Name] = true
+		}
+	}
+
+	// Set up default non-protocol-specific discovery feeds if no protocol
+	// has configured discovery.
+	if len(added) == 0 {
+		if srv.discv4 != nil {
+			it := srv.discv4.RandomNodes()
+			srv.discmix.AddSource(enode.WithSourceName("discv4-default", it))
+		}
+		if srv.discv5 != nil {
+			it := srv.discv5.RandomNodes()
+			srv.discmix.AddSource(enode.WithSourceName("discv5-default", it))
 		}
 	}
 	return nil
@@ -953,6 +962,8 @@ func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *enode.Node) 
 	if err != nil {
 		if !c.is(inboundConn) {
 			markDialError(err)
+		} else {
+			markServeError(err)
 		}
 		c.close(err)
 	}

@@ -121,3 +121,15 @@ func (mr *MockBatchMockRecorder) Write() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockBatch)(nil).Write))
 }
+
+func (m *MockBatch) DeleteRange(start, end []byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteRange", start, end)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+func (mr *MockBatchMockRecorder) DeleteRange(start, end any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteRange", reflect.TypeOf((*MockBatch)(nil).DeleteRange), start, end)
+}

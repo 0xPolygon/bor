@@ -174,7 +174,9 @@ type Message struct {
 
 	// When SkipNonceChecks is true, the message nonce is not checked against the
 	// account nonce in state.
-	// This field will be set to true for operations like RPC eth_call.
+	//
+	// This field will be set to true for operations like RPC eth_call
+	// or the state prefetching.
 	SkipNonceChecks bool
 
 	// When SkipFromEOACheck is true, the message sender is not checked to be an EOA.
@@ -496,7 +498,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 		st.evm.AccessEvents.AddTxOrigin(msg.From)
 
 		if targetAddr := msg.To; targetAddr != nil {
-			st.evm.AccessEvents.AddTxDestination(*targetAddr, msg.Value.Sign() != 0)
+			st.evm.AccessEvents.AddTxDestination(*targetAddr, msg.Value.Sign() != 0, !st.state.Exist(*targetAddr))
 		}
 	}
 
@@ -575,10 +577,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 	effectiveTip := msg.GasPrice
 
 	if rules.IsLondon {
-		effectiveTip = new(big.Int).Sub(msg.GasFeeCap, st.evm.Context.BaseFee)
-		if effectiveTip.Cmp(msg.GasTipCap) > 0 {
-			effectiveTip = msg.GasTipCap
-		}
+		effectiveTip = new(big.Int).Sub(msg.GasPrice, st.evm.Context.BaseFee)
 	}
 
 	// TODO(raneet10): Double check. We might want to inculcate this fix in a separate condition
@@ -612,7 +611,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 
 		// add the coinbase to the witness iff the fee is greater than 0
 		if rules.IsEIP4762 && amount.Sign() != 0 {
-			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true)
+			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true, math.MaxUint64)
 		}
 
 		output1 := new(big.Int).SetBytes(input1.Bytes())

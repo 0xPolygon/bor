@@ -20,6 +20,7 @@ import (
 	"math/big"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/ethereum/go-ethereum/common"
@@ -71,6 +72,7 @@ type Peer struct {
 	*p2p.Peer                   // The embedded P2P package peer
 	rw        p2p.MsgReadWriter // Input/output streams for snap
 	version   uint              // Protocol version negotiated
+	lastRange atomic.Pointer[BlockRangeUpdatePacket]
 
 	head common.Hash // Latest advertised head block hash
 	td   *big.Int    // Latest advertised head block total difficulty
@@ -161,6 +163,12 @@ func (p *Peer) KnownBlock(hash common.Hash) bool {
 	return p.knownBlocks.Contains(hash)
 }
 
+// BlockRange returns the latest announced block range.
+// This will be nil for peers below protocol version eth/69.
+func (p *Peer) BlockRange() *BlockRangeUpdatePacket {
+	return p.lastRange.Load()
+}
+
 // KnownTransaction returns whether peer is known to already have a transaction.
 func (p *Peer) KnownTransaction(hash common.Hash) bool {
 	return p.knownTxs.Contains(hash)
@@ -210,29 +218,17 @@ func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
 	}
 }
 
-// sendPooledTransactionHashes66 sends transaction hashes to the peer and includes
-// them in its transaction hash set for future reference.
-//
-// This method is a helper used by the async transaction announcer. Don't call it
-// directly as the queueing (memory) and transmission (bandwidth) costs should
-// not be managed directly.
-func (p *Peer) sendPooledTransactionHashes66(hashes []common.Hash) error {
-	// Mark all the transactions as known, but ensure we don't overflow our limits
-	p.knownTxs.Add(hashes...)
-	return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket67(hashes))
-}
-
-// sendPooledTransactionHashes68 sends transaction hashes (tagged with their type
+// sendPooledTransactionHashes sends transaction hashes (tagged with their type
 // and size) to the peer and includes them in its transaction hash set for future
 // reference.
 //
 // This method is a helper used by the async transaction announcer. Don't call it
 // directly as the queueing (memory) and transmission (bandwidth) costs should
 // not be managed directly.
-func (p *Peer) sendPooledTransactionHashes68(hashes []common.Hash, types []byte, sizes []uint32) error {
+func (p *Peer) sendPooledTransactionHashes(hashes []common.Hash, types []byte, sizes []uint32) error {
 	// Mark all the transactions as known, but ensure we don't overflow our limits
 	p.knownTxs.Add(hashes...)
-	return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket68{Types: types, Sizes: sizes, Hashes: hashes})
+	return p2p.Send(p.rw, NewPooledTransactionHashesMsg, NewPooledTransactionHashesPacket{Types: types, Sizes: sizes, Hashes: hashes})
 }
 
 // AsyncSendPooledTransactionHashes queues a list of transactions hashes to eventually
@@ -478,6 +474,14 @@ func (p *Peer) IsTrusted() bool {
 // IsStatic returns whether the peer is a static peer or not.
 func (p *Peer) IsStatic() bool {
 	return p.Info().Network.Static
+}
+
+// SendBlockRangeUpdate sends a notification about our available block range to the peer.
+func (p *Peer) SendBlockRangeUpdate(msg BlockRangeUpdatePacket) error {
+	if p.version < ETH69 {
+		return nil
+	}
+	return p2p.Send(p.rw, BlockRangeUpdateMsg, &msg)
 }
 
 // knownCache is a cache for known hashes.

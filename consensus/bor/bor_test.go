@@ -76,7 +76,7 @@ func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, d
 	genspec := &core.Genesis{Config: cfg}
 	db := rawdb.NewMemoryDatabase()
 	_ = genspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
-	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, genspec, nil, b, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
 	require.NoError(t, err)
 	return chain, b
 }
@@ -132,7 +132,7 @@ func TestGenesisContractChange(t *testing.T) {
 	statedb, err := state.New(genesis.Root(), state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
 	require.NoError(t, err)
 
-	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, genspec, nil, b, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
 	require.NoError(t, err)
 
 	addBlock := func(root common.Hash, num int64) (common.Hash, *state.StateDB) {
