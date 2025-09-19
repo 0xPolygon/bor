@@ -723,6 +723,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		go func() {
 			pstart := time.Now()
 			parallelStatedb.StartPrefetcher("chain", witness)
+			log.Error("Processing block using Block STM", "number", block.NumberU64())
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
 			if err == nil {
