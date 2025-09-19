@@ -622,17 +622,7 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		// we can ask the resultcache if this header is within the
 		// "prioritized" segment of blocks. If it is not, we need to throttle
 
-		receiptExists := false
 		stale, throttle, item, err := q.resultCache.AddFetch(header, q.mode)
-		// log.Info("[debug] fetch task for receipt created", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
-		if common.IsStateSyncBlock(header.Number.Uint64()) {
-			if (item.pending.Load() & (1 << receiptType)) == 0 {
-				log.Info("[debug] receipt skipped for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
-			} else {
-				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err, "kind", kind)
-				receiptExists = true
-			}
-		}
 		if stale {
 			// Don't put back in the task queue, this item has already been
 			// delivered upstream
@@ -655,9 +645,6 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 			// the caller to throttle, since we still want some other
 			// peer to fetch those for us
 			throttled = len(skip) == 0
-			if receiptExists {
-				log.Info("[debug] exiting due to throttle")
-			}
 			break
 		}
 
@@ -669,9 +656,6 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		}
 
 		if item.Done(kind) {
-			if receiptExists {
-				log.Info("[debug] done already, skipping", "item", item.pending.Load(), "done", (item.pending.Load())&(1<<kind) == 0, "kind", kind)
-			}
 			// If it's a noop, we can skip this task
 			delete(taskPool, header.Hash())
 			taskQueue.PopItem()
@@ -683,17 +667,10 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		}
 		// Remove it from the task queue
 		taskQueue.PopItem()
-		if receiptExists {
-			log.Info("[debug] about to add header to list")
-		}
 		// Otherwise unless the peer is known not to have the data, add to the retrieve list
 		if p.Lacks(header.Hash()) {
-			log.Info("[debug] skipping header", "number", header.Number.Uint64())
 			skip = append(skip, header)
 		} else {
-			if receiptExists {
-				log.Info("[debug] adding header in send", "number", header.Number.Uint64())
-			}
 			send = append(send, header)
 		}
 	}
