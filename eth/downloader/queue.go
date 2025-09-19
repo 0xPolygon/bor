@@ -90,9 +90,6 @@ func newFetchResult(header *types.Header, syncMode SyncMode) *fetchResult {
 	if header.EmptyReceipts() && header.Number.Uint64()%16 != 0 {
 		fetchReceipts = false
 	}
-	if common.IsStateSyncBlock(header.Number.Uint64()) {
-		log.Info("[debug] creating fetch task for state-sync block", "fetch", fetchReceipts)
-	}
 	if syncMode == SnapSync && fetchReceipts {
 		item.pending.Store(item.pending.Load() | (1 << receiptType))
 	}
@@ -618,6 +615,14 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		// "prioritized" segment of blocks. If it is not, we need to throttle
 
 		stale, throttle, item, err := q.resultCache.AddFetch(header, q.mode)
+		log.Info("[debug] fetch task for receipt created", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
+		if common.IsStateSyncBlock(header.Number.Uint64()) {
+			if (item.pending.Load() & (1 << receiptType)) == 0 {
+				log.Info("[debug] receipt skipped for state sync block")
+			} else {
+				log.Info("[debug] receipt about to be fetched for state sync block")
+			}
+		}
 		if stale {
 			// Don't put back in the task queue, this item has already been
 			// delivered upstream
@@ -664,8 +669,10 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		taskQueue.PopItem()
 		// Otherwise unless the peer is known not to have the data, add to the retrieve list
 		if p.Lacks(header.Hash()) {
+			log.Info("[debug] skipping header", "number", header.Number.Uint64())
 			skip = append(skip, header)
 		} else {
+			log.Info("[debug] adding header in send", "number", header.Number.Uint64())
 			send = append(send, header)
 		}
 	}
