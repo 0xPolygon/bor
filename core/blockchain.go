@@ -654,16 +654,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	throwaway, err := state.New(parentRoot, bc.statedb)
+	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	statedb, err := state.New(parentRoot, bc.statedb)
+	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
 
-	parallelStatedb, err := state.New(parentRoot, bc.statedb)
+	parallelStatedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
