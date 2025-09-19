@@ -614,13 +614,15 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		// we can ask the resultcache if this header is within the
 		// "prioritized" segment of blocks. If it is not, we need to throttle
 
+		receiptExists := false
 		stale, throttle, item, err := q.resultCache.AddFetch(header, q.mode)
-		log.Info("[debug] fetch task for receipt created", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
+		// log.Info("[debug] fetch task for receipt created", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
 		if common.IsStateSyncBlock(header.Number.Uint64()) {
 			if (item.pending.Load() & (1 << receiptType)) == 0 {
-				log.Info("[debug] receipt skipped for state sync block")
+				log.Info("[debug] receipt skipped for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
+				receiptExists = true
 			} else {
-				log.Info("[debug] receipt about to be fetched for state sync block")
+				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64())
 			}
 		}
 		if stale {
@@ -656,6 +658,9 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		}
 
 		if item.Done(kind) {
+			if receiptExists {
+				log.Info("[debug] done already, skipping")
+			}
 			// If it's a noop, we can skip this task
 			delete(taskPool, header.Hash())
 			taskQueue.PopItem()
@@ -667,6 +672,9 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		}
 		// Remove it from the task queue
 		taskQueue.PopItem()
+		if receiptExists {
+			log.Info("[debug] about to add header to list")
+		}
 		// Otherwise unless the peer is known not to have the data, add to the retrieve list
 		if p.Lacks(header.Hash()) {
 			log.Info("[debug] skipping header", "number", header.Number.Uint64())
