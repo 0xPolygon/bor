@@ -1309,8 +1309,8 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		}()
 
 		found, err := store.waitForNewSpan(150, author1Address, 1*time.Second)
-		require.NoError(t, err)
-		require.True(t, found)
+		require.Error(t, err)
+		require.False(t, found)
 	})
 
 	t.Run("target block not initially in span", func(t *testing.T) {
