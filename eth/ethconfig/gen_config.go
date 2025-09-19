@@ -81,6 +81,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		FastForwardThreshold                 uint64
 		WitnessPruneThreshold                uint64
 		WitnessPruneInterval                 time.Duration
+		EnableParallelStatelessImport        bool
+		EnableParallelStatelessImportWorkers int
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -145,6 +147,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.FastForwardThreshold = c.FastForwardThreshold
 	enc.WitnessPruneThreshold = c.WitnessPruneThreshold
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
+	enc.EnableParallelStatelessImport = c.EnableParallelStatelessImport
+	enc.EnableParallelStatelessImportWorkers = c.EnableParallelStatelessImportWorkers
 	return &enc, nil
 }
 
@@ -213,6 +217,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		FastForwardThreshold                 *uint64
 		WitnessPruneThreshold                *uint64
 		WitnessPruneInterval                 *time.Duration
+		EnableParallelStatelessImport        *bool
+		EnableParallelStatelessImportWorkers *int
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -403,6 +409,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.WitnessPruneInterval != nil {
 		c.WitnessPruneInterval = *dec.WitnessPruneInterval
+	}
+	if dec.EnableParallelStatelessImport != nil {
+		c.EnableParallelStatelessImport = *dec.EnableParallelStatelessImport
+	}
+	if dec.EnableParallelStatelessImportWorkers != nil {
+		c.EnableParallelStatelessImportWorkers = *dec.EnableParallelStatelessImportWorkers
 	}
 	return nil
 }

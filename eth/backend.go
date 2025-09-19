@@ -165,20 +165,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 
-	// Here we determine genesis hash and active ChainConfig.
-	// We need these to figure out the consensus parameters and to set up history pruning.
-	chainConfig, _, err := core.LoadChainConfig(chainDb, config.Genesis)
-	if err != nil {
-		return nil, err
-	}
-
-	/*
-		engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
-		if err != nil {
-			return nil, err
-		}
-	*/
-
 	// Assemble the Ethereum object.
 	eth := &Ethereum{
 		config:          config,
@@ -205,7 +191,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	gpoParams := config.GPO
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(chainConfig, config, chainDb, blockChainAPI)
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -283,6 +269,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewParallelBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, checker, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
 		eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, checker)
+	}
+
+	// Set parallel stateless import toggle on blockchain
+	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
+		eth.blockchain.ParallelStatelessImportEnable()
+		if config.EnableParallelStatelessImportWorkers > 0 {
+			eth.blockchain.SetParallelStatelessImportWorkers(config.EnableParallelStatelessImportWorkers)
+		}
 	}
 
 	if err != nil {

@@ -22,6 +22,8 @@
         "indoreBlock": 73100,
         "ahmedabadBlock": 11865856,
         "bhilaiBlock": 22765056,
+        "rioBlock": 26272256,
+        "skipValidatorByteCheck": [26160367, 26161087, 26171567, 26173743, 26175647],
         "stateSyncConfirmationDelay": {
           "0": 128
         },
@@ -45,6 +47,10 @@
         "burntContract": {
           "0": "0x000000000000000000000000000000000000dead",
           "73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9"
+        },
+        "coinbase": {
+          "0":        "0x0000000000000000000000000000000000000000",
+          "26272256": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0"
         },
         "blockAlloc": {
           "11865856": {

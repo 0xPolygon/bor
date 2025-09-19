@@ -9,6 +9,7 @@ on:
     branches:
       - 'master'
       - 'develop'
+      - v2.3.0-candidate # Remove after testing
     types: [opened, synchronize]
 
 concurrency:
@@ -58,7 +59,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: stateless
+          ref: raneet10/stateless-parallel-import # Revert after testing
           path: kurtosis-pos
 
       - name: Pre kurtosis run

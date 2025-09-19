@@ -239,6 +239,13 @@ type Config struct {
 	// The time interval between each witness prune routine
 	WitnessPruneInterval time.Duration
 
+	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
+	EnableParallelStatelessImport bool
+
+	// EnableParallelStatelessImportWorkers sets the number of workers (CPUs) used for parallel stateless import.
+	// If 0, defaults to GOMAXPROCS.
+	EnableParallelStatelessImportWorkers int
+
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
 

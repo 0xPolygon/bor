@@ -666,6 +666,12 @@ type WitnessConfig struct {
 	// ProduceWitnesses enables producing witnesses while syncing
 	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
 
+	// Parallel stateless import (download path) toggle
+	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
+
+	// Number of workers (CPUs) to use for parallel stateless import. If 0, uses GOMAXPROCS.
+	ParallelStatelessImportWorkers int `hcl:"parallelstatelessimportworkers,optional" toml:"parallelstatelessimportworkers,optional"`
+
 	// WitnessAPI enables witness API endpoints
 	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
 
@@ -883,13 +889,15 @@ func DefaultConfig() *Config {
 			Enforce:              false,
 		},
 		Witness: &WitnessConfig{
-			Enable:               false,
-			SyncWithWitnesses:    false,
-			ProduceWitnesses:     false,
-			WitnessAPI:           false,
-			FastForwardThreshold: 6400,
-			PruneThreshold:       64000,
-			PruneInterval:        120 * time.Second,
+			Enable:                         false,
+			SyncWithWitnesses:              false,
+			ProduceWitnesses:               false,
+			EnableParallelStatelessImport:  true,
+			ParallelStatelessImportWorkers: 0,
+			WitnessAPI:                     false,
+			FastForwardThreshold:           6400,
+			PruneThreshold:                 64000,
+			PruneInterval:                  120 * time.Second,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
@@ -1330,6 +1338,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
 	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.EnableParallelStatelessImport = c.Witness.EnableParallelStatelessImport
+	n.EnableParallelStatelessImportWorkers = c.Witness.ParallelStatelessImportWorkers
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
 	n.WitnessPruneThreshold = c.Witness.PruneThreshold

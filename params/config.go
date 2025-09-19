@@ -292,7 +292,7 @@ var (
 			},
 			Coinbase: map[string]string{
 				"0":        "0x0000000000000000000000000000000000000000",
-				"50000000": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+				"49439808": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
@@ -337,6 +337,7 @@ var (
 			IndoreBlock:    big.NewInt(73100),
 			AhmedabadBlock: big.NewInt(11865856),
 			BhilaiBlock:    big.NewInt(22765056),
+			RioBlock:       big.NewInt(26272256),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -363,8 +364,9 @@ var (
 			},
 			Coinbase: map[string]string{
 				"0":        "0x0000000000000000000000000000000000000000",
-				"26201856": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+				"26272256": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
+			SkipValidatorByteCheck: []uint64{26160367, 26161087, 26171567, 26173743, 26175647},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
 				"11865856": map[string]interface{}{
@@ -864,6 +866,7 @@ type BorConfig struct {
 	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
 	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
+	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)

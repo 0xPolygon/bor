@@ -171,6 +171,13 @@ func (w *Witness) SetHeader(header *types.Header) {
 	}
 }
 
+func (w *Witness) HeaderReader() HeaderReader {
+	if w == nil {
+		return nil
+	}
+	return w.chain
+}
+
 // GetWitnessFromRlp decodes a witness from its RLP encoded form.
 func GetWitnessFromRlp(rlpEncodedWitness []byte) (*Witness, error) {
 	var witness Witness
