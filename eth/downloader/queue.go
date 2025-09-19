@@ -86,7 +86,11 @@ func newFetchResult(header *types.Header, syncMode SyncMode) *fetchResult {
 		item.Withdrawals = make(types.Withdrawals, 0)
 	}
 
-	if syncMode == SnapSync && !header.EmptyReceipts() {
+	fetchReceipts := true
+	if header.EmptyReceipts() && header.Number.Uint64()%16 != 0 {
+		fetchReceipts = false
+	}
+	if syncMode == SnapSync && fetchReceipts {
 		item.pending.Store(item.pending.Load() | (1 << receiptType))
 	}
 
