@@ -5,6 +5,7 @@ on:
     branches:
       - 'master'
       - 'develop'
+      - 'raneet10/parallel-block-import-stateless-ci' # Remove after testing
   pull_request:
     branches:
       - 'master'
@@ -59,7 +60,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: raneet10/stateless-parallel-import # Revert after testing
+          ref: raneet10/test-stateless # Revert after testing
           path: kurtosis-pos
 
       - name: Pre kurtosis run
