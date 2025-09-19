@@ -762,6 +762,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	result := <-resultChan
 
 	if result.parallel {
+		panic("Block STM processor finished first, should not happen")
 		log.Error("Block STM processor finished first", "number", block.NumberU64())
 	} else {
 		log.Error("Serial processor finished first", "number", block.NumberU64())
