@@ -553,9 +553,9 @@ func (s *Server) getBorInfo() map[string]any {
 		borInfo["sync_mode"] = s.backend.SyncMode()
 
 		if s.backend.Synced() {
-			borInfo["sync_status"] = "synced"
+			borInfo["catching_up"] = "false"
 		} else {
-			borInfo["sync_status"] = "not_synced"
+			borInfo["catching_up"] = "true"
 		}
 	}
 
@@ -577,11 +577,11 @@ func (s *Server) performHealthChecks(healthResponse map[string]any) (string, str
 			// Check critical threshold first.
 			if s.config.Health.MaxGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.MaxGoRoutineThreshold {
 				status = append(status, "CRITICAL")
-				statusMessage = append(statusMessage, "Number of goroutines is greater than the maximum threshold")
+				statusMessage = append(statusMessage, "number of goroutines above the maximum threshold")
 			} else if s.config.Health.WarnGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.WarnGoRoutineThreshold {
 				// Only check warning threshold if we haven't already hit critical.
 				status = append(status, "WARN")
-				statusMessage = append(statusMessage, "Number of goroutines is greater than the warning threshold")
+				statusMessage = append(statusMessage, "number of goroutines above the warning threshold")
 			}
 		}
 	}
@@ -592,11 +592,11 @@ func (s *Server) performHealthChecks(healthResponse map[string]any) (string, str
 			// Check critical threshold first.
 			if s.config.Health.MinPeerThreshold != 0 && peerCount < s.config.Health.MinPeerThreshold {
 				status = append(status, "CRITICAL")
-				statusMessage = append(statusMessage, "Number of peers is less than the minimum threshold")
+				statusMessage = append(statusMessage, "number of peers below the minimum threshold")
 			} else if s.config.Health.WarnPeerThreshold != 0 && peerCount < s.config.Health.WarnPeerThreshold {
 				// Only check warning threshold if we haven't already hit critical.
 				status = append(status, "WARN")
-				statusMessage = append(statusMessage, "Number of peers is less than the warning threshold")
+				statusMessage = append(statusMessage, "number of peers below the warning threshold")
 			}
 		}
 	}
