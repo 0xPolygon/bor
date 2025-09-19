@@ -1139,5 +1139,35 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.History.StateHistory,
 	})
 
+	// Health check related flags
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.max-goroutine-threshold",
+		Usage:   "Maximum number of goroutines before health check fails (0 = disabled)",
+		Value:   &c.cliConfig.Health.MaxGoRoutineThreshold,
+		Default: c.cliConfig.Health.MaxGoRoutineThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.warn-goroutine-threshold",
+		Usage:   "Maximum number of goroutines before health check warns (0 = disabled)",
+		Value:   &c.cliConfig.Health.WarnGoRoutineThreshold,
+		Default: c.cliConfig.Health.WarnGoRoutineThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.min-peer-threshold",
+		Usage:   "Minimum number of peers before health check fails (0 = disabled)",
+		Value:   &c.cliConfig.Health.MinPeerThreshold,
+		Default: c.cliConfig.Health.MinPeerThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.warn-peer-threshold",
+		Usage:   "Minimum number of peers before health check warns (0 = disabled)",
+		Value:   &c.cliConfig.Health.WarnPeerThreshold,
+		Default: c.cliConfig.Health.WarnPeerThreshold,
+		Group:   "Health",
+	})
+
 	return f
 }

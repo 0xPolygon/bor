@@ -168,6 +168,16 @@ The ```bor server``` command runs the Bor client.
 
 - ```leveldb.compaction.total.size.multiplier```: Multiplier on level size on LevelDB levels. Size for a level is determined by: `leveldb.compaction.total.size * (leveldb.compaction.total.size.multiplier ^ Level)` (default: 10)
 
+### Health Options
+
+- ```health.max-goroutine-threshold```: Maximum number of goroutines before health check fails (0 = disabled) (default: 0)
+
+- ```health.min-peer-threshold```: Minimum number of peers before health check fails (0 = disabled) (default: 0)
+
+- ```health.warn-goroutine-threshold```: Maximum number of goroutines before health check warns (0 = disabled) (default: 0)
+
+- ```health.warn-peer-threshold```: Minimum number of peers before health check warns (0 = disabled) (default: 0)
+
 ### JsonRPC Options
 
 - ```authrpc.addr```: Listening address for authenticated APIs (default: localhost)

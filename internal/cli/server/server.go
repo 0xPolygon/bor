@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -546,9 +545,9 @@ func (s *Server) getBorInfo() map[string]any {
 
 	if s.backend != nil {
 		currentBlock := s.backend.BlockChain().CurrentBlock()
-		borInfo["current_block_hash"] = currentBlock.Hash().Hex()
-		borInfo["current_block_number"] = currentBlock.Number.Uint64()
-		borInfo["current_block_timestamp"] = time.Unix(int64(currentBlock.Time), 0).UTC().Format(time.RFC3339Nano)
+		borInfo["latest_block_hash"] = currentBlock.Hash().Hex()
+		borInfo["latest_block_number"] = currentBlock.Number.Uint64()
+		borInfo["latest_block_timestamp"] = time.Unix(int64(currentBlock.Time), 0).UTC().Format(time.RFC3339Nano)
 		borInfo["peer_count"] = s.backend.PeerCount()
 		borInfo["sync_mode"] = s.backend.SyncMode()
 
@@ -562,61 +561,63 @@ func (s *Server) getBorInfo() map[string]any {
 	return borInfo
 }
 
-func (s *Server) performHealthChecks(healthResponse map[string]any) (string, string) {
-	overallStatus := "OK"
-	var status []string
-	var statusMessage []string
+func (s *Server) performHealthChecks(healthResponse map[string]any) HealthStatus {
+	overallStatus := StatusOK
+	var statusMessages []string
 
 	if s.config == nil || s.config.Health == nil {
-		return overallStatus, ""
+		return HealthStatus{
+			Level:   StatusOK,
+			Code:    StatusOK.Code(),
+			Message: "",
+		}
 	}
 
 	// Goroutines check.
-	if system, ok := healthResponse["system"].(map[string]any); ok {
+	if system, ok := healthResponse["system"].(map[string]any); ok && system != nil {
 		if goroutinesCount, ok := system["goroutines_count"].(float64); ok {
 			// Check critical threshold first.
 			if s.config.Health.MaxGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.MaxGoRoutineThreshold {
-				status = append(status, "CRITICAL")
-				statusMessage = append(statusMessage, "number of goroutines above the maximum threshold")
+				overallStatus = StatusCritical
+				statusMessages = append(statusMessages, "number of goroutines above the maximum threshold")
 			} else if s.config.Health.WarnGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.WarnGoRoutineThreshold {
-				// Only check warning threshold if we haven't already hit critical.
-				status = append(status, "WARN")
-				statusMessage = append(statusMessage, "number of goroutines above the warning threshold")
+				// Only set to warn if we haven't already hit critical.
+				if overallStatus != StatusCritical {
+					overallStatus = StatusWarn
+				}
+				statusMessages = append(statusMessages, "number of goroutines above the warning threshold")
 			}
 		}
 	}
 
-	// Peer check.
-	if borInfo, ok := healthResponse["bor_info"].(map[string]any); ok {
+	// Peer check - only perform if node_info exists and has peer_count.
+	if borInfo, ok := healthResponse["node_info"].(map[string]any); ok && borInfo != nil {
 		if peerCount, ok := borInfo["peer_count"].(int); ok {
 			// Check critical threshold first.
 			if s.config.Health.MinPeerThreshold != 0 && peerCount < s.config.Health.MinPeerThreshold {
-				status = append(status, "CRITICAL")
-				statusMessage = append(statusMessage, "number of peers below the minimum threshold")
+				overallStatus = StatusCritical
+				statusMessages = append(statusMessages, "number of peers below the minimum threshold")
 			} else if s.config.Health.WarnPeerThreshold != 0 && peerCount < s.config.Health.WarnPeerThreshold {
-				// Only check warning threshold if we haven't already hit critical.
-				status = append(status, "WARN")
-				statusMessage = append(statusMessage, "number of peers below the warning threshold")
+				// Only set to warn if we haven't already hit critical.
+				if overallStatus != StatusCritical {
+					overallStatus = StatusWarn
+				}
+				statusMessages = append(statusMessages, "number of peers below the warning threshold")
 			}
 		}
 	}
 
-	switch {
-	case slices.Contains(status, "CRITICAL"):
-		overallStatus = "CRITICAL"
-	case slices.Contains(status, "WARN"):
-		overallStatus = "WARN"
-	default:
-		overallStatus = "OK"
+	return HealthStatus{
+		Level:   overallStatus,
+		Code:    overallStatus.Code(),
+		Message: strings.Join(statusMessages, ", "),
 	}
-
-	return overallStatus, strings.Join(statusMessage, ", and ")
 }
 
 // customHealthServiceHandler wraps the health-go handler and adds Bor-specific information on top of it.
 func (s *Server) customHealthServiceHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recorder := &responseRecorder{
+		recorder := &ResponseRecorder{
 			ResponseWriter: w,
 			body:           make([]byte, 0),
 		}
@@ -637,11 +638,13 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 		// Remove the "status" field from health-go as it's always "OK" and not useful.
 		delete(healthResponse, "status")
 
-		healthResponse["bor_info"] = s.getBorInfo()
+		healthResponse["node_info"] = s.getBorInfo()
 
-		status, statusMessage := s.performHealthChecks(healthResponse)
+		status := s.performHealthChecks(healthResponse)
 		healthResponse["status"] = status
-		healthResponse["status_message"] = statusMessage
+
+		healthResponse["error"] = false
+		healthResponse["error_message"] = ""
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(recorder.statusCode)
@@ -653,22 +656,6 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 			}
 		}
 	})
-}
-
-// responseRecorder captures the response from health-go handler.
-type responseRecorder struct {
-	http.ResponseWriter
-	statusCode int
-	body       []byte
-}
-
-func (r *responseRecorder) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
-}
-
-func (r *responseRecorder) Write(data []byte) (int, error) {
-	r.body = append(r.body, data...)
-	return len(data), nil
 }
 
 // registerHealthServiceEndpoint registers the /health service endpoint.
