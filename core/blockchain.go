@@ -658,7 +658,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
+	statedb, err := state.New(parentRoot, bc.statedb)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
