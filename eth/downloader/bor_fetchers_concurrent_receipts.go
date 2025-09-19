@@ -82,9 +82,13 @@ func (q *receiptQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 	}
 
 	hashes := make([]common.Hash, 0, len(req.Headers))
+	nums := make([]uint64, 0, len(req.Headers))
 	for _, header := range req.Headers {
 		hashes = append(hashes, header.Hash())
+		nums = append(nums, header.Number.Uint64())
 	}
+
+	log.Info("[debug] requesting receipts", "peer", peer.id, "nums", nums)
 
 	return peer.peer.RequestReceipts(hashes, resCh)
 }
