@@ -647,6 +647,9 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 			// the caller to throttle, since we still want some other
 			// peer to fetch those for us
 			throttled = len(skip) == 0
+			if receiptExists {
+				log.Info("[debug] exiting due to throttle")
+			}
 			break
 		}
 
