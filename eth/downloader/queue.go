@@ -393,7 +393,11 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			log.Warn("Header already scheduled for block fetch", "number", header.Number, "hash", hash)
 		}
 		// Queue for receipt retrieval
-		if q.mode == SnapSync && !header.EmptyReceipts() {
+		fetchReceipts := true
+		if header.EmptyReceipts() && header.Number.Uint64()%16 != 0 {
+			fetchReceipts = false
+		}
+		if q.mode == SnapSync && fetchReceipts {
 			if _, ok := q.receiptTaskPool[hash]; !ok {
 				q.receiptTaskPool[hash] = header
 				q.receiptTaskQueue.Push(header, -int64(header.Number.Uint64()))
@@ -595,6 +599,10 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 	// downloading something (sanity check not to corrupt state)
 	if taskQueue.Empty() {
 		return nil, false, true
+	}
+
+	if kind == receiptType {
+		log.Info("[debug] reserve headers for receipts")
 	}
 
 	if _, ok := pendPool[p.id]; ok {
