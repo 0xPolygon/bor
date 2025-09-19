@@ -620,9 +620,9 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		if common.IsStateSyncBlock(header.Number.Uint64()) {
 			if (item.pending.Load() & (1 << receiptType)) == 0 {
 				log.Info("[debug] receipt skipped for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
-				receiptExists = true
 			} else {
-				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64())
+				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
+				receiptExists = true
 			}
 		}
 		if stale {
@@ -680,7 +680,9 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 			log.Info("[debug] skipping header", "number", header.Number.Uint64())
 			skip = append(skip, header)
 		} else {
-			log.Info("[debug] adding header in send", "number", header.Number.Uint64())
+			if receiptExists {
+				log.Info("[debug] adding header in send", "number", header.Number.Uint64())
+			}
 			send = append(send, header)
 		}
 	}
