@@ -624,7 +624,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 }
 
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
-	panic("bad")
+
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -763,7 +763,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	result := <-resultChan
 
 	if result.parallel {
-		panic("Block STM processor finished first, should not happen")
 		log.Error("Block STM processor finished first", "number", block.NumberU64())
 	} else {
 		log.Error("Serial processor finished first", "number", block.NumberU64())
