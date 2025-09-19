@@ -66,7 +66,7 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	}
 	processor := NewStateProcessor(config, headerChain)
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
-
+	log.Error("ExecuteStateless is using State Processor", "number", block.NumberU64())
 	res, err := processor.Process(block, db, vmconfig, author, context.Background())
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, err
