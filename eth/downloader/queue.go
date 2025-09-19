@@ -621,7 +621,7 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 			if (item.pending.Load() & (1 << receiptType)) == 0 {
 				log.Info("[debug] receipt skipped for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
 			} else {
-				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err)
+				log.Info("[debug] receipt about to be fetched for state sync block", "number", header.Number.Uint64(), "stale", stale, "throttle", throttle, "item", item.pending.Load(), "err", err, "kind", kind)
 				receiptExists = true
 			}
 		}
@@ -662,7 +662,7 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 
 		if item.Done(kind) {
 			if receiptExists {
-				log.Info("[debug] done already, skipping")
+				log.Info("[debug] done already, skipping", "item", item.pending.Load(), "done", (item.pending.Load())&(1<<kind) == 0, "kind", kind)
 			}
 			// If it's a noop, we can skip this task
 			delete(taskPool, header.Hash())
