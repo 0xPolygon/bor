@@ -706,8 +706,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	// temporary disabled block STM because witness not work on parallel.
 	// TODO: how to enable witness on parallel state processing
-	bc.parallelProcessor = nil
-	bc.enforceParallelProcessor = false
+	// bc.parallelProcessor = nil
+	// bc.enforceParallelProcessor = false
 
 	var resultChanLen int = 2
 	if bc.enforceParallelProcessor {
