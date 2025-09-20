@@ -337,6 +337,15 @@ func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
+// ExcludeStateSync removes the state sync transaction from the list. We use
+// the property of zero gas used to identify a state-sync transaction in the
+// list.
+func (rl *ReceiptList68) ExcludeStateSync() {
+	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
+		rl.items = rl.items[:len(rl.items)-1]
+	}
+}
+
 // ReceiptList69 is the block receipt list as downloaded by eth/69.
 // This implements types.DerivableList for validation purposes.
 type ReceiptList69 struct {
@@ -403,10 +412,20 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
+// ExcludeStateSync removes the state sync transaction from the list. We use
+// the property of zero gas used to identify a state-sync transaction in the
+// list.
+func (rl *ReceiptList69) ExcludeStateSync() {
+	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
+		rl.items = rl.items[:len(rl.items)-1]
+	}
+}
+
 // blockReceiptsToNetwork69 takes a slice of rlp-encoded receipts, and transactions,
 // and applies the type-encoding on the receipts (for non-legacy receipts).
-// e.g. for non-legacy receipts: receipt-data -> {tx-type || receipt-data}
-func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, error) {
+// e.g. for non-legacy receipts: receipt-data -> {tx-type || receipt-data}. It also
+// handles state-sync transaction receipts and encodes them in the same format.
+func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue, isStateSyncReceipt func(index int) bool) ([]byte, error) {
 	txTypesIter, err := txTypesInBody(blockBody)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block body: %v", err)
@@ -421,10 +440,14 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 	)
 	outer := enc.List()
 	for i := 0; it.Next(); i++ {
-		txType, _ := nextTxType()
 		content, _, _ := rlp.SplitList(it.Value())
 		receiptList := enc.List()
-		enc.WriteUint64(uint64(txType))
+		if isStateSyncReceipt(i) {
+			enc.WriteUint64(uint64(0)) // TxType is always 0 for state-sync transactions
+		} else {
+			txType, _ := nextTxType()
+			enc.WriteUint64(uint64(txType))
+		}
 		enc.Write(content)
 		enc.ListEnd(receiptList)
 	}

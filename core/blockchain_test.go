@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 )
 
 // So we can deterministically seed different blockchains
@@ -5314,6 +5315,90 @@ func TestGetCanonicalReceipt(t *testing.T) {
 				t.Fatalf("Receipt is not matched, want %s, got: %s", want, got)
 			}
 		}
+	}
+}
+
+// TestSplitReceipts checks if normal and state-sync receipts are split correctly
+// before inserting to database.
+func TestSplitReceipts(t *testing.T) {
+	var tests = []struct {
+		name             string
+		normalReceipts   []types.ReceiptForStorage
+		stateSyncReceipt *types.ReceiptForStorage
+	}{
+		// Both nil
+		{
+			name:             "both normal and state-sync receipt is nil",
+			normalReceipts:   nil,
+			stateSyncReceipt: nil,
+		},
+		// Normal receipt empty and state-sync nil
+		{
+			name:             "empty normal receipt and nil state-sync receipt",
+			normalReceipts:   []types.ReceiptForStorage{},
+			stateSyncReceipt: nil,
+		},
+		// Only normal receipt (single)
+		{
+			name:             "state-sync receipt is nil, only single normal receipt present",
+			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+			stateSyncReceipt: nil,
+		},
+		// Only normal receipt (multiple)
+		{
+			name:             "state-sync receipt is nil, multiple normal receipts present",
+			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}},
+			stateSyncReceipt: nil,
+		},
+		// Only state-sync receipt
+		{
+			name:             "normal receipt is nil, only state-sync receipt present",
+			normalReceipts:   nil,
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+		// Normal + state-sync receipts (single)
+		{
+			name:             "single normal and state-sync receipt present",
+			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+		// Normal + state-sync receipts (multiple)
+		{
+			name:             "multiple normal and single state-sync receipt present",
+			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}, {CumulativeGasUsed: 777, Status: 1, Logs: nil}},
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+	}
+
+	for _, test := range tests {
+		// Individually encode receipts for comparing with values after splitting
+		normalEncoded, _ := rlp.EncodeToBytes(test.normalReceipts)
+		if len(test.normalReceipts) == 0 {
+			normalEncoded = nil
+		}
+		stateSyncEncoded, _ := rlp.EncodeToBytes(test.stateSyncReceipt)
+		if test.stateSyncReceipt == nil {
+			stateSyncEncoded = nil
+		}
+
+		// Merge both and encode the final list
+		var allReceipts = make([]types.ReceiptForStorage, 0)
+		if test.normalReceipts != nil {
+			allReceipts = append(allReceipts, test.normalReceipts...)
+		}
+		if test.stateSyncReceipt != nil {
+			allReceipts = append(allReceipts, *test.stateSyncReceipt)
+		}
+		encoded, _ := rlp.EncodeToBytes(allReceipts)
+		if len(allReceipts) == 0 {
+			// Skip encoding, instead just set nil
+			encoded = nil
+		}
+
+		// Split receipts and assert if the individual list match with the expected receipt data or not
+		normal, stateSync := splitReceipts(encoded, 0, common.Hash{})
+		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
+		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
 	}
 }
 

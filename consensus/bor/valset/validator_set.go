@@ -351,7 +351,7 @@ func (vals *ValidatorSet) UpdateTotalVotingPower() error {
 // It recomputes the total voting power if required.
 func (vals *ValidatorSet) TotalVotingPower() int64 {
 	if vals.totalVotingPower == 0 {
-		log.Debug("invoking updateTotalVotingPower before returning it")
+		// log.Debug("invoking updateTotalVotingPower before returning it")
 
 		if err := vals.UpdateTotalVotingPower(); err != nil {
 			// Can/should we do better?

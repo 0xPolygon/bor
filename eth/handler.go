@@ -214,16 +214,14 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
 		// Disable switching to snap sync as it's disabled momentarily.
-		/*
-			fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-			if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-				h.snapSync.Store(true)
-				log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-			} else if !h.chain.HasState(fullBlock.Root) {
-				h.snapSync.Store(true)
-				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
-			}
-		*/
+		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
+		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+			h.snapSync.Store(true)
+			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
+		} else if !h.chain.HasState(fullBlock.Root) {
+			h.snapSync.Store(true)
+			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+		}
 	} else {
 		// This is snap sync mode
 		head := h.chain.CurrentBlock()
@@ -280,11 +278,6 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		} else {
 			return h.chain.InsertChainWithWitnesses(blocks, config.witnessProtocol, witnesses)
 		}
-	}
-
-	// If snap sync is requested but snapshots are disabled, fail loudly
-	if h.snapSync.Load() && config.Chain.Snapshots() == nil {
-		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses)

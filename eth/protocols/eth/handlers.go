@@ -341,24 +341,78 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			lookups >= 2*maxReceiptsServe {
 			break
 		}
-		// Retrieve the requested block's receipts
-		results := chain.GetReceiptsRLP(hash)
-		if results == nil {
-			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
-				continue
-			}
-		} else {
-			body := chain.GetBodyRLP(hash)
-			if body == nil {
-				continue
-			}
-			var err error
-			results, err = blockReceiptsToNetwork69(results, body)
-			if err != nil {
-				log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+
+		// In order to include state-sync transaction receipts, which resides in a separate
+		// table in db, we need to separately fetch normal and state-sync transaction receipts.
+		// Later, decode them, merge them into a single unit and re-encode the final list to
+		// be sent over p2p.
+
+		// Fetch receipts of normal evm transactions
+		normalReceipts := chain.GetReceiptsRLP(hash)
+		var normalReceiptsDecoded []*types.ReceiptForStorage
+		if normalReceipts != nil {
+			if err := rlp.DecodeBytes(normalReceipts, &normalReceiptsDecoded); err != nil {
+				log.Error("Failed to decode normal receipts", "err", err)
 				continue
 			}
 		}
+
+		// Fetch state-sync transaction receipt (if any)
+		borReceipt := chain.GetBorReceiptRLPByHash(hash)
+		var borReceiptDecoded types.ReceiptForStorage
+		if borReceipt != nil {
+			if err := rlp.DecodeBytes(borReceipt, &borReceiptDecoded); err != nil {
+				log.Error("Failed to decode state-sync receipt", "err", err)
+				continue
+			}
+		}
+
+		// Check if receipts are nil due to non existence or something else
+		if normalReceipts == nil && borReceipt == nil {
+			// Don't append empty receipt data for this block if either the local header is nil
+			// or the receipt root of header denotes existence of receipt (i.e. is not empty hash)
+			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
+				continue
+			}
+
+			// Append an empty entry for this block and continue
+			receipts = append(receipts, nil)
+			continue
+		}
+
+		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
+		var blockReceipts []*types.ReceiptForStorage = make([]*types.ReceiptForStorage, 0)
+		if normalReceipts != nil {
+			blockReceipts = append(blockReceipts, normalReceiptsDecoded...)
+		}
+		if borReceipt != nil {
+			blockReceipts = append(blockReceipts, &borReceiptDecoded)
+		}
+
+		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
+		isStateSyncReceipt := func(index int) bool {
+			if index >= len(blockReceipts) {
+				return false
+			}
+			return blockReceipts[index].CumulativeGasUsed == 0
+		}
+
+		// Encode the final list and convert to network format
+		encodedBlockReceipts, err := rlp.EncodeToBytes(blockReceipts)
+		if err != nil {
+			continue
+		}
+		body := chain.GetBodyRLP(hash)
+		if body == nil {
+			continue
+		}
+
+		results, err := blockReceiptsToNetwork69(encodedBlockReceipts, body, isStateSyncReceipt)
+		if err != nil {
+			log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+			continue
+		}
+
 		receipts = append(receipts, results)
 		bytes += len(results)
 	}
@@ -474,6 +528,20 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	if err := msg.Decode(res); err != nil {
 		return err
 	}
+
+	// The response in p2p packet can only be consumed once. As we need a copy of receipt
+	// to exclude state-sync transaction receipt from receipt root calculation, encode
+	// and decode the response back.
+	packet, err := rlp.EncodeToBytes(res)
+	if err != nil {
+		return fmt.Errorf("failed to re-encode receipt packet for making copy: %w", err)
+	}
+
+	resWithoutStateSync := new(ReceiptsPacket[L])
+	if err := rlp.DecodeBytes(packet, resWithoutStateSync); err != nil {
+		return fmt.Errorf("failed to decode re-encoded receipt packet for making copy: %w", err)
+	}
+
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
 	buffers := new(receiptListBuffers)
@@ -483,9 +551,13 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 
 	metadata := func() interface{} {
 		hasher := trie.NewStackTrie(nil)
-		hashes := make([]common.Hash, len(res.List))
-		for i := range res.List {
-			hashes[i] = types.DeriveSha(res.List[i], hasher)
+		hashes := make([]common.Hash, len(resWithoutStateSync.List))
+		for i := range resWithoutStateSync.List {
+			// The receipt root of a block doesn't include receipts from state-sync
+			// transactions specific to polygon. Exclude them for calculating the
+			// hashes of all receipts.
+			resWithoutStateSync.List[i].ExcludeStateSync()
+			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
 		}
 
 		return hashes
