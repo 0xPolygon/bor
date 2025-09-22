@@ -9,12 +9,18 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/cli/flagset"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -61,21 +67,6 @@ type WriteInstruction struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
-
-// ----- Minimal RLP types to decode the stored receipt value -----
-//
-// The producer code encodes: types.ReceiptForStorage{ Status: ..., Logs: receiptJustLogs.Logs }
-// In go-ethereum, many derived fields on Log are tagged `rlp:"-"`, so they will *not* be present.
-// We only need Address, Topics, Data.
-
-type rlpLog struct {
-	Address common.Address
-	Topics  []common.Hash
-	Data    []byte
-	// All derived fields (TxHash, BlockHash, etc.) are rlp:"-" in geth and thus not encoded.
-}
-
-// ----- Constants / helpers -----
 
 var (
 	// Receipt key byte prefix: "matic-bor-receipt-"
@@ -176,12 +167,10 @@ func parseBlockNumberFromTxLookupValue(valHex string) (uint64, error) {
 	return n, nil
 }
 
-// ----- Validation -----
-
 type stateSyncPoint struct {
 	ID        uint64
 	BlockNum  uint64
-	ReceiptAt string // (optional) can keep the key for debugging
+	ReceiptAt string
 }
 
 type validationResult struct {
@@ -201,14 +190,14 @@ func (vr *validationResult) addWarn(format string, args ...any) {
 
 // ValidateBackfillFile runs the checks described in your request and prints a summary.
 // It returns a non-nil error if *invalid*.
-func ValidateBackfillFile(backfillFilePath string) error {
+func (c *BackFillStateSyncTxsEntriesCommand) validateBackfillFile(backfillFilePath string) ([]WriteInstruction, error) {
 	raw, err := os.ReadFile(backfillFilePath)
 	if err != nil {
-		return fmt.Errorf("read file: %w", err)
+		return nil, fmt.Errorf("read file: %w", err)
 	}
 	var writes []WriteInstruction
 	if err := json.Unmarshal(raw, &writes); err != nil {
-		return fmt.Errorf("parse JSON writes: %w", err)
+		return nil, fmt.Errorf("parse JSON writes: %w", err)
 	}
 
 	res := &validationResult{Valid: true}
@@ -329,37 +318,244 @@ func ValidateBackfillFile(backfillFilePath string) error {
 		}
 	}
 
-	// Summarize
 	if len(res.Errors) > 0 {
 		res.Valid = false
 	}
 
-	// ----- Output -----
-	fmt.Println("=== Backfill Validation Summary ===")
-	fmt.Printf("File: %s\n", backfillFilePath)
-	fmt.Printf("Valid: %v\n", res.Valid)
+	c.UI.Output("=== Backfill Validation Summary ===")
+	c.UI.Output(fmt.Sprintf("File: %s\n", backfillFilePath))
+	c.UI.Output(fmt.Sprintf("Valid: %v\n", res.Valid))
 	if len(res.Errors) > 0 {
-		fmt.Println("\nErrors:")
+		c.UI.Output("\nErrors:")
 		for _, e := range res.Errors {
-			fmt.Printf("  - %s\n", e)
+			c.UI.Output(fmt.Sprintf("  - %s\n", e))
 		}
 	}
 	if len(res.Warnings) > 0 {
-		fmt.Println("\nWarnings:")
+		c.UI.Output("\nWarnings:")
 		for _, w := range res.Warnings {
-			fmt.Printf("  - %s\n", w)
+			c.UI.Output(fmt.Sprintf("  - %s\n", w))
 		}
 	}
 	if len(allPoints) > 0 {
-		fmt.Printf("\nFirst state-sync:  ID=%d  Block=%d\n", res.FirstStateSyncID, res.FirstStateSyncBlock)
-		fmt.Printf("Last state-sync:   ID=%d  Block=%d\n", res.LastStateSyncID, res.LastStateSyncBlock)
+		c.UI.Output(fmt.Sprintf("\nFirst state-sync:  ID=%d  Block=%d\n", res.FirstStateSyncID, res.FirstStateSyncBlock))
+		c.UI.Output(fmt.Sprintf("Last state-sync:   ID=%d  Block=%d\n", res.LastStateSyncID, res.LastStateSyncBlock))
 	} else {
-		fmt.Println("\nNo state-sync logs discovered, so first/last not available.")
+		c.UI.Output("\nNo state-sync logs discovered, so first/last not available.")
 	}
 
 	if !res.Valid {
-		return fmt.Errorf("backfill validation: INVALID")
+		return nil, fmt.Errorf("backfill validation: INVALID")
 	}
+	return writes, nil
+}
+
+type putReq struct {
+	key []byte
+	val []byte
+}
+
+func incrementAndMaybeReportProgress(c *BackFillStateSyncTxsEntriesCommand, processed *int64, total int64) {
+	n := atomic.AddInt64(processed, 1)
+	if n%1000 == 0 || n == total {
+		c.UI.Output(fmt.Sprintf("Progress: %d/%d (%.2f%%)", n, total, 100*float64(n)/float64(total)))
+	}
+}
+
+// putMissingBackfill iterates over the writes in parallel, checks db presence, and batches missing puts.
+func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Database, writes []WriteInstruction) error {
+	batch := chaindb.NewBatch()
+
+	total := len(writes)
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+
+	jobs := make(chan WriteInstruction, workers*2)
+	puts := make(chan putReq, workers*4)
+	errCh := make(chan error, 1)
+
+	var processed int64
+	var checkedRcpt int64
+	var checkedLookup int64
+	var inserted int64
+	var skippedKnown int64
+	var skippedOther int64
+
+	var batchWG sync.WaitGroup
+	batchWG.Add(1)
+	go func() {
+		defer batchWG.Done()
+		for p := range puts {
+			if err := batch.Put(p.key, p.val); err != nil {
+				// First error wins
+				select {
+				case errCh <- fmt.Errorf("batch put failed: %w", err):
+				default:
+				}
+				return
+			}
+			atomic.AddInt64(&inserted, 1)
+		}
+	}()
+
+	// Worker pool
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for w := range jobs {
+				// Early exit if a hard error occurred (avoid wasted work)
+				select {
+				case e := <-errCh:
+					// put it back for others / caller, then stop
+					select {
+					case errCh <- e:
+					default:
+					}
+					return
+				default:
+				}
+
+				isReceipt, number, blockHash, err := parseReceiptKey(w.Key)
+				if err != nil {
+					c.UI.Output(fmt.Sprintf("WARN: %v (key=%s)", err, w.Key))
+					atomic.AddInt64(&skippedOther, 1)
+					incrementAndMaybeReportProgress(c, &processed, int64(total))
+					continue
+				}
+
+				if isReceipt {
+					atomic.AddInt64(&checkedRcpt, 1)
+
+					exists := rawdb.ReadBorReceiptRLP(chaindb, blockHash, number)
+					if len(exists) > 0 {
+						atomic.AddInt64(&skippedKnown, 1)
+						incrementAndMaybeReportProgress(c, &processed, int64(total))
+						continue
+					}
+
+					keyBytes, err := decodeHexString(w.Key)
+					if err != nil {
+						select {
+						case errCh <- fmt.Errorf("decode receipt key: %w", err):
+						default:
+						}
+						return
+					}
+					valBytes, err := decodeHexString(w.Value)
+					if err != nil {
+						select {
+						case errCh <- fmt.Errorf("decode receipt value: %w", err):
+						default:
+						}
+						return
+					}
+
+					select {
+					case puts <- putReq{key: keyBytes, val: valBytes}:
+					case e := <-errCh:
+						// propagate and return
+						select {
+						case errCh <- e:
+						default:
+						}
+						return
+					}
+
+					incrementAndMaybeReportProgress(c, &processed, int64(total))
+					continue
+				}
+
+				// txlookup path
+				txh, err := parseTxLookup(w.Key)
+				if err != nil {
+					c.UI.Output(fmt.Sprintf("WARN: cannot parse txlookup key (key=%s): %v", w.Key, err))
+					atomic.AddInt64(&skippedOther, 1)
+					incrementAndMaybeReportProgress(c, &processed, int64(total))
+					continue
+				}
+				atomic.AddInt64(&checkedLookup, 1)
+
+				if rawdb.ReadBorTxLookupEntry(chaindb, txh) != nil {
+					atomic.AddInt64(&skippedKnown, 1)
+					incrementAndMaybeReportProgress(c, &processed, int64(total))
+					continue
+				}
+
+				keyBytes, err := decodeHexString(w.Key)
+				if err != nil {
+					select {
+					case errCh <- fmt.Errorf("decode txlookup key: %w", err):
+					default:
+					}
+					return
+				}
+				valBytes, err := decodeHexString(w.Value)
+				if err != nil {
+					select {
+					case errCh <- fmt.Errorf("decode txlookup value: %w", err):
+					default:
+					}
+					return
+				}
+
+				select {
+				case puts <- putReq{key: keyBytes, val: valBytes}:
+				case e := <-errCh:
+					select {
+					case errCh <- e:
+					default:
+					}
+					return
+				}
+
+				incrementAndMaybeReportProgress(c, &processed, int64(total))
+			}
+		}()
+	}
+
+	go func() {
+		for _, w := range writes {
+			// If a hard error already happened, stop feeding.
+			select {
+			case e := <-errCh:
+				select {
+				case errCh <- e:
+				default:
+				}
+				close(jobs)
+				return
+			default:
+			}
+			jobs <- w
+		}
+		close(jobs)
+	}()
+
+	wg.Wait()
+	close(puts)
+	batchWG.Wait()
+
+	select {
+	case e := <-errCh:
+		return e
+	default:
+	}
+
+	// Final write
+	if err := batch.Write(); err != nil {
+		return fmt.Errorf("failed to write batch: %w", err)
+	}
+
+	c.UI.Output(fmt.Sprintf(
+		"Backfill summary: total=%d receipts_checked=%d txlookups_checked=%d inserted=%d already_present=%d skipped_other=%d",
+		total,
+		checkedRcpt, checkedLookup, inserted, skippedKnown, skippedOther,
+	))
 	return nil
 }
 
@@ -386,16 +582,27 @@ func (c *BackFillStateSyncTxsEntriesCommand) Run(args []string) int {
 
 	c.UI.Output("Starting to check the backfill file. Opening at path: " + backfillFilePath)
 
-	err := ValidateBackfillFile(backfillFilePath)
+	writes, err := c.validateBackfillFile(backfillFilePath)
 	if err != nil {
 		c.UI.Error("error while validating backfill file: " + err.Error())
 	}
 
-	// c.UI.Output(fmt.Sprintf("Backfill file is good and contains:\n- %d state sync transactions\n- %d state sync logs\n\nIn the block period of [%d,%d]", transactionCount, logsCount, blockStart, blockEnd))
+	c.UI.Output("Starting to check missing txs over database")
+	node, err := node.New(&node.Config{
+		DataDir: datadir,
+	})
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Failed to create node: %v", err))
+		return 1
+	}
+	chaindb, err := node.OpenDatabase(datadir+"/bor/chaindata", 1024, 2000, "", false)
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Failed to open underlying key value database: %v", err))
+		return 1
+	}
+	c.UI.Output("Opened database at path: " + datadir)
 
-	// c.UI.Output("Starting to check missing txs over database")
-
-	// c.UI.Output(fmt.Sprintf("Found:\n- %d missing state sync transactions\n- %d missing state sync logs", missingStateSyncTxsCount, missingStateSyncLogsCount))
+	c.putMissingBackfill(chaindb, writes)
 
 	return 0
 }
