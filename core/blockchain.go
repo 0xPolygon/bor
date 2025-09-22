@@ -2330,6 +2330,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				if perr != nil {
 					// If stateless self-validation depends on parent's commit, mark for retry in writer stage
 					if idx > 0 && errors.Is(perr, ErrStatelessStateRootMismatch) {
+						log.Info("Deferring stateless self-validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash())
 						results[idx].needsRetry = true
 						results[idx].witness = witness
 						continue
@@ -2382,12 +2383,14 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 
 		// Handle deferred retry for stateless self-validation root mismatch
 		if results[i].needsRetry {
+			log.Info("Retrying deferred stateless self-validation", "block", block.NumberU64(), "hash", block.Hash())
 			var witness *stateless.Witness
 			if i < len(witnesses) {
 				witness = witnesses[i]
 			}
 			sdb, gasUsed, perr := bc.ProcessBlockWithWitnesses(block, witness)
 			if perr != nil {
+				log.Error("Deferred stateless self-validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
 				stopHeaders()
 				return int(processed.Load()), perr
 			}
