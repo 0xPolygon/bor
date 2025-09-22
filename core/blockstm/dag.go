@@ -8,6 +8,12 @@ import (
 	"github.com/heimdalr/dag"
 
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
+)
+
+var (
+	hasReadDepCallCounter = metrics.NewRegisteredCounter("blockstm/hasreaddep/calls", nil)
+	readsMapSizeHist      = metrics.NewRegisteredHistogram("blockstm/hasreaddep/reads/size", nil, metrics.NewExpDecaySample(1028, 0.015))
 )
 
 type DAG struct {
@@ -50,6 +56,8 @@ func HasReadDep(txFrom TxnOutput, txTo TxnInput) bool {
 	for _, v := range txTo {
 		reads[v.Path] = struct{}{}
 	}
+
+	readsMapSizeHist.Update(int64(len(reads)))
 
 	for _, rd := range txFrom {
 		if _, ok := reads[rd.Path]; ok {
