@@ -581,6 +581,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) Run(args []string) int {
 	writes, err := c.validateBackfillFile(backfillFilePath)
 	if err != nil {
 		c.UI.Error("error while validating backfill file: " + err.Error())
+		return 1
 	}
 
 	c.UI.Output("Starting to check missing txs over database")
