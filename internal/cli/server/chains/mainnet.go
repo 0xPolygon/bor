@@ -35,7 +35,8 @@ var mainnetBor = &Chain{
 				DelhiBlock:     big.NewInt(38189056),
 				IndoreBlock:    big.NewInt(44934656),
 				AhmedabadBlock: big.NewInt(62278656),
-				BhilaiBlock:    big.NewInt(73440256),
+				BhilaiBlock:      big.NewInt(73440256),
+				TimestampHFBlock: big.NewInt(999999999999),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},
