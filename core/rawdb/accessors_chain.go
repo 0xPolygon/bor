@@ -666,21 +666,15 @@ func HasReceipts(db ethdb.Reader, hash common.Hash, number uint64) bool {
 // ReadReceiptsRLP retrieves all the transaction receipts belonging to a block in RLP encoding.
 func ReadReceiptsRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawValue {
 	var data []byte
-	data, _ = db.Get(blockReceiptsKey(number, hash))
-	log.Info("###_### Forcing read from KV", "hash", hash, "number", number, "len(data)", len(data))
 
-	log.Info("###_### Reading Receipt RLP", "hash", hash, "number", number)
 	_ = db.ReadAncients(func(reader ethdb.AncientReaderOp) error {
 		// Check if the data is in ancients
 		if isCanon(reader, number, hash) {
 			data, _ = reader.Ancient(ChainFreezerReceiptTable, number)
-			log.Info("###_### Reading from Ancient", "hash", hash, "number", number)
 			return nil
 		}
 		// If not, try reading from leveldb
 		data, _ = db.Get(blockReceiptsKey(number, hash))
-		log.Info("###_### Reading from KV", "hash", hash, "number", number, "len(data)", len(data))
-
 		return nil
 	})
 

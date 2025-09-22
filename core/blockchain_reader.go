@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -247,25 +246,19 @@ func (bc *BlockChain) GetBlocksFromHash(hash common.Hash, n int) (blocks []*type
 // GetReceiptsByHash retrieves the receipts for all transactions in a given block.
 func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	if receipts, ok := bc.receiptsCache.Get(hash); ok {
-		log.Info("###_### Hitting cache!", "hash", hash)
-
 		return receipts
 	}
 
 	number := rawdb.ReadHeaderNumber(bc.db, hash)
 	if number == nil {
-		log.Info("###_### No header number found!", "hash", hash, "number", number)
-
 		return nil
 	}
 	header := bc.GetHeader(hash, *number)
 	if header == nil {
-		log.Info("###_### No header found!", "hash", hash, "number", number)
 		return nil
 	}
 	receipts := rawdb.ReadReceipts(bc.db, hash, *number, header.Time, bc.chainConfig)
 	if receipts == nil {
-		log.Info("###_### No receipts found!", "hash", hash, "number", number)
 		return nil
 	}
 
