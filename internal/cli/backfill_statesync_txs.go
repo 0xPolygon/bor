@@ -355,6 +355,55 @@ type putReq struct {
 	val []byte
 }
 
+// propagateOnce non-blockingly sends the first error into errCh.
+// Subsequent calls become no-ops if the channel already contains an error.
+func propagateOnce(errCh chan error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case errCh <- err:
+	default:
+	}
+}
+
+// hasPendingErr returns true if errCh already holds an error.
+func hasPendingErr(errCh chan error) bool {
+	select {
+	case e := <-errCh:
+		// put it back for other consumers and signal presence
+		propagateOnce(errCh, e)
+		return true
+	default:
+		return false
+	}
+}
+
+// tryDecodeKV decodes the hex key/value of a write instruction and wraps errors with kind.
+func tryDecodeKV(kind string, w WriteInstruction) (keyBytes, valBytes []byte, err error) {
+	keyBytes, err = decodeHexString(w.Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode %s key: %w", kind, err)
+	}
+	valBytes, err = decodeHexString(w.Value)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode %s value: %w", kind, err)
+	}
+	return keyBytes, valBytes, nil
+}
+
+// enqueuePut attempts to send a put request; returns false if a hard error is pending.
+func enqueuePut(puts chan putReq, req putReq, errCh chan error) bool {
+	select {
+	case puts <- req:
+		return true
+	case e := <-errCh:
+		// propagate and signal caller to stop
+		propagateOnce(errCh, e)
+		return false
+	}
+}
+
 func incrementAndMaybeReportProgress(c *BackFillStateSyncTxsEntriesCommand, processed *int64, total int64) {
 	n := atomic.AddInt64(processed, 1)
 	if n%1000 == 0 || n == total {
@@ -391,10 +440,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 		for p := range puts {
 			if err := batch.Put(p.key, p.val); err != nil {
 				// First error wins
-				select {
-				case errCh <- fmt.Errorf("batch put failed: %w", err):
-				default:
-				}
+				propagateOnce(errCh, fmt.Errorf("batch put failed: %w", err))
 				return
 			}
 			atomic.AddInt64(&inserted, 1)
@@ -409,15 +455,8 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 			defer wg.Done()
 			for w := range jobs {
 				// Early exit if a hard error occurred (avoid wasted work)
-				select {
-				case e := <-errCh:
-					// put it back for others / caller, then stop
-					select {
-					case errCh <- e:
-					default:
-					}
+				if hasPendingErr(errCh) {
 					return
-				default:
 				}
 
 				isReceipt, number, blockHash, err := parseReceiptKey(w.Key)
@@ -438,31 +477,12 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 						continue
 					}
 
-					keyBytes, err := decodeHexString(w.Key)
+					keyBytes, valBytes, err := tryDecodeKV("receipt", w)
 					if err != nil {
-						select {
-						case errCh <- fmt.Errorf("decode receipt key: %w", err):
-						default:
-						}
+						propagateOnce(errCh, err)
 						return
 					}
-					valBytes, err := decodeHexString(w.Value)
-					if err != nil {
-						select {
-						case errCh <- fmt.Errorf("decode receipt value: %w", err):
-						default:
-						}
-						return
-					}
-
-					select {
-					case puts <- putReq{key: keyBytes, val: valBytes}:
-					case e := <-errCh:
-						// propagate and return
-						select {
-						case errCh <- e:
-						default:
-						}
+					if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
 						return
 					}
 
@@ -486,30 +506,12 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 					continue
 				}
 
-				keyBytes, err := decodeHexString(w.Key)
+				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
 				if err != nil {
-					select {
-					case errCh <- fmt.Errorf("decode txlookup key: %w", err):
-					default:
-					}
+					propagateOnce(errCh, err)
 					return
 				}
-				valBytes, err := decodeHexString(w.Value)
-				if err != nil {
-					select {
-					case errCh <- fmt.Errorf("decode txlookup value: %w", err):
-					default:
-					}
-					return
-				}
-
-				select {
-				case puts <- putReq{key: keyBytes, val: valBytes}:
-				case e := <-errCh:
-					select {
-					case errCh <- e:
-					default:
-					}
+				if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
 					return
 				}
 
@@ -521,15 +523,9 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 	go func() {
 		for _, w := range writes {
 			// If a hard error already happened, stop feeding.
-			select {
-			case e := <-errCh:
-				select {
-				case errCh <- e:
-				default:
-				}
+			if hasPendingErr(errCh) {
 				close(jobs)
 				return
-			default:
 			}
 			jobs <- w
 		}
