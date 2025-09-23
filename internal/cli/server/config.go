@@ -360,6 +360,9 @@ type TxPoolConfig struct {
 	// lifetime is the maximum amount of time non-executable transaction are queued
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
+
+	// CensorshipFile is the path to comma-separated list of addresses to censor transactions from
+	CensorshipFile string `hcl:"censored-addresses,optional" toml:"censored-addresses,optional"`
 }
 
 type SealerConfig struct {
@@ -1073,6 +1076,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+		n.TxPool.CensorshipFile = c.TxPool.CensorshipFile
 	}
 
 	// miner options

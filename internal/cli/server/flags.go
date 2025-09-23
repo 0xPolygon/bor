@@ -306,6 +306,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "txpool.censored-addresses",
+		Usage:   "Path to comma-separated list of addresses to censor transactions from",
+		Value:   &c.cliConfig.TxPool.CensorshipFile,
+		Default: c.cliConfig.TxPool.CensorshipFile,
+		Group:   "Transaction Pool",
+	})
 
 	// sealer options
 	f.BoolFlag(&flagset.BoolFlag{
