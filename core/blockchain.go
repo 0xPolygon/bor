@@ -138,7 +138,7 @@ type StateSyncData struct {
 var ss = make([]StateSyncData, 0)
 var ssMu sync.Mutex
 
-func PrintSSDetails(prefix string, db ethdb.Reader) {
+func PrintSSDetails(prefix string, db ethdb.Reader, backupDb ethdb.Reader) {
 	ssMu.Lock()
 	if len(ss) > 0 {
 		log.Info("[debug] "+prefix+" trying to read state-sync events from db", "len", len(ss))
@@ -146,7 +146,15 @@ func PrintSSDetails(prefix string, db ethdb.Reader) {
 			data := rawdb.ReadBorReceiptRLP(db, event.hash, event.number)
 			if data == nil {
 				log.Info("[debug] nil receipt in db", "number", event.number, "hash", event.hash)
-				continue
+				if backupDb == nil {
+					continue
+				} else {
+					data = rawdb.ReadBorReceiptRLP(backupDb, event.hash, event.number)
+					if data == nil {
+						log.Info("[debug] nil receipt in backup db too", "number", event.number, "hash", event.hash)
+						continue
+					}
+				}
 			}
 			var storageReceipt types.ReceiptForStorage
 			if err := rlp.DecodeBytes(data, &storageReceipt); err != nil {
@@ -639,7 +647,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
 func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, cfg *BlockChainConfig, numprocs int, enforce bool) (*BlockChain, error) {
 	bc, err := NewBlockChain(db, genesis, engine, cfg)
-
 	if err != nil {
 		return nil, err
 	}
@@ -2053,7 +2060,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 		updateHead(blockChain[len(blockChain)-1], headers)
 
-		PrintSSDetails("[receipts]", bc.db)
+		PrintSSDetails("[receipts]", bc.db, nil)
 
 		return 0, nil
 	}
@@ -3033,7 +3040,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// Only count canonical blocks for GC processing time
 			bc.gcproc += proctime
 
-			PrintSSDetails("[chain]", bc.db)
+			PrintSSDetails("[chain]", bc.db, bc.triedb.Disk())
 
 		case SideStatTy:
 			log.Debug("Inserted forked block", "number", block.Number(), "hash", block.Hash(),
