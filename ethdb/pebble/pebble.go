@@ -18,6 +18,7 @@
 package pebble
 
 import (
+	"bytes"
 	"fmt"
 	"runtime"
 	"strings"
@@ -413,6 +414,9 @@ func (d *Database) Put(key []byte, value []byte) error {
 	if d.closed {
 		return pebble.ErrClosed
 	}
+	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
+		log.Info("[debug] *** writing bor receipts pebble")
+	}
 	return d.db.Set(key, value, d.writeOptions)
 }
 
@@ -422,6 +426,9 @@ func (d *Database) Delete(key []byte) error {
 	defer d.quitLock.RUnlock()
 	if d.closed {
 		return pebble.ErrClosed
+	}
+	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
+		log.Info("[debug] *** deleting bor receipts pebble")
 	}
 	return d.db.Delete(key, d.writeOptions)
 }
