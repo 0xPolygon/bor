@@ -653,6 +653,9 @@ type batch struct {
 
 // Put inserts the given value into the batch for later committing.
 func (b *batch) Put(key, value []byte) error {
+	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
+		log.Info("[debug] *** writing bor receipts pebble batch")
+	}
 	if err := b.b.Set(key, value, nil); err != nil {
 		return err
 	}
@@ -663,6 +666,9 @@ func (b *batch) Put(key, value []byte) error {
 
 // Delete inserts the key removal into the batch for later committing.
 func (b *batch) Delete(key []byte) error {
+	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
+		log.Info("[debug] *** deleting bor receipts pebble batch")
+	}
 	if err := b.b.Delete(key, nil); err != nil {
 		return err
 	}
@@ -674,6 +680,9 @@ func (b *batch) Delete(key []byte) error {
 // DeleteRange removes all keys in the range [start, end) from the batch for
 // later committing, inclusive on start, exclusive on end.
 func (b *batch) DeleteRange(start, end []byte) error {
+	if bytes.HasPrefix(start, []byte("matic-bor-receipt-")) {
+		log.Info("[debug] *** deleting bor receipts pebble batch range")
+	}
 	// There is no special flag to represent the end of key range
 	// in pebble(nil in leveldb). Use an ugly hack to construct a
 	// large key to represent it.
