@@ -233,8 +233,12 @@ func (ctx *generatorContext) removeRemainingStorage() uint64 {
 		iter  = ctx.storage
 	)
 	for iter.Next() {
+		key := iter.Key()
+		if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
+			log.Info("[debug] *** deleting bor receipts")
+		}
 		count++
-		ctx.batch.Delete(iter.Key())
+		ctx.batch.Delete(key)
 		if ctx.batch.ValueSize() > ethdb.IdealBatchSize {
 			ctx.batch.Write()
 			ctx.batch.Reset()
