@@ -46,8 +46,10 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 		data, _ = db.Get(borReceiptKey(number, hash))
 
 		if len(data) == 0 {
-			log.Info("[debug] found bor receipt in ancient")
 			data, _ = reader.Ancient(freezerBorReceiptTable, number)
+			if len(data) > 0 {
+				log.Info("[debug] found bor receipt in ancient", "number", number, "hash", hash)
+			}
 		}
 
 		return nil
@@ -116,10 +118,10 @@ func ReadBorReceipt(db ethdb.Reader, hash common.Hash, number uint64, config *pa
 
 // WriteBorReceipt stores all the bor receipt belonging to a block.
 func WriteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64, borReceipt *types.ReceiptForStorage) {
-	if common.IsStateSyncBlock(number) {
-		log.Info("[debug] *** Writing bor receipts", "number", hash, "number", number)
-		borReceipt.Print()
-	}
+	// if common.IsStateSyncBlock(number) {
+	log.Info("[debug] *** Writing bor receipts", "number", hash, "number", number)
+	borReceipt.Print()
+	// }
 	// Convert the bor receipt into their storage form and serialize them
 	bytes, err := rlp.EncodeToBytes(borReceipt)
 	if err != nil {
@@ -134,9 +136,9 @@ func WriteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64, b
 
 // DeleteBorReceipt removes receipt data associated with a block hash.
 func DeleteBorReceipt(db ethdb.KeyValueWriter, hash common.Hash, number uint64) {
-	if common.IsStateSyncBlock(number) {
-		log.Info("[debug] *** Deleting bor receipt", "number", number, "hash", hash)
-	}
+	// if common.IsStateSyncBlock(number) {
+	log.Info("[debug] *** Deleting bor receipt", "number", number, "hash", hash)
+	// }
 	key := borReceiptKey(number, hash)
 
 	if err := db.Delete(key); err != nil {
