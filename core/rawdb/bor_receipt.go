@@ -45,6 +45,11 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 		// If not, try reading from leveldb
 		data, _ = db.Get(borReceiptKey(number, hash))
 
+		if len(data) == 0 {
+			log.Info("[debug] found bor receipt in ancient")
+			data, _ = reader.Ancient(freezerBorReceiptTable, number)
+		}
+
 		return nil
 	})
 
