@@ -361,7 +361,7 @@ type TxPoolConfig struct {
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
 
-	// CensorshipFile is the path to comma-separated list of addresses to censor transactions from
+	// CensorshipFile is the path to newline-separated list of addresses to censor transactions from
 	CensorshipFile string `hcl:"censored-addresses,optional" toml:"censored-addresses,optional"`
 }
 
@@ -1076,7 +1076,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
-		n.TxPool.CensorshipFile = c.TxPool.CensorshipFile
+
+		// Load censored addresses during config initialization
+		if censoredAddrs, err := loadCensoredAddresses(c.TxPool.CensorshipFile); err != nil {
+			return nil, fmt.Errorf("failed to load censored addresses: %v", err)
+		} else {
+			n.TxPool.CensoredAddresses = censoredAddrs
+		}
 	}
 
 	// miner options
@@ -1705,4 +1711,44 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+// loadCensoredAddresses loads newline-separated addresses to censor from the specified file.
+func loadCensoredAddresses(filePath string) (map[common.Address]struct{}, error) {
+	if filePath == "" {
+		return make(map[common.Address]struct{}), nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Warn("Censorship file not found", "file", filePath)
+			return make(map[common.Address]struct{}), nil
+		}
+		return nil, fmt.Errorf("failed to read censorship file: %v", err)
+	}
+
+	censoredAddrs := make(map[common.Address]struct{})
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		log.Info("Empty censorship file", "file", filePath)
+		return censoredAddrs, nil
+	}
+
+	addresses := strings.Split(content, "\n")
+	for i, addrStr := range addresses {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		if !common.IsHexAddress(addrStr) {
+			log.Warn("Invalid address in censorship file", "file", filePath, "position", i+1, "address", addrStr)
+			continue
+		}
+		addr := common.HexToAddress(addrStr)
+		censoredAddrs[addr] = struct{}{}
+	}
+
+	log.Info("Loaded censored addresses", "count", len(censoredAddrs), "file", filePath)
+	return censoredAddrs, nil
 }

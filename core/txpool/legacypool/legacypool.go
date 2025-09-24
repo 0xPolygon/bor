@@ -22,10 +22,8 @@ import (
 	"maps"
 	"math"
 	"math/big"
-	"os"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -171,7 +169,7 @@ type Config struct {
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
 	// Transaction censorship configuration
-	CensorshipFile string // Path to txt file containing comma-separated addresses to censor txs from
+	CensoredAddresses map[common.Address]struct{} // Pre-loaded censored addresses (populated by config)
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -281,8 +279,7 @@ type LegacyPool struct {
 	promoteTxCh chan struct{} // should be used only for tests
 
 	// Censorship fields
-	censoredAddrs map[common.Address]bool // Map of addresses to censor
-	censorMu      sync.RWMutex            // Protects censoredAddrs
+	censoredAddrs map[common.Address]struct{} // Map of addresses to censor
 }
 
 type txpoolResetRequest struct {
@@ -311,20 +308,21 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		reorgDoneCh:     make(chan chan struct{}),
 		reorgShutdownCh: make(chan struct{}),
 		initDoneCh:      make(chan struct{}),
-		censoredAddrs:   make(map[common.Address]bool),
+		censoredAddrs:   make(map[common.Address]struct{}),
 	}
 	pool.priced = newPricedList(pool.all)
+
+	// Copy pre-loaded censored addresses
+	if config.CensoredAddresses != nil {
+		for addr := range config.CensoredAddresses {
+			pool.censoredAddrs[addr] = struct{}{}
+		}
+		log.Info("Loaded censored addresses", "count", len(pool.censoredAddrs))
+	}
 
 	// apply options
 	for _, fn := range options {
 		fn(pool)
-	}
-
-	// Load censored addresses if configured
-	if config.CensorshipFile != "" {
-		if err := pool.loadCensoredAddresses(); err != nil {
-			log.Error("Failed to load censored addresses", "file", config.CensorshipFile, "err", err)
-		}
 	}
 
 	return pool
@@ -2095,56 +2093,8 @@ func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 	return pool.all.hasAuth(addr)
 }
 
-// loadCensoredAddresses loads comma-separated addresses to censor from the configured TXT file.
-func (pool *LegacyPool) loadCensoredAddresses() error {
-	if pool.config.CensorshipFile == "" {
-		return nil
-	}
-
-	data, err := os.ReadFile(pool.config.CensorshipFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Warn("Censorship file not found", "file", pool.config.CensorshipFile)
-			return nil
-		}
-		return err
-	}
-
-	pool.censorMu.Lock()
-	defer pool.censorMu.Unlock()
-
-	// Clear existing censored addresses
-	pool.censoredAddrs = make(map[common.Address]bool)
-
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		log.Info("Empty censorship file", "file", pool.config.CensorshipFile)
-		return nil
-	}
-
-	addresses := strings.Split(content, ",")
-	for i, addrStr := range addresses {
-		addrStr = strings.TrimSpace(addrStr)
-		if addrStr == "" {
-			continue
-		}
-
-		if !common.IsHexAddress(addrStr) {
-			log.Warn("Invalid address in censorship file", "file", pool.config.CensorshipFile, "position", i+1, "address", addrStr)
-			continue
-		}
-
-		addr := common.HexToAddress(addrStr)
-		pool.censoredAddrs[addr] = true
-	}
-
-	log.Info("Loaded censored addresses", "count", len(pool.censoredAddrs), "file", pool.config.CensorshipFile)
-	return nil
-}
-
 // isCensored checks if an address is in the censored list.
 func (pool *LegacyPool) isCensored(addr common.Address) bool {
-	pool.censorMu.RLock()
-	defer pool.censorMu.RUnlock()
-	return pool.censoredAddrs[addr]
+	_, exists := pool.censoredAddrs[addr]
+	return exists
 }

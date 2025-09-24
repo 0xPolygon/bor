@@ -34,6 +34,8 @@ import (
 	crand2 "github.com/0xPolygon/crand"
 	"github.com/stretchr/testify/require"
 
+	"strings"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -328,6 +330,56 @@ func validateEvents(events chan core.NewTxsEvent, count int) error {
 
 func deriveSender(tx *types.Transaction) (common.Address, error) {
 	return types.Sender(types.HomesteadSigner{}, tx)
+}
+
+// loadCensoredAddressesForTest mimics the config loading behavior for tests
+func loadCensoredAddressesForTest(t *testing.T, filePath string) (map[common.Address]struct{}, error) {
+	t.Helper()
+	if filePath == "" {
+		return make(map[common.Address]struct{}), nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[common.Address]struct{}), nil
+		}
+		return nil, fmt.Errorf("failed to read censorship file: %v", err)
+	}
+
+	censoredAddrs := make(map[common.Address]struct{})
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return censoredAddrs, nil
+	}
+
+	addresses := strings.Split(content, "\n")
+	for i, addrStr := range addresses {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		if !common.IsHexAddress(addrStr) {
+			// Skip invalid addresses (same behavior as config loading)
+			fmt.Printf("Invalid address in censorship file at position %d: %s\n", i+1, addrStr)
+			continue
+		}
+		addr := common.HexToAddress(addrStr)
+		censoredAddrs[addr] = struct{}{}
+	}
+
+	return censoredAddrs, nil
+}
+
+// updatePoolCensoredAddresses is a helper to update both pool config and internal state with censored addresses
+func updatePoolCensoredAddresses(t *testing.T, filePath string) (map[common.Address]struct{}, error) {
+	t.Helper()
+
+	censoredAddrs, err := loadCensoredAddressesForTest(t, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load censored addresses: %v", err)
+	}
+	return censoredAddrs, nil
 }
 
 type testChain struct {
@@ -4793,29 +4845,29 @@ func TestTxCensoring(t *testing.T) {
 		key2, _ := crypto.GenerateKey()
 		addr2 := crypto.PubkeyToAddress(key2.PublicKey)
 
-		// Write addresses to file (comma-separated)
-		content := fmt.Sprintf("%s,%s", addr1.Hex(), addr2.Hex())
+		// Write addresses to file (newline-separated)
+		content := fmt.Sprintf("%s\n%s", addr1.Hex(), addr2.Hex())
 		if _, err := tempFile.WriteString(content); err != nil {
 			t.Fatalf("failed to write to temp file: %v", err)
 		}
 		tempFile.Close()
 
 		// Create pool with censorship file configuration
-		config := testTxPoolConfig
-		config.CensorshipFile = tempFile.Name()
-		pool, normalKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
-			pool.config = config
-		})
-		defer pool.Close()
-
-		// Load censored addresses
-		if err := pool.loadCensoredAddresses(); err != nil {
+		var censoredAddrs map[common.Address]struct{}
+		if censoredAddrs, err = updatePoolCensoredAddresses(t, tempFile.Name()); err != nil {
 			t.Fatalf("failed to load censored addresses: %v", err)
 		}
+		pool, normalKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.censoredAddrs = censoredAddrs
+		})
+		defer pool.Close()
 
 		// Test censored addresses
 		tx1 := transaction(0, 100000, key1)
 		from1, _ := deriveSender(tx1)
+		tx2 := transaction(0, 100000, key2)
+		from2, _ := deriveSender(tx2)
+
 		testAddBalance(pool, from1, big.NewInt(1000000))
 
 		err1 := pool.addRemote(tx1)
@@ -4823,8 +4875,6 @@ func TestTxCensoring(t *testing.T) {
 			t.Errorf("expected ErrTxCensored for addr1, got %v", err1)
 		}
 
-		tx2 := transaction(0, 100000, key2)
-		from2, _ := deriveSender(tx2)
 		testAddBalance(pool, from2, big.NewInt(1000000))
 
 		err2 := pool.addRemote(tx2)
@@ -4860,16 +4910,14 @@ func TestTxCensoring(t *testing.T) {
 		defer os.Remove(tempFile.Name())
 		tempFile.Close()
 
-		config := testTxPoolConfig
-		config.CensorshipFile = tempFile.Name()
+		censoredAddrs := testTxPoolConfig.CensoredAddresses
+		if censoredAddrs, err = updatePoolCensoredAddresses(t, tempFile.Name()); err != nil {
+			t.Fatalf("failed to load censored addresses: %v", err)
+		}
 		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
-			pool.config = config
+			pool.censoredAddrs = censoredAddrs
 		})
 		defer pool.Close()
-
-		if err := pool.loadCensoredAddresses(); err != nil {
-			t.Fatalf("failed to load empty censorship file: %v", err)
-		}
 
 		// Any transaction should be accepted
 		tx := transaction(0, 100000, key)
@@ -4893,25 +4941,23 @@ func TestTxCensoring(t *testing.T) {
 		// Write invalid addresses mixed with valid ones
 		key1, _ := crypto.GenerateKey()
 		addr1 := crypto.PubkeyToAddress(key1.PublicKey)
-		content := fmt.Sprintf("invalid_address,%s,0xnotanaddress", addr1.Hex())
+		content := fmt.Sprintf("invalid_address\n%s\n0xnotanaddress", addr1.Hex())
 		if _, err := tempFile.WriteString(content); err != nil {
 			t.Fatalf("failed to write to temp file: %v", err)
 		}
 		tempFile.Close()
 
-		config := testTxPoolConfig
-		config.CensorshipFile = tempFile.Name()
+		censoredAddrs := testTxPoolConfig.CensoredAddresses
+		if censoredAddrs, err = updatePoolCensoredAddresses(t, tempFile.Name()); err != nil {
+			t.Fatalf("failed to load censored addresses: %v", err)
+		}
+
 		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
-			pool.config = config
+			pool.censoredAddrs = censoredAddrs
 		})
 		defer pool.Close()
 
-		// Should load without error but skip invalid addresses
-		if err := pool.loadCensoredAddresses(); err != nil {
-			t.Fatalf("failed to load censorship file with invalid addresses: %v", err)
-		}
-
-		// Valid address should still be censored
+		// Valid address should still be censored - use actual sender address
 		tx1 := transaction(0, 100000, key1)
 		from1, _ := deriveSender(tx1)
 		testAddBalance(pool, from1, big.NewInt(1000000))
@@ -4935,16 +4981,11 @@ func TestTxCensoring(t *testing.T) {
 	// Test non-existent censorship file
 	t.Run("NonExistentFile", func(t *testing.T) {
 		config := testTxPoolConfig
-		config.CensorshipFile = "/path/to/nonexistent/file.txt"
+		config.CensoredAddresses = make(map[common.Address]struct{}) // Empty map for non-existent file
 		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
 			pool.config = config
 		})
 		defer pool.Close()
-
-		// Should not error, just log warning
-		if err := pool.loadCensoredAddresses(); err != nil {
-			t.Fatalf("loading non-existent file should not error: %v", err)
-		}
 
 		// Any transaction should be accepted
 		tx := transaction(0, 100000, key)
