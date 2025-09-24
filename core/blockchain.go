@@ -2009,6 +2009,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
 			rawdb.WriteBlock(batch, block)
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
+			if len(receiptChain[i]) > 0 {
+				log.Info("[debug] written normal receipts into block", "number", block.NumberU64(), "hash", block.Hash(), "len", len(receiptChain[i]))
+			}
 
 			var borReceipt types.ReceiptForStorage
 			if len(borReceiptRaw) > 0 {
