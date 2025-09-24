@@ -4833,7 +4833,7 @@ func TestTxCensoring(t *testing.T) {
 	t.Parallel()
 	t.Run("CorrectCensoring", func(t *testing.T) {
 		// Create temporary censorship file
-		tempFile, err := os.CreateTemp("", "censored_addresses_*.txt")
+		tempFile, err := os.CreateTemp(t.TempDir(), "censored_addresses_*.txt")
 		if err != nil {
 			t.Fatalf("failed to create temp file: %v", err)
 		}
@@ -4903,14 +4903,14 @@ func TestTxCensoring(t *testing.T) {
 
 	// Test empty censorship file
 	t.Run("EmptyFile", func(t *testing.T) {
-		tempFile, err := os.CreateTemp("", "empty_censored_*.txt")
+		tempFile, err := os.CreateTemp(t.TempDir(), "empty_censored_*.txt")
 		if err != nil {
 			t.Fatalf("failed to create temp file: %v", err)
 		}
 		defer os.Remove(tempFile.Name())
 		tempFile.Close()
 
-		censoredAddrs := testTxPoolConfig.CensoredAddresses
+		var censoredAddrs map[common.Address]struct{}
 		if censoredAddrs, err = updatePoolCensoredAddresses(t, tempFile.Name()); err != nil {
 			t.Fatalf("failed to load censored addresses: %v", err)
 		}
@@ -4932,7 +4932,7 @@ func TestTxCensoring(t *testing.T) {
 
 	// Test invalid addresses in censorship file
 	t.Run("InvalidAddresses", func(t *testing.T) {
-		tempFile, err := os.CreateTemp("", "invalid_censored_*.txt")
+		tempFile, err := os.CreateTemp(t.TempDir(), "invalid_censored_*.txt")
 		if err != nil {
 			t.Fatalf("failed to create temp file: %v", err)
 		}
@@ -4947,7 +4947,7 @@ func TestTxCensoring(t *testing.T) {
 		}
 		tempFile.Close()
 
-		censoredAddrs := testTxPoolConfig.CensoredAddresses
+		var censoredAddrs map[common.Address]struct{}
 		if censoredAddrs, err = updatePoolCensoredAddresses(t, tempFile.Name()); err != nil {
 			t.Fatalf("failed to load censored addresses: %v", err)
 		}
