@@ -2291,7 +2291,7 @@ func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index in
 
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
 func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
-	log.Info("Performing parallel stateless import", "chain length", len(chain))
+	log.Debug("Performing parallel stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
 	statelessParallelImportBlocksCounter.Inc(int64(len(chain)))
@@ -2497,7 +2497,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 // insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
 func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
-	log.Info("Perfoming sequential stateless import", "chain length", len(chain))
+	log.Debug("Performing sequential stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
 	statelessSequentialImportBlocksCounter.Inc(int64(len(chain)))
