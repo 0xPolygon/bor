@@ -139,6 +139,7 @@ var ss = make([]StateSyncData, 0)
 var ssMu sync.Mutex
 
 func PrintSSDetails(prefix string, db ethdb.Reader, backupDb ethdb.Reader) {
+	log.Info("[debug] db memory address", "address", fmt.Sprintf("%p", db))
 	ssMu.Lock()
 	if len(ss) > 0 {
 		log.Info("[debug] "+prefix+" trying to read state-sync events from db", "len", len(ss))
@@ -165,6 +166,8 @@ func PrintSSDetails(prefix string, db ethdb.Reader, backupDb ethdb.Reader) {
 		}
 	}
 	ssMu.Unlock()
+	normalReceipt := rawdb.ReadReceiptsRLP(db, common.HexToHash("5252cc624b07709fa40879baeb2165e9b064c5f49ed6f22d3a60f52623f240c1"), 17)
+	log.Info("[debug] read normal receipt", "len", len(normalReceipt))
 }
 
 const (
@@ -2009,7 +2012,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
 			rawdb.WriteBlock(batch, block)
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
-			if len(receiptChain[i]) > 0 {
+			if len(receiptChain[i]) > 1 {
 				log.Info("[debug] written normal receipts into block", "number", block.NumberU64(), "hash", block.Hash(), "len", len(receiptChain[i]))
 			}
 
