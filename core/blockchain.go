@@ -2043,6 +2043,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			// except transaction indexes(will be created once sync is finished).
 			if batch.ValueSize() >= ethdb.IdealBatchSize {
 				if err := batch.Write(); err != nil {
+					log.Crit("*** failed writing receipt batch", "err", err)
 					return 0, err
 				}
 
@@ -2059,7 +2060,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			size += int64(batch.ValueSize())
 
 			if err := batch.Write(); err != nil {
-				log.Error("[debug] **** failed writing receipt batch", "err", err)
+				log.Crit("[debug] **** failed writing receipt batch", "err", err)
 				return 0, err
 			}
 		}
