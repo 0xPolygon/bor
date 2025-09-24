@@ -601,10 +601,6 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		return nil, false, true
 	}
 
-	if kind == receiptType {
-		log.Info("[debug] reserve headers for receipts")
-	}
-
 	if _, ok := pendPool[p.id]; ok {
 		return nil, false, false
 	}

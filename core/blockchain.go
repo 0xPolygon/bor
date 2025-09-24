@@ -3008,6 +3008,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
 		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
 
+		PrintSSDetails("[chain]", bc.db, bc.triedb.Disk())
 		/*
 			// Print confirmation that a future fork is scheduled, but not yet active.
 			bc.logForkReadiness(block)
@@ -3039,8 +3040,6 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 			// Only count canonical blocks for GC processing time
 			bc.gcproc += proctime
-
-			PrintSSDetails("[chain]", bc.db, bc.triedb.Disk())
 
 		case SideStatTy:
 			log.Debug("Inserted forked block", "number", block.Number(), "hash", block.Hash(),
