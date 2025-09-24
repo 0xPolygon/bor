@@ -39,7 +39,10 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 		if isCanon(reader, number, hash) {
 			data, _ = reader.Ancient(freezerBorReceiptTable, number)
 
-			return nil
+			log.Info("[debug] is canon true", "number", number, "hash", hash, "len", len(data))
+			if len(data) > 0 {
+				return nil
+			}
 		}
 
 		// If not, try reading from leveldb
