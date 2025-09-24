@@ -602,6 +602,11 @@ func (bc *BlockChain) SetParallelStatelessImportWorkers(n int) {
 	}
 }
 
+// IsParallelStatelessImportEnabled returns true if parallel stateless import is currently enabled.
+func (bc *BlockChain) IsParallelStatelessImportEnabled() bool {
+	return bc.parallelStatelessImportEnabled.Load()
+}
+
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
 func NewParallelBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis, overrides *ChainOverrides, engine consensus.Engine, vmConfig vm.Config, shouldPreserve func(header *types.Header) bool, txLookupLimit *uint64, checker ethereum.ChainValidator, numprocs int, enforce bool) (*BlockChain, error) {
 	bc, err := NewBlockChain(db, cacheConfig, genesis, overrides, engine, vmConfig, shouldPreserve, txLookupLimit, checker)
