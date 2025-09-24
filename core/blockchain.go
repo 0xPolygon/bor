@@ -641,10 +641,26 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		bc.txIndexer = newTxIndexer(uint64(bc.cfg.TxLookupLimit), bc)
 	}
 
+	go bc.printStateSyncDetails()
+
 	// Start header verification loop
 	bc.startHeaderVerificationLoop()
 
 	return bc, nil
+}
+
+func (bc *BlockChain) printStateSyncDetails() {
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			if bc.db != nil {
+				PrintSSDetails("[chain]", bc.db, nil)
+			} else {
+				log.Info("[debug] db is nil")
+			}
+		}
+	}
 }
 
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
@@ -3015,7 +3031,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
 		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
 
-		PrintSSDetails("[chain]", bc.db, bc.triedb.Disk())
+		// PrintSSDetails("[chain]", bc.db, bc.triedb.Disk())
 		/*
 			// Print confirmation that a future fork is scheduled, but not yet active.
 			bc.logForkReadiness(block)
