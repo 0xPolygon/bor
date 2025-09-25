@@ -50,7 +50,7 @@ var chainFreezerTableConfigs = map[string]freezerTableConfig{
 	ChainFreezerBodiesTable:     {noSnappy: false, prunable: true},
 	ChainFreezerReceiptTable:    {noSnappy: false, prunable: true},
 	ChainFreezerDifficultyTable: {noSnappy: true, prunable: true},
-	freezerBorReceiptTable:      {noSnappy: false, prunable: true},
+	freezerBorReceiptTable:      {noSnappy: false, prunable: false},
 }
 
 // freezerTableConfig contains the settings for a freezer table.
