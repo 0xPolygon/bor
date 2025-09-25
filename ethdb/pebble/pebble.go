@@ -417,6 +417,7 @@ func (d *Database) Put(key []byte, value []byte) error {
 	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
 		log.Info("[debug] *** writing bor receipts pebble")
 	}
+	log.Error("Pebble Put", "key", string(key), "value len", len(value))
 	return d.db.Set(key, value, d.writeOptions)
 }
 
@@ -430,6 +431,7 @@ func (d *Database) Delete(key []byte) error {
 	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
 		log.Info("[debug] *** deleting bor receipts pebble")
 	}
+	log.Error("Pebble Delete", "key", string(key))
 	return d.db.Delete(key, d.writeOptions)
 }
 
@@ -448,6 +450,7 @@ func (d *Database) DeleteRange(start, end []byte) error {
 	if end == nil {
 		end = ethdb.MaximumKey
 	}
+	log.Error("Pebble DeleteRange", "start", string(start), "end", string(end))
 	return d.db.DeleteRange(start, end, d.writeOptions)
 }
 
@@ -529,6 +532,7 @@ func (d *Database) SyncKeyValue() error {
 	// durability up to this point.
 	b := d.db.NewBatch()
 	b.LogData(nil, nil)
+	log.Error("Pebble SyncKeyValue")
 	return d.db.Apply(b, pebble.Sync)
 }
 
@@ -656,6 +660,7 @@ func (b *batch) Put(key, value []byte) error {
 	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
 		log.Info("[debug] *** writing bor receipts pebble batch")
 	}
+	log.Error("Pebble Batch Put", "key", string(key), "value len", len(value))
 	if err := b.b.Set(key, value, nil); err != nil {
 		return err
 	}
@@ -669,6 +674,7 @@ func (b *batch) Delete(key []byte) error {
 	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
 		log.Info("[debug] *** deleting bor receipts pebble batch")
 	}
+	log.Error("Pebble Batch Delete", "key", string(key))
 	if err := b.b.Delete(key, nil); err != nil {
 		return err
 	}
@@ -689,6 +695,7 @@ func (b *batch) DeleteRange(start, end []byte) error {
 	if end == nil {
 		end = ethdb.MaximumKey
 	}
+	log.Error("Pebble Batch DeleteRange", "start", string(start), "end", string(end))
 	if err := b.b.DeleteRange(start, end, nil); err != nil {
 		return err
 	}
@@ -721,7 +728,7 @@ func (b *batch) Reset() {
 // Replay replays the batch contents.
 func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 	reader := b.b.Reader()
-
+	log.Error("Pebble Batch Replay")
 	for {
 		kind, k, v, ok, err := reader.Next()
 		if !ok || err != nil {
