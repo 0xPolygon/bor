@@ -308,7 +308,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.censored-addresses",
-		Usage:   "Path to comma-separated list of addresses to censor transactions from",
+		Usage:   "Path to the file containing a newline-separated list of addresses to censor transactions from",
 		Value:   &c.cliConfig.TxPool.CensorshipFile,
 		Default: c.cliConfig.TxPool.CensorshipFile,
 		Group:   "Transaction Pool",
