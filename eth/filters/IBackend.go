@@ -24,7 +24,7 @@ import (
 	event "github.com/ethereum/go-ethereum/event"
 	params "github.com/ethereum/go-ethereum/params"
 	rpc "github.com/ethereum/go-ethereum/rpc"
-	gomock "github.com/golang/mock/gomock"
+	"go.uber.org/mock/gomock"
 )
 
 // MockBackend is a mock of Backend interface.
