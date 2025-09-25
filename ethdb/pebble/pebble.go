@@ -660,7 +660,7 @@ func (b *batch) Put(key, value []byte) error {
 	if bytes.HasPrefix(key, []byte("matic-bor-receipt-")) {
 		log.Info("[debug] *** writing bor receipts pebble batch")
 	}
-	log.Error("Pebble Batch Put", "key", string(key), "value len", len(value))
+
 	if err := b.b.Set(key, value, nil); err != nil {
 		return err
 	}
