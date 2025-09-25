@@ -338,7 +338,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```txpool.accountslots```: Minimum number of executable transaction slots guaranteed per account (default: 16)
 
-- ```txpool.censored-addresses```: Path to the file containing a newline-separated list of addresses to censor transactions from
+- ```txpool.filtered-addresses```: Path to the file containing a newline-separated list of addresses whose transactions will be filtered
 
 - ```txpool.globalqueue```: Maximum number of non-executable transaction slots for all accounts (default: 131072)
 

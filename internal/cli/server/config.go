@@ -361,8 +361,8 @@ type TxPoolConfig struct {
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
 
-	// CensorshipFile is the path to newline-separated list of addresses to censor transactions from
-	CensorshipFile string `hcl:"censored-addresses,optional" toml:"censored-addresses,optional"`
+	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
+	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 }
 
 type SealerConfig struct {
@@ -1077,11 +1077,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
 
-		// Load censored addresses during config initialization
-		if censoredAddrs, err := loadCensoredAddresses(c.TxPool.CensorshipFile); err != nil {
-			return nil, fmt.Errorf("failed to load censored addresses: %v", err)
+		// Load filtered addresses during config initialization
+		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
+			return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
 		} else {
-			n.TxPool.CensoredAddresses = censoredAddrs
+			n.TxPool.FilteredAddresses = filteredAddrs
 		}
 	}
 
@@ -1713,8 +1713,8 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	return lines, nil
 }
 
-// loadCensoredAddresses loads newline-separated addresses to censor from the specified file.
-func loadCensoredAddresses(filePath string) (map[common.Address]struct{}, error) {
+// loadFilteredAddresses loads newline-separated addresses to filter from the specified file.
+func loadFilteredAddresses(filePath string) (map[common.Address]struct{}, error) {
 	if filePath == "" {
 		return make(map[common.Address]struct{}), nil
 	}
@@ -1722,17 +1722,17 @@ func loadCensoredAddresses(filePath string) (map[common.Address]struct{}, error)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Warn("Censorship file not found", "file", filePath)
+			log.Warn("Filtered addresses file not found", "file", filePath)
 			return make(map[common.Address]struct{}), nil
 		}
-		return nil, fmt.Errorf("failed to read censorship file: %v", err)
+		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
 	}
 
-	censoredAddrs := make(map[common.Address]struct{})
+	filteredAddrs := make(map[common.Address]struct{})
 	content := strings.TrimSpace(string(data))
 	if content == "" {
-		log.Info("Empty censorship file", "file", filePath)
-		return censoredAddrs, nil
+		log.Info("Empty filtered addresses file", "file", filePath)
+		return filteredAddrs, nil
 	}
 
 	addresses := strings.Split(content, "\n")
@@ -1742,13 +1742,13 @@ func loadCensoredAddresses(filePath string) (map[common.Address]struct{}, error)
 			continue
 		}
 		if !common.IsHexAddress(addrStr) {
-			log.Warn("Invalid address in censorship file", "file", filePath, "position", i+1, "address", addrStr)
+			log.Warn("Invalid address in filtered addresses file", "file", filePath, "position", i+1, "address", addrStr)
 			continue
 		}
 		addr := common.HexToAddress(addrStr)
-		censoredAddrs[addr] = struct{}{}
+		filteredAddrs[addr] = struct{}{}
 	}
 
-	log.Info("Loaded censored addresses", "count", len(censoredAddrs), "file", filePath)
-	return censoredAddrs, nil
+	log.Info("Loaded filtered addresses", "count", len(filteredAddrs), "file", filePath)
+	return filteredAddrs, nil
 }

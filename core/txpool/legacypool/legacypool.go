@@ -76,8 +76,8 @@ var (
 	// one. Future transactions should only be able to replace other future transactions.
 	ErrFutureReplacePending = errors.New("future transaction tries to replace pending")
 
-	// ErrTxCensored is returned if a transaction is from a censored address.
-	ErrTxCensored = errors.New("transaction from censored address")
+	// ErrTxFiltered is returned if a transaction is from a filtered address.
+	ErrTxFiltered = errors.New("transaction from filtered address")
 )
 
 var (
@@ -105,7 +105,7 @@ var (
 	invalidTxMeter     = metrics.NewRegisteredMeter("txpool/invalid", nil)
 	underpricedTxMeter = metrics.NewRegisteredMeter("txpool/underpriced", nil)
 	overflowedTxMeter  = metrics.NewRegisteredMeter("txpool/overflowed", nil)
-	censoredTxMeter    = metrics.NewRegisteredMeter("txpool/censored", nil)
+	filteredTxMeter    = metrics.NewRegisteredMeter("txpool/filtered", nil)
 
 	// throttleTxMeter counts how many transactions are rejected due to too-many-changes between
 	// txpool reorgs.
@@ -168,8 +168,8 @@ type Config struct {
 	Lifetime            time.Duration // Maximum amount of time non-executable transaction are queued
 	AllowUnprotectedTxs bool          // Allow non-EIP-155 transactions
 
-	// Transaction censorship configuration
-	CensoredAddresses map[common.Address]struct{} // Pre-loaded censored addresses (populated by config)
+	// Transaction filtering configuration
+	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -278,8 +278,7 @@ type LegacyPool struct {
 
 	promoteTxCh chan struct{} // should be used only for tests
 
-	// Censorship fields
-	censoredAddrs map[common.Address]struct{} // Map of addresses to censor
+	filteredAddrs map[common.Address]struct{} // Map of addresses to filter
 }
 
 type txpoolResetRequest struct {
@@ -308,16 +307,16 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		reorgDoneCh:     make(chan chan struct{}),
 		reorgShutdownCh: make(chan struct{}),
 		initDoneCh:      make(chan struct{}),
-		censoredAddrs:   make(map[common.Address]struct{}),
+		filteredAddrs:   make(map[common.Address]struct{}),
 	}
 	pool.priced = newPricedList(pool.all)
 
-	// Copy pre-loaded censored addresses
-	if config.CensoredAddresses != nil {
-		for addr := range config.CensoredAddresses {
-			pool.censoredAddrs[addr] = struct{}{}
+	// Copy pre-loaded filtered addresses
+	if config.FilteredAddresses != nil {
+		for addr := range config.FilteredAddresses {
+			pool.filteredAddrs[addr] = struct{}{}
 		}
-		log.Info("Loaded censored addresses", "count", len(pool.censoredAddrs))
+		log.Info("Loaded filtered addresses", "count", len(pool.filteredAddrs))
 	}
 
 	// apply options
@@ -641,16 +640,16 @@ func (pool *LegacyPool) ValidateTxBasics(tx *types.Transaction) error {
 // validateTx checks whether a transaction is valid according to the consensus
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
-	// Check if transaction sender is censored
+	// Check if transaction sender is filtered
 	from, err := types.Sender(pool.signer, tx)
 	if err != nil {
 		return err
 	}
 
-	if pool.isCensored(from) {
-		censoredTxMeter.Mark(1)
-		log.Warn("Censored transaction rejected", "hash", tx.Hash(), "from", from)
-		return ErrTxCensored
+	if pool.isFiltered(from) {
+		filteredTxMeter.Mark(1)
+		log.Warn("Filtered transaction rejected", "hash", tx.Hash(), "from", from)
+		return ErrTxFiltered
 	}
 
 	opts := &txpool.ValidationOptionsWithState{
@@ -2093,8 +2092,8 @@ func (pool *LegacyPool) HasPendingAuth(addr common.Address) bool {
 	return pool.all.hasAuth(addr)
 }
 
-// isCensored checks if an address is in the censored list.
-func (pool *LegacyPool) isCensored(addr common.Address) bool {
-	_, exists := pool.censoredAddrs[addr]
+// isFiltered checks if an address is in the filtered list.
+func (pool *LegacyPool) isFiltered(addr common.Address) bool {
+	_, exists := pool.filteredAddrs[addr]
 	return exists
 }
