@@ -599,7 +599,10 @@ func (c *BackFillStateSyncTxsEntriesCommand) Run(args []string) int {
 	}
 	c.UI.Output("Opened database at path: " + datadir)
 
-	c.putMissingBackfill(chaindb, writes)
+	if err := c.putMissingBackfill(chaindb, writes); err != nil {
+		c.UI.Error("error while putting missing backfill: " + err.Error())
+		return 1
+	}
 
 	return 0
 }
