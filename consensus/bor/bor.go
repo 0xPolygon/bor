@@ -569,7 +569,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		}
 
 		// verify the validator list in the last sprint block
-		if IsSprintStart(number, c.config.CalculateSprint(number)) && !slices.Contains(c.config.SkipValidatorByteCheck, number-1) {
+		if IsSprintStart(number+1, c.config.CalculateSprint(number+1)) && !slices.Contains(c.config.SkipValidatorByteCheck, number) {
 			parentValidatorBytes := parent.GetValidatorBytes(c.chainConfig)
 			validatorsBytes := make([]byte, len(snap.ValidatorSet.Validators)*validatorHeaderBytesLength)
 
@@ -582,7 +582,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 			}
 			// len(header.Extra) >= extraVanity+extraSeal has already been validated in validateHeaderExtraField, so this won't result in a panic
 			if !bytes.Equal(parentValidatorBytes, validatorsBytes) {
-				return &MismatchingValidatorsError{number - 1, validatorsBytes, parentValidatorBytes}
+				return &MismatchingValidatorsError{number, validatorsBytes, parentValidatorBytes}
 			}
 		}
 	}
