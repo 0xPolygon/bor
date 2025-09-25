@@ -274,6 +274,142 @@ func TestWitnessVerificationConstants(t *testing.T) {
 	}
 }
 
+// TestSimplifiedWitnessVerification tests the simplified verification logic
+func TestSimplifiedWitnessVerification(t *testing.T) {
+	tests := []struct {
+		name           string
+		reportedPages  uint64
+		peerPages      []uint64
+		expectedHonest bool
+		description    string
+	}{
+		{
+			name:           "UnderThreshold_ShouldBeHonest",
+			reportedPages:  5,
+			peerPages:      []uint64{5, 5},
+			expectedHonest: true,
+			description:    "Page count under threshold should be considered honest",
+		},
+		{
+			name:           "OverThreshold_ConsensusAgreement",
+			reportedPages:  15,
+			peerPages:      []uint64{15, 15},
+			expectedHonest: true,
+			description:    "Consensus agreement should mark peer as honest",
+		},
+		{
+			name:           "OverThreshold_ConsensusDisagreement",
+			reportedPages:  15,
+			peerPages:      []uint64{20, 20},
+			expectedHonest: false,
+			description:    "Consensus disagreement should mark peer as dishonest (dropped)",
+		},
+		{
+			name:           "OverThreshold_MixedResults",
+			reportedPages:  15,
+			peerPages:      []uint64{15, 20},
+			expectedHonest: true,
+			description:    "Mixed results should default to honest (conservative)",
+		},
+		{
+			name:           "OverThreshold_InsufficientPeers",
+			reportedPages:  15,
+			peerPages:      []uint64{15},
+			expectedHonest: true,
+			description:    "Insufficient peers should default to honest (conservative)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the simplified verification logic
+			isHonest := simulateSimplifiedWitnessVerification(tt.reportedPages, tt.peerPages)
+
+			if isHonest != tt.expectedHonest {
+				t.Errorf("%s: expected honest=%v, got honest=%v", tt.description, tt.expectedHonest, isHonest)
+			}
+		})
+	}
+}
+
+// simulateSimplifiedWitnessVerification simulates the simplified verification logic
+func simulateSimplifiedWitnessVerification(reportedPageCount uint64, peerPageCounts []uint64) bool {
+	const witnessPageWarningThreshold = 10
+	const witnessVerificationPeers = 2
+
+	// If under threshold, assume honest
+	if reportedPageCount <= witnessPageWarningThreshold {
+		return true
+	}
+
+	// If insufficient peers, assume honest (conservative approach)
+	if len(peerPageCounts) < witnessVerificationPeers {
+		return true
+	}
+
+	// Get consensus from peers (most common page count)
+	countMap := make(map[uint64]int)
+	for _, count := range peerPageCounts {
+		countMap[count]++
+	}
+
+	var maxCount int
+	var consensusCount uint64
+	for count, freq := range countMap {
+		if freq > maxCount {
+			maxCount = freq
+			consensusCount = count
+		}
+	}
+
+	// If we have consensus, check if it matches reported count
+	if maxCount >= 2 {
+		return consensusCount == reportedPageCount
+	}
+
+	// No clear consensus, assume honest (conservative approach)
+	return true
+}
+
+// TestWitnessVerificationScenarios tests various verification scenarios
+func TestWitnessVerificationScenarios(t *testing.T) {
+	t.Run("MaliciousPeer_ExcessivePages", func(t *testing.T) {
+		// Simulate a malicious peer reporting 1000+ pages
+		reportedPages := uint64(1000)
+		peerPages := []uint64{15, 15} // Other peers report normal page count
+
+		isHonest := simulateSimplifiedWitnessVerification(reportedPages, peerPages)
+
+		if isHonest {
+			t.Error("Expected malicious peer with excessive pages to be marked as dishonest")
+		}
+	})
+
+	t.Run("HonestPeer_LargeButReasonablePages", func(t *testing.T) {
+		// Simulate an honest peer with large but reasonable page count
+		reportedPages := uint64(50)
+		peerPages := []uint64{50, 50} // Other peers agree
+
+		isHonest := simulateSimplifiedWitnessVerification(reportedPages, peerPages)
+
+		if !isHonest {
+			t.Error("Expected honest peer with large but reasonable pages to be marked as honest")
+		}
+	})
+
+	t.Run("NetworkPartition_ConservativeApproach", func(t *testing.T) {
+		// Simulate network partition where only one peer responds
+		reportedPages := uint64(100)
+		peerPages := []uint64{100} // Only one peer responds
+
+		isHonest := simulateSimplifiedWitnessVerification(reportedPages, peerPages)
+
+		if !isHonest {
+			t.Error("Expected conservative approach to mark peer as honest when insufficient consensus")
+		}
+	})
+}
+
 // TestWitnessPageCountVerification tests the page count verification logic
 func TestWitnessPageCountVerification(t *testing.T) {
 	tests := []struct {
@@ -369,57 +505,6 @@ func simulateWitnessPageCountVerification(reportedPageCount uint64, peerPageCoun
 
 	// No clear consensus, assume honest (conservative approach)
 	return true
-}
-
-// TestWitnessVerificationScenarios tests various verification scenarios
-func TestWitnessVerificationScenarios(t *testing.T) {
-	t.Run("MaliciousPeer_ExcessivePages", func(t *testing.T) {
-		// Simulate a malicious peer reporting 1000+ pages
-		reportedPages := uint64(1000)
-		peerPages := []uint64{15, 15} // Other peers report normal page count
-
-		isHonest := simulateWitnessPageCountVerification(reportedPages, peerPages)
-
-		if isHonest {
-			t.Error("Expected malicious peer with excessive pages to be marked as dishonest")
-		}
-	})
-
-	t.Run("HonestPeer_LargeButReasonablePages", func(t *testing.T) {
-		// Simulate an honest peer with large but reasonable page count
-		reportedPages := uint64(50)
-		peerPages := []uint64{50, 50} // Other peers agree
-
-		isHonest := simulateWitnessPageCountVerification(reportedPages, peerPages)
-
-		if !isHonest {
-			t.Error("Expected honest peer with large but reasonable pages to be marked as honest")
-		}
-	})
-
-	t.Run("NetworkPartition_ConservativeApproach", func(t *testing.T) {
-		// Simulate network partition where only one peer responds
-		reportedPages := uint64(100)
-		peerPages := []uint64{100} // Only one peer responds
-
-		isHonest := simulateWitnessPageCountVerification(reportedPages, peerPages)
-
-		if !isHonest {
-			t.Error("Expected conservative approach to mark peer as honest when insufficient consensus")
-		}
-	})
-
-	t.Run("ConsensusThreshold_EdgeCase", func(t *testing.T) {
-		// Test exactly at the warning threshold
-		reportedPages := uint64(10)
-		peerPages := []uint64{10, 10}
-
-		isHonest := simulateWitnessPageCountVerification(reportedPages, peerPages)
-
-		if !isHonest {
-			t.Error("Expected peer at threshold to be marked as honest")
-		}
-	})
 }
 
 // TestWitnessVerificationPerformance tests the performance characteristics

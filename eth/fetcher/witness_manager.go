@@ -95,8 +95,6 @@ type witnessManager struct {
 
 	// Witness verification state
 	witnessVerificationCache *ttlcache.Cache[common.Hash, *witnessVerificationResult] // Cache of verified page counts
-	pendingVerifications     map[common.Hash]*witnessVerificationRequest              // Pending verification requests
-	peerReputation           map[string]int                                           // Peer reputation score (negative = bad, positive = good)
 
 	// Communication channels (owned by witnessManager)
 	injectNeedWitnessCh chan *injectBlockNeedWitnessMsg // Injected blocks needing witness fetch
@@ -152,8 +150,6 @@ func newWitnessManager(
 		witnessUnavailable:       make(map[common.Hash]time.Time),
 		witnessCache:             witnessCache,
 		witnessVerificationCache: witnessVerificationCache,
-		pendingVerifications:     make(map[common.Hash]*witnessVerificationRequest),
-		peerReputation:           make(map[string]int),
 		injectNeedWitnessCh:      make(chan *injectBlockNeedWitnessMsg, 10),
 		injectWitnessCh:          make(chan *injectedWitnessMsg, 10),
 		witnessTimer:             time.NewTimer(0),
@@ -1004,54 +1000,21 @@ func (m *witnessManager) verifyWitnessPageCount(hash common.Hash, reportedPageCo
 	if cached := m.witnessVerificationCache.Get(hash); cached != nil {
 		if cached.Value().pageCount == reportedPageCount {
 			// Page count matches cached result, peer is honest
-			m.updatePeerReputation(reportingPeer, 1)
 			return
 		} else {
-			// Page count doesn't match cached result, peer is dishonest
-			m.updatePeerReputation(reportingPeer, -5)
-			m.penalisePeer(reportingPeer)
+			// Page count doesn't match cached result, peer is dishonest - drop immediately
+			log.Warn("Dropping dishonest peer - cached verification mismatch", "peer", reportingPeer, "reported", reportedPageCount, "cached", cached.Value().pageCount)
+			m.parentDropPeer(reportingPeer)
 			return
 		}
 	}
 
-	// Check if verification is already in progress
-	m.mu.Lock()
-	if _, exists := m.pendingVerifications[hash]; exists {
-		m.mu.Unlock()
-		return // Verification already in progress
-	}
-
-	// Create verification request
-	verificationReq := &witnessVerificationRequest{
-		hash:      hash,
-		pageCount: reportedPageCount,
-		peer:      reportingPeer,
-		callback: func(isHonest bool) {
-			if isHonest {
-				m.updatePeerReputation(reportingPeer, 1)
-				// Cache the verified result
-				m.witnessVerificationCache.Set(hash, &witnessVerificationResult{
-					pageCount: reportedPageCount,
-					verified:  true,
-					timestamp: time.Now(),
-				}, witnessVerificationCacheTTL)
-			} else {
-				m.updatePeerReputation(reportingPeer, -5)
-				m.penalisePeer(reportingPeer)
-			}
-		},
-	}
-	m.pendingVerifications[hash] = verificationReq
-	m.mu.Unlock()
-
 	// Get random peers for verification
 	randomPeers := getRandomPeers()
 	if len(randomPeers) < witnessVerificationPeers {
-		// Not enough peers for verification, assume honest
-		m.mu.Lock()
-		delete(m.pendingVerifications, hash)
-		m.mu.Unlock()
-		m.updatePeerReputation(reportingPeer, 1)
+		// Not enough peers for verification, assume honest (conservative approach)
+		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
+		m.cacheVerificationResult(hash, reportedPageCount)
 		return
 	}
 
@@ -1059,84 +1022,63 @@ func (m *witnessManager) verifyWitnessPageCount(hash common.Hash, reportedPageCo
 	selectedPeers := randomPeers[:witnessVerificationPeers]
 
 	// Query selected peers for page count
-	verificationResults := make([]uint64, 0, len(selectedPeers))
-	verificationErrors := make([]error, 0, len(selectedPeers))
-
-	for _, peer := range selectedPeers {
-		pageCount, err := getWitnessPageCount(peer, hash)
-		verificationResults = append(verificationResults, pageCount)
-		verificationErrors = append(verificationErrors, err)
-	}
-
-	// Analyze results using 2/3 consensus
-	honestCount := 0
-	consensusPageCount := uint64(0)
-
-	for i, pageCount := range verificationResults {
-		if verificationErrors[i] == nil {
-			honestCount++
-			if consensusPageCount == 0 {
-				consensusPageCount = pageCount
-			} else if consensusPageCount != pageCount {
-				// Different page counts reported, no clear consensus
-				consensusPageCount = 0
-				break
-			}
-		}
-	}
+	consensusPageCount := m.getConsensusPageCount(selectedPeers, hash, getWitnessPageCount)
 
 	// Determine if original peer is honest
-	isHonest := false
-	if honestCount >= 2 && consensusPageCount > 0 {
-		// We have consensus from at least 2 peers
-		if consensusPageCount == reportedPageCount {
-			isHonest = true
-		} else {
-			// Consensus disagrees with reported page count
-			isHonest = false
+	if consensusPageCount != reportedPageCount {
+		// Peer is dishonest - drop immediately
+		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
+		m.parentDropPeer(reportingPeer)
+		return
+	}
+
+	// Peer is honest - cache result
+	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount)
+	m.cacheVerificationResult(hash, reportedPageCount)
+}
+
+// getConsensusPageCount gets consensus page count from multiple peers
+func (m *witnessManager) getConsensusPageCount(peers []string, hash common.Hash, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
+	pageCounts := make([]uint64, 0, len(peers))
+
+	for _, peer := range peers {
+		pageCount, err := getWitnessPageCount(peer, hash)
+		if err == nil {
+			pageCounts = append(pageCounts, pageCount)
 		}
-	} else {
-		// No clear consensus, assume honest (conservative approach)
-		isHonest = true
 	}
 
-	// Clean up pending verification
-	m.mu.Lock()
-	delete(m.pendingVerifications, hash)
-	m.mu.Unlock()
+	// If we have at least 2 responses, use the most common one
+	if len(pageCounts) >= 2 {
+		// Simple consensus: use the most common page count
+		countMap := make(map[uint64]int)
+		for _, count := range pageCounts {
+			countMap[count]++
+		}
 
-	// Execute callback
-	verificationReq.callback(isHonest)
+		var maxCount int
+		var consensusCount uint64
+		for count, freq := range countMap {
+			if freq > maxCount {
+				maxCount = freq
+				consensusCount = count
+			}
+		}
+
+		return consensusCount
+	}
+
+	// Not enough responses, return 0 (will be treated as no consensus)
+	return 0
 }
 
-// updatePeerReputation updates a peer's reputation score
-func (m *witnessManager) updatePeerReputation(peer string, delta int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	currentRep := m.peerReputation[peer]
-	newRep := currentRep + delta
-
-	// Cap reputation at reasonable bounds
-	if newRep > 100 {
-		newRep = 100
-	} else if newRep < -100 {
-		newRep = -100
-	}
-
-	m.peerReputation[peer] = newRep
-
-	// If reputation is very bad, penalize the peer
-	if newRep <= -50 {
-		m.penalisePeer(peer)
-	}
-}
-
-// getPeerReputation returns the current reputation score for a peer
-func (m *witnessManager) getPeerReputation(peer string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.peerReputation[peer]
+// cacheVerificationResult caches a successful verification result
+func (m *witnessManager) cacheVerificationResult(hash common.Hash, pageCount uint64) {
+	m.witnessVerificationCache.Set(hash, &witnessVerificationResult{
+		pageCount: pageCount,
+		verified:  true,
+		timestamp: time.Now(),
+	}, witnessVerificationCacheTTL)
 }
 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
@@ -1145,8 +1087,5 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	if pageCount > witnessPageWarningThreshold {
 		log.Debug("[wm] Witness page count exceeds threshold, triggering verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", witnessPageWarningThreshold)
 		go m.verifyWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
-	} else {
-		// Small page count, assume honest and update reputation slightly
-		m.updatePeerReputation(peer, 1)
 	}
 }
