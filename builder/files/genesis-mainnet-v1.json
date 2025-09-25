@@ -22,6 +22,7 @@
       "indoreBlock": 44934656,
       "ahmedabadBlock": 62278656,
       "bhilaiBlock": 73440256,
+      "rioBlock": 77414656,
       "stateSyncConfirmationDelay": {
         "44934656": 128
       },
@@ -38,6 +39,10 @@
       },
       "backupMultiplier": {
         "0": 2
+      },
+      "coinbase": {
+        "0":        "0x0000000000000000000000000000000000000000",
+        "77414656": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0"
       },
       "validatorContract": "0x0000000000000000000000000000000000001000",
       "stateReceiverContract": "0x0000000000000000000000000000000000001001",

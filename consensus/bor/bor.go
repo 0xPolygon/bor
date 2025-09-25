@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -111,8 +112,8 @@ var (
 	// be modified via out-of-range or non-contiguous headers.
 	errOutOfRangeChain = errors.New("out of range or non-contiguous chain")
 
-	errUncleDetected = errors.New("uncles not allowed")
-	// errUnknownValidators = errors.New("unknown validators")
+	errUncleDetected     = errors.New("uncles not allowed")
+	errUnknownValidators = errors.New("unknown validators")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -523,6 +524,69 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		return ErrInvalidTimestamp
 	}
 
+	if !c.config.IsRio(header.Number) && !slices.Contains(c.config.SkipValidatorByteCheck, number) {
+		// Retrieve the snapshot needed to verify this header and cache it
+		snap, err := c.snapshot(chain, header, parents, false)
+		if err != nil {
+			return err
+		}
+
+		// Verify if the producer set in header's extra data matches with the list in span.
+		// We skip the check for 0th span as the producer set in contract v/s producer set
+		// in heimdall span is different which will lead a mismatch. Moreover, to make the
+		// validation stateless, we use the span from heimdall (via span store) instead of
+		// span from validator set genesis contract as both are supposed to be equivalent.
+		if number > zerothSpanEnd && IsSprintStart(number+1, c.config.CalculateSprint(number)) {
+			span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+			if err != nil {
+				return err
+			}
+
+			// Use producer set from span as it's equivalent to the data we get from genesis contract
+			selectedProducers := borSpan.ConvertHeimdallValidatorsToBorValidators(span.SelectedProducers)
+			newValidators := make([]*valset.Validator, len(selectedProducers))
+			for i, val := range selectedProducers {
+				newValidators[i] = &val
+			}
+			sort.Sort(valset.ValidatorsByAddress(newValidators))
+
+			headerVals, err := valset.ParseValidators(header.GetValidatorBytes(c.chainConfig))
+			if err != nil {
+				return err
+			}
+
+			if len(newValidators) != len(headerVals) {
+				log.Warn("Invalid validator set", "block number", number, "newValidators", newValidators, "headerVals", headerVals)
+				return errInvalidSpanValidators
+			}
+
+			for i, val := range newValidators {
+				if !bytes.Equal(val.HeaderBytes(), headerVals[i].HeaderBytes()) {
+					log.Warn("Invalid validator set", "block number", number, "index", i, "local validator", val, "header validator", headerVals[i])
+					return errInvalidSpanValidators
+				}
+			}
+		}
+
+		// verify the validator list in the last sprint block
+		if IsSprintStart(number, c.config.CalculateSprint(number)) && !slices.Contains(c.config.SkipValidatorByteCheck, number-1) {
+			parentValidatorBytes := parent.GetValidatorBytes(c.chainConfig)
+			validatorsBytes := make([]byte, len(snap.ValidatorSet.Validators)*validatorHeaderBytesLength)
+
+			currentValidators := snap.ValidatorSet.Copy().Validators
+			// sort validator by address
+			sort.Sort(valset.ValidatorsByAddress(currentValidators))
+
+			for i, validator := range currentValidators {
+				copy(validatorsBytes[i*validatorHeaderBytesLength:], validator.HeaderBytes())
+			}
+			// len(header.Extra) >= extraVanity+extraSeal has already been validated in validateHeaderExtraField, so this won't result in a panic
+			if !bytes.Equal(parentValidatorBytes, validatorsBytes) {
+				return &MismatchingValidatorsError{number - 1, validatorsBytes, parentValidatorBytes}
+			}
+		}
+	}
+
 	// All basic checks passed, verify the seal and return
 	return c.verifySeal(chain, header, parents)
 }
@@ -854,17 +918,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	// get validator set if number
 	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsRio(header.Number) {
-		span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+		newValidators, err := c.spanner.GetCurrentValidatorsByHash(context.Background(), header.ParentHash, number+1)
 		if err != nil {
-			return err
-		}
-
-		newValidators := make([]*valset.Validator, len(span.SelectedProducers))
-		for i, val := range span.SelectedProducers {
-			newValidators[i] = &valset.Validator{
-				Address:     common.HexToAddress(val.Signer),
-				VotingPower: val.VotingPower,
-			}
+			return errUnknownValidators
 		}
 
 		// sort validator by address
