@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -451,6 +452,8 @@ func (d *Database) DeleteRange(start, end []byte) error {
 		end = ethdb.MaximumKey
 	}
 	log.Error("Pebble DeleteRange", "start", string(start), "end", string(end))
+	log.Error("Will not delete", "callstack", debug.Stack())
+	return nil
 	return d.db.DeleteRange(start, end, d.writeOptions)
 }
 
