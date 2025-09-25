@@ -708,6 +708,61 @@ func (b testBackend) StoreWitness(ctx context.Context, hash common.Hash, witness
 	return nil
 }
 
+func (b testBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
+	blockHeader, err := b.HeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	rlpEncodedWitness := rawdb.ReadWitness(b.ChainDb(), blockHeader.Hash())
+	if len(rlpEncodedWitness) == 0 {
+		return nil, nil
+	}
+
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
+		return nil, err
+	}
+
+	return witness, nil
+}
+
+func (b testBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
+	blockHeader, err := b.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	rlpEncodedWitness := rawdb.ReadWitness(b.ChainDb(), hash)
+	if len(rlpEncodedWitness) == 0 {
+		return nil, nil
+	}
+
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
+		return nil, err
+	}
+
+	return witness, nil
+}
+
+func (b testBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
+	if blockNumber, ok := blockNrOrHash.Number(); ok {
+		return b.WitnessByNumber(ctx, blockNumber)
+	}
+	if blockHash, ok := blockNrOrHash.Hash(); ok {
+		return b.WitnessByHash(ctx, blockHash)
+	}
+
+	return nil, errors.New("invalid block number or hash")
+}
+
 func (b testBackend) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	receipt := b.chain.GetBorReceiptByHash(hash)
 	if receipt == nil {
@@ -4007,6 +4062,22 @@ func TestRPCGetBlockReceipts(t *testing.T) {
 	}
 }
 
+func TestAccessListWorksForAnyEmptyAddress(t *testing.T) {
+	api, _, _ := setupBlocksToApiTest(t)
+
+	from := common.BytesToAddress([]byte("deadbeef"))
+	block := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	overrides := override.StateOverride{}
+	res, err := api.CreateAccessList(t.Context(), TransactionArgs{
+		From: &from,
+		Data: hex2Bytes("0x608060806080608155"),
+	}, &block, &overrides)
+
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, 1, res.Accesslist.StorageKeys())
+}
+
 func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, []struct {
 	txHash common.Hash
 	want   string
@@ -4343,4 +4414,83 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 		StorageKeys: []common.Hash{{}},
 	}}
 	require.Equal(t, expected, result.Accesslist)
+}
+
+func TestBorWitnessAPI_Integration(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	testBlock, err := backend.BlockByNumber(t.Context(), rpc.BlockNumber(1))
+	require.NoError(t, err)
+	require.NotNil(t, testBlock)
+	testBlockHash := testBlock.Hash()
+
+	mockWitness, err := stateless.NewWitness(testBlock.Header(), backend.chain)
+	require.NoError(t, err)
+	require.NotNil(t, mockWitness)
+
+	var witBuf bytes.Buffer
+	err = mockWitness.EncodeRLP(&witBuf)
+	require.NoError(t, err)
+	rawdb.WriteWitness(backend.ChainDb(), testBlockHash, witBuf.Bytes())
+
+	t.Run("Database_WitnessStorage", func(t *testing.T) {
+		witnessData := rawdb.ReadWitness(backend.ChainDb(), testBlockHash)
+		require.NotEmpty(t, witnessData, "Witness data should be stored in database")
+
+		witness, err := stateless.GetWitnessFromRlp(witnessData)
+		require.NoError(t, err)
+		require.NotNil(t, witness.Header())
+		require.Equal(t, testBlockHash, witness.Header().Hash())
+	})
+
+	borApi := NewBorAPI(backend)
+
+	t.Run("BorAPI_GetWitnessByNumber_WithStoredWitness", func(t *testing.T) {
+		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(1))
+		require.NoError(t, err)
+		require.NotNil(t, result, "Should find the stored witness")
+		require.NotNil(t, result["context"], "Witness should have a context header")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	})
+
+	t.Run("BorAPI_GetWitnessByHash_WithStoredWitness", func(t *testing.T) {
+		result, err := borApi.GetWitnessByHash(t.Context(), testBlockHash)
+		require.NoError(t, err)
+		require.NotNil(t, result, "Should find the stored witness")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	})
+
+	t.Run("BorAPI_GetWitnessByBlockNumberOrHash_WithStoredWitness", func(t *testing.T) {
+		result, err := borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(1)))
+		require.NoError(t, err)
+		require.NotNil(t, result, "Should find the stored witness by number")
+
+		result, err = borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithHash(testBlockHash, false))
+		require.NoError(t, err)
+		require.NotNil(t, result, "Should find the stored witness by hash")
+		contextHeader := result["context"].(map[string]interface{})
+		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	})
+
+	t.Run("BorAPI_GetWitnessByNumber_NoWitness", func(t *testing.T) {
+		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(2))
+		require.NoError(t, err)
+		require.Nil(t, result, "Should return nil for block without witness")
+	})
+
+	t.Run("BorAPI_GetWitnessByHash_NonExistentBlock", func(t *testing.T) {
+		fakeHash := common.HexToHash("0xdeadbeef")
+		result, err := borApi.GetWitnessByHash(t.Context(), fakeHash)
+		require.NoError(t, err)
+		require.Nil(t, result, "Should return nil for non-existent block")
+	})
 }

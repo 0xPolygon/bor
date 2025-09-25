@@ -45,7 +45,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -586,15 +585,17 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 			return nil, err
 		}
 
-		witnessRlpEncoded := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+		rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
 
-		var decodedWitness stateless.Witness
-		stream := rlp.NewStream(bytes.NewReader(witnessRlpEncoded), 0)
-		if err := decodedWitness.DecodeRLP(stream); err != nil {
-			log.Error("Failed to decode witness", "caughtErr", err)
+		witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+		if err != nil {
+			// Log the error and return what we have so far.
+			log.Error("Failed to decode witness", "blockNumber", blockNumber, "blockHash", blockHeader.Hash(), "error", err)
+			return response, err
 		}
-
-		response = append(response, &decodedWitness)
+		if witness != nil {
+			response = append(response, witness)
+		}
 	}
 
 	return response, nil
@@ -603,10 +604,77 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash, witness *stateless.Witness) error {
 	var witBuf bytes.Buffer
 	if err := witness.EncodeRLP(&witBuf); err != nil {
-		log.Error("error in witness encoding", "caughterr", err)
+		log.Error("Failed to encode witness", "error", err)
 	}
 
 	rawdb.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
 
 	return nil
+}
+
+func (b *EthAPIBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
+	if !b.eth.config.WitnessAPIEnabled {
+		return nil, errors.New("witness API is disabled - enable with --witness.witnessapi flag")
+	}
+
+	blockHeader, err := b.HeaderByNumber(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+	if len(rlpEncodedWitness) == 0 {
+		return nil, nil
+	}
+
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
+		return nil, err
+	}
+
+	return witness, nil
+}
+
+func (b *EthAPIBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
+	if !b.eth.config.WitnessAPIEnabled {
+		return nil, errors.New("witness API is disabled - enable with --witness.witnessapi flag")
+	}
+
+	blockHeader, err := b.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if blockHeader == nil {
+		return nil, nil
+	}
+
+	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), hash)
+	if len(rlpEncodedWitness) == 0 {
+		return nil, nil
+	}
+
+	witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
+	if err != nil {
+		return nil, err
+	}
+
+	return witness, nil
+}
+
+func (b *EthAPIBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
+	if !b.eth.config.WitnessAPIEnabled {
+		return nil, errors.New("witness API is disabled - enable with --witness.witnessapi flag")
+	}
+
+	if blockNumber, ok := blockNrOrHash.Number(); ok {
+		return b.WitnessByNumber(ctx, blockNumber)
+	}
+	if blockHash, ok := blockNrOrHash.Hash(); ok {
+		return b.WitnessByHash(ctx, blockHash)
+	}
+
+	return nil, errors.New("invalid block number or hash")
 }

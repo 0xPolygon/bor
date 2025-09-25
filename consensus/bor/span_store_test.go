@@ -1332,3 +1332,197 @@ func TestSpanStore_WaitForNewSpan(t *testing.T) {
 		require.True(t, found)
 	})
 }
+
+func TestSpanStore_ConcurrentAccess(t *testing.T) {
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	defer spanStore.Close()
+	ctx := t.Context()
+
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+
+	// Test concurrent access to spanById which updates the latestKnownSpanId.
+	for i := range numGoroutines {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			spanId := uint64(id + 1)
+			span, err := spanStore.spanById(ctx, spanId)
+			require.NoError(t, err)
+			require.Equal(t, spanId, span.Id)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify that the final state is consistent.
+	finalLatestSpanId := spanStore.latestKnownSpanId.Load()
+	require.Equal(t, uint64(numGoroutines), finalLatestSpanId, "Latest span ID should be the highest processed span")
+
+	// Verify that all spans are accessible.
+	for i := range numGoroutines {
+		spanId := uint64(i + 1)
+		span, err := spanStore.spanById(ctx, spanId)
+		require.NoError(t, err)
+		require.Equal(t, spanId, span.Id)
+	}
+}
+
+// TimeoutHeimdallClient simulates a heimdall client that times out or hangs on requests
+type TimeoutHeimdallClient struct {
+	timeout        time.Duration
+	shouldTimeout  bool
+	shouldHangSpan bool
+}
+
+func (h *TimeoutHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
+	if h.shouldTimeout {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(h.timeout):
+			return nil, fmt.Errorf("request timed out")
+		}
+	}
+
+	// Return a basic span for testing
+	validators := []*stakeTypes.Validator{
+		{
+			ValId:            1,
+			Signer:           "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a",
+			VotingPower:      100,
+			ProposerPriority: 0,
+		},
+	}
+	validatorSet := stakeTypes.ValidatorSet{
+		Validators: validators,
+		Proposer:   validators[0],
+	}
+	selectedProducers := []stakeTypes.Validator{
+		{
+			ValId:            1,
+			Signer:           "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a",
+			VotingPower:      100,
+			ProposerPriority: 0,
+		},
+	}
+
+	return &types.Span{
+		Id:                spanID,
+		StartBlock:        spanID * 100,
+		EndBlock:          (spanID+1)*100 - 1,
+		ValidatorSet:      validatorSet,
+		SelectedProducers: selectedProducers,
+	}, nil
+}
+
+func (h *TimeoutHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
+	if h.shouldHangSpan {
+		// Simulate a hanging request that would block indefinitely
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(30 * time.Second): // Simulate the old behavior with 30s timeout
+			return nil, fmt.Errorf("request timed out after 30s")
+		}
+	}
+	return h.GetSpan(ctx, 1)
+}
+
+func (h *TimeoutHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	if h.shouldTimeout {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(h.timeout):
+			return nil, fmt.Errorf("request timed out")
+		}
+	}
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
+}
+
+// Implement other required interface methods
+func (h *TimeoutHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+	panic("not implemented")
+}
+func (h *TimeoutHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+	panic("not implemented")
+}
+func (h *TimeoutHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
+	panic("not implemented")
+}
+func (h *TimeoutHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+	panic("not implemented")
+}
+func (h *TimeoutHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	panic("not implemented")
+}
+func (h *TimeoutHeimdallClient) Close() {}
+
+func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
+	t.Run("heimdallStatus set to nil on FetchStatus error", func(t *testing.T) {
+		// Create a client that will fail on FetchStatus
+		mockClient := &TimeoutHeimdallClient{
+			shouldTimeout: true,
+			timeout:       10 * time.Millisecond, // Quick failure
+		}
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// First set the status to non-nil value
+		spanStore.heimdallStatus.Store(&ctypes.SyncInfo{CatchingUp: false})
+
+		// Now call updateHeimdallStatus with a context that will cause FetchStatus to fail
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+
+		err := spanStore.updateHeimdallStatus(ctx)
+
+		// Should return an error
+		require.Error(t, err)
+
+		// heimdallStatus should be set to nil after the error
+		status := spanStore.heimdallStatus.Load()
+		require.Nil(t, status, "heimdallStatus should be nil after FetchStatus error")
+	})
+
+	t.Run("background goroutine sets heimdallStatus to nil on persistent errors", func(t *testing.T) {
+		// Create a client that starts working then fails
+		mockClient := &TimeoutHeimdallClient{
+			shouldTimeout: false,
+			timeout:       10 * time.Millisecond,
+		}
+
+		spanStore := NewSpanStore(mockClient, nil, "1337")
+		defer spanStore.Close()
+
+		// Wait for initial successful status update
+		time.Sleep(300 * time.Millisecond)
+
+		// Verify status was set initially
+		status := spanStore.heimdallStatus.Load()
+		require.NotNil(t, status, "Status should be set initially")
+
+		// Now make FetchStatus fail
+		mockClient.shouldTimeout = true
+
+		// Wait for the background goroutine to encounter the error
+		time.Sleep(500 * time.Millisecond)
+
+		// heimdallStatus should be nil after the error
+		status = spanStore.heimdallStatus.Load()
+		require.Nil(t, status, "heimdallStatus should be nil after FetchStatus starts failing")
+
+		// Now make it work again
+		mockClient.shouldTimeout = false
+
+		// Wait for recovery
+		time.Sleep(500 * time.Millisecond)
+
+		// Status should be restored
+		status = spanStore.heimdallStatus.Load()
+		require.NotNil(t, status, "Status should be restored after recovery")
+		require.False(t, status.CatchingUp, "Status should show not catching up after recovery")
+	})
+}

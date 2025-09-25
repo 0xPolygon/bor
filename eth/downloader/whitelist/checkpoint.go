@@ -33,26 +33,34 @@ func (w *checkpoint) IsValidChain(currentHeader *types.Header, chain []*types.He
 	defer w.finality.RUnlock()
 
 	res, err := w.finality.IsValidChain(currentHeader, chain)
-
-	if res {
-		CheckpointChainMeter.Mark(int64(1))
-	} else {
-		CheckpointPeerMeter.Mark(int64(-1))
-	}
+	reportCheckpointMetrics(res, true, false)
 
 	return res, err
+}
+
+func reportCheckpointMetrics(result bool, chain bool, peer bool) {
+	if chain {
+		if result {
+			CheckpointChainMeter.Mark(int64(1))
+		} else {
+			CheckpointPeerMeter.Mark(int64(-1))
+		}
+	}
+
+	if peer {
+		if result {
+			CheckpointPeerMeter.Mark(int64(1))
+		} else {
+			CheckpointPeerMeter.Mark(int64(-1))
+		}
+	}
 }
 
 // IsValidPeer checks if the chain we're about to receive from a peer is valid or not
 // in terms of reorgs. We won't reorg beyond the last bor finality submitted to mainchain.
 func (w *checkpoint) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
 	res, err := w.finality.IsValidPeer(fetchHeadersByNumber)
-
-	if res {
-		CheckpointPeerMeter.Mark(int64(1))
-	} else {
-		CheckpointPeerMeter.Mark(int64(-1))
-	}
+	reportCheckpointMetrics(res, false, true)
 
 	return res, err
 }

@@ -109,3 +109,30 @@ func (api *BorAPI) SendRawTransactionConditional(ctx context.Context, input hexu
 func (api *BorAPI) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
 	return api.b.GetVoteOnHash(ctx, starBlockNr, endBlockNr, hash, milestoneId)
 }
+
+// GetWitnessByNumber returns the witness for the given block number.
+func (api *BorAPI) GetWitnessByNumber(ctx context.Context, number rpc.BlockNumber) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByNumber(ctx, number)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
+}
+
+// GetWitnessByHash returns the witness for the given block hash.
+func (api *BorAPI) GetWitnessByHash(ctx context.Context, hash common.Hash) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByHash(ctx, hash)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
+}
+
+// GetWitnessByBlockNumberOrHash returns the witness for the given block number or hash.
+func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (map[string]interface{}, error) {
+	witness, err := api.b.WitnessByNumberOrHash(ctx, blockNrOrHash)
+	if witness == nil || err != nil {
+		return nil, err
+	}
+	return RPCMarshalWitness(witness), nil
+}

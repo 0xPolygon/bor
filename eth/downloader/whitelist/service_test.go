@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,16 +52,15 @@ func (m *MockChainReader) SetBlock(number uint64, block *types.Block) {
 // NewMockService creates a new mock whitelist service
 func NewMockService(db ethdb.Database) *Service {
 	return &Service{
-
-		&checkpoint{
+		db: db,
+		checkpointService: &checkpoint{
 			finality[*rawdb.Checkpoint]{
 				doExist:  false,
 				interval: 256,
 				db:       db,
 			},
 		},
-
-		&milestone{
+		milestoneService: &milestone{
 			finality: finality[*rawdb.Milestone]{
 				doExist:  false,
 				interval: 256,
@@ -71,6 +71,9 @@ func NewMockService(db ethdb.Database) *Service {
 			FutureMilestoneOrder: make([]uint64, 0),
 			MaxCapacity:          10,
 		},
+		maxForkCorrectnessLimit: 10,
+		lastValidForkBlock:      0,
+		forkValidationCache:     make(map[common.Hash]bool, 10),
 	}
 }
 
@@ -475,14 +478,14 @@ func TestIsValidChain(t *testing.T) {
 
 	db := rawdb.NewMemoryDatabase()
 	s := NewMockService(db)
-	chainA := createMockChain(1, 20) // A1->A2...A19->A20
+	chainA := createMockChain(1, 20, common.Hash{}) // A1->A2...A19->A20
 
 	//Case1: no checkpoint whitelist and no milestone and no locking, should consider the chain as valid
 	res, err := s.IsValidChain(nil, chainA)
 	require.Nil(t, err)
 	require.Equal(t, res, true, "Expected chain to be valid")
 
-	tempChain := createMockChain(21, 22) // A21->A22
+	tempChain := createMockChain(21, 22, common.Hash{}) // A21->A22
 
 	// add mock checkpoint entry
 	s.ProcessCheckpoint(tempChain[1].Number.Uint64(), tempChain[1].Hash())
@@ -636,7 +639,7 @@ func TestIsValidChain(t *testing.T) {
 	require.Equal(t, res, true, "expected chain to be valid")
 
 	// Clear checkpoint whitelist and mock blocks in whitelist
-	tempChain = createMockChain(20, 20) // A20
+	tempChain = createMockChain(20, 20, common.Hash{}) // A20
 
 	s.PurgeWhitelistedCheckpoint()
 	s.ProcessCheckpoint(tempChain[0].Number.Uint64(), tempChain[0].Hash())
@@ -655,7 +658,7 @@ func TestIsValidChain(t *testing.T) {
 	require.Equal(t, res, true, "expected chain to be invalid")
 
 	// create a future chain to be imported of length <= `checkpointInterval`
-	chainB := createMockChain(21, 30) // B21->B22...B29->B30
+	chainB := createMockChain(21, 30, common.Hash{}) // B21->B22...B29->B30
 
 	// case19: Try importing a future chain of acceptable length,should consider the chain as valid
 	res, err = s.IsValidChain(tempChain[0], chainB)
@@ -665,7 +668,7 @@ func TestIsValidChain(t *testing.T) {
 	s.PurgeWhitelistedCheckpoint()
 	s.PurgeWhitelistedMilestone()
 
-	chainB = createMockChain(21, 29) // C21->C22....C29
+	chainB = createMockChain(21, 29, common.Hash{}) // C21->C22....C29
 
 	s.milestoneService.ProcessFutureMilestone(29, chainB[8].Hash())
 
@@ -674,14 +677,14 @@ func TestIsValidChain(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, res, true, "expected chain to be valid")
 
-	chainB = createMockChain(21, 27) // C21->C22...C39->C40...C->256
+	chainB = createMockChain(21, 27, common.Hash{}) // C21->C22...C39->C40...C->256
 
 	// case21: Try importing a chain whose end point is less than future milestone
 	res, err = s.IsValidChain(tempChain[0], chainB)
 	require.Nil(t, err)
 	require.Equal(t, res, true, "expected chain to be valid")
 
-	chainB = createMockChain(30, 39) // C21->C22...C39->C40...C->256
+	chainB = createMockChain(30, 39, common.Hash{}) // C21->C22...C39->C40...C->256
 
 	//Processing wrong hash
 	s.milestoneService.ProcessFutureMilestone(38, chainB[9].Hash())
@@ -691,7 +694,7 @@ func TestIsValidChain(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, res, false, "expected chain to be invalid")
 
-	chainB = createMockChain(40, 49) // C40->C41...C48->C49
+	chainB = createMockChain(40, 49, common.Hash{}) // C40->C41...C48->C49
 
 	// case23: Try importing a future chain whose starting point is ahead of latest future milestone
 	res, err = s.IsValidChain(tempChain[0], chainB)
@@ -799,7 +802,7 @@ func TestPropertyBasedTestingMilestone(t *testing.T) {
 			end   = rapid.Uint64Min(start.(uint64)).Filter(fitlerFn).AsAny().Draw(t, "end for mock chain")
 		)
 
-		chainTemp := createMockChain(start.(uint64), end.(uint64))
+		chainTemp := createMockChain(start.(uint64), end.(uint64), common.Hash{})
 
 		val, err := milestone.IsValidChain(chainTemp[0], chainTemp)
 		if err != nil {
@@ -968,13 +971,13 @@ func TestSplitChain(t *testing.T) {
 		chain   []*types.Header
 		result  Result
 	}{
-		{name: "X = 10, N = 11, M = 20", current: uint64(10), chain: createMockChain(11, 20), result: Result{futureStart: 11, futureEnd: 20, futureLength: 10}},
-		{name: "X = 10, N = 13, M = 20", current: uint64(10), chain: createMockChain(13, 20), result: Result{futureStart: 13, futureEnd: 20, futureLength: 8}},
-		{name: "X = 10, N = 2, M = 10", current: uint64(10), chain: createMockChain(2, 10), result: Result{pastStart: 2, pastEnd: 10, pastLength: 9}},
-		{name: "X = 10, N = 2, M = 9", current: uint64(10), chain: createMockChain(2, 9), result: Result{pastStart: 2, pastEnd: 9, pastLength: 8}},
-		{name: "X = 10, N = 2, M = 8", current: uint64(10), chain: createMockChain(2, 8), result: Result{pastStart: 2, pastEnd: 8, pastLength: 7}},
-		{name: "X = 10, N = 5, M = 15", current: uint64(10), chain: createMockChain(5, 15), result: Result{pastStart: 5, pastEnd: 10, pastLength: 6, futureStart: 11, futureEnd: 15, futureLength: 5}},
-		{name: "X = 10, N = 10, M = 20", current: uint64(10), chain: createMockChain(10, 20), result: Result{pastStart: 10, pastEnd: 10, pastLength: 1, futureStart: 11, futureEnd: 20, futureLength: 10}},
+		{name: "X = 10, N = 11, M = 20", current: uint64(10), chain: createMockChain(11, 20, common.Hash{}), result: Result{futureStart: 11, futureEnd: 20, futureLength: 10}},
+		{name: "X = 10, N = 13, M = 20", current: uint64(10), chain: createMockChain(13, 20, common.Hash{}), result: Result{futureStart: 13, futureEnd: 20, futureLength: 8}},
+		{name: "X = 10, N = 2, M = 10", current: uint64(10), chain: createMockChain(2, 10, common.Hash{}), result: Result{pastStart: 2, pastEnd: 10, pastLength: 9}},
+		{name: "X = 10, N = 2, M = 9", current: uint64(10), chain: createMockChain(2, 9, common.Hash{}), result: Result{pastStart: 2, pastEnd: 9, pastLength: 8}},
+		{name: "X = 10, N = 2, M = 8", current: uint64(10), chain: createMockChain(2, 8, common.Hash{}), result: Result{pastStart: 2, pastEnd: 8, pastLength: 7}},
+		{name: "X = 10, N = 5, M = 15", current: uint64(10), chain: createMockChain(5, 15, common.Hash{}), result: Result{pastStart: 5, pastEnd: 10, pastLength: 6, futureStart: 11, futureEnd: 15, futureLength: 5}},
+		{name: "X = 10, N = 10, M = 20", current: uint64(10), chain: createMockChain(10, 20, common.Hash{}), result: Result{pastStart: 10, pastEnd: 10, pastLength: 1, futureStart: 11, futureEnd: 20, futureLength: 10}},
 	}
 	for _, tc := range testCases {
 		tc := tc
@@ -1092,7 +1095,7 @@ func TestSplitChainProperties(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			chain := createMockChain(uint64(tc.remoteStart), uint64(tc.remoteEnd))
+			chain := createMockChain(uint64(tc.remoteStart), uint64(tc.remoteEnd), common.Hash{})
 
 			past, future := splitChain(uint64(tc.current), chain)
 
@@ -1147,7 +1150,7 @@ func TestSplitChainProperties(t *testing.T) {
 
 // createMockChain returns a chain with dummy headers
 // starting from `start` to `end` (inclusive)
-func createMockChain(start, end uint64) []*types.Header {
+func createMockChain(start, end uint64, parentHash common.Hash) []*types.Header {
 	var (
 		i   uint64
 		idx uint64
@@ -1157,11 +1160,13 @@ func createMockChain(start, end uint64) []*types.Header {
 
 	for i = start; i <= end; i++ {
 		header := &types.Header{
-			Number: big.NewInt(int64(i)),
-			Time:   uint64(time.Now().UnixMicro()) + i,
+			Number:     big.NewInt(int64(i)),
+			Time:       uint64(time.Now().UnixMicro()) + i,
+			ParentHash: parentHash,
 		}
 		chain[idx] = header
 		idx++
+		parentHash = header.Hash()
 	}
 
 	return chain
@@ -1280,4 +1285,251 @@ func TestMilestoneSetBlockchain(t *testing.T) {
 	// Verify blockchain is set
 	require.NotNil(t, milestone.blockchain, "Blockchain should be set")
 	require.Equal(t, blockchain, milestone.blockchain, "Blockchain should match what was set")
+}
+
+func TestMilestone_IsValidPeer_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	db := rawdb.NewMemoryDatabase()
+	service := NewMockService(db)
+	milestone := service.milestoneService.(*milestone)
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+
+	// Simple mock fetchHeadersByNumber function.
+	fetchHeaders := func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error) {
+		header := &types.Header{Number: big.NewInt(int64(number))}
+		return []*types.Header{header}, []common.Hash{common.HexToHash("0x123")}, nil
+	}
+
+	// Test concurrent access: readers call IsValidPeer while writer calls Process.
+	// This tests the race condition fix in the finality fields access.
+
+	// Writer goroutine - updates the milestone data.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 10; i++ {
+			blockNum := uint64(100 + i)
+			hash := common.BytesToHash([]byte{byte(i)})
+			milestone.Process(blockNum, hash)
+			time.Sleep(time.Microsecond) // Small delay to increase race probability.
+		}
+	}()
+
+	// Reader goroutines - call IsValidPeer concurrently.
+	for i := range numGoroutines - 1 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			// This should not race with Process() calls due to our lock protection fix.
+			// The race was in accessing m.doExist, m.Number, m.Hash, m.blockchain fields.
+			_, err := milestone.IsValidPeer(fetchHeaders)
+
+			// We don't care about the specific result, just that no race occurs.
+			// Error is expected due to mock setup, but no race condition should happen.
+			_ = err // Ignore error, we're testing for race conditions, not functionality
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify final state is consistent after concurrent access.
+	doExist, finalNumber, finalHash := milestone.Get()
+	require.True(t, doExist, "Milestone should exist after processing")
+	require.Equal(t, uint64(110), finalNumber, "Final milestone number should be 110")
+	require.NotEqual(t, common.Hash{}, finalHash, "Final milestone hash should not be empty")
+}
+
+func TestForkCorrectness(t *testing.T) {
+	// Note that max fork correctness check limit is set to 10 blocks for tests
+	db := rawdb.NewMemoryDatabase()
+	s := NewMockService(db)
+	chainA := createMockChain(1, 20, common.Hash{}) // A1->A2...A19->A20
+	for _, header := range chainA {
+		rawdb.WriteHeader(db, header)
+	}
+
+	// Note: The fork correctness check returns true if it doesn't have enough info
+	// to determine the correctness or if there's any error. The tests below apart
+	// from checking if the result is expected or not also checks the helper variables
+	// like the last known block and the validation cache to ensure a particular code
+	// path is taken.
+
+	t.Run("nil first block", func(t *testing.T) {
+		res := s.checkForkCorrectness(nil)
+		require.Equal(t, true, res, "expected chain to be valid")
+	})
+
+	t.Run("no milestone or checkpoint exists", func(t *testing.T) {
+		res := s.checkForkCorrectness(chainA)
+		require.Equal(t, true, res, "expected chain to be valid")
+	})
+
+	t.Run("long fork: only checkpoint exists", func(t *testing.T) {
+		// Whitelist block 5 as checkpoint
+		s.ProcessCheckpoint(chainA[5].Number.Uint64(), chainA[5].Hash())
+
+		res := s.checkForkCorrectness(chainA[16:]) // 11 blocks ahead of last checkpoint
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+	})
+
+	t.Run("long fork: more recent checkpoint than milestone", func(t *testing.T) {
+		// Whitelist block 4 as milestone
+		s.ProcessMilestone(chainA[4].Number.Uint64(), chainA[4].Hash())
+
+		res := s.checkForkCorrectness(chainA[16:]) // 12 blocks ahead of last milestone
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+	})
+
+	t.Run("long fork: only milestone exists", func(t *testing.T) {
+		// Purge checkpoint
+		s.checkpointService.Purge()
+
+		res := s.checkForkCorrectness(chainA[16:]) // 12 blocks ahead of last milestone
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, uint64(0), s.lastValidForkBlock, "expected last known valid block to be 0")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+	})
+
+	t.Run("long fork: both milestone and checkpoint exist but last known block is recent", func(t *testing.T) {
+		s.lastValidForkBlock = 6 // 1 block ahead of last checkpoint
+
+		res := s.checkForkCorrectness(chainA[17:]) // 11 blocks ahead of last known block
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+	})
+
+	t.Run("long fork: no milestone or checkpoint exists, only last known block exists", func(t *testing.T) {
+		s.checkpointService.Purge()
+		s.milestoneService.Purge()
+
+		res := s.checkForkCorrectness(chainA[17:]) // 11 blocks ahead of last known block
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+		s.lastValidForkBlock = 0
+	})
+
+	// Create a mock chain linking back to last block
+	chain1 := createMockChain(21, 22, chainA[19].Hash()) // A21->A22 (extends A20)
+	for _, header := range chain1 {
+		rawdb.WriteHeader(db, header)
+	}
+
+	t.Run("incoming chain ahead of last whitelisted entry", func(t *testing.T) {
+		// Whitelist last block of the chain as milestone
+		s.ProcessMilestone(chainA[19].Number.Uint64(), chainA[19].Hash())
+
+		res := s.checkForkCorrectness(chain1)
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, chain1[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updated")
+		require.Equal(t, 2, len(s.forkValidationCache), "expected two entries in cache")
+		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry")
+		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry")
+	})
+
+	// Extend the chain further
+	chain2 := createMockChain(23, 24, chain1[1].Hash()) // A23->A24 (extends A22)
+	for _, header := range chain2 {
+		rawdb.WriteHeader(db, header)
+	}
+
+	t.Run("incoming chain further ahead of last chain", func(t *testing.T) {
+		res := s.checkForkCorrectness(chain2)
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updated")
+		require.Equal(t, 4, len(s.forkValidationCache), "expected four entries in cache") // block 21, 22, 23, 24 should be present in cache
+		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
+		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry: block 22")
+		require.Equal(t, true, s.forkValidationCache[chain2[0].Hash()], "expected cache to have valid entry: block 23")
+		require.Equal(t, true, s.forkValidationCache[chain2[1].Hash()], "expected cache to have valid entry: block 24")
+	})
+
+	// Extend the chain further
+	chain3 := createMockChain(25, 26, chain2[1].Hash()) // A25->A26 (extends A24)
+	for _, header := range chain3 {
+		rawdb.WriteHeader(db, header)
+	}
+
+	t.Run("missing header in database, missing in cache", func(t *testing.T) {
+		// Explicitly delete the parent block i.e. 24 from db and cache
+		rawdb.DeleteHeader(db, chain2[1].Hash(), chain2[1].Number.Uint64())
+		delete(s.forkValidationCache, chain2[1].Hash())
+
+		res := s.checkForkCorrectness(chain3)
+		require.Equal(t, true, res, "expected chain to be valid due to missing data")
+
+		// The last valid fork block shouldn't be updated as we couldn't verify the chain
+		// due to missing header. The cache except for the explicit deletion should be intact.
+		require.Equal(t, chain2[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
+		require.Equal(t, 3, len(s.forkValidationCache), "expected three entries in cache") // block 21, 22, 23 should be present in cache
+		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
+		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry: block 22")
+		require.Equal(t, true, s.forkValidationCache[chain2[0].Hash()], "expected cache to have valid entry: block 23")
+
+		// Write the deleted header back to db and cache
+		rawdb.WriteHeader(db, chain2[1])
+		s.forkValidationCache[chain2[1].Hash()] = true
+	})
+
+	t.Run("missing entry in database, present in cache", func(t *testing.T) {
+		// Explicitly delete the parent block i.e. 24 only from db this time
+		rawdb.DeleteHeader(db, chain2[1].Hash(), chain2[1].Number.Uint64())
+
+		// The fork should be valid as block 24 is present in cache (even though header is not available)
+		res := s.checkForkCorrectness(chain3)
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be updates") // block 26
+
+		require.Equal(t, 6, len(s.forkValidationCache), "expected six entries in cache") // block 21, 22, 23, 24, 25, 26 should be present in cache
+		require.Equal(t, true, s.forkValidationCache[chain1[0].Hash()], "expected cache to have valid entry: block 21")
+		require.Equal(t, true, s.forkValidationCache[chain1[1].Hash()], "expected cache to have valid entry: block 22")
+		require.Equal(t, true, s.forkValidationCache[chain2[0].Hash()], "expected cache to have valid entry: block 23")
+		require.Equal(t, true, s.forkValidationCache[chain2[1].Hash()], "expected cache to have valid entry: block 24")
+		require.Equal(t, true, s.forkValidationCache[chain3[0].Hash()], "expected cache to have valid entry: block 25")
+		require.Equal(t, true, s.forkValidationCache[chain3[1].Hash()], "expected cache to have valid entry: block 26")
+
+		// Write the deleted header back to db
+		rawdb.WriteHeader(db, chain2[1])
+	})
+
+	t.Run("cache clearance on new milestone", func(t *testing.T) {
+		s.ProcessMilestone(chain3[1].Number.Uint64(), chain3[1].Hash())
+		require.Equal(t, 0, len(s.forkValidationCache), "expected cache to be cleared on new milestone")
+	})
+
+	t.Run("past chain before last milestone", func(t *testing.T) {
+		res := s.checkForkCorrectness(chain3[:1])
+		require.Equal(t, true, res, "expected chain to be valid")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+	})
+
+	// Outage scenario: Currently, block 26, which is the last milestone has been whitelisted. The
+	// database also has the same entry. This case tries to add a conflicting header entry of a
+	// different fork for the last whitelisted block.
+	//	  A25 --------> A26 (m)   ---> A27
+	//			  \
+	//			   \--> A26' (db) ---> A27'
+	//
+	// A26 (m) is the milestone entry. Currently, it matches with the database entry but we'll try
+	// to explicitly change the database entry to A26' which belongs to a different fork. All the
+	// chains on top of A26' should be rejected.
+	chain4 := createMockChain(26, 27, chain3[0].Hash()) // A25 -> A26' -> A27'
+	// Firstly, delete the old header
+	rawdb.DeleteHeader(db, chain3[1].Hash(), chain3[1].Number.Uint64())
+	for _, header := range chain4 {
+		rawdb.WriteHeader(db, header)
+	}
+	t.Run("outage scenario: conflicting fork in database and whitelisted entry", func(t *testing.T) {
+		res := s.checkForkCorrectness(chain4[1:])
+		require.Equal(t, false, res, "expected chain to be invalid due to mismatch with milestone")
+		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
+		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
+	})
 }

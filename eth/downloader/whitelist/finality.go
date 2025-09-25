@@ -34,11 +34,9 @@ type finalityService interface {
 func (f *finality[T]) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
 	// We want to validate the chain by comparing the last finalized block
 	f.RLock()
-
 	doExist := f.doExist
 	number := f.Number
 	hash := f.Hash
-
 	f.RUnlock()
 
 	return isValidPeer(fetchHeadersByNumber, doExist, number, hash)
@@ -81,8 +79,8 @@ func (f *finality[T]) Process(block uint64, hash common.Hash) {
 	}
 }
 
-// Get returns the existing whitelisted
-// entries of checkpoint of the form (doExist,block number,block hash.)
+// Get returns the existing whitelisted entries of the form
+// (doExist, block number, block hash).
 func (f *finality[T]) Get() (bool, uint64, common.Hash) {
 	f.RLock()
 	defer f.RUnlock()
@@ -93,14 +91,14 @@ func (f *finality[T]) Get() (bool, uint64, common.Hash) {
 
 	block, hash, err := rawdb.ReadFinality[T](f.db)
 	if err != nil {
-		fmt.Println("Error while reading whitelisted state from Db", "err", err)
+		log.Debug("Unable to find whitelist entry from db", "err", err)
 		return false, f.Number, f.Hash
 	}
 
 	return true, block, hash
 }
 
-// Purge purges the whitlisted checkpoint
+// Purge removes the whitelisted checkpoint
 func (f *finality[T]) Purge() {
 	f.Lock()
 	defer f.Unlock()

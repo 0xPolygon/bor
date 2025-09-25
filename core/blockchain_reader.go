@@ -541,10 +541,14 @@ type BorStateSyncer interface {
 
 // SetStateSync set sync data in state_data
 func (bc *BlockChain) SetStateSync(stateData []*types.StateSyncData) {
+	bc.stateSyncMu.Lock()
+	defer bc.stateSyncMu.Unlock()
 	bc.stateSyncData = stateData
 }
 
 func (bc *BlockChain) GetStateSync() []*types.StateSyncData {
+	bc.stateSyncMu.RLock()
+	defer bc.stateSyncMu.RUnlock()
 	return bc.stateSyncData
 }
 

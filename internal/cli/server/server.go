@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -29,7 +31,9 @@ import (
 	"github.com/ethereum/go-ethereum/metrics/influxdb"
 	"github.com/ethereum/go-ethereum/metrics/prometheus"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/hellofresh/health-go/v5"
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"go.opentelemetry.io/otel"
@@ -60,6 +64,9 @@ type Server struct {
 
 	// tracerAPI to trace block executions
 	tracerAPI *tracers.API
+
+	// Bor health service.
+	healthService *health.Health
 }
 
 type serverOption func(srv *Server, config *Config) error
@@ -292,6 +299,9 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 	// Set the node instance
 	srv.node = stack
 
+	// Register the health service endpoint.
+	srv.registerHealthServiceEndpoint()
+
 	// start the node
 	if err := srv.node.Start(); err != nil {
 		return nil, err
@@ -507,4 +517,152 @@ func (s *Server) GetLatestBlockNumber() *big.Int {
 
 func (s *Server) GetGrpcAddr() string {
 	return s.config.GRPC.Addr[1:]
+}
+
+// setupHealthService initializes the health service for Bor.
+func (s *Server) setupHealthService() error {
+	h, err := health.New(
+		health.WithComponent(health.Component{
+			Name:    "bor",
+			Version: params.VersionWithMeta,
+		}),
+		health.WithSystemInfo(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create health service: %w", err)
+	}
+	s.healthService = h
+	return nil
+}
+
+// getBorInfo returns Bor-specific information.
+func (s *Server) getBorInfo() map[string]any {
+	borInfo := map[string]any{}
+
+	if s.config != nil {
+		borInfo["chain_id"] = s.config.chain.Genesis.Config.ChainID.Uint64()
+	}
+
+	if s.backend != nil {
+		currentBlock := s.backend.BlockChain().CurrentBlock()
+		borInfo["latest_block_hash"] = currentBlock.Hash().Hex()
+		borInfo["latest_block_number"] = currentBlock.Number.Uint64()
+		borInfo["latest_block_timestamp"] = time.Unix(int64(currentBlock.Time), 0).UTC().Format(time.RFC3339Nano)
+		borInfo["peer_count"] = s.backend.PeerCount()
+		borInfo["sync_mode"] = s.backend.SyncMode()
+
+		if s.backend.Synced() {
+			borInfo["catching_up"] = "false"
+		} else {
+			borInfo["catching_up"] = "true"
+		}
+	}
+
+	return borInfo
+}
+
+func (s *Server) performHealthChecks(healthResponse map[string]any) HealthStatus {
+	overallStatus := StatusOK
+	var statusMessages []string
+
+	if s.config == nil || s.config.Health == nil {
+		return HealthStatus{
+			Level:   StatusOK,
+			Code:    StatusOK.Code(),
+			Message: "",
+		}
+	}
+
+	// Goroutines check.
+	if system, ok := healthResponse["system"].(map[string]any); ok && system != nil {
+		if goroutinesCount, ok := system["goroutines_count"].(float64); ok {
+			// Check critical threshold first.
+			if s.config.Health.MaxGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.MaxGoRoutineThreshold {
+				overallStatus = StatusCritical
+				statusMessages = append(statusMessages, "number of goroutines above the maximum threshold")
+			} else if s.config.Health.WarnGoRoutineThreshold != 0 && int(goroutinesCount) > s.config.Health.WarnGoRoutineThreshold {
+				// Only set to warn if we haven't already hit critical.
+				if overallStatus != StatusCritical {
+					overallStatus = StatusWarn
+				}
+				statusMessages = append(statusMessages, "number of goroutines above the warning threshold")
+			}
+		}
+	}
+
+	// Peer check - only perform if node_info exists and has peer_count.
+	if borInfo, ok := healthResponse["node_info"].(map[string]any); ok && borInfo != nil {
+		if peerCount, ok := borInfo["peer_count"].(int); ok {
+			// Check critical threshold first.
+			if s.config.Health.MinPeerThreshold != 0 && peerCount < s.config.Health.MinPeerThreshold {
+				overallStatus = StatusCritical
+				statusMessages = append(statusMessages, "number of peers below the minimum threshold")
+			} else if s.config.Health.WarnPeerThreshold != 0 && peerCount < s.config.Health.WarnPeerThreshold {
+				// Only set to warn if we haven't already hit critical.
+				if overallStatus != StatusCritical {
+					overallStatus = StatusWarn
+				}
+				statusMessages = append(statusMessages, "number of peers below the warning threshold")
+			}
+		}
+	}
+
+	return HealthStatus{
+		Level:   overallStatus,
+		Code:    overallStatus.Code(),
+		Message: strings.Join(statusMessages, ", "),
+	}
+}
+
+// customHealthServiceHandler wraps the health-go handler and adds Bor-specific information on top of it.
+func (s *Server) customHealthServiceHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &ResponseRecorder{
+			ResponseWriter: w,
+			body:           make([]byte, 0),
+		}
+
+		s.healthService.Handler().ServeHTTP(recorder, r)
+
+		var healthResponse map[string]any
+		if err := json.Unmarshal(recorder.body, &healthResponse); err != nil {
+			log.Error("Failed to unmarshal response: %v\n", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(recorder.statusCode)
+			if _, writeErr := w.Write(recorder.body); writeErr != nil {
+				log.Error("Failed to write fallback response: %v\n", writeErr)
+			}
+			return
+		}
+
+		// Remove the "status" field from health-go as it's always "OK" and not useful.
+		delete(healthResponse, "status")
+
+		healthResponse["node_info"] = s.getBorInfo()
+
+		status := s.performHealthChecks(healthResponse)
+		healthResponse["status"] = status
+
+		healthResponse["error"] = false
+		healthResponse["error_message"] = ""
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(recorder.statusCode)
+
+		if err := json.NewEncoder(w).Encode(healthResponse); err != nil {
+			log.Error("Failed to encode enhanced health response", "error", err)
+			if _, writeErr := w.Write(recorder.body); writeErr != nil {
+				log.Error("Failed to write fallback response: %v\n", writeErr)
+			}
+		}
+	})
+}
+
+// registerHealthServiceEndpoint registers the /health service endpoint.
+func (s *Server) registerHealthServiceEndpoint() {
+	if err := s.setupHealthService(); err != nil {
+		log.Error("Failed to setup health service", "error", err)
+		return
+	}
+	s.node.RegisterHandler("Health service endpoint", "/health", s.customHealthServiceHandler())
 }
