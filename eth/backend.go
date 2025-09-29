@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
@@ -164,20 +165,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 
-	// Here we determine genesis hash and active ChainConfig.
-	// We need these to figure out the consensus parameters and to set up history pruning.
-	chainConfig, _, err := core.LoadChainConfig(chainDb, config.Genesis)
-	if err != nil {
-		return nil, err
-	}
-
-	/*
-		engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
-		if err != nil {
-			return nil, err
-		}
-	*/
-
 	// Assemble the Ethereum object.
 	eth := &Ethereum{
 		config:          config,
@@ -204,7 +191,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	gpoParams := config.GPO
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(chainConfig, config, chainDb, blockChainAPI)
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -265,7 +252,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		vmConfig.Tracer = t
 	}
 
-	checker := whitelist.NewService(chainDb)
+	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
@@ -821,6 +808,11 @@ func (s *Ethereum) fetchAndHandleMilestone(ctx context.Context, ethHandler *ethH
 func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *ethHandler, bor *bor.Bor) error {
 	milestoneEvents := bor.HeimdallWSClient.SubscribeMilestoneEvents(ctx)
 
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var milestone *milestone.Milestone
+
 	for {
 		select {
 		case m, ok := <-milestoneEvents:
@@ -828,7 +820,20 @@ func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *
 				return nil
 			}
 
+			milestone = m
+
 			err := ethHandler.handleMilestone(ctx, s, m, newBorVerifier())
+			if err != nil {
+				log.Error("error handling milestone ws event", "err", err)
+			}
+
+		// Re-process the milestone periodically in case a fork is imported right after the previous milestone
+		case <-ticker.C:
+			if milestone == nil {
+				continue
+			}
+
+			err := ethHandler.handleMilestone(ctx, s, milestone, newBorVerifier())
 			if err != nil {
 				log.Error("error handling milestone ws event", "err", err)
 			}

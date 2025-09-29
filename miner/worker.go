@@ -1305,13 +1305,27 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 
 		timestamp = parent.Time + 1
 	}
+
+	var coinbase common.Address
+	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
+	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(newBlockNumber) {
+		coinbase = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(newBlockNumber.Uint64()))
+
+		// In case of coinbase is not set post Rio, use the default coinbase
+		if coinbase == (common.Address{}) {
+			coinbase = genParams.coinbase
+		}
+	} else {
+		coinbase = genParams.coinbase
+	}
+
 	// Construct the sealing block header.
 	header := &types.Header{
 		ParentHash: parent.Hash(),
-		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Number:     newBlockNumber,
 		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
 		Time:       timestamp,
-		Coinbase:   genParams.coinbase,
+		Coinbase:   coinbase,
 	}
 	// Set the extra field.
 	if len(w.extra) != 0 {
@@ -1348,7 +1362,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
-	env, err := w.makeEnv(parent, header, genParams.coinbase, witness)
+	env, err := w.makeEnv(parent, header, coinbase, witness)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err

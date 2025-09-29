@@ -35,7 +35,7 @@ type SpanStore struct {
 
 	chainId           string
 	lastUsedSpan      atomic.Pointer[borTypes.Span]
-	latestKnownSpanId uint64
+	latestKnownSpanId atomic.Uint64
 	heimdallStatus    atomic.Pointer[ctypes.SyncInfo]
 
 	// cancel function to stop the background routine
@@ -109,6 +109,7 @@ func (s *SpanStore) updateHeimdallStatus(ctx context.Context) (err error) {
 	} else {
 		syncInfo, err = s.heimdallClient.FetchStatus(ctx)
 		if err != nil {
+			s.heimdallStatus.Store(nil)
 			return err
 		}
 	}
@@ -215,6 +216,11 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 			log.Warn("Unable to fetch span from heimdall", "id", spanId, "err", err)
 			return nil, err
 		}
+
+		if len(currentSpan.SelectedProducers) == 0 {
+			log.Warn("Span from Heimdall has empty SelectedProducers", "spanId", spanId, "selectedProducers", currentSpan.SelectedProducers, "validators", currentSpan.ValidatorSet.Validators, "startBlock", currentSpan.StartBlock, "endBlock", currentSpan.EndBlock)
+			return nil, fmt.Errorf("span %d has empty SelectedProducers, possibly incomplete", spanId)
+		}
 	}
 
 	if currentSpan == nil {
@@ -222,8 +228,8 @@ func (s *SpanStore) spanById(ctx context.Context, spanId uint64) (*borTypes.Span
 	}
 
 	s.store.Add(spanId, currentSpan)
-	if currentSpan.Id > s.latestKnownSpanId {
-		s.latestKnownSpanId = currentSpan.Id
+	if currentSpan.Id > s.latestKnownSpanId.Load() {
+		s.latestKnownSpanId.Store(currentSpan.Id)
 	}
 
 	return currentSpan, nil
@@ -241,7 +247,7 @@ func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (
 	// that we still check if the block number lies in the range of span before returning it.
 	estimatedSpanId := s.estimateSpanId(blockNumber)
 	defer func() {
-		if res != nil && err == nil {
+		if res != nil && len(res.SelectedProducers) > 0 && err == nil {
 			s.lastUsedSpan.Store(res)
 		}
 	}()

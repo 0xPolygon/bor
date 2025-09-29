@@ -95,8 +95,8 @@ func newTesterWithNotification(t *testing.T, success func()) *downloadTester {
 		peers:   make(map[string]*downloadTesterPeer),
 	}
 
-	//nolint:staticcheck
-	tester.downloader = New(db, new(event.TypeMux), tester.chain, nil, tester.dropPeer, success, whitelist.NewService(db), 0, false)
+	//nolint: staticcheck
+	tester.downloader = New(db, new(event.TypeMux), tester.chain, nil, tester.dropPeer, success, whitelist.NewService(db, false, 0), 0, false)
 
 	return tester
 }

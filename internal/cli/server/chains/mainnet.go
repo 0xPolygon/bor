@@ -36,6 +36,7 @@ var mainnetBor = &Chain{
 				IndoreBlock:    big.NewInt(44934656),
 				AhmedabadBlock: big.NewInt(62278656),
 				BhilaiBlock:    big.NewInt(73440256),
+				RioBlock:       big.NewInt(77414656),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},
@@ -73,6 +74,10 @@ var mainnetBor = &Chain{
 				BurntContract: map[string]string{
 					"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
 					"50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",
+				},
+				Coinbase: map[string]string{
+					"0":        "0x0000000000000000000000000000000000000000",
+					"77414656": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 				},
 				BlockAlloc: map[string]interface{}{
 					// write as interface since that is how it is decoded in genesis

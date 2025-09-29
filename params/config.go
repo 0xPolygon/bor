@@ -226,6 +226,9 @@ var (
 			BackupMultiplier: map[string]uint64{
 				"0": 2,
 			},
+			Coinbase: map[string]string{
+				"0": "0x000000000000000000000000000000000000ba5e",
+			},
 			ValidatorContract:     "0x0000000000000000000000000000000000001000",
 			StateReceiverContract: "0x0000000000000000000000000000000000001001",
 			BurntContract: map[string]string{
@@ -287,6 +290,10 @@ var (
 				"22640000": "0x70bcA57F4579f58670aB2d18Ef16e02C17553C38",
 				"41874000": "0x617b94CCCC2511808A3C9478ebb96f455CF167aA",
 			},
+			Coinbase: map[string]string{
+				"0":        "0x0000000000000000000000000000000000000000",
+				"49439808": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
 				"22244000": map[string]interface{}{
@@ -330,6 +337,7 @@ var (
 			IndoreBlock:    big.NewInt(73100),
 			AhmedabadBlock: big.NewInt(11865856),
 			BhilaiBlock:    big.NewInt(22765056),
+			RioBlock:       big.NewInt(26272256),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -354,6 +362,11 @@ var (
 				"0":     "0x000000000000000000000000000000000000dead",
 				"73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9",
 			},
+			Coinbase: map[string]string{
+				"0":        "0x0000000000000000000000000000000000000000",
+				"26272256": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+			},
+			SkipValidatorByteCheck: []uint64{26160367, 26161087, 26171567, 26173743, 26175647},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
 				"11865856": map[string]interface{}{
@@ -404,6 +417,7 @@ var (
 			IndoreBlock:    big.NewInt(44934656),
 			AhmedabadBlock: big.NewInt(62278656),
 			BhilaiBlock:    big.NewInt(73440256),
+			RioBlock:       big.NewInt(77414656),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -442,6 +456,10 @@ var (
 			BurntContract: map[string]string{
 				"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
 				"50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",
+			},
+			Coinbase: map[string]string{
+				"0":        "0x0000000000000000000000000000000000000000",
+				"77414656": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
@@ -852,6 +870,8 @@ type BorConfig struct {
 	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
 	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
+	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -958,6 +978,14 @@ func borKeyValueConfigHelper[T uint64 | string](field map[string]T, number uint6
 
 func (c *BorConfig) CalculateBurntContract(number uint64) string {
 	return borKeyValueConfigHelper(c.BurntContract, number)
+}
+
+func (c *BorConfig) CalculateCoinbase(number uint64) string {
+	if c.Coinbase != nil {
+		return borKeyValueConfigHelper(c.Coinbase, number)
+	} else {
+		return common.Address{}.Hex()
+	}
 }
 
 func (c *BorConfig) GetOverrideStateSyncRecord(block uint64) (int, bool) {

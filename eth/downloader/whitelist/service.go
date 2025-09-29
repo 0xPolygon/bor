@@ -3,11 +3,13 @@ package whitelist
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
@@ -19,24 +21,54 @@ var (
 	ErrNoRemoteCheckpoint = errors.New("remote peer doesn't have a checkpoint")
 )
 
+var (
+	// DefaultMaxForkCorrectnessLimit defines the default max number of blocks to iterate
+	// backwards in db for checking fork correctness instead of blindly accepting the chain.
+	DefaultMaxForkCorrectnessLimit = uint64(256)
+)
+
 type Service struct {
+	db ethdb.Database
 	checkpointService
 	milestoneService
+
+	disableBlindForkValidation bool   // Flag to disable additional fork validation and accept blind forks without tracing back to last whitelisted entry
+	maxForkCorrectnessLimit    uint64 // Maximum number of blocks to iterate backwards for fork correctness check
+	lastValidForkBlock         uint64 // Last known valid block for fork correctness check
+	forkValidationCache        map[common.Hash]bool
+	forkValidationCacheMu      sync.RWMutex
 }
 
-func NewService(db ethdb.Database) *Service {
+func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindForkValidationLimit uint64) *Service {
+	if maxBlindForkValidationLimit == 0 {
+		maxBlindForkValidationLimit = DefaultMaxForkCorrectnessLimit
+		log.Info("Invalid max blind fork validation limit, falling back to default", "limit", DefaultMaxForkCorrectnessLimit)
+	}
+
+	// Avoid allocating large map if the limit set by user is too high (allow 2x of the default limit)
+	var forkValidationCacheSize = maxBlindForkValidationLimit
+	if forkValidationCacheSize > 2*DefaultMaxForkCorrectnessLimit {
+		forkValidationCacheSize = 2 * DefaultMaxForkCorrectnessLimit
+	}
+
+	if disableBlindForkValidation {
+		forkValidationCacheSize = 0
+		log.Info("Disabling blind fork validation")
+	}
+
+	// Fetch last whitelisted checkpoint entry from db. Ignore in case of error or if
+	// the whitelisted entry has empty hash.
 	var checkpointDoExist = true
-
 	checkpointNumber, checkpointHash, err := rawdb.ReadFinality[*rawdb.Checkpoint](db)
-
-	if err != nil {
+	if err != nil || checkpointHash == (common.Hash{}) {
 		checkpointDoExist = false
 	}
 
+	// Fetch last whitelisted milestone entry from db. Ignore in case of error or if
+	// the whitelisted entry has empty hash.
 	var milestoneDoExist = true
-
 	milestoneNumber, milestoneHash, err := rawdb.ReadFinality[*rawdb.Milestone](db)
-	if err != nil {
+	if err != nil || milestoneHash == (common.Hash{}) {
 		milestoneDoExist = false
 	}
 
@@ -53,7 +85,8 @@ func NewService(db ethdb.Database) *Service {
 	}
 
 	return &Service{
-		&checkpoint{
+		db: db,
+		checkpointService: &checkpoint{
 			finality[*rawdb.Checkpoint]{
 				doExist:  checkpointDoExist,
 				Number:   checkpointNumber,
@@ -63,8 +96,7 @@ func NewService(db ethdb.Database) *Service {
 				name:     "checkpoint",
 			},
 		},
-
-		&milestone{
+		milestoneService: &milestone{
 			finality: finality[*rawdb.Milestone]{
 				doExist:  milestoneDoExist,
 				Number:   milestoneNumber,
@@ -83,12 +115,18 @@ func NewService(db ethdb.Database) *Service {
 			MaxCapacity:           10,
 			blockchain:            nil, // Will be set after blockchain creation
 		},
+		disableBlindForkValidation: disableBlindForkValidation,
+		maxForkCorrectnessLimit:    maxBlindForkValidationLimit,
+		lastValidForkBlock:         0,
+		forkValidationCache:        make(map[common.Hash]bool, forkValidationCacheSize),
 	}
 }
 
 // SetBlockchain sets the blockchain reference for the milestone service
 func (s *Service) SetBlockchain(blockchain ChainReader) {
 	if milestone, ok := s.milestoneService.(*milestone); ok {
+		milestone.finality.Lock()
+		defer milestone.finality.Unlock()
 		milestone.blockchain = blockchain
 	}
 }
@@ -127,10 +165,12 @@ func (s *Service) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
 
 func (s *Service) ProcessMilestone(endBlockNum uint64, endBlockHash common.Hash) {
 	s.milestoneService.Process(endBlockNum, endBlockHash)
+	s.resetForkValidationCache()
 }
 
 func (s *Service) ProcessCheckpoint(endBlockNum uint64, endBlockHash common.Hash) {
 	s.checkpointService.Process(endBlockNum, endBlockHash)
+	s.resetForkValidationCache()
 }
 
 func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Header) (bool, error) {
@@ -144,7 +184,134 @@ func (s *Service) IsValidChain(currentHeader *types.Header, chain []*types.Heade
 		return milestoneBool, err
 	}
 
-	return true, nil
+	if s.disableBlindForkValidation {
+		return true, nil
+	}
+
+	// At last, check for fork correctness
+	return s.checkForkCorrectness(chain), nil
+}
+
+// checkForkCorrectness checks if the chain being imported belongs to the correct fork
+// by iterating backwards until the last whitelisted milestone or checkpoint. This helps
+// in cases where the chain being imported doesn't overlap with any whitelisted entry and
+// we have to blindly accept it.
+func (s *Service) checkForkCorrectness(chain []*types.Header) bool {
+	if len(chain) == 0 {
+		return true
+	}
+	firstBlock := chain[0]
+	headerNumber := firstBlock.Number.Uint64()
+	lastHeaderNumber := chain[len(chain)-1].Number.Uint64()
+
+	// Recent most whitelisted entry
+	var (
+		number uint64
+		hash   common.Hash
+	)
+
+	// Fetch the latest whitelisted entry using both checkpoint and milestone
+	milestoneExists, milestoneNumber, milestoneHash := s.milestoneService.Get()
+	checkpointExists, checkpointNumber, checkpointHash := s.checkpointService.Get()
+	if !milestoneExists && !checkpointExists {
+		return true
+	}
+	if milestoneExists {
+		number = milestoneNumber
+		hash = milestoneHash
+	}
+	if checkpointExists {
+		// Only choose checkpoint if it's more recent than last milestone
+		if checkpointNumber > number {
+			number = checkpointNumber
+			hash = checkpointHash
+		}
+	}
+
+	var lastKnownValidBlock uint64 = number
+	if s.lastValidForkBlock > number {
+		lastKnownValidBlock = s.lastValidForkBlock
+	}
+
+	// Blind accept the chain if we've to iterate more than `maxForkCorrectnessLimit` blocks
+	if headerNumber > lastKnownValidBlock && headerNumber-lastKnownValidBlock > s.maxForkCorrectnessLimit {
+		log.Debug("Skipping fork correctness check as block is too far ahead", "block", headerNumber, "last whitelisted", number)
+		return true
+	}
+
+	// Track all blocks iterated for caching
+	var blocksChecked []common.Hash = make([]common.Hash, 0, s.maxForkCorrectnessLimit)
+	// Cache the incoming chain by default
+	for _, header := range chain {
+		blocksChecked = append(blocksChecked, header.Hash())
+	}
+
+	// Acquire lock over the cache
+	s.forkValidationCacheMu.Lock()
+	defer s.forkValidationCacheMu.Unlock()
+
+	// Only perform checks if first block being imported is ahead of last whitelisted entry. We can
+	// skip checking for fork correctness otherwise as chain would be already validated before.
+	if headerNumber > number {
+		parentNumber := headerNumber - 1
+		parentHash := firstBlock.ParentHash
+		for {
+			// Check against cache if this block has been already validated
+			if s.forkValidationCache[parentHash] {
+				// Cache suggests that this fork is already validated. Accept the fork
+				// and update the cache.
+				s.updateForkValidationCache(blocksChecked)
+				s.lastValidForkBlock = lastHeaderNumber
+				return true
+			}
+			// Fetch the parent block by number and hash
+			header := rawdb.ReadHeader(s.db, parentHash, parentNumber)
+			if header == nil {
+				// This shouldn't happen as the db should have all blocks before the first block
+				// Log the issue and accept blindly (falling back to previous behaviour instead of rejecting)
+				log.Warn("Missing parent block while checking fork correctness", "number", parentNumber, "hash", parentHash, "import block", headerNumber, "import hash", firstBlock.Hash())
+				return true
+			}
+
+			// Check if we're at the whitelisted block
+			if header.Number.Uint64() == number {
+				// Check if hash matches and return
+				res := header.Hash() == hash
+				if res {
+					// If valid, cache the blocks checked already to avoid re-checking
+					// them in next import.
+					s.updateForkValidationCache(blocksChecked)
+					s.lastValidForkBlock = lastHeaderNumber
+				} else {
+					log.Info("Rejecting invalid fork after validating against last whitelisted entry", "number", number, "expected", hash, "got", header.Hash())
+				}
+				return res
+			} else {
+				blocksChecked = append(blocksChecked, header.Hash())
+			}
+
+			// Header not reached yet, move to parent
+			parentHash = header.ParentHash
+			parentNumber--
+		}
+	}
+
+	return true
+}
+
+// updateForkValidationCache inserts all block hashes which have been
+// validated to the cache. Caller must hold the lock over the cache.
+func (s *Service) updateForkValidationCache(blocks []common.Hash) {
+	for _, hash := range blocks {
+		s.forkValidationCache[hash] = true
+	}
+}
+
+// resetForkValidationCache resets the cache when a new block is whitelisted.
+func (s *Service) resetForkValidationCache() {
+	s.forkValidationCacheMu.Lock()
+	clear(s.forkValidationCache)
+	s.forkValidationCacheMu.Unlock()
 }
 
 func (s *Service) GetMilestoneIDsList() []string {

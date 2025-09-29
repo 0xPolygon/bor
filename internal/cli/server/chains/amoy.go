@@ -35,6 +35,7 @@ var amoyTestnet = &Chain{
 				IndoreBlock:    big.NewInt(73100),
 				AhmedabadBlock: big.NewInt(11865856),
 				BhilaiBlock:    big.NewInt(22765056),
+				RioBlock:       big.NewInt(26272256),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,
 				},
@@ -59,6 +60,11 @@ var amoyTestnet = &Chain{
 					"0":     "0x000000000000000000000000000000000000dead",
 					"73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9",
 				},
+				Coinbase: map[string]string{
+					"0":        "0x0000000000000000000000000000000000000000",
+					"26272256": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+				},
+				SkipValidatorByteCheck: []uint64{26160367, 26161087, 26171567, 26173743, 26175647},
 				BlockAlloc: map[string]interface{}{
 					"11865856": map[string]interface{}{
 						// StateReceiver contract

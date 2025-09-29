@@ -206,6 +206,16 @@ func Commands() map[string]MarkDownCommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"purge-whitelisted-entries": func() (MarkDownCommand, error) {
+			return &PurgeWhitelistedEntriesCommand{
+				Meta: meta,
+			}, nil
+		},
+		"backfill-statesync-txs": func() (MarkDownCommand, error) {
+			return &BackFillStateSyncTxsEntriesCommand{
+				Meta: meta,
+			}, nil
+		},
 	}
 }
 
