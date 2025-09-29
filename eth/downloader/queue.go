@@ -76,7 +76,7 @@ type fetchResult struct {
 	Witness      *stateless.Witness
 }
 
-func newFetchResult(header *types.Header, syncMode SyncMode) *fetchResult {
+func newFetchResult(header *types.Header, syncMode SyncMode, borCfg *params.BorConfig) *fetchResult {
 	item := &fetchResult{
 		Header: header,
 	}
@@ -86,7 +86,11 @@ func newFetchResult(header *types.Header, syncMode SyncMode) *fetchResult {
 		item.Withdrawals = make(types.Withdrawals, 0)
 	}
 
-	if syncMode == SnapSync && !header.EmptyReceipts() {
+	fetchReceipts := true
+	if header.EmptyReceipts() && !isSprintEndBlock(borCfg, header.Number.Uint64()) {
+		fetchReceipts = false
+	}
+	if syncMode == SnapSync && fetchReceipts {
 		item.pending.Store(item.pending.Load() | (1 << receiptType))
 	}
 
@@ -144,6 +148,8 @@ func (f *fetchResult) Done(kind uint) bool {
 type queue struct {
 	mode SyncMode // Synchronisation mode to decide on the block parts to schedule for fetching
 
+	borConfig *params.BorConfig
+
 	// Headers are "special", they download in batches, supported by a skeleton chain
 	headerHead      common.Hash                    // Hash of the last queued header to verify order
 	headerTaskPool  map[uint64]*types.Header       // Pending header retrieval tasks, mapping starting indexes to skeleton headers
@@ -186,9 +192,10 @@ type queue struct {
 }
 
 // newQueue creates a new download queue for scheduling block retrieval.
-func newQueue(blockCacheLimit int, thresholdInitialSize int) *queue {
+func newQueue(blockCacheLimit int, thresholdInitialSize int, borCfg *params.BorConfig) *queue {
 	lock := new(sync.RWMutex)
 	q := &queue{
+		borConfig:            borCfg,
 		headerContCh:         make(chan bool, 1),
 		blockTaskQueue:       prque.New[int64, *types.Header](nil),
 		blockWakeCh:          make(chan bool, 1),
@@ -359,6 +366,16 @@ func (q *queue) RetrieveHeaders() ([]*types.Header, []common.Hash, int) {
 	return headers, hashes, proced
 }
 
+func isSprintEndBlock(borCfg *params.BorConfig, number uint64) bool {
+	if borCfg == nil {
+		return false
+	}
+	if number%borCfg.CalculateSprint(number) == 0 {
+		return true
+	}
+	return false
+}
+
 // Schedule adds a set of headers for the download queue for scheduling, returning
 // the new headers encountered.
 func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uint64) []*types.Header {
@@ -389,7 +406,11 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			log.Warn("Header already scheduled for block fetch", "number", header.Number, "hash", hash)
 		}
 		// Queue for receipt retrieval
-		if q.mode == SnapSync && !header.EmptyReceipts() {
+		fetchReceipts := true
+		if header.EmptyReceipts() && !isSprintEndBlock(q.borConfig, header.Number.Uint64()) {
+			fetchReceipts = false
+		}
+		if q.mode == SnapSync && fetchReceipts {
 			if _, ok := q.receiptTaskPool[hash]; !ok {
 				q.receiptTaskPool[hash] = header
 				q.receiptTaskQueue.Push(header, -int64(header.Number.Uint64()))
@@ -610,7 +631,7 @@ func (q *queue) reserveHeaders(p *peerConnection, count int, taskPool map[common
 		// we can ask the resultcache if this header is within the
 		// "prioritized" segment of blocks. If it is not, we need to throttle
 
-		stale, throttle, item, err := q.resultCache.AddFetch(header, q.mode)
+		stale, throttle, item, err := q.resultCache.AddFetch(header, q.mode, q.borConfig)
 		if stale {
 			// Don't put back in the task queue, this item has already been
 			// delivered upstream

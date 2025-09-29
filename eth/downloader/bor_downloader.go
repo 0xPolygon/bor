@@ -256,7 +256,7 @@ func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, lightchai
 	dl := &Downloader{
 		stateDB:                 stateDb,
 		mux:                     mux,
-		queue:                   newQueue(blockCacheMaxItems, blockCacheInitialItems),
+		queue:                   newQueue(blockCacheMaxItems, blockCacheInitialItems, chain.GetChainConfig().Bor),
 		peers:                   newPeerSet(),
 		blockchain:              chain,
 		lightchain:              lightchain,
