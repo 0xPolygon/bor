@@ -160,20 +160,40 @@ func increaseKey(key []byte) []byte {
 //
 // Note, this method assumes the storage space with prefix `StateHistoryIndexPrefix`
 // is exclusively occupied by the history indexing data!
+//
+// Note, as bor receipts and tx lookup are also stored with prefix "matic-bor", it needs
+// to be excluded from range deletion.
 func DeleteStateHistoryIndex(db ethdb.KeyValueRangeDeleter) {
-	start := StateHistoryIndexPrefix
-	limit := increaseKey(bytes.Clone(StateHistoryIndexPrefix))
+	// We split the delete range queries into 2 parts to ensure that bor receipts related data isn't deleted.
+	// 1. `StateHistoryIndexPrefix` (i.e. "m") to "matic-bor" key (exclusive)
+	// 2. Immediate next key after "matic-bor" to next key after `StateHistoryIndexPrefix` (i.e. "n")
+	start1 := StateHistoryIndexPrefix
+	limit1 := []byte("matic-bor")
+	start2 := increaseKey(bytes.Clone(limit1))
+	limit2 := increaseKey(bytes.Clone(StateHistoryIndexPrefix))
 
 	// Try to remove the data in the range by a loop, as the leveldb
 	// doesn't support the native range deletion.
 	for {
-		err := db.DeleteRange(start, limit)
+		err := db.DeleteRange(start1, limit1)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, ethdb.ErrTooManyKeys) {
+			continue
+		}
+		log.Crit("Failed to delete history index range 1", "err", err)
+	}
+
+	// Try removing for second range
+	for {
+		err := db.DeleteRange(start2, limit2)
 		if err == nil {
 			return
 		}
 		if errors.Is(err, ethdb.ErrTooManyKeys) {
 			continue
 		}
-		log.Crit("Failed to delete history index range", "err", err)
+		log.Crit("Failed to delete history index range 2", "err", err)
 	}
 }
