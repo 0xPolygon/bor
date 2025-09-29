@@ -1851,10 +1851,14 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		for i, block := range blockChain {
 			if bc.txIndexer == nil || bc.txIndexer.limit == 0 || ancientLimit <= bc.txIndexer.limit || block.NumberU64() >= ancientLimit-bc.txIndexer.limit {
 				rawdb.WriteTxLookupEntriesByBlock(batch, block)
-				rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+				if len(borReceipts[i]) > 0 {
+					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+				}
 			} else if rawdb.ReadTxIndexTail(bc.db) != nil {
 				rawdb.WriteTxLookupEntriesByBlock(batch, block)
-				rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+				if len(borReceipts[i]) > 0 {
+					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+				}
 			}
 
 			stats.processed++

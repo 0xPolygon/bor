@@ -920,8 +920,11 @@ func writeAncientBlock(op ethdb.AncientWriteOp, block *types.Block, header *type
 		return fmt.Errorf("can't append block %d receipts: %v", num, err)
 	}
 
-	if err := op.Append(freezerBorReceiptTable, num, borReceipt); err != nil {
-		return fmt.Errorf("can't append block %d bor receipts: %v", num, err)
+	// Only write non empty receipts
+	if len(borReceipt) > 0 {
+		if err := op.Append(freezerBorReceiptTable, num, borReceipt); err != nil {
+			return fmt.Errorf("can't append block %d bor receipts: %v", num, err)
+		}
 	}
 
 	if err := op.Append(ChainFreezerDifficultyTable, num, td); err != nil {
