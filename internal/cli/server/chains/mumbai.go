@@ -64,6 +64,10 @@ var mumbaiTestnet = &Chain{
 					"22640000": "0x70bcA57F4579f58670aB2d18Ef16e02C17553C38",
 					"41874000": "0x617b94CCCC2511808A3C9478ebb96f455CF167aA",
 				},
+				Coinbase: map[string]string{
+					"0":        "0x0000000000000000000000000000000000000000",
+					"50000000": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+				},
 				BlockAlloc: map[string]interface{}{
 					// write as interface since that is how it is decoded in genesis
 					"22244000": map[string]interface{}{

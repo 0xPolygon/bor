@@ -574,3 +574,59 @@ func TestOverrideStateSyncRecordsInRangeExample(t *testing.T) {
 			blockNumber, overrideValue)
 	})
 }
+
+func TestCalculateCoinbase(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: Nil coinbase configuration
+	t.Run("Nil coinbase configuration", func(t *testing.T) {
+		config := &BorConfig{}
+
+		result := config.CalculateCoinbase(100)
+		expected := "0x0000000000000000000000000000000000000000"
+
+		if result != expected {
+			t.Errorf("Expected %s, got %s", expected, result)
+		}
+	})
+
+	// Test case 4: Multiple coinbase addresses with block transitions
+	t.Run("Multiple coinbase addresses", func(t *testing.T) {
+		config := &BorConfig{
+			Coinbase: map[string]string{
+				"0":     "0x1111111111111111111111111111111111111111",
+				"1000":  "0x2222222222222222222222222222222222222222",
+				"5000":  "0x3333333333333333333333333333333333333333",
+				"10000": "0x4444444444444444444444444444444444444444",
+			},
+		}
+
+		testCases := []struct {
+			blockNumber uint64
+			expected    string
+			description string
+		}{
+			{0, "0x1111111111111111111111111111111111111111", "At genesis block"},
+			{500, "0x1111111111111111111111111111111111111111", "Before first transition"},
+			{999, "0x1111111111111111111111111111111111111111", "Just before first transition"},
+			{1000, "0x2222222222222222222222222222222222222222", "At first transition"},
+			{1001, "0x2222222222222222222222222222222222222222", "Just after first transition"},
+			{3000, "0x2222222222222222222222222222222222222222", "Between first and second transition"},
+			{4999, "0x2222222222222222222222222222222222222222", "Just before second transition"},
+			{5000, "0x3333333333333333333333333333333333333333", "At second transition"},
+			{7500, "0x3333333333333333333333333333333333333333", "Between second and third transition"},
+			{9999, "0x3333333333333333333333333333333333333333", "Just before third transition"},
+			{10000, "0x4444444444444444444444444444444444444444", "At third transition"},
+			{15000, "0x4444444444444444444444444444444444444444", "After final transition"},
+			{999999, "0x4444444444444444444444444444444444444444", "Far beyond final transition"},
+		}
+
+		for _, tc := range testCases {
+			result := config.CalculateCoinbase(tc.blockNumber)
+			if result != tc.expected {
+				t.Errorf("Block %d (%s): expected %s, got %s",
+					tc.blockNumber, tc.description, tc.expected, result)
+			}
+		}
+	})
+}

@@ -485,6 +485,19 @@ func (b *backendMock) GetWitnesses(ctx context.Context, startBlock uint64, endBl
 func (b *backendMock) StoreWitness(ctx context.Context, hash common.Hash, witness *stateless.Witness) error {
 	return nil
 }
+
+func (b *backendMock) WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
+	return nil, nil
+}
+
+func (b *backendMock) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
+	return nil, nil
+}
+
+func (b *backendMock) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
+	return nil, nil
+}
+
 func (b backendMock) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Subscription {
 	return nil
 }

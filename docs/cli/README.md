@@ -40,6 +40,8 @@
 
 - [```peers status```](./peers_status.md)
 
+- [```purge-whitelisted-entries```](./purge-whitelisted-entries.md)
+
 - [```removedb```](./removedb.md)
 
 - [```server```](./server.md)

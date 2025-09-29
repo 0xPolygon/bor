@@ -52,6 +52,27 @@ func (m *Milestone) block() (uint64, common.Hash) {
 	return m.Block, m.Hash
 }
 
+// PurgeWhitelistedEntriesFromDb removes all entries related to whitelisted checkpoint
+// and milestone from the database. It doesn't return any error back to the caller.
+func PurgeWhitelistedEntriesFromDb(db ethdb.KeyValueWriter) {
+	err := db.Delete(lastMilestone)
+	if err != nil {
+		log.Error("Error deleting last milestone entry", "err", err)
+	}
+	err = db.Delete(lockFieldKey)
+	if err != nil {
+		log.Error("Error deleting lock field entry", "err", err)
+	}
+	err = db.Delete(futureMilestoneKey)
+	if err != nil {
+		log.Error("Error deleting future milestone field entry", "err", err)
+	}
+	err = db.Delete(lastCheckpoint)
+	if err != nil {
+		log.Error("Error deleting last checkpoint entry", "err", err)
+	}
+}
+
 func ReadFinality[T BlockFinality[T]](db ethdb.KeyValueReader) (uint64, common.Hash, error) {
 	lastTV, key := getKey[T]()
 

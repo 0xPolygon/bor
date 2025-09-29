@@ -1016,6 +1016,15 @@ func (m *MockBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 	return ret0, ret1
 }
 
+// WitnessByHash mocks base method.
+func (m *MockBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WitnessByHash", ctx, hash)
+	ret0, _ := ret[0].(*stateless.Witness)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
 func (mr *MockBackendMockRecorder) GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalReceipt", reflect.TypeOf((*MockBackend)(nil).GetCanonicalReceipt), tx, blockHash, blockNumber, blockIndex)
@@ -1035,4 +1044,40 @@ func (m *MockBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.
 func (mr *MockBackendMockRecorder) GetCanonicalTransaction(txHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalTransaction", reflect.TypeOf((*MockBackend)(nil).GetCanonicalTransaction), txHash)
+}
+
+// WitnessByHash indicates an expected call of WitnessByHash.
+func (mr *MockBackendMockRecorder) WitnessByHash(ctx, hash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WitnessByHash", reflect.TypeOf((*MockBackend)(nil).WitnessByHash), ctx, hash)
+}
+
+// WitnessByNumber mocks base method.
+func (m *MockBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WitnessByNumber", ctx, number)
+	ret0, _ := ret[0].(*stateless.Witness)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WitnessByNumber indicates an expected call of WitnessByNumber.
+func (mr *MockBackendMockRecorder) WitnessByNumber(ctx, number any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WitnessByNumber", reflect.TypeOf((*MockBackend)(nil).WitnessByNumber), ctx, number)
+}
+
+// WitnessByNumberOrHash mocks base method.
+func (m *MockBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WitnessByNumberOrHash", ctx, blockNrOrHash)
+	ret0, _ := ret[0].(*stateless.Witness)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WitnessByNumberOrHash indicates an expected call of WitnessByNumberOrHash.
+func (mr *MockBackendMockRecorder) WitnessByNumberOrHash(ctx, blockNrOrHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WitnessByNumberOrHash", reflect.TypeOf((*MockBackend)(nil).WitnessByNumberOrHash), ctx, blockNrOrHash)
 }

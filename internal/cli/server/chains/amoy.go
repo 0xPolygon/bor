@@ -59,6 +59,10 @@ var amoyTestnet = &Chain{
 					"0":     "0x000000000000000000000000000000000000dead",
 					"73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9",
 				},
+				Coinbase: map[string]string{
+					"0":        "0x0000000000000000000000000000000000000000",
+					"26201856": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
+				},
 				BlockAlloc: map[string]interface{}{
 					"11865856": map[string]interface{}{
 						// StateReceiver contract

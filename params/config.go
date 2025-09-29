@@ -226,6 +226,9 @@ var (
 			BackupMultiplier: map[string]uint64{
 				"0": 2,
 			},
+			Coinbase: map[string]string{
+				"0": "0x000000000000000000000000000000000000ba5e",
+			},
 			ValidatorContract:     "0x0000000000000000000000000000000000001000",
 			StateReceiverContract: "0x0000000000000000000000000000000000001001",
 			BurntContract: map[string]string{
@@ -286,6 +289,10 @@ var (
 			BurntContract: map[string]string{
 				"22640000": "0x70bcA57F4579f58670aB2d18Ef16e02C17553C38",
 				"41874000": "0x617b94CCCC2511808A3C9478ebb96f455CF167aA",
+			},
+			Coinbase: map[string]string{
+				"0":        "0x0000000000000000000000000000000000000000",
+				"50000000": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
@@ -353,6 +360,10 @@ var (
 			BurntContract: map[string]string{
 				"0":     "0x000000000000000000000000000000000000dead",
 				"73100": "0xeCDD77cE6f146cCf5dab707941d318Bd50eeD2C9",
+			},
+			Coinbase: map[string]string{
+				"0":        "0x0000000000000000000000000000000000000000",
+				"26201856": "0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0",
 			},
 			BlockAlloc: map[string]interface{}{
 				// write as interface since that is how it is decoded in genesis
@@ -853,6 +864,7 @@ type BorConfig struct {
 	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
 	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -954,6 +966,14 @@ func borKeyValueConfigHelper[T uint64 | string](field map[string]T, number uint6
 
 func (c *BorConfig) CalculateBurntContract(number uint64) string {
 	return borKeyValueConfigHelper(c.BurntContract, number)
+}
+
+func (c *BorConfig) CalculateCoinbase(number uint64) string {
+	if c.Coinbase != nil {
+		return borKeyValueConfigHelper(c.Coinbase, number)
+	} else {
+		return common.Address{}.Hex()
+	}
 }
 
 func (c *BorConfig) GetOverrideStateSyncRecord(block uint64) (int, bool) {

@@ -185,7 +185,12 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 // NewWithReader creates a new state for the specified state root. Unlike New,
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
+	tr, err := db.OpenTrie(root)
+	if err != nil {
+		return nil, err
+	}
 	sdb := &StateDB{
+		trie:                 tr,
 		db:                   db,
 		originalRoot:         root,
 		reader:               reader,

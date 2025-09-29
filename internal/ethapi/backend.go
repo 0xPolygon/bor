@@ -121,6 +121,9 @@ type Backend interface {
 	// Witness related APIs
 	GetWitnesses(ctx context.Context, originBlock uint64, totalBlocks uint64) ([]*stateless.Witness, error)
 	StoreWitness(ctx context.Context, blockHash common.Hash, witness *stateless.Witness) error
+	WitnessByNumber(ctx context.Context, number rpc.BlockNumber) (*stateless.Witness, error)
+	WitnessByHash(ctx context.Context, hash common.Hash) (*stateless.Witness, error)
+	WitnessByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*stateless.Witness, error)
 
 	// Networking related APIs
 	PeerStats() interface{}

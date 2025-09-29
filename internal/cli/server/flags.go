@@ -122,6 +122,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.BorLogs,
 		Default: c.cliConfig.BorLogs,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "disable-blind-fork-validation",
+		Usage:   `Disable additional fork validation and accept blind forks without tracing back to last whitelisted entry`,
+		Value:   &c.cliConfig.DisableBlindForkValidation,
+		Default: c.cliConfig.DisableBlindForkValidation,
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "max-blind-fork-validation-limit",
+		Usage:   `Maximum number of blocks to traverse back in the database when validating blind forks`,
+		Value:   &c.cliConfig.MaxBlindForkValidationLimit,
+		Default: c.cliConfig.MaxBlindForkValidationLimit,
+	})
 
 	// logging related flags (log-level and verbosity is present above, it will be removed soon)
 	f.StringFlag(&flagset.StringFlag{
@@ -1031,6 +1043,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.ProduceWitnesses,
 		Default: c.cliConfig.Witness.ProduceWitnesses,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.witnessapi",
+		Usage:   "Enable witness API endpoints (by default disabled)",
+		Value:   &c.cliConfig.Witness.WitnessAPI,
+		Default: c.cliConfig.Witness.WitnessAPI,
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
 		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",
@@ -1119,6 +1137,36 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Number of recent blocks to retain state history for, only relevant in state.scheme=path (default = 90,000 blocks, 0 = entire chain)",
 		Value:   &c.cliConfig.History.StateHistory,
 		Default: c.cliConfig.History.StateHistory,
+	})
+
+	// Health check related flags
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.max-goroutine-threshold",
+		Usage:   "Maximum number of goroutines before health check fails (0 = disabled)",
+		Value:   &c.cliConfig.Health.MaxGoRoutineThreshold,
+		Default: c.cliConfig.Health.MaxGoRoutineThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.warn-goroutine-threshold",
+		Usage:   "Maximum number of goroutines before health check warns (0 = disabled)",
+		Value:   &c.cliConfig.Health.WarnGoRoutineThreshold,
+		Default: c.cliConfig.Health.WarnGoRoutineThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.min-peer-threshold",
+		Usage:   "Minimum number of peers before health check fails (0 = disabled)",
+		Value:   &c.cliConfig.Health.MinPeerThreshold,
+		Default: c.cliConfig.Health.MinPeerThreshold,
+		Group:   "Health",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "health.warn-peer-threshold",
+		Usage:   "Minimum number of peers before health check warns (0 = disabled)",
+		Value:   &c.cliConfig.Health.WarnPeerThreshold,
+		Default: c.cliConfig.Health.WarnPeerThreshold,
+		Group:   "Health",
 	})
 
 	return f

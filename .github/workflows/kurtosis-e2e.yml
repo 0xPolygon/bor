@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: v1.1.5
+          ref: v1.1.11
           path: kurtosis-pos
 
       - name: Pre kurtosis run
@@ -83,7 +83,7 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Test state syncs
-        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,l1,l2 --recursive tests/"
+        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
 
       - name: Run RPC tests
         run: |

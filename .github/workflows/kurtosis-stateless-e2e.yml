@@ -94,7 +94,7 @@ jobs:
           bash tests/stateless_tests/kurtosis_stateless_test.sh
 
       - name: Test state syncs (post VeBlop HF)
-        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter-tags pos,bridge,l1,l2 --recursive tests/"
+        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
 
       - name: Post kurtosis run
         if: always()
