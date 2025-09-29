@@ -517,7 +517,12 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		}
 		m.mu.Unlock()
 
-		return
+		if req != nil {
+			peer = req.Peer
+		} else {
+			peer = ""
+		}
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
 	}
 
 	peer = req.Peer
