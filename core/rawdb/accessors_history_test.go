@@ -58,9 +58,9 @@ func TestDeleteStateHistoryIndex_WithoutBorReceipts(t *testing.T) {
 		{"checking 'ma' key", accountHistoryIndexKey(common.Hash{}), false},
 		{"checking 'ms' key", storageHistoryIndexKey(common.Hash{}, common.Hash{}), false},
 		{"checking 'mba' key", accountHistoryIndexBlockKey(common.Hash{}, 1), false},
+		{"checking 'mbs' key", storageHistoryIndexBlockKey(common.Hash{}, common.Hash{}, 1), false},
 
 		// Bor receipt related data
-		{"checking 'mbs' key", storageHistoryIndexBlockKey(common.Hash{}, common.Hash{}, 1), false},
 		{"checking 'matic-bor-receipts' key", types.BorReceiptKey(1, common.Hash{}), true},
 		{"checking 'matic-bor-tx-lookup' key", borTxLookupKey(common.Hash{}), true},
 		{"checking 'matic-bos' key", []byte("matic-bos"), false}, // this one should be deleted
