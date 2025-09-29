@@ -501,9 +501,6 @@ func (m *witnessManager) tick() {
 		for hash, announce := range hashAnnounceMap {
 			// Ensure we have a valid announce and fetchWitness function
 			if announce == nil || announce.fetchWitness == nil {
-				log.Debug("[wm] Missing announce or fetchWitness for witness request", "peer", peer, "hash", hash)
-				// Hard failure: remove from pending so we don't spin forever
-				m.handleWitnessFetchFailureExt(hash, peer, errors.New("missing fetch configuration"), true)
 				continue
 			}
 
@@ -546,10 +543,10 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		}
 		m.mu.Unlock()
 
-		// Penalize the peer for other initiation failures
-		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
 		return
 	}
+
+	peer = req.Peer
 
 	// Check if still pending after successful request creation
 	m.mu.Lock()
@@ -569,7 +566,6 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 	case res := <-resCh:
 		if res == nil {
 			log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
 			return
 		}
 		res.Done <- nil // Signal consumption
@@ -578,13 +574,13 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		witness, ok := res.Res.([]*stateless.Witness)
 		if !ok {
 			log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
+			m.parentDropPeer(peer)
 			return
 		}
 
 		if len(witness) == 0 {
 			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
+			m.parentDropPeer(peer)
 			return
 		}
 
@@ -593,10 +589,9 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("fetch timeout"), false)
+		m.parentDropPeer(peer)
 	case <-m.parentQuit:
 		log.Debug("[wm] Witness fetch cancelled due to shutdown", "peer", peer, "hash", hash)
-		// Don't penalize peer for shutdown
 	}
 }
 
