@@ -66,11 +66,9 @@ type witnessManager struct {
 	parentChainHeight chainHeightFn          // Retrieve chain height for distance checks
 
 	// Witness-specific state
-	pending               map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
-	failedWitnessAttempts map[string]int                               // Tracks witness fetch failures per peer.
-	peerPenalty           map[string]time.Time                         // Tracks peers currently penalised until a given time.
-	witnessUnavailable    map[common.Hash]time.Time                    // Tracks hashes whose witnesses are known to be unavailable, with expiry times.
-	witnessCache          *ttlcache.Cache[common.Hash, *cachedWitness] // TTL cache of witnesses that arrived before their blocks
+	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
+	witnessUnavailable map[common.Hash]time.Time                    // Tracks hashes whose witnesses are known to be unavailable, with expiry times.
+	witnessCache       *ttlcache.Cache[common.Hash, *cachedWitness] // TTL cache of witnesses that arrived before their blocks
 
 	// Communication channels (owned by witnessManager)
 	injectNeedWitnessCh chan *injectBlockNeedWitnessMsg // Injected blocks needing witness fetch
@@ -108,21 +106,19 @@ func newWitnessManager(
 	)
 
 	m := &witnessManager{
-		parentQuit:            parentQuit,
-		parentDropPeer:        parentDropPeer,
-		parentEnqueueCh:       parentEnqueueCh,
-		parentGetBlock:        parentGetBlock,
-		parentGetHeader:       parentGetHeader,
-		parentChainHeight:     parentChainHeight,
-		pending:               make(map[common.Hash]*witnessRequestState),
-		failedWitnessAttempts: make(map[string]int),
-		peerPenalty:           make(map[string]time.Time),
-		witnessUnavailable:    make(map[common.Hash]time.Time),
-		witnessCache:          witnessCache,
-		injectNeedWitnessCh:   make(chan *injectBlockNeedWitnessMsg, 10),
-		injectWitnessCh:       make(chan *injectedWitnessMsg, 10),
-		witnessTimer:          time.NewTimer(0),
-		pokeCh:                make(chan struct{}, 1),
+		parentQuit:          parentQuit,
+		parentDropPeer:      parentDropPeer,
+		parentEnqueueCh:     parentEnqueueCh,
+		parentGetBlock:      parentGetBlock,
+		parentGetHeader:     parentGetHeader,
+		parentChainHeight:   parentChainHeight,
+		pending:             make(map[common.Hash]*witnessRequestState),
+		witnessUnavailable:  make(map[common.Hash]time.Time),
+		witnessCache:        witnessCache,
+		injectNeedWitnessCh: make(chan *injectBlockNeedWitnessMsg, 10),
+		injectWitnessCh:     make(chan *injectedWitnessMsg, 10),
+		witnessTimer:        time.NewTimer(0),
+		pokeCh:              make(chan struct{}, 1),
 	}
 	// Clear the timer channel initially
 	if !m.witnessTimer.Stop() {
@@ -245,12 +241,6 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 	// Check if witness is known to be unavailable
 	if m.isWitnessUnavailable(hash) {
 		log.Debug("[wm] Witness for injected block known to be unavailable, discarding", "hash", hash)
-		return
-	}
-
-	// Check if peer is currently penalised (do this outside of main lock to avoid deadlock)
-	if m.HasFailedTooManyTimes(msg.origin) {
-		log.Debug("[wm] Discarding injected block, peer is currently penalised for witness failures", "peer", msg.origin, "hash", hash)
 		return
 	}
 
@@ -470,23 +460,6 @@ func (m *witnessManager) tick() {
 
 	// Send out all block witness requests
 	for peer, hashAnnounceMap := range requests {
-		// Check if peer is currently penalised
-		if m.HasFailedTooManyTimes(peer) {
-			log.Debug("[wm] Skipping witness fetch batch, peer currently penalised", "peer", peer, "hashes", len(hashAnnounceMap))
-			m.mu.Lock()
-			if expiry, ok := m.peerPenalty[peer]; ok {
-				for h := range hashAnnounceMap {
-					if st := m.pending[h]; st != nil {
-						st.announce.time = expiry.Add(gatherSlack)
-					}
-				}
-			}
-			m.mu.Unlock()
-			// Reschedule timer based on the new future times.
-			m.rescheduleWitness()
-			continue // Skip this peer for now, hashes remain pending
-		}
-
 		// Collect hashes for logging
 		hashesToFetch := make([]common.Hash, 0, len(hashAnnounceMap))
 		for hash := range hashAnnounceMap {
@@ -501,6 +474,7 @@ func (m *witnessManager) tick() {
 		for hash, announce := range hashAnnounceMap {
 			// Ensure we have a valid announce and fetchWitness function
 			if announce == nil || announce.fetchWitness == nil {
+				m.handleWitnessFetchFailureExt(hash, "", errors.New("missing fetch configuration"), true)
 				continue
 			}
 
@@ -553,6 +527,7 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 	if _, exists := m.pending[hash]; !exists {
 		m.mu.Unlock()
 		log.Debug("[wm] Skipping witness fetch, block no longer pending", "peer", peer, "hash", hash)
+		m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("request initiation failed: %w", err), false)
 		req.Close()
 		return
 	}
@@ -566,6 +541,7 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 	case res := <-resCh:
 		if res == nil {
 			log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
+			m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
 			return
 		}
 		res.Done <- nil // Signal consumption
@@ -574,13 +550,13 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 		witness, ok := res.Res.([]*stateless.Witness)
 		if !ok {
 			log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-			m.parentDropPeer(peer)
+			m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
 			return
 		}
 
 		if len(witness) == 0 {
 			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-			m.parentDropPeer(peer)
+			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
 			return
 		}
 
@@ -589,7 +565,7 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
-		m.parentDropPeer(peer)
+		m.handleWitnessFetchFailureExt(hash, peer, errors.New("fetch timeout"), false)
 	case <-m.parentQuit:
 		log.Debug("[wm] Witness fetch cancelled due to shutdown", "peer", peer, "hash", hash)
 	}
@@ -688,16 +664,11 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 			state.announce.time = time.Now().Add(fetchTimeout)
 		}
 	}
-	// Track peer failures (for metrics)
-	m.failedWitnessAttempts[peer]++
-	failures := m.failedWitnessAttempts[peer]
-
-	// Penalise peer with time-based window - do this under the same lock
-	until := time.Now().Add(witnessFailurePenalty)
-	m.peerPenalty[peer] = until
 	m.mu.Unlock()
 
-	log.Debug("[wm] Penalising peer for witness fetch failure", "peer", peer, "failures", failures, "penalty", witnessFailurePenalty, "until", until)
+	if peer != "" {
+		m.parentDropPeer(peer)
+	}
 
 	m.rescheduleWitness()
 }
@@ -727,11 +698,6 @@ func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
 	select {
 	case m.parentEnqueueCh <- req:
 		log.Debug("[wm] Successfully enqueued completed block+witness", "hash", hash, "origin", op.origin, "number", op.number())
-		// Reset failure count and penalty for the originating peer upon success.
-		m.mu.Lock()
-		delete(m.failedWitnessAttempts, op.origin)
-		delete(m.peerPenalty, op.origin)
-		m.mu.Unlock()
 	case <-m.parentQuit:
 		log.Debug("[wm] Failed to enqueue block+witness, fetcher shutting down", "hash", hash)
 		// Nothing more to do; the parent is quitting.
@@ -839,12 +805,6 @@ func (m *witnessManager) handleFilterResult(announce *blockAnnounce, block *type
 	}
 	m.mu.Unlock()
 
-	// Check if peer currently penalised
-	if m.HasFailedTooManyTimes(announce.origin) {
-		log.Debug("[wm] Discarding block from filter result, peer currently penalised", "peer", announce.origin, "hash", hash)
-		return
-	}
-
 	// Check if we have a cached witness for this block
 	if item := m.witnessCache.Get(hash); item != nil {
 		cached := item.Value()
@@ -903,12 +863,6 @@ func (m *witnessManager) checkCompleting(announce *blockAnnounce, block *types.B
 		}
 		m.mu.Unlock()
 
-		// Check if peer currently penalised
-		if m.HasFailedTooManyTimes(announce.origin) {
-			log.Debug("[wm] Discarding completed block, peer currently penalised", "peer", announce.origin, "hash", hash)
-			return
-		}
-
 		// Check if block known locally (might have been imported between header and body arrival)
 		if m.parentGetBlock(hash) != nil {
 			log.Debug("[wm] Completed block already known locally", "hash", hash)
@@ -937,30 +891,6 @@ func (m *witnessManager) checkCompleting(announce *blockAnnounce, block *types.B
 		// No witness needed, BlockFetcher should enqueue directly
 		log.Debug("[wm] Completed block does not require witness", "hash", hash)
 	}
-}
-
-func (m *witnessManager) HasFailedTooManyTimes(peer string) bool {
-	m.mu.Lock()
-	ts, ok := m.peerPenalty[peer]
-	if !ok {
-		m.mu.Unlock()
-		return false
-	}
-	if time.Now().After(ts) {
-		delete(m.peerPenalty, peer)
-		m.mu.Unlock()
-		return false
-	}
-	m.mu.Unlock()
-	return true
-}
-
-// penalisePeer marks a peer as penalised for witnessFailurePenalty duration.
-func (m *witnessManager) penalisePeer(peer string) {
-	until := time.Now().Add(witnessFailurePenalty)
-	m.mu.Lock()
-	m.peerPenalty[peer] = until
-	m.mu.Unlock()
 }
 
 var ErrNoWitnessPeerAvailable = errors.New("no peer with witness available") // Define a potential specific error

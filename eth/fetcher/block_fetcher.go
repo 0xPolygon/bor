@@ -551,13 +551,6 @@ func (f *BlockFetcher) loop() {
 				break // Ignore old protocol announces
 			}
 
-			// Check if peer has already failed witness attempts too many times
-			if f.requireWitness && f.wm.HasFailedTooManyTimes(notification.origin) {
-				log.Debug("Peer ignored announcement, too many prior witness failures", "peer", notification.origin)
-				blockAnnounceDropMeter.Mark(1)
-				break
-			}
-
 			// If we have a valid block number, check that it's potentially useful
 			if dist := int64(notification.number) - int64(f.chainHeight()); dist < -maxUncleDist || dist > maxQueueDist {
 				log.Debug("Peer discarded announcement", "peer", notification.origin, "number", notification.number, "hash", notification.hash, "distance", dist)
@@ -594,14 +587,6 @@ func (f *BlockFetcher) loop() {
 				log.Debug("Ignoring direct block injection in light mode or if header provided", "origin", op.origin)
 				continue
 			}
-
-			// Check witness failures again specifically for witness-requiring injections
-			// Note: Non-witness blocks are enqueued directly without this check here.
-			if f.requireWitness && op.block != nil && f.wm.HasFailedTooManyTimes(op.origin) {
-				log.Warn("Discarding injected block, peer has too many prior witness failures", "peer", op.origin, "hash", op.hash())
-				continue
-			}
-			// Witness manager handles peer failure checks related to witness
 
 			f.enqueue(op.origin, nil, op.block, op.witness)
 
@@ -842,15 +827,6 @@ func (f *BlockFetcher) loop() {
 
 							// Check if a witness is required for this empty block
 							if f.requireWitness && announce.fetchWitness != nil {
-								// === Witness Manager Interaction ===
-								// Check peer failure status BEFORE delegating
-								if f.wm.HasFailedTooManyTimes(announce.origin) {
-									log.Warn("[fetcher] Discarding empty block, peer has too many prior witness failures", "peer", announce.origin, "hash", header.Hash())
-									f.forgetHash(hash) // Clean up announce states
-									delete(f.fetching, hash)
-									continue // Skip witness manager call
-								}
-
 								log.Debug("Empty block requires witness, notifying witness manager", "peer", announce.origin, "number", header.Number, "hash", header.Hash())
 								f.wm.handleFilterResult(announce, block)
 								delete(f.fetching, hash) // Remove from fetching state as WM is now responsible
@@ -978,20 +954,10 @@ func (f *BlockFetcher) loop() {
 
 							// If witness is needed, delegate to witness manager, otherwise add to enqueue list
 							if f.requireWitness && matchAnnounce.fetchWitness != nil {
-								// === Witness Manager Interaction ===
-								// Check peer failure status BEFORE delegating
-								if f.wm.HasFailedTooManyTimes(announce.origin) {
-									log.Warn("[fetcher] Discarding completed block, peer has too many prior witness failures", "peer", announce.origin, "hash", blockHash)
-									f.forgetHash(blockHash) // Clean up announce states
-									delete(f.completing, blockHash)
-									// Skip witness manager call, but allow loop to continue to process next body
-								} else {
-									log.Debug("Block body received, checking witness requirement with manager", "peer", announce.origin, "number", block.NumberU64(), "hash", blockHash)
-									f.wm.checkCompleting(matchAnnounce, block)
-									// Remove from completing state as WM is now responsible
-									delete(f.completing, blockHash)
-								}
-								// === End Witness Manager Interaction ===
+								log.Debug("Block body received, checking witness requirement with manager", "peer", announce.origin, "number", block.NumberU64(), "hash", blockHash)
+								f.wm.checkCompleting(matchAnnounce, block)
+								// Remove from completing state as WM is now responsible
+								delete(f.completing, blockHash)
 							} else {
 								log.Debug("Block body received, queuing for import (no witness needed)", "peer", announce.origin, "number", block.NumberU64(), "hash", blockHash)
 								blocks = append(blocks, block)
