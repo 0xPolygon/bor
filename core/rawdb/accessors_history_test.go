@@ -40,12 +40,6 @@ func TestDeleteStateHistoryIndex_WithoutBorReceipts(t *testing.T) {
 	db.Put([]byte("n"), []byte{})
 	db.Put([]byte("z"), []byte{})
 
-	iter := db.NewIterator(nil, nil)
-	for iter.Next() {
-		key := iter.Key()
-		t.Log("key:", key, string(key))
-	}
-
 	// Call the state history deletor
 	DeleteStateHistoryIndex(db)
 
