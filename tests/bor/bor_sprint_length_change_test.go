@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io/ioutil" // nolint:staticcheck
 	_log "log"
 	"math/big"
 	"os"
@@ -772,7 +771,7 @@ func InitGenesisSprintLength(t *testing.T, faucets []*ecdsa.PrivateKey, fileLoca
 	t.Helper()
 
 	// sprint size = 8 in genesis
-	genesisData, err := ioutil.ReadFile(fileLocation)
+	genesisData, err := os.ReadFile(fileLocation)
 	if err != nil {
 		t.Fatalf("%s", err)
 	}
@@ -791,7 +790,7 @@ func InitGenesisSprintLength(t *testing.T, faucets []*ecdsa.PrivateKey, fileLoca
 
 func InitMinerSprintLength(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
-	datadir, _ := ioutil.TempDir("", "")
+	datadir, _ := os.MkdirTemp("", "")
 
 	config := &node.Config{
 		Name:    "geth",
