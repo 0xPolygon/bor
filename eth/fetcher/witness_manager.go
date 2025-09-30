@@ -28,14 +28,6 @@ const (
 	// witness for a block hash before giving up and marking it unavailable.
 	maxWitnessFetchRetries = 10
 
-	// witnessFailurePenalty defines how long a peer is considered "penalised"
-	// after a witness-related failure. While a peer is penalised, the
-	// witnessManager will not initiate new witness requests for that peer and
-	// the BlockFetcher will also ignore its announcements that require a
-	// witness. Once the penalty window elapses the peer is automatically
-	// eligible again.
-	witnessFailurePenalty = 5 * time.Second
-
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 )
