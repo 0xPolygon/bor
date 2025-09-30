@@ -157,6 +157,11 @@ func (bc *BlockChain) GetBodyRLP(hash common.Hash) rlp.RawValue {
 }
 
 // HasBlock checks if a block is fully present in the database or not.
+func (bc *BlockChain) HasWitness(hash common.Hash) bool {
+	return rawdb.HasWitness(bc.db, hash)
+}
+
+// HasBlock checks if a block is fully present in the database or not.
 func (bc *BlockChain) HasBlock(hash common.Hash, number uint64) bool {
 	if bc.blockCache.Contains(hash) {
 		return true

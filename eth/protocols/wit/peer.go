@@ -79,8 +79,6 @@ func (p *Peer) sendNewWitness(witness *stateless.Witness) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	p.knownWitnesses.Add(witness.Header().Hash())
-
 	return p2p.Send(p.rw, NewWitnessMsg, &NewWitnessPacket{
 		Witness: witness,
 	})
@@ -88,6 +86,10 @@ func (p *Peer) sendNewWitness(witness *stateless.Witness) error {
 
 // sendNewWitnessHashes sends witness hashes to the peer
 func (p *Peer) sendNewWitnessHashes(packet *NewWitnessHashesPacket) error {
+	for _, hash := range packet.Hashes {
+		p.knownWitnesses.Add(hash)
+
+	}
 	return p2p.Send(p.rw, NewWitnessHashesMsg, packet)
 }
 
@@ -103,7 +105,6 @@ func (p *Peer) AsyncSendNewWitness(witness *stateless.Witness) {
 	// Queue the witness for broadcast
 	select {
 	case p.queuedWitness <- witness:
-		p.knownWitnesses.Add(witness.Header().Hash())
 	default:
 		p.logger.Debug("Dropped witness propagation.", "hash", witness.Header().Hash(), "peer", p.id)
 	}
