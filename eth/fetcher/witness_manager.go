@@ -40,10 +40,15 @@ const (
 	witnessCacheTTL  = 2 * time.Minute
 
 	// Witness verification constants
-	witnessPageWarningThreshold = 10               // Trigger verification when peer reports >10 pages
 	witnessVerificationPeers    = 2                // Number of random peers to query for verification
 	witnessVerificationTimeout  = 5 * time.Second  // Timeout for verification queries
 	witnessVerificationCacheTTL = 10 * time.Minute // Cache verification results for 10 minutes
+
+	// Witness size estimation constants
+	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
+	gasPerMB             = 1_000_000 // 1M gas per MB of witness
+	maxPageSizeMB        = 15        // Maximum page size in MB
+	witnessPageThreshold = 10        // Default threshold if gas ceil not available
 )
 
 // witnessRequestState tracks the state of a pending witness request.
@@ -95,6 +100,7 @@ type witnessManager struct {
 
 	// Witness verification state
 	witnessVerificationCache *ttlcache.Cache[common.Hash, *witnessVerificationResult] // Cache of verified page counts
+	gasCeil                  uint64                                                   // Gas ceiling for calculating dynamic page threshold
 
 	// Communication channels (owned by witnessManager)
 	injectNeedWitnessCh chan *injectBlockNeedWitnessMsg // Injected blocks needing witness fetch
@@ -124,6 +130,7 @@ func newWitnessManager(
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
 	parentChainHeight chainHeightFn,
+	gasCeil uint64,
 ) *witnessManager {
 	// Create TTL cache with 1 minute expiration for witnesses
 	witnessCache := ttlcache.New[common.Hash, *cachedWitness](
@@ -150,6 +157,7 @@ func newWitnessManager(
 		witnessUnavailable:       make(map[common.Hash]time.Time),
 		witnessCache:             witnessCache,
 		witnessVerificationCache: witnessVerificationCache,
+		gasCeil:                  gasCeil,
 		injectNeedWitnessCh:      make(chan *injectBlockNeedWitnessMsg, 10),
 		injectWitnessCh:          make(chan *injectedWitnessMsg, 10),
 		witnessTimer:             time.NewTimer(0),
@@ -1001,6 +1009,29 @@ func (m *witnessManager) penalisePeer(peer string) {
 
 var ErrNoWitnessPeerAvailable = errors.New("no peer with witness available") // Define a potential specific error
 
+// calculatePageThreshold calculates the dynamic page threshold based on gas ceiling
+// Formula: ceil(gasCeil (in millions) / maxPageSizeMB)
+// Example: 50M gas / 15MB per page = ceil(3.33) = 4 pages
+func (m *witnessManager) calculatePageThreshold() uint64 {
+	if m.gasCeil == 0 {
+		return witnessPageThreshold // Return default if gas ceil not set
+	}
+
+	// Convert gas ceil to millions and divide by max page size in MB using ceiling division
+	gasCeilMB := m.gasCeil / gasPerMB
+
+	// Ceiling division: (a + b - 1) / b
+	threshold := (gasCeilMB + maxPageSizeMB - 1) / maxPageSizeMB
+
+	// Ensure minimum threshold of 1 page
+	if threshold < 1 {
+		threshold = 1
+	}
+
+	log.Debug("[wm] Calculated dynamic page threshold", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
+	return threshold
+}
+
 // verifyWitnessPageCount verifies a witness page count by querying random peers
 func (m *witnessManager) verifyWitnessPageCount(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) {
 	// Check if we already have a cached verification result
@@ -1090,9 +1121,12 @@ func (m *witnessManager) cacheVerificationResult(hash common.Hash, pageCount uin
 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) {
-	// Only trigger verification if page count exceeds warning threshold
-	if pageCount > witnessPageWarningThreshold {
-		log.Debug("[wm] Witness page count exceeds threshold, triggering verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", witnessPageWarningThreshold)
+	// Calculate dynamic threshold based on gas ceiling
+	threshold := m.calculatePageThreshold()
+
+	// Only trigger verification if page count exceeds dynamic threshold
+	if pageCount > threshold {
+		log.Debug("[wm] Witness page count exceeds threshold, triggering verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
 		go m.verifyWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 	}
 }

@@ -354,6 +354,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		EventMux:                eth.eventMux,
 		RequiredBlocks:          config.RequiredBlocks,
 		EthAPI:                  blockChainAPI,
+		gasCeil:                 config.Miner.GasCeil,
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
