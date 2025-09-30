@@ -72,14 +72,6 @@ type witnessVerificationResult struct {
 	timestamp time.Time
 }
 
-// witnessVerificationRequest represents a pending verification request
-type witnessVerificationRequest struct {
-	hash      common.Hash
-	pageCount uint64
-	peer      string
-	callback  func(bool) // Called with true if peer is honest, false if dishonest
-}
-
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {

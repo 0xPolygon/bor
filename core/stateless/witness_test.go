@@ -258,22 +258,6 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 }
 
-// TestWitnessVerificationConstants tests the verification constants
-func TestWitnessVerificationConstants(t *testing.T) {
-	// These constants should match the ones defined in eth/fetcher/witness_manager.go
-	const (
-		witnessPageWarningThreshold = 10
-		witnessVerificationPeers    = 2
-	)
-
-	if witnessPageWarningThreshold != 10 {
-		t.Errorf("Expected witnessPageWarningThreshold to be 10, got %d", witnessPageWarningThreshold)
-	}
-	if witnessVerificationPeers != 2 {
-		t.Errorf("Expected witnessVerificationPeers to be 2, got %d", witnessVerificationPeers)
-	}
-}
-
 // TestSimplifiedWitnessVerification tests the simplified verification logic
 func TestSimplifiedWitnessVerification(t *testing.T) {
 	tests := []struct {

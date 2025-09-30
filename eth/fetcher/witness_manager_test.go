@@ -61,6 +61,7 @@ func TestWitnessManagerCreation(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	if manager == nil {
@@ -110,6 +111,7 @@ func TestWitnessManagerLifecycle(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start the manager
@@ -144,6 +146,7 @@ func TestHandleNeed(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -193,6 +196,7 @@ func TestHandleNeedDuplicates(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -247,6 +251,7 @@ func TestHandleNeedKnownBlock(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
@@ -293,6 +298,7 @@ func TestHandleBroadcast(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start a goroutine to collect enqueue requests
@@ -363,6 +369,7 @@ func TestWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash := common.HexToHash("0x123")
@@ -422,6 +429,7 @@ func TestPeerPenalty(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	peer := "test-peer"
@@ -468,6 +476,7 @@ func TestForget(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -516,6 +525,7 @@ func TestHandleFilterResult(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -552,6 +562,7 @@ func TestCheckCompleting(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -588,6 +599,7 @@ func TestWitnessFetchFailure(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash := common.HexToHash("0x123")
@@ -630,6 +642,7 @@ func TestCleanupUnavailableCache(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash1 := common.HexToHash("0x123")
@@ -683,6 +696,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -793,6 +807,7 @@ func TestTick(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Test tick with no pending requests
@@ -876,6 +891,7 @@ func TestTickMaxRetries(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -932,6 +948,7 @@ func TestTickWithWitnessAlreadyPresent(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start goroutine to collect enqueue requests
@@ -1012,6 +1029,7 @@ func TestHandleWitnessFetchSuccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start goroutine to collect enqueue requests
@@ -1077,6 +1095,7 @@ func TestHandleWitnessFetchSuccessNoPending(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1107,6 +1126,7 @@ func TestHandleWitnessFetchSuccessWitnessAlreadyPresent(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1154,6 +1174,7 @@ func TestRescheduleWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Test with no pending items - timer should be stopped
@@ -1207,6 +1228,7 @@ func TestSafeEnqueueWithNilWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1248,6 +1270,7 @@ func TestSafeEnqueueChannelClosed(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1282,6 +1305,7 @@ func TestHandleNeedPenalizedPeer(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Penalize peer first
@@ -1326,6 +1350,7 @@ func TestHandleNeedDistanceCheck(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Create block that's too far away (block 10 when chain is at 100)
@@ -1367,6 +1392,7 @@ func TestHandleNeedMissingFetchWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1404,6 +1430,7 @@ func TestLoop(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start the loop
@@ -1475,6 +1502,7 @@ func TestHandleFilterResultWithoutWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1513,6 +1541,7 @@ func TestCheckCompletingWithoutWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1551,6 +1580,7 @@ func TestFetchWitnessError(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash := common.HexToHash("0x123")
@@ -1591,6 +1621,7 @@ func TestFetchWitnessNoPeerError(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash := common.HexToHash("0x123")
@@ -1636,6 +1667,7 @@ func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1676,6 +1708,7 @@ func TestHandleFilterResultDuplicate(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1719,6 +1752,7 @@ func TestHandleFilterResultPenalizedPeer(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	peer := "test-peer"
@@ -1759,6 +1793,7 @@ func TestCheckCompletingWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1799,6 +1834,7 @@ func TestCheckCompletingDuplicate(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -1849,6 +1885,7 @@ func TestCheckCompletingKnownBlock(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
@@ -1884,6 +1921,7 @@ func TestCheckCompletingPenalizedPeer(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	peer := "test-peer"
@@ -1924,6 +1962,7 @@ func TestTickInvalidPendingState(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	hash := common.HexToHash("0x123")
@@ -1964,6 +2003,7 @@ func TestTickNotReadyYet(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -2024,6 +2064,7 @@ func TestSafeEnqueueSuccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start goroutine to collect enqueue requests
@@ -2104,6 +2145,7 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start the manager
@@ -2158,6 +2200,7 @@ func TestHandleWitnessFetchSuccessWithBlockNoLongerPending(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Create test data
@@ -2217,6 +2260,7 @@ func TestFetchWitnessWithBlockRemovedBeforeError(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Create test data
