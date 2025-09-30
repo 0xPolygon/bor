@@ -1024,49 +1024,6 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	return threshold
 }
 
-// verifyWitnessPageCount verifies a witness page count by querying random peers
-func (m *witnessManager) verifyWitnessPageCount(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) {
-	// Check if we already have a cached verification result
-	if cached := m.witnessVerificationCache.Get(hash); cached != nil {
-		if cached.Value().pageCount == reportedPageCount {
-			// Page count matches cached result, peer is honest
-			return
-		} else {
-			// Page count doesn't match cached result, peer is dishonest - drop immediately
-			log.Warn("Dropping dishonest peer - cached verification mismatch", "peer", reportingPeer, "reported", reportedPageCount, "cached", cached.Value().pageCount)
-			m.parentDropPeer(reportingPeer)
-			return
-		}
-	}
-
-	// Get random peers for verification
-	randomPeers := getRandomPeers()
-	if len(randomPeers) < witnessVerificationPeers {
-		// Not enough peers for verification, assume honest (conservative approach)
-		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
-		m.cacheVerificationResult(hash, reportedPageCount)
-		return
-	}
-
-	// Select random peers for verification
-	selectedPeers := randomPeers[:witnessVerificationPeers]
-
-	// Query selected peers for page count
-	consensusPageCount := m.getConsensusPageCount(selectedPeers, hash, getWitnessPageCount)
-
-	// Determine if original peer is honest
-	if consensusPageCount != reportedPageCount {
-		// Peer is dishonest - drop immediately
-		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
-		m.parentDropPeer(reportingPeer)
-		return
-	}
-
-	// Peer is honest - cache result
-	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount)
-	m.cacheVerificationResult(hash, reportedPageCount)
-}
-
 // getConsensusPageCount gets consensus page count from multiple peers
 func (m *witnessManager) getConsensusPageCount(peers []string, hash common.Hash, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
 	pageCounts := make([]uint64, 0, len(peers))
