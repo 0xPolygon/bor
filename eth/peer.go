@@ -163,7 +163,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 }
 
 // RequestWitnessesWithVerification requests witnesses with optional page count verification
-func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string)) (*eth.Request, error) {
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -176,6 +176,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 	witTotalPages := make(map[common.Hash]uint64)   // witness hash and its total pages required
 	witTotalRequest := make(map[common.Hash]uint64) // witness hash and its total requests
 	failedRequests := make(map[common.Hash]map[uint64]witReqRetryCount)
+	downloadPaused := make(map[common.Hash]bool) // Track if download is paused for verification
 	var mapsMu sync.RWMutex
 	var buildRequestMu sync.RWMutex
 
@@ -214,7 +215,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, verifyPageCount)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -318,7 +319,8 @@ func (p *ethPeer) receiveWitnessPage(
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
-	verifyPageCount func(common.Hash, uint64, string),
+	downloadPaused map[common.Hash]bool,
+	verifyPageCount func(common.Hash, uint64, string) bool,
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -380,8 +382,28 @@ func (p *ethPeer) receiveWitnessPage(
 		mapsMu.Unlock()
 
 		// Trigger page count verification if callback is provided
+		// If verification fails (peer is dishonest), pause download and mark for cancellation
 		if verifyPageCount != nil {
-			verifyPageCount(page.Hash, page.TotalPages, p.ID())
+			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
+			if !isHonest {
+				// Peer is dishonest - pause download and discard pages
+				mapsMu.Lock()
+				downloadPaused[page.Hash] = true
+				mapsMu.Unlock()
+				p.witPeer.Peer.Log().Warn("Peer failed verification, pausing witness download", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
+				// Don't build more requests for this hash
+				return nil
+			}
+		}
+
+		// Check if download is paused before building more requests
+		mapsMu.RLock()
+		paused := downloadPaused[page.Hash]
+		mapsMu.RUnlock()
+
+		if paused {
+			// Download is paused, don't build more requests
+			return nil
 		}
 
 		// non blocking call to avoid race condition because of semaphore

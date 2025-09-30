@@ -132,8 +132,8 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Create verification callback for page count verification
-			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) {
+			// Create verification callback for page count verification (returns true if honest)
+			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) bool {
 				// Get random peers for verification
 				getRandomPeers := func() []string {
 					allPeers := h.peers.getAllPeers()
@@ -182,8 +182,8 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 					}
 				}
 
-				// Trigger verification in witness manager
-				h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+				// Run synchronous verification and return result
+				return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 			}
 
 			// Request witnesses using the wit peer with verification
@@ -214,8 +214,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Create verification callback for page count verification
-			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) {
+			// Create verification callback for page count verification (returns true if honest)
+			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) bool {
 				// Get random peers for verification
 				getRandomPeers := func() []string {
 					allPeers := h.peers.getAllPeers()
@@ -264,8 +264,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 					}
 				}
 
-				// Trigger verification in witness manager
-				h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+				// Run synchronous verification and return result
+				return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 			}
 
 			// Request witnesses using the wit peer with verification

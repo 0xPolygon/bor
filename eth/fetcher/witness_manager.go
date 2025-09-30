@@ -1112,13 +1112,63 @@ func (m *witnessManager) cacheVerificationResult(hash common.Hash, pageCount uin
 }
 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
-func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) {
+// Returns true if peer is honest (or under threshold), false if peer should be dropped
+func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
 
-	// Only trigger verification if page count exceeds dynamic threshold
-	if pageCount > threshold {
-		log.Debug("[wm] Witness page count exceeds threshold, triggering verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
-		go m.verifyWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+	// If page count is within threshold, no verification needed
+	if pageCount <= threshold {
+		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		return true
 	}
+
+	// Page count exceeds threshold - verify synchronously
+	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+}
+
+// verifyWitnessPageCountSync verifies a witness page count synchronously and returns result
+func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
+	// Check if we already have a cached verification result
+	if cached := m.witnessVerificationCache.Get(hash); cached != nil {
+		if cached.Value().pageCount == reportedPageCount {
+			// Page count matches cached result, peer is honest
+			log.Debug("[wm] Cached verification result matches", "peer", reportingPeer, "pageCount", reportedPageCount)
+			return true
+		} else {
+			// Page count doesn't match cached result, peer is dishonest - drop immediately
+			log.Warn("Dropping dishonest peer - cached verification mismatch", "peer", reportingPeer, "reported", reportedPageCount, "cached", cached.Value().pageCount)
+			m.parentDropPeer(reportingPeer)
+			return false
+		}
+	}
+
+	// Get random peers for verification
+	randomPeers := getRandomPeers()
+	if len(randomPeers) < witnessVerificationPeers {
+		// Not enough peers for verification, assume honest (conservative approach)
+		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
+		m.cacheVerificationResult(hash, reportedPageCount)
+		return true
+	}
+
+	// Select random peers for verification
+	selectedPeers := randomPeers[:witnessVerificationPeers]
+
+	// Query selected peers for page count
+	consensusPageCount := m.getConsensusPageCount(selectedPeers, hash, getWitnessPageCount)
+
+	// Determine if original peer is honest
+	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
+		// Peer is dishonest - drop immediately
+		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
+		m.parentDropPeer(reportingPeer)
+		return false
+	}
+
+	// Peer is honest - cache result
+	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount)
+	m.cacheVerificationResult(hash, reportedPageCount)
+	return true
 }
