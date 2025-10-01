@@ -90,7 +90,6 @@ func (p *Peer) sendNewWitness(witness *stateless.Witness) error {
 func (p *Peer) sendNewWitnessHashes(packet *NewWitnessHashesPacket) error {
 	for _, hash := range packet.Hashes {
 		p.knownWitnesses.Add(hash)
-
 	}
 	return p2p.Send(p.rw, NewWitnessHashesMsg, packet)
 }

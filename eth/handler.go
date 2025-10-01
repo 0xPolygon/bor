@@ -673,7 +673,6 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 		}
 		log.Debug("Announced witness", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
-
 }
 
 func EthPeersContainsID(ethPeers []*ethPeer, id string) bool {
