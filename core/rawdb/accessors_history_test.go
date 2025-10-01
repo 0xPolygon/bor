@@ -9,7 +9,7 @@ import (
 )
 
 // TestDeleteStateHistoryIndex_WithoutBorReceipts tests if the the deletion of all
-// history indexing data works and bor receipts aren't deleted dispite having same
+// history indexing data works and bor receipts aren't deleted despite having same
 // prefix for deletion.
 func TestDeleteStateHistoryIndex_WithoutBorReceipts(t *testing.T) {
 	db := NewMemoryDatabase()
