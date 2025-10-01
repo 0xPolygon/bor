@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -160,6 +161,54 @@ func (p *ethPeer) SupportsWitness() bool {
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
 	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil)
+}
+
+// RequestWitnessPageCount requests only the page count for a witness without downloading all pages.
+// This is efficient for verification purposes where we only need metadata.
+func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
+	if p.witPeer == nil {
+		return 0, errors.New("witness peer not found")
+	}
+
+	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
+
+	// Request only the first page (page 0) to get TotalPages metadata
+	witResCh := make(chan *wit.Response, 1)
+	request := []wit.WitnessPageRequest{{Hash: hash, Page: 0}}
+
+	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
+	if err != nil {
+		p.witPeer.Peer.Log().Error("Error requesting witness page count", "peer", p.ID(), "err", err)
+		return 0, err
+	}
+	defer witReq.Close()
+
+	// Wait for the first page response with timeout
+	select {
+	case witRes := <-witResCh:
+		if witRes == nil {
+			return 0, errors.New("nil witness response")
+		}
+
+		// Extract WitnessPacketRLPPacket from the response
+		witPacket, ok := witRes.Res.(*wit.WitnessPacketRLPPacket)
+		if !ok {
+			return 0, fmt.Errorf("unexpected witness response type: %T", witRes.Res)
+		}
+
+		// Extract TotalPages from the first page
+		if len(witPacket.WitnessPacketResponse) == 0 {
+			return 0, errors.New("empty witness packet response")
+		}
+
+		totalPages := witPacket.WitnessPacketResponse[0].TotalPages
+		p.witPeer.Peer.Log().Debug("Received witness page count", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
+
+		return totalPages, nil
+
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("timeout waiting for witness page count from peer %s", p.ID())
+	}
 }
 
 // RequestWitnessesWithVerification requests witnesses with optional page count verification

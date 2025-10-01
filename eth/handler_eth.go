@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
-	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
@@ -151,35 +150,15 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 					return randomPeers
 				}
 
-				// Get witness page count from a peer
+				// Get witness page count from a peer using the dedicated method
 				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
 					peer := h.peers.peer(peerID)
 					if peer == nil || !peer.SupportsWitness() {
 						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
 					}
 
-					// Create a temporary channel to get the page count
-					resCh := make(chan *eth.Response, 1)
-					req, err := peer.RequestWitnesses([]common.Hash{hash}, resCh)
-					if err != nil {
-						return 0, err
-					}
-					defer req.Close()
-
-					// Wait for response with timeout
-					select {
-					case res := <-resCh:
-						if res == nil {
-							return 0, fmt.Errorf("no response from peer %s", peerID)
-						}
-						// Extract page count from response
-						if witPacket, ok := res.Res.(*wit.WitnessPacketRLPPacket); ok && len(witPacket.WitnessPacketResponse) > 0 {
-							return witPacket.WitnessPacketResponse[0].TotalPages, nil
-						}
-						return 0, fmt.Errorf("invalid response format from peer %s", peerID)
-					case <-time.After(5 * time.Second):
-						return 0, fmt.Errorf("timeout waiting for response from peer %s", peerID)
-					}
+					// Use the new efficient method that only downloads page 0
+					return peer.RequestWitnessPageCount(hash)
 				}
 
 				// Run synchronous verification and return result
@@ -233,35 +212,15 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 					return randomPeers
 				}
 
-				// Get witness page count from a peer
+				// Get witness page count from a peer using the dedicated method
 				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
 					peer := h.peers.peer(peerID)
 					if peer == nil || !peer.SupportsWitness() {
 						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
 					}
 
-					// Create a temporary channel to get the page count
-					resCh := make(chan *eth.Response, 1)
-					req, err := peer.RequestWitnesses([]common.Hash{hash}, resCh)
-					if err != nil {
-						return 0, err
-					}
-					defer req.Close()
-
-					// Wait for response with timeout
-					select {
-					case res := <-resCh:
-						if res == nil {
-							return 0, fmt.Errorf("no response from peer %s", peerID)
-						}
-						// Extract page count from response
-						if witPacket, ok := res.Res.(*wit.WitnessPacketRLPPacket); ok && len(witPacket.WitnessPacketResponse) > 0 {
-							return witPacket.WitnessPacketResponse[0].TotalPages, nil
-						}
-						return 0, fmt.Errorf("invalid response format from peer %s", peerID)
-					case <-time.After(5 * time.Second):
-						return 0, fmt.Errorf("timeout waiting for response from peer %s", peerID)
-					}
+					// Use the new efficient method that only downloads page 0
+					return peer.RequestWitnessPageCount(hash)
 				}
 
 				// Run synchronous verification and return result
