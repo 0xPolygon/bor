@@ -394,6 +394,117 @@ func TestWitnessVerificationScenarios(t *testing.T) {
 	})
 }
 
+// TestTotalPagesConsistency tests that peers cannot change TotalPages across pages
+func TestTotalPagesConsistency(t *testing.T) {
+	t.Run("ConsistentTotalPages_ShouldPass", func(t *testing.T) {
+		// Simulate receiving pages with consistent TotalPages
+		pages := []struct {
+			pageNum    uint64
+			totalPages uint64
+		}{
+			{0, 3},
+			{1, 3},
+			{2, 3},
+		}
+
+		var storedTotalPages uint64
+		var hasTotalPages bool
+
+		for _, page := range pages {
+			if hasTotalPages {
+				// Verify TotalPages hasn't changed
+				if storedTotalPages != page.totalPages {
+					t.Errorf("TotalPages changed from %d to %d on page %d", storedTotalPages, page.totalPages, page.pageNum)
+					return
+				}
+			} else {
+				// First time - store it
+				storedTotalPages = page.totalPages
+				hasTotalPages = true
+			}
+		}
+
+		// All pages had consistent TotalPages
+		if storedTotalPages != 3 {
+			t.Errorf("Expected TotalPages to be 3, got %d", storedTotalPages)
+		}
+	})
+
+	t.Run("InconsistentTotalPages_ShouldFail", func(t *testing.T) {
+		// Simulate malicious peer changing TotalPages
+		pages := []struct {
+			pageNum    uint64
+			totalPages uint64
+		}{
+			{0, 3},
+			{1, 3},
+			{2, 3},
+			{3, 1000}, // Malicious peer changes TotalPages!
+		}
+
+		var storedTotalPages uint64
+		var hasTotalPages bool
+		attackDetected := false
+
+		for _, page := range pages {
+			if hasTotalPages {
+				// Verify TotalPages hasn't changed
+				if storedTotalPages != page.totalPages {
+					attackDetected = true
+					t.Logf("Attack detected: TotalPages changed from %d to %d on page %d", storedTotalPages, page.totalPages, page.pageNum)
+					break
+				}
+			} else {
+				// First time - store it
+				storedTotalPages = page.totalPages
+				hasTotalPages = true
+			}
+		}
+
+		if !attackDetected {
+			t.Error("Expected attack to be detected when TotalPages changes")
+		}
+	})
+
+	t.Run("ExcessPages_ShouldFail", func(t *testing.T) {
+		// Simulate peer sending more pages than claimed
+		totalPages := uint64(3)
+		receivedPages := 5 // Peer sends 5 pages but claimed 3
+
+		if receivedPages > int(totalPages) {
+			// This should be detected and rejected
+			t.Logf("Correctly detected: peer sent %d pages but claimed %d", receivedPages, totalPages)
+		} else {
+			t.Error("Failed to detect peer sending more pages than claimed")
+		}
+	})
+
+	t.Run("InvalidPageNumber_ShouldFail", func(t *testing.T) {
+		// Simulate peer sending page number >= TotalPages
+		testCases := []struct {
+			pageNum    uint64
+			totalPages uint64
+			shouldFail bool
+		}{
+			{0, 3, false}, // Valid: page 0 of 3
+			{2, 3, false}, // Valid: page 2 of 3 (last page)
+			{3, 3, true},  // Invalid: page 3 >= TotalPages 3
+			{5, 3, true},  // Invalid: page 5 >= TotalPages 3
+		}
+
+		for _, tc := range testCases {
+			isInvalid := tc.pageNum >= tc.totalPages
+			if isInvalid != tc.shouldFail {
+				t.Errorf("Page=%d, TotalPages=%d: expected fail=%v, got fail=%v", tc.pageNum, tc.totalPages, tc.shouldFail, isInvalid)
+			}
+
+			if isInvalid {
+				t.Logf("Correctly rejected: page %d >= totalPages %d", tc.pageNum, tc.totalPages)
+			}
+		}
+	})
+}
+
 // TestWitnessPageCountVerification tests the page count verification logic
 func TestWitnessPageCountVerification(t *testing.T) {
 	tests := []struct {

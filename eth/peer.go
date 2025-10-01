@@ -367,6 +367,12 @@ func (p *ethPeer) receiveWitnessPage(
 			continue
 		}
 
+		// Validate that current page number is within bounds
+		if page.Page >= page.TotalPages {
+			p.witPeer.Peer.Log().Warn("Peer sent invalid page number, dropping peer", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
+			return fmt.Errorf("peer sent invalid page number: page=%d >= totalPages=%d", page.Page, page.TotalPages)
+		}
+
 		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
 		if len(receivedWitPages[page.Hash]) == int(page.TotalPages) {
 			wit, err := p.reconstructWitness(receivedWitPages[page.Hash])
@@ -376,14 +382,26 @@ func (p *ethPeer) receiveWitnessPage(
 			reconstructedWitness[page.Hash] = wit
 		}
 
-		// check and build any remaining witnessRequest for the witnesses we dont know previously the totalPages
+		// Check and validate TotalPages consistency
 		mapsMu.Lock()
-		witTotalPages[page.Hash] = page.TotalPages
+		existingTotalPages, hasTotalPages := witTotalPages[page.Hash]
+		if hasTotalPages {
+			// We already know TotalPages - verify it hasn't changed
+			if existingTotalPages != page.TotalPages {
+				mapsMu.Unlock()
+				p.witPeer.Peer.Log().Warn("Peer sent inconsistent TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "existing", existingTotalPages, "new", page.TotalPages)
+				downloadPaused[page.Hash] = true
+				return fmt.Errorf("peer sent inconsistent TotalPages: existing=%d, new=%d", existingTotalPages, page.TotalPages)
+			}
+		} else {
+			// First time learning TotalPages - store it
+			witTotalPages[page.Hash] = page.TotalPages
+		}
 		mapsMu.Unlock()
 
-		// Trigger page count verification if callback is provided
+		// Trigger page count verification if callback is provided (only on first page)
 		// If verification fails (peer is dishonest), pause download and mark for cancellation
-		if verifyPageCount != nil {
+		if verifyPageCount != nil && !hasTotalPages {
 			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
 			if !isHonest {
 				// Peer is dishonest - pause download and discard pages
@@ -394,6 +412,19 @@ func (p *ethPeer) receiveWitnessPage(
 				// Don't build more requests for this hash
 				return nil
 			}
+		}
+
+		// Additional check: Verify we haven't received more pages than claimed
+		mapsMu.RLock()
+		currentTotalPages := witTotalPages[page.Hash]
+		mapsMu.RUnlock()
+
+		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
+			p.witPeer.Peer.Log().Warn("Peer sent more pages than TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "received", len(receivedWitPages[page.Hash]), "total", currentTotalPages)
+			mapsMu.Lock()
+			downloadPaused[page.Hash] = true
+			mapsMu.Unlock()
+			return fmt.Errorf("peer sent more pages than TotalPages: received=%d, total=%d", len(receivedWitPages[page.Hash]), currentTotalPages)
 		}
 
 		// Check if download is paused before building more requests
