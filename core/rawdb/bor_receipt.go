@@ -84,17 +84,15 @@ func ReadBorReceipt(db ethdb.Reader, hash common.Hash, number uint64, config *pa
 		return nil
 	}
 
-	// We're deriving many fields from the block body, retrieve beside the receipt
+	// Fetch the raw bor receipt for given block
 	borReceipt := ReadRawBorReceipt(db, hash, number)
 	if borReceipt == nil {
 		return nil
 	}
 
-	// We're deriving many fields from the block body, retrieve beside the receipt
+	// Fetch normal receipts to derive certain fields for bor receipts. Don't return if no
+	// receipts are present as a block with only state-sync transaction can exist.
 	receipts := ReadRawReceipts(db, hash, number)
-	if receipts == nil {
-		return nil
-	}
 
 	body := ReadBody(db, hash, number)
 	if body == nil {
