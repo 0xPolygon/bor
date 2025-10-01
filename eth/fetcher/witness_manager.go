@@ -1024,38 +1024,39 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	return threshold
 }
 
-// getConsensusPageCount gets consensus page count from multiple peers
-func (m *witnessManager) getConsensusPageCount(peers []string, hash common.Hash, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
-	pageCounts := make([]uint64, 0, len(peers))
+// getConsensusPageCountWithOriginal gets consensus page count including the original peer
+func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash common.Hash, originalPageCount uint64, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) uint64 {
+	// Start with the original peer's count
+	countMap := make(map[uint64]int)
+	countMap[originalPageCount] = 1
 
+	// Query random peers and add their counts
 	for _, peer := range peers {
 		pageCount, err := getWitnessPageCount(peer, hash)
 		if err == nil {
-			pageCounts = append(pageCounts, pageCount)
+			countMap[pageCount]++
 		}
 	}
 
-	// If we have at least 2 responses, use the most common one
-	if len(pageCounts) >= 2 {
-		// Simple consensus: use the most common page count
-		countMap := make(map[uint64]int)
-		for _, count := range pageCounts {
-			countMap[count]++
+	// Find the most common page count (majority vote)
+	var maxCount int
+	var consensusCount uint64
+	for count, freq := range countMap {
+		if freq > maxCount {
+			maxCount = freq
+			consensusCount = count
 		}
+	}
 
-		var maxCount int
-		var consensusCount uint64
-		for count, freq := range countMap {
-			if freq > maxCount {
-				maxCount = freq
-				consensusCount = count
-			}
-		}
+	// Log the consensus result
+	log.Debug("[wm] Consensus calculation", "counts", countMap, "consensus", consensusCount, "maxVotes", maxCount)
 
+	// Only return consensus if we have majority (at least 2 out of 3)
+	if maxCount >= 2 {
 		return consensusCount
 	}
 
-	// Not enough responses, return 0 (will be treated as no consensus)
+	// No clear majority, return 0 (will be treated as no consensus)
 	return 0
 }
 
@@ -1113,10 +1114,10 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	// Select random peers for verification
 	selectedPeers := randomPeers[:witnessVerificationPeers]
 
-	// Query selected peers for page count
-	consensusPageCount := m.getConsensusPageCount(selectedPeers, hash, getWitnessPageCount)
+	// Query selected peers for page count and include original peer's count in consensus
+	consensusPageCount := m.getConsensusPageCountWithOriginal(selectedPeers, hash, reportedPageCount, getWitnessPageCount)
 
-	// Determine if original peer is honest
+	// Determine if original peer is honest based on majority consensus
 	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
 		// Peer is dishonest - drop immediately
 		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)

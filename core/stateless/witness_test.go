@@ -258,6 +258,79 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 }
 
+// TestConsensusWithOriginalPeer tests consensus calculation including original peer
+func TestConsensusWithOriginalPeer(t *testing.T) {
+	t.Run("Case1_OriginalPeer3_RandomPeers2and3_ShouldChoose3", func(t *testing.T) {
+		// Original peer: 3, Random peer 1: 2, Random peer 2: 3
+		// Out of 3 total peers, 2 say "3" → Should choose 3
+		originalCount := uint64(3)
+		randomCounts := []uint64{2, 3}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 3 {
+			t.Errorf("Expected consensus to be 3 (majority), got %d", consensus)
+		}
+		t.Logf("Correct: Out of 3 peers (1 says 2, 2 say 3), chose majority: 3")
+	})
+
+	t.Run("Case2_OriginalPeer3_RandomPeers2and2_ShouldChoose2", func(t *testing.T) {
+		// Original peer: 3, Random peer 1: 2, Random peer 2: 2
+		// Out of 3 total peers, 2 say "2" → Should choose 2 (original is dishonest)
+		originalCount := uint64(3)
+		randomCounts := []uint64{2, 2}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 2 {
+			t.Errorf("Expected consensus to be 2 (majority), got %d", consensus)
+		}
+		t.Logf("Correct: Out of 3 peers (2 say 2, 1 says 3), chose majority: 2")
+	})
+
+	t.Run("NoMajority_AllDifferent", func(t *testing.T) {
+		// Original peer: 3, Random peer 1: 2, Random peer 2: 4
+		// All different, no majority
+		originalCount := uint64(3)
+		randomCounts := []uint64{2, 4}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 0 {
+			t.Errorf("Expected consensus to be 0 (no majority), got %d", consensus)
+		}
+		t.Logf("Correct: No majority (1,1,1), no consensus")
+	})
+}
+
+// getConsensusIncludingOriginal simulates consensus calculation with original peer included
+func getConsensusIncludingOriginal(originalCount uint64, randomCounts []uint64) uint64 {
+	// Build count map including original peer
+	countMap := make(map[uint64]int)
+	countMap[originalCount] = 1
+
+	for _, count := range randomCounts {
+		countMap[count]++
+	}
+
+	// Find majority (at least 2 out of 3)
+	var maxCount int
+	var consensusCount uint64
+	for count, freq := range countMap {
+		if freq > maxCount {
+			maxCount = freq
+			consensusCount = count
+		}
+	}
+
+	// Need at least 2 votes for majority
+	if maxCount >= 2 {
+		return consensusCount
+	}
+
+	return 0 // No consensus
+}
+
 // TestSimplifiedWitnessVerification tests the simplified verification logic
 func TestSimplifiedWitnessVerification(t *testing.T) {
 	tests := []struct {
