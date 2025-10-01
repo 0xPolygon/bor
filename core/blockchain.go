@@ -2327,7 +2327,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		}
 
 		// Process the block using stateless execution
-		statedb, err := bc.ProcessBlockWithWitnesses(block, witness)
+		statedb, res, err := bc.ProcessBlockWithWitnesses(block, witness)
 		if err != nil {
 			return processed, err
 		}
@@ -2342,6 +2342,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		processed++
 
 		stats.processed = processed
+		stats.usedGas += res.GasUsed
 
 		stats.report(chain, i, 0, 0, 0, 0, true, true)
 	}
@@ -2925,7 +2926,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
 		// Run the stateless self-cross-validation
-		crossStateRoot, crossReceiptRoot, _, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, diskdb)
+		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, diskdb)
 		if err != nil {
 			return nil, fmt.Errorf("stateless self-validation failed: %v", err)
 		}
@@ -3658,15 +3659,15 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 }
 
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
-func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, error) {
+func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
-		return nil, errors.New("nil witness")
+		return nil, nil, errors.New("nil witness")
 	}
 
 	// Validate witness.
 	if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
 		log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
-		return nil, fmt.Errorf("witness validation failed: %w", err)
+		return nil, nil, fmt.Errorf("witness validation failed: %w", err)
 	}
 
 	// Remove critical computed fields from the block to force true recalculation
@@ -3679,25 +3680,25 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
-	crossStateRoot, crossReceiptRoot, statedb, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.vmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
 
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
 		log.Error("Stateless self-validation failed", "block", block.Number(), "hash", block.Hash(), "error", err)
-		return nil, err
+		return nil, nil, err
 	}
 	if crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
 		err = fmt.Errorf("stateless self-validation state root mismatch: remote %x != local %x", block.Root(), crossStateRoot)
-		return nil, err
+		return nil, nil, err
 	}
 	if crossReceiptRoot != block.ReceiptHash() {
 		log.Error("Stateless self-validation receipt root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossReceiptRoot, "local", block.ReceiptHash())
 		err = fmt.Errorf("stateless self-validation receipt root mismatch: remote %x != local %x", block.ReceiptHash(), crossReceiptRoot)
-		return nil, err
+		return nil, nil, err
 	}
-	return statedb, nil
+	return statedb, res, nil
 }
 
 // startHeaderVerificationLoop starts a background goroutine that periodically

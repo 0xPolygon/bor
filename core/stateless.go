@@ -42,7 +42,7 @@ import (
 //   - It cannot be placed outside of core, because it needs to construct a dud headerchain
 //
 // TODO(karalabe): Would be nice to resolve both issues above somehow and move it.
-func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database) (common.Hash, common.Hash, *state.StateDB, error) {
+func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database) (common.Hash, common.Hash, *state.StateDB, *ProcessResult, error) {
 	// Sanity check if the supplied block accidentally contains a set root or
 	// receipt hash. If so, be very loud, but still continue.
 	if block.Root() != (common.Hash{}) {
@@ -55,7 +55,7 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	memdb := witness.MakeHashDB(diskdb)
 	db, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
 	if err != nil {
-		return common.Hash{}, common.Hash{}, nil, err
+		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 	// Create a blockchain that is idle, but can be used to access headers through
 	headerChain := &HeaderChain{
@@ -69,14 +69,14 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 
 	res, err := processor.Process(block, db, vmconfig, author, context.Background())
 	if err != nil {
-		return common.Hash{}, common.Hash{}, nil, err
+		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 
 	if err = validator.ValidateState(block, db, res, true); err != nil {
-		return common.Hash{}, common.Hash{}, nil, err
+		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 	// Almost everything validated, but receipt and state root needs to be returned
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
-	return stateRoot, receiptRoot, db, nil
+	return stateRoot, receiptRoot, db, res, nil
 }
