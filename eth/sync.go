@@ -30,9 +30,8 @@ import (
 )
 
 const (
-	forceSyncCycle        = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	defaultMinSyncPeers   = 5                // Amount of peers desired to start syncing
-	defaultTdGapTolerance = 10               // The gap tolerance between ourTd and peer with highest TD before forcing syncOp
+	forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
+	defaultMinSyncPeers = 5                // Amount of peers desired to start syncing
 )
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
@@ -173,9 +172,7 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		ourTD = big.NewInt(0)
 	}
 
-	sum := new(big.Int).Add(ourTD, big.NewInt(defaultTdGapTolerance))
-
-	if op.td.Cmp(sum) <= 0 {
+	if op.td.Cmp(ourTD) <= 0 {
 		// We seem to be in sync according to the legacy rules. In the merge
 		// world, it can also mean we're stuck on the merge block, waiting for
 		// a beacon client. In the latter case, notify the user.

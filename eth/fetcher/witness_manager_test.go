@@ -914,7 +914,7 @@ func TestTickMaxRetries(t *testing.T) {
 			block:  block,
 		},
 		announce: announce,
-		retries:  10, // Already at max retries
+		retries:  maxWitnessFetchRetries, // Already at max retries
 	}
 
 	manager.mu.Lock()
