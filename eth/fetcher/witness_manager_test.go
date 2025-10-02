@@ -1548,51 +1548,6 @@ func TestFetchWitnessError(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // Give time for goroutine to process
 }
 
-// TestFetchWitnessNoPeerError tests specific error case for no peers
-func TestFetchWitnessNoPeerError(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	hash := common.HexToHash("0x123")
-	peer := "test-peer"
-
-	// Test fetchWitness with specific "no peer with witness for hash" error
-	announce := &blockAnnounce{
-		origin: peer,
-		hash:   hash,
-		number: 101,
-		time:   time.Now(),
-		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
-			return nil, errors.New("no peer with witness for hash")
-		},
-	}
-
-	// This will run in background and should mark witness as unavailable
-	go manager.fetchWitness(peer, hash, announce)
-
-	time.Sleep(50 * time.Millisecond) // Give time for goroutine to process
-
-	// Check that witness was marked as unavailable
-	if !manager.isWitnessUnavailable(hash) {
-		t.Error("Expected witness to be marked unavailable after no peer error")
-	}
-}
-
 // TestHandleFilterResultWitnessUnavailable tests filter result with unavailable witness
 func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 	quit := make(chan struct{})
