@@ -87,6 +87,7 @@ type WitnessPeer interface {
 	AsyncSendNewWitness(witness *stateless.Witness)
 	AsyncSendNewWitnessHash(hash common.Hash, number uint64)
 	RequestWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error)
+	RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error)
 	Close()
 	ID() string
 	Version() uint
@@ -163,14 +164,75 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil)
 }
 
-// RequestWitnessPageCount requests only the page count for a witness without downloading all pages.
-// This is efficient for verification purposes where we only need metadata.
+// RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
+// This is efficient for verification purposes where we only need metadata, not the actual witness data.
 func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 	if p.witPeer == nil {
 		return 0, errors.New("witness peer not found")
 	}
 
+	// Check if peer supports WIT2 protocol with metadata message
+	if p.witPeer.Peer.Version() < wit.WIT2 {
+		// Fallback to old method for WIT1 peers: request page 0
+		return p.requestWitnessPageCountLegacy(hash)
+	}
+
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
+
+	// Use the new efficient metadata request (WIT2)
+	witResCh := make(chan *wit.Response, 1)
+
+	witReq, err := p.witPeer.Peer.RequestWitnessMetadata([]common.Hash{hash}, witResCh)
+	if err != nil {
+		p.witPeer.Peer.Log().Error("Error requesting witness metadata", "peer", p.ID(), "err", err)
+		return 0, err
+	}
+	defer witReq.Close()
+
+	// Wait for metadata response with timeout
+	select {
+	case witRes := <-witResCh:
+		if witRes == nil {
+			return 0, errors.New("nil witness metadata response")
+		}
+
+		// Extract WitnessMetadataPacket from the response
+		metadataPacket, ok := witRes.Res.(*wit.WitnessMetadataPacket)
+		if !ok {
+			return 0, fmt.Errorf("unexpected witness metadata response type: %T", witRes.Res)
+		}
+
+		// Extract metadata
+		if len(metadataPacket.Metadata) == 0 {
+			return 0, errors.New("empty witness metadata response")
+		}
+
+		metadata := metadataPacket.Metadata[0]
+
+		// Validate that witness is available
+		if !metadata.Available {
+			return 0, fmt.Errorf("witness not available on peer %s for hash %s", p.ID(), hash)
+		}
+
+		p.witPeer.Peer.Log().Debug("Received witness metadata",
+			"peer", p.ID(),
+			"hash", hash,
+			"totalPages", metadata.TotalPages,
+			"witnessSize", metadata.WitnessSize,
+			"blockNumber", metadata.BlockNumber,
+			"available", metadata.Available)
+
+		return metadata.TotalPages, nil
+
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("timeout waiting for witness metadata from peer %s", p.ID())
+	}
+}
+
+// requestWitnessPageCountLegacy is the fallback method for WIT1 peers that don't support metadata requests.
+// It requests page 0 to get the TotalPages field.
+func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error) {
+	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)
 
 	// Request only the first page (page 0) to get TotalPages metadata
 	witResCh := make(chan *wit.Response, 1)
@@ -178,7 +240,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 
 	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
 	if err != nil {
-		p.witPeer.Peer.Log().Error("Error requesting witness page count", "peer", p.ID(), "err", err)
+		p.witPeer.Peer.Log().Error("Error requesting witness page count (legacy)", "peer", p.ID(), "err", err)
 		return 0, err
 	}
 	defer witReq.Close()
@@ -202,7 +264,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 		}
 
 		totalPages := witPacket.WitnessPacketResponse[0].TotalPages
-		p.witPeer.Peer.Log().Debug("Received witness page count", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
+		p.witPeer.Peer.Log().Debug("Received witness page count (legacy)", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
 
 		return totalPages, nil
 
