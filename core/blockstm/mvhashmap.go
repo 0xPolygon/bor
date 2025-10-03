@@ -1,7 +1,10 @@
 package blockstm
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/emirpasic/gods/maps/treemap"
@@ -278,4 +281,201 @@ func ValidateVersion(txIdx int, lastInputOutput *TxnInputOutput, versionedData *
 	}
 
 	return
+}
+
+// json models
+type jsonKey struct {
+	Type     string `json:"type"`               // address | state | subpath
+	Address  string `json:"address"`            // 0x...
+	StateKey string `json:"stateKey,omitempty"` // 0x..., only for state
+	Subpath  uint8  `json:"subpath,omitempty"`  // only for subpath
+}
+
+type jsonWriteCell struct {
+	TxIndex     int    `json:"txIndex"`
+	Flag        string `json:"flag"`        // done | estimate
+	Incarnation int    `json:"incarnation"` // -1 means unknown / unset
+	Data        string `json:"data"`        // stringified
+}
+
+type jsonVersionedEntry struct {
+	Key      jsonKey         `json:"key"`
+	Versions []jsonWriteCell `json:"versions"` // sorted by txIndex asc
+}
+
+type jsonStorageCacheEntry struct {
+	Key   jsonKey `json:"key"`
+	Value string  `json:"value"`
+}
+
+type jsonMVHashMapDump struct {
+	Versioned    []jsonVersionedEntry    `json:"versioned"`    // sorted by key
+	StorageCache []jsonStorageCacheEntry `json:"storageCache"` // sorted by key
+}
+
+// ToJSON returns a complete JSON dump of the MVHashMap (stable order).
+func (mv *MVHashMap) ToJSON() string {
+	// --- collect versioned entries from mv.m ---
+	type keyed struct {
+		keyBytes Key
+		entry    jsonVersionedEntry
+	}
+	var versioned []keyed
+
+	mv.m.Range(func(k any, v any) bool {
+		kenc := k.(Key)
+		cells := v.(*TxnIndexCells)
+
+		// Build entry with a read-locked snapshot of the treemap.
+		entry := jsonVersionedEntry{Key: keyToJSON(kenc)}
+
+		cells.rw.RLock()
+		// gods/treemap keeps keys sorted; iterate in order
+		for _, kraw := range cells.tm.Keys() {
+			txIdx := kraw.(int)
+			if cval, ok := cells.tm.Get(txIdx); ok {
+				wc := cval.(*WriteCell)
+				entry.Versions = append(entry.Versions, jsonWriteCell{
+					TxIndex:     txIdx,
+					Flag:        flagToString(wc.flag),
+					Incarnation: wc.incarnation,
+					Data:        anyToString(wc.data),
+				})
+			}
+		}
+		cells.rw.RUnlock()
+
+		versioned = append(versioned, keyed{
+			keyBytes: kenc,
+			entry:    entry,
+		})
+		return true
+	})
+
+	// stable sort by raw key bytes
+	sort.Slice(versioned, func(i, j int) bool {
+		ki := versioned[i].keyBytes
+		kj := versioned[j].keyBytes
+		for x := 0; x < KeyLength; x++ {
+			if ki[x] != kj[x] {
+				return ki[x] < kj[x]
+			}
+		}
+		return false
+	})
+
+	outVersioned := make([]jsonVersionedEntry, len(versioned))
+	for i := range versioned {
+		outVersioned[i] = versioned[i].entry
+	}
+
+	// --- collect storage cache entries from mv.s ---
+	type skeyed struct {
+		keyBytes Key
+		entry    jsonStorageCacheEntry
+	}
+	var storage []skeyed
+
+	mv.s.Range(func(k any, v any) bool {
+		// k is string of raw Key bytes; reconstruct Key
+		kstr := k.(string)
+		var kenc Key
+		copy(kenc[:], []byte(kstr))
+
+		entry := jsonStorageCacheEntry{
+			Key:   keyToJSON(kenc),
+			Value: anyToString(v),
+		}
+		storage = append(storage, skeyed{keyBytes: kenc, entry: entry})
+		return true
+	})
+
+	sort.Slice(storage, func(i, j int) bool {
+		ki := storage[i].keyBytes
+		kj := storage[j].keyBytes
+		for x := 0; x < KeyLength; x++ {
+			if ki[x] != kj[x] {
+				return ki[x] < kj[x]
+			}
+		}
+		return false
+	})
+
+	outStorage := make([]jsonStorageCacheEntry, len(storage))
+	for i := range storage {
+		outStorage[i] = storage[i].entry
+	}
+
+	// marshal
+	dump := jsonMVHashMapDump{
+		Versioned:    outVersioned,
+		StorageCache: outStorage,
+	}
+	b, _ := json.Marshal(dump) // safe for logging; ignore error to avoid panics
+	return string(b)
+}
+
+// String implements fmt.Stringer; it returns the same JSON as ToJSON.
+func (mv *MVHashMap) String() string { return mv.ToJSON() }
+
+// --- helpers -----------------------------------------------------------------
+
+func keyToJSON(k Key) jsonKey {
+	switch {
+	case k.IsAddress():
+		return jsonKey{
+			Type:    "address",
+			Address: k.GetAddress().Hex(),
+		}
+	case k.IsState():
+		return jsonKey{
+			Type:     "state",
+			Address:  k.GetAddress().Hex(),
+			StateKey: k.GetStateKey().Hex(),
+		}
+	case k.IsSubpath():
+		return jsonKey{
+			Type:    "subpath",
+			Address: k.GetAddress().Hex(),
+			Subpath: k.GetSubpath(),
+		}
+	default:
+		// Fallback: treat as raw address-key
+		return jsonKey{
+			Type:    "unknown",
+			Address: k.GetAddress().Hex(),
+		}
+	}
+}
+
+func flagToString(f uint) string {
+	switch f {
+	case FlagDone:
+		return "done"
+	case FlagEstimate:
+		return "estimate"
+	default:
+		return "unknown"
+	}
+}
+
+func anyToString(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case []byte:
+		return "0x" + hex.EncodeToString(t)
+	case common.Address:
+		return t.Hex()
+	case *common.Address:
+		return t.Hex()
+	case common.Hash:
+		return t.Hex()
+	case *common.Hash:
+		return t.Hex()
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }

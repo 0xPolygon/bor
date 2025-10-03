@@ -702,11 +702,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		parallel bool
 	}
 
-	// temporary disabled block STM because witness not work on parallel.
-	// TODO: how to enable witness on parallel state processing
-	bc.parallelProcessor = nil
-	bc.enforceParallelProcessor = false
-
 	var resultChanLen int = 2
 	if bc.enforceParallelProcessor {
 		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
@@ -2844,6 +2839,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if !isValid {
 			return nil, it.index, whitelist.ErrMismatch
 		}
+
+		panic("Wont commit block")
 
 		if !setHead {
 			// Don't set the head, only insert the block

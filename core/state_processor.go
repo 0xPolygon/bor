@@ -17,10 +17,13 @@
 package core
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math"
 	"math/big"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -156,6 +159,39 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}, nil
 }
 
+// AppendToFile ensures the parent dir exists, then appends s (plus a newline)
+// to the file at path. Returns an error on failure.
+func AppendToFile(path, s string) error {
+	// Make sure the directory exists
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+	}
+
+	// Open for append (create if missing)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	if _, err := w.WriteString(s); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	// Ensure each record ends with a newline (handy for JSONL/NDJSON)
+	if len(s) == 0 || s[len(s)-1] != '\n' {
+		if err := w.WriteByte('\n'); err != nil {
+			return fmt.Errorf("write newline: %w", err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+	return nil
+}
+
 // ApplyTransactionWithEVM attempts to apply a transaction to the given state database
 // and uses the input parameters for its environment similar to ApplyTransaction. However,
 // this method takes an already created EVM instance as input.
@@ -189,6 +225,9 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if err != nil {
 		return nil, err
 	}
+
+	json := backupMVHashMap.ToJSON()
+	AppendToFile("/home/avalkov/serial.log", string(json))
 
 	// stop recording read and write
 	statedb.SetMVHashmap(nil)
