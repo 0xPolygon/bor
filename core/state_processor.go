@@ -226,9 +226,11 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		return nil, err
 	}
 
-	json := backupMVHashMap.ToJSON()
-	AppendToFile("/home/avalkov/serial.log", string(json))
-
+	resMap := statedb.GetMVHashmap()
+	if resMap != nil {
+		json := backupMVHashMap.ToJSON()
+		AppendToFile("/home/avalkov/serial.log", string(json))
+	}
 	// stop recording read and write
 	statedb.SetMVHashmap(nil)
 
