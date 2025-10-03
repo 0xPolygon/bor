@@ -24,6 +24,7 @@ import (
 	"io"
 	"math/big"
 	"math/rand"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,8 @@ import (
 
 	crand2 "github.com/0xPolygon/crand"
 	"github.com/stretchr/testify/require"
+
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -348,6 +351,56 @@ func validateEvents(events chan core.NewTxsEvent, count int) error {
 
 func deriveSender(tx *types.Transaction) (common.Address, error) {
 	return types.Sender(types.HomesteadSigner{}, tx)
+}
+
+// loadFilteredAddressesForTest mimics the config loading behavior for tests
+func loadFilteredAddressesForTest(t *testing.T, filePath string) (map[common.Address]struct{}, error) {
+	t.Helper()
+	if filePath == "" {
+		return make(map[common.Address]struct{}), nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[common.Address]struct{}), nil
+		}
+		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
+	}
+
+	filteredAddrs := make(map[common.Address]struct{})
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return filteredAddrs, nil
+	}
+
+	addresses := strings.Split(content, "\n")
+	for i, addrStr := range addresses {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		if !common.IsHexAddress(addrStr) {
+			// Skip invalid addresses (same behavior as config loading)
+			fmt.Printf("Invalid address in filtered addresses file at position %d: %s\n", i+1, addrStr)
+			continue
+		}
+		addr := common.HexToAddress(addrStr)
+		filteredAddrs[addr] = struct{}{}
+	}
+
+	return filteredAddrs, nil
+}
+
+// updatePoolFilteredAddresses is a helper to update both pool config and internal state with filtered addresses
+func updatePoolFilteredAddresses(t *testing.T, filePath string) (map[common.Address]struct{}, error) {
+	t.Helper()
+
+	filteredAddrs, err := loadFilteredAddressesForTest(t, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
+	}
+	return filteredAddrs, nil
 }
 
 type testChain struct {
@@ -4794,4 +4847,175 @@ func BenchmarkMultiAccountBatchInsert(b *testing.B) {
 	for _, tx := range batches {
 		pool.addRemotesSync([]*types.Transaction{tx})
 	}
+}
+
+// TestTxFiltering tests transaction filtered functionality
+func TestTxFiltering(t *testing.T) {
+	t.Parallel()
+	t.Run("CorrectFiltering", func(t *testing.T) {
+		// Create temporary filtered addresses file
+		tempFile, err := os.CreateTemp(t.TempDir(), "filtered_addresses_*.txt")
+		if err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+		defer os.Remove(tempFile.Name())
+
+		// Generate test addresses
+		key1, _ := crypto.GenerateKey()
+		addr1 := crypto.PubkeyToAddress(key1.PublicKey)
+		key2, _ := crypto.GenerateKey()
+		addr2 := crypto.PubkeyToAddress(key2.PublicKey)
+
+		// Write addresses to file (newline-separated)
+		content := fmt.Sprintf("%s\n%s", addr1.Hex(), addr2.Hex())
+		if _, err := tempFile.WriteString(content); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+		tempFile.Close()
+
+		// Create pool with filtered addresses file configuration
+		var filteredAddrs map[common.Address]struct{}
+		if filteredAddrs, err = updatePoolFilteredAddresses(t, tempFile.Name()); err != nil {
+			t.Fatalf("failed to load filtered addresses: %v", err)
+		}
+		pool, normalKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.filteredAddrs = filteredAddrs
+		})
+		defer pool.Close()
+
+		// Test filtered addresses
+		tx1 := transaction(0, 100000, key1)
+		from1, _ := deriveSender(tx1)
+		tx2 := transaction(0, 100000, key2)
+		from2, _ := deriveSender(tx2)
+
+		testAddBalance(pool, from1, big.NewInt(1000000))
+
+		err1 := pool.addRemote(tx1)
+		if !errors.Is(err1, ErrTxFiltered) {
+			t.Errorf("expected ErrTxFiltered for addr1, got %v", err1)
+		}
+
+		testAddBalance(pool, from2, big.NewInt(1000000))
+
+		err2 := pool.addRemote(tx2)
+		if !errors.Is(err2, ErrTxFiltered) {
+			t.Errorf("expected ErrTxFiltered for addr2, got %v", err2)
+		}
+
+		// Test non-filtered address
+		normalTx := transaction(0, 100000, normalKey)
+		normalFrom, _ := deriveSender(normalTx)
+		testAddBalance(pool, normalFrom, big.NewInt(1000000))
+
+		errNormal := pool.addRemote(normalTx)
+		if errNormal != nil {
+			t.Errorf("normal transaction should be accepted, got %v", errNormal)
+		}
+
+		// Verify only normal transaction is in pool
+		if !pool.Has(normalTx.Hash()) {
+			t.Error("normal transaction should be in pool")
+		}
+		if pool.Has(tx1.Hash()) || pool.Has(tx2.Hash()) {
+			t.Error("filtered transactions should not be in pool")
+		}
+	})
+
+	// Test empty filtered addresses file
+	t.Run("EmptyFile", func(t *testing.T) {
+		tempFile, err := os.CreateTemp(t.TempDir(), "empty_filtered_*.txt")
+		if err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+		defer os.Remove(tempFile.Name())
+		tempFile.Close()
+
+		var filteredAddrs map[common.Address]struct{}
+		if filteredAddrs, err = updatePoolFilteredAddresses(t, tempFile.Name()); err != nil {
+			t.Fatalf("failed to load filtered addresses: %v", err)
+		}
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.filteredAddrs = filteredAddrs
+		})
+		defer pool.Close()
+
+		// Any transaction should be accepted
+		tx := transaction(0, 100000, key)
+		from, _ := deriveSender(tx)
+		testAddBalance(pool, from, big.NewInt(1000000))
+
+		err = pool.addRemote(tx)
+		if err != nil {
+			t.Errorf("transaction should be accepted with empty filtered addresses file, got %v", err)
+		}
+	})
+
+	// Test invalid addresses in filtered addresses file
+	t.Run("InvalidAddresses", func(t *testing.T) {
+		tempFile, err := os.CreateTemp(t.TempDir(), "invalid_filtered_*.txt")
+		if err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
+		defer os.Remove(tempFile.Name())
+
+		// Write invalid addresses mixed with valid ones
+		key1, _ := crypto.GenerateKey()
+		addr1 := crypto.PubkeyToAddress(key1.PublicKey)
+		content := fmt.Sprintf("invalid_address\n%s\n0xnotanaddress", addr1.Hex())
+		if _, err := tempFile.WriteString(content); err != nil {
+			t.Fatalf("failed to write to temp file: %v", err)
+		}
+		tempFile.Close()
+
+		var filteredAddrs map[common.Address]struct{}
+		if filteredAddrs, err = updatePoolFilteredAddresses(t, tempFile.Name()); err != nil {
+			t.Fatalf("failed to load filtered addresses: %v", err)
+		}
+
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.filteredAddrs = filteredAddrs
+		})
+		defer pool.Close()
+
+		// Valid address should still be filtered - use actual sender address
+		tx1 := transaction(0, 100000, key1)
+		from1, _ := deriveSender(tx1)
+		testAddBalance(pool, from1, big.NewInt(1000000))
+
+		err1 := pool.addRemote(tx1)
+		if !errors.Is(err1, ErrTxFiltered) {
+			t.Errorf("expected ErrTxFiltered for valid addr, got %v", err1)
+		}
+
+		// Other transactions should be accepted
+		tx2 := transaction(0, 100000, key)
+		from2, _ := deriveSender(tx2)
+		testAddBalance(pool, from2, big.NewInt(1000000))
+
+		err2 := pool.addRemote(tx2)
+		if err2 != nil {
+			t.Errorf("normal transaction should be accepted, got %v", err2)
+		}
+	})
+
+	// Test non-existent filtered addresses file
+	t.Run("NonExistentFile", func(t *testing.T) {
+		config := testTxPoolConfig
+		config.FilteredAddresses = make(map[common.Address]struct{}) // Empty map for non-existent file
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		// Any transaction should be accepted
+		tx := transaction(0, 100000, key)
+		from, _ := deriveSender(tx)
+		testAddBalance(pool, from, big.NewInt(1000000))
+
+		err := pool.addRemote(tx)
+		if err != nil {
+			t.Errorf("transaction should be accepted with non-existent file, got %v", err)
+		}
+	})
 }

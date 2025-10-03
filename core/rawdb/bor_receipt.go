@@ -36,7 +36,7 @@ func ReadBorReceiptRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.Raw
 
 	// First, try to fetch from KV db
 	data, _ = db.Get(borReceiptKey(number, hash))
-	if data != nil {
+	if len(data) != 0 {
 		return data
 	}
 

@@ -46,6 +46,9 @@ const (
 	// before dropping older announcements.
 	maxQueuedTxAnns = 4096
 
+	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up before dropping older announcements for trusted and static peers. Specific to Bor.
+	maxQueuedTxAnnsTrusted = 40960
+
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
 	// dropping broadcasts. There's not much point in queueing stale blocks, so a few
 	// that might cover uncles should be enough.
