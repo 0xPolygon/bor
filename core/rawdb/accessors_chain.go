@@ -675,7 +675,6 @@ func ReadReceiptsRLP(db ethdb.Reader, hash common.Hash, number uint64) rlp.RawVa
 		}
 		// If not, try reading from leveldb
 		data, _ = db.Get(blockReceiptsKey(number, hash))
-
 		return nil
 	})
 

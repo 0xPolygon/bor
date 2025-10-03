@@ -46,7 +46,7 @@ env:
 jobs:
   docker_cache:
     name: "Build Docker image"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -65,7 +65,7 @@ jobs:
 
   linux_debian:
     name: "x86_64: Linux (Debian stable)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -127,7 +127,7 @@ jobs:
 
   i686_debian:
     name: "i686: Linux (Debian stable)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -177,7 +177,7 @@ jobs:
 
   s390x_debian:
     name: "s390x (big-endian): Linux (Debian stable, QEMU)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     env:
@@ -223,7 +223,7 @@ jobs:
 
   arm32_debian:
     name: "ARM32: Linux (Debian stable, QEMU)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -277,7 +277,7 @@ jobs:
 
   arm64_debian:
     name: "ARM64: Linux (Debian stable, QEMU)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     env:
@@ -334,7 +334,7 @@ jobs:
 
   ppc64le_debian:
     name: "ppc64le: Linux (Debian stable, QEMU)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     env:
@@ -380,7 +380,7 @@ jobs:
 
   valgrind_debian:
     name: "Valgrind (memcheck)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -436,7 +436,7 @@ jobs:
 
   sanitizers_debian:
     name: "UBSan, ASan, LSan"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -493,7 +493,7 @@ jobs:
 
   msan_debian:
     name: "MSan"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     strategy:
@@ -557,7 +557,7 @@ jobs:
 
   mingw_debian:
     name: ${{ matrix.configuration.job_name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     env:
@@ -788,7 +788,7 @@ jobs:
 
   cxx_fpermissive_debian:
     name: "C++ -fpermissive (entire project)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     env:
@@ -833,7 +833,7 @@ jobs:
 
   cxx_headers_debian:
     name: "C++ (public headers)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     needs: docker_cache
 
     steps:
@@ -851,7 +851,7 @@ jobs:
 
   sage:
     name: "SageMath prover"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     container:
       image: sagemath/sagemath:latest
       options: --user root
@@ -866,7 +866,7 @@ jobs:
           sage prove_group_implementations.sage
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
 
     steps:
       - name: Checkout

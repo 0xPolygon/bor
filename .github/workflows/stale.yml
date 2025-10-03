@@ -11,7 +11,7 @@ on:
 
 jobs:
   stale:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       issues: write
       pull-requests: write
