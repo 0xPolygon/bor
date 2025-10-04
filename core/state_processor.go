@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -221,6 +222,7 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 
 	// resume recording read and write
 	if backupMVHashMap == nil {
+		log.Error("backupMVHashMap is nil")
 		backupMVHashMap = blockstm.MakeMVHashMap()
 	}
 	statedb.SetMVHashmap(backupMVHashMap)
@@ -232,8 +234,10 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 
 	resMap := statedb.GetMVHashmap()
 	if resMap != nil {
-		json := backupMVHashMap.ToJSON()
+		json := resMap.ToJSON()
 		AppendToFile("/home/avalkov/serial.log", string(json))
+	} else {
+		log.Error("resMap is nil")
 	}
 	// stop recording read and write
 	statedb.SetMVHashmap(nil)
