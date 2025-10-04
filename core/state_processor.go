@@ -232,6 +232,7 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		return nil, err
 	}
 
+	statedb.FlushMVWriteSet()
 	resMap := statedb.GetMVHashmap()
 	if resMap != nil {
 		json := resMap.ToJSON()
