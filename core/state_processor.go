@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -219,6 +220,9 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	coinbaseBalance := statedb.GetBalance(evm.Context.Coinbase)
 
 	// resume recording read and write
+	if backupMVHashMap == nil {
+		backupMVHashMap = blockstm.MakeMVHashMap()
+	}
 	statedb.SetMVHashmap(backupMVHashMap)
 
 	result, err = ApplyMessageNoFeeBurnOrTip(evm, *msg, gp, interrupt)
