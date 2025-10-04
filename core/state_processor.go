@@ -235,7 +235,8 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	resMap := statedb.GetMVHashmap()
 	if resMap != nil {
 		json := resMap.ToJSON()
-		AppendToFile("/home/avalkov/serial.log", string(json))
+		log.Error("resMap", "json", string(json))
+		AppendToFile("/var/lib/bor/serial.log", string(json))
 	} else {
 		log.Error("resMap is nil")
 	}
