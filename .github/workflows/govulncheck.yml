@@ -4,7 +4,7 @@ on: [push, pull_request]
 jobs:
   govulncheck:
     name: Run govulncheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     steps:
       - uses: actions/setup-go@v5
         with:

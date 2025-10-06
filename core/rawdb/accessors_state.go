@@ -319,6 +319,15 @@ func ReadWitness(db ethdb.KeyValueReader, blockHash common.Hash) []byte {
 	return data
 }
 
+// HasWitness verifies the existence of a witness corresponding to the hash.
+func HasWitness(db ethdb.Reader, blockHash common.Hash) bool {
+	if has, err := db.Has(witnessKey(blockHash)); !has || err != nil {
+		return false
+	}
+
+	return true
+}
+
 func ReadWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
 	log.Debug("ReadWitnessSize", "blockHash", blockHash)
 	data, err := db.Get(witnessSizeKey(blockHash))

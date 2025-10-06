@@ -12,6 +12,8 @@
 
 - [```attach```](./attach.md)
 
+- [```backfill-statesync-txs```](./backfill-statesync-txs.md)
+
 - [```bootnode```](./bootnode.md)
 
 - [```chain```](./chain.md)

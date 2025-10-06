@@ -306,6 +306,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "txpool.filtered-addresses",
+		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
+		Value:   &c.cliConfig.TxPool.FilteredAddressesFile,
+		Default: c.cliConfig.TxPool.FilteredAddressesFile,
+		Group:   "Transaction Pool",
+	})
 
 	// sealer options
 	f.BoolFlag(&flagset.BoolFlag{
