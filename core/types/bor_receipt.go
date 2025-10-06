@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // TenToTheFive - To be used while sorting bor logs
@@ -96,4 +97,14 @@ func MergeBorLogs(logs []*Log, borLogs []*Log) []*Log {
 	})
 
 	return result
+}
+
+func IsSprintEndBlock(borCfg *params.BorConfig, number uint64) bool {
+	if borCfg == nil {
+		return false
+	}
+	if number%borCfg.CalculateSprint(number) == 0 {
+		return true
+	}
+	return false
 }

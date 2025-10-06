@@ -87,7 +87,7 @@ func newFetchResult(header *types.Header, syncMode SyncMode, borCfg *params.BorC
 	}
 
 	fetchReceipts := true
-	if header.EmptyReceipts() && !isSprintEndBlock(borCfg, header.Number.Uint64()) {
+	if header.EmptyReceipts() && !types.IsSprintEndBlock(borCfg, header.Number.Uint64()) {
 		fetchReceipts = false
 	}
 	if syncMode == SnapSync && fetchReceipts {
@@ -366,16 +366,6 @@ func (q *queue) RetrieveHeaders() ([]*types.Header, []common.Hash, int) {
 	return headers, hashes, proced
 }
 
-func isSprintEndBlock(borCfg *params.BorConfig, number uint64) bool {
-	if borCfg == nil {
-		return false
-	}
-	if number%borCfg.CalculateSprint(number) == 0 {
-		return true
-	}
-	return false
-}
-
 // Schedule adds a set of headers for the download queue for scheduling, returning
 // the new headers encountered.
 func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uint64) []*types.Header {
@@ -407,7 +397,7 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 		}
 		// Queue for receipt retrieval
 		fetchReceipts := true
-		if header.EmptyReceipts() && !isSprintEndBlock(q.borConfig, header.Number.Uint64()) {
+		if header.EmptyReceipts() && !types.IsSprintEndBlock(q.borConfig, header.Number.Uint64()) {
 			fetchReceipts = false
 		}
 		if q.mode == SnapSync && fetchReceipts {
