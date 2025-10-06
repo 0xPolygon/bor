@@ -236,6 +236,28 @@ func (buf *receiptListBuffers) encodeForStorage(rs []Receipt) rlp.RawValue {
 	return out.Bytes()
 }
 
+// excludeStateSyncReceipt excludes the state sync receipt from the list if present
+// and returns the modified list.
+func excludeStateSyncReceipt(items []Receipt) []Receipt {
+	if len(items) == 0 {
+		return items
+	}
+
+	// The state-sync receipt can either have a 0 cumulative gas used (this depends on the remote peer) or
+	// have the same cumulative gas used as the previous receipt as state-sync transactions uses 0 gas and
+	// hence they don't contribute to the cumulative gas used value.
+	if items[len(items)-1].GasUsed == 0 {
+		return items[:len(items)-1]
+	}
+
+	// If not found, compare with a receipt before
+	if len(items) >= 2 && items[len(items)-1].GasUsed == items[len(items)-2].GasUsed {
+		return items[:len(items)-1]
+	}
+
+	return items
+}
+
 // ReceiptList68 is a block receipt list as downloaded by eth/68.
 // This also implements types.DerivableList for validation purposes.
 type ReceiptList68 struct {
@@ -337,13 +359,9 @@ func (rl *ReceiptList68) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
-// ExcludeStateSync removes the state sync transaction from the list. We use
-// the property of zero gas used to identify a state-sync transaction in the
-// list.
-func (rl *ReceiptList68) ExcludeStateSync() {
-	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
-		rl.items = rl.items[:len(rl.items)-1]
-	}
+// ExcludeStateSync removes the state sync transaction receipt from the list.
+func (rl *ReceiptList68) ExcludeStateSyncReceipt() {
+	rl.items = excludeStateSyncReceipt(rl.items)
 }
 
 // ReceiptList69 is the block receipt list as downloaded by eth/69.
@@ -412,13 +430,9 @@ func (rl *ReceiptList69) EncodeRLP(_w io.Writer) error {
 	return w.Flush()
 }
 
-// ExcludeStateSync removes the state sync transaction from the list. We use
-// the property of zero gas used to identify a state-sync transaction in the
-// list.
-func (rl *ReceiptList69) ExcludeStateSync() {
-	if len(rl.items) > 0 && rl.items[len(rl.items)-1].GasUsed == 0 {
-		rl.items = rl.items[:len(rl.items)-1]
-	}
+// ExcludeStateSync removes the state sync transaction receipt from the list.
+func (rl *ReceiptList69) ExcludeStateSyncReceipt() {
+	rl.items = excludeStateSyncReceipt(rl.items)
 }
 
 // blockReceiptsToNetwork69 takes a slice of rlp-encoded receipts, and transactions,

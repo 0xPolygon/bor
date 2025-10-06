@@ -380,21 +380,26 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			continue
 		}
 
+		// Track existence of bor receipts for encoding
+		var isBorReceiptPresent bool
+
 		// We atleast have some non-nil data for this block. Combine the receipts for encoding.
 		var blockReceipts []*types.ReceiptForStorage = make([]*types.ReceiptForStorage, 0)
 		if normalReceipts != nil {
 			blockReceipts = append(blockReceipts, normalReceiptsDecoded...)
 		}
 		if borReceipt != nil {
+			isBorReceiptPresent = true
 			blockReceipts = append(blockReceipts, &borReceiptDecoded)
 		}
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
 		isStateSyncReceipt := func(index int) bool {
-			if index >= len(blockReceipts) {
-				return false
+			// If bor receipt is present, it will always be at the end of list
+			if isBorReceiptPresent && index == len(blockReceipts)-1 {
+				return true
 			}
-			return blockReceipts[index].CumulativeGasUsed == 0
+			return false
 		}
 
 		// Encode the final list and convert to network format
@@ -556,7 +561,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 			// The receipt root of a block doesn't include receipts from state-sync
 			// transactions specific to polygon. Exclude them for calculating the
 			// hashes of all receipts.
-			resWithoutStateSync.List[i].ExcludeStateSync()
+			resWithoutStateSync.List[i].ExcludeStateSyncReceipt()
 			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
 		}
 

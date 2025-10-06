@@ -1659,6 +1659,27 @@ const (
 	SideStatTy
 )
 
+// isStateSyncReceiptPresent checks if a state-sync receipt is present in the list of
+// receipts or not.
+func isStateSyncReceiptPresent(decoded []*types.ReceiptForStorage) bool {
+	if len(decoded) == 0 {
+		return false
+	}
+
+	// The state-sync receipt can either have a 0 cumulative gas used (this depends on the remote peer) or
+	// have the same cumulative gas used as the previous receipt as state-sync transactions uses 0 gas and
+	// hence they don't contribute to the cumulative gas used value.
+	if decoded[len(decoded)-1].CumulativeGasUsed == 0 {
+		return true
+	}
+
+	if len(decoded) >= 2 && decoded[len(decoded)-1].CumulativeGasUsed == decoded[len(decoded)-2].CumulativeGasUsed {
+		return true
+	}
+
+	return false
+}
+
 // splitReceipts separates out the state-sync receipt from the whole receipt list
 // of a block and returns the encoded lists back separately. In case of errors or
 // empty receipt, it returns `nil` instead of `rlp.EncodeToBytes(nil)`.
@@ -1677,9 +1698,9 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash, borCf
 		log.Warn("Failed to decode block receipts", "number", number, "hash", hash, "err", err)
 		return receipts, nil
 	}
-	// Find if there's a state-sync transaction receipt present. They are always
-	// appended at the end of list and can be identified by 0 gas usage.
-	if len(decoded) > 0 && decoded[len(decoded)-1].CumulativeGasUsed == 0 {
+
+	// Split receipts only if there's a state-sync receipt present
+	if isStateSyncReceiptPresent(decoded) {
 		// Encode the state-sync transaction separately
 		encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
 		if err != nil {
@@ -1700,6 +1721,7 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash, borCf
 		}
 		return encodedReceipts, encodedStateSyncReceipt
 	}
+
 	return receipts, nil
 }
 

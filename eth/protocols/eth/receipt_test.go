@@ -77,10 +77,16 @@ var stateSyncReceiptsTests = []struct {
 		stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
 		txs:              []*types.Transaction{types.NewBorTransaction()},
 	},
-	// Normal + state-sync receipts
+	// Normal + state-sync receipts with 0 cumulative gas used for state-sync receipt
 	{
 		normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
 		stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		txs:              []*types.Transaction{types.NewTx(&types.LegacyTx{}), types.NewBorTransaction()},
+	},
+	// Normal + state-sync receipts with non-zero cumulative gas used for state-sync receipt
+	{
+		normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+		stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 555, Status: 1, Logs: nil, Type: 0},
 		txs:              []*types.Transaction{types.NewTx(&types.LegacyTx{}), types.NewBorTransaction()},
 	},
 }
@@ -165,6 +171,9 @@ func TestStateSyncReceiptList69(t *testing.T) {
 	// The tests tries to replicate behaviour of how the getReceipts query would
 	// handle normal and state-sync receipts.
 	for i, test := range stateSyncReceiptsTests {
+		// Track existence of bor receipts for encoding
+		var isBorReceiptPresent bool
+
 		// Merge both receipts
 		var blockReceipts = make([]types.ReceiptForStorage, 0)
 		if test.normalReceipts != nil {
@@ -172,14 +181,16 @@ func TestStateSyncReceiptList69(t *testing.T) {
 		}
 		if test.stateSyncReceipt != nil {
 			blockReceipts = append(blockReceipts, *test.stateSyncReceipt)
+			isBorReceiptPresent = true
 		}
 
 		// isStateSyncReceipt denotes whether a receipt belongs to state-sync transaction or not
 		isStateSyncReceipt := func(index int) bool {
-			if index >= len(blockReceipts) {
-				return false
+			// If bor receipt is present, it will always be at the end of list
+			if isBorReceiptPresent && index == len(blockReceipts)-1 {
+				return true
 			}
-			return blockReceipts[index].CumulativeGasUsed == 0
+			return false
 		}
 
 		// encode receipts from types.ReceiptForStorage object.
@@ -210,7 +221,7 @@ func TestStateSyncReceiptList69(t *testing.T) {
 		}
 
 		// Exclude the state-sync receipt from root hash calculations
-		rl.ExcludeStateSync()
+		rl.ExcludeStateSyncReceipt()
 
 		// compute root hash from ReceiptList69 and compare.
 		responseHash := types.DeriveSha(&rl, trie.NewStackTrie(nil))
