@@ -104,6 +104,7 @@ func (p *Peer) AsyncSendNewWitness(witness *stateless.Witness) {
 	select {
 	case p.queuedWitness <- witness:
 		p.knownWitnesses.Add(witness.Header().Hash())
+
 	default:
 		p.logger.Debug("Dropped witness propagation.", "hash", witness.Header().Hash(), "peer", p.id)
 	}
