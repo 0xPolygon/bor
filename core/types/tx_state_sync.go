@@ -67,7 +67,7 @@ func (tx *StateSyncTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.In
 }
 
 func (tx *StateSyncTx) rawSignatureValues() (v, r, s *big.Int) {
-	panic("rawSignatureValues called on StateSyncTx")
+	return big.NewInt(0), big.NewInt(0), big.NewInt(0)
 }
 
 func (tx *StateSyncTx) setSignatureValues(chainID, v, r, s *big.Int) {

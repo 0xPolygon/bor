@@ -1080,6 +1080,7 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateS
 		Logs:              stateSyncLogs,
 		BlockNumber:       header.Number,
 		TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
+		EffectiveGasPrice: big.NewInt(0),
 	}
 	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
 	receipts = append(receipts, stateSyncReceipt)
