@@ -360,6 +360,9 @@ type TxPoolConfig struct {
 	// lifetime is the maximum amount of time non-executable transaction are queued
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
+
+	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
+	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 }
 
 type SealerConfig struct {
@@ -1073,6 +1076,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+
+		// Load filtered addresses during config initialization
+		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
+			return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
+		} else {
+			n.TxPool.FilteredAddresses = filteredAddrs
+		}
 	}
 
 	// miner options
@@ -1701,4 +1711,44 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	}
 
 	return lines, nil
+}
+
+// loadFilteredAddresses loads newline-separated addresses to filter from the specified file.
+func loadFilteredAddresses(filePath string) (map[common.Address]struct{}, error) {
+	if filePath == "" {
+		return make(map[common.Address]struct{}), nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Warn("Filtered addresses file not found", "file", filePath)
+			return make(map[common.Address]struct{}), nil
+		}
+		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
+	}
+
+	filteredAddrs := make(map[common.Address]struct{})
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		log.Info("Empty filtered addresses file", "file", filePath)
+		return filteredAddrs, nil
+	}
+
+	addresses := strings.Split(content, "\n")
+	for i, addrStr := range addresses {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		if !common.IsHexAddress(addrStr) {
+			log.Warn("Invalid address in filtered addresses file", "file", filePath, "position", i+1, "address", addrStr)
+			continue
+		}
+		addr := common.HexToAddress(addrStr)
+		filteredAddrs[addr] = struct{}{}
+	}
+
+	log.Info("Loaded filtered addresses", "count", len(filteredAddrs), "file", filePath)
+	return filteredAddrs, nil
 }

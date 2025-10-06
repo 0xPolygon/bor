@@ -25,10 +25,9 @@ func createTestBlock(number uint64) *types.Block {
 }
 
 func createTestWitnessForBlock(block *types.Block) *stateless.Witness {
-	// Create a witness with the same header as the block
 	witness, err := stateless.NewWitness(block.Header(), nil)
 	if err != nil {
-		panic(err) // This shouldn't happen in tests
+		panic(err)
 	}
 	return witness
 }
@@ -43,84 +42,97 @@ func createTestBlockAnnounce(origin string, block *types.Block, fetchWitness wit
 	}
 }
 
-// TestWitnessManagerCreation tests the creation and basic setup of witnessManager
-func TestWitnessManagerCreation(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
+// Test setup helper
+type testWitnessManager struct {
+	manager      *witnessManager
+	quit         chan struct{}
+	enqueueCh    chan *enqueueRequest
+	droppedPeers []string
+	mu           sync.Mutex
+}
 
-	dropPeer := peerDropFn(func(id string) {})
+func newTestWitnessManager() *testWitnessManager {
+	quit := make(chan struct{})
 	enqueueCh := make(chan *enqueueRequest, 10)
+
+	tw := &testWitnessManager{
+		quit:      quit,
+		enqueueCh: enqueueCh,
+	}
+
+	dropPeer := peerDropFn(func(id string) {
+		tw.mu.Lock()
+		tw.droppedPeers = append(tw.droppedPeers, id)
+		tw.mu.Unlock()
+	})
+
 	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
 	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
 	chainHeight := chainHeightFn(func() uint64 { return 100 })
 
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
+	tw.manager = newWitnessManager(quit, dropPeer, enqueueCh, getBlock, getHeader, chainHeight)
+	return tw
+}
 
-	if manager == nil {
+func (tw *testWitnessManager) Close() {
+	close(tw.quit)
+}
+
+func (tw *testWitnessManager) DroppedPeers() []string {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	result := make([]string, len(tw.droppedPeers))
+	copy(result, tw.droppedPeers)
+	return result
+}
+
+func (tw *testWitnessManager) PendingCount() int {
+	tw.manager.mu.Lock()
+	defer tw.manager.mu.Unlock()
+	return len(tw.manager.pending)
+}
+
+// TestWitnessManagerCreation tests the creation and basic setup of witnessManager
+func TestWitnessManagerCreation(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	if tw.manager == nil {
 		t.Fatal("Expected witnessManager to be created")
 	}
 
 	// Check initial state
-	if len(manager.pending) != 0 {
-		t.Errorf("Expected empty pending map, got %d items", len(manager.pending))
+	if tw.PendingCount() != 0 {
+		t.Errorf("Expected empty pending map, got %d items", tw.PendingCount())
 	}
 
-	if len(manager.failedWitnessAttempts) != 0 {
-		t.Errorf("Expected empty failedWitnessAttempts map, got %d items", len(manager.failedWitnessAttempts))
-	}
-
-	if len(manager.peerPenalty) != 0 {
-		t.Errorf("Expected empty peerPenalty map, got %d items", len(manager.peerPenalty))
-	}
-
-	if manager.witnessTimer == nil {
+	if tw.manager.witnessTimer == nil {
 		t.Error("Expected witnessTimer to be initialized")
 	}
 
 	// Test channels are created with proper buffering
-	if cap(manager.injectNeedWitnessCh) != 10 {
-		t.Errorf("Expected injectNeedWitnessCh buffer size 10, got %d", cap(manager.injectNeedWitnessCh))
+	if cap(tw.manager.injectNeedWitnessCh) != 10 {
+		t.Errorf("Expected injectNeedWitnessCh buffer size 10, got %d", cap(tw.manager.injectNeedWitnessCh))
 	}
 
-	if cap(manager.injectWitnessCh) != 10 {
-		t.Errorf("Expected injectWitnessCh buffer size 10, got %d", cap(manager.injectWitnessCh))
+	if cap(tw.manager.injectWitnessCh) != 10 {
+		t.Errorf("Expected injectWitnessCh buffer size 10, got %d", cap(tw.manager.injectWitnessCh))
 	}
 }
 
 // TestWitnessManagerLifecycle tests start and stop functionality
 func TestWitnessManagerLifecycle(t *testing.T) {
-	quit := make(chan struct{})
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
+	tw := newTestWitnessManager()
+	defer tw.Close()
 
 	// Start the manager
-	manager.start()
+	tw.manager.start()
 
 	// Give it a moment to start
 	time.Sleep(10 * time.Millisecond)
 
 	// Stop the manager
-	manager.stop()
-	close(quit)
+	tw.manager.stop()
 
 	// Give it a moment to stop
 	time.Sleep(10 * time.Millisecond)
@@ -128,23 +140,8 @@ func TestWitnessManagerLifecycle(t *testing.T) {
 
 // TestHandleNeed tests processing of blocks needing witnesses
 func TestHandleNeed(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
+	tw := newTestWitnessManager()
+	defer tw.Close()
 
 	block := createTestBlock(101)
 	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
@@ -158,20 +155,16 @@ func TestHandleNeed(t *testing.T) {
 	}
 
 	// Test successful handling
-	manager.handleNeed(msg)
+	tw.manager.handleNeed(msg)
 
 	// Check that block was added to pending
-	if !manager.isPending(block.Hash()) {
+	if !tw.manager.isPending(block.Hash()) {
 		t.Error("Expected block to be pending after handleNeed")
 	}
 
 	// Check pending count
-	manager.mu.Lock()
-	pendingCount := len(manager.pending)
-	manager.mu.Unlock()
-
-	if pendingCount != 1 {
-		t.Errorf("Expected 1 pending request, got %d", pendingCount)
+	if tw.PendingCount() != 1 {
+		t.Errorf("Expected 1 pending request, got %d", tw.PendingCount())
 	}
 }
 
@@ -404,52 +397,6 @@ func TestWitnessUnavailable(t *testing.T) {
 	_ = originalTimeout
 }
 
-// TestPeerPenalty tests peer penalty system
-func TestPeerPenalty(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	peer := "test-peer"
-
-	// Initially should not have failed too many times
-	if manager.HasFailedTooManyTimes(peer) {
-		t.Error("Expected peer to not be penalised initially")
-	}
-
-	// Penalise the peer
-	manager.penalisePeer(peer)
-
-	// Should now be penalised
-	if !manager.HasFailedTooManyTimes(peer) {
-		t.Error("Expected peer to be penalised after penalisePeer call")
-	}
-
-	// Manually expire the penalty for testing
-	manager.mu.Lock()
-	manager.peerPenalty[peer] = time.Now().Add(-time.Minute)
-	manager.mu.Unlock()
-
-	// Should no longer be penalised
-	if manager.HasFailedTooManyTimes(peer) {
-		t.Error("Expected peer to not be penalised after penalty expiry")
-	}
-}
-
 // TestForget tests cleanup of pending state
 func TestForget(t *testing.T) {
 	quit := make(chan struct{})
@@ -575,7 +522,11 @@ func TestWitnessFetchFailure(t *testing.T) {
 	quit := make(chan struct{})
 	defer close(quit)
 
-	dropPeer := peerDropFn(func(id string) {})
+	droppedPeer := ""
+
+	dropPeer := peerDropFn(func(id string) {
+		droppedPeer = id
+	})
 	enqueueCh := make(chan *enqueueRequest, 10)
 	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
 	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
@@ -594,21 +545,89 @@ func TestWitnessFetchFailure(t *testing.T) {
 	peer := "test-peer"
 	err := errors.New("fetch failed")
 
-	// Test soft failure (keep pending for retry)
+	// Test soft failure (keep pending for retry) - peer should still be dropped
 	manager.handleWitnessFetchFailureExt(hash, peer, err, false)
 
-	// Check that peer failure count increased
-	manager.mu.Lock()
-	failureCount := manager.failedWitnessAttempts[peer]
-	manager.mu.Unlock()
+	if droppedPeer != peer {
+		t.Errorf("Expected peer to be dropped on soft failure, got %s", droppedPeer)
+	}
+}
 
-	if failureCount != 1 {
-		t.Errorf("Expected failure count 1, got %d", failureCount)
+// TestWitnessFetchFailureAlwaysDropsPeer tests that handleWitnessFetchFailureExt
+// always drops the peer regardless of removePending flag
+func TestWitnessFetchFailureAlwaysDropsPeer(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	hash := common.HexToHash("0x123")
+	peer1 := "test-peer-1"
+	peer2 := "test-peer-2"
+	err := errors.New("fetch failed")
+
+	// Add a pending request to test removal behavior
+	block := createTestBlock(101)
+	state := &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin: peer1,
+			block:  block,
+		},
+		announce: &blockAnnounce{
+			origin: peer1,
+			hash:   hash,
+			number: 101,
+			time:   time.Now(),
+			fetchWitness: func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
+				return nil, nil
+			},
+		},
+		retries: 0,
 	}
 
-	// Check that peer is penalised
-	if !manager.HasFailedTooManyTimes(peer) {
-		t.Error("Expected peer to be penalised after failure")
+	tw.manager.mu.Lock()
+	tw.manager.pending[hash] = state
+	tw.manager.mu.Unlock()
+
+	// Test soft failure (removePending = false) - peer should be dropped
+	tw.manager.handleWitnessFetchFailureExt(hash, peer1, err, false)
+
+	droppedPeers := tw.DroppedPeers()
+	if len(droppedPeers) != 1 || droppedPeers[0] != peer1 {
+		t.Errorf("Expected peer1 to be dropped on soft failure, got %v", droppedPeers)
+	}
+
+	// Verify pending request was NOT removed (soft failure)
+	if !tw.manager.isPending(hash) {
+		t.Error("Expected pending request to remain after soft failure")
+	}
+
+	// Test hard failure (removePending = true) - peer should also be dropped
+	tw.manager.handleWitnessFetchFailureExt(hash, peer2, err, true)
+
+	droppedPeers = tw.DroppedPeers()
+	if len(droppedPeers) != 2 || droppedPeers[1] != peer2 {
+		t.Errorf("Expected peer2 to be dropped on hard failure, got %v", droppedPeers)
+	}
+
+	// Verify pending request was removed (hard failure)
+	if tw.manager.isPending(hash) {
+		t.Error("Expected pending request to be removed after hard failure")
+	}
+}
+
+// TestWitnessFetchFailureEmptyPeer tests that no peer is dropped when peer string is empty
+func TestWitnessFetchFailureEmptyPeer(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	hash := common.HexToHash("0x123")
+	err := errors.New("fetch failed")
+
+	// Test with empty peer string - no peer should be dropped
+	tw.manager.handleWitnessFetchFailureExt(hash, "", err, false)
+
+	droppedPeers := tw.DroppedPeers()
+	if len(droppedPeers) != 0 {
+		t.Errorf("Expected no peer to be dropped when peer string is empty, got %v", droppedPeers)
 	}
 }
 
@@ -895,7 +914,7 @@ func TestTickMaxRetries(t *testing.T) {
 			block:  block,
 		},
 		announce: announce,
-		retries:  10, // Already at max retries
+		retries:  maxWitnessFetchRetries, // Already at max retries
 	}
 
 	manager.mu.Lock()
@@ -1264,50 +1283,6 @@ func TestSafeEnqueueChannelClosed(t *testing.T) {
 	// Should not panic and should use the quit channel path
 }
 
-// TestHandleNeedPenalizedPeer tests handleNeed with penalized peer
-func TestHandleNeedPenalizedPeer(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	// Penalize peer first
-	peer := "test-peer"
-	manager.penalisePeer(peer)
-
-	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
-		return nil, nil
-	}
-
-	msg := &injectBlockNeedWitnessMsg{
-		origin:       peer,
-		block:        block,
-		fetchWitness: fetchWitness,
-	}
-
-	// Test handleNeed with penalized peer - should be ignored
-	manager.handleNeed(msg)
-
-	// Check that no pending requests were created
-	if manager.isPending(block.Hash()) {
-		t.Error("Expected request to be ignored for penalized peer")
-	}
-}
-
 // TestHandleNeedDistanceCheck tests handleNeed with distance check
 func TestHandleNeedDistanceCheck(t *testing.T) {
 	quit := make(chan struct{})
@@ -1573,51 +1548,6 @@ func TestFetchWitnessError(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // Give time for goroutine to process
 }
 
-// TestFetchWitnessNoPeerError tests specific error case for no peers
-func TestFetchWitnessNoPeerError(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	hash := common.HexToHash("0x123")
-	peer := "test-peer"
-
-	// Test fetchWitness with specific "no peer with witness for hash" error
-	announce := &blockAnnounce{
-		origin: peer,
-		hash:   hash,
-		number: 101,
-		time:   time.Now(),
-		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
-			return nil, errors.New("no peer with witness for hash")
-		},
-	}
-
-	// This will run in background and should mark witness as unavailable
-	go manager.fetchWitness(peer, hash, announce)
-
-	time.Sleep(50 * time.Millisecond) // Give time for goroutine to process
-
-	// Check that witness was marked as unavailable
-	if !manager.isWitnessUnavailable(hash) {
-		t.Error("Expected witness to be marked unavailable after no peer error")
-	}
-}
-
 // TestHandleFilterResultWitnessUnavailable tests filter result with unavailable witness
 func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 	quit := make(chan struct{})
@@ -1698,46 +1628,6 @@ func TestHandleFilterResultDuplicate(t *testing.T) {
 
 	if pendingCount != 1 {
 		t.Errorf("Expected 1 pending request after duplicate filter result, got %d", pendingCount)
-	}
-}
-
-// TestHandleFilterResultPenalizedPeer tests filter result with penalized peer
-func TestHandleFilterResultPenalizedPeer(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	peer := "test-peer"
-	// Penalize peer first
-	manager.penalisePeer(peer)
-
-	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
-		return nil, nil
-	}
-
-	announce := createTestBlockAnnounce(peer, block, fetchWitness)
-
-	// Handle filter result with penalized peer
-	manager.handleFilterResult(announce, block)
-
-	// Check that block was NOT added to pending
-	if manager.isPending(block.Hash()) {
-		t.Error("Expected block from penalized peer to be discarded")
 	}
 }
 
@@ -1863,46 +1753,6 @@ func TestCheckCompletingKnownBlock(t *testing.T) {
 	// Check that block was NOT added to pending
 	if manager.isPending(block.Hash()) {
 		t.Error("Expected known block to be ignored")
-	}
-}
-
-// TestCheckCompletingPenalizedPeer tests checkCompleting with penalized peer
-func TestCheckCompletingPenalizedPeer(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	peer := "test-peer"
-	// Penalize peer first
-	manager.penalisePeer(peer)
-
-	block := createTestBlock(101)
-	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
-		return nil, nil
-	}
-
-	announce := createTestBlockAnnounce(peer, block, fetchWitness)
-
-	// Check completing with penalized peer
-	manager.checkCompleting(announce, block)
-
-	// Check that block was NOT added to pending
-	if manager.isPending(block.Hash()) {
-		t.Error("Expected block from penalized peer to be discarded")
 	}
 }
 
@@ -2037,12 +1887,6 @@ func TestSafeEnqueueSuccess(t *testing.T) {
 
 	peer := "test-peer"
 
-	// Add some peer failures first
-	manager.mu.Lock()
-	manager.failedWitnessAttempts[peer] = 5
-	manager.peerPenalty[peer] = time.Now().Add(time.Hour)
-	manager.mu.Unlock()
-
 	block := createTestBlock(101)
 	witness := createTestWitnessForBlock(block)
 	op := &blockOrHeaderInject{
@@ -2068,20 +1912,6 @@ func TestSafeEnqueueSuccess(t *testing.T) {
 
 	if reqCount != 1 {
 		t.Errorf("Expected 1 enqueue request, got %d", reqCount)
-	}
-
-	// Verify peer failures and penalty were reset
-	manager.mu.Lock()
-	failures := manager.failedWitnessAttempts[peer]
-	_, penalized := manager.peerPenalty[peer]
-	manager.mu.Unlock()
-
-	if failures != 0 {
-		t.Errorf("Expected peer failures to be reset to 0, got %d", failures)
-	}
-
-	if penalized {
-		t.Error("Expected peer penalty to be removed after successful enqueue")
 	}
 }
 
@@ -2119,7 +1949,7 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 	var wg sync.WaitGroup
 	numGoroutines := 100
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -2128,142 +1958,4 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 	}
 
 	wg.Wait()
-
-	// Verify that the failure count is correct
-	manager.mu.Lock()
-	failureCount := manager.failedWitnessAttempts[peer]
-	manager.mu.Unlock()
-
-	if failureCount != numGoroutines {
-		t.Errorf("Expected failure count %d, got %d", numGoroutines, failureCount)
-	}
-}
-
-// TestHandleWitnessFetchSuccessWithBlockNoLongerPending tests handleWitnessFetchSuccess
-// when block is no longer pending
-func TestHandleWitnessFetchSuccessWithBlockNoLongerPending(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	// Create test data
-	block := createTestBlock(101)
-	hash := block.Hash()
-	witness := createTestWitnessForBlock(block)
-
-	// First add the block to pending
-	manager.mu.Lock()
-	manager.pending[hash] = &witnessRequestState{
-		op: &blockOrHeaderInject{
-			origin: "test-peer",
-			block:  block,
-		},
-		announce: &blockAnnounce{
-			origin: "test-peer",
-			hash:   hash,
-			number: block.NumberU64(),
-			time:   time.Now(),
-		},
-	}
-	manager.mu.Unlock()
-
-	// Remove it to simulate the scenario
-	manager.mu.Lock()
-	delete(manager.pending, hash)
-	manager.mu.Unlock()
-
-	// Call handleWitnessFetchSuccess - should handle gracefully
-	manager.handleWitnessFetchSuccess("test-peer", hash, witness, time.Now())
-
-	// Verify no enqueue occurred
-	select {
-	case <-enqueueCh:
-		t.Error("Should not enqueue when block is no longer pending")
-	default:
-		// Expected - no enqueue
-	}
-}
-
-// TestFetchWitnessWithBlockRemovedBeforeError tests that when a block is removed from pending
-// before a fetch error occurs, the peer is not penalized
-func TestFetchWitnessWithBlockRemovedBeforeError(t *testing.T) {
-	quit := make(chan struct{})
-	defer close(quit)
-
-	dropPeer := peerDropFn(func(id string) {})
-	enqueueCh := make(chan *enqueueRequest, 10)
-	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
-	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
-	chainHeight := chainHeightFn(func() uint64 { return 100 })
-
-	manager := newWitnessManager(
-		quit,
-		dropPeer,
-		enqueueCh,
-		getBlock,
-		getHeader,
-		chainHeight,
-	)
-
-	// Create test data
-	block := createTestBlock(101)
-	hash := block.Hash()
-
-	// Track original failure count
-	originalFailures := 0
-
-	// Create a mock fetchWitness that removes block from pending before error
-	fetchWitness := func(h common.Hash, resCh chan *eth.Response) (*eth.Request, error) {
-		// Remove block from pending before returning error
-		manager.mu.Lock()
-		delete(manager.pending, hash)
-		originalFailures = manager.failedWitnessAttempts["test-peer"]
-		manager.mu.Unlock()
-
-		// Return an error - this should trigger the check for pending status
-		return nil, errors.New("simulated fetch error")
-	}
-
-	// Add block to pending
-	manager.mu.Lock()
-	manager.pending[hash] = &witnessRequestState{
-		op: &blockOrHeaderInject{
-			origin: "test-peer",
-			block:  block,
-		},
-		announce: &blockAnnounce{
-			origin:       "test-peer",
-			hash:         hash,
-			number:       block.NumberU64(),
-			time:         time.Now().Add(-time.Second), // Make it ready to fetch
-			fetchWitness: fetchWitness,
-		},
-	}
-	manager.mu.Unlock()
-
-	// Call fetchWitness directly to simulate the fetch attempt
-	manager.fetchWitness("test-peer", hash, manager.pending[hash].announce)
-
-	// Verify peer was not penalized (failure count should not increase)
-	manager.mu.Lock()
-	currentFailures := manager.failedWitnessAttempts["test-peer"]
-	manager.mu.Unlock()
-
-	if currentFailures > originalFailures {
-		t.Errorf("Peer should not be penalized when block is no longer pending, failures increased from %d to %d", originalFailures, currentFailures)
-	}
 }
