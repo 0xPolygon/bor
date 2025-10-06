@@ -1662,9 +1662,14 @@ const (
 // splitReceipts separates out the state-sync receipt from the whole receipt list
 // of a block and returns the encoded lists back separately. In case of errors or
 // empty receipt, it returns `nil` instead of `rlp.EncodeToBytes(nil)`.
-func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash) (rlp.RawValue, rlp.RawValue) {
+func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash, borCfg *params.BorConfig) (rlp.RawValue, rlp.RawValue) {
 	if receipts == nil {
 		return nil, nil
+	}
+
+	// Bor receipts can only exist on sprint end blocks. Avoid decoding if possible.
+	if !types.IsSprintEndBlock(borCfg, number) {
+		return receipts, nil
 	}
 
 	var decoded []*types.ReceiptForStorage
@@ -1826,7 +1831,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		// Separate out bor receipts (i.e. receipts of state-sync transactions)
 		var borReceipts = make([]rlp.RawValue, len(receiptChain))
 		for i, receipts := range receiptChain {
-			receiptChain[i], borReceipts[i] = splitReceipts(receipts, blockChain[i].NumberU64(), blockChain[i].Hash())
+			receiptChain[i], borReceipts[i] = splitReceipts(receipts, blockChain[i].NumberU64(), blockChain[i].Hash(), bc.chainConfig.Bor)
 		}
 
 		var headers []*types.Header
@@ -1966,7 +1971,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 			// Separate out bor receipts (i.e. receipts of state-sync transactions)
 			var borReceiptRaw rlp.RawValue
-			receiptChain[i], borReceiptRaw = splitReceipts(receiptChain[i], block.NumberU64(), block.Hash())
+			receiptChain[i], borReceiptRaw = splitReceipts(receiptChain[i], block.NumberU64(), block.Hash(), bc.chainConfig.Bor)
 
 			// Write all the data out into the database
 			// TODO v1.16.1: Which of the two?
