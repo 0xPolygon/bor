@@ -37,7 +37,7 @@ var (
 	// errEndBlock is returned when we're unable to fetch the tip confirmation block locally.
 	errTipConfirmationBlock = errors.New("failed to get tip confirmation block")
 
-	// rewindLengthMeter for collecting info about the length of chain rewinded
+	// rewindLengthMeter for collecting info about the length of chain rewound
 	rewindLengthMeter = metrics.NewRegisteredMeter("chain/autorewind/length", nil)
 )
 
