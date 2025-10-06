@@ -5370,6 +5370,11 @@ func TestSplitReceipts(t *testing.T) {
 		},
 	}
 
+	// Create a mock config with sprint length as 1 (so that split receipts will run for all test cases)
+	mockBorCfg := params.BorConfig{
+		Sprint: map[string]uint64{"0": 1},
+	}
+
 	for _, test := range tests {
 		// Individually encode receipts for comparing with values after splitting
 		normalEncoded, _ := rlp.EncodeToBytes(test.normalReceipts)
@@ -5396,7 +5401,7 @@ func TestSplitReceipts(t *testing.T) {
 		}
 
 		// Split receipts and assert if the individual list match with the expected receipt data or not
-		normal, stateSync := splitReceipts(encoded, 0, common.Hash{})
+		normal, stateSync := splitReceipts(encoded, 0, common.Hash{}, &mockBorCfg)
 		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
 		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
 	}
