@@ -1942,10 +1942,17 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			// DeriveFieldsForBorLogs will fill those fields for websocket subscriptions
 			types.DeriveFieldsForBorLogs(stateSyncLogs, block.Hash(), block.NumberU64(), uint(len(receipts)), uint(len(logs)))
 
+			// Derive the cumulative gas used from last receipt of this block
+			var cumulativeGasUsed uint64
+			if len(receipts) > 0 {
+				cumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+			}
+
 			// Write bor receipt
 			rawdb.WriteBorReceipt(blockBatch, block.Hash(), block.NumberU64(), &types.ReceiptForStorage{
-				Status: types.ReceiptStatusSuccessful, // make receipt status successful
-				Logs:   stateSyncLogs,
+				Status:            types.ReceiptStatusSuccessful, // make receipt status successful
+				Logs:              stateSyncLogs,
+				CumulativeGasUsed: cumulativeGasUsed,
 			})
 
 			// Write bor tx reverse lookup
