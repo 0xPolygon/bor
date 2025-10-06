@@ -2,7 +2,7 @@
   "blockHash": "0xfb278012fb863c9256925b2e62d260fdf06a4ffc11f564c42fde70b903a28592",
   "blockNumber": "0x5",
   "contractAddress": null,
-  "cumulativeGasUsed": "0x0",
+  "cumulativeGasUsed": "0xe01c",
   "effectiveGasPrice": "0x0",
   "from": "0x0000000000000000000000000000000000000000",
   "gasUsed": "0x0",
