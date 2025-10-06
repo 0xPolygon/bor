@@ -1771,16 +1771,18 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		size  = int64(0)
 	)
 
-	getReceiptAndLogCount := func(receipts rlp.RawValue) (int, int) {
+	// getReceiptFields returns the tx index, log index and cumulative gas used
+	// for populating the bor receipt.
+	getReceiptFields := func(receipts rlp.RawValue) (int, int, uint64) {
 		if receipts == nil {
-			return 0, 0
+			return 0, 0, 0
 		}
 
 		// Decode the receipts for each block
 		var decoded []types.ReceiptForStorage
 		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
 			log.Warn("Failed to decode block receipts", "err", err)
-			return 0, 0
+			return 0, 0, 0
 		}
 
 		logs := 0
@@ -1788,7 +1790,12 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			logs += len(receipt.Logs)
 		}
 
-		return len(decoded), logs
+		cumulativeGasUsed := uint64(0)
+		if len(decoded) > 0 {
+			cumulativeGasUsed = decoded[len(decoded)-1].CumulativeGasUsed
+		}
+
+		return len(decoded), logs, cumulativeGasUsed
 	}
 
 	// updateHead updates the head snap sync block if the inserted blocks are better
@@ -2005,9 +2012,10 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			if len(borReceiptRaw) > 0 {
 				if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
 					// Derive rest of fields for bor receipts before writing
-					txIndex, logIndex := getReceiptAndLogCount(receiptChain[i])
+					txIndex, logIndex, cumulativeGasUsed := getReceiptFields(receiptChain[i])
 					types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
 					borReceipt.Status = types.ReceiptStatusSuccessful
+					borReceipt.CumulativeGasUsed = cumulativeGasUsed
 
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
