@@ -57,7 +57,6 @@ func DeriveFieldsForBorReceipt(receipt *Receipt, hash common.Hash, number uint64
 		logIndex += len(receipts[i].Logs)
 	}
 
-	receipt.CumulativeGasUsed = 0
 	if len(receipts) > 0 {
 		receipt.CumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
 	}
