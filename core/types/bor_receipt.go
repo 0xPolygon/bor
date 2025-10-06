@@ -57,6 +57,11 @@ func DeriveFieldsForBorReceipt(receipt *Receipt, hash common.Hash, number uint64
 		logIndex += len(receipts[i].Logs)
 	}
 
+	receipt.CumulativeGasUsed = 0
+	if len(receipts) > 0 {
+		receipt.CumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+	}
+
 	// The derived log fields can simply be set from the block and transaction
 	for j := 0; j < len(receipt.Logs); j++ {
 		receipt.Logs[j].BlockNumber = number
