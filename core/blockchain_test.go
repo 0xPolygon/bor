@@ -5318,95 +5318,6 @@ func TestGetCanonicalReceipt(t *testing.T) {
 	}
 }
 
-// TestSplitReceipts checks if normal and state-sync receipts are split correctly
-// before inserting to database.
-func TestSplitReceipts(t *testing.T) {
-	var tests = []struct {
-		name             string
-		normalReceipts   []types.ReceiptForStorage
-		stateSyncReceipt *types.ReceiptForStorage
-	}{
-		// Both nil
-		{
-			name:             "both normal and state-sync receipt is nil",
-			normalReceipts:   nil,
-			stateSyncReceipt: nil,
-		},
-		// Normal receipt empty and state-sync nil
-		{
-			name:             "empty normal receipt and nil state-sync receipt",
-			normalReceipts:   []types.ReceiptForStorage{},
-			stateSyncReceipt: nil,
-		},
-		// Only normal receipt (single)
-		{
-			name:             "state-sync receipt is nil, only single normal receipt present",
-			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
-			stateSyncReceipt: nil,
-		},
-		// Only normal receipt (multiple)
-		{
-			name:             "state-sync receipt is nil, multiple normal receipts present",
-			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}},
-			stateSyncReceipt: nil,
-		},
-		// Only state-sync receipt
-		{
-			name:             "normal receipt is nil, only state-sync receipt present",
-			normalReceipts:   nil,
-			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
-		},
-		// Normal + state-sync receipts (single)
-		{
-			name:             "single normal and state-sync receipt present",
-			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
-			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
-		},
-		// Normal + state-sync receipts (multiple)
-		{
-			name:             "multiple normal and single state-sync receipt present",
-			normalReceipts:   []types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}, {CumulativeGasUsed: 777, Status: 1, Logs: nil}},
-			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
-		},
-	}
-
-	// Create a mock config with sprint length as 1 (so that split receipts will run for all test cases)
-	mockBorCfg := params.BorConfig{
-		Sprint: map[string]uint64{"0": 1},
-	}
-
-	for _, test := range tests {
-		// Individually encode receipts for comparing with values after splitting
-		normalEncoded, _ := rlp.EncodeToBytes(test.normalReceipts)
-		if len(test.normalReceipts) == 0 {
-			normalEncoded = nil
-		}
-		stateSyncEncoded, _ := rlp.EncodeToBytes(test.stateSyncReceipt)
-		if test.stateSyncReceipt == nil {
-			stateSyncEncoded = nil
-		}
-
-		// Merge both and encode the final list
-		var allReceipts = make([]types.ReceiptForStorage, 0)
-		if test.normalReceipts != nil {
-			allReceipts = append(allReceipts, test.normalReceipts...)
-		}
-		if test.stateSyncReceipt != nil {
-			allReceipts = append(allReceipts, *test.stateSyncReceipt)
-		}
-		encoded, _ := rlp.EncodeToBytes(allReceipts)
-		if len(allReceipts) == 0 {
-			// Skip encoding, instead just set nil
-			encoded = nil
-		}
-
-		// Split receipts and assert if the individual list match with the expected receipt data or not
-		normal, stateSync := splitReceipts(encoded, 0, common.Hash{}, &mockBorCfg)
-		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
-		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
-	}
-}
-
 // TestStatelessModeRewind tests the rewind behavior when TriesInMemory is 0 (stateless mode)
 func TestStatelessModeRewind(t *testing.T) {
 	testStatelessModeRewind(t, rawdb.HashScheme)
@@ -5564,5 +5475,107 @@ func TestStatelessSetHeadBeyondRoot(t *testing.T) {
 		if block == nil {
 			t.Fatalf("block %d not found after SetHead", i)
 		}
+	}
+}
+
+// TestSplitReceiptsAndDeriveFields checks if normal and state-sync receipts are split correctly
+// before inserting to database. It also checks if state-sync receipt fields are derived correctly.
+func TestSplitReceiptsAndDeriveFields(t *testing.T) {
+	var tests = []struct {
+		name             string
+		normalReceipts   []*types.ReceiptForStorage
+		stateSyncReceipt *types.ReceiptForStorage
+	}{
+		// Both nil
+		{
+			name:             "both normal and state-sync receipt is nil",
+			normalReceipts:   nil,
+			stateSyncReceipt: nil,
+		},
+		// Normal receipt empty and state-sync nil
+		{
+			name:             "empty normal receipt and nil state-sync receipt",
+			normalReceipts:   []*types.ReceiptForStorage{},
+			stateSyncReceipt: nil,
+		},
+		// Only normal receipt (single)
+		{
+			name:             "state-sync receipt is nil, only single normal receipt present",
+			normalReceipts:   []*types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+			stateSyncReceipt: nil,
+		},
+		// Only normal receipt (multiple)
+		{
+			name:             "state-sync receipt is nil, multiple normal receipts present",
+			normalReceipts:   []*types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}},
+			stateSyncReceipt: nil,
+		},
+		// Only state-sync receipt
+		{
+			name:             "normal receipt is nil, only state-sync receipt present",
+			normalReceipts:   nil,
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+		// Normal + state-sync receipts (single)
+		{
+			name:             "single normal and state-sync receipt present",
+			normalReceipts:   []*types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}},
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+		// Normal + state-sync receipts (multiple)
+		{
+			name:             "multiple normal and single state-sync receipt present",
+			normalReceipts:   []*types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}, {CumulativeGasUsed: 777, Status: 1, Logs: nil}},
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 0, Status: 1, Logs: nil, Type: 0},
+		},
+		// Normal + state-sync receipts (multiple) with non-zero cumulative gas used
+		{
+			name:             "multiple normal and single state-sync receipt present with non-zero cumulative gas used",
+			normalReceipts:   []*types.ReceiptForStorage{{CumulativeGasUsed: 555, Status: 1, Logs: nil}, {CumulativeGasUsed: 666, Status: 1, Logs: nil}, {CumulativeGasUsed: 777, Status: 1, Logs: nil}},
+			stateSyncReceipt: &types.ReceiptForStorage{CumulativeGasUsed: 777, Status: 1, Logs: nil, Type: 0},
+		},
+	}
+
+	// Create a mock config with sprint length as 1 (so that split receipts will run for all test cases)
+	mockBorCfg := params.BorConfig{
+		Sprint: map[string]uint64{"0": 1},
+	}
+
+	for _, test := range tests {
+		// Individually encode receipts for comparing with values after splitting
+		var normalEncoded []byte = nil
+		if len(test.normalReceipts) > 0 {
+			normalEncoded, _ = rlp.EncodeToBytes(test.normalReceipts)
+		}
+
+		// For state-sync receipts, create a copy and populate remaining fields which will be
+		// used to compare later with the output. Don't populate the original test object as
+		// the `splitReceiptsAndDeriveFields` should populate values in it.
+		stateSyncReceipt := test.stateSyncReceipt
+		var stateSyncEncoded []byte = nil
+		if test.stateSyncReceipt != nil {
+			_, _, cumulativeGasUsed := getReceiptFields(test.normalReceipts)
+			stateSyncReceipt.CumulativeGasUsed = cumulativeGasUsed
+			stateSyncEncoded, _ = rlp.EncodeToBytes(stateSyncReceipt)
+		}
+
+		// Merge both and encode the final list. Use the receipts in test object.
+		var allReceipts = make([]*types.ReceiptForStorage, 0)
+		if test.normalReceipts != nil {
+			allReceipts = append(allReceipts, test.normalReceipts...)
+		}
+		if test.stateSyncReceipt != nil {
+			allReceipts = append(allReceipts, test.stateSyncReceipt)
+		}
+		encoded, _ := rlp.EncodeToBytes(allReceipts)
+		if len(allReceipts) == 0 {
+			// Skip encoding, instead just set nil
+			encoded = nil
+		}
+
+		// Split receipts and assert if the individual list match with the expected receipt data or not
+		normal, stateSync := splitReceiptsAndDeriveFields(encoded, 0, common.Hash{}, &mockBorCfg)
+		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
+		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
 	}
 }

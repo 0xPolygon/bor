@@ -1659,6 +1659,23 @@ const (
 	SideStatTy
 )
 
+// getReceiptFields given a list of normal receipts returns the tx index, the log index
+// and cumulative gas used for populating the bor receipt.
+func getReceiptFields(receipts []*types.ReceiptForStorage) (int, int, uint64) {
+	if len(receipts) == 0 {
+		return 0, 0, 0
+	}
+
+	logs := 0
+	for _, receipt := range receipts {
+		logs += len(receipt.Logs)
+	}
+
+	cumulativeGasUsed := receipts[len(receipts)-1].CumulativeGasUsed
+
+	return len(receipts), logs, cumulativeGasUsed
+}
+
 // isStateSyncReceiptPresent checks if a state-sync receipt is present in the list of
 // receipts or not.
 func isStateSyncReceiptPresent(decoded []*types.ReceiptForStorage) bool {
@@ -1680,10 +1697,11 @@ func isStateSyncReceiptPresent(decoded []*types.ReceiptForStorage) bool {
 	return false
 }
 
-// splitReceipts separates out the state-sync receipt from the whole receipt list
-// of a block and returns the encoded lists back separately. In case of errors or
-// empty receipt, it returns `nil` instead of `rlp.EncodeToBytes(nil)`.
-func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash, borCfg *params.BorConfig) (rlp.RawValue, rlp.RawValue) {
+// splitReceiptsAndDeriveFields separates out the state-sync receipt from the whole receipt list
+// of a block and returns the encoded lists back separately. If a state-sync receipt is found, it
+// derives the necessary fields and populates them. In case of errors or empty receipt, it returns
+// `nil` instead of `rlp.EncodeToBytes(nil)`.
+func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash common.Hash, borCfg *params.BorConfig) (rlp.RawValue, rlp.RawValue) {
 	if receipts == nil {
 		return nil, nil
 	}
@@ -1701,8 +1719,16 @@ func splitReceipts(receipts rlp.RawValue, number uint64, hash common.Hash, borCf
 
 	// Split receipts only if there's a state-sync receipt present
 	if isStateSyncReceiptPresent(decoded) {
-		// Encode the state-sync transaction separately
-		encodedStateSyncReceipt, err := rlp.EncodeToBytes(decoded[len(decoded)-1])
+		borReceipt := decoded[len(decoded)-1]
+
+		// Derive rest of fields for bor receipts before encoding back
+		txIndex, logIndex, cumulativeGasUsed := getReceiptFields(decoded[:len(decoded)-1])
+		types.DeriveFieldsForBorLogs(borReceipt.Logs, hash, number, uint(txIndex), uint(logIndex))
+		borReceipt.Status = types.ReceiptStatusSuccessful
+		borReceipt.CumulativeGasUsed = cumulativeGasUsed
+
+		// Encode the state-sync transaction receipt separately
+		encodedStateSyncReceipt, err := rlp.EncodeToBytes(borReceipt)
 		if err != nil {
 			log.Warn("Failed to encode state-sync receipt", "number", number, "hash", hash, "err", err)
 			return receipts, nil
@@ -1771,33 +1797,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		size  = int64(0)
 	)
 
-	// getReceiptFields returns the tx index, log index and cumulative gas used
-	// for populating the bor receipt.
-	getReceiptFields := func(receipts rlp.RawValue) (int, int, uint64) {
-		if receipts == nil {
-			return 0, 0, 0
-		}
-
-		// Decode the receipts for each block
-		var decoded []types.ReceiptForStorage
-		if err := rlp.DecodeBytes(receipts, &decoded); err != nil {
-			log.Warn("Failed to decode block receipts", "err", err)
-			return 0, 0, 0
-		}
-
-		logs := 0
-		for _, receipt := range decoded {
-			logs += len(receipt.Logs)
-		}
-
-		cumulativeGasUsed := uint64(0)
-		if len(decoded) > 0 {
-			cumulativeGasUsed = decoded[len(decoded)-1].CumulativeGasUsed
-		}
-
-		return len(decoded), logs, cumulativeGasUsed
-	}
-
 	// updateHead updates the head snap sync block if the inserted blocks are better
 	// and returns an indicator whether the inserted blocks are canonical.
 	updateHead := func(head *types.Block, headers []*types.Header) bool {
@@ -1860,7 +1859,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		// Separate out bor receipts (i.e. receipts of state-sync transactions)
 		var borReceipts = make([]rlp.RawValue, len(receiptChain))
 		for i, receipts := range receiptChain {
-			receiptChain[i], borReceipts[i] = splitReceipts(receipts, blockChain[i].NumberU64(), blockChain[i].Hash(), bc.chainConfig.Bor)
+			receiptChain[i], borReceipts[i] = splitReceiptsAndDeriveFields(receipts, blockChain[i].NumberU64(), blockChain[i].Hash(), bc.chainConfig.Bor)
 		}
 
 		var headers []*types.Header
@@ -2000,7 +1999,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 
 			// Separate out bor receipts (i.e. receipts of state-sync transactions)
 			var borReceiptRaw rlp.RawValue
-			receiptChain[i], borReceiptRaw = splitReceipts(receiptChain[i], block.NumberU64(), block.Hash(), bc.chainConfig.Bor)
+			receiptChain[i], borReceiptRaw = splitReceiptsAndDeriveFields(receiptChain[i], block.NumberU64(), block.Hash(), bc.chainConfig.Bor)
 
 			// Write all the data out into the database
 			rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
@@ -2010,12 +2009,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			var borReceipt types.ReceiptForStorage
 			if len(borReceiptRaw) > 0 {
 				if err := rlp.DecodeBytes(borReceiptRaw, &borReceipt); err == nil {
-					// Derive rest of fields for bor receipts before writing
-					txIndex, logIndex, cumulativeGasUsed := getReceiptFields(receiptChain[i])
-					types.DeriveFieldsForBorLogs(borReceipt.Logs, block.Hash(), block.NumberU64(), uint(txIndex), uint(logIndex))
-					borReceipt.Status = types.ReceiptStatusSuccessful
-					borReceipt.CumulativeGasUsed = cumulativeGasUsed
-
 					rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &borReceipt)
 					rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
 				}
