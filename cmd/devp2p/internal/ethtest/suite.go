@@ -526,7 +526,6 @@ func (s *Suite) TestMaliciousStatus(t *utesting.T) {
 	if err := conn.handshake(); err != nil {
 		t.Fatalf("handshake failed: %v", err)
 	}
-	// TODO v1.16.1: Fix this test, should we add total difficulty to the status packet?
 	// Create status with large total difficulty.
 	status := &eth.StatusPacket69{
 		ProtocolVersion: uint32(conn.negotiatedProtoVersion),

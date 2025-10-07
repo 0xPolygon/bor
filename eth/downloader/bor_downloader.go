@@ -723,7 +723,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 				d.ancientLimit = 0
 			}
 		}
-		// TODO v1.16.1: Should this downloader be changed according to this PR ? https://github.com/ethereum/go-ethereum/commit/90d44e715d4f44fdad582f458c5973b0e6463082
+
 		frozen, _ := d.stateDB.ItemAmountInAncient() // Ignore the error here since light client can also hit here.
 
 		// If a part of blockchain data has already been written into active store,

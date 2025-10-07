@@ -226,9 +226,8 @@ type trieReader struct {
 	// or Verkle-tree is not safe for concurrent read.
 	mainTrie Trie
 
-	subRoots map[common.Address]common.Hash // Set of storage roots, cached when the account is resolved
-	subTries map[common.Address]Trie        // Group of storage tries, cached when it's resolved
-	// TODO v1.16.1: Do we need all the mutexes ?
+	subRoots   map[common.Address]common.Hash // Set of storage roots, cached when the account is resolved
+	subTries   map[common.Address]Trie        // Group of storage tries, cached when it's resolved
 	muSubRoot  sync.Mutex
 	muSubTries sync.Mutex
 	lock       sync.Mutex // Lock for protecting concurrent read

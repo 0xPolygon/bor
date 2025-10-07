@@ -2003,7 +2003,6 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			receiptChain[i], borReceiptRaw = splitReceipts(receiptChain[i], block.NumberU64(), block.Hash(), bc.chainConfig.Bor)
 
 			// Write all the data out into the database
-			// TODO v1.16.1: Which of the two?
 			rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
 			rawdb.WriteBlock(batch, block)
 			rawdb.WriteRawReceipts(batch, block.Hash(), block.NumberU64(), receiptChain[i])
@@ -2168,10 +2167,17 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			// DeriveFieldsForBorLogs will fill those fields for websocket subscriptions
 			types.DeriveFieldsForBorLogs(stateSyncLogs, block.Hash(), block.NumberU64(), uint(len(receipts)), uint(len(logs)))
 
+			// Derive the cumulative gas used from last receipt of this block
+			var cumulativeGasUsed uint64
+			if len(receipts) > 0 {
+				cumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+			}
+
 			// Write bor receipt
 			rawdb.WriteBorReceipt(blockBatch, block.Hash(), block.NumberU64(), &types.ReceiptForStorage{
-				Status: types.ReceiptStatusSuccessful, // make receipt status successful
-				Logs:   stateSyncLogs,
+				Status:            types.ReceiptStatusSuccessful, // make receipt status successful
+				Logs:              stateSyncLogs,
+				CumulativeGasUsed: cumulativeGasUsed,
 			})
 
 			// Write bor tx reverse lookup
@@ -2927,7 +2933,6 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		proctime := time.Since(start) // processing + validation
 
-		// TODO v1.16.1: Verify if these metrics work after using the new way to initialize prefetcher
 		// Update the metrics touched during block processing and validation
 		accountReadTimer.Update(statedb.AccountReads)                   // Account reads are complete(in processing)
 		storageReadTimer.Update(statedb.StorageReads)                   // Storage reads are complete(in processing)
