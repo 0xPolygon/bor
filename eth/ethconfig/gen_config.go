@@ -39,6 +39,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		DatabaseHandles                      int                    `toml:"-"`
 		DatabaseCache                        int
 		DatabaseFreezer                      string
+		DatabaseEra                          string
 		LevelDbCompactionTableSize           uint64
 		LevelDbCompactionTableSizeMultiplier float64
 		LevelDbCompactionTotalSize           uint64
@@ -61,7 +62,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
-		OverridePrague                       *big.Int `toml:",omitempty"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		HeimdallURL                          string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
@@ -172,6 +173,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		DatabaseHandles                      *int                   `toml:"-"`
 		DatabaseCache                        *int
 		DatabaseFreezer                      *string
+		DatabaseEra                          *string
 		LevelDbCompactionTableSize           *uint64
 		LevelDbCompactionTableSizeMultiplier *float64
 		LevelDbCompactionTotalSize           *uint64
@@ -194,7 +196,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
-		OverridePrague                       *big.Int `toml:",omitempty"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		HeimdallURL                          *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
