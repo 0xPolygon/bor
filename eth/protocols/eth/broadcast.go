@@ -142,6 +142,12 @@ func (p *Peer) announceTransactions() {
 		fail   = make(chan error, 1) // Channel used to receive network error
 		failed bool                  // Flag whether a send failed, discard everything onward
 	)
+
+	queueLimit := maxQueuedTxAnns
+	if p.IsTrusted() || p.IsStatic() {
+		queueLimit = maxQueuedTxAnnsTrusted
+	}
+
 	for {
 		// If there's no in-flight announce running, check if a new one is needed
 		if done == nil && len(queue) > 0 {
@@ -172,16 +178,9 @@ func (p *Peer) announceTransactions() {
 			if len(pending) > 0 {
 				done = make(chan struct{})
 				go func() {
-					if p.version >= ETH68 {
-						if err := p.sendPooledTransactionHashes68(pending, pendingTypes, pendingSizes); err != nil {
-							fail <- err
-							return
-						}
-					} else {
-						if err := p.sendPooledTransactionHashes66(pending); err != nil {
-							fail <- err
-							return
-						}
+					if err := p.sendPooledTransactionHashes(pending, pendingTypes, pendingSizes); err != nil {
+						fail <- err
+						return
 					}
 					close(done)
 					p.Log().Trace("Sent transaction announcements", "count", len(pending))
@@ -197,9 +196,9 @@ func (p *Peer) announceTransactions() {
 			}
 			// New batch of transactions to be broadcast, queue them (with cap)
 			queue = append(queue, hashes...)
-			if len(queue) > maxQueuedTxAnns {
+			if len(queue) > queueLimit {
 				// Fancy copy and resize to ensure buffer doesn't grow indefinitely
-				queue = queue[:copy(queue, queue[len(queue)-maxQueuedTxAnns:])]
+				queue = queue[:copy(queue, queue[len(queue)-queueLimit:])]
 			}
 
 		case <-done:

@@ -46,14 +46,6 @@ func newMemoryTable(name string, config freezerTableConfig) *memoryTable {
 	return &memoryTable{name: name, config: config}
 }
 
-// has returns an indicator whether the specified data exists.
-func (t *memoryTable) has(number uint64) bool {
-	t.lock.RLock()
-	defer t.lock.RUnlock()
-
-	return number >= t.offset && number < t.items
-}
-
 // retrieve retrieves multiple items in sequence, starting from the index 'start'.
 // It will return:
 //   - at most 'count' items,
@@ -251,17 +243,6 @@ func (f *MemoryFreezer) ItemAmountInAncient() (uint64, error) {
 	return f.items - f.offset.Load(), nil
 }
 
-// HasAncient returns an indicator whether the specified data exists.
-func (f *MemoryFreezer) HasAncient(kind string, number uint64) (bool, error) {
-	f.lock.RLock()
-	defer f.lock.RUnlock()
-
-	if table := f.tables[kind]; table != nil {
-		return table.has(number), nil
-	}
-	return false, nil
-}
-
 // Ancient retrieves an ancient binary blob from the in-memory freezer.
 func (f *MemoryFreezer) Ancient(kind string, number uint64) ([]byte, error) {
 	f.lock.RLock()
@@ -414,8 +395,8 @@ func (f *MemoryFreezer) TruncateTail(tail uint64) (uint64, error) {
 	return old, nil
 }
 
-// Sync flushes all data tables to disk.
-func (f *MemoryFreezer) Sync() error {
+// SyncAncient flushes all data tables to disk.
+func (f *MemoryFreezer) SyncAncient() error {
 	return nil
 }
 

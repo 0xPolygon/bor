@@ -105,10 +105,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.DatabaseHandles = c.DatabaseHandles
 	enc.DatabaseCache = c.DatabaseCache
 	enc.DatabaseFreezer = c.DatabaseFreezer
-	enc.LevelDbCompactionTableSize = c.LevelDbCompactionTableSize
-	enc.LevelDbCompactionTableSizeMultiplier = c.LevelDbCompactionTableSizeMultiplier
-	enc.LevelDbCompactionTotalSize = c.LevelDbCompactionTotalSize
-	enc.LevelDbCompactionTotalSizeMultiplier = c.LevelDbCompactionTotalSizeMultiplier
+	enc.DatabaseEra = c.DatabaseEra
 	enc.TrieCleanCache = c.TrieCleanCache
 	enc.TrieDirtyCache = c.TrieDirtyCache
 	enc.TrieTimeout = c.TrieTimeout
@@ -127,7 +124,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
-	enc.OverridePrague = c.OverridePrague
+	enc.OverrideOsaka = c.OverrideOsaka
 	enc.HeimdallURL = c.HeimdallURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
@@ -284,17 +281,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.DatabaseFreezer != nil {
 		c.DatabaseFreezer = *dec.DatabaseFreezer
 	}
-	if dec.LevelDbCompactionTableSize != nil {
-		c.LevelDbCompactionTableSize = *dec.LevelDbCompactionTableSize
-	}
-	if dec.LevelDbCompactionTableSizeMultiplier != nil {
-		c.LevelDbCompactionTableSizeMultiplier = *dec.LevelDbCompactionTableSizeMultiplier
-	}
-	if dec.LevelDbCompactionTotalSize != nil {
-		c.LevelDbCompactionTotalSize = *dec.LevelDbCompactionTotalSize
-	}
-	if dec.LevelDbCompactionTotalSizeMultiplier != nil {
-		c.LevelDbCompactionTotalSizeMultiplier = *dec.LevelDbCompactionTotalSizeMultiplier
+	if dec.DatabaseEra != nil {
+		c.DatabaseEra = *dec.DatabaseEra
 	}
 	if dec.TrieCleanCache != nil {
 		c.TrieCleanCache = *dec.TrieCleanCache
@@ -350,8 +338,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.RPCTxFeeCap != nil {
 		c.RPCTxFeeCap = *dec.RPCTxFeeCap
 	}
-	if dec.OverridePrague != nil {
-		c.OverridePrague = dec.OverridePrague
+	if dec.OverrideOsaka != nil {
+		c.OverrideOsaka = dec.OverrideOsaka
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL

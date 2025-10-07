@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -20,14 +19,15 @@ func prepareStatelessBenchmark(b *testing.B) (stateLessChain *BlockChain, stateF
 
 	engine := ethash.NewFaker()
 	gspec := &Genesis{Config: params.TestChainConfig}
-	cacheConfig := &CacheConfig{TriesInMemory: 0}
+	cfg := DefaultConfig()
+	cfg.Stateless = true
 
-	stateLessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	stateLessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
 	if err != nil {
 		b.Fatalf("failed to create stateless chain: %v", err)
 	}
 
-	stateFullChain, err = NewBlockChain(rawdb.NewMemoryDatabase(), cacheConfig, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	stateFullChain, err = NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
 	if err != nil {
 		b.Fatalf("failed to create full-state chain: %v", err)
 	}

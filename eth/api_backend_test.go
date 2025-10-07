@@ -33,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/txpool/locals"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -60,7 +59,7 @@ func initBackend(withLocal bool) *EthAPIBackend {
 		db     = rawdb.NewMemoryDatabase()
 		engine = beacon.New(ethash.NewFaker())
 	)
-	chain, _ := core.NewBlockChain(db, nil, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(db, gspec, engine, nil)
 
 	txconfig := legacypool.DefaultConfig
 	txconfig.Journal = "" // Don't litter the disk with test journals

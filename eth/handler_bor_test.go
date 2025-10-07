@@ -17,7 +17,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/event"
@@ -74,7 +73,7 @@ func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
 		Config: params.TestChainConfig,
 		Alloc:  core.GenesisAlloc{},
 	}
-	chain, _ := core.NewBlockChain(db, nil, gspec, nil, ethash.NewFaker(), vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), core.DefaultConfig())
 	defer chain.Stop()
 
 	// create a downloader with the blockchain
