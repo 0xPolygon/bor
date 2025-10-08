@@ -18,6 +18,9 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -26,10 +29,12 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -43,6 +48,24 @@ import (
 //
 // TODO(karalabe): Would be nice to resolve both issues above somehow and move it.
 func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database) (common.Hash, common.Hash, *state.StateDB, error) {
+
+	fmt.Printf("PSP - Executing stateless for block %s\n", block.Number())
+	fmt.Printf("\tPSP - Witness State Hashes:\n")
+
+	// Open log file for writing witness state hash information
+	logFile, err := os.OpenFile("witness_state_hashes.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Warn("Failed to open witness state hashes log file", "error", err)
+	} else {
+		defer logFile.Close()
+
+		// Write block execution header with timestamp
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		fmt.Fprintf(logFile, "\n=== [%s] Block %s ===\n", timestamp, block.Number())
+		fmt.Fprintf(logFile, "Witness State Hashes:\n")
+		WriteHashesToFile(logFile, witness)
+	}
+
 	// Sanity check if the supplied block accidentally contains a set root or
 	// receipt hash. If so, be very loud, but still continue.
 	if block.Root() != (common.Hash{}) {
@@ -78,5 +101,54 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	// Almost everything validated, but receipt and state root needs to be returned
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
+
+	fmt.Printf("\tPSP - Updated Witness State Hashes:\n")
+	if logFile != nil {
+		fmt.Fprintf(logFile, "Updated Witness State Hashes:\n")
+	}
+
+	_, stateUdate, _ := db.CommitAndReturnStateUpdate(block.Number().Uint64(), config.IsEIP158(block.Number()))
+
+	nodes := stateUdate.Nodes
+	var order []common.Hash
+	for owner := range nodes.Sets {
+		if owner == (common.Hash{}) {
+			continue
+		}
+		order = append(order, owner)
+	}
+	if _, ok := nodes.Sets[common.Hash{}]; ok {
+		order = append(order, common.Hash{})
+	}
+	for _, owner := range order {
+		subset := nodes.Sets[owner]
+		subset.ForEachWithOrder(func(path string, n *trienode.Node) {
+			if n.IsDeleted() {
+				return // ignore deletion
+			}
+			fmt.Printf("\t\t- %s:\n", n.Hash)
+			if logFile != nil {
+				fmt.Fprintf(logFile, "  - %s\n", n.Hash)
+			}
+		})
+	}
+
 	return stateRoot, receiptRoot, db, nil
+}
+
+func WriteHashesToFile(file *os.File, w *stateless.Witness) {
+	var (
+		hasher = crypto.NewKeccakState()
+		hash   = make([]byte, 32)
+	)
+
+	for node := range w.State {
+		blob := []byte(node)
+
+		hasher.Reset()
+		hasher.Write(blob)
+		hasher.Read(hash)
+		fmt.Printf("\t\t- %s:\n", common.Bytes2Hex(hash))
+		fmt.Fprintf(file, "  - %s\n", common.Bytes2Hex(hash))
+	}
 }
