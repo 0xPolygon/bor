@@ -2558,12 +2558,23 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				}
 				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
-					// If stateless self-validation depends on parent's commit, mark for retry in writer stage
-					if idx > 0 && errors.Is(perr, ErrStatelessStateRootMismatch) {
-						log.Info("Deferring stateless self-validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash())
-						results[idx].needsRetry = true
-						results[idx].witness = witness
-						continue
+					// If validation depends on parent's commit, mark for retry in writer stage
+					if idx > 0 {
+						switch {
+						case errors.Is(perr, ErrStatelessStateRootMismatch):
+							fallthrough
+						case errors.Is(perr, ErrGasUsedMismatch):
+							fallthrough
+						case errors.Is(perr, ErrBloomMismatch):
+							fallthrough
+						case errors.Is(perr, ErrReceiptRootMismatch):
+							fallthrough
+						case errors.Is(perr, ErrRequestsHashMismatch):
+							log.Info("Deferring validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "error", perr)
+							results[idx].needsRetry = true
+							results[idx].witness = witness
+							continue
+						}
 					}
 					results[idx].err = perr
 					continue
@@ -2611,16 +2622,16 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			return int(processed.Load()), resErr
 		}
 
-		// Handle deferred retry for stateless self-validation root mismatch
+		// Handle deferred retry for validation errors
 		if results[i].needsRetry {
-			log.Info("Retrying deferred stateless self-validation", "block", block.NumberU64(), "hash", block.Hash())
+			log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
 			var witness *stateless.Witness
 			if i < len(witnesses) {
 				witness = witnesses[i]
 			}
 			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
 			if perr != nil {
-				log.Error("Deferred stateless self-validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
+				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
 				stopHeaders()
 				return int(processed.Load()), perr
 			}

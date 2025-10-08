@@ -38,6 +38,22 @@ var (
 	// state root and the cross-validated (remote) state root during stateless
 	// self-validation.
 	ErrStatelessStateRootMismatch = errors.New("stateless self-validation state root mismatch")
+
+	// ErrGasUsedMismatch indicates a mismatch between locally computed
+	// gas used and the block's gas used during validation.
+	ErrGasUsedMismatch = errors.New("invalid gas used")
+
+	// ErrBloomMismatch indicates a mismatch between locally computed
+	// bloom filter and the block's bloom during validation.
+	ErrBloomMismatch = errors.New("invalid bloom")
+
+	// ErrReceiptRootMismatch indicates a mismatch between locally computed
+	// receipt root and the block's receipt root during validation.
+	ErrReceiptRootMismatch = errors.New("invalid receipt root hash")
+
+	// ErrRequestsHashMismatch indicates a mismatch between locally computed
+	// requests hash and the block's requests hash during validation.
+	ErrRequestsHashMismatch = errors.New("invalid requests hash")
 )
 
 // List of evm-call-message pre-checking errors. All state transition messages will
