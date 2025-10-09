@@ -2149,12 +2149,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	var stateSyncLogs []*types.Log
 
 	if len(blockLogs) > 0 {
-		sort.SliceStable(blockLogs, func(i, j int) bool {
-			return blockLogs[i].Index < blockLogs[j].Index
-		})
-
 		// After StateSync HF we dont write bor receipts separately
 		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
+			sort.SliceStable(blockLogs, func(i, j int) bool {
+				return blockLogs[i].Index < blockLogs[j].Index
+			})
 			stateSyncLogs = blockLogs[len(logs):] // get state-sync logs from `state.Logs()`
 
 			// State sync logs don't have tx index, tx hash and other necessary fields
