@@ -417,7 +417,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 		postTrie := state.GetTrie()
 		if postTrie == nil {
-			return nil, errors.New("post-state tree is not available")
+			return nil, nil, errors.New("post-state tree is not available")
 		}
 		vktPreTrie, okpre := preTrie.(*trie.VerkleTrie)
 		vktPostTrie, okpost := postTrie.(*trie.VerkleTrie)
