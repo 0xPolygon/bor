@@ -2526,7 +2526,6 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		sdb        *state.StateDB
 		err        error
 		needsRetry bool
-		witness    *stateless.Witness
 		gasUsed    uint64
 	}
 	results := make([]execResult, len(chain))
@@ -2572,7 +2571,6 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 						case errors.Is(perr, ErrRequestsHashMismatch):
 							log.Info("Deferring validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "error", perr)
 							results[idx].needsRetry = true
-							results[idx].witness = witness
 							continue
 						}
 					}
