@@ -122,6 +122,10 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	}
 	for _, owner := range order {
 		subset := nodes.Sets[owner]
+		fmt.Printf("\t\t- %s:\n", subset.Summary())
+		if logFile != nil {
+			fmt.Fprintf(logFile, "  - %s\n", subset.Summary())
+		}
 		subset.ForEachWithOrder(func(path string, n *trienode.Node) {
 			if n.IsDeleted() {
 				return // ignore deletion
