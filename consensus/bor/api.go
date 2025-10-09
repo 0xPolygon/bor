@@ -98,7 +98,7 @@ func (api *API) GetSnapshotProposerSequence(blockNrOrHash *rpc.BlockNumberOrHash
 		return BlockSigners{}, errUnknownBlock
 	}
 
-	snapNumber := rpc.BlockNumber(header.Number.Int64() - 1)
+	snapNumber := rpc.BlockNumber(header.Number.Int64())
 	snap, err := api.GetSnapshot(&snapNumber)
 
 	var difficulties = make(map[common.Address]uint64)
@@ -161,7 +161,7 @@ func (api *API) GetSnapshotProposer(blockNrOrHash *rpc.BlockNumberOrHash) (commo
 		return common.Address{}, errUnknownBlock
 	}
 
-	snapNumber := rpc.BlockNumber(header.Number.Int64() - 1)
+	snapNumber := rpc.BlockNumber(header.Number.Int64())
 	snap, err := api.GetSnapshot(&snapNumber)
 
 	if err != nil {

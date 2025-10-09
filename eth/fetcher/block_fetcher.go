@@ -1195,21 +1195,21 @@ func (f *BlockFetcher) importBlocks(peer string, block *types.Block, witness *st
 			// Log the insertion event
 			var (
 				msg         string
-				delayInMs   uint64
+				delayInMs   int64
 				prettyDelay common.PrettyDuration
 			)
 
 			if block.AnnouncedAt != nil {
 				msg = "[block tracker] Inserted new block with announcement"
-				delayInMs = uint64(time.Since(*block.AnnouncedAt).Milliseconds())
+				delayInMs = time.Since(*block.AnnouncedAt).Milliseconds()
 				prettyDelay = common.PrettyDuration(time.Since(*block.AnnouncedAt))
 			} else {
 				msg = "[block tracker] Inserted new block without announcement"
-				delayInMs = uint64(time.Since(block.ReceivedAt).Milliseconds())
+				delayInMs = time.Since(block.ReceivedAt).Milliseconds()
 				prettyDelay = common.PrettyDuration(time.Since(block.ReceivedAt))
 			}
 
-			totalDelayInMs := uint64(time.Now().UnixMilli()) - block.Time()*1000
+			totalDelayInMs := time.Now().UnixMilli() - int64(block.Time())*1000
 			totalDelay := common.PrettyDuration(time.Millisecond * time.Duration(totalDelayInMs))
 
 			log.Info(msg, "number", block.Number().Uint64(), "hash", hash, "delay", prettyDelay, "delayInMs", delayInMs, "totalDelay", totalDelay, "totalDelayInMs", totalDelayInMs)

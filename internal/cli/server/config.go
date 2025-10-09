@@ -1298,9 +1298,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 			log.Info("Enabling recording of key preimages since archive mode is used")
 		}
-		if c.StateScheme == "path" {
-			return nil, fmt.Errorf("path storage scheme is not supported in archive mode, please use hash instead")
-		}
 	default:
 		return nil, fmt.Errorf("gcmode '%s' not found", c.GcMode)
 	}

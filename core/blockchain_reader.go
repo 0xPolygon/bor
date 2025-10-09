@@ -18,10 +18,12 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -248,6 +250,44 @@ func (bc *BlockChain) GetBlocksFromHash(hash common.Hash, n int) (blocks []*type
 	return
 }
 
+// GetCanonicalReceipt allows fetching a receipt for a transaction that was
+// already looked up on the index. Notably, only receipt in canonical chain
+// is visible.
+func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, txIndex uint64) (*types.Receipt, error) {
+	// The receipt retrieved from the cache contains all previously derived fields
+	if receipts, ok := bc.receiptsCache.Get(blockHash); ok {
+		if int(txIndex) >= len(receipts) {
+			return nil, fmt.Errorf("receipt out of index, length: %d, index: %d", len(receipts), txIndex)
+		}
+		return receipts[int(txIndex)], nil
+	}
+	header := bc.GetHeader(blockHash, blockNumber)
+	if header == nil {
+		return nil, fmt.Errorf("block header is not found, %d, %x", blockNumber, blockHash)
+	}
+	var blobGasPrice *big.Int
+	if header.ExcessBlobGas != nil {
+		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, header)
+	}
+	receipt, ctx, err := rawdb.ReadCanonicalRawReceipt(bc.db, blockHash, blockNumber, txIndex)
+	if err != nil {
+		return nil, err
+	}
+	signer := types.MakeSigner(bc.chainConfig, new(big.Int).SetUint64(blockNumber), header.Time)
+	receipt.DeriveFields(signer, types.DeriveReceiptContext{
+		BlockHash:    blockHash,
+		BlockNumber:  blockNumber,
+		BlockTime:    header.Time,
+		BaseFee:      header.BaseFee,
+		BlobGasPrice: blobGasPrice,
+		GasUsed:      ctx.GasUsed,
+		LogIndex:     ctx.LogIndex,
+		Tx:           tx,
+		TxIndex:      uint(txIndex),
+	})
+	return receipt, nil
+}
+
 // GetReceiptsByHash retrieves the receipts for all transactions in a given block.
 func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	if receipts, ok := bc.receiptsCache.Get(hash); ok {
@@ -272,12 +312,22 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	return receipts
 }
 
-func (bc *BlockChain) GetRawReceiptsByHash(hash common.Hash) types.Receipts {
+// GetRawReceipts retrieves the receipts for all transactions in a given block
+// without deriving the internal fields and the Bloom.
+func (bc *BlockChain) GetRawReceipts(hash common.Hash, number uint64) types.Receipts {
+	if receipts, ok := bc.receiptsCache.Get(hash); ok {
+		return receipts
+	}
+	return rawdb.ReadRawReceipts(bc.db, hash, number)
+}
+
+// GetReceiptsRLP retrieves the receipts of a block.
+func (bc *BlockChain) GetReceiptsRLP(hash common.Hash) rlp.RawValue {
 	number := rawdb.ReadHeaderNumber(bc.db, hash)
 	if number == nil {
 		return nil
 	}
-	return rawdb.ReadRawReceipts(bc.db, hash, *number)
+	return rawdb.ReadReceiptsRLP(bc.db, hash, *number)
 }
 
 // GetUnclesInChain retrieves all the uncles from a given block backwards until
@@ -322,6 +372,38 @@ func (bc *BlockChain) GetTransactionLookup(hash common.Hash) (*rawdb.LegacyTxLoo
 	}
 
 	tx, blockHash, blockNumber, txIndex := rawdb.ReadTransaction(bc.db, hash)
+	if tx == nil {
+		return nil, nil
+	}
+	lookup := &rawdb.LegacyTxLookupEntry{
+		BlockHash:  blockHash,
+		BlockIndex: blockNumber,
+		Index:      txIndex,
+	}
+	bc.txLookupCache.Add(hash, txLookup{
+		lookup:      lookup,
+		transaction: tx,
+	})
+	return lookup, tx
+}
+
+// GetCanonicalTransaction retrieves the lookup along with the transaction
+// itself associate with the given transaction hash.
+//
+// A null will be returned if the transaction is not found. This can be due to
+// the transaction indexer not being finished. The caller must explicitly check
+// the indexer progress.
+//
+// Notably, only the transaction in the canonical chain is visible.
+func (bc *BlockChain) GetCanonicalTransaction(hash common.Hash) (*rawdb.LegacyTxLookupEntry, *types.Transaction) {
+	bc.txLookupLock.RLock()
+	defer bc.txLookupLock.RUnlock()
+
+	// Short circuit if the txlookup already in the cache, retrieve otherwise
+	if item, exist := bc.txLookupCache.Get(hash); exist {
+		return item.lookup, item.transaction
+	}
+	tx, blockHash, blockNumber, txIndex := rawdb.ReadCanonicalTransaction(bc.db, hash)
 	if tx == nil {
 		return nil, nil
 	}
@@ -407,6 +489,13 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 	return state.New(root, bc.statedb)
 }
 
+// HistoricState returns a historic state specified by the given root.
+// Live states are not available and won't be served, please use `State`
+// or `StateAt` instead.
+func (bc *BlockChain) HistoricState(root common.Hash) (*state.StateDB, error) {
+	return state.New(root, state.NewHistoricDatabase(bc.db, bc.triedb))
+}
+
 // Config retrieves the chain's fork configuration.
 func (bc *BlockChain) Config() *params.ChainConfig { return bc.chainConfig }
 
@@ -445,7 +534,7 @@ func (bc *BlockChain) Genesis() *types.Block {
 
 // GetVMConfig returns the block chain VM config.
 func (bc *BlockChain) GetVMConfig() *vm.Config {
-	return &bc.vmConfig
+	return &bc.cfg.VmConfig
 }
 
 // SetTxLookupLimit is responsible for updating the txlookup limit to the
@@ -472,6 +561,11 @@ func (bc *BlockChain) TxIndexProgress() (TxIndexProgress, error) {
 		return TxIndexProgress{}, errors.New("tx indexer is not enabled")
 	}
 	return bc.txIndexer.txIndexProgress(), nil
+}
+
+// StateIndexProgress returns the historical state indexing progress.
+func (bc *BlockChain) StateIndexProgress() (uint64, error) {
+	return bc.triedb.IndexProgress()
 }
 
 // HistoryPruningCutoff returns the configured history pruning point.
