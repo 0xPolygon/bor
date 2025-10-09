@@ -2622,26 +2622,6 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			return int(processed.Load()), resErr
 		}
 
-		// Handle deferred retry for validation errors
-		if results[i].needsRetry {
-			log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
-			var witness *stateless.Witness
-			if i < len(witnesses) {
-				witness = witnesses[i]
-			}
-			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
-			if perr != nil {
-				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
-				stopHeaders()
-				return int(processed.Load()), perr
-			}
-			if witness != nil {
-				sdb.SetWitness(witness)
-			}
-			results[i].sdb = sdb
-			results[i].gasUsed = res.GasUsed
-		}
-
 		var hErr error
 		if i < len(errChans) {
 			hErr = <-errChans[i]
@@ -2665,9 +2645,38 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			}
 		}
 
-		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
-			stopHeaders()
-			return int(processed.Load()), werr
+		// Only commit blocks that don't need retry
+		if !results[i].needsRetry {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
+		}
+
+		// Handle deferred retry for validation errors
+		if results[i].needsRetry {
+			log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if perr != nil {
+				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
+				stopHeaders()
+				return int(processed.Load()), perr
+			}
+			if witness != nil {
+				sdb.SetWitness(witness)
+			}
+			results[i].sdb = sdb
+			results[i].gasUsed = res.GasUsed
+
+			// Commit the block after successful retry
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
 		}
 
 		processed.Add(1)
