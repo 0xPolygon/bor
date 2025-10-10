@@ -81,7 +81,7 @@ type stateUpdate struct {
 	rawStorageKey  bool
 
 	codes map[common.Address]contractCode // codes contains the set of dirty codes
-	nodes *trienode.MergedNodeSet         // Aggregated dirty nodes caused by state changes
+	Nodes *trienode.MergedNodeSet         // Aggregated dirty nodes caused by state changes
 }
 
 // empty returns a flag indicating the state transition is empty or not.
@@ -170,7 +170,7 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 		storagesOrigin: storagesOrigin,
 		rawStorageKey:  rawStorageKey,
 		codes:          codes,
-		nodes:          nodes,
+		Nodes:          nodes,
 	}
 }
 
