@@ -387,6 +387,10 @@ type SealerConfig struct {
 	RecommitRaw string        `hcl:"recommit,optional" toml:"recommit,optional"`
 
 	CommitInterruptFlag bool `hcl:"commitinterrupt,optional" toml:"commitinterrupt,optional"`
+
+	// BlockTime is the block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
+	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -760,6 +764,7 @@ func DefaultConfig() *Config {
 			ExtraData:           "",
 			Recommit:            125 * time.Second,
 			CommitInterruptFlag: true,
+			BlockTime:           0,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -952,6 +957,7 @@ func (c *Config) fillTimeDurations() error {
 	}{
 		{"jsonrpc.evmtimeout", &c.JsonRPC.RPCEVMTimeout, &c.JsonRPC.RPCEVMTimeoutRaw},
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
+		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
 		{"jsonrpc.timeouts.idle", &c.JsonRPC.HttpTimeout.IdleTimeout, &c.JsonRPC.HttpTimeout.IdleTimeoutRaw},
@@ -1092,6 +1098,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.GasCeil = c.Sealer.GasCeil
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
+		n.Miner.BlockTime = c.Sealer.BlockTime
 
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {

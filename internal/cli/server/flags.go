@@ -364,6 +364,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.CommitInterruptFlag,
 		Group:   "Sealer",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "miner.blocktime",
+		Usage:   "The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.",
+		Value:   &c.cliConfig.Sealer.BlockTime,
+		Default: c.cliConfig.Sealer.BlockTime,
+		Group:   "Sealer",
+	})
 
 	// ethstats
 	f.StringFlag(&flagset.StringFlag{
