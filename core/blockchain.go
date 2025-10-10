@@ -56,6 +56,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
@@ -294,6 +295,10 @@ type BlockChain struct {
 	// future blocks are blocks added for later processing
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
+	// Span state cache for reducing witness bandwidth
+	spanStateCache *lru.Cache[string, struct{}] // Cache state nodes within current span
+	currentSpan    uint64                       // Track current span for boundary detection
+
 	wg            sync.WaitGroup
 	quit          chan struct{} // shutdown signal, closed in Stop.
 	stopping      atomic.Bool   // false if chain is running, true when stopped
@@ -372,6 +377,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		futureBlocks:  lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
 		engine:        engine,
 		vmConfig:      vmConfig,
+
+		// Initialize span state cache with sufficient capacity for one span
+		// Typical span has ~100K-500K unique state nodes
+		spanStateCache: lru.NewCache[string, struct{}](1000000),
+		currentSpan:    0, // Will be set on first block processing
 
 		borReceiptsCache: lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		logger:           vmConfig.Tracer,
@@ -3657,10 +3667,61 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 	return bc.scope.Track(bc.chain2HeadFeed.Subscribe(ch))
 }
 
+// mergeSpanCacheIntoWitness merges cached state nodes from the span cache into the witness.
+// This allows reduced witnesses to work by adding previously cached state data.
+func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int {
+	if bc.spanStateCache == nil || witness == nil {
+		return 0
+	}
+
+	mergedCount := 0
+	keys := bc.spanStateCache.Keys()
+
+	for _, key := range keys {
+		stateNode := key
+		// Check if this state node is missing from the witness
+		if _, exists := witness.State[stateNode]; !exists {
+			// Add it from cache
+			witness.State[stateNode] = struct{}{}
+			mergedCount++
+		}
+	}
+
+	return mergedCount
+}
+
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, error) {
 	if witness == nil {
 		return nil, errors.New("nil witness")
+	}
+
+	blockNum := block.Number().Uint64()
+
+	// Span boundary detection and cache management
+	const spanSize uint64 = 6400 // Bor span length
+	newSpan := blockNum / spanSize
+
+	if bc.spanStateCache != nil && newSpan != bc.currentSpan {
+		oldCacheSize := bc.spanStateCache.Len()
+		bc.spanStateCache.Purge()
+		bc.currentSpan = newSpan
+		log.Info("Span boundary: flushed state cache",
+			"block", blockNum,
+			"oldSpan", bc.currentSpan-1,
+			"newSpan", newSpan,
+			"cachedStates", oldCacheSize)
+	}
+
+	// Merge cached states into witness for blocks that aren't the first in span
+	witnessStatesBefore := len(witness.State)
+	mergedCount := bc.mergeSpanCacheIntoWitness(witness)
+	if mergedCount > 0 {
+		log.Debug("Merged cached states into witness",
+			"block", blockNum,
+			"witnessStatesBefore", witnessStatesBefore,
+			"mergedFromCache", mergedCount,
+			"witnessStatesAfter", len(witness.State))
 	}
 
 	// Validate witness.
@@ -3697,6 +3758,49 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		err = fmt.Errorf("stateless self-validation receipt root mismatch: remote %x != local %x", block.ReceiptHash(), crossReceiptRoot)
 		return nil, err
 	}
+
+	// Cache witness states and updated states for subsequent blocks in this span
+	if bc.spanStateCache != nil {
+		cachedWitnessStates := 0
+		cachedUpdatedStates := 0
+
+		// Cache all witness state nodes
+		for stateNode := range witness.State {
+			if _, exists := bc.spanStateCache.Get(stateNode); !exists {
+				bc.spanStateCache.Add(stateNode, struct{}{})
+				cachedWitnessStates++
+			}
+		}
+
+		// Extract and cache updated states from execution
+		if statedb != nil {
+			_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, bc.chainConfig.IsEIP158(block.Number()))
+			if stateUpdate != nil && stateUpdate.Nodes != nil {
+				nodes := stateUpdate.Nodes
+
+				// Iterate through all node sets
+				for owner := range nodes.Sets {
+					subset := nodes.Sets[owner]
+					subset.ForEachWithOrder(func(path string, n *trienode.Node) {
+						if !n.IsDeleted() && n.Blob != nil {
+							stateNode := string(n.Blob)
+							if _, exists := bc.spanStateCache.Get(stateNode); !exists {
+								bc.spanStateCache.Add(stateNode, struct{}{})
+								cachedUpdatedStates++
+							}
+						}
+					})
+				}
+			}
+		}
+
+		log.Debug("Cached states for span",
+			"block", blockNum,
+			"cachedWitnessStates", cachedWitnessStates,
+			"cachedUpdatedStates", cachedUpdatedStates,
+			"totalCacheSize", bc.spanStateCache.Len())
+	}
+
 	return statedb, nil
 }
 
