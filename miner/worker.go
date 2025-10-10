@@ -1628,6 +1628,11 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 // and toggles the flag when the timer expires.
 func createInterruptTimer(number, timestamp uint64, interruptBlockBuilding *atomic.Bool) func() {
 	delay := time.Until(time.Unix(int64(timestamp), 0))
+
+	// Reduce the timeout by 500ms to give some buffer for state root computation
+	if delay > 1*time.Second {
+		delay -= 500 * time.Millisecond
+	}
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
 
 	// Reset the flag when timer starts for building a new block.
