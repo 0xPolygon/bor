@@ -143,16 +143,8 @@ func (f *BorBlockLogsFilter) unindexedLogs(ctx context.Context, end uint64) ([]*
 
 // borBlockLogs returns the logs matching the filter criteria within a single block.
 func (f *BorBlockLogsFilter) borBlockLogs(_ context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
-	// After upstream merge from geth v1.16.1, range filters can depend on per-receipt bloom.
-	// Bor receipts written by tests (or older code) may omit Bloom.
-	// To keep compatibility, compute the Bloom on-the-fly, when missing.
-	bloom := receipt.Bloom
-	if (bloom == (types.Bloom{})) && len(receipt.Logs) > 0 {
-		bloom = types.CreateBloom(receipt)
-	}
-	if bloomFilter(bloom, f.addresses, f.topics) {
-		logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
-	}
+	// no bloom filter applied since bor logs has no effect on bloom
+	logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
 
 	return logs, nil
 }

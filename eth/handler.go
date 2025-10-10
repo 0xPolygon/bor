@@ -775,7 +775,7 @@ func (h *handler) minedBroadcastLoop() {
 	for obj := range h.minedBlockSub.Chan() {
 		if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
 			if h.enableBlockTracking {
-				delayInMs := uint64(time.Now().UnixMilli()) - ev.Block.Time()*1000
+				delayInMs := time.Now().UnixMilli() - int64(ev.Block.Time())*1000
 				delay := common.PrettyDuration(time.Millisecond * time.Duration(delayInMs))
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", time.Now().Unix(), "delay", delay, "delayInMs", delayInMs)
 			}
