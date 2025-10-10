@@ -1791,7 +1791,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 		// If trie database is enabled, commit the state update as a new layer
 		if db := s.db.TrieDB(); db != nil {
 			start := time.Now()
-			if err := db.Update(ret.root, ret.originRoot, block, ret.nodes, ret.stateSet()); err != nil {
+			if err := db.Update(ret.root, ret.originRoot, block, ret.Nodes, ret.stateSet()); err != nil {
 				return nil, err
 			}
 			s.TrieDBCommits += time.Since(start)
@@ -1799,6 +1799,14 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 	}
 	s.reader, _ = s.db.Reader(s.originalRoot)
 	return ret, err
+}
+
+func (s *StateDB) CommitAndReturnStateUpdate(block uint64, deleteEmptyObjects bool) (common.Hash, *stateUpdate, error) {
+	ret, err := s.commitAndFlush(block, deleteEmptyObjects, true)
+	if err != nil {
+		return common.Hash{}, nil, err
+	}
+	return ret.root, ret, nil
 }
 
 // Commit writes the state mutations into the configured data stores.
