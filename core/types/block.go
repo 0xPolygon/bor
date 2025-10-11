@@ -243,6 +243,13 @@ func (h *Header) ValidateTimestampOptionsPIP15(minTimestamp *uint64, maxTimestam
 	return nil
 }
 
+func (h *Header) GetActualTime() time.Time {
+	if h.ActualTime.IsZero() {
+		return time.Unix(int64(h.Time), 0)
+	}
+	return h.ActualTime
+}
+
 // Body is a simple (mutable, non-safe) data container for storing and moving
 // a block's data contents (transactions and uncles) together.
 type Body struct {

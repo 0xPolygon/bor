@@ -1009,12 +1009,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		header.ActualTime = actualNewBlockTime
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
-		header.ActualTime = time.Unix(int64(header.Time), 0)
 	}
 
 	if header.Time < uint64(time.Now().Unix()) {
 		header.Time = uint64(time.Now().Unix())
-		header.ActualTime = time.Unix(int64(header.Time), 0)
 	} else {
 		// For primary validators, wait until the current block production window
 		// starts. This prevents bor from starting to build next block before time
@@ -1022,7 +1020,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		// need a check for hard fork as it doesn't change any consensus rules, we
 		// still keep it for safety and testing.
 		if c.config.IsBhilai(big.NewInt(int64(number))) && succession == 0 {
-			startTime := header.ActualTime.Add(-time.Duration(c.config.CalculatePeriod(number)) * time.Second)
+			startTime := header.GetActualTime().Add(-time.Duration(c.config.CalculatePeriod(number)) * time.Second)
 			time.Sleep(time.Until(startTime))
 		}
 	}
@@ -1226,14 +1224,9 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 
 	var delay time.Duration
 
-	actualTime := header.ActualTime
-	if actualTime.IsZero() {
-		actualTime = time.Unix(int64(header.Time), 0)
-	}
-
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(actualTime) // Wait until we reach header time for non-primary validators
+		delay = time.Until(header.GetActualTime()) // Wait until we reach header time for non-primary validators
 		// Disable early block announcement
 		// if successionNumber == 0 {
 		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
@@ -1241,7 +1234,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
 		// }
 	} else {
-		delay = time.Until(actualTime) // Wait until we reach header time
+		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging
