@@ -1226,9 +1226,14 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 
 	var delay time.Duration
 
+	actualTime := header.ActualTime
+	if actualTime.IsZero() {
+		actualTime = time.Unix(int64(header.Time), 0)
+	}
+
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(header.ActualTime) // Wait until we reach header time for non-primary validators
+		delay = time.Until(actualTime) // Wait until we reach header time for non-primary validators
 		// Disable early block announcement
 		// if successionNumber == 0 {
 		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
@@ -1236,7 +1241,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
 		// }
 	} else {
-		delay = time.Until(header.ActualTime) // Wait until we reach header time
+		delay = time.Until(actualTime) // Wait until we reach header time
 	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging
