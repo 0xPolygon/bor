@@ -994,10 +994,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	}
 
 	if c.blockTime > 0 && uint64(c.blockTime.Seconds()) < c.config.CalculatePeriod(number) {
-		return fmt.Errorf("block time is less than the consensus block time: %v < %v", c.blockTime.Seconds(), c.config.CalculatePeriod(number))
+		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
+		// Only enable custom block time for Rio and later
 		parentActualTime := c.lastMinedBlockTime
 		if parentActualTime.IsZero() || parentActualTime.Before(time.Unix(int64(parent.Time), 0)) {
 			parentActualTime = time.Unix(int64(parent.Time), 0)
