@@ -171,6 +171,12 @@ type StateDB struct {
 
 	// Bor metrics
 	BorConsensusTime time.Duration
+
+	// Additional measurements to identify bottlenecks in IntermediateRoot
+	FinaliseTime   time.Duration // Time spent in Finalise folding dirties and scheduling prefetches
+	TrieOpenTime   time.Duration // Time spent opening the account trie when not yet constructed
+	PrefetchReport time.Duration // Time spent waiting for prefetchers to drain during report
+	WitnessCollect time.Duration // Time spent collecting trie witnesses
 }
 
 // New creates a new state from a given trie.
@@ -1255,7 +1261,10 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 // goes into transaction receipts.
 func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Finalise all the dirty storage states and write them into the tries
+	// Measure the time spent in finalization
+	fstart := time.Now()
 	s.Finalise(deleteEmptyObjects)
+	s.FinaliseTime += time.Since(fstart)
 
 	// Initialize the trie if it's not constructed yet. If the prefetch
 	// is enabled, the trie constructed below will be replaced by the
@@ -1264,19 +1273,24 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// This operation must be done before state object storage hashing,
 	// as it assumes the main trie is already loaded.
 	if s.trie == nil {
+		// Opening the account trie can be IO-heavy; measure
+		tstart := time.Now()
 		tr, err := s.db.OpenTrie(s.originalRoot)
 		if err != nil {
 			s.setError(err)
 			return common.Hash{}
 		}
 		s.trie = tr
+		s.TrieOpenTime += time.Since(tstart)
 	}
 	// If there was a trie prefetcher operating, terminate it async so that the
 	// individual storage tries can be updated as soon as the disk load finishes.
 	if s.prefetcher != nil {
 		s.prefetcher.terminate(true)
 		defer func() {
+			pstart := time.Now()
 			s.prefetcher.report()
+			s.PrefetchReport += time.Since(pstart)
 			s.prefetcher = nil // Pre-byzantium, unset any used up prefetcher
 		}()
 	}
@@ -1319,6 +1333,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Skip witness collection in Verkle mode, they will be gathered
 	// together at the end.
 	if s.witness != nil && !s.db.TrieDB().IsVerkle() {
+		wstart := time.Now()
 		// Pull in anything that has been accessed before destruction
 		for _, obj := range s.stateObjectsDestruct {
 			// Skip any objects that haven't touched their storage
@@ -1347,6 +1362,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				s.witness.AddState(obj.trie.Witness())
 			}
 		}
+		s.WitnessCollect += time.Since(wstart)
 	}
 	workers.Wait()
 	s.StorageUpdates += time.Since(start)
@@ -1410,7 +1426,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 
 	// If witness building is enabled, gather the account trie witness
 	if s.witness != nil {
+		wstart := time.Now()
 		s.witness.AddState(s.trie.Witness())
+		s.WitnessCollect += time.Since(wstart)
 	}
 	return hash
 }

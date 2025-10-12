@@ -100,6 +100,12 @@ var (
 
 	borConsensusTime = metrics.NewRegisteredTimer("chain/bor/consensus", nil)
 
+	// Additional visibility for IntermediateRoot bottlenecks
+	stateFinaliseTimer   = metrics.NewRegisteredResettingTimer("chain/state/finalise", nil)
+	accountTrieOpenTimer = metrics.NewRegisteredResettingTimer("chain/account/trie/open", nil)
+	prefetchReportTimer  = metrics.NewRegisteredResettingTimer("chain/prefetch/report", nil)
+	witnessCollectTimer  = metrics.NewRegisteredResettingTimer("chain/witness/collect", nil)
+
 	blockImportTimer = metrics.NewRegisteredMeter("chain/imports", nil)
 
 	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
@@ -2931,10 +2937,14 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		storageReadTimer.Update(statedb.StorageReads)                   // Storage reads are complete(in processing)
 		snapshotAccountReadTimer.Update(statedb.SnapshotAccountReads)   // Account reads are complete(in processing)
 		snapshotStorageReadTimer.Update(statedb.SnapshotStorageReads)   // Storage reads are complete(in processing)
+		stateFinaliseTimer.Update(statedb.FinaliseTime)                 // Time spent in StateDB.Finalise
+		accountTrieOpenTimer.Update(statedb.TrieOpenTime)               // Time spent opening account trie
 		accountUpdateTimer.Update(statedb.AccountUpdates)               // Account updates are complete(in validation)
 		storageUpdateTimer.Update(statedb.StorageUpdates)               // Storage updates are complete(in validation)
 		accountHashTimer.Update(statedb.AccountHashes)                  // Account hashes are complete(in validation)
 		storageHashTimer.Update(statedb.StorageHashes)                  // Storage hashes are complete(in validation)
+		witnessCollectTimer.Update(statedb.WitnessCollect)              // Time spent collecting witnesses
+		prefetchReportTimer.Update(statedb.PrefetchReport)              // Time spent waiting in prefetch report
 		triehash := statedb.AccountHashes + statedb.StorageHashes       // The time spent on tries hashing
 		trieUpdate := statedb.AccountUpdates + statedb.StorageUpdates   // The time spent on tries update
 		trieRead := statedb.SnapshotAccountReads + statedb.AccountReads // The time spent on account read
@@ -3158,6 +3168,8 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	if statedb.StorageLoaded != 0 {
 		storageReadSingleTimer.Update(statedb.StorageReads / time.Duration(statedb.StorageLoaded))
 	}
+	stateFinaliseTimer.Update(statedb.FinaliseTime)                                   // Time spent in StateDB.Finalise
+	accountTrieOpenTimer.Update(statedb.TrieOpenTime)                                 // Time spent opening account trie
 	accountUpdateTimer.Update(statedb.AccountUpdates)                                 // Account updates are complete(in validation)
 	storageUpdateTimer.Update(statedb.StorageUpdates)                                 // Storage updates are complete(in validation)
 	accountHashTimer.Update(statedb.AccountHashes)                                    // Account hashes are complete(in validation)
@@ -3166,6 +3178,8 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	blockExecutionTimer.Update(ptime - (statedb.AccountReads + statedb.StorageReads)) // The time spent on EVM processing
 	blockValidationTimer.Update(vtime - (triehash + trieUpdate))                      // The time spent on block validation
 	blockCrossValidationTimer.Update(xvtime)                                          // The time spent on stateless cross validation
+	witnessCollectTimer.Update(statedb.WitnessCollect)                                // Time spent collecting witnesses
+	prefetchReportTimer.Update(statedb.PrefetchReport)                                // Time spent waiting in prefetch report
 
 	// Write the block to the chain and get the status.
 	var (
