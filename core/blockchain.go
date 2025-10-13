@@ -730,6 +730,14 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			}
 			log.Error("Parallel STM finished", "number", block.NumberU64(), "err", err)
 			log.Error("Receipts", "number", block.NumberU64(), "len receipts", len(res.Receipts), "receipts", res.Receipts, "len logs", len(res.Logs), "logs", res.Logs, "gasUsed", res.GasUsed)
+			// Log each receipt
+			for i, receipt := range res.Receipts {
+				log.Error("Receipt", "number", block.NumberU64(), "index", i, "receipt", *receipt)
+			}
+			// Log each log
+			for i, lg := range res.Logs {
+				log.Error("Log", "number", block.NumberU64(), "index", i, "log", lg)
+			}
 			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true}
 		}()
 	}
@@ -752,6 +760,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 				res = &ProcessResult{}
 			}
 			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false}
+			log.Error("Serial STM finished", "number", block.NumberU64(), "err", err)
+			log.Error("Receipts", "number", block.NumberU64(), "len receipts", len(res.Receipts), "receipts", res.Receipts, "len logs", len(res.Logs), "logs", res.Logs, "gasUsed", res.GasUsed)
+			// Log each receipt
+			for i, receipt := range res.Receipts {
+				log.Error("Receipt", "number", block.NumberU64(), "index", i, "receipt", *receipt)
+			}
+			// Log each log
+			for i, lg := range res.Logs {
+				log.Error("Log", "number", block.NumberU64(), "index", i, "log", lg)
+			}
 		}()
 	}
 
