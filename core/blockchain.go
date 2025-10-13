@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"os"
 	"runtime"
 	"slices"
 	"sort"
@@ -426,8 +427,8 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		engine:        engine,
 
 		// Initialize span state cache with sufficient capacity for one span
-		// Typical span has ~100K-500K unique state nodes
-		spanStateCache: lru.NewCache[string, struct{}](1000000),
+		// Capacity set to 10M to handle large state growth during experiments
+		spanStateCache: lru.NewCache[string, struct{}](10000000),
 		currentSpan:    0, // Will be set on first block processing
 
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
@@ -3990,14 +3991,18 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	// Cache witness states and updated states for subsequent blocks in this span
 	if bc.spanStateCache != nil {
-		cachedWitnessStates := 0
-		cachedUpdatedStates := 0
+		totalWitnessStates := len(witness.State)
+		cacheHits := 0
+		newWitnessStates := 0
+		newUpdatedStates := 0
 
-		// Cache all witness state nodes
+		// Cache all witness state nodes and count hits
 		for stateNode := range witness.State {
-			if _, exists := bc.spanStateCache.Get(stateNode); !exists {
+			if _, exists := bc.spanStateCache.Get(stateNode); exists {
+				cacheHits++
+			} else {
 				bc.spanStateCache.Add(stateNode, struct{}{})
-				cachedWitnessStates++
+				newWitnessStates++
 			}
 		}
 
@@ -4015,7 +4020,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 							stateNode := string(n.Blob)
 							if _, exists := bc.spanStateCache.Get(stateNode); !exists {
 								bc.spanStateCache.Add(stateNode, struct{}{})
-								cachedUpdatedStates++
+								newUpdatedStates++
 							}
 						}
 					})
@@ -4023,11 +4028,30 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			}
 		}
 
+		totalCacheSize := bc.spanStateCache.Len()
+		cacheHitRate := float64(0)
+		if totalWitnessStates > 0 {
+			cacheHitRate = float64(cacheHits) * 100.0 / float64(totalWitnessStates)
+		}
+
+		// Log to console
 		log.Debug("Cached states for span",
 			"block", blockNum,
-			"cachedWitnessStates", cachedWitnessStates,
-			"cachedUpdatedStates", cachedUpdatedStates,
-			"totalCacheSize", bc.spanStateCache.Len())
+			"witnessStates", totalWitnessStates,
+			"cacheHits", cacheHits,
+			"newWitnessStates", newWitnessStates,
+			"newUpdatedStates", newUpdatedStates,
+			"totalCacheSize", totalCacheSize,
+			"cacheHitRate%", fmt.Sprintf("%.2f", cacheHitRate))
+
+		// Write detailed metrics to file
+		metricsFile, err := os.OpenFile("span_cache_metrics.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			defer metricsFile.Close()
+			timestamp := time.Now().Format("2006-01-02 15:04:05")
+			fmt.Fprintf(metricsFile, "[%s] Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | Merged: %d\n",
+				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, mergedCount)
+		}
 	}
 
 	return statedb, res, nil
