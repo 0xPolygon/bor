@@ -2556,6 +2556,11 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 					witness = witnesses[idx]
 				}
 				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
+				if sdb != nil {
+					if db := sdb.Database().TrieDB().Disk(); db != nil {
+						log.Debug("StateDB disk backend", "block", blk.NumberU64(), "diskdb_ptr", fmt.Sprintf("%p", db))
+					}
+				}
 				if perr != nil {
 					// If validation depends on parent's commit, mark for retry in writer stage
 					if idx > 0 {
@@ -2658,6 +2663,11 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				witness = witnesses[i]
 			}
 			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if sdb != nil {
+				if db := sdb.Database().TrieDB().Disk(); db != nil {
+					log.Debug("Retry StateDB disk backend", "block", block.NumberU64(), "diskdb_ptr", fmt.Sprintf("%p", db))
+				}
+			}
 			if perr != nil {
 				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
 				stopHeaders()

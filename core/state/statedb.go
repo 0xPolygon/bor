@@ -1766,7 +1766,8 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 	// Commit dirty contract code if any exists
 	if db := s.db.TrieDB().Disk(); db != nil && len(ret.codes) > 0 {
 		batch := db.NewBatch()
-		for _, code := range ret.codes {
+		for addr, code := range ret.codes {
+			log.Info("Persisting contract code", "address", addr, "codeHash", code.hash, "size", len(code.blob), "block", block)
 			rawdb.WriteCode(batch, code.hash, code.blob)
 		}
 		if err := batch.Write(); err != nil {
