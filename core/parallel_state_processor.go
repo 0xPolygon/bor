@@ -370,9 +370,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	backupStateDB := statedb.Copy()
 
+	log.Error("Starting parallel block execution", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 	profile := false
 	result, err := blockstm.ExecuteParallel(tasks, profile, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
-
+	log.Error("Completed parallel block execution", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 	if err == nil && profile && result.Deps != nil {
 		_, weight := result.Deps.LongestPath(*result.Stats)
 
@@ -388,6 +389,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	for _, task := range tasks {
 		task := task.(*ExecutionTask)
 		if task.shouldRerunWithoutFeeDelay {
+			log.Error("Rerunning block execution without delaying fee calculation", "txIndex", task.index, "txHash", task.tx.Hash(), "shouldDelayFeeCal", *task.shouldDelayFeeCal)
 			shouldDelayFeeCal = false
 
 			// nolint
