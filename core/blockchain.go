@@ -4049,6 +4049,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		if err == nil {
 			defer metricsFile.Close()
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
+			fmt.Println("PSP - Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | Merged: %d\n",
+				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, mergedCount)
 			fmt.Fprintf(metricsFile, "[%s] Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | Merged: %d\n",
 				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, mergedCount)
 		}
