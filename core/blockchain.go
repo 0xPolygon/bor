@@ -347,8 +347,8 @@ type BlockChain struct {
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
 	// Span state cache for reducing witness bandwidth
-	spanStateCache *lru.Cache[string, struct{}] // Cache state nodes within current span
-	currentSpan    uint64                       // Track current span for boundary detection
+	spanStateCache   *lru.Cache[string, struct{}] // Cache state nodes within current span
+	currentcacheSpan uint64                       // Track current span for boundary detection
 
 	wg            sync.WaitGroup
 	quit          chan struct{} // shutdown signal, closed in Stop.
@@ -427,9 +427,9 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		engine:        engine,
 
 		// Initialize span state cache with sufficient capacity for one span
-		// Capacity set to 10M to handle large state growth during experiments
-		spanStateCache: lru.NewCache[string, struct{}](10000000),
-		currentSpan:    0, // Will be set on first block processing
+		// Typical span has ~100K-500K unique state nodes
+		spanStateCache:   lru.NewCache[string, struct{}](1000000),
+		currentcacheSpan: 0, // Will be set on first block processing
 
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -3920,6 +3920,32 @@ func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int 
 	return mergedCount
 }
 
+const (
+	defaultSpanLength = 6400 // Default span length i.e. number of bor blocks in a span
+	zerothSpanEnd     = 255  // End block of 0th span
+)
+
+func isSpanEnd(blockNum uint64) bool {
+	if blockNum > zerothSpanEnd {
+		return (blockNum-zerothSpanEnd)%defaultSpanLength == 0
+	}
+	return blockNum == zerothSpanEnd
+}
+
+func isSpanStart(blockNum uint64) bool {
+	if blockNum > zerothSpanEnd {
+		return (blockNum-zerothSpanEnd-1)%defaultSpanLength == 0
+	}
+	return blockNum == 0
+}
+
+func getSpanNum(blockNum uint64) uint64 {
+	if blockNum > zerothSpanEnd {
+		return (blockNum - zerothSpanEnd) / defaultSpanLength
+	}
+	return 0
+}
+
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
@@ -3928,30 +3954,33 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.Number().Uint64()
 
-	// Span boundary detection and cache management
-	const spanSize uint64 = 6400 // Bor span length
-	newSpan := blockNum / spanSize
-
-	if bc.spanStateCache != nil && newSpan != bc.currentSpan {
+	// Span boundary detection and cache management using isSpanStart
+	if bc.spanStateCache != nil && isSpanStart(blockNum) {
 		oldCacheSize := bc.spanStateCache.Len()
 		bc.spanStateCache.Purge()
-		bc.currentSpan = newSpan
+
+		// Calculate span number for logging
+		spanNum := getSpanNum(blockNum)
+		bc.currentcacheSpan = spanNum
+
 		log.Info("Span boundary: flushed state cache",
 			"block", blockNum,
-			"oldSpan", bc.currentSpan-1,
-			"newSpan", newSpan,
+			"spanNum", spanNum,
 			"cachedStates", oldCacheSize)
 	}
 
+	var mergedCount int
 	// Merge cached states into witness for blocks that aren't the first in span
-	witnessStatesBefore := len(witness.State)
-	mergedCount := bc.mergeSpanCacheIntoWitness(witness)
-	if mergedCount > 0 {
-		log.Debug("Merged cached states into witness",
-			"block", blockNum,
-			"witnessStatesBefore", witnessStatesBefore,
-			"mergedFromCache", mergedCount,
-			"witnessStatesAfter", len(witness.State))
+	if !isSpanStart(blockNum) {
+		witnessStatesBefore := len(witness.State)
+		mergedCount = bc.mergeSpanCacheIntoWitness(witness)
+		if mergedCount > 0 {
+			log.Debug("Merged cached states into witness",
+				"block", blockNum,
+				"witnessStatesBefore", witnessStatesBefore,
+				"mergedFromCache", mergedCount,
+				"witnessStatesAfter", len(witness.State))
+		}
 	}
 
 	// Validate witness.
