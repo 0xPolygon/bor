@@ -346,6 +346,7 @@ func (pe *ParallelExecutor) Prepare() error {
 					pe.mvh.FlushMVWriteSet(res.txAllOut)
 				}
 
+				log.Error("ExecResult", "tx", res.ver.TxnIndex, "incarnation", res.ver.Incarnation, "err", res.err, "hash", task.et.Hash(), "reads", len(res.txIn), "writes", len(res.txOut), "fullwrites", len(res.txAllOut), "worker", procNum)
 				pe.resultQueue.Push(res.ver.TxnIndex, res)
 				pe.chResults <- struct{}{}
 
