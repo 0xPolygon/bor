@@ -1203,11 +1203,12 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	if c.config.IsBhilai(header.Number) {
 		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time for non-primary validators
-		if successionNumber == 0 {
-			// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
-			// for early block announcement instead of waiting for full block time.
-			delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
-		}
+		// Disable early block announcement
+		// if successionNumber == 0 {
+		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
+		// 	// for early block announcement instead of waiting for full block time.
+		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
+		// }
 	} else {
 		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time
 	}

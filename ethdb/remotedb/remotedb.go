@@ -51,14 +51,6 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	return resp, nil
 }
 
-func (db *Database) HasAncient(kind string, number uint64) (bool, error) {
-	if _, err := db.Ancient(kind, number); err != nil {
-		return false, err
-	}
-
-	return true, nil
-}
-
 func (db *Database) Ancient(kind string, number uint64) ([]byte, error) {
 	var resp hexutil.Bytes
 	err := db.remote.Call(&resp, "debug_dbAncient", kind, number)
@@ -125,7 +117,7 @@ func (db *Database) TruncateTail(n uint64) (uint64, error) {
 	panic("not supported")
 }
 
-func (db *Database) Sync() error {
+func (db *Database) SyncAncient() error {
 	return nil
 }
 
@@ -150,6 +142,10 @@ func (db *Database) AncientDatadir() (string, error) {
 }
 
 func (db *Database) Compact(start []byte, limit []byte) error {
+	return nil
+}
+
+func (db *Database) SyncKeyValue() error {
 	return nil
 }
 

@@ -441,21 +441,15 @@ type testBackend struct {
 }
 
 func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.Engine, generator func(i int, b *core.BlockGen)) *testBackend {
-	var (
-		cacheConfig = &core.CacheConfig{
-			TrieCleanLimit:    256,
-			TrieDirtyLimit:    256,
-			TrieTimeLimit:     5 * time.Minute,
-			SnapshotLimit:     0,
-			TrieDirtyDisabled: true, // Archive mode
-		}
-	)
+	options := core.DefaultConfig().WithArchive(true)
+	options.TxLookupLimit = 0 // index all txs
+
 	accman, acc := newTestAccountManager(t)
 	// gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
 	// Generate blocks for testing
 	db, blocks, _ := core.GenerateChainWithGenesis(gspec, engine, n, generator)
-	txlookupLimit := uint64(0)
-	chain, err := core.NewBlockChain(db, cacheConfig, gspec, nil, engine, vm.Config{}, nil, &txlookupLimit, nil)
+
+	chain, err := core.NewBlockChain(db, gspec, engine, options)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -600,17 +594,16 @@ func (b testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) even
 func (b testBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
 	panic("implement me")
 }
-func (b testBackend) GetTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
-	tx, blockHash, blockNumber, index := rawdb.ReadTransaction(b.db, txHash)
-	found := true
-	if tx == nil {
-		found = false
-	}
-	return found, tx, blockHash, blockNumber, index
-}
 func (b testBackend) GetPoolTransactions() (types.Transactions, error) { panic("implement me") }
 func (b testBackend) GetPoolTransaction(txHash common.Hash) *types.Transaction {
 	return nil
+}
+func (b testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
+	return tx != nil, tx, blockHash, blockNumber, index
+}
+func (b testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	return b.chain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 func (b testBackend) TxIndexDone() bool {
 	return true
@@ -2526,84 +2519,113 @@ func TestSimulateV1(t *testing.T) {
 				}},
 			}},
 		},
-		// Polygon/bor: POS-3049
-		/*
-			{
-				name: "basefee-non-validation",
-				tag:  latest,
-				blocks: []simBlock{{
-					StateOverrides: &override.StateOverride{
-						randomAccounts[2].addr: {
-							// Yul code:
-							// object "Test" {
-							//    code {
-							//        // Get the gas price from the transaction
-							//        let gasPrice := gasprice()
-							//
-							//        // Get the base fee from the block
-							//        let baseFee := basefee()
-							//
-							//        // Store gasPrice and baseFee in memory
-							//        mstore(0x0, gasPrice)
-							//        mstore(0x20, baseFee)
-							//
-							//        // Return the data
-							//        return(0x0, 0x40)
-							//    }
-							// }
-							Code: hex2Bytes("3a489060005260205260406000f3"),
-						},
+		{
+			name: "basefee-non-validation",
+			tag:  latest,
+			blocks: []simBlock{{
+				StateOverrides: &override.StateOverride{
+					randomAccounts[2].addr: {
+						// Yul code:
+						// object "Test" {
+						//    code {
+						//        // Get the gas price from the transaction
+						//        let gasPrice := gasprice()
+						//
+						//        // Get the base fee from the block
+						//        let baseFee := basefee()
+						//
+						//        // Store gasPrice and baseFee in memory
+						//        mstore(0x0, gasPrice)
+						//        mstore(0x20, baseFee)
+						//
+						//        // Return the data
+						//        return(0x0, 0x40)
+						//    }
+						// }
+						Code: hex2Bytes("3a489060005260205260406000f3"),
 					},
-					Calls: []TransactionArgs{{
-						From: &accounts[0].addr,
-						To:   &randomAccounts[2].addr,
-						// 0 gas price
-					}, {
-						From: &accounts[0].addr,
-						To:   &randomAccounts[2].addr,
-						// non-zero gas price
-						MaxPriorityFeePerGas: newInt(1),
-						MaxFeePerGas:         newInt(2),
-					},
-					},
+				},
+				Calls: []TransactionArgs{{
+					From: &accounts[0].addr,
+					To:   &randomAccounts[2].addr,
+					// 0 gas price
 				}, {
-					BlockOverrides: &override.BlockOverrides{
-						BaseFeePerGas: (*hexutil.Big)(big.NewInt(1)),
-					},
-					Calls: []TransactionArgs{{
-						From: &accounts[0].addr,
-						To:   &randomAccounts[2].addr,
-						// 0 gas price
-					}, {
-						From: &accounts[0].addr,
-						To:   &randomAccounts[2].addr,
-						// non-zero gas price
-						MaxPriorityFeePerGas: newInt(1),
-						MaxFeePerGas:         newInt(2),
-					},
-					},
+					From: &accounts[0].addr,
+					To:   &randomAccounts[2].addr,
+					// non-zero gas price
+					MaxPriorityFeePerGas: newInt(1),
+					MaxFeePerGas:         newInt(2),
+				},
+				},
+			}, {
+				BlockOverrides: &override.BlockOverrides{
+					BaseFeePerGas: (*hexutil.Big)(big.NewInt(1)),
+				},
+				Calls: []TransactionArgs{{
+					From: &accounts[0].addr,
+					To:   &randomAccounts[2].addr,
+					// 0 gas price
 				}, {
-					// Base fee should be 0 to zero even if it was set in previous block.
-					Calls: []TransactionArgs{{
-						From: &accounts[0].addr,
-						To:   &randomAccounts[2].addr,
-					}},
+					From: &accounts[0].addr,
+					To:   &randomAccounts[2].addr,
+					// non-zero gas price
+					MaxPriorityFeePerGas: newInt(1),
+					MaxFeePerGas:         newInt(2),
+				},
+				},
+			}, {
+				// Base fee should be 0 to zero even if it was set in previous block.
+				Calls: []TransactionArgs{{
+					From: &accounts[0].addr,
+					To:   &randomAccounts[2].addr,
 				}},
-				want: []blockRes{{
-					Number:        "0xb",
-					GasLimit:      "0x47e7c4",
-					GasUsed:       "0xa44e",
-					Miner:         coinbase,
-					BaseFeePerGas: "0x0",
-					Calls: []callRes{{
-						ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-						GasUsed:     "0x5227",
-						Logs:        []log{},
-						Status:      "0x1",
-					}, {
-						ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
-						GasUsed:     "0x5227",
-						Logs: []log{{
+			}},
+			want: []blockRes{{
+				Number:        "0xb",
+				GasLimit:      "0x47e7c4",
+				GasUsed:       "0xa44e",
+				Miner:         coinbase,
+				BaseFeePerGas: "0x0",
+				Calls: []callRes{{
+					ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+					GasUsed:     "0x5227",
+					Logs:        []log{},
+					Status:      "0x1",
+				}, {
+					ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000",
+					GasUsed:     "0x5227",
+					Logs: []log{{
+						Address: core.GetFeeAddress(),
+						Topics: []common.Hash{
+							common.Hash([32]byte{0x4d, 0xfe, 0x1b, 0xbb, 0xcf, 0x07, 0x7d, 0xdc, 0x3e, 0x01, 0x29, 0x1e, 0xea, 0x2d, 0x5c, 0x70, 0xc2, 0xb4, 0x22, 0xb4, 0x15, 0xd9, 0x56, 0x45, 0xb9, 0xad, 0xcf, 0xd6, 0x78, 0xcb, 0x1d, 0x63}),
+							common.BytesToHash(core.GetFeeAddress().Bytes()),
+							common.BytesToHash(accounts[0].addr.Bytes()),
+							common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
+						},
+						Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
+						BlockNumber: 11,
+						TxIndex:     1,
+						Index:       0,
+					},
+					},
+					Status: "0x1",
+				}},
+			}, {
+				Number:        "0xc",
+				GasLimit:      "0x47e7c4",
+				GasUsed:       "0xa44e",
+				Miner:         coinbase,
+				BaseFeePerGas: "0x1",
+				Calls: []callRes{{
+					ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+					GasUsed:     "0x5227",
+					Logs:        []log{},
+					Status:      "0x1",
+				}, {
+					ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001",
+					GasUsed:     "0x5227",
+					Logs: []log{
+						{
 							Address: core.GetFeeAddress(),
 							Topics: []common.Hash{
 								common.Hash([32]byte{0x4d, 0xfe, 0x1b, 0xbb, 0xcf, 0x07, 0x7d, 0xdc, 0x3e, 0x01, 0x29, 0x1e, 0xea, 0x2d, 0x5c, 0x70, 0xc2, 0xb4, 0x22, 0xb4, 0x15, 0xd9, 0x56, 0x45, 0xb9, 0xad, 0xcf, 0xd6, 0x78, 0xcb, 0x1d, 0x63}),
@@ -2611,60 +2633,28 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(accounts[0].addr.Bytes()),
 								common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
-							BlockNumber: 11,
+							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xa4, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0x69, 0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xf6, 0x75},
+							BlockNumber: 12,
 							TxIndex:     1,
 							Index:       0,
 						},
-						},
-						Status: "0x1",
-					}},
-				}, {
-					Number:        "0xc",
-					GasLimit:      "0x47e7c4",
-					GasUsed:       "0xa44e",
-					Miner:         coinbase,
-					BaseFeePerGas: "0x1",
-					Calls: []callRes{{
-						ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
-						GasUsed:     "0x5227",
-						Logs:        []log{},
-						Status:      "0x1",
-					}, {
-						ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001",
-						GasUsed:     "0x5227",
-						Logs: []log{
-							{
-								Address: core.GetFeeAddress(),
-								Topics: []common.Hash{
-									common.Hash([32]byte{0x4d, 0xfe, 0x1b, 0xbb, 0xcf, 0x07, 0x7d, 0xdc, 0x3e, 0x01, 0x29, 0x1e, 0xea, 0x2d, 0x5c, 0x70, 0xc2, 0xb4, 0x22, 0xb4, 0x15, 0xd9, 0x56, 0x45, 0xb9, 0xad, 0xcf, 0xd6, 0x78, 0xcb, 0x1d, 0x63}),
-									common.BytesToHash(core.GetFeeAddress().Bytes()),
-									common.BytesToHash(accounts[0].addr.Bytes()),
-									common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
-								},
-								Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0xa4, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0x69, 0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0xf6, 0x75},
-								BlockNumber: 12,
-								TxIndex:     1,
-								Index:       0,
-							},
-						},
-						Status: "0x1",
-					}},
-				}, {
-					Number:        "0xd",
-					GasLimit:      "0x47e7c4",
-					GasUsed:       "0x5227",
-					Miner:         coinbase,
-					BaseFeePerGas: "0x0",
-					Calls: []callRes{{
-						ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-						GasUsed:     "0x5227",
-						Logs:        []log{},
-						Status:      "0x1",
-					}},
+					},
+					Status: "0x1",
 				}},
-			},
-		*/
+			}, {
+				Number:        "0xd",
+				GasLimit:      "0x47e7c4",
+				GasUsed:       "0x5227",
+				Miner:         coinbase,
+				BaseFeePerGas: "0x0",
+				Calls: []callRes{{
+					ReturnValue: "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+					GasUsed:     "0x5227",
+					Logs:        []log{},
+					Status:      "0x1",
+				}},
+			}},
+		},
 		{
 			name: "basefee-validation-mode",
 			tag:  latest,
@@ -4186,6 +4176,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x00000000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000de0a5fd640afa000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000de0a5fd640af6180000000000000000000000000000000000000000000000000de0b6b3a76403e8",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0x644a31c354391520d00e95b9affbbb010fc79ac268144ab8e28207f4cf51097e",
 					"transactionIndex": "0x0",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
@@ -4242,6 +4233,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x000000000000000000000000000000000000000000000000000000000000000b",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0xa228af0975b99799bd28331085a6966aba2fb5814a8d89aabc342462aa40429a",
 					"transactionIndex": "0x2",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
@@ -4279,6 +4271,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					],
 					"data": "0x0000000000000000000000000000000000000000000000000000000000a32f640000000000000000000000000000000000000000000000000de06892fa4b3d9800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de06892f9a80e340000000000000000000000000000000000000000000000000000000000a32f64",
 					"blockNumber": "0x1",
+					"blockTimestamp": "0xa",
 					"transactionHash": "0xc2cc458a65bc96f642d4a2063cce162b0da642613d801271bdbc4aa7e775f3ed",
 					"transactionIndex": "0x3",
 					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
@@ -4321,7 +4314,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
 				"blockNumber": "0x1",
 				"contractAddress": null,
-				"cumulativeGasUsed": "0x0",
+				"cumulativeGasUsed": "0x2b325",
 				"effectiveGasPrice": "0x0",
 				"from": "0x0000000000000000000000000000000000000000",
 				"gasUsed": "0x0",
