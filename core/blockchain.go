@@ -759,7 +759,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false}
 			log.Error("Serial STM finished", "number", block.NumberU64(), "err", err)
 			log.Error("Receipts", "number", block.NumberU64(), "len receipts", len(res.Receipts), "receipts", res.Receipts, "len logs", len(res.Logs), "logs", res.Logs, "gasUsed", res.GasUsed)
 			// Log each receipt
@@ -770,6 +769,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			for i, lg := range res.Logs {
 				log.Error("Log", "number", block.NumberU64(), "index", i, "log", lg)
 			}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false}
 		}()
 	}
 
