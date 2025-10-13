@@ -230,12 +230,12 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		return nil, err
 	}
 
-	statedb.FlushMVWriteSet()
-	resMap := statedb.GetMVHashmap()
-	if resMap != nil {
-		json := resMap.ToJSON()
-		AppendToFile("/var/lib/bor/serial.log", string(json))
-	}
+	// statedb.FlushMVWriteSet()
+	// resMap := statedb.GetMVHashmap()
+	// if resMap != nil {
+	// 	json := resMap.ToJSON()
+	// 	AppendToFile("/var/lib/bor/serial.log", string(json))
+	// }
 	// stop recording read and write
 	statedb.SetMVHashmap(nil)
 
