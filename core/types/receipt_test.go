@@ -575,3 +575,59 @@ func clearComputedFieldsOnLogs(logs []*Log) []*Log {
 
 	return l
 }
+
+// TestDecodeErigonStateSyncReceipt verifies that Bor can decode state sync receipts
+// sent by Erigon nodes over P2P using eth/69 protocol.
+// The RLP data is captured from actual Erigon state sync receipt generation.
+func TestDecodeErigonStateSyncReceipt(t *testing.T) {
+	// This is the eth/69 RLP encoding of a state sync receipt from Erigon.
+	eth69RLP := "0xf9037e0180f90379f9013d940000000000000000000000000000000000001010f884a0e6497e3ee548a3372136af2fcb0696db31fc6cf20260707645068bd3fe97f3c4a00000000000000000000000000000000000000000000000000000000000001010a00000000000000000000000000000000000000000000000000000000000001010a0000000000000000000000000740395a9f4e27357fba15a11c15aba50cee08860b8a00000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000204fcc40244438a65dc0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000204fcc40166381f2b65c00000000000000000000000000000000000000000000000000000de0b6b3a7640000f8dc940000000000000000000000000000000000001010f863a04e2ca0515ed1aef1395f66b5303bb5d6f1bf9d61a353fa53f73f8ac9973fa9f6a00000000000000000000000008e1700577b7ae261753c67e1b93fe60dd3e205faa0000000000000000000000000740395a9f4e27357fba15a11c15aba50cee08860b8600000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a7640000f8dd94eafa0622b7f1a8d267cb920f9024f19d45aeb331f884a0ec3afb067bce33c5a294470ec5b29e6759301cd3928550490c6d48816cdc2f5da00000000000000000000000008e1700577b7ae261753c67e1b93fe60dd3e205faa00000000000000000000000000000000000000000000000000000000000001010a0000000000000000000000000740395a9f4e27357fba15a11c15aba50cee08860b8400000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000001f87a940000000000000000000000000000000000001001f842a05a22725590b0a51c923940223f7458512164b1113359a735e86e7f27f44791eea00000000000000000000000000000000000000000000000000000000000000001a00000000000000000000000000000000000000000000000000000000000000001"
+
+	// Decode the hex string.
+	rlpBytes := common.FromHex(eth69RLP)
+
+	if len(rlpBytes) == 0 {
+		t.Fatal("Empty RLP bytes")
+	}
+
+	var data storedReceiptRLP
+	err := rlp.DecodeBytes(rlpBytes, &data)
+	if err != nil {
+		t.Fatalf("Failed to decode eth/69 receipt: %v", err)
+	}
+
+	receiptType := LegacyTxType
+
+	// Verify it's a state sync receipt (CumulativeGasUsed = 0).
+	if data.CumulativeGasUsed != 0 {
+		t.Errorf("Expected CumulativeGasUsed=0 for state sync receipt, got %d", data.CumulativeGasUsed)
+	}
+
+	// Verify receipt type (should be legacy for state-sync).
+	if receiptType != LegacyTxType {
+		t.Errorf("Expected Type=%d (LegacyTxType) for state sync receipt, got %d", LegacyTxType, receiptType)
+	}
+
+	// Verify it has logs.
+	if len(data.Logs) != 4 {
+		t.Errorf("Expected 4 logs for state sync receipt, got %d", len(data.Logs))
+	}
+
+	// Verify the last log is from state receiver contract (0x1001).
+	stateReceiverAddr := common.HexToAddress("0x0000000000000000000000000000000000001001")
+	lastLog := data.Logs[len(data.Logs)-1]
+	if lastLog.Address != stateReceiverAddr {
+		t.Errorf("Expected last log from state receiver contract %s, got %s", stateReceiverAddr.Hex(), lastLog.Address.Hex())
+	}
+
+	// Verify the state sync event topic.
+	expectedTopic := common.HexToHash("0x5a22725590b0a51c923940223f7458512164b1113359a735e86e7f27f44791ee")
+	if len(lastLog.Topics) == 0 || lastLog.Topics[0] != expectedTopic {
+		t.Errorf("Expected state sync event topic %s", expectedTopic.Hex())
+	}
+
+	// Verify status is successful.
+	if !bytes.Equal(data.PostStateOrStatus, receiptStatusSuccessfulRLP) {
+		t.Errorf("Expected status %x (ReceiptStatusSuccessful), got %x", receiptStatusSuccessfulRLP, data.PostStateOrStatus)
+	}
+}
