@@ -43,21 +43,21 @@ type BorBlockLogsFilter struct {
 // figure out whether a particular block is interesting or not.
 func NewBorBlockLogsRangeFilter(backend Backend, borConfig *params.BorConfig, begin, end int64, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
 	// Create a generic filter and convert it into a range filter
-	filter := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
-	filter.begin = begin
-	filter.end = end
+	f := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
+	f.begin = begin
+	f.end = end
 
-	return filter
+	return f
 }
 
 // NewBorBlockLogsFilter creates a new filter which directly inspects the contents of
 // a block to figure out whether it is interesting or not.
 func NewBorBlockLogsFilter(backend Backend, borConfig *params.BorConfig, block common.Hash, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
 	// Create a generic filter and convert it into a block filter
-	filter := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
-	filter.block = block
+	f := newBorBlockLogsFilter(backend, borConfig, addresses, topics)
+	f.block = block
 
-	return filter
+	return f
 }
 
 // newBorBlockLogsFilter creates a generic filter that can either filter based on a block hash,
@@ -142,10 +142,9 @@ func (f *BorBlockLogsFilter) unindexedLogs(ctx context.Context, end uint64) ([]*
 }
 
 // borBlockLogs returns the logs matching the filter criteria within a single block.
-func (f *BorBlockLogsFilter) borBlockLogs(ctx context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
-	if bloomFilter(receipt.Bloom, f.addresses, f.topics) {
-		logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
-	}
+func (f *BorBlockLogsFilter) borBlockLogs(_ context.Context, receipt *types.Receipt) (logs []*types.Log, err error) {
+	// no bloom filter applied since bor logs has no effect on bloom
+	logs = filterLogs(receipt.Logs, nil, nil, f.addresses, f.topics)
 
 	return logs, nil
 }

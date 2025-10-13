@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // resultStore implements a structure for maintaining fetchResults, tracking their
@@ -78,7 +79,7 @@ func (r *resultStore) SetThrottleThreshold(threshold uint64) uint64 {
 //	throttled - if true, the store is at capacity, this particular header is not prio now
 //	item      - the result to store data into
 //	err       - any error that occurred
-func (r *resultStore) AddFetch(header *types.Header, syncMode SyncMode) (stale, throttled bool, item *fetchResult, err error) {
+func (r *resultStore) AddFetch(header *types.Header, syncMode SyncMode, borCfg *params.BorConfig) (stale, throttled bool, item *fetchResult, err error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -90,7 +91,7 @@ func (r *resultStore) AddFetch(header *types.Header, syncMode SyncMode) (stale, 
 	}
 
 	if item == nil {
-		item = newFetchResult(header, syncMode)
+		item = newFetchResult(header, syncMode, borCfg)
 		r.items[index] = item
 	}
 

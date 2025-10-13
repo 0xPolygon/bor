@@ -36,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -112,7 +111,7 @@ func newTestBackendWithGenerator(blocks int, shanghai bool, cancun bool, generat
 		Alloc:      types.GenesisAlloc{testAddr: {Balance: big.NewInt(100_000_000_000_000_000)}},
 		Difficulty: common.Big0,
 	}
-	chain, _ := core.NewBlockChain(db, nil, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(db, gspec, engine, nil)
 
 	_, bs, _ := core.GenerateChainWithGenesis(gspec, engine, blocks, generator)
 	if _, err := chain.InsertChain(bs, false); err != nil {
@@ -165,7 +164,7 @@ func (b *testBackend) Handle(*Peer, Packet) error {
 }
 
 // Tests that block headers can be retrieved from a remote chain based on user queries.
-func TestGetBlockHeaders67(t *testing.T) { testGetBlockHeaders(t, ETH67) }
+func TestGetBlockHeaders69(t *testing.T) { testGetBlockHeaders(t, ETH69) }
 func TestGetBlockHeaders68(t *testing.T) { testGetBlockHeaders(t, ETH68) }
 
 func testGetBlockHeaders(t *testing.T, protocol uint) {
@@ -381,7 +380,7 @@ func testGetBlockHeaders(t *testing.T, protocol uint) {
 }
 
 // Tests that block contents can be retrieved from a remote chain based on their hashes.
-func TestGetBlockBodies67(t *testing.T) { testGetBlockBodies(t, ETH67) }
+func TestGetBlockBodies69(t *testing.T) { testGetBlockBodies(t, ETH69) }
 func TestGetBlockBodies68(t *testing.T) { testGetBlockBodies(t, ETH68) }
 
 func testGetBlockBodies(t *testing.T, protocol uint) {
@@ -476,7 +475,7 @@ func testGetBlockBodies(t *testing.T, protocol uint) {
 }
 
 // Tests that the transaction receipts can be retrieved based on hashes.
-func TestGetBlockReceipts67(t *testing.T) { testGetBlockReceipts(t, ETH67) }
+func TestGetBlockReceipts69(t *testing.T) { testGetBlockReceipts(t, ETH69) }
 func TestGetBlockReceipts68(t *testing.T) { testGetBlockReceipts(t, ETH68) }
 
 func testGetBlockReceipts(t *testing.T, protocol uint) {
@@ -525,27 +524,53 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 	defer peer.close()
 
 	// Collect the hashes to request, and the response to expect
-	var (
-		hashes   []common.Hash
-		receipts [][]*types.Receipt
-	)
+	var hashes []common.Hash
 
-	for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
-		block := backend.chain.GetBlockByNumber(i)
+	switch protocol {
+	case ETH69:
+		var receipts []*ReceiptList69
+		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
+			block := backend.chain.GetBlockByNumber(i)
+			hashes = append(hashes, block.Hash())
+			trs := backend.chain.GetReceiptsByHash(block.Hash())
+			receipts = append(receipts, NewReceiptList69(trs))
+		}
 
-		hashes = append(hashes, block.Hash())
-		receipts = append(receipts, backend.chain.GetReceiptsByHash(block.Hash()))
-	}
-	// Send the hash request and verify the response
-	p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
-		RequestId:          123,
-		GetReceiptsRequest: hashes,
-	})
-	if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket{
-		RequestId:        123,
-		ReceiptsResponse: receipts,
-	}); err != nil {
-		t.Errorf("receipts mismatch: %v", err)
+		// Send request and verify ETH69 response
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
+			RequestId:          123,
+			GetReceiptsRequest: hashes,
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket[*ReceiptList69]{
+			RequestId: 123,
+			List:      receipts,
+		}); err != nil {
+			t.Errorf("receipts mismatch (ETH69): %v", err)
+		}
+
+	case ETH68:
+		var receipts []*ReceiptList68
+		for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
+			block := backend.chain.GetBlockByNumber(i)
+			hashes = append(hashes, block.Hash())
+			trs := backend.chain.GetReceiptsByHash(block.Hash())
+			receipts = append(receipts, NewReceiptList68(trs))
+		}
+
+		// Send request and verify ETH68 response
+		p2p.Send(peer.app, GetReceiptsMsg, &GetReceiptsPacket{
+			RequestId:          123,
+			GetReceiptsRequest: hashes,
+		})
+		if err := p2p.ExpectMsg(peer.app, ReceiptsMsg, &ReceiptsPacket[*ReceiptList68]{
+			RequestId: 123,
+			List:      receipts,
+		}); err != nil {
+			t.Errorf("receipts mismatch (ETH68): %v", err)
+		}
+
+	default:
+		t.Fatalf("unsupported protocol version: %d", protocol)
 	}
 }
 
@@ -611,10 +636,10 @@ func setup() (*testBackend, *testPeer) {
 }
 
 func FuzzEthProtocolHandlers(f *testing.F) {
-	handlers := eth68
+	handlers := eth69
 	backend, peer := setup()
 	f.Fuzz(func(t *testing.T, code byte, msg []byte) {
-		handler := handlers[uint64(code)%protocolLengths[ETH68]]
+		handler := handlers[uint64(code)%protocolLengths[ETH69]]
 		if handler == nil {
 			return
 		}

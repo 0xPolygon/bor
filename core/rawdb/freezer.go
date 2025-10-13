@@ -124,7 +124,6 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		tables:       make(map[string]*freezerTable),
 		instanceLock: lock,
 	}
-	freezer.offset.Store(offset)
 
 	// Create the tables.
 	for name, config := range tables {
@@ -155,10 +154,6 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		return nil, err
 	}
 
-	// Some blocks in ancientDB may have already been frozen and been pruned, so adding the offset to
-	// represent the absolute number of blocks already frozen.
-	freezer.frozen.Add(offset)
-
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
 
@@ -182,24 +177,12 @@ func (f *Freezer) Close() error {
 			errs = append(errs, err)
 		}
 	})
-	if errs != nil {
-		return fmt.Errorf("%v", errs)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // AncientDatadir returns the path of the ancient store.
 func (f *Freezer) AncientDatadir() (string, error) {
 	return f.datadir, nil
-}
-
-// HasAncient returns an indicator whether the specified ancient data exists
-// in the freezer.
-func (f *Freezer) HasAncient(kind string, number uint64) (bool, error) {
-	if table := f.tables[kind]; table != nil {
-		return table.has(number - f.offset.Load()), nil
-	}
-	return false, nil
 }
 
 // Ancient retrieves an ancient binary blob from the append-only immutable files.
@@ -345,8 +328,8 @@ func (f *Freezer) TruncateTail(tail uint64) (uint64, error) {
 	return old, nil
 }
 
-// Sync flushes all data tables to disk.
-func (f *Freezer) Sync() error {
+// SyncAncient flushes all data tables to disk.
+func (f *Freezer) SyncAncient() error {
 	var errs []error
 	for _, table := range f.tables {
 		if err := table.Sync(); err != nil {
