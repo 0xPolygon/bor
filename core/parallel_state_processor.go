@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -177,6 +178,10 @@ func (task *ExecutionTask) Dependencies() []int {
 	return task.dependencies
 }
 
+var totalFeeBurnt *big.Int = big.NewInt(0)
+var totalFeeTipped *big.Int = big.NewInt(0)
+var mu sync.Mutex
+
 func (task *ExecutionTask) Settle() {
 	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
 
@@ -187,6 +192,8 @@ func (task *ExecutionTask) Settle() {
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
 	}
+	// check for `#tasks/#execs` in `blockstm exec summary` log. It should be ideally 100
+	// 54876000
 
 	if *task.shouldDelayFeeCal {
 		if task.config.IsLondon(task.blockNumber) {
@@ -194,6 +201,15 @@ func (task *ExecutionTask) Settle() {
 		}
 
 		task.finalStateDB.AddBalance(task.coinbase, cmath.BigIntToUint256Int(task.result.FeeTipped), tracing.BalanceChangeTransfer)
+
+		mu.Lock()
+		totalFeeBurnt.Add(totalFeeBurnt, task.result.FeeBurnt)
+		totalFeeTipped.Add(totalFeeTipped, task.result.FeeTipped)
+		log.Error("Fee details", "blockNumber", task.blockNumber.Uint64(), "txIndex", task.index, "txHash", task.tx.Hash(),
+			"feeBurnt", task.result.FeeBurnt, "feeTipped", task.result.FeeTipped,
+			"totalFeeBurnt", totalFeeBurnt, "totalFeeTipped", totalFeeTipped)
+		mu.Unlock()
+
 		output1 := new(big.Int).SetBytes(task.result.SenderInitBalance.Bytes())
 		output2 := new(big.Int).SetBytes(coinbaseBalance.Bytes())
 
@@ -222,6 +238,11 @@ func (task *ExecutionTask) Settle() {
 
 	if task.config.IsByzantium(task.blockNumber) {
 		task.finalStateDB.Finalise(true)
+		dbCopy := task.finalStateDB.Copy()
+		logRoot := dbCopy.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
+		log.Error("IntermediateRoot", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash(), "logRoot", logRoot,
+			"logRootHex", common.Bytes2Hex(logRoot))
 	} else {
 		root = task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
 	}
