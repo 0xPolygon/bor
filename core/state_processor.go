@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -125,6 +126,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
+
+		dbCopy := statedb.Copy()
+		logRoot := dbCopy.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
+		log.Error("IntermediateRoot", "blockNumber", blockNumber.Uint64(),
+			"txIndex", i, "txHash", tx.Hash(), "logRoot", logRoot,
+			"logRootHex", common.Bytes2Hex(logRoot))
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
