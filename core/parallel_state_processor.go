@@ -183,6 +183,13 @@ var totalFeeTipped *big.Int = big.NewInt(0)
 var mu sync.Mutex
 
 func (task *ExecutionTask) Settle() {
+	if task.index == 43 {
+		receiverBalance := task.statedb.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
+		log.Error("Receiver balance Before Finalize", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
+			"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
+	}
+
 	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
@@ -245,7 +252,7 @@ func (task *ExecutionTask) Settle() {
 			"logRootHex", common.Bytes2Hex(logRoot))
 		if task.index == 43 {
 			receiverBalance := dbCopy.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
-			log.Error("Receiver balance", "blockNumber", task.blockNumber.Uint64(),
+			log.Error("Receiver balance After Finalize", "blockNumber", task.blockNumber.Uint64(),
 				"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
 				"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
 			contracts := []string{
