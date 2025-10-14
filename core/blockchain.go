@@ -4063,14 +4063,28 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			cacheHitRate = float64(cacheHits) * 100.0 / float64(totalWitnessStates)
 		}
 
+		// Calculate approximate memory usage of cache
+		cacheMemoryBytes := uint64(0)
+		keys := bc.spanStateCache.Keys()
+		for _, key := range keys {
+			// Each key is a string (state node data)
+			// struct{} value takes 0 bytes
+			// Account for string overhead: length + pointer + capacity
+			cacheMemoryBytes += uint64(len(key))
+		}
+		// Add map/cache overhead (approximately 48 bytes per entry for map structure)
+		cacheMemoryBytes += uint64(totalCacheSize) * 48
+		cacheMemoryMB := float64(cacheMemoryBytes) / (1024.0 * 1024.0)
+
 		// Log to console
-		log.Debug("Cached states for span",
+		log.Info("PSP - Cached states for span",
 			"block", blockNum,
 			"witnessStates", totalWitnessStates,
 			"cacheHits", cacheHits,
 			"newWitnessStates", newWitnessStates,
 			"newUpdatedStates", newUpdatedStates,
 			"totalCacheSize", totalCacheSize,
+			"cacheMemoryMB", fmt.Sprintf("%.2f", cacheMemoryMB),
 			"cacheHitRate%", fmt.Sprintf("%.2f", cacheHitRate))
 
 		// Write detailed metrics to file
@@ -4078,10 +4092,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		if err == nil {
 			defer metricsFile.Close()
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Println("PSP - Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | Merged: %d\n",
-				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, mergedCount)
-			fmt.Fprintf(metricsFile, "[%s] Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | Merged: %d\n",
-				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, mergedCount)
+			fmt.Fprintf(metricsFile, "[%s] Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | CacheMemoryMB: %.2f | Merged: %d\n",
+				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, cacheMemoryMB, mergedCount)
 		}
 	}
 
