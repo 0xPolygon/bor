@@ -570,6 +570,10 @@ func InitGenesis(t *testing.T, faucets []*ecdsa.PrivateKey, fileLocation string,
 }
 
 func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithBlockTime(genesis, privKey, withoutHeimdall, 0)
+}
+
+func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
 	if err != nil {
@@ -606,6 +610,7 @@ func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall
 			GasCeil:   genesis.GasLimit * 11 / 10,
 			GasPrice:  big.NewInt(1),
 			Recommit:  time.Second,
+			BlockTime: blockTime,
 		},
 		WithoutHeimdall: withoutHeimdall,
 	})

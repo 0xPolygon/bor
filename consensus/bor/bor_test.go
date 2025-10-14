@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
@@ -529,4 +530,205 @@ func TestSnapshot(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCustomBlockTimeValidation(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	testCases := []struct {
+		name            string
+		blockTime       time.Duration
+		consensusPeriod uint64
+		blockNumber     uint64
+		expectError     bool
+		description     string
+	}{
+		{
+			name:            "blockTime is zero (default) - should succeed",
+			blockTime:       0,
+			consensusPeriod: 2,
+			blockNumber:     1,
+			expectError:     false,
+			description:     "Default blockTime of 0 should use standard consensus delay",
+		},
+		{
+			name:            "blockTime equals consensus period - should succeed",
+			blockTime:       2 * time.Second,
+			consensusPeriod: 2,
+			blockNumber:     1,
+			expectError:     false,
+			description:     "Custom blockTime equal to consensus period should be valid",
+		},
+		{
+			name:            "blockTime greater than consensus period - should succeed",
+			blockTime:       5 * time.Second,
+			consensusPeriod: 2,
+			blockNumber:     1,
+			expectError:     false,
+			description:     "Custom blockTime greater than consensus period should be valid",
+		},
+		{
+			name:            "blockTime less than consensus period - should fail",
+			blockTime:       1 * time.Second,
+			consensusPeriod: 2,
+			blockNumber:     1,
+			expectError:     true,
+			description:     "Custom blockTime less than consensus period should be invalid",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+			borCfg := &params.BorConfig{
+				Sprint:   map[string]uint64{"0": 64},
+				Period:   map[string]uint64{"0": tc.consensusPeriod},
+				RioBlock: big.NewInt(0), // Enable Rio from genesis
+			}
+			chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+			b.blockTime = tc.blockTime
+
+			// Get genesis block as parent
+			genesis := chain.HeaderChain().GetHeaderByNumber(0)
+			require.NotNil(t, genesis)
+
+			header := &types.Header{
+				Number:     big.NewInt(int64(tc.blockNumber)),
+				ParentHash: genesis.Hash(),
+			}
+
+			err := b.Prepare(chain.HeaderChain(), header)
+
+			if tc.expectError {
+				require.Error(t, err, tc.description)
+				require.Contains(t, err.Error(), "less than the consensus block time", tc.description)
+			} else {
+				require.NoError(t, err, tc.description)
+			}
+		})
+	}
+}
+
+func TestCustomBlockTimeCalculation(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	t.Run("sequential blocks with custom blockTime", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		b.blockTime = 5 * time.Second
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+		baseTime := genesis.Time
+
+		header1 := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+		err := b.Prepare(chain.HeaderChain(), header1)
+		require.NoError(t, err)
+
+		require.False(t, header1.ActualTime.IsZero(), "ActualTime should be set")
+		expectedTime := time.Unix(int64(baseTime), 0).Add(5 * time.Second)
+		require.Equal(t, expectedTime.Unix(), header1.ActualTime.Unix())
+	})
+
+	t.Run("lastMinedBlockTime is zero (first block)", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		b.blockTime = 3 * time.Second
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+		baseTime := genesis.Time
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		err := b.Prepare(chain.HeaderChain(), header)
+		require.NoError(t, err)
+
+		expectedTime := time.Unix(int64(baseTime), 0).Add(3 * time.Second)
+		require.Equal(t, expectedTime.Unix(), header.ActualTime.Unix())
+	})
+
+	t.Run("lastMinedBlockTime before parent time (fallback)", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		b.blockTime = 4 * time.Second
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+		baseTime := genesis.Time
+
+		if baseTime > 10 {
+			b.lastMinedBlockTime = time.Unix(int64(baseTime-10), 0)
+		} else {
+			b.lastMinedBlockTime = time.Unix(0, 0)
+		}
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		err := b.Prepare(chain.HeaderChain(), header)
+		require.NoError(t, err)
+
+		expectedTime := time.Unix(int64(baseTime), 0).Add(4 * time.Second)
+		require.Equal(t, expectedTime.Unix(), header.ActualTime.Unix())
+	})
+}
+
+func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	t.Run("blockTime is zero uses standard CalcProducerDelay", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			ProducerDelay:    map[string]uint64{"0": 3},
+			BackupMultiplier: map[string]uint64{"0": 2},
+			RioBlock:         big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		b.blockTime = 0
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		err := b.Prepare(chain.HeaderChain(), header)
+		require.NoError(t, err)
+
+		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
+	})
 }

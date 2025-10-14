@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -597,4 +598,74 @@ func TestValidateTimestampOptionsPIP15(t *testing.T) {
 			t.Fatalf("test number %v should have failed. err is nil", test.number)
 		}
 	}
+}
+
+func TestHeaderGetActualTime(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ActualTime is set - returns ActualTime", func(t *testing.T) {
+		actualTime := time.Unix(1234567890, 0)
+		header := &Header{
+			Time:       1111111111,
+			ActualTime: actualTime,
+		}
+
+		result := header.GetActualTime()
+		if !result.Equal(actualTime) {
+			t.Errorf("expected ActualTime %v, got %v", actualTime, result)
+		}
+	})
+
+	t.Run("ActualTime is zero - returns time.Unix(Time, 0)", func(t *testing.T) {
+		headerTime := uint64(1600000000)
+		header := &Header{
+			Time: headerTime,
+			// ActualTime is not set (zero value)
+		}
+
+		result := header.GetActualTime()
+		expected := time.Unix(int64(headerTime), 0)
+		if !result.Equal(expected) {
+			t.Errorf("expected time.Unix(%d, 0) = %v, got %v", headerTime, expected, result)
+		}
+	})
+
+	t.Run("both Time and ActualTime zero - returns Unix epoch", func(t *testing.T) {
+		header := &Header{
+			Time: 0,
+			// ActualTime is not set (zero value)
+		}
+
+		result := header.GetActualTime()
+		expected := time.Unix(0, 0)
+		if !result.Equal(expected) {
+			t.Errorf("expected Unix epoch %v, got %v", expected, result)
+		}
+	})
+
+	t.Run("far future time - ActualTime set", func(t *testing.T) {
+		farFuture := time.Unix(9999999999, 0)
+		header := &Header{
+			Time:       5555555555,
+			ActualTime: farFuture,
+		}
+
+		result := header.GetActualTime()
+		if !result.Equal(farFuture) {
+			t.Errorf("expected far future time %v, got %v", farFuture, result)
+		}
+	})
+
+	t.Run("far future time - ActualTime not set", func(t *testing.T) {
+		farFutureTimestamp := uint64(9999999999)
+		header := &Header{
+			Time: farFutureTimestamp,
+		}
+
+		result := header.GetActualTime()
+		expected := time.Unix(int64(farFutureTimestamp), 0)
+		if !result.Equal(expected) {
+			t.Errorf("expected time %v, got %v", expected, result)
+		}
+	})
 }

@@ -1893,3 +1893,78 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		bor.BlockTooSoonError{Number: 4, Succession: 2},
 		*err.(*bor.BlockTooSoonError))
 }
+
+// TestCustomBlockTimeMining tests that a miner can successfully create blocks with a custom block time
+// different from the consensus period. It sets consensus period to 1s and custom miner block time to 1.75s,
+// then verifies that approximately 34 blocks (60s / 1.75s) are mined in 1 minute.
+func TestCustomBlockTimeMining(t *testing.T) {
+	t.Parallel()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
+	genesis.Config.Bor.Period = map[string]uint64{"0": 1}        // Consensus period: 1s
+	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}       // Sprint size: 16 blocks
+	genesis.Config.Bor.ProducerDelay = map[string]uint64{"0": 0} // No producer delay
+	genesis.Config.Bor.BackupMultiplier = map[string]uint64{"0": 2}
+
+	genesis.Config.Bor.RioBlock = common.Big0
+
+	customBlockTime := 1750 * time.Millisecond
+
+	stack, ethBackend, err := InitMinerWithBlockTime(genesis, keys[0], true, customBlockTime)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	borEngine := ethBackend.Engine().(*bor.Bor)
+	borEngine.Authorize(crypto.PubkeyToAddress(keys[0].PublicKey), func(account accounts.Account, s string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), keys[0])
+	})
+
+	startBlock := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+	startTime := time.Now()
+
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	testDuration := 60 * time.Second
+	time.Sleep(testDuration)
+
+	ethBackend.StopMining()
+
+	endBlock := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+	actualDuration := time.Since(startTime)
+
+	blocksMinedCount := endBlock - startBlock
+
+	expectedBlocks := float64(actualDuration.Seconds()) / customBlockTime.Seconds()
+
+	// Allow 5% tolerance for timing variations
+	tolerance := 0.05
+	minExpectedBlocks := uint64(expectedBlocks * (1 - tolerance))
+	maxExpectedBlocks := uint64(expectedBlocks * (1 + tolerance))
+
+	log.Info("Custom block time mining test results",
+		"startBlock", startBlock,
+		"endBlock", endBlock,
+		"blocksMinedCount", blocksMinedCount,
+		"duration", actualDuration,
+		"customBlockTime", customBlockTime,
+		"expectedBlocks", expectedBlocks,
+		"minExpected", minExpectedBlocks,
+		"maxExpected", maxExpectedBlocks)
+
+	require.GreaterOrEqual(t, blocksMinedCount, minExpectedBlocks,
+		fmt.Sprintf("Too few blocks mined. Expected at least %d, got %d", minExpectedBlocks, blocksMinedCount))
+	require.LessOrEqual(t, blocksMinedCount, maxExpectedBlocks,
+		fmt.Sprintf("Too many blocks mined. Expected at most %d, got %d", maxExpectedBlocks, blocksMinedCount))
+}
