@@ -425,6 +425,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 			case CodePath:
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
+				log.Error("ApplyMVWriteSet: Selfdestruct", "addr", addr.Hex())
 				stateObject := sr.getStateObject(addr)
 				if stateObject != nil {
 					s.SelfDestruct(addr)
