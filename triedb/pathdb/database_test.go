@@ -121,6 +121,7 @@ type tester struct {
 	snapStorages map[common.Hash]map[common.Hash]map[common.Hash][]byte // Keyed by the hash of account address and the hash of storage key
 }
 
+//nolint:unused
 func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int, enableIndex bool) *tester {
 	return newTesterWithMaxDiffLayers(t, historyLimit, isVerkle, layers, 128, enableIndex)
 }

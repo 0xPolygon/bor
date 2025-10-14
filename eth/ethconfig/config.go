@@ -145,7 +145,7 @@ type Config struct {
 	TrieDirtyCache int
 	TrieTimeout    time.Duration
 	SnapshotCache  int
-	MaxDiffLayers  int    // Maximum diff layers allowed in the pathdb layer tree
+	MaxDiffLayers  int // Maximum diff layers allowed in the pathdb layer tree
 	Preimages      bool
 	TriesInMemory  uint64
 
