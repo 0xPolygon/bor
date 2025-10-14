@@ -184,7 +184,7 @@ var mu sync.Mutex
 
 func (task *ExecutionTask) Settle() {
 	if task.index == 43 {
-		receiverBalance := task.statedb.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
+		receiverBalance := task.finalStateDB.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
 		log.Error("Receiver balance Before Finalize", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
 			"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
