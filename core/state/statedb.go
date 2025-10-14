@@ -425,9 +425,9 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 			case CodePath:
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
-				log.Error("ApplyMVWriteSet: Selfdestruct", "addr", addr.Hex())
 				stateObject := sr.getStateObject(addr)
 				if stateObject != nil {
+					log.Error("ApplyMVWriteSet: Selfdestruct", "addr", addr.Hex())
 					s.SelfDestruct(addr)
 				}
 			default:
@@ -923,8 +923,11 @@ func (s *StateDB) SelfDestruct(addr common.Address) uint256.Int {
 	// If it is already marked as self-destructed, we do not need to add it
 	// for journalling a second time.
 	if !stateObject.selfDestructed {
+		log.Error("StateDB: Selfdestruct", "addr", addr.Hex())
 		s.journal.destruct(addr)
 		stateObject.markSelfdestructed()
+	} else {
+		log.Error("Already marked selfdestructed", "addr", addr.Hex())
 	}
 	MVWrite(s, blockstm.NewSubpathKey(addr, SuicidePath))
 	MVWrite(s, blockstm.NewSubpathKey(addr, BalancePath))
