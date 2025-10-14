@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"runtime"
 	"sync"
@@ -33,12 +34,14 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/txpool"
+	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/txpool/locals"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -74,6 +77,26 @@ var (
 	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
 )
 
+const (
+	// This is the fairness knob for the discovery mixer. When looking for peers, we'll
+	// wait this long for a single source of candidates before moving on and trying other
+	// sources. If this timeout expires, the source will be skipped in this round, but it
+	// will continue to fetch in the background and will have a chance with a new timeout
+	// in the next rounds, giving it overall more time but a proportionally smaller share.
+	// We expect a normal source to produce ~10 candidates per second.
+	discmixTimeout = 100 * time.Millisecond
+
+	// discoveryPrefetchBuffer is the number of peers to pre-fetch from a discovery
+	// source. It is useful to avoid the negative effects of potential longer timeouts
+	// in the discovery, keeping dial progress while waiting for the next batch of
+	// candidates.
+	discoveryPrefetchBuffer = 32
+
+	// maxParallelENRRequests is the maximum number of parallel ENR requests that can be
+	// performed by a disc/v4 source.
+	maxParallelENRRequests = 16
+)
+
 // Config contains the configuration options of the ETH protocol.
 // Deprecated: use ethconfig.Config instead.
 type Config = ethconfig.Config
@@ -83,6 +106,7 @@ type Ethereum struct {
 	// core protocol objects
 	config         *ethconfig.Config
 	txPool         *txpool.TxPool
+	blobTxPool     *blobpool.BlobPool
 	localTxTracker *locals.TxTracker
 	blockchain     *core.BlockChain
 
@@ -135,8 +159,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		log.Warn("Sanitizing invalid miner gas price", "provided", config.Miner.GasPrice, "updated", ethconfig.Defaults.Miner.GasPrice)
 		config.Miner.GasPrice = ethconfig.Defaults.Miner.GasPrice
 	}
-
-	if config.NoPruning && config.TrieDirtyCache > 0 {
+	if config.NoPruning && config.TrieDirtyCache > 0 && config.StateScheme == rawdb.HashScheme {
 		if config.SnapshotCache > 0 {
 			config.TrieCleanCache += config.TrieDirtyCache * 3 / 5
 			config.SnapshotCache += config.TrieDirtyCache * 2 / 5
@@ -147,8 +170,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	log.Info("Allocated trie memory caches", "clean", common.StorageSize(config.TrieCleanCache)*1024*1024, "dirty", common.StorageSize(config.TrieDirtyCache)*1024*1024)
 
-	// Assemble the Ethereum object
-	chainDb, err := stack.OpenDatabaseWithFreezer("chaindata", config.DatabaseCache, config.DatabaseHandles, config.DatabaseFreezer, "ethereum/db/chaindata/", false, false, false, config.SyncMode == downloader.StatelessSync)
+	dbOptions := node.DatabaseOptions{
+		Cache:             config.DatabaseCache,
+		Handles:           config.DatabaseHandles,
+		AncientsDirectory: config.DatabaseFreezer,
+		EraDirectory:      config.DatabaseEra,
+		MetricsNamespace:  "eth/db/chaindata/",
+		Stateless:         config.SyncMode == downloader.StatelessSync,
+	}
+	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -164,20 +194,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 
-	// Here we determine genesis hash and active ChainConfig.
-	// We need these to figure out the consensus parameters and to set up history pruning.
-	chainConfig, _, err := core.LoadChainConfig(chainDb, config.Genesis)
-	if err != nil {
-		return nil, err
-	}
-
-	/*
-		engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
-		if err != nil {
-			return nil, err
-		}
-	*/
-
 	// Assemble the Ethereum object.
 	eth := &Ethereum{
 		config:          config,
@@ -189,7 +205,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		gasPrice:        config.Miner.GasPrice,
 		etherbase:       config.Miner.Etherbase,
 		p2pServer:       stack.Server(),
-		discmix:         enode.NewFairMix(0),
+		discmix:         enode.NewFairMix(discmixTimeout),
 		shutdownTracker: shutdowncheck.NewShutdownTracker(chainDb),
 		closeCh:         make(chan struct{}),
 	}
@@ -204,7 +220,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	gpoParams := config.GPO
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(chainConfig, config, chainDb, blockChainAPI)
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -230,29 +246,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 	var (
-		vmConfig = vm.Config{
-			EnablePreimageRecording: config.EnablePreimageRecording,
-		}
-		cacheConfig = &core.CacheConfig{
-			TrieCleanLimit:      config.TrieCleanCache,
-			TrieCleanNoPrefetch: config.NoPrefetch,
-			TrieDirtyLimit:      config.TrieDirtyCache,
-			TrieDirtyDisabled:   config.NoPruning,
-			TrieTimeLimit:       config.TrieTimeout,
-			SnapshotLimit:       config.SnapshotCache,
-			MaxDiffLayers:       config.MaxDiffLayers,
-			Preimages:           config.Preimages,
-			StateHistory:        config.StateHistory,
-			StateScheme:         scheme,
-			TriesInMemory:       config.TriesInMemory,
-			ChainHistoryMode:    config.HistoryMode,
+		options = &core.BlockChainConfig{
+			TrieCleanLimit:   config.TrieCleanCache,
+			NoPrefetch:       config.NoPrefetch,
+			TrieDirtyLimit:   config.TrieDirtyCache,
+			ArchiveMode:      config.NoPruning,
+			TrieTimeLimit:    config.TrieTimeout,
+			SnapshotLimit:    config.SnapshotCache,
+			MaxDiffLayers:    config.MaxDiffLayers,
+			Preimages:        config.Preimages,
+			StateHistory:     config.StateHistory,
+			StateScheme:      scheme,
+			ChainHistoryMode: config.HistoryMode,
+			TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+			VmConfig: vm.Config{
+				EnablePreimageRecording: config.EnablePreimageRecording,
+			},
+			Stateless: config.SyncMode == downloader.StatelessSync,
 		}
 	)
-
-	if config.SyncMode == downloader.StatelessSync {
-		cacheConfig.TriesInMemory = 0
-		cacheConfig.Stateless = true
-	}
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
@@ -263,26 +275,28 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
 		}
-		vmConfig.Tracer = t
+		options.VmConfig.Tracer = t
 	}
 
-	checker := whitelist.NewService(chainDb)
+	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
-	if config.OverridePrague != nil {
-		overrides.OverridePrague = config.OverridePrague
+	if config.OverrideOsaka != nil {
+		overrides.OverrideOsaka = config.OverrideOsaka
 	}
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
 	}
 
+	options.Overrides = &overrides
+
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
 	if config.ParallelEVM.Enable {
-		eth.blockchain, err = core.NewParallelBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, checker, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
+		eth.blockchain, err = core.NewParallelBlockChain(chainDb, config.Genesis, eth.engine, options, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
-		eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, checker)
+		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
 	if err != nil {
@@ -317,7 +331,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if fb := eth.blockchain.CurrentFinalBlock(); fb != nil {
 		finalBlock = fb.Number.Uint64()
 	}
-	eth.filterMaps = filtermaps.NewFilterMaps(chainDb, chainView, historyCutoff, finalBlock, filtermaps.DefaultParams, fmConfig)
+	filterMaps, err := filtermaps.NewFilterMaps(chainDb, chainView, historyCutoff, finalBlock, filtermaps.DefaultParams, fmConfig)
+	if err != nil {
+		return nil, err
+	}
+	eth.filterMaps = filterMaps
 	eth.closeFilterMaps = make(chan chan struct{})
 
 	if config.BlobPool.Datadir != "" {
@@ -356,7 +374,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// Permit the downloader to use the trie cache allowance during fast sync
-	cacheLimit := cacheConfig.TrieCleanLimit + cacheConfig.TrieDirtyLimit + cacheConfig.SnapshotLimit
+	cacheLimit := options.TrieCleanLimit + options.TrieDirtyLimit + options.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{
 		NodeID:                  eth.p2pServer.Self().ID(),
 		Database:                chainDb,
@@ -384,7 +402,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	eth.dropper = newDropper(eth.p2pServer.MaxDialedConns(), eth.p2pServer.MaxInboundConns())
 
 	if config.SyncMode != downloader.StatelessSync {
-		eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.EventMux(), eth.engine, eth.isLocalBlock, eth.config.WitnessProtocol)
+		eth.miner = miner.New(eth, &config.Miner, eth.blockchain.Config(), eth.eventMux, eth.engine, eth.isLocalBlock, eth.config.WitnessProtocol)
 		eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
@@ -520,33 +538,6 @@ func (s *Ethereum) isLocalBlock(header *types.Header) bool {
 	return false
 }
 
-// shouldPreserve checks whether we should preserve the given block
-// during the chain reorg depending on whether the author of block
-// is a local account.
-func (s *Ethereum) shouldPreserve(header *types.Header) bool {
-	// The reason we need to disable the self-reorg preserving for clique
-	// is it can be probable to introduce a deadlock.
-	//
-	// e.g. If there are 7 available signers
-	//
-	// r1   A
-	// r2     B
-	// r3       C
-	// r4         D
-	// r5   A      [X] F G
-	// r6    [X]
-	//
-	// In the round5, the in-turn signer E is offline, so the worst case
-	// is A, F and G sign the block of round5 and reject the block of opponents
-	// and in the round6, the last available signer B is offline, the whole
-	// network is stuck.
-	if _, ok := s.engine.(*clique.Clique); ok {
-		return false
-	}
-
-	return s.isLocalBlock(header)
-}
-
 // SetEtherbase sets the mining reward address.
 func (s *Ethereum) SetEtherbase(etherbase common.Address) {
 	s.lock.Lock()
@@ -640,7 +631,7 @@ func (s *Ethereum) Miner() *miner.Miner { return s.miner }
 func (s *Ethereum) AccountManager() *accounts.Manager  { return s.accountManager }
 func (s *Ethereum) BlockChain() *core.BlockChain       { return s.blockchain }
 func (s *Ethereum) TxPool() *txpool.TxPool             { return s.txPool }
-func (s *Ethereum) EventMux() *event.TypeMux           { return s.eventMux }
+func (s *Ethereum) BlobTxPool() *blobpool.BlobPool     { return s.blobTxPool }
 func (s *Ethereum) Engine() consensus.Engine           { return s.engine }
 func (s *Ethereum) ChainDb() ethdb.Database            { return s.chainDb }
 func (s *Ethereum) IsListening() bool                  { return true } // Always listening
@@ -822,6 +813,11 @@ func (s *Ethereum) fetchAndHandleMilestone(ctx context.Context, ethHandler *ethH
 func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *ethHandler, bor *bor.Bor) error {
 	milestoneEvents := bor.HeimdallWSClient.SubscribeMilestoneEvents(ctx)
 
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	var milestone *milestone.Milestone
+
 	for {
 		select {
 		case m, ok := <-milestoneEvents:
@@ -829,7 +825,20 @@ func (s *Ethereum) subscribeAndHandleMilestone(ctx context.Context, ethHandler *
 				return nil
 			}
 
+			milestone = m
+
 			err := ethHandler.handleMilestone(ctx, s, m, newBorVerifier())
+			if err != nil {
+				log.Error("error handling milestone ws event", "err", err)
+			}
+
+		// Re-process the milestone periodically in case a fork is imported right after the previous milestone
+		case <-ticker.C:
+			if milestone == nil {
+				continue
+			}
+
+			err := ethHandler.handleMilestone(ctx, s, milestone, newBorVerifier())
 			if err != nil {
 				log.Error("error handling milestone ws event", "err", err)
 			}
@@ -920,10 +929,27 @@ func (s *Ethereum) setupDiscovery() error {
 		s.discmix.AddSource(iter)
 	}
 
+	// Add DHT nodes from discv4.
+	if s.p2pServer.DiscoveryV4() != nil {
+		iter := s.p2pServer.DiscoveryV4().RandomNodes()
+		resolverFunc := func(ctx context.Context, enr *enode.Node) *enode.Node {
+			// RequestENR does not yet support context. It will simply time out.
+			// If the ENR can't be resolved, RequestENR will return nil. We don't
+			// care about the specific error here, so we ignore it.
+			nn, _ := s.p2pServer.DiscoveryV4().RequestENR(enr)
+			return nn
+		}
+		iter = enode.AsyncFilter(iter, resolverFunc, maxParallelENRRequests)
+		iter = enode.Filter(iter, eth.NewNodeFilter(s.blockchain))
+		iter = enode.NewBufferIter(iter, discoveryPrefetchBuffer)
+		s.discmix.AddSource(iter)
+	}
+
 	// Add DHT nodes from discv5.
 	if s.p2pServer.DiscoveryV5() != nil {
 		filter := eth.NewNodeFilter(s.blockchain)
 		iter := enode.Filter(s.p2pServer.DiscoveryV5().RandomNodes(), filter)
+		iter = enode.NewBufferIter(iter, discoveryPrefetchBuffer)
 		s.discmix.AddSource(iter)
 	}
 

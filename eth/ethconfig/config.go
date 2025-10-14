@@ -133,6 +133,7 @@ type Config struct {
 	DatabaseHandles    int  `toml:"-"`
 	DatabaseCache      int
 	DatabaseFreezer    string
+	DatabaseEra        string
 
 	// Database - LevelDB options
 	LevelDbCompactionTableSize           uint64
@@ -226,6 +227,9 @@ type Config struct {
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 
+	// OverrideOsaka (TODO: remove after the fork)
+	OverrideOsaka *big.Int `toml:",omitempty"`
+
 	// OverrideVerkle (TODO: remove after the fork)
 	OverrideVerkle *big.Int `toml:",omitempty"`
 
@@ -243,6 +247,12 @@ type Config struct {
 
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
+
+	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
+	DisableBlindForkValidation bool
+
+	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
+	MaxBlindForkValidationLimit uint64
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

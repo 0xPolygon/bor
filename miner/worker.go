@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -1081,6 +1082,23 @@ mainloop:
 			continue
 		}
 
+		// Make sure all transactions after osaka have cell proofs
+		if w.chainConfig.IsOsaka(env.header.Number) {
+			if sidecar := tx.BlobTxSidecar(); sidecar != nil {
+				if sidecar.Version == 0 {
+					log.Info("Including blob tx with v0 sidecar, recomputing proofs", "hash", ltx.Hash)
+					sidecar.Proofs = make([]kzg4844.Proof, 0, len(sidecar.Blobs)*kzg4844.CellProofsPerBlob)
+					for _, blob := range sidecar.Blobs {
+						cellProofs, err := kzg4844.ComputeCellProofs(&blob)
+						if err != nil {
+							panic(err)
+						}
+						sidecar.Proofs = append(sidecar.Proofs, cellProofs...)
+					}
+				}
+			}
+		}
+
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance in the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -1610,6 +1628,11 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 // and toggles the flag when the timer expires.
 func createInterruptTimer(number, timestamp uint64, interruptBlockBuilding *atomic.Bool) func() {
 	delay := time.Until(time.Unix(int64(timestamp), 0))
+
+	// Reduce the timeout by 500ms to give some buffer for state root computation
+	if delay > 1*time.Second {
+		delay -= 500 * time.Millisecond
+	}
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
 
 	// Reset the flag when timer starts for building a new block.

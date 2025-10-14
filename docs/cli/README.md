@@ -12,6 +12,8 @@
 
 - [```attach```](./attach.md)
 
+- [```backfill-statesync-txs```](./backfill-statesync-txs.md)
+
 - [```bootnode```](./bootnode.md)
 
 - [```chain```](./chain.md)
@@ -39,6 +41,8 @@
 - [```peers remove```](./peers_remove.md)
 
 - [```peers status```](./peers_status.md)
+
+- [```purge-whitelisted-entries```](./purge-whitelisted-entries.md)
 
 - [```removedb```](./removedb.md)
 

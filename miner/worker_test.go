@@ -38,7 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -97,7 +96,7 @@ func testGenerateBlockAndImport(t *testing.T, isClique bool, isBor bool) {
 	defer w.close()
 
 	// This test chain imports the mined blocks.
-	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, b.genesis, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), b.genesis, engine, core.DefaultConfig())
 	defer chain.Stop()
 
 	// Wait for mined blocks.
@@ -251,7 +250,7 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 		t.Fatalf("unexpected consensus engine type: %T", engine)
 	}
 	// genesis := gspec.MustCommit(db)
-	chain, err := core.NewBlockChain(db, &core.CacheConfig{TrieDirtyDisabled: true}, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, err := core.NewBlockChain(db, gspec, engine, core.DefaultConfig())
 	if err != nil {
 		t.Fatalf("core.NewBlockChain failed: %v", err)
 	}
@@ -345,7 +344,7 @@ func TestGenerateAndImportBlock(t *testing.T) {
 	defer w.close()
 
 	// This test chain imports the mined blocks.
-	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, b.genesis, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), b.genesis, engine, core.DefaultConfig())
 	defer chain.Stop()
 
 	// Wait for mined blocks.
@@ -1029,7 +1028,7 @@ func BenchmarkBorMining(b *testing.B) {
 	w, back, _ := newTestWorker(b, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
 	defer w.close()
 
-	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), nil, back.genesis, nil, engine, vm.Config{}, nil, nil, nil)
+	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), back.genesis, engine, core.DefaultConfig())
 	defer chain.Stop()
 
 	// fulfill tx pool
@@ -1132,7 +1131,7 @@ func BenchmarkBorMiningBlockSTMMetadata(b *testing.B) {
 	db2 := rawdb.NewMemoryDatabase()
 	back.genesis.MustCommit(db2, triedb.NewDatabase(db2, triedb.HashDefaults))
 
-	chain, _ := core.NewParallelBlockChain(db2, nil, back.genesis, nil, engine, vm.Config{}, nil, nil, nil, 8, false)
+	chain, _ := core.NewParallelBlockChain(db2, back.genesis, engine, core.DefaultConfig(), 8, false)
 	defer chain.Stop()
 
 	// Ignore empty commit here for less noise.

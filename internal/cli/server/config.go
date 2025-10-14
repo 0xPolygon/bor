@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/fdlimit"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/internal/cli/server/chains"
@@ -99,6 +100,12 @@ type Config struct {
 	// Ethstats is the address of the ethstats server to send telemetry
 	Ethstats string `hcl:"ethstats,optional" toml:"ethstats,optional"`
 
+	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
+	DisableBlindForkValidation bool `hcl:"disable-blind-fork-validation,optional" toml:"disable-blind-fork-validation,optional"`
+
+	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
+	MaxBlindForkValidationLimit uint64 `hcl:"max-blind-fork-validation-limit,optional" toml:"max-blind-fork-validation-limit,optional"`
+
 	// Logging has the logging related settings
 	Logging *LoggingConfig `hcl:"log,block" toml:"log,block"`
 
@@ -151,6 +158,9 @@ type Config struct {
 
 	// HistoryConfig has historical data retention related settings
 	History *HistoryConfig `hcl:"history,block" toml:"history,block"`
+
+	// HealthConfig has health check related settings
+	Health *HealthConfig `hcl:"health,block" toml:"health,block"`
 }
 
 type HistoryConfig struct {
@@ -166,6 +176,20 @@ type HistoryConfig struct {
 	// StateHistory denotes number of recent blocks to retain state history for (only relevant
 	// in state.scheme=path)
 	StateHistory uint64 `hcl:"state,block" toml:"state,block"`
+}
+
+type HealthConfig struct {
+	// MaxGoRoutineThreshold is the maximum number of goroutines before bor health check fails.
+	MaxGoRoutineThreshold int `hcl:"max_goroutine_threshold,optional" toml:"max_goroutine_threshold,optional"`
+
+	// WarnGoRoutineThreshold is the maximum number of goroutines before bor health check warns.
+	WarnGoRoutineThreshold int `hcl:"warn_goroutine_threshold,optional" toml:"warn_goroutine_threshold,optional"`
+
+	// MinPeerThreshold is the minimum number of peers before bor health check fails.
+	MinPeerThreshold int `hcl:"min_peer_threshold,optional" toml:"min_peer_threshold,optional"`
+
+	// WarnPeerThreshold is the minimum number of peers before bor health check warns.
+	WarnPeerThreshold int `hcl:"warn_peer_threshold,optional" toml:"warn_peer_threshold,optional"`
 }
 
 type LoggingConfig struct {
@@ -338,6 +362,9 @@ type TxPoolConfig struct {
 	// lifetime is the maximum amount of time non-executable transaction are queued
 	LifeTime    time.Duration `hcl:"-,optional" toml:"-"`
 	LifeTimeRaw string        `hcl:"lifetime,optional" toml:"lifetime,optional"`
+
+	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
+	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
 }
 
 type SealerConfig struct {
@@ -672,16 +699,18 @@ type WitnessConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Chain:                   "mainnet",
-		Identity:                Hostname(),
-		RequiredBlocks:          map[string]string{},
-		Verbosity:               3,
-		LogLevel:                "",
-		EnablePreimageRecording: false,
-		DataDir:                 DefaultDataDir(),
-		Ancient:                 "",
-		DBEngine:                "pebble",
-		KeyStoreDir:             "",
+		Chain:                       "mainnet",
+		Identity:                    Hostname(),
+		RequiredBlocks:              map[string]string{},
+		Verbosity:                   3,
+		LogLevel:                    "",
+		EnablePreimageRecording:     false,
+		DataDir:                     DefaultDataDir(),
+		Ancient:                     "",
+		DBEngine:                    "pebble",
+		KeyStoreDir:                 "",
+		DisableBlindForkValidation:  false,
+		MaxBlindForkValidationLimit: whitelist.DefaultMaxForkCorrectnessLimit,
 		Logging: &LoggingConfig{
 			Vmodule:             "",
 			Json:                false,
@@ -890,6 +919,12 @@ func DefaultConfig() *Config {
 			LogNoHistory:       ethconfig.Defaults.LogNoHistory,
 			StateHistory:       params.FullImmutabilityThreshold,
 		},
+		Health: &HealthConfig{
+			MaxGoRoutineThreshold:  0,
+			WarnGoRoutineThreshold: 0,
+			MinPeerThreshold:       0,
+			WarnPeerThreshold:      0,
+		},
 	}
 }
 
@@ -1060,6 +1095,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+
+		// Load filtered addresses during config initialization
+		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
+			return nil, fmt.Errorf("failed to load filtered addresses: %v", err)
+		} else {
+			n.TxPool.FilteredAddresses = filteredAddrs
+		}
 	}
 
 	// miner options
@@ -1305,9 +1347,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 			log.Info("Enabling recording of key preimages since archive mode is used")
 		}
-		if c.StateScheme == "path" {
-			return nil, fmt.Errorf("path storage scheme is not supported in archive mode, please use hash instead")
-		}
 	default:
 		return nil, fmt.Errorf("gcmode '%s' not found", c.GcMode)
 	}
@@ -1359,6 +1398,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
+
+	// Blind fork acceptance configs
+	n.DisableBlindForkValidation = c.DisableBlindForkValidation
+	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
 	return &n, nil
 }
@@ -1544,10 +1587,6 @@ func (c *Config) buildNode() (*node.Config, error) {
 		cfg.P2P.ListenAddr = ""
 		cfg.P2P.NoDial = true
 		cfg.P2P.DiscoveryV5 = false
-
-		// enable JsonRPC HTTP API
-		c.JsonRPC.Http.Enabled = true
-		cfg.HTTPModules = []string{"admin", "debug", "eth", "miner", "net", "personal", "txpool", "web3", "bor"}
 	}
 
 	// enable jsonrpc endpoints
@@ -1827,4 +1866,44 @@ func validateGoDebug(value string) error {
 	}
 
 	return nil
+}
+
+// loadFilteredAddresses loads newline-separated addresses to filter from the specified file.
+func loadFilteredAddresses(filePath string) (map[common.Address]struct{}, error) {
+	if filePath == "" {
+		return make(map[common.Address]struct{}), nil
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Warn("Filtered addresses file not found", "file", filePath)
+			return make(map[common.Address]struct{}), nil
+		}
+		return nil, fmt.Errorf("failed to read filtered addresses file: %v", err)
+	}
+
+	filteredAddrs := make(map[common.Address]struct{})
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		log.Info("Empty filtered addresses file", "file", filePath)
+		return filteredAddrs, nil
+	}
+
+	addresses := strings.Split(content, "\n")
+	for i, addrStr := range addresses {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		if !common.IsHexAddress(addrStr) {
+			log.Warn("Invalid address in filtered addresses file", "file", filePath, "position", i+1, "address", addrStr)
+			continue
+		}
+		addr := common.HexToAddress(addrStr)
+		filteredAddrs[addr] = struct{}{}
+	}
+
+	log.Info("Loaded filtered addresses", "count", len(filteredAddrs), "file", filePath)
+	return filteredAddrs, nil
 }
