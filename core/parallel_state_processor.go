@@ -243,6 +243,34 @@ func (task *ExecutionTask) Settle() {
 		log.Error("IntermediateRoot", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash(), "logRoot", logRoot,
 			"logRootHex", common.Bytes2Hex(logRoot))
+		if task.index == 43 {
+			receiverBalance := dbCopy.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
+			log.Error("Receiver balance", "blockNumber", task.blockNumber.Uint64(),
+				"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
+				"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
+			contracts := []string{
+				"0x7556b97f766cd81ae136cf6e9157c7a24090f0fc",
+				"0x05f404875a3d368613e27b68a309f8891082a3c1",
+				"0x61e80f11c8eee5ebebfa45e2b90b45ed9fc7d305",
+				"0x459453ace10d838ed771c34b15ed78d1518c7bf1",
+				"0xeff00818069ea28a20a8c7d929813f030a992eab",
+				"0xbecad4ede783855546cd668fd6e80beb1cf06644",
+				"0xfc362477b22554f0b11f55afac574e47b28594db",
+				"0xd37b3a6cb6fdb77cdd006fc08938a3badb52cc95",
+				"0xb58806484ee43fde596037b137355cf44aa52735",
+				"0xa97de29e3f56815c1bb2d10939140b11c709bda3",
+			}
+			for _, contract := range contracts {
+				contractSize := dbCopy.GetCodeSize(common.HexToAddress(contract))
+				contractCode := dbCopy.GetCode(common.HexToAddress(contract))
+				contractBalance := dbCopy.GetBalance(common.HexToAddress(contract))
+				log.Error("Contract code", "blockNumber", task.blockNumber.Uint64(),
+					"txIndex", task.index, "txHash", task.tx.Hash(), "contract", contract,
+					"contractSize", contractSize,
+					"contractCode", common.Bytes2Hex(contractCode),
+					"contractBalance", contractBalance.Uint64())
+			}
+		}
 	} else {
 		root = task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
 	}
