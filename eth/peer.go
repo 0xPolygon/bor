@@ -511,7 +511,7 @@ func (p *ethPeer) receiveWitnessPage(
 		mapsMu.Unlock()
 
 		// Trigger page count verification if callback is provided (only on first page)
-		// If verification fails (peer is dishonest), pause download and mark for cancellation
+		// If verification fails (peer is dishonest), drop the peer immediately
 		if verifyPageCount != nil && !hasTotalPages {
 			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
 			if !isHonest {
@@ -519,9 +519,9 @@ func (p *ethPeer) receiveWitnessPage(
 				mapsMu.Lock()
 				downloadPaused[page.Hash] = true
 				mapsMu.Unlock()
-				p.witPeer.Peer.Log().Warn("Peer failed verification, pausing witness download", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
-				// Don't build more requests for this hash
-				return nil
+				p.witPeer.Peer.Log().Warn("Peer failed verification, dropping peer", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
+				// Return error to trigger peer drop
+				return fmt.Errorf("peer failed page count verification: claimed=%d pages", page.TotalPages)
 			}
 		}
 
