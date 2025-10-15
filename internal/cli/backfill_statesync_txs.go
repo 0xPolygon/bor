@@ -446,6 +446,13 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 
 				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(w.Key))
 
+				debugKey := common.Hex2Bytes("0x6d617469632d626f722d726563656970742d000000000490eee010d94a2c3502f351a66a74a8123892d22b9b12bf88d0569f713f7d0e04254e61")
+				if bytes.Equal(common.Hex2Bytes(w.Key), debugKey) {
+					c.UI.Output(fmt.Sprintf("Found debug key!"))
+					c.UI.Output(fmt.Sprintf("Writing key: lenRetrievedVal: %d | lenFileVale", len(retrievedValue), len(common.Hex2Bytes(w.Value))))
+
+				}
+
 				if bytes.Equal(retrievedValue, common.Hex2Bytes(w.Value)) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
