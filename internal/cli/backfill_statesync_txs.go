@@ -474,11 +474,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 						return
 					}
 
-					retrievedValue, err := chaindb.Get(keyBytes)
-					if err != nil {
-						propagateOnce(errCh, err)
-						return
-					}
+					retrievedValue, _ := chaindb.Get(keyBytes)
 
 					if bytes.Equal(retrievedValue, valBytes) {
 						atomic.AddInt64(&skippedKnown, 1)
@@ -509,12 +505,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				}
 				atomic.AddInt64(&checkedLookup, 1)
 
-				retrievedValue, err := chaindb.Get(keyBytes)
-				if err != nil {
-					propagateOnce(errCh, err)
-					return
-				}
-
+				retrievedValue, _ := chaindb.Get(keyBytes)
 				if bytes.Equal(retrievedValue, valBytes) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
