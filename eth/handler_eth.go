@@ -131,42 +131,8 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Create verification callback for page count verification (returns true if honest)
-			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) bool {
-				// Get random peers for verification
-				getRandomPeers := func() []string {
-					allPeers := h.peers.getAllPeers()
-					randomPeers := make([]string, 0, len(allPeers))
-					for _, peer := range allPeers {
-						if peer.SupportsWitness() {
-							randomPeers = append(randomPeers, peer.ID())
-						}
-					}
-					// Shuffle the peers to get random selection
-					for i := len(randomPeers) - 1; i > 0; i-- {
-						j := rand.Intn(i + 1)
-						randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
-					}
-					return randomPeers
-				}
-
-				// Get witness page count from a peer using the dedicated method
-				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
-					peer := h.peers.peer(peerID)
-					if peer == nil || !peer.SupportsWitness() {
-						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
-					}
-
-					// Use the new efficient method that only downloads page 0
-					return peer.RequestWitnessPageCount(hash)
-				}
-
-				// Run synchronous verification and return result
-				return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
-			}
-
 			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, verifyPageCount)
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount)
 		}
 	}
 
@@ -175,6 +141,42 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	}
 
 	return nil
+}
+
+// verifyPageCount verifies the witness page count for a given block hash by
+// comparing it against random peers' reported page counts.
+// Returns true if the peer is honest (page count matches consensus), false otherwise.
+func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer string) bool {
+	// Get random peers for verification
+	getRandomPeers := func() []string {
+		allPeers := h.peers.getAllPeers()
+		randomPeers := make([]string, 0, len(allPeers))
+		for _, peer := range allPeers {
+			if peer.SupportsWitness() {
+				randomPeers = append(randomPeers, peer.ID())
+			}
+		}
+		// Shuffle the peers to get random selection
+		for i := len(randomPeers) - 1; i > 0; i-- {
+			j := rand.Intn(i + 1)
+			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
+		}
+		return randomPeers
+	}
+
+	// Get witness page count from a peer using the dedicated method
+	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
+		peer := h.peers.peer(peerID)
+		if peer == nil || !peer.SupportsWitness() {
+			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
+		}
+
+		// Use the new efficient method that only downloads page 0
+		return peer.RequestWitnessPageCount(hash)
+	}
+
+	// Run synchronous verification and return result
+	return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
 // handleBlockBroadcast is invoked from a peer's message handler when it transmits a
@@ -193,42 +195,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Create verification callback for page count verification (returns true if honest)
-			verifyPageCount := func(hash common.Hash, pageCount uint64, peer string) bool {
-				// Get random peers for verification
-				getRandomPeers := func() []string {
-					allPeers := h.peers.getAllPeers()
-					randomPeers := make([]string, 0, len(allPeers))
-					for _, peer := range allPeers {
-						if peer.SupportsWitness() {
-							randomPeers = append(randomPeers, peer.ID())
-						}
-					}
-					// Shuffle the peers to get random selection
-					for i := len(randomPeers) - 1; i > 0; i-- {
-						j := rand.Intn(i + 1)
-						randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
-					}
-					return randomPeers
-				}
-
-				// Get witness page count from a peer using the dedicated method
-				getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
-					peer := h.peers.peer(peerID)
-					if peer == nil || !peer.SupportsWitness() {
-						return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
-					}
-
-					// Use the new efficient method that only downloads page 0
-					return peer.RequestWitnessPageCount(hash)
-				}
-
-				// Run synchronous verification and return result
-				return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
-			}
-
 			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, verifyPageCount)
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount)
 		}
 
 		// Call the new fetcher method to inject the block
