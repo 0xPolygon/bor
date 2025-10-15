@@ -118,8 +118,6 @@ type handlerConfig struct {
 	syncWithWitnesses       bool                   // Whether to sync blocks with witnesses
 	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
 	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
-	witnessPruneThreshold   uint64                 // Minimum necessary distance between local header and latest non pruned witness
-	witnessPruneInterval    time.Duration          // The time interval between each witness prune routine
 }
 
 type handler struct {
@@ -166,8 +164,6 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
-
-	witPruner *witPruner
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
@@ -302,11 +298,6 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
 	h.chainSync = newChainSyncer(h)
-
-	if config.witnessProtocol {
-		h.witPruner = NewWitPruner(h.ethAPI, h.database, config.witnessPruneThreshold, config.witnessPruneInterval)
-		h.witPruner.Start()
-	}
 
 	return h, nil
 }

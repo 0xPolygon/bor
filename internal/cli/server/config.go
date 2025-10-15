@@ -674,12 +674,6 @@ type WitnessConfig struct {
 
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
-
-	// Minimum necessary distance between local header and latest non pruned witness
-	PruneThreshold uint64 `hcl:"prunethreshold,optional" toml:"prunethreshold,optional"`
-
-	// The time interval between each witness prune routine
-	PruneInterval time.Duration `hcl:"pruneinterval,optional" toml:"pruneinterval,optional"`
 }
 
 func DefaultConfig() *Config {
@@ -891,8 +885,6 @@ func DefaultConfig() *Config {
 			ProduceWitnesses:     false,
 			WitnessAPI:           false,
 			FastForwardThreshold: 6400,
-			PruneThreshold:       64000,
-			PruneInterval:        120 * time.Second,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
@@ -1339,8 +1331,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
-	n.WitnessPruneThreshold = c.Witness.PruneThreshold
-	n.WitnessPruneInterval = c.Witness.PruneInterval
 
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit
 

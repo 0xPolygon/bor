@@ -1062,18 +1062,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.FastForwardThreshold,
 		Default: c.cliConfig.Witness.FastForwardThreshold,
 	})
-	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "witness.prunethreshold",
-		Usage:   "Maximum distance between local header and latest non pruned witness after a pruning routine",
-		Value:   &c.cliConfig.Witness.PruneThreshold,
-		Default: c.cliConfig.Witness.PruneThreshold,
-	})
-	f.DurationFlag(&flagset.DurationFlag{
-		Name:    "witness.pruneinterval",
-		Usage:   "The time interval between each witness prune routine",
-		Value:   &c.cliConfig.Witness.PruneInterval,
-		Default: c.cliConfig.Witness.PruneInterval,
-	})
 
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "dev.gaslimit",

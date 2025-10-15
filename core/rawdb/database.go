@@ -43,6 +43,7 @@ type freezerdb struct {
 	ethdb.KeyValueStore
 	*chainFreezer
 
+	witPruner   witPruner
 	readOnly    bool
 	ancientRoot string
 }
@@ -61,6 +62,10 @@ func (frdb *freezerdb) Close() error {
 	}
 
 	if err := frdb.KeyValueStore.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := frdb.witPruner.Close(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -433,7 +438,8 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		}
 	}
 	// Freezer is consistent with the key-value database, permit combining the two
-	if !opts.DisableFreeze {
+	// No freeze operation on stateless node
+	if !opts.DisableFreeze && !opts.Stateless {
 		frdb.wg.Add(1)
 
 		go func() {
@@ -442,11 +448,18 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		}()
 	}
 
-	return &freezerdb{
+	ethDb := &freezerdb{
 		ancientRoot:   opts.Ancient,
 		KeyValueStore: db,
 		chainFreezer:  frdb,
-	}, nil
+	}
+
+	if opts.Stateless {
+		witPruner := NewWitPruner(ethDb)
+		witPruner.Start()
+	}
+
+	return ethDb, nil
 }
 
 // NewMemoryDatabase creates an ephemeral in-memory key-value database without a
