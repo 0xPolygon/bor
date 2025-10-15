@@ -2529,6 +2529,14 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		gasUsed    uint64
 	}
 	results := make([]execResult, len(chain))
+	defer func() {
+		for i := range results {
+			if results[i].sdb != nil {
+				results[i].sdb = nil
+			}
+		}
+	}()
+
 	workCh := make(chan int, len(chain))
 	var snapDiffItems, snapBufItems common.StorageSize
 	var wg sync.WaitGroup
@@ -2557,6 +2565,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				}
 				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
+					sdb = nil
 					// If validation depends on parent's commit, mark for retry in writer stage
 					switch {
 					case errors.Is(perr, ErrStatelessStateRootMismatch):
