@@ -3970,6 +3970,14 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	var mergedCount int
+	// Count states in ORIGINAL transmitted witness before merging
+	// This tells us what was actually sent over the network
+	originalWitnessStates := make(map[string]struct{})
+	for stateNode := range witness.State {
+		originalWitnessStates[stateNode] = struct{}{}
+	}
+	transmittedStates := len(originalWitnessStates)
+
 	// Merge cached states into witness for blocks that aren't the first in span
 	if !isSpanStart(blockNum) {
 		witnessStatesBefore := len(witness.State)
@@ -4020,20 +4028,30 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	// Cache witness states and updated states for subsequent blocks in this span
 	if bc.spanStateCache != nil {
-		totalWitnessStates := len(witness.State)
-		cacheHits := 0
-		newWitnessStates := 0
-		newUpdatedStates := 0
+		// Check ORIGINAL transmitted states against cache
+		// This tells us what bandwidth could have been saved
+		alreadyCachedStates := 0 // States that were transmitted but already in cache (wasted bandwidth)
+		newRequiredStates := 0   // States that were transmitted and needed (required bandwidth)
 
-		// Cache all witness state nodes and count hits
-		for stateNode := range witness.State {
+		for stateNode := range originalWitnessStates {
 			if _, exists := bc.spanStateCache.Get(stateNode); exists {
-				cacheHits++
+				alreadyCachedStates++ // This state was sent but we already had it
 			} else {
 				bc.spanStateCache.Add(stateNode, struct{}{})
-				newWitnessStates++
+				newRequiredStates++ // This state was sent and we needed it
 			}
 		}
+
+		// Also cache any merged states that weren't in originalWitnessStates
+		// (These were added from cache during merge, so already cached)
+		for stateNode := range witness.State {
+			if _, existsInOriginal := originalWitnessStates[stateNode]; !existsInOriginal {
+				// This was merged from cache, ensure it stays cached
+				bc.spanStateCache.Add(stateNode, struct{}{})
+			}
+		}
+
+		newUpdatedStates := 0
 
 		// Extract and cache updated states from execution
 		if statedb != nil {
@@ -4058,9 +4076,11 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		}
 
 		totalCacheSize := bc.spanStateCache.Len()
-		cacheHitRate := float64(0)
-		if totalWitnessStates > 0 {
-			cacheHitRate = float64(cacheHits) * 100.0 / float64(totalWitnessStates)
+
+		// Calculate bandwidth savings: what % of transmitted data was redundant
+		bandwidthSavings := float64(0)
+		if transmittedStates > 0 {
+			bandwidthSavings = float64(alreadyCachedStates) * 100.0 / float64(transmittedStates)
 		}
 
 		// Calculate approximate memory usage of cache
@@ -4076,24 +4096,26 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		cacheMemoryBytes += uint64(totalCacheSize) * 48
 		cacheMemoryMB := float64(cacheMemoryBytes) / (1024.0 * 1024.0)
 
-		// Log to console
-		log.Info("PSP - Cached states for span",
+		// Log to console with clearer naming
+		log.Info("PSP - Span cache metrics",
 			"block", blockNum,
-			"witnessStates", totalWitnessStates,
-			"cacheHits", cacheHits,
-			"newWitnessStates", newWitnessStates,
-			"newUpdatedStates", newUpdatedStates,
+			"transmittedStates", transmittedStates,
+			"alreadyCached", alreadyCachedStates,
+			"newRequired", newRequiredStates,
+			"newFromExecution", newUpdatedStates,
+			"bandwidthSavings%", fmt.Sprintf("%.2f", bandwidthSavings),
 			"totalCacheSize", totalCacheSize,
 			"cacheMemoryMB", fmt.Sprintf("%.2f", cacheMemoryMB),
-			"cacheHitRate%", fmt.Sprintf("%.2f", cacheHitRate))
+			"merged", mergedCount,
+		)
 
 		// Write detailed metrics to file
 		metricsFile, err := os.OpenFile("span_cache_metrics.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
 			defer metricsFile.Close()
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Fprintf(metricsFile, "[%s] Block %d | WitnessStates: %d | CacheHits: %d (%.2f%%) | NewWitness: %d | NewUpdated: %d | TotalCacheSize: %d | CacheMemoryMB: %.2f | Merged: %d\n",
-				timestamp, blockNum, totalWitnessStates, cacheHits, cacheHitRate, newWitnessStates, newUpdatedStates, totalCacheSize, cacheMemoryMB, mergedCount)
+			fmt.Fprintf(metricsFile, "[%s] Block %d | Transmitted: %d | AlreadyCached: %d | NewRequired: %d | NewFromExecution: %d | BandwidthSavings: %.2f%% | TotalCache: %d | MemoryMB: %.2f | Merged: %d\n",
+				timestamp, blockNum, transmittedStates, alreadyCachedStates, newRequiredStates, newUpdatedStates, bandwidthSavings, totalCacheSize, cacheMemoryMB, mergedCount)
 		}
 	}
 
