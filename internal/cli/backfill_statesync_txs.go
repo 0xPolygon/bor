@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/cli/flagset"
@@ -469,19 +468,24 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 
 				if isReceipt {
 					atomic.AddInt64(&checkedRcpt, 1)
-
-					exists := rawdb.ReadBorReceiptRLP(chaindb, blockHash, number)
-					if len(exists) > 0 {
-						atomic.AddInt64(&skippedKnown, 1)
-						incrementAndMaybeReportProgress(c, &processed, int64(total))
-						continue
-					}
-
 					keyBytes, valBytes, err := tryDecodeKV("receipt", w)
 					if err != nil {
 						propagateOnce(errCh, err)
 						return
 					}
+
+					retrievedValue, err := chaindb.Get(keyBytes)
+					if err != nil {
+						propagateOnce(errCh, err)
+						return
+					}
+
+					if bytes.Equal(retrievedValue, valBytes) {
+						atomic.AddInt64(&skippedKnown, 1)
+						incrementAndMaybeReportProgress(c, &processed, int64(total))
+						continue
+					}
+
 					if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
 						return
 					}
@@ -491,7 +495,12 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				}
 
 				// txlookup path
-				txh, err := parseTxLookup(w.Key)
+				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
+				if err != nil {
+					propagateOnce(errCh, err)
+					return
+				}
+
 				if err != nil {
 					c.UI.Output(fmt.Sprintf("WARN: cannot parse txlookup key (key=%s): %v", w.Key, err))
 					atomic.AddInt64(&skippedOther, 1)
@@ -500,17 +509,18 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				}
 				atomic.AddInt64(&checkedLookup, 1)
 
-				if rawdb.ReadBorTxLookupEntry(chaindb, txh) != nil {
+				retrievedValue, err := chaindb.Get(keyBytes)
+				if err != nil {
+					propagateOnce(errCh, err)
+					return
+				}
+
+				if bytes.Equal(retrievedValue, valBytes) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
 					continue
 				}
 
-				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
-				if err != nil {
-					propagateOnce(errCh, err)
-					return
-				}
 				if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
 					return
 				}
