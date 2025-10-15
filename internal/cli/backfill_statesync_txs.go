@@ -443,23 +443,32 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				if hasPendingErr(errCh) {
 					return
 				}
+				trimmedKey := w.Key
+				trimmedValue := w.Value
 
-				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(w.Key))
+				if len(trimmedKey) >= 2 && trimmedKey[:2] == "0x" {
+					trimmedKey = trimmedKey[2:]
+				}
+
+				if len(trimmedValue) >= 2 && trimmedValue[:2] == "0x" {
+					trimmedValue = trimmedValue[2:]
+				}
+				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(trimmedKey))
 
 				debugKey := common.Hex2Bytes("0x6d617469632d626f722d726563656970742d000000000490eee010d94a2c3502f351a66a74a8123892d22b9b12bf88d0569f713f7d0e04254e61")
-				if bytes.Equal(common.Hex2Bytes(w.Key), debugKey) {
+				if bytes.Equal(common.Hex2Bytes(trimmedKey), debugKey) {
 					c.UI.Output(fmt.Sprintf("Found debug key!"))
-					c.UI.Output(fmt.Sprintf("Writing key: lenRetrievedVal: %d | lenFileVale", len(retrievedValue), len(common.Hex2Bytes(w.Value))))
+					c.UI.Output(fmt.Sprintf("Writing key: lenRetrievedVal: %d | lenFileVale %d", len(retrievedValue), len(common.Hex2Bytes(trimmedValue))))
 
 				}
 
-				if bytes.Equal(retrievedValue, common.Hex2Bytes(w.Value)) {
+				if bytes.Equal(retrievedValue, common.Hex2Bytes(trimmedValue)) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
 					continue
 				}
 
-				if !enqueuePut(puts, putReq{key: common.Hex2Bytes(w.Key), val: common.Hex2Bytes(w.Value)}, errCh) {
+				if !enqueuePut(puts, putReq{key: common.Hex2Bytes(trimmedKey), val: common.Hex2Bytes(trimmedValue)}, errCh) {
 					return
 				}
 
