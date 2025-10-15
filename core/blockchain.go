@@ -2529,186 +2529,158 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 		gasUsed    uint64
 	}
 	results := make([]execResult, len(chain))
-	defer func() {
-		for i := range results {
-			if results[i].sdb != nil {
-				results[i].sdb = nil
-			}
-		}
-	}()
-
+	workCh := make(chan int, len(chain))
 	var snapDiffItems, snapBufItems common.StorageSize
+	var wg sync.WaitGroup
 	numWorkers := runtime.GOMAXPROCS(0)
 	if bc.parallelStatelessImportEnabled.Load() && bc.parallelStatelessImportWorkers > 0 {
 		numWorkers = bc.parallelStatelessImportWorkers
 	}
 
-	workChSize := numWorkers * 2
-	if workChSize < 1 {
-		workChSize = 1
-	}
-
-	// Sequentially verify headers and write blocks in windows capped by workChSize
-	var processed atomic.Int32
-	for start := 0; start < len(chain); start += workChSize {
-		end := start + workChSize
-		if end > len(chain) {
-			end = len(chain)
-		}
-
-		workCh := make(chan int, workChSize)
-		wg := sync.WaitGroup{}
-		for w := 0; w < numWorkers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for idx := range workCh {
-					blk := chain[idx]
-					// Known block: skip execution
-					if bc.HasBlock(blk.Hash(), blk.NumberU64()) {
-						continue
-					}
-					if bc.insertStopped() {
-						results[idx].err = errInsertionInterrupted
-						continue
-					}
-					var witness *stateless.Witness
-					if idx < len(witnesses) {
-						witness = witnesses[idx]
-					}
-					sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
-					if sdb != nil {
-						if db := sdb.Database().TrieDB().Disk(); db != nil {
-							log.Debug("StateDB disk backend", "block", blk.NumberU64(), "diskdb_ptr", fmt.Sprintf("%p", db))
-						}
-					}
-					if perr != nil {
-						sdb = nil
-						// If validation depends on parent's commit, mark for retry in writer stage
-						switch {
-						case errors.Is(perr, ErrStatelessStateRootMismatch):
-							fallthrough
-						case errors.Is(perr, ErrGasUsedMismatch):
-							fallthrough
-						case errors.Is(perr, ErrBloomMismatch):
-							fallthrough
-						case errors.Is(perr, ErrReceiptRootMismatch):
-							fallthrough
-						case errors.Is(perr, ErrRequestsHashMismatch):
-							log.Info("Deferring validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "error", perr)
-							results[idx].needsRetry = true
-							continue
-						}
-						results[idx].err = perr
-						continue
-					}
-					if witness != nil {
-						sdb.SetWitness(witness)
-					}
-					results[idx].sdb = sdb
-					results[idx].gasUsed = res.GasUsed
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range workCh {
+				blk := chain[idx]
+				// Known block: skip execution
+				if bc.HasBlock(blk.Hash(), blk.NumberU64()) {
+					continue
 				}
-			}()
-		}
-		for i := start; i < end; i++ {
-			workCh <- i
-		}
-		close(workCh)
-		wg.Wait()
-
-		// Writer stage for this window
-		for i := start; i < end; i++ {
-			block := chain[i]
-			if bc.HasBlock(block.Hash(), block.NumberU64()) {
-				processed.Add(1)
-				log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
-				if i < len(errChans) {
-					if err := <-errChans[i]; err != nil {
-						stopHeaders()
-						return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
-					}
+				if bc.insertStopped() {
+					results[idx].err = errInsertionInterrupted
+					continue
 				}
-				stats.processed = int(processed.Load())
-				stats.usedGas += block.GasUsed()
-
-				if bc.snaps != nil {
-					snapDiffItems, snapBufItems = bc.snaps.Size()
-				}
-				trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-				stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
-				continue
-			}
-
-			if resErr := results[i].err; resErr != nil {
-				stopHeaders()
-				return int(processed.Load()), resErr
-			}
-
-			var hErr error
-			if i < len(errChans) {
-				hErr = <-errChans[i]
-			}
-			if hErr != nil {
-				if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
-					stopHeaders()
-					return int(processed.Load()), err
-				}
-			}
-
-			// Validate witness pre-state for this block (if present) before writing
-			if i < len(witnesses) && witnesses[i] != nil {
-				var headerReader stateless.HeaderReader = bc
-				if witnesses[i].HeaderReader() != nil {
-					headerReader = witnesses[i].HeaderReader()
-				}
-				if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
-					stopHeaders()
-					return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
-				}
-			}
-
-			// Only commit blocks that don't need retry
-			if !results[i].needsRetry {
-				if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
-					stopHeaders()
-					return int(processed.Load()), werr
-				}
-				// Clear the reference after successful write - defer will handle cleanup
-				results[i].sdb = nil
-			} else {
-				// Handle deferred retry for validation errors
-				log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
 				var witness *stateless.Witness
-				if i < len(witnesses) {
-					witness = witnesses[i]
+				if idx < len(witnesses) {
+					witness = witnesses[idx]
 				}
-				sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
-					log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
-					stopHeaders()
-					return int(processed.Load()), perr
+					// If validation depends on parent's commit, mark for retry in writer stage
+					switch {
+					case errors.Is(perr, ErrStatelessStateRootMismatch):
+						fallthrough
+					case errors.Is(perr, ErrGasUsedMismatch):
+						fallthrough
+					case errors.Is(perr, ErrBloomMismatch):
+						fallthrough
+					case errors.Is(perr, ErrReceiptRootMismatch):
+						fallthrough
+					case errors.Is(perr, ErrRequestsHashMismatch):
+						log.Info("Deferring validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "error", perr)
+						results[idx].needsRetry = true
+						continue
+					}
+					results[idx].err = perr
+					continue
 				}
 				if witness != nil {
 					sdb.SetWitness(witness)
 				}
-				results[i].gasUsed = res.GasUsed
+				results[idx].sdb = sdb
+				results[idx].gasUsed = res.GasUsed
+			}
+		}()
+	}
 
-				// Commit the block after successful retry
-				if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, false, true); werr != nil {
+	for i := range chain {
+		workCh <- i
+	}
+	close(workCh)
+	wg.Wait()
+
+	// Sequentially verify headers and write blocks
+	var processed atomic.Int32
+	for i, block := range chain {
+		if bc.HasBlock(block.Hash(), block.NumberU64()) {
+			processed.Add(1)
+			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+			if i < len(errChans) {
+				if err := <-errChans[i]; err != nil {
 					stopHeaders()
-					return int(processed.Load()), werr
+					return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 				}
 			}
-
-			processed.Add(1)
 			stats.processed = int(processed.Load())
-			stats.usedGas += results[i].gasUsed
+			stats.usedGas += block.GasUsed()
+
 			if bc.snaps != nil {
 				snapDiffItems, snapBufItems = bc.snaps.Size()
 			}
 			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
 			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+			continue
 		}
+
+		if resErr := results[i].err; resErr != nil {
+			stopHeaders()
+			return int(processed.Load()), resErr
+		}
+
+		var hErr error
+		if i < len(errChans) {
+			hErr = <-errChans[i]
+		}
+		if hErr != nil {
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
+				stopHeaders()
+				return int(processed.Load()), err
+			}
+		}
+
+		// Validate witness pre-state for this block (if present) before writing
+		if i < len(witnesses) && witnesses[i] != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[i].HeaderReader() != nil {
+				headerReader = witnesses[i].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+				stopHeaders()
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
+			}
+		}
+
+		// Only commit blocks that don't need retry
+		if !results[i].needsRetry {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
+			results[i].sdb = nil
+		} else {
+			// Handle deferred retry for validation errors
+			log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if perr != nil {
+				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
+				stopHeaders()
+				return int(processed.Load()), perr
+			}
+			if witness != nil {
+				sdb.SetWitness(witness)
+			}
+			results[i].gasUsed = res.GasUsed
+
+			// Commit the block after successful retry
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
+		}
+
+		processed.Add(1)
+		stats.processed = int(processed.Load())
+		stats.usedGas += results[i].gasUsed
+		if bc.snaps != nil {
+			snapDiffItems, snapBufItems = bc.snaps.Size()
+		}
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
 	}
 
 	return int(processed.Load()), nil
