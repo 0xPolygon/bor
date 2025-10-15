@@ -146,8 +146,15 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // verifyPageCount verifies the witness page count for a given block hash by
 // comparing it against random peers' reported page counts.
 // Returns true if the peer is honest (page count matches consensus), false otherwise.
+//
+// Optimization: The functions below (getRandomPeers, getWitnessPageCount) are passed as
+// closures to CheckWitnessPageCount but are only executed if needed:
+// - Not called if pageCount <= threshold (small witnesses)
+// - Not called if cache hit (recently verified witnesses)
+// This avoids unnecessary peer queries and metadata requests in most cases.
 func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer string) bool {
-	// Get random peers for verification
+	// Define function to get random peers for verification
+	// Note: This function is only called if verification is actually needed (cache miss + threshold exceeded)
 	getRandomPeers := func() []string {
 		allPeers := h.peers.getAllPeers()
 		randomPeers := make([]string, 0, len(allPeers))
@@ -164,7 +171,8 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 		return randomPeers
 	}
 
-	// Get witness page count from a peer using the dedicated method
+	// Define function to get witness page count from a peer
+	// Note: This function is only called if verification is needed (after cache check)
 	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
 		peer := h.peers.peer(peerID)
 		if peer == nil || !peer.SupportsWitness() {

@@ -993,24 +993,39 @@ func (m *witnessManager) cacheVerificationResult(hash common.Hash, pageCount uin
 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
 // Returns true if peer is honest (or under threshold), false if peer should be dropped
+//
+// Optimization: This function receives getRandomPeers and getWitnessPageCount as function
+// references (not called yet). They are only executed if:
+// 1. pageCount > threshold (line below)
+// 2. Cache miss (in verifyWitnessPageCountSync)
+// This avoids unnecessary peer queries in most cases (cache hits or small witnesses).
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
 
 	// If page count is within threshold, no verification needed
+	// No peer queries are made in this case
 	if pageCount <= threshold {
 		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
 		return true
 	}
 
 	// Page count exceeds threshold - verify synchronously
+	// Note: Peer queries only happen after cache check in verifyWitnessPageCountSync
 	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
 	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
 // verifyWitnessPageCountSync verifies a witness page count synchronously and returns result
+//
+// Optimization flow:
+// 1. Check cache first (below) - no peer queries if cache hit
+// 2. Get random peers only if cache miss
+// 3. Query peers for consensus only if we have enough peers
+// This minimizes network overhead by avoiding redundant verifications.
 func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// Check if we already have a cached verification result
+	// OPTIMIZATION: Check cache first before making any peer queries
+	// This avoids unnecessary network requests for recently verified witnesses
 	if cached := m.witnessVerificationCache.Get(hash); cached != nil {
 		if cached.Value().pageCount == reportedPageCount {
 			// Page count matches cached result, peer is honest
@@ -1024,7 +1039,8 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 		}
 	}
 
-	// Get random peers for verification
+	// Cache miss - need to verify with other peers
+	// Now we call getRandomPeers() for the first time
 	randomPeers := getRandomPeers()
 	if len(randomPeers) < witnessVerificationPeers {
 		// Not enough peers for verification, assume honest (conservative approach)
