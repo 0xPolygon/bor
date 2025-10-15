@@ -458,7 +458,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 					return
 				}
 
-				isReceipt, number, blockHash, err := parseReceiptKey(w.Key)
+				isReceipt, _, _, err := parseReceiptKey(w.Key)
 				if err != nil {
 					c.UI.Output(fmt.Sprintf("WARN: %v (key=%s)", err, w.Key))
 					atomic.AddInt64(&skippedOther, 1)
