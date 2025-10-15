@@ -1541,6 +1541,7 @@ func testEncodeSigHeader(w io.Writer, header *types.Header, c *params.BorConfig)
 // acting as a primary block producer. It ensures that consensus handles the header time and
 // block announcement time correctly.
 func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
+	t.Skip("Skipping PIP-66 unitl it is enabled back")
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
