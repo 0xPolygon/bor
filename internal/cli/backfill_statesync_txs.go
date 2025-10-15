@@ -442,6 +442,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				propagateOnce(errCh, fmt.Errorf("batch put failed: %w", err))
 				return
 			}
+			c.UI.Output(fmt.Sprintf("Writing key: %s", common.Bytes2Hex(p.key)))
 			atomic.AddInt64(&inserted, 1)
 		}
 	}()
@@ -493,10 +494,8 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				// txlookup path
 				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
 				if err != nil {
-					c.UI.Output(fmt.Sprintf("WARN: cannot parse txlookup key (key=%s): %v", w.Key, err))
-					atomic.AddInt64(&skippedOther, 1)
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
+					propagateOnce(errCh, err)
+					return
 				}
 				atomic.AddInt64(&checkedLookup, 1)
 
