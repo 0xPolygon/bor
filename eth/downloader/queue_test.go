@@ -107,7 +107,7 @@ func TestBasics(t *testing.T) {
 	numOfBlocks := len(emptyChain.blocks)
 	numOfReceipts := len(emptyChain.blocks) / 2
 
-	q := newQueue(10, 10)
+	q := newQueue(10, 10, nil)
 	if !q.Idle() {
 		t.Errorf("new queue should be idle")
 	}
@@ -223,7 +223,7 @@ func TestBasics(t *testing.T) {
 func TestEmptyBlocks(t *testing.T) {
 	numOfBlocks := len(emptyChain.blocks)
 
-	q := newQueue(10, 10)
+	q := newQueue(10, 10, nil)
 
 	q.Prepare(1, SnapSync)
 
@@ -298,6 +298,53 @@ func TestEmptyBlocks(t *testing.T) {
 	}
 }
 
+func TestQueueWithBorReceipts(t *testing.T) {
+	// The mock chain contains receipts for every odd blocks. Apart from fetching receipts
+	// for those blocks, it will also include the sprint end blocks (i.e. multiple of 16)
+	// even though they have empty root hash. Include that in the expected count.
+	numOfReceipts := len(emptyChain.blocks)/2 + len(emptyChain.blocks)/16
+
+	mockBorCfg := params.BorConfig{
+		Sprint: map[string]uint64{"0": 16},
+	}
+	q := newQueue(10, 10, &mockBorCfg)
+	if !q.Idle() {
+		t.Errorf("new queue should be idle")
+	}
+
+	q.Prepare(1, SnapSync)
+
+	if res := q.Results(false); len(res) != 0 {
+		t.Fatal("new queue should have 0 results")
+	}
+
+	// Schedule a batch of headers
+	headers := chain.headers()
+	hashes := make([]common.Hash, len(headers))
+
+	for i, header := range headers {
+		hashes[i] = header.Hash()
+	}
+
+	q.Schedule(headers, hashes, 1)
+
+	if q.Idle() {
+		t.Errorf("queue should not be idle")
+	}
+
+	if got, exp := q.PendingBodies(), chain.Len(); got != exp {
+		t.Errorf("wrong pending block count, got %d, exp %d", got, exp)
+	}
+	// Only non-empty receipts + sprint end blocks get added to task-queue
+	if got, exp := q.PendingReceipts(), numOfReceipts; got != exp {
+		t.Errorf("wrong pending receipt count, got %d, exp %d", got, exp)
+	}
+
+	if exp, got := q.receiptTaskQueue.Size(), numOfReceipts; exp != got {
+		t.Errorf("expected receipt task queue to be %d, got %d", exp, got)
+	}
+}
+
 // XTestDelivery does some more extensive testing of events that happen,
 // blocks that become known and peers that make reservations and deliveries.
 // disabled since it's not really a unit-test, but can be executed to test
@@ -314,7 +361,7 @@ func XTestDelivery(t *testing.T) {
 		log.SetDefault(log.NewLogger(slog.NewTextHandler(os.Stdout, nil)))
 	}
 
-	q := newQueue(10, 10)
+	q := newQueue(10, 10, nil)
 
 	var wg sync.WaitGroup
 
@@ -417,7 +464,7 @@ func XTestDelivery(t *testing.T) {
 		for {
 			f, _, _ := q.ReserveReceipts(peer, rand.Intn(50))
 			if f != nil {
-				var rcs [][]*types.Receipt
+				var rcs []types.Receipts
 				for _, hdr := range f.Headers {
 					rcs = append(rcs, world.getReceipts(hdr.Number.Uint64()))
 				}
@@ -426,10 +473,9 @@ func XTestDelivery(t *testing.T) {
 				hashes := make([]common.Hash, len(rcs))
 
 				for i, receipt := range rcs {
-					hashes[i] = types.DeriveSha(types.Receipts(receipt), hasher)
+					hashes[i] = types.DeriveSha(receipt, hasher)
 				}
-
-				_, err := q.DeliverReceipts(peer.id, rcs, hashes)
+				_, err := q.DeliverReceipts(peer.id, types.EncodeBlockReceiptLists(rcs), hashes)
 				if err != nil {
 					fmt.Printf("delivered %d receipts %v\n", len(rcs), err)
 				}

@@ -26,7 +26,7 @@ const (
 
 	// maxWitnessFetchRetries defines how many times we will try to fetch a
 	// witness for a block hash before giving up and marking it unavailable.
-	maxWitnessFetchRetries = 10
+	maxWitnessFetchRetries = 300 // ~30s of retries
 
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
@@ -521,13 +521,16 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 	witnessFetchMeter.Mark(1)
 
 	req, err := announce.fetchWitness(hash, resCh)
+	if req != nil {
+		peer = req.Peer
+	} else {
+		peer = ""
+	}
 	if err != nil {
 		log.Debug("[wm] Failed to initiate witness fetch request", "peer", peer, "hash", hash, "err", err)
 		// Check if the error specifically indicates no peers were available
 		if strings.Contains(err.Error(), "no peer with witness for hash") {
-			log.Debug("[wm] Marking witness as unavailable based on fetch initiation error", "hash", hash)
-			m.markWitnessUnavailable(hash)
-			// Don't penalize the announcing peer in this case
+			m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("request initiation failed: %w", err), false)
 			return
 		}
 
@@ -539,16 +542,9 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 			return
 		}
 		m.mu.Unlock()
-
-		if req != nil {
-			peer = req.Peer
-		} else {
-			peer = ""
-		}
 		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
+		return
 	}
-
-	peer = req.Peer
 
 	// Check if still pending after successful request creation
 	m.mu.Lock()
@@ -689,7 +685,7 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 	} else {
 		if state := m.pending[hash]; state != nil {
 			// back-off before next retry
-			state.announce.time = time.Now().Add(fetchTimeout)
+			state.announce.time = time.Now()
 		}
 	}
 	m.mu.Unlock()

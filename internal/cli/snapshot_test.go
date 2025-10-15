@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -15,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/cli/server"
@@ -35,14 +33,7 @@ var (
 	balance                     = big.NewInt(1_000000000000000000)
 	gspec                       = &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{address: {Balance: balance}}}
 	signer                      = types.LatestSigner(gspec.Config)
-	config                      = &core.CacheConfig{
-		TrieCleanLimit: 256,
-		TrieDirtyLimit: 256,
-		TrieTimeLimit:  5 * time.Minute,
-		SnapshotLimit:  0, // Disable snapshot
-		TriesInMemory:  128,
-	}
-	engine = ethash.NewFullFaker()
+	engine                      = ethash.NewFullFaker()
 )
 
 func TestOfflineBlockPrune(t *testing.T) {
@@ -139,7 +130,8 @@ func BlockchainCreator(t *testing.T, node *node.Node, chaindbPath, AncientPath s
 
 	genesis := gspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 	// Initialize a fresh chain with only a genesis block
-	blockchain, err := core.NewBlockChain(db, config, gspec, nil, engine, vm.Config{}, nil, nil, nil)
+	config := core.DefaultConfig()
+	blockchain, err := core.NewBlockChain(db, gspec, engine, config)
 	require.NoError(t, err, "failed to create chain")
 
 	// Make chain starting from genesis
