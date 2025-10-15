@@ -442,7 +442,7 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				propagateOnce(errCh, fmt.Errorf("batch put failed: %w", err))
 				return
 			}
-			c.UI.Output(fmt.Sprintf("Writing key: %s", common.Bytes2Hex(p.key)))
+			c.UI.Output(fmt.Sprintf("Writing key: %s , lenval: %d", common.Bytes2Hex(p.key), len(p.val)))
 			atomic.AddInt64(&inserted, 1)
 		}
 	}()
