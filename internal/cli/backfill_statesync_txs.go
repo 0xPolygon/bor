@@ -378,19 +378,6 @@ func hasPendingErr(errCh chan error) bool {
 	}
 }
 
-// tryDecodeKV decodes the hex key/value of a write instruction and wraps errors with kind.
-func tryDecodeKV(kind string, w WriteInstruction) (keyBytes, valBytes []byte, err error) {
-	keyBytes, err = decodeHexString(w.Key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode %s key: %w", kind, err)
-	}
-	valBytes, err = decodeHexString(w.Value)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode %s value: %w", kind, err)
-	}
-	return keyBytes, valBytes, nil
-}
-
 // enqueuePut attempts to send a put request; returns false if a hard error is pending.
 func enqueuePut(puts chan putReq, req putReq, errCh chan error) bool {
 	select {
@@ -426,8 +413,6 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 	errCh := make(chan error, 1)
 
 	var processed int64
-	var checkedRcpt int64
-	var checkedLookup int64
 	var inserted int64
 	var skippedKnown int64
 	var skippedOther int64
@@ -459,58 +444,20 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 					return
 				}
 
-				isReceipt, _, _, err := parseReceiptKey(w.Key)
-				if err != nil {
-					c.UI.Output(fmt.Sprintf("WARN: %v (key=%s)", err, w.Key))
-					atomic.AddInt64(&skippedOther, 1)
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
-				}
+				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(w.Key))
 
-				if isReceipt {
-					atomic.AddInt64(&checkedRcpt, 1)
-					keyBytes, valBytes, err := tryDecodeKV("receipt", w)
-					if err != nil {
-						propagateOnce(errCh, err)
-						return
-					}
-
-					retrievedValue, _ := chaindb.Get(keyBytes)
-
-					if bytes.Equal(retrievedValue, valBytes) {
-						atomic.AddInt64(&skippedKnown, 1)
-						incrementAndMaybeReportProgress(c, &processed, int64(total))
-						continue
-					}
-
-					if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
-						return
-					}
-
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
-				}
-
-				// txlookup path
-				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
-				if err != nil {
-					propagateOnce(errCh, err)
-					return
-				}
-				atomic.AddInt64(&checkedLookup, 1)
-
-				retrievedValue, _ := chaindb.Get(keyBytes)
-				if bytes.Equal(retrievedValue, valBytes) {
+				if bytes.Equal(retrievedValue, common.Hex2Bytes(w.Value)) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
 					continue
 				}
 
-				if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
+				if !enqueuePut(puts, putReq{key: common.Hex2Bytes(w.Key), val: common.Hex2Bytes(w.Value)}, errCh) {
 					return
 				}
 
 				incrementAndMaybeReportProgress(c, &processed, int64(total))
+				continue
 			}
 		}()
 	}
@@ -543,9 +490,8 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 	}
 
 	c.UI.Output(fmt.Sprintf(
-		"Backfill summary: total=%d receipts_checked=%d txlookups_checked=%d inserted=%d already_present=%d skipped_other=%d",
-		total,
-		checkedRcpt, checkedLookup, inserted, skippedKnown, skippedOther,
+		"Backfill summary: total=%d inserted=%d already_present=%d skipped_other=%d",
+		total, inserted, skippedKnown, skippedOther,
 	))
 	return nil
 }
