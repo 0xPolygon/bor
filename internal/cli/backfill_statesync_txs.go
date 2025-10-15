@@ -427,7 +427,6 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				propagateOnce(errCh, fmt.Errorf("batch put failed: %w", err))
 				return
 			}
-			c.UI.Output(fmt.Sprintf("Writing key: %s , lenval: %d", common.Bytes2Hex(p.key), len(p.val)))
 			atomic.AddInt64(&inserted, 1)
 		}
 	}()
@@ -455,10 +454,10 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				}
 				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(trimmedKey))
 
-				debugKey := common.Hex2Bytes("0x6d617469632d626f722d726563656970742d000000000490eee010d94a2c3502f351a66a74a8123892d22b9b12bf88d0569f713f7d0e04254e61")
+				debugKey := common.Hex2Bytes("6d617469632d626f722d726563656970742d000000000490eee010d94a2c3502f351a66a74a8123892d22b9b12bf88d0569f713f7d0e04254e61")
 				if bytes.Equal(common.Hex2Bytes(trimmedKey), debugKey) {
 					c.UI.Output(fmt.Sprintf("Found debug key!"))
-					c.UI.Output(fmt.Sprintf("Writing key: lenRetrievedVal: %d | lenFileVale %d", len(retrievedValue), len(common.Hex2Bytes(trimmedValue))))
+					c.UI.Output(fmt.Sprintf("lenRetrievedVal: %d | lenFileVale %d", len(retrievedValue), len(common.Hex2Bytes(trimmedValue))))
 
 				}
 
