@@ -19,6 +19,7 @@ package eth
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -26,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -534,19 +536,6 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
-	// The response in p2p packet can only be consumed once. As we need a copy of receipt
-	// to exclude state-sync transaction receipt from receipt root calculation, encode
-	// and decode the response back.
-	packet, err := rlp.EncodeToBytes(res)
-	if err != nil {
-		return fmt.Errorf("failed to re-encode receipt packet for making copy: %w", err)
-	}
-
-	resWithoutStateSync := new(ReceiptsPacket[L])
-	if err := rlp.DecodeBytes(packet, resWithoutStateSync); err != nil {
-		return fmt.Errorf("failed to decode re-encoded receipt packet for making copy: %w", err)
-	}
-
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
 	buffers := new(receiptListBuffers)
@@ -554,28 +543,48 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		res.List[i].setBuffers(buffers)
 	}
 
+	// The `metadata` function below was used earlier to calculate `ReceiptHash` which is further
+	// used to validate against `header.ReceiptHash`. By default, state-sync receipts (which are
+	// appended at the end of list for a block) are excluded from the `ReceiptHash` calculation.
+	// After the state-sync hard fork, they should be included in the calculation. We don't have
+	// access to block number here so we can't determine whether to exclude or not. Instead, just
+	// ignore the `metadata` function and pass on the whole receipt list as is. The receipt queue
+	// handler which has access to block number will take care of the exclusion if needed.
 	metadata := func() interface{} {
-		hasher := trie.NewStackTrie(nil)
-		hashes := make([]common.Hash, len(resWithoutStateSync.List))
-		for i := range resWithoutStateSync.List {
-			// The receipt root of a block doesn't include receipts from state-sync
-			// transactions specific to polygon. Exclude them for calculating the
-			// hashes of all receipts.
-			resWithoutStateSync.List[i].ExcludeStateSyncReceipt()
-			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
-		}
+		return nil
+	}
 
-		return hashes
-	}
-	var enc ReceiptsRLPResponse
-	for i := range res.List {
-		enc = append(enc, res.List[i].EncodeForStorage())
-	}
+	// Assign the decoded receipt list to the result of `Response` packet.
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: ReceiptsMsg,
-		Res:  &enc,
+		Res:  &res.List,
 	}, metadata)
+}
+
+// EncodeReceipts encodes a list of receipts to the storage format (does not include TxType field).
+func EncodeReceipts[L ReceiptsList](receipts []L) ReceiptsRLPResponse {
+	var encodedReceipts ReceiptsRLPResponse = make(ReceiptsRLPResponse, len(receipts))
+	for i := range receipts {
+		encodedReceipts[i] = receipts[i].EncodeForStorage()
+	}
+	return encodedReceipts
+}
+
+// PrepareReceiptListHasher returns a function which calculates `ReceiptHash` of a receipt list
+// based on the whether we've crossed the hardfork or not.
+func PrepareReceiptListHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) func(int, *big.Int) common.Hash {
+	hasher := trie.NewStackTrie(nil)
+	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
+		// Don't exclude state-sync receipts for post hardfork blocks
+		if borCfg.IsStateSync(number) {
+			return types.DeriveSha(receipts[index], hasher)
+		} else {
+			receipts[index].ExcludeStateSyncReceipt()
+			return types.DeriveSha(receipts[index], hasher)
+		}
+	}
+	return calculateReceiptHashes
 }
 
 func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) error {
