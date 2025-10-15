@@ -1040,8 +1040,8 @@ func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, getReceip
 	defer q.lock.Unlock()
 
 	validate := func(index int, header *types.Header) error {
-		localReceiptListHash := getReceiptListHash(index, header.Number)
-		if localReceiptListHash != header.ReceiptHash {
+		receiptListHash := getReceiptListHash(index, header.Number)
+		if receiptListHash != header.ReceiptHash {
 			return errInvalidReceipt
 		}
 
