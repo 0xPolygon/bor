@@ -560,5 +560,9 @@ func (c *BackFillStateSyncTxsEntriesCommand) Run(args []string) int {
 		return 1
 	}
 
+	if err = chaindb.Close(); err != nil {
+		c.UI.Error("error while closing db: " + err.Error())
+		return 1
+	}
 	return 0
 }
