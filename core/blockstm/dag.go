@@ -14,6 +14,7 @@ import (
 var (
 	hasReadDepCallCounter = metrics.NewRegisteredCounter("blockstm/hasreaddep/calls", nil)
 	readsMapSizeHist      = metrics.NewRegisteredHistogram("blockstm/hasreaddep/reads/size", nil, metrics.NewExpDecaySample(1028, 0.015))
+	dagBuildTimer         = metrics.NewRegisteredTimer("blockstm/dag/build", nil)
 )
 
 type DAG struct {
@@ -69,6 +70,8 @@ func HasReadDep(txFrom TxnOutput, txTo TxnInput) bool {
 }
 
 func BuildDAG(deps TxnInputOutput) (d DAG) {
+	defer dagBuildTimer.UpdateSince(time.Now())
+
 	d = DAG{dag.NewDAG()}
 	ids := make(map[int]string)
 
