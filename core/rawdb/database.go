@@ -284,14 +284,16 @@ func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
 // can be opened.
 //
 // Deprecated: use Open.
-func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
+func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless, witnessPruneEnabled, blockPruneEnabled bool) (ethdb.Database, error) {
 	return Open(db, OpenOptions{
-		Ancient:          ancient,
-		MetricsNamespace: namespace,
-		ReadOnly:         readonly,
-		DisableFreeze:    disableFreeze,
-		IsLastOffset:     isLastOffset,
-		Stateless:        stateless,
+		Ancient:             ancient,
+		MetricsNamespace:    namespace,
+		ReadOnly:            readonly,
+		DisableFreeze:       disableFreeze,
+		IsLastOffset:        isLastOffset,
+		WitnessPruneEnabled: witnessPruneEnabled,
+		BlockPruneEnabled:   blockPruneEnabled,
+		Stateless:           stateless,
 	})
 }
 
@@ -304,7 +306,9 @@ type OpenOptions struct {
 	DisableFreeze    bool
 	IsLastOffset     bool
 
-	Stateless bool
+	WitnessPruneEnabled bool
+	BlockPruneEnabled   bool
+	Stateless           bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -463,10 +467,12 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		chainFreezer:  frdb,
 	}
 
-	if opts.Stateless {
+	if opts.WitnessPruneEnabled || opts.Stateless {
 		ethDb.witPruner = NewPruner(ethDb, NewWitnessStrategy())
 		ethDb.witPruner.Start()
+	}
 
+	if opts.BlockPruneEnabled || opts.Stateless {
 		ethDb.blockPruner = NewPruner(ethDb, NewBlockStrategy())
 		ethDb.blockPruner.Start()
 	}

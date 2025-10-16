@@ -170,13 +170,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	log.Info("Allocated trie memory caches", "clean", common.StorageSize(config.TrieCleanCache)*1024*1024, "dirty", common.StorageSize(config.TrieDirtyCache)*1024*1024)
 
+	witnessPruneEnabled := false
+	if config.SyncMode == downloader.StatelessSync || config.WitnessProtocol {
+		witnessPruneEnabled = true
+	}
+
+	blockPruneEnabled := false
+	if config.SyncMode == downloader.StatelessSync {
+		blockPruneEnabled = true
+	}
+
 	dbOptions := node.DatabaseOptions{
-		Cache:             config.DatabaseCache,
-		Handles:           config.DatabaseHandles,
-		AncientsDirectory: config.DatabaseFreezer,
-		EraDirectory:      config.DatabaseEra,
-		MetricsNamespace:  "eth/db/chaindata/",
-		Stateless:         config.SyncMode == downloader.StatelessSync,
+		Cache:               config.DatabaseCache,
+		Handles:             config.DatabaseHandles,
+		AncientsDirectory:   config.DatabaseFreezer,
+		EraDirectory:        config.DatabaseEra,
+		MetricsNamespace:    "eth/db/chaindata/",
+		WitnessPruneEnabled: witnessPruneEnabled,
+		BlockPruneEnabled:   blockPruneEnabled,
+		Stateless:           config.SyncMode == downloader.StatelessSync,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
