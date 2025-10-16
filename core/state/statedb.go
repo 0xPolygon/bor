@@ -1763,6 +1763,10 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 	if err != nil {
 		return nil, err
 	}
+	// Log if no contract codes found (may indicate abnormal behavior if block contains contract deployments)
+	if len(ret.codes) == 0 {
+		log.Info("commitAndFlush: no contract codes found", "block", block, "codes_len", len(ret.codes))
+	}
 	// Commit dirty contract code if any exists
 	if db := s.db.TrieDB().Disk(); db != nil && len(ret.codes) > 0 {
 		batch := db.NewBatch()
