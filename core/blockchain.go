@@ -180,6 +180,7 @@ type BlockChainConfig struct {
 	TrieDirtyLimit   int           // Memory limit (MB) at which to start flushing dirty trie nodes to disk
 	TrieTimeLimit    time.Duration // Time limit after which to flush the current in-memory trie to disk
 	TrieNoAsyncFlush bool          // Whether the asynchronous buffer flushing is disallowed
+	TriesInMemory    uint64        // Number of recent tries to keep in memory
 
 	Preimages    bool   // Whether to store preimage of trie key to the disk
 	StateHistory uint64 // Number of blocks from head whose state histories are reserved.
@@ -221,6 +222,7 @@ func DefaultConfig() *BlockChainConfig {
 		TrieCleanLimit:   256,
 		TrieDirtyLimit:   256,
 		TrieTimeLimit:    5 * time.Minute,
+		TriesInMemory:    state.TriesInMemory,
 		StateScheme:      rawdb.HashScheme,
 		SnapshotLimit:    256,
 		SnapshotWait:     true,
@@ -250,6 +252,14 @@ func (cfg BlockChainConfig) WithNoAsyncFlush(on bool) *BlockChainConfig {
 	return &cfg
 }
 
+// GetTriesInMemory returns the safe value of tries in memory (defaults to [state.TriesInMemory])
+func (cfg BlockChainConfig) GetTriesInMemory() uint64 {
+	if cfg.TriesInMemory == 0 {
+		return state.TriesInMemory
+	}
+	return cfg.TriesInMemory
+}
+
 // triedbConfig derives the configures for trie database.
 func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 	config := &triedb.Config{
@@ -267,6 +277,7 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			EnableStateIndexing: cfg.ArchiveMode,
 			TrieCleanSize:       cfg.TrieCleanLimit * 1024 * 1024,
 			StateCleanSize:      cfg.SnapshotLimit * 1024 * 1024,
+			MaxDiffLayers:       cfg.GetTriesInMemory(),
 
 			// TODO(rjl493456442): The write buffer represents the memory limit used
 			// for flushing both trie data and state data to disk. The config name
@@ -611,7 +622,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
 func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, cfg *BlockChainConfig, numprocs int, enforce bool) (*BlockChain, error) {
 	bc, err := NewBlockChain(db, genesis, engine, cfg)
-
 	if err != nil {
 		return nil, err
 	}
@@ -781,6 +791,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
 }
+
 func (bc *BlockChain) setupSnapshot() {
 	// Short circuit if the chain is established with path scheme, as the
 	// state snapshot has been integrated into path database natively.
@@ -1591,7 +1602,8 @@ func (bc *BlockChain) Stop() {
 		if !bc.cfg.ArchiveMode {
 			triedb := bc.triedb
 
-			for _, offset := range []uint64{0, 1, state.TriesInMemory - 1} {
+			triesInMemory := bc.cfg.GetTriesInMemory()
+			for _, offset := range []uint64{0, 1, triesInMemory - 1} {
 				if number := bc.CurrentBlock().Number.Uint64(); number > offset {
 					recent := bc.GetBlockByNumber(number - offset)
 
@@ -1857,7 +1869,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Separate out bor receipts (i.e. receipts of state-sync transactions)
-		var borReceipts = make([]rlp.RawValue, len(receiptChain))
+		borReceipts := make([]rlp.RawValue, len(receiptChain))
 		for i, receipts := range receiptChain {
 			receiptChain[i], borReceipts[i] = splitReceiptsAndDeriveFields(receipts, blockChain[i].NumberU64(), blockChain[i].Hash(), bc.chainConfig.Bor)
 		}
@@ -1936,9 +1948,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Delete block data from the main database.
-		var (
-			canonHashes = make(map[common.Hash]struct{}, len(blockChain))
-		)
+
+		canonHashes := make(map[common.Hash]struct{}, len(blockChain))
+
 		batch = bc.db.NewBatch()
 		for _, block := range blockChain {
 			canonHashes[block.Hash()] = struct{}{}
@@ -2224,7 +2236,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	// Flush limits are not considered for the first TriesInMemory blocks.
 	current := block.NumberU64()
-	if current <= state.TriesInMemory {
+	triesInMemory := bc.cfg.GetTriesInMemory()
+	if current <= triesInMemory {
 		return []*types.Log{}, nil
 	}
 	// If we exceeded our memory allowance, flush matured singleton nodes to disk
@@ -2237,7 +2250,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		_ = bc.triedb.Cap(limit - ethdb.IdealBatchSize)
 	}
 	// Find the next state trie we need to commit
-	chosen := current - state.TriesInMemory
+	chosen := current - triesInMemory
 	flushInterval := time.Duration(bc.flushInterval.Load())
 	// If we exceeded time allowance, flush an entire trie to disk
 	if bc.gcproc > flushInterval {
@@ -2249,8 +2262,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		} else {
 			// If we're exceeding limits but haven't reached a large enough memory gap,
 			// warn the user that the system is becoming unstable.
-			if chosen < bc.lastWrite+state.TriesInMemory && bc.gcproc >= 2*flushInterval {
-				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/state.TriesInMemory)
+			if chosen < bc.lastWrite+triesInMemory && bc.gcproc >= 2*flushInterval {
+				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/float64(triesInMemory))
 			}
 			// Flush an entire trie and restart the counters
 			_ = bc.triedb.Commit(header.Root, true)
@@ -3083,7 +3096,7 @@ type blockProcessingResult struct {
 // it writes the block and associated state to database.
 // nolint : unused
 func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
-	var startTime = time.Now()
+	startTime := time.Now()
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 		bc.logger.OnBlockStart(tracing.BlockEvent{
@@ -3908,7 +3921,6 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
 	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
-
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
