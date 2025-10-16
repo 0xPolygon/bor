@@ -17,7 +17,6 @@
 package downloader
 
 import (
-	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -94,23 +93,9 @@ func (q *receiptQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 // fetcher, unpacking the receipt data and delivering it to the downloader's queue.
 func (q *receiptQueue) deliver(peer *peerConnection, packet *eth.Response) (int, error) {
 	// We're expecting a full decoded receipt list instead of encoded receipts for storage
-	// earlier. Extract receipts based on type. Add/remove support for new types here as needed.
-	var (
-		receipts             eth.ReceiptsRLPResponse
-		getReceiptListHashes func(int, *big.Int) common.Hash
-	)
-	switch packet.Res.(type) {
-	case *eth.ReceiptList68:
-		receiptList := packet.Res.([]*eth.ReceiptList68)
-		receipts = eth.EncodeReceipts(receiptList)
-		getReceiptListHashes = eth.PrepareReceiptListHasher(receiptList, q.queue.borConfig)
-	case *eth.ReceiptList69:
-		receiptList := packet.Res.([]*eth.ReceiptList69)
-		receipts = eth.EncodeReceipts(receiptList)
-		getReceiptListHashes = eth.PrepareReceiptListHasher(receiptList, q.queue.borConfig)
-	default:
-		// This shouldn't happen unless there's a bug in identifying type of receipt list
-		// or there's a new type which isn't handled here. Just log error.
+	// we used to have earlier.
+	receipts, getReceiptListHashes := eth.EncodeReceiptsAndPrepareHasher(packet.Res, q.queue.borConfig)
+	if receipts == nil || getReceiptListHashes == nil {
 		peer.log.Warn("Unknown receipt list type, discarding packet")
 		return 0, nil
 	}

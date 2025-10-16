@@ -562,18 +562,37 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	}, metadata)
 }
 
-// EncodeReceipts encodes a list of receipts to the storage format (does not include TxType field).
-func EncodeReceipts[L ReceiptsList](receipts []L) ReceiptsRLPResponse {
+// EncodeReceiptsAndPrepareHasher encodes a list of receipts to the storage format (does not
+// include TxType field). It also returns a function which calculates `ReceiptHash` of a receipt list
+// based on the whether we've crossed the hardfork or not.
+func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
+	// Extract receipts based on type. Add/remove support for new types here as needed.
+	var (
+		receipts             ReceiptsRLPResponse
+		getReceiptListHashes func(int, *big.Int) common.Hash
+	)
+	switch packet := packet.(type) {
+	case []*ReceiptList68:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	case []*ReceiptList69:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	default:
+		// This shouldn't happen unless there's a bug in identifying type of receipt list
+		// or there's a new type which isn't handled here.
+		return nil, nil
+	}
+	return receipts, getReceiptListHashes
+}
+
+// encodeReceiptsAndPrepareHasher is an internal generic function for all receipt types
+func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
 	var encodedReceipts ReceiptsRLPResponse = make(ReceiptsRLPResponse, len(receipts))
 	for i := range receipts {
 		encodedReceipts[i] = receipts[i].EncodeForStorage()
 	}
-	return encodedReceipts
-}
 
-// PrepareReceiptListHasher returns a function which calculates `ReceiptHash` of a receipt list
-// based on the whether we've crossed the hardfork or not.
-func PrepareReceiptListHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) func(int, *big.Int) common.Hash {
 	hasher := trie.NewStackTrie(nil)
 	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
 		// Don't exclude state-sync receipts for post hardfork blocks
@@ -584,7 +603,8 @@ func PrepareReceiptListHasher[L ReceiptsList](receipts []L, borCfg *params.BorCo
 			return types.DeriveSha(receipts[index], hasher)
 		}
 	}
-	return calculateReceiptHashes
+
+	return encodedReceipts, calculateReceiptHashes
 }
 
 func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) error {
