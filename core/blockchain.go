@@ -2335,6 +2335,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		status = CanonStatTy
 	} else {
 		status = SideStatTy
+		log.Info("writeBlockAndSetHead: wrote side block", "number", block.Number(), "hash", block.Hash())
 	}
 
 	// Set new head.
