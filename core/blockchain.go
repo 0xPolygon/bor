@@ -2324,6 +2324,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 	if reorg {
 		// Reorganise the chain if the parent is not the head block
 		if block.ParentHash() != currentBlock.Hash() {
+			log.Info("REORG DONE!", "current block", currentBlock.Hash(), "number", currentBlock.Number, "new block", block.Hash(), "number", block.NumberU64())
 			if err = bc.reorg(currentBlock, block.Header()); err != nil {
 				if !(stateless && err == errInvalidNewChain) { // fast forward may raise an invalid new chain error, skipping for stateless
 					return NonStatTy, err
@@ -3653,7 +3654,7 @@ func (bc *BlockChain) recoverAncestors(block *types.Block, makeWitness bool) (co
 
 // collectLogs collects the logs that were generated or removed during the
 // processing of a block. These logs are later announced as deleted or reborn.
-func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
+func (bc *BlockChain) collectLogs(b *types.Block, removed bool) ([]*types.Log, error) {
 	var blobGasPrice *big.Int
 	if b.ExcessBlobGas() != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, b.Header())
@@ -3663,11 +3664,17 @@ func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
 	// Append bor receipt
 	borReceipt := rawdb.ReadBorReceipt(bc.db, b.Hash(), b.NumberU64(), bc.chainConfig)
 	if borReceipt != nil {
+		log.Info("BOR RECEIPT FOUND!", "number", b.NumberU64(), "hash", b.Hash())
 		receipts = append(receipts, borReceipt)
 	}
 
+	// Extra diagnostics: log counts when mismatch occurs
+	if len(b.Transactions()) != len(receipts) {
+		log.Error("Receipt/tx count mismatch", "number", b.NumberU64(), "hash", b.Hash(), "receipts", len(receipts), "txs", len(b.Transactions()))
+		return nil, fmt.Errorf("receipt/tx mismatch: receipts=%d txs=%d", len(receipts), len(b.Transactions()))
+	}
 	if err := receipts.DeriveFields(bc.chainConfig, b.Hash(), b.NumberU64(), b.Time(), b.BaseFee(), blobGasPrice, b.Transactions()); err != nil {
-		log.Error("Failed to derive block receipts fields", "hash", b.Hash(), "number", b.NumberU64(), "err", err)
+		return nil, fmt.Errorf("derive receipts fields: %w", err)
 	}
 	var logs []*types.Log
 
@@ -3680,7 +3687,7 @@ func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
 		}
 	}
 
-	return logs
+	return logs, nil
 }
 
 // reorg takes two blocks, an old chain and a new chain and will reconstruct the
@@ -3800,7 +3807,9 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 			if block == nil {
 				return errInvalidOldChain // Corrupt database, mostly here to avoid weird panics
 			}
-			if logs := bc.collectLogs(block, true); len(logs) > 0 {
+			if logs, err := bc.collectLogs(block, true); err != nil {
+				log.Error("collectLogs failed during reorg (deleted)", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+			} else if len(logs) > 0 {
 				deletedLogs = append(deletedLogs, logs...)
 			}
 			if len(deletedLogs) > 512 {
@@ -3823,7 +3832,9 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 			deletedTxs = append(deletedTxs, tx.Hash())
 		}
 		// Collect deleted logs and emit them for new integrations
-		if logs := bc.collectLogs(block, true); len(logs) > 0 {
+		if logs, err := bc.collectLogs(block, true); err != nil {
+			log.Error("collectLogs failed during reorg (deleted, forward emission)", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+		} else if len(logs) > 0 {
 			// Emit revertals latest first, older then
 			slices.Reverse(logs)
 
@@ -3841,7 +3852,9 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 			rebirthTxs = append(rebirthTxs, tx.Hash())
 		}
 		// Collect inserted logs and emit them
-		if logs := bc.collectLogs(block, false); len(logs) > 0 {
+		if logs, err := bc.collectLogs(block, false); err != nil {
+			log.Error("collectLogs failed during reorg (inserted)", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+		} else if len(logs) > 0 {
 			rebirthLogs = append(rebirthLogs, logs...)
 		}
 		if len(rebirthLogs) > 512 {
@@ -3930,7 +3943,11 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	bc.writeHeadBlock(head)
 
 	// Emit events
-	logs := bc.collectLogs(head, false)
+	logs, err := bc.collectLogs(head, false)
+	if err != nil {
+		log.Error("collectLogs failed at new head", "number", head.NumberU64(), "hash", head.Hash(), "err", err)
+		logs = nil
+	}
 	bc.chainFeed.Send(ChainEvent{Header: head.Header()})
 	if len(logs) > 0 {
 		bc.logsFeed.Send(logs)
