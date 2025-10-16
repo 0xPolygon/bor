@@ -43,7 +43,7 @@ type freezerdb struct {
 	ethdb.KeyValueStore
 	*chainFreezer
 
-	witPruner   witPruner
+	pruner      pruner
 	readOnly    bool
 	ancientRoot string
 }
@@ -65,7 +65,7 @@ func (frdb *freezerdb) Close() error {
 		errs = append(errs, err)
 	}
 
-	if err := frdb.witPruner.Close(); err != nil {
+	if err := frdb.pruner.Close(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -455,7 +455,7 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 	}
 
 	if opts.Stateless {
-		witPruner := NewWitPruner(ethDb)
+		witPruner := NewPruner(ethDb, NewWitnessStrategy())
 		witPruner.Start()
 	}
 
