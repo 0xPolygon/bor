@@ -25,8 +25,8 @@ func NewBlockStrategy() *BlockStrategy {
 }
 
 func (b *BlockStrategy) Name() string            { return "block pruner" }
-func (w *BlockStrategy) RetentionBlocks() uint64 { return w.retention }
-func (w *BlockStrategy) Interval() time.Duration { return w.interval }
+func (b *BlockStrategy) RetentionBlocks() uint64 { return w.retention }
+func (b *BlockStrategy) Interval() time.Duration { return w.interval }
 
 func (b *BlockStrategy) ReadCursor(db ethdb.KeyValueReader) *uint64 { return ReadBlockPruneCursor(db) }
 func (b *BlockStrategy) WriteCursor(db ethdb.KeyValueWriter, cur uint64) {
