@@ -3954,7 +3954,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.Number().Uint64()
 
-	// Span boundary detection and cache management using isSpanStart
+	// 1. Span boundary detection and cache management using isSpanStart
+	spanBoundaryStart := time.Now()
 	if bc.spanStateCache != nil && isSpanStart(blockNum) {
 		oldCacheSize := bc.spanStateCache.Len()
 		bc.spanStateCache.Purge()
@@ -3968,17 +3969,20 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			"spanNum", spanNum,
 			"cachedStates", oldCacheSize)
 	}
+	spanBoundaryDuration := time.Since(spanBoundaryStart)
 
 	var mergedCount int
-	// Count states in ORIGINAL transmitted witness before merging
-	// This tells us what was actually sent over the network
+	// 2. Count states in ORIGINAL transmitted witness before merging
+	copyWitnessStart := time.Now()
 	originalWitnessStates := make(map[string]struct{})
 	for stateNode := range witness.State {
 		originalWitnessStates[stateNode] = struct{}{}
 	}
 	transmittedStates := len(originalWitnessStates)
+	copyWitnessDuration := time.Since(copyWitnessStart)
 
-	// Merge cached states into witness for blocks that aren't the first in span
+	// 3. Merge cached states into witness for blocks that aren't the first in span
+	mergeStart := time.Now()
 	if !isSpanStart(blockNum) {
 		witnessStatesBefore := len(witness.State)
 		mergedCount = bc.mergeSpanCacheIntoWitness(witness)
@@ -3990,6 +3994,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 				"witnessStatesAfter", len(witness.State))
 		}
 	}
+	mergeDuration := time.Since(mergeStart)
+
+	log.Info("PSP - Cache operation timings (1-3)",
+		"block", blockNum,
+		"spanBoundaryMs", spanBoundaryDuration.Milliseconds(),
+		"copyWitnessMs", copyWitnessDuration.Milliseconds(),
+		"mergeMs", mergeDuration.Milliseconds())
 
 	// Validate witness.
 	if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
@@ -4028,8 +4039,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	// Cache witness states and updated states for subsequent blocks in this span
 	if bc.spanStateCache != nil {
-		// Check ORIGINAL transmitted states against cache
-		// This tells us what bandwidth could have been saved
+		// 4. Check ORIGINAL transmitted states against cache
+		cacheCheckStart := time.Now()
 		alreadyCachedStates := 0 // States that were transmitted but already in cache (wasted bandwidth)
 		newRequiredStates := 0   // States that were transmitted and needed (required bandwidth)
 
@@ -4041,21 +4052,31 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 				newRequiredStates++ // This state was sent and we needed it
 			}
 		}
+		cacheCheckDuration := time.Since(cacheCheckStart)
 
-		// Also cache any merged states that weren't in originalWitnessStates
-		// (These were added from cache during merge, so already cached)
+		// 5. Also cache any merged states that weren't in originalWitnessStates
+		cacheMergedStart := time.Now()
 		for stateNode := range witness.State {
 			if _, existsInOriginal := originalWitnessStates[stateNode]; !existsInOriginal {
 				// This was merged from cache, ensure it stays cached
 				bc.spanStateCache.Add(stateNode, struct{}{})
 			}
 		}
+		cacheMergedDuration := time.Since(cacheMergedStart)
 
 		newUpdatedStates := 0
 
-		// Extract and cache updated states from execution
+		// 6. Extract and cache updated states from execution
+		commitStart := time.Now()
+		var commitDuration time.Duration
+		var processNodesDuration time.Duration
+
 		if statedb != nil {
 			_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, bc.chainConfig.IsEIP158(block.Number()))
+			commitDuration = time.Since(commitStart)
+
+			// 7. Process updated state nodes
+			processNodesStart := time.Now()
 			if stateUpdate != nil && stateUpdate.Nodes != nil {
 				nodes := stateUpdate.Nodes
 
@@ -4073,6 +4094,10 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 					})
 				}
 			}
+			processNodesDuration = time.Since(processNodesStart)
+		} else {
+			commitDuration = time.Since(commitStart)
+			processNodesDuration = 0
 		}
 
 		totalCacheSize := bc.spanStateCache.Len()
@@ -4083,7 +4108,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			bandwidthSavings = float64(alreadyCachedStates) * 100.0 / float64(transmittedStates)
 		}
 
-		// Calculate approximate memory usage of cache
+		// 8. Calculate approximate memory usage of cache
+		memoryCalcStart := time.Now()
 		cacheMemoryBytes := uint64(0)
 		keys := bc.spanStateCache.Keys()
 		for _, key := range keys {
@@ -4095,6 +4121,20 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		// Add map/cache overhead (approximately 48 bytes per entry for map structure)
 		cacheMemoryBytes += uint64(totalCacheSize) * 48
 		cacheMemoryMB := float64(cacheMemoryBytes) / (1024.0 * 1024.0)
+		memoryCalcDuration := time.Since(memoryCalcStart)
+
+		// Log timing for operations 4-8
+		log.Info("PSP - Cache operation timings (4-8)",
+			"block", blockNum,
+			"cacheCheckMs", cacheCheckDuration.Milliseconds(),
+			"cacheMergedMs", cacheMergedDuration.Milliseconds(),
+			"commitMs", commitDuration.Milliseconds(),
+			"processNodesMs", processNodesDuration.Milliseconds(),
+			"memoryCalcMs", memoryCalcDuration.Milliseconds())
+
+		// Calculate total time spent in ALL cache operations (1-8)
+		totalCacheTime := spanBoundaryDuration + copyWitnessDuration + mergeDuration +
+			cacheCheckDuration + cacheMergedDuration + commitDuration + processNodesDuration + memoryCalcDuration
 
 		// Log to console with clearer naming
 		log.Info("PSP - Span cache metrics",
@@ -4107,15 +4147,18 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			"totalCacheSize", totalCacheSize,
 			"cacheMemoryMB", fmt.Sprintf("%.2f", cacheMemoryMB),
 			"merged", mergedCount,
+			"totalCacheTimeMs", totalCacheTime.Milliseconds(),
 		)
 
-		// Write detailed metrics to file
+		// Write detailed metrics to file (includes ALL timings from operations 1-8)
 		metricsFile, err := os.OpenFile("span_cache_metrics.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
 			defer metricsFile.Close()
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Fprintf(metricsFile, "[%s] Block %d | Transmitted: %d | AlreadyCached: %d | NewRequired: %d | NewFromExecution: %d | BandwidthSavings: %.2f%% | TotalCache: %d | MemoryMB: %.2f | Merged: %d\n",
-				timestamp, blockNum, transmittedStates, alreadyCachedStates, newRequiredStates, newUpdatedStates, bandwidthSavings, totalCacheSize, cacheMemoryMB, mergedCount)
+			fmt.Fprintf(metricsFile, "[%s] Block %d | Transmitted: %d | AlreadyCached: %d | NewRequired: %d | NewFromExecution: %d | BandwidthSavings: %.2f%% | TotalCache: %d | MemoryMB: %.2f | Merged: %d | Times(ms): SpanBoundary=%d CopyWitness=%d Merge=%d CacheCheck=%d CacheMerged=%d Commit=%d ProcessNodes=%d MemCalc=%d Total=%d\n",
+				timestamp, blockNum, transmittedStates, alreadyCachedStates, newRequiredStates, newUpdatedStates, bandwidthSavings, totalCacheSize, cacheMemoryMB, mergedCount,
+				spanBoundaryDuration.Milliseconds(), copyWitnessDuration.Milliseconds(), mergeDuration.Milliseconds(),
+				cacheCheckDuration.Milliseconds(), cacheMergedDuration.Milliseconds(), commitDuration.Milliseconds(), processNodesDuration.Milliseconds(), memoryCalcDuration.Milliseconds(), totalCacheTime.Milliseconds())
 		}
 	}
 
