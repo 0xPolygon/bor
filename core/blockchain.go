@@ -2568,22 +2568,18 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
 				if perr != nil {
 					sdb = nil
-					// If validation depends on parent's commit, mark for retry in writer stage
-					switch {
-					case errors.Is(perr, ErrStatelessStateRootMismatch):
-						fallthrough
-					case errors.Is(perr, ErrGasUsedMismatch):
-						fallthrough
-					case errors.Is(perr, ErrBloomMismatch):
-						fallthrough
-					case errors.Is(perr, ErrReceiptRootMismatch):
-						fallthrough
-					case errors.Is(perr, ErrRequestsHashMismatch):
-						log.Info("Deferring validation retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "error", perr)
-						results[idx].needsRetry = true
-						continue
-					}
-					results[idx].err = perr
+					// Defer execution errors to the sequential writer for retry
+					log.Info("Deferring execution retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "err", perr)
+					results[idx].needsRetry = true
+					continue
+				}
+
+				// If StateDB captured a database error during execution, defer to writer
+				if sdb != nil && sdb.Error() != nil {
+					err := sdb.Error()
+					log.Info("Deferring due to StateDB error", "block", blk.NumberU64(), "hash", blk.Hash(), "err", err)
+					sdb = nil
+					results[idx].needsRetry = true
 					continue
 				}
 				if witness != nil {
