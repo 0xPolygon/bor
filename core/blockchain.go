@@ -2668,6 +2668,12 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				stopHeaders()
 				return int(processed.Load()), perr
 			}
+			if sdb != nil && sdb.Error() != nil {
+				retryErr := sdb.Error()
+				log.Error("Deferred validation captured StateDB error", "block", block.NumberU64(), "hash", block.Hash(), "err", retryErr)
+				stopHeaders()
+				return int(processed.Load()), retryErr
+			}
 			if witness != nil {
 				sdb.SetWitness(witness)
 			}
