@@ -120,8 +120,13 @@ func TestHistoryReader(t *testing.T) {
 }
 
 func testHistoryReader(t *testing.T, historyLimit uint64) {
-	// Use a helper that allows overriding MaxDiffLayers per DB config.
-	env := newTesterWithMaxDiffLayers(t, historyLimit, false, 64, 4, true)
+	maxDiffLayers = 4
+	defer func() {
+		maxDiffLayers = 128
+	}()
+	//log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelDebug, true)))
+
+	env := newTester(t, historyLimit, false, 64, true)
 	defer env.release()
 	waitIndexing(env.db)
 

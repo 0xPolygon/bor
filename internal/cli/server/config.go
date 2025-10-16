@@ -626,9 +626,6 @@ type CacheConfig struct {
 
 	// GoDebug sets debugging variables for the runtime
 	GoDebug string `hcl:"godebug,optional" toml:"godebug,optional"`
-
-	// MaxDiffLayers is the maximum diff layers allowed in the pathdb layer tree
-	MaxDiffLayers int `hcl:"maxdifflayers,optional" toml:"maxdifflayers,optional"`
 }
 
 type ExtraDBConfig struct {
@@ -865,7 +862,6 @@ func DefaultConfig() *Config {
 			GoMemLimit:         "",  // Empty means no limit
 			GoGC:               100, // Go default is 100%
 			GoDebug:            "",  // Empty means no debug flags
-			MaxDiffLayers:      128, // Default maximum diff layers
 		},
 		ExtraDB: &ExtraDBConfig{
 			// These are LevelDB defaults, specifying here for clarity in code and in logging.
@@ -1274,17 +1270,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 		}
 
-		// Sanitize MaxDiffLayers value to reasonable bounds
-		sanitizedMaxDiffLayers := sanitizeMaxDiffLayers(c.Cache.MaxDiffLayers)
-		if sanitizedMaxDiffLayers != c.Cache.MaxDiffLayers {
-			log.Warn("MaxDiffLayers value sanitized", "original", c.Cache.MaxDiffLayers, "sanitized", sanitizedMaxDiffLayers)
-		}
-
 		n.DatabaseCache = calcPerc(c.Cache.PercDatabase)
 		n.SnapshotCache = calcPerc(c.Cache.PercSnapshot)
 		n.TrieCleanCache = calcPerc(c.Cache.PercTrie)
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
-		n.MaxDiffLayers = sanitizedMaxDiffLayers
 		n.NoPrefetch = c.Cache.NoPrefetch
 		n.Preimages = c.Cache.Preimages
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.

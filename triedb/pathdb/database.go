@@ -56,6 +56,9 @@ const (
 	defaultBufferSize = 64 * 1024 * 1024
 )
 
+// maxDiffLayers is the maximum diff layers allowed in the layer tree.
+var maxDiffLayers = 128
+
 // layer is the interface implemented by all state layers which includes some
 // public methods and some additional methods for internal usage.
 type layer interface {
@@ -114,7 +117,6 @@ type Config struct {
 	TrieCleanSize       int    // Maximum memory allowance (in bytes) for caching clean trie nodes
 	StateCleanSize      int    // Maximum memory allowance (in bytes) for caching clean state data
 	WriteBufferSize     int    // Maximum memory allowance (in bytes) for write buffer
-	MaxDiffLayers       int    // Maximum diff layers allowed in the layer tree
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
 
 	// Testing configurations
@@ -137,15 +139,6 @@ func (c *Config) sanitize() *Config {
 		maxMaxDiffLayers     = 256 // Maximum diff layers
 		defaultMaxDiffLayers = 128 // Default max diff layers
 	)
-	if conf.MaxDiffLayers == 0 {
-		conf.MaxDiffLayers = defaultMaxDiffLayers
-	} else if conf.MaxDiffLayers < minMaxDiffLayers {
-		log.Warn("Sanitizing invalid MaxDiffLayers", "provided", conf.MaxDiffLayers, "updated", minMaxDiffLayers)
-		conf.MaxDiffLayers = minMaxDiffLayers
-	} else if conf.MaxDiffLayers > maxMaxDiffLayers {
-		log.Warn("Sanitizing invalid MaxDiffLayers", "provided", conf.MaxDiffLayers, "updated", maxMaxDiffLayers)
-		conf.MaxDiffLayers = maxMaxDiffLayers
-	}
 	return &conf
 }
 
@@ -167,7 +160,6 @@ func (c *Config) fields() []interface{} {
 	} else {
 		list = append(list, "history", fmt.Sprintf("last %d blocks", c.StateHistory))
 	}
-	list = append(list, "maxdifflayers", c.MaxDiffLayers)
 	return list
 }
 
@@ -177,7 +169,6 @@ var Defaults = &Config{
 	TrieCleanSize:   defaultTrieCleanSize,
 	StateCleanSize:  defaultStateCleanSize,
 	WriteBufferSize: defaultBufferSize,
-	MaxDiffLayers:   128, // Default max diff layers
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -435,7 +426,7 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	// - head-1 layer is paired with HEAD-1 state
 	// - head-(MaxDiffLayers-1) layer(bottom-most diff layer) is paired with HEAD-(MaxDiffLayers-1) state
 	// - head-MaxDiffLayers layer(disk layer) is paired with HEAD-MaxDiffLayers state
-	return db.tree.cap(root, db.config.MaxDiffLayers)
+	return db.tree.cap(root, 128)
 }
 
 // Commit traverses downwards the layer tree from a specified layer with the

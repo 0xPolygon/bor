@@ -69,7 +69,6 @@ var Defaults = Config{
 	TrieDirtyCache:        256,
 	TrieTimeout:           60 * time.Minute,
 	SnapshotCache:         102,
-	MaxDiffLayers:         128, // Default max diff layers
 	FilterLogCacheSize:    32,
 	Miner:                 miner.DefaultConfig,
 	TxPool:                legacypool.DefaultConfig,
@@ -145,7 +144,6 @@ type Config struct {
 	TrieDirtyCache int
 	TrieTimeout    time.Duration
 	SnapshotCache  int
-	MaxDiffLayers  int // Maximum diff layers allowed in the pathdb layer tree
 	Preimages      bool
 	TriesInMemory  uint64
 
