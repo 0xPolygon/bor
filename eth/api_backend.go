@@ -712,3 +712,11 @@ func (b *EthAPIBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash
 func (b *EthAPIBackend) IsParallelImportActive() bool {
 	return b.eth.blockchain.IsParallelStatelessImportEnabled()
 }
+
+func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
+	return b.eth.config.TxSyncDefaultTimeout
+}
+
+func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
+	return b.eth.config.TxSyncMaxTimeout
+}

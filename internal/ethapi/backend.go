@@ -58,6 +58,9 @@ type Backend interface {
 	RPCTxFeeCap() float64          // global tx fee cap for all transaction related APIs
 	UnprotectedAllowed() bool      // allows only for EIP155 transactions.
 
+	RPCTxSyncDefaultTimeout() time.Duration
+	RPCTxSyncMaxTimeout() time.Duration
+
 	// Blockchain API
 	SetHead(number uint64)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)

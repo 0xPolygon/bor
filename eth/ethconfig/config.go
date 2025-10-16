@@ -70,6 +70,7 @@ var Defaults = Config{
 	TrieTimeout:          60 * time.Minute,
 	SnapshotCache:        102,
 	FilterLogCacheSize:   32,
+	LogQueryLimit:        1000,
 	Miner:                miner.DefaultConfig,
 	TxPool:               legacypool.DefaultConfig,
 	BlobPool:             blobpool.DefaultConfig,
@@ -79,6 +80,8 @@ var Defaults = Config{
 	RPCTxFeeCap:          1, // 1 ether
 	FastForwardThreshold: 6400,
 	WitnessAPIEnabled:    false,
+	TxSyncDefaultTimeout: 20 * time.Second,
+	TxSyncMaxTimeout:     1 * time.Minute,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -147,6 +150,10 @@ type Config struct {
 
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int
+
+	// This is the maximum number of addresses or topics allowed in filter criteria
+	// for eth_getLogs.
+	LogQueryLimit int
 
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes
@@ -260,6 +267,10 @@ type Config struct {
 
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
+
+	// EIP-7966: eth_sendRawTransactionSync timeouts
+	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
+	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
