@@ -62,6 +62,9 @@ type Backend interface {
 	IsPreconfEnabled() bool
 	ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool // Validate if a tx is included in by the block producers
 
+	RPCTxSyncDefaultTimeout() time.Duration
+	RPCTxSyncMaxTimeout() time.Duration
+
 	// Blockchain API
 	SetHead(number uint64)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)
