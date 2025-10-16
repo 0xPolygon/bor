@@ -118,6 +118,7 @@ type Config struct {
 	StateCleanSize      int    // Maximum memory allowance (in bytes) for caching clean state data
 	WriteBufferSize     int    // Maximum memory allowance (in bytes) for write buffer
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
+	MaxDiffLayers       uint64 // Maximum diff layers allowed in the layer tree.
 
 	// Testing configurations
 	SnapshotNoBuild   bool // Flag Whether the state generation is allowed
@@ -169,6 +170,7 @@ var Defaults = &Config{
 	TrieCleanSize:   defaultTrieCleanSize,
 	StateCleanSize:  defaultStateCleanSize,
 	WriteBufferSize: defaultBufferSize,
+	MaxDiffLayers:   uint64(maxDiffLayers),
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -424,9 +426,13 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	// Keep configured diff layers in the memory, persistent layer is next.
 	// - head layer is paired with HEAD state
 	// - head-1 layer is paired with HEAD-1 state
-	// - head-(MaxDiffLayers-1) layer(bottom-most diff layer) is paired with HEAD-(MaxDiffLayers-1) state
-	// - head-MaxDiffLayers layer(disk layer) is paired with HEAD-MaxDiffLayers state
-	return db.tree.cap(root, 128)
+	// - head-127 layer(bottom-most diff layer) is paired with HEAD-127 state
+	// - head-128 layer(disk layer) is paired with HEAD-128 state
+	layers := maxDiffLayers
+	if db.config.MaxDiffLayers > 0 {
+		layers = int(db.config.MaxDiffLayers)
+	}
+	return db.tree.cap(root, layers)
 }
 
 // Commit traverses downwards the layer tree from a specified layer with the
