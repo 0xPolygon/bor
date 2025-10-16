@@ -4018,7 +4018,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
+	executeStatelessStart := time.Now()
 	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	executeStatelessDuration := time.Since(executeStatelessStart)
+
+	log.Info("PSP - ExecuteStateless timings",
+		"block", blockNum,
+		"executeStatelessMs", executeStatelessDuration.Milliseconds())
 
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
@@ -4148,6 +4154,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			"cacheMemoryMB", fmt.Sprintf("%.2f", cacheMemoryMB),
 			"merged", mergedCount,
 			"totalCacheTimeMs", totalCacheTime.Milliseconds(),
+			"executeStatelessMs", executeStatelessDuration.Milliseconds(),
 		)
 
 		// Write detailed metrics to file (includes ALL timings from operations 1-8)
