@@ -4162,10 +4162,10 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		if err == nil {
 			defer metricsFile.Close()
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Fprintf(metricsFile, "[%s] Block %d | Transmitted: %d | AlreadyCached: %d | NewRequired: %d | NewFromExecution: %d | BandwidthSavings: %.2f%% | TotalCache: %d | MemoryMB: %.2f | Merged: %d | Times(ms): SpanBoundary=%d CopyWitness=%d Merge=%d CacheCheck=%d CacheMerged=%d Commit=%d ProcessNodes=%d MemCalc=%d Total=%d\n",
+			fmt.Fprintf(metricsFile, "[%s] Block %d | Transmitted: %d | AlreadyCached: %d | NewRequired: %d | NewFromExecution: %d | BandwidthSavings: %.2f%% | TotalCache: %d | MemoryMB: %.2f | Merged: %d | Times(ms): SpanBoundary=%d CopyWitness=%d Merge=%d CacheCheck=%d CacheMerged=%d Commit=%d ProcessNodes=%d MemCalc=%d Total=%d ExecuteStateless=%d\n",
 				timestamp, blockNum, transmittedStates, alreadyCachedStates, newRequiredStates, newUpdatedStates, bandwidthSavings, totalCacheSize, cacheMemoryMB, mergedCount,
 				spanBoundaryDuration.Milliseconds(), copyWitnessDuration.Milliseconds(), mergeDuration.Milliseconds(),
-				cacheCheckDuration.Milliseconds(), cacheMergedDuration.Milliseconds(), commitDuration.Milliseconds(), processNodesDuration.Milliseconds(), memoryCalcDuration.Milliseconds(), totalCacheTime.Milliseconds())
+				cacheCheckDuration.Milliseconds(), cacheMergedDuration.Milliseconds(), commitDuration.Milliseconds(), processNodesDuration.Milliseconds(), memoryCalcDuration.Milliseconds(), totalCacheTime.Milliseconds(), executeStatelessDuration.Milliseconds())
 		}
 	}
 
