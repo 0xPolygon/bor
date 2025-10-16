@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	WitnessRetentionBlocks = 64000             // Minimum necessary distance between local header and latest non pruned witness
+	WitnessRetentionBlocks = 6400              // Minimum necessary distance between local header and latest non pruned witness
 	WitnessPruneInterval   = 120 * time.Second // The time interval between each witness prune routine
 )
 

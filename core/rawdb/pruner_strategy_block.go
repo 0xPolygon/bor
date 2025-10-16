@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	BlockRetention     = 128000            // Minimum necessary distance between local header and latest non pruned Block
+	BlockRetention     = 12800             // Minimum necessary distance between local header and latest non pruned Block
 	BlockPruneInterval = 120 * time.Second // The time interval between each Block prune routine
 )
 
