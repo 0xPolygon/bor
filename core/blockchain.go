@@ -2737,6 +2737,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		blockExecutionTimer.Update(ptime - trieRead)                    // The time spent on EVM processing
 		blockValidationTimer.Update(vtime - (triehash + trieUpdate))    // The time spent on block validation
 		borConsensusTime.Update(statedb.BorConsensusTime)               // The time spent on bor consensus (span + state sync)
+
+		execOnly := (ptime - trieRead)
+		stateCalc := (triehash + trieUpdate + trieRead)
+		stats.execDur += execOnly
+		stats.stateCalcDur += stateCalc
 		// Write the block to the chain and get the status.
 		var (
 			wstart = time.Now()

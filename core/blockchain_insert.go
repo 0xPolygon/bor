@@ -31,6 +31,8 @@ type insertStats struct {
 	usedGas                    uint64
 	lastIndex                  int
 	startTime                  mclock.AbsTime
+	execDur                    time.Duration
+	stateCalcDur               time.Duration
 }
 
 // statsReportLimit is the time limit during import and export after which we
@@ -60,6 +62,12 @@ func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, sn
 			"number", end.Number(), "hash", end.Hash(),
 			"blocks", st.processed, "txs", txs, "mgas", float64(st.usedGas) / 1000000,
 			"elapsed", common.PrettyDuration(elapsed), "mgasps", float64(st.usedGas) * 1000 / float64(elapsed),
+		}
+		if st.execDur != 0 {
+			context = append(context, []interface{}{"exec", common.PrettyDuration(st.execDur)}...)
+		}
+		if st.stateCalcDur != 0 {
+			context = append(context, []interface{}{"statecalc", common.PrettyDuration(st.stateCalcDur)}...)
 		}
 		if timestamp := time.Unix(int64(end.Time()), 0); time.Since(timestamp) > time.Minute {
 			context = append(context, []interface{}{"age", common.PrettyAge(timestamp)}...)
