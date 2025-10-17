@@ -489,6 +489,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.FDLimit,
 		Group:   "Cache",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.gomemlimit",
+		Usage:   "Set GOMEMLIMIT for the runtime (e.g. '34GB', '34359738368'). Empty means no limit",
+		Value:   &c.cliConfig.Cache.GoMemLimit,
+		Default: c.cliConfig.Cache.GoMemLimit,
+		Group:   "Cache",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "cache.gogc",
+		Usage:   "Set GOGC percentage for garbage collection trigger (default: 100)",
+		Value:   &c.cliConfig.Cache.GoGC,
+		Default: c.cliConfig.Cache.GoGC,
+		Group:   "Cache",
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.godebug",
+		Usage:   "Set GODEBUG variables for runtime debugging (e.g. 'gctrace=1,gcpacertrace=1')",
+		Value:   &c.cliConfig.Cache.GoDebug,
+		Default: c.cliConfig.Cache.GoDebug,
+		Group:   "Cache",
+	})
 
 	// LevelDB options
 	f.Uint64Flag(&flagset.Uint64Flag{
