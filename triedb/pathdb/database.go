@@ -134,12 +134,7 @@ func (c *Config) sanitize() *Config {
 		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.WriteBufferSize), "updated", common.StorageSize(maxBufferSize))
 		conf.WriteBufferSize = maxBufferSize
 	}
-	// Sanitize MaxDiffLayers value to reasonable bounds
-	const (
-		minMaxDiffLayers     = 1   // Minimum diff layers
-		maxMaxDiffLayers     = 256 // Maximum diff layers
-		defaultMaxDiffLayers = 128 // Default max diff layers
-	)
+
 	return &conf
 }
 
@@ -423,7 +418,7 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	if err := db.tree.add(root, parentRoot, block, nodes, states); err != nil {
 		return err
 	}
-	// Keep configured diff layers in the memory, persistent layer is next.
+	// Keep 128 diff layers in the memory, persistent layer is 129th.
 	// - head layer is paired with HEAD state
 	// - head-1 layer is paired with HEAD-1 state
 	// - head-127 layer(bottom-most diff layer) is paired with HEAD-127 state
