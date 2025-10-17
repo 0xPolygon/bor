@@ -53,7 +53,7 @@ func (w *WitnessStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uin
 // If none exists in the range, it returns (hi, false).
 func findEarliestWitness(db ethdb.Database, hi uint64) (uint64, bool) {
 	var (
-		lo    uint64 = 0
+		lo    uint64 = 1
 		res   uint64
 		found bool
 	)

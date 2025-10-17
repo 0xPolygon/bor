@@ -60,7 +60,7 @@ func (b *BlockStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uint6
 // it returns (hi, false).
 func findEarliestBlockWithData(db ethdb.Database, hi uint64) (uint64, bool) {
 	var (
-		lo    uint64 = 0
+		lo    uint64 = 1
 		res   uint64
 		found bool
 	)

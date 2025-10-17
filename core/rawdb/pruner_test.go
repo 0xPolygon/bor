@@ -66,7 +66,7 @@ func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
 	var badDeleted []uint64
 	var badRetained []uint64
 
-	for i := uint64(0); i <= head; i++ {
+	for i := uint64(1); i <= head; i++ {
 		exists := HasWitness(db, hashes[i])
 		if i < cutoff && exists {
 			badDeleted = append(badDeleted, i)
@@ -128,7 +128,7 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 	var badDeleted []uint64
 	var badRetained []uint64
 
-	for i := uint64(0); i <= head; i++ {
+	for i := uint64(1); i <= head; i++ {
 		exists := HasWitness(db, hashes[i])
 
 		switch {
@@ -190,7 +190,7 @@ func TestBlockPruner_HappyPath_GenericPruner(t *testing.T) {
 	cutoff := head - bs.RetentionBlocks()
 
 	var badDeleted, badRetainedNumMap []uint64
-	for i := uint64(0); i <= head; i++ {
+	for i := uint64(1); i <= head; i++ {
 		// Per-hash data presence: header should be gone for pruned heights.
 		haveHeader := HasHeader(db, hashes[i], i)
 		// Canonical number->hash presence
@@ -246,7 +246,7 @@ func TestBlockPruner_FindCursor_FirstBlockBeforeCutoff(t *testing.T) {
 	// Make earliest existing block-data height > 0 by removing [0..6] pre-state,
 	// so the pruner must binary-search to find earliest=7.
 	const earliest uint64 = 7
-	for i := uint64(0); i < earliest; i++ {
+	for i := uint64(1); i < earliest; i++ {
 		DeleteBlockWithoutNumber(db, hashes[i], i)
 		DeleteCanonicalHash(db, i)
 	}
@@ -269,7 +269,7 @@ func TestBlockPruner_FindCursor_FirstBlockBeforeCutoff(t *testing.T) {
 	cutoff := head - bs.RetentionBlocks()
 
 	var badDeleted, badMapping []uint64
-	for i := uint64(0); i <= head; i++ {
+	for i := uint64(1); i <= head; i++ {
 		haveHeader := HasHeader(db, hashes[i], i)
 		canon := ReadCanonicalHash(db, i)
 
