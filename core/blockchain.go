@@ -2573,7 +2573,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		statedb.SetWitness(witness)
 
 		// Write the block to the chain without committing state
-		if _, err := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); err != nil {
+		if _, err := bc.writeBlockAndSetHead(block, res.Receipts, res.Logs, statedb, false, true); err != nil {
 			return processed, err
 		}
 
