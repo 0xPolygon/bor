@@ -37,6 +37,8 @@ type pruner struct {
 	strategy      Strategy
 }
 
+// This pruner implements an online solution of pruning data. It demands the data to be pruned
+// to be on the KV database. That's why, for example, if you prune blocks you need to disable ancient db
 func NewPruner(db ethdb.Database, s Strategy) *pruner {
 	return &pruner{db: db, strategy: s, quit: make(chan struct{}), stopped: make(chan struct{})}
 }
