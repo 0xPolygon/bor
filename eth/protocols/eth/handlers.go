@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
@@ -338,18 +339,49 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes    int
 		receipts []rlp.RawValue
 	)
+	borCfg := chain.Config().Bor
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
 			lookups >= 2*maxReceiptsServe {
 			break
 		}
 
-		// In order to include state-sync transaction receipts, which resides in a separate
-		// table in db, we need to separately fetch normal and state-sync transaction receipts.
-		// Later, decode them, merge them into a single unit and re-encode the final list to
-		// be sent over p2p.
+		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if number == nil {
+			continue
+		}
 
-		// Fetch receipts of normal evm transactions
+		// If we're past the state-sync hardfork, state-sync receipts (if present) are stored
+		// with normal block receipts so no special handling needed.
+		if borCfg != nil && borCfg.IsStateSync(big.NewInt(int64(*number))) {
+			allReceipts := chain.GetReceiptsRLP(hash)
+			if allReceipts == nil {
+				if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
+					continue
+				}
+			}
+			body := chain.GetBodyRLP(hash)
+			if body == nil {
+				continue
+			}
+			// Noop as no special handling is needed
+			isStateSyncReceipt := func(index int) bool {
+				return false
+			}
+			results, err := blockReceiptsToNetwork69(allReceipts, body, isStateSyncReceipt)
+			if err != nil {
+				log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+				continue
+			}
+
+			receipts = append(receipts, results)
+			bytes += len(results)
+			continue
+		}
+
+		// Before state-sync HF, we need to fetch state-sync receipts separately along with fetching
+		// block receipts. Upon fetching, decode them, merge them into a single unit and re-encode
+		// the final list to be sent over p2p.
 		normalReceipts := chain.GetReceiptsRLP(hash)
 		var normalReceiptsDecoded []*types.ReceiptForStorage
 		if normalReceipts != nil {
@@ -376,10 +408,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
 				continue
 			}
-
-			// Append an empty entry for this block and continue
-			receipts = append(receipts, nil)
-			continue
 		}
 
 		// Track existence of bor receipts for encoding
