@@ -1777,22 +1777,6 @@ func sanitizeGoGC(value int) int {
 	return value
 }
 
-// sanitizeMaxDiffLayers clamps maxDiffLayers values to reasonable bounds
-func sanitizeMaxDiffLayers(value int) int {
-	const (
-		minMaxDiffLayers = 1   // Minimum diff layers
-		maxMaxDiffLayers = 128 // Maximum diff layers
-	)
-
-	if value < minMaxDiffLayers {
-		return minMaxDiffLayers
-	}
-	if value > maxMaxDiffLayers {
-		return maxMaxDiffLayers
-	}
-	return value
-}
-
 // validateGoDebug validates GODEBUG values for known debug variables
 func validateGoDebug(value string) error {
 	// Known GODEBUG variables (not exhaustive, but covers common ones)
