@@ -41,9 +41,17 @@ func (b *BlockStrategy) ReadNumberHashes(db ethdb.Iteratee, from, to uint64) []*
 	return ReadAllHashesInRange(db, from, to)
 }
 func (b *BlockStrategy) DeletePerHash(batch ethdb.KeyValueWriter, number uint64, hash common.Hash) {
+	// do not prune genesis
+	if number == 0 {
+		return
+	}
 	DeleteBlockWithoutNumber(batch, hash, number)
 }
 func (b *BlockStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uint64) {
+	// do not prune genesis
+	if number == 0 {
+		return
+	}
 	DeleteCanonicalHash(batch, number)
 }
 
