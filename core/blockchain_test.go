@@ -5554,6 +5554,84 @@ func createTestBlockAndWitness(t *testing.T) (*BlockChain, *types.Block, *statel
 	return statelessChain, block, witness
 }
 
+// TestParallelStateless_ContractDeployedThenCalled ensures that a contract
+// deployed and later accessed imports correctly
+// in parallel stateless mode.
+func TestParallelStateless_ContractDeployedThenCalled(t *testing.T) {
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+
+	cfg := DefaultConfig()
+	cfg.Stateless = true
+
+	eng := ethash.NewFaker()
+
+	// Build a 3-block chain: B1 deploy contract, B2 noop, B3 call contract
+	var contractAddr common.Address
+	_, blocks, _ := GenerateChainWithGenesis(gspec, eng, 3, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		if i == 0 {
+			code := []byte{0x60, 0x00, 0x56}
+			tx, _ := types.SignTx(
+				types.NewContractCreation(0, big.NewInt(0), 150000, b.header.BaseFee, code),
+				types.HomesteadSigner{}, key,
+			)
+			b.AddTx(tx)
+			contractAddr = crypto.CreateAddress(addr, 0)
+		}
+		if i == 2 {
+			// Call the deployed contract in block 3
+			callData := []byte{}
+			tx, _ := types.SignTx(
+				types.NewTransaction(1, contractAddr, big.NewInt(0), 100000, big.NewInt(2_000_000_000), callData),
+				types.HomesteadSigner{}, key,
+			)
+			b.AddTx(tx)
+		}
+	})
+
+	// Create stateful chain for witness generation
+	stateFullChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, eng, cfg)
+	require.NoError(t, err)
+	defer stateFullChain.Stop()
+
+	// Build witnesses by inserting each block on the full chain (stateful)
+	w1, _, err := stateFullChain.insertChain(types.Blocks{blocks[0]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w1)
+
+	w2, _, err := stateFullChain.insertChain(types.Blocks{blocks[1]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w2)
+
+	w3, _, err := stateFullChain.insertChain(types.Blocks{blocks[2]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w3)
+
+	// Corrupt the third witness by dropping code to simulate missing bytecode in worker
+	badW3 := w3.Copy()
+	badW3.Codes = make(map[string]struct{})
+
+	// Create stateless chain for parallel insertion
+	statelessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+	require.NoError(t, err)
+	defer statelessChain.Stop()
+
+	headers := []*types.Header{blocks[0].Header(), blocks[1].Header(), blocks[2].Header()}
+	stopHeaders, errChans := statelessChain.prepareHeaderVerification(headers)
+	defer stopHeaders()
+
+	stats := &insertStats{startTime: mclock.Now()}
+	processed, err := statelessChain.insertChainStatelessParallel(types.Blocks{blocks[0], blocks[1], blocks[2]}, []*stateless.Witness{w1, w2, badW3}, errChans, stats, stopHeaders)
+
+	require.NoError(t, err)
+	require.Equal(t, 3, processed)
+}
+
 // TestStatelessInsertChainInvalidInputs tests invalid or edge inputs for sequential and parallel stateless insertions
 func TestStatelessInsertChainInvalidInputs(t *testing.T) {
 	adversarialTests := []struct {
