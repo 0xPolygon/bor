@@ -257,13 +257,12 @@ var (
 		CancunBlock:         big.NewInt(45648608),
 		PragueBlock:         big.NewInt(48467456),
 		Bor: &BorConfig{
-			JaipurBlock:      big.NewInt(22770000),
-			DelhiBlock:       big.NewInt(29638656),
-			IndoreBlock:      big.NewInt(37075456),
-			AhmedabadBlock:   big.NewInt(48467456),
-			BhilaiBlock:      big.NewInt(48467456),
-			RioBlock:         big.NewInt(48473856),
-			TimestampHFBlock: big.NewInt(999999999999),
+			JaipurBlock:    big.NewInt(22770000),
+			DelhiBlock:     big.NewInt(29638656),
+			IndoreBlock:    big.NewInt(37075456),
+			AhmedabadBlock: big.NewInt(48467456),
+			BhilaiBlock:    big.NewInt(48467456),
+			RioBlock:       big.NewInt(48473856),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"37075456": 128,
 			},
@@ -881,7 +880,6 @@ type BorConfig struct {
 	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	TimestampHFBlock                *big.Int               `json:"timestampHFBlock"`           // Timestamp hardfork switch block (nil = no fork, 0 = already active)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -931,10 +929,6 @@ func (c *BorConfig) IsBhilai(number *big.Int) bool {
 
 func (c *BorConfig) IsRio(number *big.Int) bool {
 	return isBlockForked(c.RioBlock, number)
-}
-
-func (c *BorConfig) IsTimestampHF(number *big.Int) bool {
-	return isBlockForked(c.TimestampHFBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
