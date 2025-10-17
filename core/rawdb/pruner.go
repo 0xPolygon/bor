@@ -56,6 +56,7 @@ func (p *pruner) Start() {
 			}
 		}
 	}()
+	log.Info(p.strategy.Name()+": started", "retentionBlocks", p.strategy.RetentionBlocks(), "interval", p.strategy.Interval().String())
 }
 func (p *pruner) Close() error {
 	close(p.quit)
@@ -123,6 +124,7 @@ func (p *pruner) prune() {
 			log.Error(p.strategy.Name()+": batch write error", "from", from, "to", to-1, "err", err)
 			return
 		}
+		log.Info(p.strategy.Name()+": successfully pruned", "from", from, "to", to)
 		from = to
 	}
 }
