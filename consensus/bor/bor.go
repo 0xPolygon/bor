@@ -1071,17 +1071,25 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateS
 	logsFromReceiptCount := countLogsFromReceipts(receipts)
 	stateSyncLogs := allLogs[logsFromReceiptCount:]
 
+	txIndex := uint(len(body.Transactions) - 1)
+	for _, l := range stateSyncLogs {
+		l.TxIndex = txIndex
+	}
+
 	stateSyncReceipt := &types.Receipt{
+		// Consensus fields
 		Type:              types.StateSyncTxType,
-		PostState:         header.Root.Bytes(),
 		Status:            types.ReceiptStatusSuccessful,
 		CumulativeGasUsed: header.GasUsed,
-		TxHash:            stateSyncTx.Hash(),
 		Logs:              stateSyncLogs,
-		BlockNumber:       header.Number,
-		TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
-		EffectiveGasPrice: big.NewInt(0),
+		// Implementation fields
+		TxHash:  stateSyncTx.Hash(),
+		GasUsed: 0,
+		// Inclusion information
+		BlockNumber:      header.Number,
+		TransactionIndex: txIndex,
 	}
+
 	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
 	receipts = append(receipts, stateSyncReceipt)
 
