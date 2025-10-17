@@ -895,7 +895,7 @@ func DefaultConfig() *Config {
 			Enable:                         false,
 			SyncWithWitnesses:              false,
 			ProduceWitnesses:               false,
-			EnableParallelStatelessImport:  true,
+			EnableParallelStatelessImport:  false,
 			ParallelStatelessImportWorkers: 0,
 			WitnessAPI:                     false,
 			FastForwardThreshold:           6400,
