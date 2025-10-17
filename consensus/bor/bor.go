@@ -1086,6 +1086,7 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateS
 		TxHash:  stateSyncTx.Hash(),
 		GasUsed: 0,
 		// Inclusion information
+		BlockNumber:      header.Number,
 		TransactionIndex: txIndex,
 	}
 
