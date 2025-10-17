@@ -26,7 +26,6 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -100,7 +99,6 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 	if diff := externTd.Cmp(localTD); diff > 0 {
 		return true, nil
 	} else if diff < 0 {
-		log.Info("ForkChoice: no reorg, extern TD lower", "localTD", localTD, "externTD", externTd, "currentNum", current.Number, "externNum", extern.Number, "currentHash", current.Hash(), "externHash", extern.Hash())
 		return false, nil
 	}
 	// Local and external difficulty is identical.
@@ -119,12 +117,6 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 
 		// Compare hashes of block in case of tie breaker. Lexicographically larger hash wins.
 		reorg = !currentPreserve && (externPreserve || bytes.Compare(current.Hash().Bytes(), extern.Hash().Bytes()) < 0)
-		if !reorg {
-			cmp := bytes.Compare(current.Hash().Bytes(), extern.Hash().Bytes())
-			log.Info("ForkChoice: no reorg at equal TD and height", "currentPreserve", currentPreserve, "externPreserve", externPreserve, "hashCmp", cmp, "currentNum", localNum, "externNum", externNum, "currentHash", current.Hash(), "externHash", extern.Hash())
-		}
-	} else { // externNum > localNum
-		log.Info("ForkChoice: no reorg, extern height is ahead but equal TD", "currentNum", localNum, "externNum", externNum, "hashCurr", current.Hash(), "hashExtern", extern.Hash())
 	}
 
 	return reorg, nil
