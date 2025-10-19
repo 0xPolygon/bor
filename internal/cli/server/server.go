@@ -291,8 +291,13 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 
 	// sealing (if enabled) or in dev mode
 	if config.Sealer.Enabled || config.Developer.Enabled {
-		if err := srv.backend.StartMining(); err != nil {
-			return nil, err
+		// stateless node can't mine
+		if config.SyncMode != "stateless" {
+			if err := srv.backend.StartMining(); err != nil {
+				return nil, err
+			}
+		} else {
+			log.Warn("Mining disabled due to stateless configuration")
 		}
 	}
 

@@ -73,9 +73,7 @@ import (
 	gethversion "github.com/ethereum/go-ethereum/version"
 )
 
-var (
-	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
-)
+var MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
 
 const (
 	// This is the fairness knob for the discovery mixer. When looking for peers, we'll
@@ -228,7 +226,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// END: Bor changes
 
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
-	var dbVer = "<nil>"
+	dbVer := "<nil>"
 	if bcVersion != nil {
 		dbVer = fmt.Sprintf("%d", *bcVersion)
 	}
@@ -245,25 +243,24 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
-	var (
-		options = &core.BlockChainConfig{
-			TrieCleanLimit:   config.TrieCleanCache,
-			NoPrefetch:       config.NoPrefetch,
-			TrieDirtyLimit:   config.TrieDirtyCache,
-			ArchiveMode:      config.NoPruning,
-			TrieTimeLimit:    config.TrieTimeout,
-			SnapshotLimit:    config.SnapshotCache,
-			Preimages:        config.Preimages,
-			StateHistory:     config.StateHistory,
-			StateScheme:      scheme,
-			ChainHistoryMode: config.HistoryMode,
-			TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
-			VmConfig: vm.Config{
-				EnablePreimageRecording: config.EnablePreimageRecording,
-			},
-			Stateless: config.SyncMode == downloader.StatelessSync,
-		}
-	)
+	options := &core.BlockChainConfig{
+		TrieCleanLimit:   config.TrieCleanCache,
+		NoPrefetch:       config.NoPrefetch,
+		TrieDirtyLimit:   config.TrieDirtyCache,
+		ArchiveMode:      config.NoPruning,
+		TrieTimeLimit:    config.TrieTimeout,
+		SnapshotLimit:    config.SnapshotCache,
+		Preimages:        config.Preimages,
+		StateHistory:     config.StateHistory,
+		StateScheme:      scheme,
+		TriesInMemory:    config.TriesInMemory,
+		ChainHistoryMode: config.HistoryMode,
+		TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+		VmConfig: vm.Config{
+			EnablePreimageRecording: config.EnablePreimageRecording,
+		},
+		Stateless: config.SyncMode == downloader.StatelessSync,
+	}
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")

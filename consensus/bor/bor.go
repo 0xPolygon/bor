@@ -1071,17 +1071,25 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateS
 	logsFromReceiptCount := countLogsFromReceipts(receipts)
 	stateSyncLogs := allLogs[logsFromReceiptCount:]
 
+	txIndex := uint(len(body.Transactions) - 1)
+	for _, l := range stateSyncLogs {
+		l.TxIndex = txIndex
+	}
+
 	stateSyncReceipt := &types.Receipt{
+		// Consensus fields
 		Type:              types.StateSyncTxType,
-		PostState:         header.Root.Bytes(),
 		Status:            types.ReceiptStatusSuccessful,
 		CumulativeGasUsed: header.GasUsed,
-		TxHash:            stateSyncTx.Hash(),
 		Logs:              stateSyncLogs,
-		BlockNumber:       header.Number,
-		TransactionIndex:  uint(len(body.Transactions)), // we already appended state sync tx on body
-		EffectiveGasPrice: big.NewInt(0),
+		// Implementation fields
+		TxHash:  stateSyncTx.Hash(),
+		GasUsed: 0,
+		// Inclusion information
+		BlockNumber:      header.Number,
+		TransactionIndex: txIndex,
 	}
+
 	stateSyncReceipt.Bloom = types.CreateBloom(stateSyncReceipt)
 	receipts = append(receipts, stateSyncReceipt)
 
@@ -1237,11 +1245,12 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	if c.config.IsBhilai(header.Number) {
 		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time for non-primary validators
-		if successionNumber == 0 {
-			// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
-			// for early block announcement instead of waiting for full block time.
-			delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
-		}
+		// Disable early block announcement
+		// if successionNumber == 0 {
+		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
+		// 	// for early block announcement instead of waiting for full block time.
+		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
+		// }
 	} else {
 		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time
 	}
