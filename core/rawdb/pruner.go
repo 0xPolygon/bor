@@ -69,7 +69,7 @@ func (p *pruner) Close() error {
 func (p *pruner) prune() {
 	head := ReadHeadHeader(p.db)
 	if head == nil {
-		log.Debug(p.strategy.Name() + ": no head; skip")
+		log.Info(p.strategy.Name() + ": no head; skip")
 		return
 	}
 	latest := head.Number.Uint64()
@@ -82,17 +82,19 @@ func (p *pruner) prune() {
 	cur := p.strategy.ReadCursor(p.db)
 	if cur == nil {
 		if e, ok := p.strategy.FindEarliest(p.db, cutoff); ok {
+			log.Info(p.strategy.Name()+": no cursor stored", "earliestFound", e)
 			cur = &e
 		} else {
 			tmp := cutoff
 			cur = &tmp
-			log.Debug(p.strategy.Name()+": no data ≤ cutoff; starting at cutoff", "cutoff", cutoff)
+			log.Info(p.strategy.Name()+": no data ≤ cutoff; starting at cutoff", "cutoff", cutoff)
 		}
 	}
 	if *cur >= cutoff {
 		batch := p.db.NewBatch()
 		p.strategy.WriteCursor(batch, *cur)
 		_ = batch.Write()
+		log.Info(p.strategy.Name()+": no data to prune", "cursor", *cur, "cutoff", cutoff)
 		return
 	}
 
