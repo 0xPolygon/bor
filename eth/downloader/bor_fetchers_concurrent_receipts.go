@@ -92,10 +92,15 @@ func (q *receiptQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 // deliver is responsible for taking a generic response packet from the concurrent
 // fetcher, unpacking the receipt data and delivering it to the downloader's queue.
 func (q *receiptQueue) deliver(peer *peerConnection, packet *eth.Response) (int, error) {
-	receipts := *packet.Res.(*eth.ReceiptsRLPResponse)
-	hashes := packet.Meta.([]common.Hash) // {receipt hashes}
+	// We're expecting a full decoded receipt list instead of encoded receipts for storage
+	// we used to have earlier.
+	receipts, getReceiptListHashes := eth.EncodeReceiptsAndPrepareHasher(packet.Res, q.queue.borConfig)
+	if receipts == nil || getReceiptListHashes == nil {
+		peer.log.Warn("Unknown receipt list type, discarding packet")
+		return 0, nil
+	}
 
-	accepted, err := q.queue.DeliverReceipts(peer.id, receipts, hashes)
+	accepted, err := q.queue.DeliverReceipts(peer.id, receipts, getReceiptListHashes)
 
 	switch {
 	case err == nil && len(receipts) == 0:

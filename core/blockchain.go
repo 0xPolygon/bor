@@ -1718,6 +1718,12 @@ func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash com
 		return nil, nil
 	}
 
+	// After the state-sync HF, no need to split receipts as all receipts for a block
+	// are stored together (i.e. under same key).
+	if borCfg.IsStateSync(big.NewInt(int64(number))) {
+		return receipts, nil
+	}
+
 	// Bor receipts can only exist on sprint end blocks. Avoid decoding if possible.
 	if !types.IsSprintEndBlock(borCfg, number) {
 		return receipts, nil
