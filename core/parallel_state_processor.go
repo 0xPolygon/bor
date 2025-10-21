@@ -300,6 +300,14 @@ func (task *ExecutionTask) Settle() {
 	receipt.BlockNumber = task.blockNumber
 	receipt.TransactionIndex = uint(task.finalStateDB.TxIndex())
 
+	if task.result.Failed() {
+		log.Error("Final Receipt", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash(),
+			"receiptStatus", receipt.Status,
+			"receiptGasUsed", receipt.GasUsed,
+			"receiptLogs", len(receipt.Logs))
+	}
+
 	*task.receipts = append(*task.receipts, receipt)
 	*task.allLogs = append(*task.allLogs, receipt.Logs...)
 }
