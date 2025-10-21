@@ -183,7 +183,7 @@ var totalFeeTipped *big.Int = big.NewInt(0)
 var mu sync.Mutex
 
 func (task *ExecutionTask) Settle() {
-	if task.index == 43 {
+	if task.index == 83 {
 		receiverBalance := task.finalStateDB.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
 		log.Error("Receiver balance Before Finalize", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
@@ -194,7 +194,9 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+	if !task.result.Failed() {
+		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+	}
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
@@ -250,7 +252,7 @@ func (task *ExecutionTask) Settle() {
 		log.Error("IntermediateRoot", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash(), "logRoot", logRoot,
 			"logRootHex", common.Bytes2Hex(logRoot))
-		if task.index == 43 {
+		if task.index == 83 {
 			receiverBalance := dbCopy.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
 			log.Error("Receiver balance After Finalize", "blockNumber", task.blockNumber.Uint64(),
 				"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
