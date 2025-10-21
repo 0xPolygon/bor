@@ -95,6 +95,8 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, accountHash commo
 
 	// Iterate over all storage trie nodes for this account
 	var totalBytes uint64
+	const logInterval = 100000 // Log progress every 100k entries
+
 	for iter.Next() {
 		key := iter.Key()
 		value := iter.Value()
@@ -104,6 +106,25 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, accountHash commo
 
 		stats.Entries++
 		totalBytes += uint64(len(key) + len(value))
+
+		// Log progress at regular intervals
+		if stats.Entries%logInterval == 0 {
+			log.Info("Preloading storage trie progress",
+				"account hash", accountHash.Hex(),
+				"entries", stats.Entries,
+				"size", common.StorageSize(totalBytes).String(),
+				"elapsed", time.Since(startTime))
+		}
+
+		// Stop loading if we've hit the cache size limit
+		// This prevents unnecessary iteration and cache evictions
+		if totalBytes >= addressCacheSize {
+			log.Info("Cache size limit reached during preload, stopping early",
+				"address", accountHash.Hex(),
+				"entries", stats.Entries,
+				"size", common.StorageSize(totalBytes).String())
+			break
+		}
 	}
 
 	if err := iter.Error(); err != nil {
