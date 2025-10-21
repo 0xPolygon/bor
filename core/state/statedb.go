@@ -402,12 +402,15 @@ func (s *StateDB) FlushMVWriteSet() {
 
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
-func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
+func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, allowOnlyNonce bool) {
 	for i := range writes {
 		path := writes[i].Path
 		sr := writes[i].Val.(*StateDB)
 
 		if path.IsState() {
+			if allowOnlyNonce {
+				continue
+			}
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
 			state := sr.GetState(addr, stateKey)
@@ -419,12 +422,21 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 
 			switch path.GetSubpath() {
 			case BalancePath:
+				if allowOnlyNonce {
+					continue
+				}
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
+				if allowOnlyNonce {
+					continue
+				}
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
+				if allowOnlyNonce {
+					continue
+				}
 				log.Error("ApplyMVWriteSet: Selfdestruct", "addr", addr.Hex())
 				stateObject := s.getStateObject(addr)
 				if stateObject != nil {
