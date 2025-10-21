@@ -322,98 +322,6 @@ func NewBlockChainAPI(b Backend) *BlockChainAPI {
 	return &BlockChainAPI{b}
 }
 
-// GetTransactionReceiptsByBlock returns the transaction receipts for the given block number or hash.
-func (api *BlockChainAPI) GetTransactionReceiptsByBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]map[string]interface{}, error) {
-	block, err := api.b.BlockByNumberOrHash(ctx, blockNrOrHash)
-	if err != nil {
-		return nil, err
-	}
-
-	if block == nil {
-		return nil, errors.New("block not found")
-	}
-
-	receipts, err := api.b.GetReceipts(ctx, block.Hash())
-	if err != nil {
-		return nil, err
-	}
-
-	txs := block.Transactions()
-
-	var txHash common.Hash
-
-	borReceipt, err := api.b.GetBorBlockReceipt(ctx, block.Hash())
-	if err != nil && err != ethereum.NotFound {
-		return nil, err
-	}
-	if borReceipt != nil {
-		receipts = append(receipts, borReceipt)
-
-		txHash = types.GetDerivedBorTxHash(types.BorReceiptKey(block.Number().Uint64(), block.Hash()))
-		if txHash != (common.Hash{}) {
-			borTx, _, _, _, _ := api.b.GetBorBlockTransactionWithBlockHash(ctx, txHash, block.Hash())
-			txs = append(txs, borTx)
-		}
-	}
-
-	if len(txs) != len(receipts) {
-		return nil, fmt.Errorf("txs length %d doesn't equal to receipts' length %d", len(txs), len(receipts))
-	}
-
-	txReceipts := make([]map[string]interface{}, 0, len(txs))
-
-	for idx, receipt := range receipts {
-		tx := txs[idx]
-
-		signer := types.MakeSigner(api.b.ChainConfig(), block.Number(), block.Time())
-		from, _ := types.Sender(signer, tx)
-
-		fields := map[string]interface{}{
-			"blockHash":         block.Hash(),
-			"blockNumber":       hexutil.Uint64(block.NumberU64()),
-			"transactionHash":   tx.Hash(),
-			"transactionIndex":  hexutil.Uint64(idx),
-			"from":              from,
-			"to":                tx.To(),
-			"gasUsed":           hexutil.Uint64(receipt.GasUsed),
-			"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
-			"contractAddress":   nil,
-			"logs":              receipt.Logs,
-			"logsBloom":         receipt.Bloom,
-			"type":              hexutil.Uint(tx.Type()),
-			"effectiveGasPrice": (*hexutil.Big)(receipt.EffectiveGasPrice),
-		}
-
-		if receipt.EffectiveGasPrice == nil {
-			fields["effectiveGasPrice"] = new(hexutil.Big)
-		}
-
-		// Assign receipt status or post state.
-		if len(receipt.PostState) > 0 {
-			fields["root"] = hexutil.Bytes(receipt.PostState)
-		} else {
-			fields["status"] = hexutil.Uint(receipt.Status)
-		}
-
-		if receipt.Logs == nil {
-			fields["logs"] = []*types.Log{}
-		}
-
-		if borReceipt != nil && idx == len(receipts)-1 {
-			fields["transactionHash"] = txHash
-		}
-
-		// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
-		if receipt.ContractAddress != (common.Address{}) {
-			fields["contractAddress"] = receipt.ContractAddress
-		}
-
-		txReceipts = append(txReceipts, fields)
-	}
-
-	return txReceipts, nil
-}
-
 // ChainId is the EIP-155 replay-protection chain id for the current Ethereum chain config.
 //
 // Note, this method does not conform to EIP-695 because the configured chain ID is always
@@ -619,6 +527,12 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 			}
 		}
 
+		// State-sync tx and receipt is stored with normal block receipts post state-sync HF so skip
+		// fetching them separately.
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+			return response, nil
+		}
+
 		// append marshalled bor transaction
 		if response != nil {
 			response = api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx)
@@ -636,6 +550,12 @@ func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, 
 	block, err := api.b.BlockByHash(ctx, hash)
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
+
+		// State-sync tx and receipt is stored with normal block receipts post state-sync HF so skip
+		// fetching them separately.
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+			return response, nil
+		}
 
 		// append marshalled bor transaction
 		if response != nil {
@@ -753,6 +673,12 @@ func (api *BlockChainAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rp
 	result := make([]map[string]interface{}, len(receipts))
 	for i, receipt := range receipts {
 		result[i] = marshalReceipt(receipt, block.Hash(), block.NumberU64(), signer, txs[i], i, false)
+	}
+
+	// State-sync receipts are stored with normal block receipts post state-sync HF so skip
+	// fetching them separately.
+	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+		return result, nil
 	}
 
 	stateSyncReceipt, err := api.b.GetBorBlockReceipt(ctx, block.Hash())
@@ -1437,6 +1363,14 @@ func NewRPCPendingTransaction(tx *types.Transaction, current *types.Header, conf
 func newRPCTransactionFromBlockIndex(b *types.Block, index uint64, config *params.ChainConfig, db ethdb.Database) *RPCTransaction {
 	txs := b.Transactions()
 
+	// State-sync transaction is part of block body post state-sync HF so skip fetching it separately.
+	if config.Bor != nil && config.Bor.IsStateSync(b.Number()) {
+		if index >= uint64(len(txs)) {
+			return nil
+		}
+		return newRPCTransaction(txs[index], b.Hash(), b.NumberU64(), b.Time(), index, b.BaseFee(), config)
+	}
+
 	if index >= uint64(len(txs)+1) {
 		return nil
 	}
@@ -1640,6 +1574,11 @@ type TransactionAPI struct {
 func (api *TransactionAPI) getAllBlockTransactions(ctx context.Context, block *types.Block) (types.Transactions, bool) {
 	txs := block.Transactions()
 
+	// State-sync transaction is part of block body post state-sync HF so skip fetching it separately.
+	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+		return txs, false
+	}
+
 	stateSyncPresent := false
 
 	borReceipt, _ := api.b.GetBorBlockReceipt(ctx, block.Hash())
@@ -1749,17 +1688,12 @@ func (api *TransactionAPI) GetTransactionCount(ctx context.Context, address comm
 
 // GetTransactionByHash returns the transaction for the given hash
 func (api *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common.Hash) (*RPCTransaction, error) {
-	borTx := false
-
-	var err error
+	var borTx bool
 
 	// Try to return an already finalized transaction
 	found, tx, blockHash, blockNumber, index := api.b.GetCanonicalTransaction(hash)
 	if !found {
-		if tx, blockHash, blockNumber, index, err = api.b.GetBorBlockTransaction(ctx, hash); err != nil {
-			return nil, err
-		}
-
+		tx, blockHash, blockNumber, index, _ = api.b.GetBorBlockTransaction(ctx, hash)
 		borTx = true
 	}
 
@@ -1771,6 +1705,11 @@ func (api *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common
 
 		resultTx := newRPCTransaction(tx, blockHash, blockNumber, header.Time, index, header.BaseFee, api.b.ChainConfig())
 
+		// Skip handling state-sync tx separately post state-sync HF
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(header.Number) {
+			return resultTx, nil
+		}
+
 		if borTx {
 			// newRPCTransaction calculates hash based on RLP of the transaction data.
 			// In case of bor block tx, we need simple derived tx hash (same as function argument) instead of RLP hash
@@ -1780,6 +1719,7 @@ func (api *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common
 
 		return resultTx, nil
 	}
+
 	// No finalized transaction, try to retrieve it from the pool
 	if tx := api.b.GetPoolTransaction(hash); tx != nil {
 		return NewRPCPendingTransaction(tx, api.b.CurrentHeader(), api.b.ChainConfig()), nil
@@ -1809,16 +1749,10 @@ func (api *TransactionAPI) GetRawTransactionByHash(ctx context.Context, hash com
 
 // GetTransactionReceipt returns the transaction receipt for the given transaction hash.
 func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash common.Hash) (map[string]interface{}, error) {
-	borTx := false
-
-	var err error
-
+	var borTx bool
 	found, tx, blockHash, blockNumber, index := api.b.GetCanonicalTransaction(hash)
 	if !found {
-		tx, blockHash, blockNumber, index, err = api.b.GetBorBlockTransaction(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
+		tx, blockHash, blockNumber, index, _ = api.b.GetBorBlockTransaction(ctx, hash)
 		borTx = true
 		// // Make sure indexer is done.
 		// if !api.b.TxIndexDone() {
@@ -1830,8 +1764,10 @@ func (api *TransactionAPI) GetTransactionReceipt(ctx context.Context, hash commo
 		return nil, nil
 	}
 
-	var receipt *types.Receipt
-
+	var (
+		receipt *types.Receipt
+		err     error
+	)
 	if borTx {
 		// Fetch bor block receipt
 		receipt, err = api.b.GetBorBlockReceipt(ctx, blockHash)
