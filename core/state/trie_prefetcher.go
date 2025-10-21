@@ -18,6 +18,7 @@ package state
 
 import (
 	"errors"
+	"runtime/debug"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -200,7 +201,7 @@ func (p *triePrefetcher) trie(owner common.Hash, root common.Hash) Trie {
 	// Bail if no trie was prefetched for this root
 	fetcher := p.fetchers[p.trieID(owner, root)]
 	if fetcher == nil {
-		log.Error("Prefetcher missed to load trie", "owner", owner, "root", root)
+		log.Error("Prefetcher missed to load trie", "owner", owner, "root", root, "stackTrace", string(debug.Stack()))
 		p.deliveryMissMeter.Mark(1)
 		return nil
 	}
