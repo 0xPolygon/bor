@@ -2113,6 +2113,7 @@ func (pool *LegacyPool) PreLoadTrieNodes(tx *types.Transaction) {
 
 	// Create execution state copy to avoid modifying the actual state
 	tempState := baseState.Copy()
+	tempState.StartPrefetcher("txpool", nil)
 
 	// Preload touched accounts, codes and access list slots to warm caches
 	reader := tempState.Reader()
