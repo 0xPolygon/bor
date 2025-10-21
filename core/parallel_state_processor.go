@@ -196,11 +196,15 @@ func (task *ExecutionTask) Settle() {
 
 	if !task.result.Failed() {
 		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+
+		for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
+			task.finalStateDB.AddLog(l)
+		}
+	} else {
+		log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash())
 	}
 
-	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
-		task.finalStateDB.AddLog(l)
-	}
 	// check for `#tasks/#execs` in `blockstm exec summary` log. It should be ideally 100
 	// 54876000
 
