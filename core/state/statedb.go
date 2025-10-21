@@ -427,6 +427,9 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, allowOnlyNo
 				}
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
+				if allowOnlyNonce {
+					log.Error("ApplyMVWriteSet: Nonce", "addr", addr.Hex())
+				}
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
 				if allowOnlyNonce {
