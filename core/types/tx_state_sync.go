@@ -51,7 +51,7 @@ func (tx *StateSyncTx) copy() TxData {
 
 // accessors for innerTx.
 func (tx *StateSyncTx) txType() byte           { return StateSyncTxType }
-func (tx *StateSyncTx) chainID() *big.Int      { panic("chainID called from StateSyncTx") }
+func (tx *StateSyncTx) chainID() *big.Int      { return nil }
 func (tx *StateSyncTx) accessList() AccessList { return nil }
 func (tx *StateSyncTx) data() []byte           { return []byte{} }
 func (tx *StateSyncTx) gas() uint64            { return 0 }
