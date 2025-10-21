@@ -18,6 +18,7 @@
 package legacypool
 
 import (
+	"bytes"
 	"errors"
 	"maps"
 	"math"
@@ -782,7 +783,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	from, _ := types.Sender(pool.signer, tx)
 
 	// naive... no buffering or queueing for now
-	go pool.PreExecuteTx(tx)
+	go pool.PreLoadTrieNodes(tx)
 
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted
@@ -2095,40 +2096,41 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 	return exists
 }
 
-// PreExecuteTx executes a transaction against the current state without committing changes.
-// This is used for cache warming and validation. Similar to eth_call but optimized for pool usage.
-func (pool *LegacyPool) PreExecuteTx(tx *types.Transaction) {
+// PreLoadTrieNodes warms relevant trie nodes and code for a transaction by touching
+// sender, recipient and access-list storage slots using the state reader. It does
+// not execute the transaction or commit changes.
+func (pool *LegacyPool) PreLoadTrieNodes(tx *types.Transaction) {
 	pool.mu.RLock()
-	defer pool.mu.RUnlock()
-
-	// Create execution state copy to avoid modifying the actual state
-	tempState := pool.currentState.Copy()
+	baseState := pool.currentState
+	header := pool.currentHead.Load()
+	signer := pool.signer
+	pool.mu.RUnlock()
 
 	// Get current head for block context
-	header := pool.currentHead.Load()
 	if header == nil {
 		return
 	}
 
-	// Convert transaction to message
-	msg, err := core.TransactionToMessage(tx, pool.signer, header.BaseFee)
-	if err != nil {
-		return
+	// Create execution state copy to avoid modifying the actual state
+	tempState := baseState.Copy()
+
+	// Preload touched accounts, codes and access list slots to warm caches
+	reader := tempState.Reader()
+	sender, err := types.Sender(signer, tx)
+	if err == nil {
+		reader.Account(sender)
 	}
-
-	// Create block context for EVM
-	blockContext := pool.newEVMBlockContext(header)
-
-	// Create EVM with optimized config for pre-execution
-	evm := vm.NewEVM(blockContext, tempState, pool.chainconfig, vm.Config{NoBaseFee: true})
-
-	// Create gas pool with current head's gas limit
-	gasPool := new(core.GasPool).AddGas(header.GasLimit)
-
-	// Execute the message
-	usedGas := new(atomic.Bool)
-	_, err = core.ApplyMessage(evm, msg, gasPool, usedGas)
-	return
+	if tx.To() != nil {
+		if account, _ := reader.Account(*tx.To()); account != nil && !bytes.Equal(account.CodeHash, types.EmptyCodeHash.Bytes()) {
+			reader.Code(*tx.To(), common.BytesToHash(account.CodeHash))
+		}
+	}
+	for _, al := range tx.AccessList() {
+		reader.Account(al.Address)
+		for _, slot := range al.StorageKeys {
+			reader.Storage(al.Address, slot)
+		}
+	}
 }
 
 // newEVMBlockContext creates a block context for EVM execution using the current pool state
