@@ -1100,11 +1100,16 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateS
 		l.TxIndex = txIndex
 	}
 
+	var cumulativeGasUsed uint64
+	if len(receipts) > 0 {
+		cumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+	}
+
 	stateSyncReceipt := &types.Receipt{
 		// Consensus fields
 		Type:              types.StateSyncTxType,
 		Status:            types.ReceiptStatusSuccessful,
-		CumulativeGasUsed: header.GasUsed,
+		CumulativeGasUsed: cumulativeGasUsed,
 		Logs:              stateSyncLogs,
 		// Implementation fields
 		TxHash:  stateSyncTx.Hash(),
