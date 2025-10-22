@@ -15,7 +15,7 @@ import (
 
 const (
 	// addressCacheSize is the fixed size for each address-specific cache (1GB)
-	addressCacheSize = 1024 * 1024 * 1024
+	addressCacheSize = 45 * 1024 * 1024 * 1024
 )
 
 // CacheStats contains statistics about a cache instance
@@ -89,21 +89,21 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, accountHash commo
 	prefix := rawdb.TrieNodeStoragePrefix
 	keyPrefix := append(prefix, accountHash.Bytes()...)
 
-	// First pass: count entries to give visibility into data size
-	log.Info("Scanning storage trie entries", "account hash", accountHash.Hex())
-	countIter := db.NewIterator(keyPrefix, nil)
-	var totalCount int
-	var estimatedSize uint64
-	for countIter.Next() {
-		totalCount++
-		estimatedSize += uint64(len(countIter.Key()) + len(countIter.Value()))
-	}
-	countIter.Release()
+	// // First pass: count entries to give visibility into data size
+	// log.Info("Scanning storage trie entries", "account hash", accountHash.Hex())
+	// countIter := db.NewIterator(keyPrefix, nil)
+	// var totalCount int
+	// var estimatedSize uint64
+	// for countIter.Next() {
+	// 	totalCount++
+	// 	estimatedSize += uint64(len(countIter.Key()) + len(countIter.Value()))
+	// }
+	// countIter.Release()
 
-	log.Info("Found storage trie entries",
-		"account hash", accountHash.Hex(),
-		"entries", totalCount,
-		"estimated size", common.StorageSize(estimatedSize).String())
+	// log.Info("Found storage trie entries",
+	// 	"account hash", accountHash.Hex(),
+	// 	"entries", totalCount,
+	// 	"estimated size", common.StorageSize(estimatedSize).String())
 
 	// Create an iterator for all keys with this prefix
 	iter := db.NewIterator(keyPrefix, nil)
