@@ -121,6 +121,7 @@ type tester struct {
 	snapStorages map[common.Hash]map[common.Hash]map[common.Hash][]byte // Keyed by the hash of account address and the hash of storage key
 }
 
+//nolint:unused
 func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int, enableIndex bool) *tester {
 	var (
 		disk, _ = rawdb.Open(rawdb.NewMemoryDatabase(), rawdb.OpenOptions{Ancient: t.TempDir()})
@@ -464,8 +465,6 @@ func TestDatabaseRollback(t *testing.T) {
 	defer func() {
 		maxDiffLayers = 128
 	}()
-
-	// Verify state histories
 	tester := newTester(t, 0, false, 32, false)
 	defer tester.release()
 
@@ -498,7 +497,6 @@ func TestDatabaseRecoverable(t *testing.T) {
 	defer func() {
 		maxDiffLayers = 128
 	}()
-
 	var (
 		tester = newTester(t, 0, false, 12, false)
 		index  = tester.bottomIndex()

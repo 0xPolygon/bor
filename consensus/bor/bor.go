@@ -55,7 +55,7 @@ const (
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
-	veblopBlockTimeout = time.Second * 4 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	veblopBlockTimeout = time.Second * 6 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
 )
 
 // Bor protocol constants.
@@ -248,6 +248,11 @@ type Bor struct {
 	fakeDiff      bool // Skip difficulty verifications
 	DevFakeAuthor bool
 
+	// The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	blockTime time.Duration
+
+	lastMinedBlockTime time.Time
+
 	quit      chan struct{}
 	closeOnce sync.Once
 }
@@ -267,6 +272,7 @@ func New(
 	heimdallWSClient IHeimdallWSClient,
 	genesisContracts GenesisContract,
 	devFakeAuthor bool,
+	blockTime time.Duration,
 ) *Bor {
 	// get bor config
 	borConfig := chainConfig.Bor
@@ -307,6 +313,7 @@ func New(
 		HeimdallWSClient:       heimdallWSClient,
 		spanStore:              spanStore,
 		DevFakeAuthor:          devFakeAuthor,
+		blockTime:              blockTime,
 		quit:                   make(chan struct{}),
 	}
 
@@ -985,7 +992,24 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		}
 	}
 
-	header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+	if c.blockTime > 0 && uint64(c.blockTime.Seconds()) < c.config.CalculatePeriod(number) {
+		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
+	}
+
+	if c.blockTime > 0 && c.config.IsRio(header.Number) {
+		// Only enable custom block time for Rio and later
+		parentActualTime := c.lastMinedBlockTime
+		if parentActualTime.IsZero() || parentActualTime.Before(time.Unix(int64(parent.Time), 0)) {
+			parentActualTime = time.Unix(int64(parent.Time), 0)
+		}
+		actualNewBlockTime := parentActualTime.Add(c.blockTime)
+		c.lastMinedBlockTime = actualNewBlockTime
+		header.Time = uint64(actualNewBlockTime.Unix())
+		header.ActualTime = actualNewBlockTime
+	} else {
+		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+	}
+
 	if header.Time < uint64(time.Now().Unix()) {
 		header.Time = uint64(time.Now().Unix())
 	} else {
@@ -995,7 +1019,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		// need a check for hard fork as it doesn't change any consensus rules, we
 		// still keep it for safety and testing.
 		if c.config.IsBhilai(big.NewInt(int64(number))) && succession == 0 {
-			startTime := time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0)
+			startTime := header.GetActualTime().Add(-time.Duration(c.config.CalculatePeriod(number)) * time.Second)
 			time.Sleep(time.Until(startTime))
 		}
 	}
@@ -1244,7 +1268,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time for non-primary validators
+		delay = time.Until(header.GetActualTime()) // Wait until we reach header time for non-primary validators
 		// Disable early block announcement
 		// if successionNumber == 0 {
 		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
@@ -1252,7 +1276,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
 		// }
 	} else {
-		delay = time.Until(time.Unix(int64(header.Time), 0)) // Wait until we reach header time
+		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging

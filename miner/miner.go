@@ -52,6 +52,7 @@ type Config struct {
 	GasPrice            *big.Int       // Minimum gas price for mining a transaction
 	Recommit            time.Duration  // The time interval for miner to re-create mining work.
 	CommitInterruptFlag bool           // Interrupt commit when time is up ( default = true)
+	BlockTime           time.Duration  // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
 	NewPayloadTimeout time.Duration // The maximum time allowance for creating a new payload
 }

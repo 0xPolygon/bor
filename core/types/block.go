@@ -98,6 +98,9 @@ type Header struct {
 	MixDigest   common.Hash    `json:"mixHash"`
 	Nonce       BlockNonce     `json:"nonce"`
 
+	// ActualTime is the actual time of the block. It is internally used by the miner.
+	ActualTime time.Time `json:"-" rlp:"-"`
+
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
@@ -238,6 +241,13 @@ func (h *Header) ValidateTimestampOptionsPIP15(minTimestamp *uint64, maxTimestam
 	}
 
 	return nil
+}
+
+func (h *Header) GetActualTime() time.Time {
+	if h.ActualTime.IsZero() {
+		return time.Unix(int64(h.Time), 0)
+	}
+	return h.ActualTime
 }
 
 // Body is a simple (mutable, non-safe) data container for storing and moving

@@ -116,10 +116,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```witness.producewitnesses```: Produce witnesses while syncing (default: false)
 
-- ```witness.pruneinterval```: The time interval between each witness prune routine (default: 2m0s)
-
-- ```witness.prunethreshold```: Maximum distance between local header and latest non pruned witness after a pruning routine (default: 64000)
-
 - ```witness.syncwithwitnesses```: Sync blocks with witnesses (default: false)
 
 - ```witness.witnessapi```: Enable witness API endpoints (by default disabled) (default: false)

@@ -57,30 +57,28 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:              downloader.SnapSync,
-	HistoryMode:           history.KeepAll,
-	NetworkId:             0, // enable auto configuration of networkID == chainID
-	TxLookupLimit:         2350000,
-	TransactionHistory:    2350000, // Note: used in bor cli
-	LogHistory:            2350000, // Note: used in bor cli
-	StateHistory:          params.FullImmutabilityThreshold,
-	DatabaseCache:         512,
-	TrieCleanCache:        154,
-	TrieDirtyCache:        256,
-	TrieTimeout:           60 * time.Minute,
-	SnapshotCache:         102,
-	FilterLogCacheSize:    32,
-	Miner:                 miner.DefaultConfig,
-	TxPool:                legacypool.DefaultConfig,
-	BlobPool:              blobpool.DefaultConfig,
-	RPCGasCap:             50000000,
-	RPCEVMTimeout:         5 * time.Second,
-	GPO:                   FullNodeGPO,
-	RPCTxFeeCap:           1, // 1 ether
-	FastForwardThreshold:  6400,
-	WitnessPruneThreshold: 64000,
-	WitnessPruneInterval:  120 * time.Second,
-	WitnessAPIEnabled:     false,
+	SyncMode:             downloader.SnapSync,
+	HistoryMode:          history.KeepAll,
+	NetworkId:            0, // enable auto configuration of networkID == chainID
+	TxLookupLimit:        2350000,
+	TransactionHistory:   2350000, // Note: used in bor cli
+	LogHistory:           2350000, // Note: used in bor cli
+	StateHistory:         params.FullImmutabilityThreshold,
+	DatabaseCache:        512,
+	TrieCleanCache:       154,
+	TrieDirtyCache:       256,
+	TrieTimeout:          60 * time.Minute,
+	SnapshotCache:        102,
+	FilterLogCacheSize:   32,
+	Miner:                miner.DefaultConfig,
+	TxPool:               legacypool.DefaultConfig,
+	BlobPool:             blobpool.DefaultConfig,
+	RPCGasCap:            50000000,
+	RPCEVMTimeout:        5 * time.Second,
+	GPO:                  FullNodeGPO,
+	RPCTxFeeCap:          1, // 1 ether
+	FastForwardThreshold: 6400,
+	WitnessAPIEnabled:    false,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -237,12 +235,6 @@ type Config struct {
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64
 
-	// Minimum necessary distance between local header and latest non pruned witness
-	WitnessPruneThreshold uint64
-
-	// The time interval between each witness prune routine
-	WitnessPruneInterval time.Duration
-
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
 
@@ -266,9 +258,10 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		spanner := span.NewChainSpanner(blockchainAPI, contract.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
 
 		log.Info("Creating consensus engine", "withoutHeimdall", ethConfig.WithoutHeimdall)
+		log.Info("Using custom miner block time", "blockTime", ethConfig.Miner.BlockTime)
 
 		if ethConfig.WithoutHeimdall {
-			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor, ethConfig.Miner.BlockTime), nil
 		} else {
 			if ethConfig.DevFakeAuthor {
 				log.Warn("Sanitizing DevFakeAuthor", "Use DevFakeAuthor with", "--bor.withoutheimdall")
@@ -294,7 +287,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				}
 			}
 
-			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false, ethConfig.Miner.BlockTime), nil
 		}
 	}
 	return beacon.New(ethash.NewFaker()), nil
