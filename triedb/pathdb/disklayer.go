@@ -59,11 +59,7 @@ func newDiskLayer(root common.Hash, id uint64, db *Database, nodes *AddressBiase
 	// or reuse the provided caches if they are not nil (inherited from
 	// the original disk layer).
 	if nodes == nil && db.config.TrieCleanSize != 0 {
-		addresses := make([]common.Hash, 0)
-		targetAddress := common.HexToAddress("0x2AB0e9e4eE70FFf1fB9D67031E44F6410170d00e")
-		addrHash := crypto.Keccak256Hash(targetAddress.Bytes())
-		addresses = append(addresses, addrHash)
-		cachedNodes, err := NewAddressBiasedCache(db.diskdb, addresses, db.config.TrieCleanSize)
+		cachedNodes, err := NewAddressBiasedCache(db.diskdb, db.config.AddressCacheSizes, db.config.TrieCleanSize)
 		if err != nil {
 			panic(err)
 		}

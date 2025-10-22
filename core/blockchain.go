@@ -187,6 +187,10 @@ type BlockChainConfig struct {
 	StateScheme  string // Scheme used to store ethereum states and merkle tree nodes on top
 	ArchiveMode  bool   // Whether to enable the archive mode
 
+	// Address-specific cache sizes for biased caching (pathdb only)
+	// Maps account address to cache size in bytes
+	AddressCacheSizes map[common.Address]int
+
 	// State snapshot related options
 	SnapshotLimit   int  // Memory allowance (MB) to use for caching snapshot entries in memory
 	SnapshotNoBuild bool // Whether the background generation is allowed
@@ -282,8 +286,9 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			// TODO(rjl493456442): The write buffer represents the memory limit used
 			// for flushing both trie data and state data to disk. The config name
 			// should be updated to eliminate the confusion.
-			WriteBufferSize: cfg.TrieDirtyLimit * 1024 * 1024,
-			NoAsyncFlush:    cfg.TrieNoAsyncFlush,
+			WriteBufferSize:   cfg.TrieDirtyLimit * 1024 * 1024,
+			NoAsyncFlush:      cfg.TrieNoAsyncFlush,
+			AddressCacheSizes: cfg.AddressCacheSizes,
 		}
 	}
 	return config
