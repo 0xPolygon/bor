@@ -2101,7 +2101,6 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 // not execute the transaction or commit changes.
 func (pool *LegacyPool) PreLoadTrieNodes(tx *types.Transaction) {
 	pool.mu.RLock()
-	baseState := pool.currentState
 	header := pool.currentHead.Load()
 	signer := pool.signer
 	pool.mu.RUnlock()
@@ -2111,8 +2110,10 @@ func (pool *LegacyPool) PreLoadTrieNodes(tx *types.Transaction) {
 		return
 	}
 
-	// Create execution state copy to avoid modifying the actual state
-	tempState := baseState.Copy()
+	tempState, err := pool.chain.StateAt(header.Root)
+	if err != nil {
+		return
+	}
 	tempState.StartPrefetcher("txpool", nil)
 
 	// Preload touched accounts, codes and access list slots to warm caches
