@@ -11,6 +11,15 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
+)
+
+var (
+	// Biased cache metrics for address-specific cache effectiveness
+	biasedAddressCacheHitMeter   = metrics.NewRegisteredMeter("pathdb/biased/address/hit", nil)
+	biasedAddressCacheMissMeter  = metrics.NewRegisteredMeter("pathdb/biased/address/miss", nil)
+	biasedAddressCacheReadMeter  = metrics.NewRegisteredMeter("pathdb/biased/address/read", nil)
+	biasedAddressCacheWriteMeter = metrics.NewRegisteredMeter("pathdb/biased/address/write", nil)
 )
 
 // CacheStats contains statistics about a cache instance
@@ -83,12 +92,13 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 	c.stats[accountHash] = stats
 
 	log.Info("Starting storage trie preload",
+		"address", addr.Hex(),
 		"account hash", accountHash.Hex(),
 		"cache size", common.StorageSize(cacheSize).String())
 
 	var totalBytes uint64
 	var maxDepthReached int
-	const logInterval = 1000000
+	const logInterval = 100000
 
 	// BFS traversal to load nodes by depth until cache is full
 	type queueItem struct {
@@ -123,7 +133,9 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 
 		// Check if adding this node would exceed cache size
 		nodeSize := uint64(len(rawdb.TrieNodeStoragePrefix) + common.HashLength + len(item.path) + len(nodeData))
-		if totalBytes+nodeSize > uint64(cacheSize) {
+
+		// Preload 66.6% of the cache size to allow hot paths to be added later
+		if totalBytes+nodeSize > uint64(cacheSize*2/3) {
 			log.Info("Cache size limit reached, stopping preload",
 				"account hash", accountHash.Hex(),
 				"entries", stats.Entries,
@@ -232,14 +244,33 @@ func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
 
 // Get retrieves the value for the given key from the appropriate cache
 func (c *AddressBiasedCache) Get(key []byte) []byte {
-	cache, _ := c.routeCache(key)
-	return cache.Get(nil, key)
+	cache, isAddressCache := c.routeCache(key)
+	value := cache.Get(nil, key)
+
+	// Update metrics only for address-specific cache
+	if isAddressCache {
+		if len(value) > 0 {
+			// Cache hit
+			biasedAddressCacheHitMeter.Mark(1)
+			biasedAddressCacheReadMeter.Mark(int64(len(value)))
+		} else {
+			// Cache miss
+			biasedAddressCacheMissMeter.Mark(1)
+		}
+	}
+
+	return value
 }
 
 // Set stores the key-value pair in the appropriate cache
 func (c *AddressBiasedCache) Set(key, value []byte) {
-	cache, _ := c.routeCache(key)
+	cache, isAddressCache := c.routeCache(key)
 	cache.Set(key, value)
+
+	// Update write metrics only for address-specific cache
+	if isAddressCache {
+		biasedAddressCacheWriteMeter.Mark(int64(len(value)))
+	}
 }
 
 // Has checks if the key exists in the appropriate cache
