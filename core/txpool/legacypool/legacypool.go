@@ -2114,7 +2114,7 @@ func (pool *LegacyPool) PreLoadTrieNodes(tx *types.Transaction) {
 	if err != nil {
 		return
 	}
-	tempState.StartPrefetcher("txpool", nil)
+	// tempState.StartPrefetcher("txpool", nil)
 
 	// Preload touched accounts, codes and access list slots to warm caches
 	reader := tempState.Reader()
