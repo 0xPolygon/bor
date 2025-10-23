@@ -1090,6 +1090,9 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state *state.StateDB, receipts []*types.Receipt) []*types.Receipt {
 	allLogs := state.Logs()
+	sort.SliceStable(allLogs, func(i, j int) bool {
+		return allLogs[i].Index < allLogs[j].Index
+	})
 	logsFromReceiptCount := countLogsFromReceipts(receipts)
 	stateSyncLogs := allLogs[logsFromReceiptCount:]
 
