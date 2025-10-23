@@ -194,18 +194,18 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	if !task.result.Failed() {
-		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), false)
+	// if !task.result.Failed() {
+	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), false)
 
-		for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
-			task.finalStateDB.AddLog(l)
-		}
-	} else {
-		log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
-			"txIndex", task.index, "txHash", task.tx.Hash())
-
-		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), true)
+	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
+		task.finalStateDB.AddLog(l)
 	}
+	// } else {
+	// 	log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
+	// 		"txIndex", task.index, "txHash", task.tx.Hash())
+
+	// 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), true)
+	// }
 
 	// check for `#tasks/#execs` in `blockstm exec summary` log. It should be ideally 100
 	// 54876000
