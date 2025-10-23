@@ -345,9 +345,14 @@ type BlockChain struct {
 	// future blocks are blocks added for later processing
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
 
-	// Span state cache for reducing witness bandwidth
-	spanStateCache   *lru.Cache[string, struct{}] // Cache state nodes within current span
-	currentcacheSpan uint64                       // Track current span for boundary detection
+	// Sliding window cache for reducing witness bandwidth
+	// Uses two maps with overlap for efficient small-window caching
+	activeCacheMap   map[string]struct{} // Currently active cache map
+	nextCacheMap     map[string]struct{} // Pre-warming map for next window
+	cacheWindowStart uint64              // Start block of current window
+	cacheWindowSize  uint64              // Size of each window (e.g., 20 blocks)
+	cacheOverlapSize uint64              // Overlap between windows (e.g., 10 blocks)
+	cacheLock        sync.RWMutex        // Lock for cache operations
 
 	wg            sync.WaitGroup
 	quit          chan struct{} // shutdown signal, closed in Stop.
@@ -425,10 +430,12 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		futureBlocks:  lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
 		engine:        engine,
 
-		// Initialize span state cache with sufficient capacity for one span
-		// Typical span has ~100K-500K unique state nodes
-		spanStateCache:   lru.NewCache[string, struct{}](1000000),
-		currentcacheSpan: 0, // Will be set on first block processing
+		// Initialize sliding window cache for witness bandwidth reduction
+		activeCacheMap:   make(map[string]struct{}),
+		nextCacheMap:     make(map[string]struct{}),
+		cacheWindowStart: 0,
+		cacheWindowSize:  20, // 20 blocks per window
+		cacheOverlapSize: 10, // 10 blocks overlap
 
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -3896,18 +3903,20 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 	return bc.scope.Track(bc.chain2HeadFeed.Subscribe(ch))
 }
 
-// mergeSpanCacheIntoWitness merges cached state nodes from the span cache into the witness.
+// mergeSpanCacheIntoWitness merges cached state nodes from the active cache map into the witness.
 // This allows reduced witnesses to work by adding previously cached state data.
 func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int {
-	if bc.spanStateCache == nil || witness == nil {
+	if witness == nil {
 		return 0
 	}
 
-	mergedCount := 0
-	keys := bc.spanStateCache.Keys()
+	bc.cacheLock.RLock()
+	defer bc.cacheLock.RUnlock()
 
-	for _, key := range keys {
-		stateNode := key
+	mergedCount := 0
+
+	// Merge from active cache map
+	for stateNode := range bc.activeCacheMap {
 		// Check if this state node is missing from the witness
 		if _, exists := witness.State[stateNode]; !exists {
 			// Add it from cache
@@ -3919,32 +3928,6 @@ func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int 
 	return mergedCount
 }
 
-const (
-	defaultSpanLength = 6400 // Default span length i.e. number of bor blocks in a span
-	zerothSpanEnd     = 255  // End block of 0th span
-)
-
-func isSpanEnd(blockNum uint64) bool {
-	if blockNum > zerothSpanEnd {
-		return (blockNum-zerothSpanEnd)%defaultSpanLength == 0
-	}
-	return blockNum == zerothSpanEnd
-}
-
-func isSpanStart(blockNum uint64) bool {
-	if blockNum > zerothSpanEnd {
-		return (blockNum-zerothSpanEnd-1)%defaultSpanLength == 0
-	}
-	return blockNum == 0
-}
-
-func getSpanNum(blockNum uint64) uint64 {
-	if blockNum > zerothSpanEnd {
-		return (blockNum - zerothSpanEnd) / defaultSpanLength
-	}
-	return 0
-}
-
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
@@ -3953,23 +3936,27 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.Number().Uint64()
 
-	// Span boundary detection and cache management using isSpanStart
-	if bc.spanStateCache != nil && isSpanStart(blockNum) {
-		oldCacheSize := bc.spanStateCache.Len()
-		bc.spanStateCache.Purge()
+	// Check if we need to slide the window
+	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
 
-		// Calculate span number for logging
-		spanNum := getSpanNum(blockNum)
-		bc.currentcacheSpan = spanNum
+	if blocksSinceWindowStart >= bc.cacheWindowSize {
+		// Time to slide the window: discard active, promote next, create new next
+		bc.cacheLock.Lock()
+		oldActiveSize := len(bc.activeCacheMap)
+		bc.activeCacheMap = bc.nextCacheMap
+		bc.nextCacheMap = make(map[string]struct{})
+		bc.cacheWindowStart = blockNum
+		bc.cacheLock.Unlock()
 
-		log.Info("Span boundary: flushed state cache",
+		log.Info("Sliding window: switched to next cache map",
 			"block", blockNum,
-			"spanNum", spanNum,
-			"cachedStates", oldCacheSize)
+			"newWindowStart", blockNum,
+			"discardedSize", oldActiveSize,
+			"newActiveSize", len(bc.activeCacheMap))
 	}
 
-	// Merge cached states into witness for blocks that aren't the first in span
-	if !isSpanStart(blockNum) {
+	// Merge cached states into witness for blocks that aren't at window start
+	if blockNum != bc.cacheWindowStart {
 		witnessStatesBefore := len(witness.State)
 		mergedCount := bc.mergeSpanCacheIntoWitness(witness)
 		if mergedCount > 0 {
@@ -4016,47 +4003,69 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		return nil, nil, err
 	}
 
-	// Cache witness states and updated states for subsequent blocks in this span
-	if bc.spanStateCache != nil {
-		cachedWitnessStates := 0
-		cachedUpdatedStates := 0
+	// Cache witness states and updated states using sliding window approach
+	bc.cacheLock.Lock()
+	defer bc.cacheLock.Unlock()
 
-		// Cache all witness state nodes
-		for stateNode := range witness.State {
-			if _, exists := bc.spanStateCache.Get(stateNode); !exists {
-				bc.spanStateCache.Add(stateNode, struct{}{})
-				cachedWitnessStates++
+	cachedWitnessStates := 0
+	cachedUpdatedStates := 0
+
+	// Determine if we're in overlap period (should cache to both maps)
+	blocksSinceWindowStart = blockNum - bc.cacheWindowStart
+	inOverlapPeriod := blocksSinceWindowStart >= bc.cacheOverlapSize
+
+	// Cache all witness state nodes
+	for stateNode := range witness.State {
+		// Add to active map
+		if _, exists := bc.activeCacheMap[stateNode]; !exists {
+			bc.activeCacheMap[stateNode] = struct{}{}
+			cachedWitnessStates++
+		}
+		// Also add to next map if in overlap period
+		if inOverlapPeriod {
+			if _, exists := bc.nextCacheMap[stateNode]; !exists {
+				bc.nextCacheMap[stateNode] = struct{}{}
 			}
 		}
+	}
 
-		// Extract and cache updated states from execution
-		if statedb != nil {
-			_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, bc.chainConfig.IsEIP158(block.Number()))
-			if stateUpdate != nil && stateUpdate.Nodes != nil {
-				nodes := stateUpdate.Nodes
+	// Extract and cache updated states from execution
+	if statedb != nil {
+		_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, bc.chainConfig.IsEIP158(block.Number()))
+		if stateUpdate != nil && stateUpdate.Nodes != nil {
+			nodes := stateUpdate.Nodes
 
-				// Iterate through all node sets
-				for owner := range nodes.Sets {
-					subset := nodes.Sets[owner]
-					subset.ForEachWithOrder(func(path string, n *trienode.Node) {
-						if !n.IsDeleted() && n.Blob != nil {
-							stateNode := string(n.Blob)
-							if _, exists := bc.spanStateCache.Get(stateNode); !exists {
-								bc.spanStateCache.Add(stateNode, struct{}{})
-								cachedUpdatedStates++
+			// Iterate through all node sets
+			for owner := range nodes.Sets {
+				subset := nodes.Sets[owner]
+				subset.ForEachWithOrder(func(path string, n *trienode.Node) {
+					if !n.IsDeleted() && n.Blob != nil {
+						stateNode := string(n.Blob)
+						// Add to active map
+						if _, exists := bc.activeCacheMap[stateNode]; !exists {
+							bc.activeCacheMap[stateNode] = struct{}{}
+							cachedUpdatedStates++
+						}
+						// Also add to next map if in overlap period
+						if inOverlapPeriod {
+							if _, exists := bc.nextCacheMap[stateNode]; !exists {
+								bc.nextCacheMap[stateNode] = struct{}{}
 							}
 						}
-					})
-				}
+					}
+				})
 			}
 		}
-
-		log.Debug("Cached states for span",
-			"block", blockNum,
-			"cachedWitnessStates", cachedWitnessStates,
-			"cachedUpdatedStates", cachedUpdatedStates,
-			"totalCacheSize", bc.spanStateCache.Len())
 	}
+
+	log.Debug("Cached states for sliding window",
+		"block", blockNum,
+		"windowStart", bc.cacheWindowStart,
+		"inOverlap", inOverlapPeriod,
+		"cachedWitnessStates", cachedWitnessStates,
+		"cachedUpdatedStates", cachedUpdatedStates,
+		"activeMapSize", len(bc.activeCacheMap),
+		"nextMapSize", len(bc.nextCacheMap))
 
 	return statedb, res, nil
 }
