@@ -1,7 +1,6 @@
 package pathdb
 
 import (
-	"bytes"
 	"fmt"
 	"time"
 
@@ -132,7 +131,8 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 		}
 
 		// Check if adding this node would exceed cache size
-		nodeSize := uint64(len(rawdb.TrieNodeStoragePrefix) + common.HashLength + len(item.path) + len(nodeData))
+		// Key format: owner (32 bytes) + path
+		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
 
 		// Preload 66.6% of the cache size to allow hot paths to be added later
 		if totalBytes+nodeSize > uint64(cacheSize*2/3) {
@@ -145,9 +145,9 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 			break
 		}
 
-		// Construct the full key for caching
-		key := append(rawdb.TrieNodeStoragePrefix, accountHash.Bytes()...)
-		key = append(key, item.path...)
+		// Construct the cache key using the same format as nodeCacheKey
+		// Format: owner (32 bytes) + path
+		key := append(accountHash.Bytes(), item.path...)
 
 		// Store in cache
 		addrCache.Set(key, nodeData)
@@ -222,23 +222,24 @@ func (c *AddressBiasedCache) gatherChildPaths(nodeData []byte, currentPath []byt
 // routeCache determines which cache should be used for the given key.
 // Returns the appropriate cache and true if it's an address-specific cache,
 // or the common cache and false otherwise.
+//
+// Note: The key format used by nodeCacheKey is:
+//   - For account trie: path only
+//   - For storage trie: owner (32 bytes) + path
 func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
-	// Check if this is a storage trie node key
-	if !bytes.HasPrefix(key, rawdb.TrieNodeStoragePrefix) {
-		return c.commonCache, false
+	// Check key length - if >= 32 bytes, it could be a storage trie node
+	// Format: owner (32 bytes) + path
+	if len(key) >= common.HashLength {
+		// Extract potential account hash (first 32 bytes)
+		accountHash := common.BytesToHash(key[:common.HashLength])
+
+		// Check if this account has a dedicated cache
+		if addrCache, ok := c.addressCaches[accountHash]; ok {
+			return addrCache, true
+		}
 	}
 
-	// Extract the account hash from the key
-	ok, accountHash, _ := rawdb.ResolveStorageTrieNode(key)
-	if !ok {
-		return c.commonCache, false
-	}
-
-	// Check if this account has a dedicated cache
-	if addrCache, ok := c.addressCaches[accountHash]; ok {
-		return addrCache, true
-	}
-
+	// Either account trie node or non-preloaded storage trie
 	return c.commonCache, false
 }
 
