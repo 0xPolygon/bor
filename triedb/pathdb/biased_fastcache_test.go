@@ -198,57 +198,6 @@ func TestAddressBiasedCache_Reset(t *testing.T) {
 	}
 }
 
-func TestAddressBiasedCache_Stats(t *testing.T) {
-	addr1 := common.HexToAddress("0x1234567890123456789012345678901234567890")
-	addr2 := common.HexToAddress("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd")
-
-	addressCacheSizes := map[common.Address]int{
-		addr1: 1024 * 1024,
-		addr2: 512 * 1024,
-	}
-
-	db := rawdb.NewMemoryDatabase()
-	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 256*1024)
-	if err != nil {
-		t.Fatalf("Failed to create cache: %v", err)
-	}
-
-	// Wait for async preloading to complete
-	time.Sleep(50 * time.Millisecond)
-
-	// Get all stats
-	stats := cache.Stats()
-	if len(stats) != 2 {
-		t.Errorf("Expected 2 stats entries, got %d", len(stats))
-	}
-
-	// Verify stats structure
-	accountHash1 := crypto.Keccak256Hash(addr1.Bytes())
-	stat1 := stats[accountHash1]
-	if stat1 == nil {
-		t.Error("Expected stats for addr1")
-	}
-	// LoadTime should be non-zero after async preload completes
-	if stat1.LoadTime == 0 {
-		t.Error("Expected non-zero load time after async preload")
-	}
-
-	// Test GetStats for specific address
-	specificStat := cache.GetStats(accountHash1)
-	if specificStat == nil {
-		t.Error("Expected stats for addr1")
-	}
-	if specificStat.Entries != stat1.Entries {
-		t.Error("Stats mismatch between Stats() and GetStats()")
-	}
-
-	// Test GetStats for non-existent address
-	nonExistentHash := crypto.Keccak256Hash([]byte("non-existent"))
-	nilStat := cache.GetStats(nonExistentHash)
-	if nilStat != nil {
-		t.Error("Expected nil stats for non-existent address")
-	}
-}
 
 func TestAddressBiasedCache_MultipleAddresses(t *testing.T) {
 	addr1 := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -336,18 +285,6 @@ func TestAddressBiasedCache_PreloadWithData(t *testing.T) {
 	// Wait for async preloading to complete
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify stats were recorded
-	stats := cache.GetStats(accountHash)
-	if stats == nil {
-		t.Fatal("Expected stats for preloaded address")
-	}
-	if stats.Entries == 0 {
-		t.Error("Expected non-zero entries in stats")
-	}
-	if stats.SizeBytes == 0 {
-		t.Error("Expected non-zero size in stats")
-	}
-
 	// Verify root node was loaded
 	rootKey := accountHash.Bytes()
 	if !cache.Has(rootKey) {
@@ -401,7 +338,7 @@ func TestAddressBiasedCache_EmptyDatabase(t *testing.T) {
 	}
 
 	db := rawdb.NewMemoryDatabase()
-	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024)
+	_, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -409,18 +346,7 @@ func TestAddressBiasedCache_EmptyDatabase(t *testing.T) {
 	// Wait for async preloading to complete
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify stats show zero entries for empty database
-	accountHash := crypto.Keccak256Hash(addr.Bytes())
-	stats := cache.GetStats(accountHash)
-	if stats == nil {
-		t.Fatal("Expected stats for preloaded address")
-	}
-	if stats.Entries != 0 {
-		t.Errorf("Expected 0 entries for empty database, got %d", stats.Entries)
-	}
-	if stats.SizeBytes != 0 {
-		t.Errorf("Expected 0 size for empty database, got %d", stats.SizeBytes)
-	}
+	// Cache created successfully for empty database
 }
 
 func TestAddressBiasedCache_AsyncPreloadWithConcurrentWrites(t *testing.T) {
@@ -460,21 +386,11 @@ func TestAddressBiasedCache_AsyncPreloadWithConcurrentWrites(t *testing.T) {
 	// Wait for async preloading to complete
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify the manually added value is still correct (preload may have overwritten it with DB value)
+	// Verify the manually added value or DB value exists
 	retrieved := cache.Get(testKey)
 	// The value could be either manual or from DB, just check it exists
 	if len(retrieved) == 0 {
 		t.Error("Expected key to have a value")
-	}
-
-	// Verify cache has entries from preload
-	stats := cache.GetStats(accountHash)
-	if stats == nil {
-		t.Fatal("Expected stats for preloaded address")
-	}
-	// Stats should have at least the root node if not all nodes
-	if stats.Entries == 0 {
-		t.Error("Expected non-zero entries after preload")
 	}
 }
 

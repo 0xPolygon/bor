@@ -22,13 +22,6 @@ var (
 	biasedAddressCacheWriteMeter = metrics.NewRegisteredMeter("pathdb/biased/address/write", nil)
 )
 
-// CacheStats contains statistics about a cache instance
-type CacheStats struct {
-	Entries   int           // Number of entries loaded
-	SizeBytes uint64        // Total size of data in bytes
-	LoadTime  time.Duration // Time taken to load the cache
-}
-
 // AddressBiasedCache is a wrapper around fastcache that maintains separate
 // caches for specific addresses and a common cache for everything else.
 // It preloads storage trie nodes for specified addresses into dedicated caches.
@@ -41,9 +34,6 @@ type AddressBiasedCache struct {
 
 	// Set of preloaded addresses for fast lookup
 	preloadedAddrs sync.Map // map[common.Hash]struct{}
-
-	// Statistics for each address cache
-	stats sync.Map // map[common.Hash]*CacheStats
 
 	// RW mutex to protect cache operations and prevent race conditions
 	// between async preloading and concurrent reads/writes
@@ -80,10 +70,6 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 	// Mark this address as preloaded
 	c.preloadedAddrs.Store(accountHash, struct{}{})
 	c.addressCaches.Store(accountHash, addrCache)
-
-	// Initialize stats
-	stats := &CacheStats{}
-	c.stats.Store(accountHash, stats)
 }
 
 // preloadAddressAsync loads storage trie nodes for the given account hash using
@@ -95,7 +81,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
 
-	// Get the address cache and stats
+	// Get the address cache
 	cacheValue, ok := c.addressCaches.Load(accountHash)
 	if !ok {
 		log.Error("Address cache not found during preload", "address", addr.Hex())
@@ -103,19 +89,15 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	}
 	addrCache := cacheValue.(*fastcache.Cache)
 
-	statsValue, ok := c.stats.Load(accountHash)
-	if !ok {
-		log.Error("Stats not found during preload", "address", addr.Hex())
-		return
-	}
-	stats := statsValue.(*CacheStats)
+	// Local stats for logging progress
+	var entriesLoaded int
+	var totalBytesLoaded uint64
 
 	log.Info("Starting storage trie preload",
 		"address", addr.Hex(),
 		"account hash", accountHash.Hex(),
 		"cache size", common.StorageSize(cacheSize).String())
 
-	var totalBytes uint64
 	var maxDepthReached int
 	const logInterval = 100000
 
@@ -155,13 +137,13 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		nodeSize := uint64(common.HashLength + len(item.path) + len(nodeData))
 
 		// Preload 66.6% of the cache size to allow hot paths to be added later
-		if totalBytes+nodeSize > uint64(cacheSize*2/3) {
+		if totalBytesLoaded+nodeSize > uint64(cacheSize*2/3) {
 			log.Info("Cache size limit reached, stopping preload",
 				"account hash", accountHash.Hex(),
-				"entries", stats.Entries,
+				"entries", entriesLoaded,
 				"current depth", item.depth,
 				"max depth reached", maxDepthReached,
-				"size", common.StorageSize(totalBytes).String())
+				"size", common.StorageSize(totalBytesLoaded).String())
 			break
 		}
 
@@ -181,21 +163,22 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 
 		// Store in cache while holding the lock
 		addrCache.Set(key, nodeData)
+
+		// Update counters while still holding the lock to prevent races
+		entriesLoaded++
+		totalBytesLoaded += nodeSize
+
 		c.mu.Unlock()
 
-		// Update stats outside the critical section
-		stats.Entries++
-		totalBytes += nodeSize
-
 		// Log progress periodically
-		if stats.Entries%logInterval == 0 {
+		if entriesLoaded%logInterval == 0 {
 			log.Info("Preloading storage trie progress",
 				"account hash", accountHash.Hex(),
-				"entries", stats.Entries,
+				"entries", entriesLoaded,
 				"current depth", item.depth,
 				"max depth", maxDepthReached,
-				"size", common.StorageSize(totalBytes).String(),
-				"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytes)*100/float64(cacheSize)),
+				"size", common.StorageSize(totalBytesLoaded).String(),
+				"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
 				"elapsed", time.Since(startTime))
 		}
 
@@ -209,18 +192,15 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		}
 	}
 
-	// Record statistics
-	stats.SizeBytes = totalBytes
-	stats.LoadTime = time.Since(startTime)
-
-	// Log the completion with stats
+	// Log the completion
+	loadTime := time.Since(startTime)
 	log.Info("Completed storage trie preload",
 		"account hash", accountHash.Hex(),
-		"entries", stats.Entries,
+		"entries", entriesLoaded,
 		"max depth", maxDepthReached,
-		"size", common.StorageSize(stats.SizeBytes).String(),
-		"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytes)*100/float64(cacheSize)),
-		"time", stats.LoadTime)
+		"size", common.StorageSize(totalBytesLoaded).String(),
+		"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytesLoaded)*100/float64(cacheSize)),
+		"time", loadTime)
 }
 
 // gatherChildPaths uses ForGatherChildren to extract child node paths from a trie node.
@@ -315,34 +295,4 @@ func (c *AddressBiasedCache) Reset() {
 		cache.Reset()
 		return true
 	})
-}
-
-// Stats returns statistics for all caches
-func (c *AddressBiasedCache) Stats() map[common.Hash]*CacheStats {
-	result := make(map[common.Hash]*CacheStats)
-	c.stats.Range(func(key, value any) bool {
-		addr := key.(common.Hash)
-		stat := value.(*CacheStats)
-		result[addr] = &CacheStats{
-			Entries:   stat.Entries,
-			SizeBytes: stat.SizeBytes,
-			LoadTime:  stat.LoadTime,
-		}
-		return true
-	})
-
-	return result
-}
-
-// GetStats returns the stats for a specific address cache, or nil if not found
-func (c *AddressBiasedCache) GetStats(addr common.Hash) *CacheStats {
-	if value, ok := c.stats.Load(addr); ok {
-		stat := value.(*CacheStats)
-		return &CacheStats{
-			Entries:   stat.Entries,
-			SizeBytes: stat.SizeBytes,
-			LoadTime:  stat.LoadTime,
-		}
-	}
-	return nil
 }
