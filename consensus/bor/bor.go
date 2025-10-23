@@ -1062,7 +1062,6 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 				return nil
 			}
 		}
-
 		// Get the underlying state for updating consensus time
 		state := wrappedState.Inner()
 		state.BorConsensusTime = time.Since(start)
@@ -1077,7 +1076,10 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	}
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, wrappedState, receipts)
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, wrappedState, receipts)
 	} else {
 		// set state sync
 		hc := chain.(*core.HeaderChain)
@@ -1086,12 +1088,11 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	return receipts
 }
 
-func insertStateSyncTransactionAndCalculateReceipt(stateSyncData []*types.StateSyncData, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
-	stateSyncTx := types.NewTx(&types.StateSyncTx{
-		StateSyncData: stateSyncData,
-	})
-	body.Transactions = append(body.Transactions, stateSyncTx)
+func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
 	allLogs := state.Logs()
+	sort.SliceStable(allLogs, func(i, j int) bool {
+		return allLogs[i].Index < allLogs[j].Index
+	})
 	logsFromReceiptCount := countLogsFromReceipts(receipts)
 	stateSyncLogs := allLogs[logsFromReceiptCount:]
 
@@ -1212,7 +1213,11 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	header.UncleHash = types.CalcUncleHash(nil)
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncData, header, body, state, receipts)
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		body.Transactions = append(body.Transactions, stateSyncTx)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, state, receipts)
 	} else {
 		// set state sync
 		bc := chain.(core.BorStateSyncer)
