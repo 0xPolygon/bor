@@ -1030,6 +1030,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
 func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
+	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
 		return nil
 	}
@@ -1042,15 +1043,12 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		err           error
 	)
 
-	state := wrappedState.Inner()
-	headerNumber := header.Number.Uint64()
-
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
-			if err := c.checkAndCommitSpan(state, header, cx); err != nil {
+			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return nil
 			}
@@ -1058,19 +1056,21 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 		if c.HeimdallClient != nil {
 			// commit states
-			stateSyncData, err = c.CommitStates(state, header, cx)
+			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
 				return nil
 			}
 		}
+		// Get the underlying state for updating consensus time
+		state := wrappedState.Inner()
 		state.BorConsensusTime = time.Since(start)
 	}
 
 	// Check if any hardfork needs change in genesis contract code. Note that we use
 	// the wrapped state here as it may have a hooked state db instance which can help
 	// in tracing if it's enabled.
-	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
+	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
 		log.Error("Error changing contract code", "error", err)
 		return nil
 	}
@@ -1079,7 +1079,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, state, receipts)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, wrappedState, receipts)
 	} else {
 		// set state sync
 		hc := chain.(*core.HeaderChain)
@@ -1088,7 +1088,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	return receipts
 }
 
-func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state *state.StateDB, receipts []*types.Receipt) []*types.Receipt {
+func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
 	allLogs := state.Logs()
 	sort.SliceStable(allLogs, func(i, j int) bool {
 		return allLogs[i].Index < allLogs[j].Index
