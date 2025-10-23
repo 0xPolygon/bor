@@ -2,6 +2,7 @@ package pathdb
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/VictoriaMetrics/fastcache"
@@ -31,20 +32,22 @@ type CacheStats struct {
 // AddressBiasedCache is a wrapper around fastcache that maintains separate
 // caches for specific addresses and a common cache for everything else.
 // It preloads storage trie nodes for specified addresses into dedicated caches.
-// All maps are populated during initialization and are read-only afterward,
-// so no locking is needed (fastcache.Cache is internally thread-safe).
 type AddressBiasedCache struct {
 	// Address-specific caches, one per preloaded address
-	addressCaches map[common.Hash]*fastcache.Cache
+	addressCaches sync.Map // map[common.Hash]*fastcache.Cache
 
 	// Common cache for all other data
 	commonCache *fastcache.Cache
 
 	// Set of preloaded addresses for fast lookup
-	preloadedAddrs map[common.Hash]struct{}
+	preloadedAddrs sync.Map // map[common.Hash]struct{}
 
-	// Statistics for each address cache (populated during init, read-only after)
-	stats map[common.Hash]*CacheStats
+	// Statistics for each address cache
+	stats sync.Map // map[common.Hash]*CacheStats
+
+	// RW mutex to protect cache operations and prevent race conditions
+	// between async preloading and concurrent reads/writes
+	mu sync.RWMutex
 }
 
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
@@ -52,43 +55,60 @@ type AddressBiasedCache struct {
 // loads them into dedicated caches. The addressCacheSizes maps each address to
 // its desired cache size in bytes. The commonCacheSize specifies the size
 // of the cache for non-preloaded data.
+// Preloading happens asynchronously in the background.
 func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int) (*AddressBiasedCache, error) {
 	cache := &AddressBiasedCache{
-		addressCaches:  make(map[common.Hash]*fastcache.Cache),
-		preloadedAddrs: make(map[common.Hash]struct{}),
-		stats:          make(map[common.Hash]*CacheStats),
-		commonCache:    fastcache.New(commonCacheSize),
+		commonCache: fastcache.New(commonCacheSize),
 	}
 
-	// Preload storage tries for each specified address with its custom cache size
+	// Initialize caches synchronously, but preload asynchronously
 	for addr, cacheSize := range addressCacheSizes {
-		if err := cache.preloadAddress(db, addr, cacheSize); err != nil {
-			log.Error("Failed to preload address", "address", addr.Hex(), "err", err)
-			return nil, fmt.Errorf("failed to preload address %s: %w", addr.Hex(), err)
-		}
+		cache.initAddressCache(addr, cacheSize)
+
+		// Start async preloading
+		go cache.preloadAddressAsync(db, addr, cacheSize)
 	}
 
 	return cache, nil
 }
 
-// preloadAddress loads storage trie nodes for the given account hash using
-// BFS traversal, prioritizing shallow nodes (most frequently accessed) until
-// the cache is full. This naturally loads nodes by depth, filling the cache
-// with as many upper-level nodes as possible.
-func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Address, cacheSize int) error {
-	startTime := time.Now()
-
+// initAddressCache initializes the cache structures for an address synchronously
+func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int) {
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
 	addrCache := fastcache.New(cacheSize)
 
-	accountHash := crypto.Keccak256Hash(addr.Bytes())
-
 	// Mark this address as preloaded
-	c.preloadedAddrs[accountHash] = struct{}{}
-	c.addressCaches[accountHash] = addrCache
+	c.preloadedAddrs.Store(accountHash, struct{}{})
+	c.addressCaches.Store(accountHash, addrCache)
 
 	// Initialize stats
 	stats := &CacheStats{}
-	c.stats[accountHash] = stats
+	c.stats.Store(accountHash, stats)
+}
+
+// preloadAddressAsync loads storage trie nodes for the given account hash using
+// BFS traversal, prioritizing shallow nodes (most frequently accessed) until
+// the cache is full. This naturally loads nodes by depth, filling the cache
+// with as many upper-level nodes as possible. This function runs asynchronously.
+func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.Address, cacheSize int) {
+	startTime := time.Now()
+
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	// Get the address cache and stats
+	cacheValue, ok := c.addressCaches.Load(accountHash)
+	if !ok {
+		log.Error("Address cache not found during preload", "address", addr.Hex())
+		return
+	}
+	addrCache := cacheValue.(*fastcache.Cache)
+
+	statsValue, ok := c.stats.Load(accountHash)
+	if !ok {
+		log.Error("Stats not found during preload", "address", addr.Hex())
+		return
+	}
+	stats := statsValue.(*CacheStats)
 
 	log.Info("Starting storage trie preload",
 		"address", addr.Hex(),
@@ -149,8 +169,21 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 		// Format: owner (32 bytes) + path
 		key := append(accountHash.Bytes(), item.path...)
 
-		// Store in cache
+		// Atomically check-and-set with mutex protection to prevent race conditions.
+		// We must hold the lock across both the check and the set to guarantee that
+		// no concurrent write from the main execution path can occur between them.
+		c.mu.Lock()
+		if addrCache.Has(key) {
+			// Key already exists, skip to avoid overwriting potentially newer data
+			c.mu.Unlock()
+			continue
+		}
+
+		// Store in cache while holding the lock
 		addrCache.Set(key, nodeData)
+		c.mu.Unlock()
+
+		// Update stats outside the critical section
 		stats.Entries++
 		totalBytes += nodeSize
 
@@ -188,33 +221,16 @@ func (c *AddressBiasedCache) preloadAddress(db ethdb.Database, addr common.Addre
 		"size", common.StorageSize(stats.SizeBytes).String(),
 		"cache usage", fmt.Sprintf("%.1f%%", float64(totalBytes)*100/float64(cacheSize)),
 		"time", stats.LoadTime)
-
-	return nil
 }
 
 // gatherChildPaths uses ForGatherChildren to extract child node paths from a trie node.
 // It decodes the node and collects paths for all child nodes that need to be loaded.
 func (c *AddressBiasedCache) gatherChildPaths(nodeData []byte, currentPath []byte) [][]byte {
 	var childPaths [][]byte
-
-	// Use ForGatherChildren to find all hash node children
-	// This function traverses the decoded node and calls the callback for each hashNode
-	// However, we need the paths, not just hashes, so we'll need to construct them
-
-	// Since we can't easily get child paths without decoding the node structure,
-	// we'll use a simpler approach: for fullNodes, try all 16 branches
-	// For shortNodes, we need to decode to get the key
-
-	// Try reading potential child nodes by extending the path
-	// For a path-based scheme, children are at currentPath + [0-15]
 	for i := byte(0); i < 16; i++ {
 		childPath := append(append([]byte(nil), currentPath...), i)
 		childPaths = append(childPaths, childPath)
 	}
-
-	// Note: This approach will attempt to read many non-existent nodes,
-	// but ReadStorageTrieNode will return empty data for those, which we handle
-	// in the main loop. This is simpler than decoding the RLP structure.
 
 	return childPaths
 }
@@ -227,35 +243,29 @@ func (c *AddressBiasedCache) gatherChildPaths(nodeData []byte, currentPath []byt
 //   - For account trie: path only
 //   - For storage trie: owner (32 bytes) + path
 func (c *AddressBiasedCache) routeCache(key []byte) (*fastcache.Cache, bool) {
-	// Check key length - if >= 32 bytes, it could be a storage trie node
-	// Format: owner (32 bytes) + path
 	if len(key) >= common.HashLength {
-		// Extract potential account hash (first 32 bytes)
 		accountHash := common.BytesToHash(key[:common.HashLength])
-
-		// Check if this account has a dedicated cache
-		if addrCache, ok := c.addressCaches[accountHash]; ok {
-			return addrCache, true
+		if cache, ok := c.addressCaches.Load(accountHash); ok {
+			return cache.(*fastcache.Cache), true
 		}
 	}
 
-	// Either account trie node or non-preloaded storage trie
 	return c.commonCache, false
 }
 
 // Get retrieves the value for the given key from the appropriate cache
 func (c *AddressBiasedCache) Get(key []byte) []byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	cache, isAddressCache := c.routeCache(key)
 	value := cache.Get(nil, key)
 
-	// Update metrics only for address-specific cache
 	if isAddressCache {
 		if len(value) > 0 {
-			// Cache hit
 			biasedAddressCacheHitMeter.Mark(1)
 			biasedAddressCacheReadMeter.Mark(int64(len(value)))
 		} else {
-			// Cache miss
 			biasedAddressCacheMissMeter.Mark(1)
 		}
 	}
@@ -265,10 +275,12 @@ func (c *AddressBiasedCache) Get(key []byte) []byte {
 
 // Set stores the key-value pair in the appropriate cache
 func (c *AddressBiasedCache) Set(key, value []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	cache, isAddressCache := c.routeCache(key)
 	cache.Set(key, value)
 
-	// Update write metrics only for address-specific cache
 	if isAddressCache {
 		biasedAddressCacheWriteMeter.Mark(int64(len(value)))
 	}
@@ -276,42 +288,56 @@ func (c *AddressBiasedCache) Set(key, value []byte) {
 
 // Has checks if the key exists in the appropriate cache
 func (c *AddressBiasedCache) Has(key []byte) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	cache, _ := c.routeCache(key)
 	return cache.Has(key)
 }
 
 // Del removes the key from the appropriate cache
 func (c *AddressBiasedCache) Del(key []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	cache, _ := c.routeCache(key)
 	cache.Del(key)
 }
 
 // Reset resets all caches
 func (c *AddressBiasedCache) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.commonCache.Reset()
-	for _, cache := range c.addressCaches {
+	c.addressCaches.Range(func(key, value any) bool {
+		cache := value.(*fastcache.Cache)
 		cache.Reset()
-	}
+		return true
+	})
 }
 
 // Stats returns statistics for all caches
 func (c *AddressBiasedCache) Stats() map[common.Hash]*CacheStats {
-	// Return a copy of the stats map
 	result := make(map[common.Hash]*CacheStats)
-	for addr, stat := range c.stats {
+	c.stats.Range(func(key, value any) bool {
+		addr := key.(common.Hash)
+		stat := value.(*CacheStats)
 		result[addr] = &CacheStats{
 			Entries:   stat.Entries,
 			SizeBytes: stat.SizeBytes,
 			LoadTime:  stat.LoadTime,
 		}
-	}
+		return true
+	})
 
 	return result
 }
 
 // GetStats returns the stats for a specific address cache, or nil if not found
 func (c *AddressBiasedCache) GetStats(addr common.Hash) *CacheStats {
-	if stat, ok := c.stats[addr]; ok {
+	if value, ok := c.stats.Load(addr); ok {
+		stat := value.(*CacheStats)
 		return &CacheStats{
 			Entries:   stat.Entries,
 			SizeBytes: stat.SizeBytes,
