@@ -537,7 +537,7 @@ func TestFetchStateSyncEvents_PostStateSyncHF(t *testing.T) {
 	// Load mock span 0
 	res := loadSpanFromFile(t)
 
-	// reate mock bor spanner
+	// Create mock bor spanner
 	spanner := getMockedSpanner(t, currentValidators)
 	_bor.SetSpanner(spanner)
 

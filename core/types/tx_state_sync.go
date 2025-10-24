@@ -109,5 +109,5 @@ func (tx *StateSyncTx) decode(b []byte) error {
 }
 
 func (tx *StateSyncTx) sigHash(chainID *big.Int) common.Hash {
-	panic("StateSyncTx has not sigHash)")
+	panic("StateSyncTx has no sigHash")
 }

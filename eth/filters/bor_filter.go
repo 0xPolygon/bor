@@ -101,7 +101,7 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 	// adjust begin for sprint
 	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(f.begin)), f.begin)
 
-	// begin already on PIP-74, no more need to bor logs
+	// begin already on PIP-74, no more need for bor logs
 	if f.borConfig != nil && f.borConfig.IsStateSync(big.NewInt(f.begin)) {
 		return nil, nil
 	}

@@ -2167,7 +2167,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	var stateSyncLogs []*types.Log
 
 	if len(blockLogs) > 0 {
-		// After StateSync HF we dont write bor receipts separately
+		// After StateSync HF we don't write bor receipts separately
 		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
 			sort.SliceStable(blockLogs, func(i, j int) bool {
 				return blockLogs[i].Index < blockLogs[j].Index
