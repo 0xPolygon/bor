@@ -2207,6 +2207,12 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 
 		rawdb.WriteWitness(blockBatch, block.Hash(), witBuf.Bytes())
+
+		// Manage sliding window for full nodes (mirrors witness-receiving nodes)
+		bc.manageSlidingWindow(block.NumberU64())
+
+		// Update sliding window cache - allows full nodes to send reduced witnesses
+		bc.updateSlidingWindowCache(block.NumberU64(), statedb.Witness(), statedb)
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
@@ -3928,15 +3934,9 @@ func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int 
 	return mergedCount
 }
 
-// ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
-func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
-	if witness == nil {
-		return nil, nil, errors.New("nil witness")
-	}
-
-	blockNum := block.Number().Uint64()
-
-	// Check if we need to slide the window
+// manageSlidingWindow handles window sliding logic.
+// Returns true if window was slid, false otherwise.
+func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
 
 	if blocksSinceWindowStart >= bc.cacheWindowSize {
@@ -3953,7 +3953,96 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			"newWindowStart", blockNum,
 			"discardedSize", oldActiveSize,
 			"newActiveSize", len(bc.activeCacheMap))
+		return true
 	}
+	return false
+}
+
+// updateSlidingWindowCache updates the sliding window cache after processing a block.
+// This is used by both full nodes and witness-receiving nodes to maintain synchronized caches.
+func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *stateless.Witness, statedb *state.StateDB) {
+	if witness == nil && statedb == nil {
+		return
+	}
+
+	bc.cacheLock.Lock()
+	defer bc.cacheLock.Unlock()
+
+	// Determine if we're in overlap period (should cache to both maps)
+	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
+	inOverlapPeriod := blocksSinceWindowStart >= bc.cacheOverlapSize
+
+	cachedToActive := 0
+	cachedToNext := 0
+
+	// Cache witness state nodes if available
+	if witness != nil {
+		for stateNode := range witness.State {
+			// Add to active map
+			if _, exists := bc.activeCacheMap[stateNode]; !exists {
+				bc.activeCacheMap[stateNode] = struct{}{}
+				cachedToActive++
+			}
+			// Also add to next map if in overlap period
+			if inOverlapPeriod {
+				if _, exists := bc.nextCacheMap[stateNode]; !exists {
+					bc.nextCacheMap[stateNode] = struct{}{}
+					cachedToNext++
+				}
+			}
+		}
+	}
+
+	// Extract and cache updated states from execution
+	if statedb != nil {
+		_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, true) // Note: EIP158 check done elsewhere
+		if stateUpdate != nil && stateUpdate.Nodes != nil {
+			nodes := stateUpdate.Nodes
+
+			// Iterate through all node sets
+			for owner := range nodes.Sets {
+				subset := nodes.Sets[owner]
+				subset.ForEachWithOrder(func(path string, n *trienode.Node) {
+					if !n.IsDeleted() && n.Blob != nil {
+						stateNode := string(n.Blob)
+						// Add to active map
+						if _, exists := bc.activeCacheMap[stateNode]; !exists {
+							bc.activeCacheMap[stateNode] = struct{}{}
+							cachedToActive++
+						}
+						// Also add to next map if in overlap period
+						if inOverlapPeriod {
+							if _, exists := bc.nextCacheMap[stateNode]; !exists {
+								bc.nextCacheMap[stateNode] = struct{}{}
+								cachedToNext++
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+
+	log.Debug("Updated sliding window cache",
+		"block", blockNum,
+		"windowStart", bc.cacheWindowStart,
+		"inOverlap", inOverlapPeriod,
+		"cachedToActive", cachedToActive,
+		"cachedToNext", cachedToNext,
+		"activeMapSize", len(bc.activeCacheMap),
+		"nextMapSize", len(bc.nextCacheMap))
+}
+
+// ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
+func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
+	if witness == nil {
+		return nil, nil, errors.New("nil witness")
+	}
+
+	blockNum := block.Number().Uint64()
+
+	// Manage sliding window (slide if needed)
+	bc.manageSlidingWindow(blockNum)
 
 	// Merge cached states into witness for blocks that aren't at window start
 	if blockNum != bc.cacheWindowStart {
@@ -4003,69 +4092,8 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		return nil, nil, err
 	}
 
-	// Cache witness states and updated states using sliding window approach
-	bc.cacheLock.Lock()
-	defer bc.cacheLock.Unlock()
-
-	cachedWitnessStates := 0
-	cachedUpdatedStates := 0
-
-	// Determine if we're in overlap period (should cache to both maps)
-	blocksSinceWindowStart = blockNum - bc.cacheWindowStart
-	inOverlapPeriod := blocksSinceWindowStart >= bc.cacheOverlapSize
-
-	// Cache all witness state nodes
-	for stateNode := range witness.State {
-		// Add to active map
-		if _, exists := bc.activeCacheMap[stateNode]; !exists {
-			bc.activeCacheMap[stateNode] = struct{}{}
-			cachedWitnessStates++
-		}
-		// Also add to next map if in overlap period
-		if inOverlapPeriod {
-			if _, exists := bc.nextCacheMap[stateNode]; !exists {
-				bc.nextCacheMap[stateNode] = struct{}{}
-			}
-		}
-	}
-
-	// Extract and cache updated states from execution
-	if statedb != nil {
-		_, stateUpdate, _ := statedb.CommitAndReturnStateUpdate(blockNum, bc.chainConfig.IsEIP158(block.Number()))
-		if stateUpdate != nil && stateUpdate.Nodes != nil {
-			nodes := stateUpdate.Nodes
-
-			// Iterate through all node sets
-			for owner := range nodes.Sets {
-				subset := nodes.Sets[owner]
-				subset.ForEachWithOrder(func(path string, n *trienode.Node) {
-					if !n.IsDeleted() && n.Blob != nil {
-						stateNode := string(n.Blob)
-						// Add to active map
-						if _, exists := bc.activeCacheMap[stateNode]; !exists {
-							bc.activeCacheMap[stateNode] = struct{}{}
-							cachedUpdatedStates++
-						}
-						// Also add to next map if in overlap period
-						if inOverlapPeriod {
-							if _, exists := bc.nextCacheMap[stateNode]; !exists {
-								bc.nextCacheMap[stateNode] = struct{}{}
-							}
-						}
-					}
-				})
-			}
-		}
-	}
-
-	log.Debug("Cached states for sliding window",
-		"block", blockNum,
-		"windowStart", bc.cacheWindowStart,
-		"inOverlap", inOverlapPeriod,
-		"cachedWitnessStates", cachedWitnessStates,
-		"cachedUpdatedStates", cachedUpdatedStates,
-		"activeMapSize", len(bc.activeCacheMap),
-		"nextMapSize", len(bc.nextCacheMap))
+	// Update sliding window cache with witness and execution data
+	bc.updateSlidingWindowCache(blockNum, witness, statedb)
 
 	return statedb, res, nil
 }
