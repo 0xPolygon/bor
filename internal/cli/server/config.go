@@ -686,10 +686,10 @@ type WitnessConfig struct {
 	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
 
 	// Parallel stateless import (download path) toggle
-	EnableParallelStatelessImport bool `hcl:"parallelstatelessimport,optional" toml:"parallelstatelessimport,optional"`
+	EnableParallelStatelessImport bool `hcl:"parallel-stateless-import,optional" toml:"parallel-stateless-import,optional"`
 
 	// Number of workers (CPUs) to use for parallel stateless import. If 0, uses GOMAXPROCS.
-	ParallelStatelessImportWorkers int `hcl:"parallelstatelessimportworkers,optional" toml:"parallelstatelessimportworkers,optional"`
+	ParallelStatelessImportWorkers int `hcl:"parallel-stateless-import-workers,optional" toml:"parallel-stateless-import-workers,optional"`
 
 	// WitnessAPI enables witness API endpoints
 	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
