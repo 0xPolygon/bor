@@ -43,6 +43,8 @@ type freezerdb struct {
 	ethdb.KeyValueStore
 	*chainFreezer
 
+	witPruner   *pruner
+	blockPruner *pruner
 	readOnly    bool
 	ancientRoot string
 }
@@ -62,6 +64,18 @@ func (frdb *freezerdb) Close() error {
 
 	if err := frdb.KeyValueStore.Close(); err != nil {
 		errs = append(errs, err)
+	}
+
+	if frdb.witPruner != nil {
+		if err := frdb.witPruner.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if frdb.blockPruner != nil {
+		if err := frdb.blockPruner.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	if len(errs) != 0 {
@@ -270,14 +284,16 @@ func resolveOffset(db ethdb.KeyValueStore, isLastOffset bool) uint64 {
 // can be opened.
 //
 // Deprecated: use Open.
-func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
+func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, stateless, witnessPruneEnabled, blockPruneEnabled bool) (ethdb.Database, error) {
 	return Open(db, OpenOptions{
-		Ancient:          ancient,
-		MetricsNamespace: namespace,
-		ReadOnly:         readonly,
-		DisableFreeze:    disableFreeze,
-		IsLastOffset:     isLastOffset,
-		Stateless:        stateless,
+		Ancient:             ancient,
+		MetricsNamespace:    namespace,
+		ReadOnly:            readonly,
+		DisableFreeze:       disableFreeze,
+		IsLastOffset:        isLastOffset,
+		WitnessPruneEnabled: witnessPruneEnabled,
+		BlockPruneEnabled:   blockPruneEnabled,
+		Stateless:           stateless,
 	})
 }
 
@@ -290,7 +306,9 @@ type OpenOptions struct {
 	DisableFreeze    bool
 	IsLastOffset     bool
 
-	Stateless bool
+	WitnessPruneEnabled bool
+	BlockPruneEnabled   bool
+	Stateless           bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -433,7 +451,8 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		}
 	}
 	// Freezer is consistent with the key-value database, permit combining the two
-	if !opts.DisableFreeze {
+	// No freeze operation on stateless node
+	if !opts.DisableFreeze && !opts.Stateless {
 		frdb.wg.Add(1)
 
 		go func() {
@@ -442,11 +461,23 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		}()
 	}
 
-	return &freezerdb{
+	ethDb := &freezerdb{
 		ancientRoot:   opts.Ancient,
 		KeyValueStore: db,
 		chainFreezer:  frdb,
-	}, nil
+	}
+
+	if opts.WitnessPruneEnabled || opts.Stateless {
+		ethDb.witPruner = NewPruner(ethDb, NewWitnessStrategy())
+		ethDb.witPruner.Start()
+	}
+
+	if opts.BlockPruneEnabled || opts.Stateless {
+		ethDb.blockPruner = NewPruner(ethDb, NewBlockStrategy())
+		ethDb.blockPruner.Start()
+	}
+
+	return ethDb, nil
 }
 
 // NewMemoryDatabase creates an ephemeral in-memory key-value database without a

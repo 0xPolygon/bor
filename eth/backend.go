@@ -73,9 +73,7 @@ import (
 	gethversion "github.com/ethereum/go-ethereum/version"
 )
 
-var (
-	MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
-)
+var MilestoneWhitelistedDelayTimer = metrics.NewRegisteredTimer("chain/milestone/whitelisteddelay", nil)
 
 const (
 	// This is the fairness knob for the discovery mixer. When looking for peers, we'll
@@ -170,13 +168,25 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	log.Info("Allocated trie memory caches", "clean", common.StorageSize(config.TrieCleanCache)*1024*1024, "dirty", common.StorageSize(config.TrieDirtyCache)*1024*1024)
 
+	witnessPruneEnabled := false
+	if config.SyncMode == downloader.StatelessSync || config.WitnessProtocol {
+		witnessPruneEnabled = true
+	}
+
+	blockPruneEnabled := false
+	if config.SyncMode == downloader.StatelessSync {
+		blockPruneEnabled = true
+	}
+
 	dbOptions := node.DatabaseOptions{
-		Cache:             config.DatabaseCache,
-		Handles:           config.DatabaseHandles,
-		AncientsDirectory: config.DatabaseFreezer,
-		EraDirectory:      config.DatabaseEra,
-		MetricsNamespace:  "eth/db/chaindata/",
-		Stateless:         config.SyncMode == downloader.StatelessSync,
+		Cache:               config.DatabaseCache,
+		Handles:             config.DatabaseHandles,
+		AncientsDirectory:   config.DatabaseFreezer,
+		EraDirectory:        config.DatabaseEra,
+		MetricsNamespace:    "eth/db/chaindata/",
+		WitnessPruneEnabled: witnessPruneEnabled,
+		BlockPruneEnabled:   blockPruneEnabled,
+		Stateless:           config.SyncMode == downloader.StatelessSync,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
@@ -228,7 +238,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// END: Bor changes
 
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
-	var dbVer = "<nil>"
+	dbVer := "<nil>"
 	if bcVersion != nil {
 		dbVer = fmt.Sprintf("%d", *bcVersion)
 	}
@@ -245,25 +255,24 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
-	var (
-		options = &core.BlockChainConfig{
-			TrieCleanLimit:   config.TrieCleanCache,
-			NoPrefetch:       config.NoPrefetch,
-			TrieDirtyLimit:   config.TrieDirtyCache,
-			ArchiveMode:      config.NoPruning,
-			TrieTimeLimit:    config.TrieTimeout,
-			SnapshotLimit:    config.SnapshotCache,
-			Preimages:        config.Preimages,
-			StateHistory:     config.StateHistory,
-			StateScheme:      scheme,
-			ChainHistoryMode: config.HistoryMode,
-			TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
-			VmConfig: vm.Config{
-				EnablePreimageRecording: config.EnablePreimageRecording,
-			},
-			Stateless: config.SyncMode == downloader.StatelessSync,
-		}
-	)
+	options := &core.BlockChainConfig{
+		TrieCleanLimit:   config.TrieCleanCache,
+		NoPrefetch:       config.NoPrefetch,
+		TrieDirtyLimit:   config.TrieDirtyCache,
+		ArchiveMode:      config.NoPruning,
+		TrieTimeLimit:    config.TrieTimeout,
+		SnapshotLimit:    config.SnapshotCache,
+		Preimages:        config.Preimages,
+		StateHistory:     config.StateHistory,
+		StateScheme:      scheme,
+		TriesInMemory:    config.TriesInMemory,
+		ChainHistoryMode: config.HistoryMode,
+		TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+		VmConfig: vm.Config{
+			EnablePreimageRecording: config.EnablePreimageRecording,
+		},
+		Stateless: config.SyncMode == downloader.StatelessSync,
+	}
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
@@ -400,8 +409,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
-		witnessPruneThreshold:   config.WitnessPruneThreshold,
-		witnessPruneInterval:    config.WitnessPruneInterval,
 	}); err != nil {
 		return nil, err
 	}

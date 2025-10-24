@@ -373,6 +373,6 @@ func ReadWitnessPruneCursor(db ethdb.KeyValueReader) *uint64 {
 func WriteWitnessPruneCursor(db ethdb.KeyValueWriter, cursor uint64) {
 	log.Debug("WriteWitnessPruneCursor", "cursor", cursor)
 	if err := db.Put(witnessPruneCursorKey(), encodeBlockNumber(cursor)); err != nil {
-		log.Crit("Failed to store witness", "err", err)
+		log.Crit("Failed to store witness cursor", "err", err)
 	}
 }

@@ -165,7 +165,7 @@ func NewFakeBor(t TensingObject, chainDB ethdb.Database, chainConfig *params.Cha
 		chainConfig.Bor = params.BorUnittestChainConfig.Bor
 	}
 
-	return bor.New(chainConfig, chainDB, ethAPIMock, spanner, heimdallClientMock, heimdallClientWSMock, contractMock, false)
+	return bor.New(chainConfig, chainDB, ethAPIMock, spanner, heimdallClientMock, heimdallClientWSMock, contractMock, false, 0)
 }
 
 func createMockSpanForTest(address common.Address, chainId string) borTypes.Span {

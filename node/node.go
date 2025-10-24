@@ -776,9 +776,11 @@ func (n *Node) OpenDatabaseWithOptions(name string, opt DatabaseOptions) (ethdb.
 
 	if n.config.DataDir == "" {
 		db, _ = rawdb.Open(memorydb.New(), rawdb.OpenOptions{
-			MetricsNamespace: opt.MetricsNamespace,
-			ReadOnly:         opt.ReadOnly,
-			Stateless:        opt.Stateless,
+			MetricsNamespace:    opt.MetricsNamespace,
+			ReadOnly:            opt.ReadOnly,
+			WitnessPruneEnabled: opt.WitnessPruneEnabled,
+			BlockPruneEnabled:   opt.BlockPruneEnabled,
+			Stateless:           opt.Stateless,
 		})
 	} else {
 		opt.AncientsDirectory = n.ResolveAncient(name, opt.AncientsDirectory)
@@ -813,7 +815,7 @@ func (n *Node) OpenDatabase(name string, cache, handles int, namespace string, r
 // also attaching a chain freezer to it that moves ancient chain data from the
 // database to immutable append-only files. If the node is an ephemeral one, a
 // memory database is returned.
-func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient, namespace string, readonly, disableFreeze, isLastOffset, stateless bool) (ethdb.Database, error) {
+func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient, namespace string, readonly, disableFreeze, isLastOffset, stateless, witnessPruneEnabled, blockPruneEnabled bool) (ethdb.Database, error) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
@@ -826,19 +828,21 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 	var err error
 
 	if n.config.DataDir == "" {
-		db, err = rawdb.NewDatabaseWithFreezer(memorydb.New(), "", namespace, readonly, false, false, stateless)
+		db, err = rawdb.NewDatabaseWithFreezer(memorydb.New(), "", namespace, readonly, false, false, stateless, witnessPruneEnabled, blockPruneEnabled)
 	} else {
 		db, err = openDatabase(internalOpenOptions{
 			directory: n.ResolvePath(name),
 			dbEngine:  n.config.DBEngine,
 			DatabaseOptions: DatabaseOptions{
-				MetricsNamespace: namespace,
-				Cache:            cache,
-				Handles:          handles,
-				ReadOnly:         readonly,
-				DisableFreeze:    disableFreeze,
-				IsLastOffset:     isLastOffset,
-				Stateless:        stateless,
+				MetricsNamespace:    namespace,
+				Cache:               cache,
+				Handles:             handles,
+				ReadOnly:            readonly,
+				DisableFreeze:       disableFreeze,
+				IsLastOffset:        isLastOffset,
+				WitnessPruneEnabled: witnessPruneEnabled,
+				BlockPruneEnabled:   blockPruneEnabled,
+				Stateless:           stateless,
 			},
 		})
 	}
