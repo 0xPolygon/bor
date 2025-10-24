@@ -198,7 +198,6 @@ func TestAddressBiasedCache_Reset(t *testing.T) {
 	}
 }
 
-
 func TestAddressBiasedCache_MultipleAddresses(t *testing.T) {
 	addr1 := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	addr2 := common.HexToAddress("0x2222222222222222222222222222222222222222")
