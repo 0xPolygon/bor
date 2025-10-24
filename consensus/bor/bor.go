@@ -1076,10 +1076,12 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	}
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
-		})
-		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, wrappedState, receipts)
+		if len(body.Transactions) > 0 {
+			lastTx := body.Transactions[len(body.Transactions)-1]
+			if lastTx.Type() == types.StateSyncTxType {
+				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
+			}
+		}
 	} else {
 		// set state sync
 		hc := chain.(*core.HeaderChain)
