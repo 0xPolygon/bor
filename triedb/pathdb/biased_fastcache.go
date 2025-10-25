@@ -1,6 +1,7 @@
 package pathdb
 
 import (
+	stdcontext "context"
 	"fmt"
 	"sync"
 	"time"
@@ -38,6 +39,11 @@ type AddressBiasedCache struct {
 	// RW mutex to protect cache operations and prevent race conditions
 	// between async preloading and concurrent reads/writes
 	mu sync.RWMutex
+
+	// Context for canceling preload operations
+	ctx    stdcontext.Context
+	cancel stdcontext.CancelFunc
+	wg     sync.WaitGroup // Wait for all preloads to finish
 }
 
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
@@ -47,8 +53,11 @@ type AddressBiasedCache struct {
 // of the cache for non-preloaded data.
 // Preloading happens asynchronously in the background.
 func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int) (*AddressBiasedCache, error) {
+	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cache := &AddressBiasedCache{
 		commonCache: fastcache.New(commonCacheSize),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
@@ -56,6 +65,7 @@ func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Addre
 		cache.initAddressCache(addr, cacheSize)
 
 		// Start async preloading
+		cache.wg.Add(1)
 		go cache.preloadAddressAsync(db, addr, cacheSize)
 	}
 
@@ -77,6 +87,7 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 // the cache is full. This naturally loads nodes by depth, filling the cache
 // with as many upper-level nodes as possible. This function runs asynchronously.
 func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.Address, cacheSize int) {
+	defer c.wg.Done()
 	startTime := time.Now()
 
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
@@ -110,6 +121,19 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	visited := make(map[string]struct{})        // Prevent revisiting nodes
 
 	for len(queue) > 0 {
+		// Check for shutdown signal periodically
+		select {
+		case <-c.ctx.Done():
+			log.Info("Preload interrupted by shutdown",
+				"account hash", accountHash.Hex(),
+				"entries", entriesLoaded,
+				"max depth", maxDepthReached,
+				"size", common.StorageSize(totalBytesLoaded).String(),
+				"elapsed", time.Since(startTime))
+			return
+		default:
+		}
+
 		item := queue[0]
 		queue = queue[1:]
 
@@ -295,4 +319,13 @@ func (c *AddressBiasedCache) Reset() {
 		cache.Reset()
 		return true
 	})
+}
+
+// Close cancels all background preload operations and waits for them to finish.
+// This ensures graceful shutdown and prevents goroutines from blocking application termination.
+func (c *AddressBiasedCache) Close() {
+	if c.cancel != nil {
+		c.cancel()  // Signal all goroutines to stop
+		c.wg.Wait() // Wait for them to finish
+	}
 }

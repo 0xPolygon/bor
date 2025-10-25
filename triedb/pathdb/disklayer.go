@@ -609,7 +609,8 @@ func (dl *diskLayer) waitFlush() error {
 }
 
 // terminate releases the frozen buffer if it's not nil and terminates the
-// background state generator.
+// background state generator. It also stops any background preload operations
+// in the address-biased cache.
 func (dl *diskLayer) terminate() error {
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
@@ -622,6 +623,10 @@ func (dl *diskLayer) terminate() error {
 	}
 	if dl.generator != nil {
 		dl.generator.stop()
+	}
+	// Stop background preload operations in the address-biased cache
+	if dl.nodes != nil {
+		dl.nodes.Close()
 	}
 	return nil
 }

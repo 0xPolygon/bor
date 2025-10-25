@@ -2,6 +2,7 @@ package pathdb
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -505,4 +506,60 @@ func BenchmarkAddressBiasedCache_Set(b *testing.B) {
 		key := append(accountHash.Bytes(), byte(i%256))
 		cache.Set(key, value)
 	}
+}
+
+// TestAddressBiasedCache_GracefulShutdown tests that Close() properly stops
+// background preload operations and waits for them to finish.
+func TestAddressBiasedCache_GracefulShutdown(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	// Create a large tree of storage trie nodes that will take some time to preload
+	nodeCount := 1000
+	for i := 0; i < nodeCount; i++ {
+		path := []byte{byte(i % 256), byte(i / 256)}
+		nodeData := []byte(fmt.Sprintf("node-data-%d", i))
+		rawdb.WriteStorageTrieNode(db, accountHash, path, nodeData)
+	}
+
+	// Create cache with preloading
+	addressCacheSizes := map[common.Address]int{
+		addr: 10 * 1024 * 1024, // 10 MB
+	}
+	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 1024*1024)
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+
+	// Immediately close the cache to test interruption
+	cache.Close()
+
+	// Verify the cache is still functional after Close()
+	key := append(accountHash.Bytes(), []byte{1, 2}...)
+	cache.Set(key, []byte("test-value"))
+	value := cache.Get(key)
+	if string(value) != "test-value" {
+		t.Errorf("Cache should still work after Close(), got: %s", string(value))
+	}
+}
+
+// TestAddressBiasedCache_MultipleClose tests that calling Close() multiple times
+// doesn't cause issues.
+func TestAddressBiasedCache_MultipleClose(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+
+	addressCacheSizes := map[common.Address]int{
+		addr: 1024 * 1024, // 1 MB
+	}
+	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 1024*1024)
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+
+	// Close multiple times should not panic
+	cache.Close()
+	cache.Close()
+	cache.Close()
 }
