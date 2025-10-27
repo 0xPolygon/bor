@@ -708,3 +708,7 @@ func (b *EthAPIBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash
 
 	return nil, errors.New("invalid block number or hash")
 }
+
+func (b *EthAPIBackend) IsParallelImportActive() bool {
+	return b.eth.blockchain.IsParallelStatelessImportEnabled()
+}

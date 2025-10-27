@@ -33,11 +33,13 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/core/vm/program"
@@ -4333,7 +4335,6 @@ func TestDeleteThenCreate(t *testing.T) {
 		}
 	*/
 	factoryBIN := common.Hex2Bytes("608060405234801561001057600080fd5b50610241806100206000396000f3fe608060405234801561001057600080fd5b506004361061002a5760003560e01c80627743601461002f575b600080fd5b610049600480360381019061004491906100d8565b61004b565b005b6000808251602084016000f59050803b61006457600080fd5b5050565b600061007b61007684610146565b610121565b905082815260208101848484011115610097576100966101eb565b5b6100a2848285610177565b509392505050565b600082601f8301126100bf576100be6101e6565b5b81356100cf848260208601610068565b91505092915050565b6000602082840312156100ee576100ed6101f5565b5b600082013567ffffffffffffffff81111561010c5761010b6101f0565b5b610118848285016100aa565b91505092915050565b600061012b61013c565b90506101378282610186565b919050565b6000604051905090565b600067ffffffffffffffff821115610161576101606101b7565b5b61016a826101fa565b9050602081019050919050565b82818337600083830152505050565b61018f826101fa565b810181811067ffffffffffffffff821117156101ae576101ad6101b7565b5b80604052505050565b7f4e487b7100000000000000000000000000000000000000000000000000000000600052604160045260246000fd5b600080fd5b600080fd5b600080fd5b600080fd5b6000601f19601f830116905091905056fea2646970667358221220ea8b35ed310d03b6b3deef166941140b4d9e90ea2c92f6b41eb441daf49a59c364736f6c63430008070033")
-
 	/*
 		contract C {
 			uint256 value;
@@ -5404,25 +5405,334 @@ func TestStatelessInsertChain(t *testing.T) {
 	}
 	defer chain.Stop()
 
-	// Test 1: Empty chain should return 0 without error
-	_, err = chain.InsertChainStateless(types.Blocks{}, nil)
-	if err != nil {
-		t.Fatalf("expected no error for empty chain, got: %v", err)
+	// Parallel path
+	_, blocksParallel, _ := GenerateChainWithGenesis(gspec, engine, 10, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+	})
+
+	// Pre-insert canonically to avoid witness requirements and mark as known
+	if _, err := chain.InsertChain(blocksParallel, true); err != nil {
+		t.Fatalf("failed to pre-insert canonical blocks: %v", err)
 	}
 
-	// Test 2: Verify the method exists and handles stateless mode correctly
-	// The actual stateless execution would require proper witnesses with state proofs,
-	// which is complex to set up in a unit test. This test verifies:
-	// - The InsertChainStateless method exists
-	// - It properly handles empty input
-	// - It's only available when Stateless = true (stateless mode)
+	witnessesParallel := make([]*stateless.Witness, len(blocksParallel))
+	for i, b := range blocksParallel {
+		w, err := stateless.NewWitness(b.Header(), chain)
+		if err != nil {
+			t.Fatalf("failed to build witness for block %d: %v", b.NumberU64(), err)
+		}
+		witnessesParallel[i] = w
+	}
+	processed, err := chain.InsertChainStateless(blocksParallel, witnessesParallel)
+	if err != nil {
+		t.Fatalf("unexpected error on parallel stateless import: %v", err)
+	}
+	if processed != len(blocksParallel) {
+		t.Fatalf("expected processed=%d, got %d", len(blocksParallel), processed)
+	}
 
 	// Verify we're in stateless mode (Stateless = true)
 	if chain.cfg.Stateless != true {
 		t.Error("Expected blockchain to be configured for stateless mode (Stateless = true)")
 	}
 
-	t.Log("InsertChainStateless method exists and handles stateless mode configuration correctly")
+	// Sequential path
+	_, blocksSequential, _ := GenerateChainWithGenesis(gspec, engine, 5, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+	})
+
+	// Pre-insert canonically to avoid witness requirements and mark as known
+	if _, err := chain.InsertChain(blocksSequential, true); err != nil {
+		t.Fatalf("failed to pre-insert canonical blocks: %v", err)
+	}
+
+	// Now import via InsertChainStateless and expect clean happy path in sequential
+	witnessesSequential := make([]*stateless.Witness, len(blocksSequential))
+	for i, b := range blocksSequential {
+		w, err := stateless.NewWitness(b.Header(), chain)
+		if err != nil {
+			t.Fatalf("failed to build witness for block %d: %v", b.NumberU64(), err)
+		}
+		witnessesSequential[i] = w
+	}
+	processed, err = chain.InsertChainStateless(blocksSequential, witnessesSequential)
+	if err != nil {
+		t.Fatalf("unexpected error on sequential stateless import: %v", err)
+	}
+	if processed != len(blocksSequential) {
+		t.Fatalf("expected processed=%d, got %d", len(blocksSequential), processed)
+	}
+}
+
+// corruptWitnessState corrupts witness by completely replacing all state with invalid data
+func corruptWitnessState(witness *stateless.Witness) *stateless.Witness {
+	corrupted := witness.Copy()
+
+	// Completely replace all state with obviously invalid data
+	// This will cause failures when any state access is attempted
+	corrupted.State = map[string]struct{}{
+		"invalid_state_node_1": {},
+		"invalid_state_node_2": {},
+		"corrupted_data_here":  {},
+	}
+
+	return corrupted
+}
+
+// corruptWitnessHeaders corrupts witness headers with wrong state root
+func corruptWitnessHeaders(witness *stateless.Witness) *stateless.Witness {
+	corrupted := witness.Copy()
+	if len(corrupted.Headers) > 0 {
+		wrongHeader := types.CopyHeader(corrupted.Headers[0])
+		wrongHeader.Root = common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef") // Incorrect state root
+		corrupted.Headers[0] = wrongHeader
+	}
+	return corrupted
+}
+
+// clearWitnessState removes all state data from witness
+func clearWitnessState(witness *stateless.Witness) *stateless.Witness {
+	cleared := witness.Copy()
+	cleared.State = make(map[string]struct{})
+	return cleared
+}
+
+// createEmptyHeaderWitness creates a witness with empty headers
+func createEmptyHeaderWitness(header *types.Header) *stateless.Witness {
+	witness := &stateless.Witness{
+		Headers: []*types.Header{}, // Empty headers
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+	witness.SetHeader(header)
+	return witness
+}
+
+// createTestBlockAndWitness creates a fresh block and witness for testing
+func createTestBlockAndWitness(t *testing.T) (*BlockChain, *types.Block, *stateless.Witness) {
+	t.Helper()
+
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+
+	cfg := DefaultConfig()
+	cfg.Stateless = true
+
+	// Create stateful chain for witness generation
+	engine := ethash.NewFaker()
+	stateFullChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create full-state chain: %v", err)
+	}
+	defer stateFullChain.Stop()
+
+	// Generate block with transaction
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		// Use transaction nonce 0 since each test uses a fresh account state
+		tx, _ := types.SignTx(types.NewTransaction(0, common.HexToAddress("0x1234"), big.NewInt(1000), 21000, big.NewInt(2000000000), nil), types.HomesteadSigner{}, key)
+		b.AddTx(tx)
+	})
+	block := blocks[0]
+
+	// Generate witness
+	witness, _, err := stateFullChain.insertChain(types.Blocks{block}, true, true)
+	if err != nil {
+		t.Fatalf("failed to build witness: %v", err)
+	}
+
+	// Create fresh stateless chain
+	statelessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+	if err != nil {
+		t.Fatalf("failed to create stateless chain: %v", err)
+	}
+
+	return statelessChain, block, witness
+}
+
+// TestParallelStateless_ContractDeployedThenCalled ensures that a contract
+// deployed and later accessed imports correctly
+// in parallel stateless mode.
+func TestParallelStateless_ContractDeployedThenCalled(t *testing.T) {
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+
+	cfg := DefaultConfig()
+	cfg.Stateless = true
+
+	eng := ethash.NewFaker()
+
+	// Build a 3-block chain: B1 deploy contract, B2 noop, B3 call contract
+	var contractAddr common.Address
+	_, blocks, _ := GenerateChainWithGenesis(gspec, eng, 3, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		if i == 0 {
+			code := []byte{0x60, 0x00, 0x56}
+			tx, _ := types.SignTx(
+				types.NewContractCreation(0, big.NewInt(0), 150000, b.header.BaseFee, code),
+				types.HomesteadSigner{}, key,
+			)
+			b.AddTx(tx)
+			contractAddr = crypto.CreateAddress(addr, 0)
+		}
+		if i == 2 {
+			// Call the deployed contract in block 3
+			callData := []byte{}
+			tx, _ := types.SignTx(
+				types.NewTransaction(1, contractAddr, big.NewInt(0), 100000, big.NewInt(2_000_000_000), callData),
+				types.HomesteadSigner{}, key,
+			)
+			b.AddTx(tx)
+		}
+	})
+
+	// Create stateful chain for witness generation
+	stateFullChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, eng, cfg)
+	require.NoError(t, err)
+	defer stateFullChain.Stop()
+
+	// Build witnesses by inserting each block on the full chain (stateful)
+	w1, _, err := stateFullChain.insertChain(types.Blocks{blocks[0]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w1)
+
+	w2, _, err := stateFullChain.insertChain(types.Blocks{blocks[1]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w2)
+
+	w3, _, err := stateFullChain.insertChain(types.Blocks{blocks[2]}, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, w3)
+
+	// Corrupt the third witness by dropping code to simulate missing bytecode in worker
+	badW3 := w3.Copy()
+	badW3.Codes = make(map[string]struct{})
+
+	// Create stateless chain for parallel insertion
+	statelessChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), cfg)
+	require.NoError(t, err)
+	defer statelessChain.Stop()
+
+	headers := []*types.Header{blocks[0].Header(), blocks[1].Header(), blocks[2].Header()}
+	stopHeaders, errChans := statelessChain.prepareHeaderVerification(headers)
+	defer stopHeaders()
+
+	stats := &insertStats{startTime: mclock.Now()}
+	processed, err := statelessChain.insertChainStatelessParallel(types.Blocks{blocks[0], blocks[1], blocks[2]}, []*stateless.Witness{w1, w2, badW3}, errChans, stats, stopHeaders)
+
+	require.NoError(t, err)
+	require.Equal(t, 3, processed)
+}
+
+// TestStatelessInsertChainInvalidInputs tests invalid or edge inputs for sequential and parallel stateless insertions
+func TestStatelessInsertChainInvalidInputs(t *testing.T) {
+	adversarialTests := []struct {
+		name    string
+		setupFn func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness)
+		wantErr bool
+	}{
+		{
+			name: "empty chain insertion",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, _, _ := createTestBlockAndWitness(t)
+				return chain, []*types.Block{}, []*stateless.Witness{}
+			},
+			wantErr: false,
+		},
+		{
+			name: "explicit nil witness",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, _ := createTestBlockAndWitness(t)
+				return chain, []*types.Block{block}, []*stateless.Witness{nil}
+			},
+			wantErr: true,
+		},
+		{
+			name: "corrupted witness state data",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				corruptedWitness := corruptWitnessState(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{corruptedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness missing required trie nodes",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				clearedWitness := clearWitnessState(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{clearedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness with incorrect state root in headers",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, witness := createTestBlockAndWitness(t)
+				corruptedWitness := corruptWitnessHeaders(witness)
+				return chain, []*types.Block{block}, []*stateless.Witness{corruptedWitness}
+			},
+			wantErr: true,
+		},
+		{
+			name: "witness with empty headers",
+			setupFn: func(t *testing.T) (*BlockChain, []*types.Block, []*stateless.Witness) {
+				chain, block, _ := createTestBlockAndWitness(t)
+				emptyHeaderWitness := createEmptyHeaderWitness(block.Header())
+				return chain, []*types.Block{block}, []*stateless.Witness{emptyHeaderWitness}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range adversarialTests {
+		t.Run(tt.name, func(t *testing.T) {
+			testInsertMethod := func(t *testing.T, methodName string, isParallel bool) {
+				chain, blocks, witnesses := tt.setupFn(t)
+				defer chain.Stop()
+
+				headers := make([]*types.Header, len(blocks))
+				for i, block := range blocks {
+					headers[i] = block.Header()
+				}
+
+				stats := &insertStats{startTime: mclock.Now()}
+
+				var err error
+				if isParallel {
+					stopHeaders, errChans := chain.prepareHeaderVerification(headers)
+					defer stopHeaders()
+					_, err = chain.insertChainStatelessParallel(blocks, witnesses, errChans, stats, stopHeaders)
+				} else {
+					_, errChans := chain.prepareHeaderVerification(headers)
+					_, err = chain.insertChainStatelessSequential(blocks, witnesses, errChans, stats)
+				}
+
+				if tt.wantErr {
+					require.Error(t, err, methodName+" expected error but got none")
+					t.Logf("%s got expected error: %v", methodName, err)
+				} else {
+					require.NoError(t, err, methodName+" unexpected error")
+				}
+			}
+
+			t.Run("sequential", func(t *testing.T) {
+				testInsertMethod(t, "insertChainStatelessSequential", false)
+			})
+
+			t.Run("parallel", func(t *testing.T) {
+				testInsertMethod(t, "insertChainStatelessParallel", true)
+			})
+		})
+	}
 }
 
 // TestStatelessSetHeadBeyondRoot tests setHeadBeyondRoot in stateless mode

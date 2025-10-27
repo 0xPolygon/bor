@@ -1079,6 +1079,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Witness.ProduceWitnesses,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.parallelstatelessimport",
+		Usage:   "Enable parallel stateless block import",
+		Value:   &c.cliConfig.Witness.EnableParallelStatelessImport,
+		Default: c.cliConfig.Witness.EnableParallelStatelessImport,
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "witness.parallelstatelessimportworkers",
+		Usage:   "Number of workers to use for parallel stateless import (0 = GOMAXPROCS)",
+		Value:   &c.cliConfig.Witness.ParallelStatelessImportWorkers,
+		Default: c.cliConfig.Witness.ParallelStatelessImportWorkers,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "witness.witnessapi",
 		Usage:   "Enable witness API endpoints (by default disabled)",
 		Value:   &c.cliConfig.Witness.WitnessAPI,

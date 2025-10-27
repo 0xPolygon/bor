@@ -685,6 +685,12 @@ type WitnessConfig struct {
 	// ProduceWitnesses enables producing witnesses while syncing
 	ProduceWitnesses bool `hcl:"producewitnesses,optional" toml:"producewitnesses,optional"`
 
+	// Parallel stateless import (download path) toggle
+	EnableParallelStatelessImport bool `hcl:"parallel-stateless-import,optional" toml:"parallel-stateless-import,optional"`
+
+	// Number of workers (CPUs) to use for parallel stateless import. If 0, uses GOMAXPROCS.
+	ParallelStatelessImportWorkers int `hcl:"parallel-stateless-import-workers,optional" toml:"parallel-stateless-import-workers,optional"`
+
 	// WitnessAPI enables witness API endpoints
 	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
 
@@ -900,11 +906,13 @@ func DefaultConfig() *Config {
 			Enforce:              false,
 		},
 		Witness: &WitnessConfig{
-			Enable:               false,
-			SyncWithWitnesses:    false,
-			ProduceWitnesses:     false,
-			WitnessAPI:           false,
-			FastForwardThreshold: 6400,
+			Enable:                         false,
+			SyncWithWitnesses:              false,
+			ProduceWitnesses:               false,
+			EnableParallelStatelessImport:  false,
+			ParallelStatelessImportWorkers: 0,
+			WitnessAPI:                     false,
+			FastForwardThreshold:           6400,
 		},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
@@ -1374,6 +1382,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 	n.SyncWithWitnesses = c.Witness.SyncWithWitnesses
 	n.SyncAndProduceWitnesses = c.Witness.ProduceWitnesses
+	n.EnableParallelStatelessImport = c.Witness.EnableParallelStatelessImport
+	n.EnableParallelStatelessImportWorkers = c.Witness.ParallelStatelessImportWorkers
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
 

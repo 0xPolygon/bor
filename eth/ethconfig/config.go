@@ -235,6 +235,19 @@ type Config struct {
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64
 
+	// Minimum necessary distance between local header and latest non pruned witness
+	WitnessPruneThreshold uint64
+
+	// The time interval between each witness prune routine
+	WitnessPruneInterval time.Duration
+
+	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
+	EnableParallelStatelessImport bool
+
+	// EnableParallelStatelessImportWorkers sets the number of workers (CPUs) used for parallel stateless import.
+	// If 0, defaults to GOMAXPROCS.
+	EnableParallelStatelessImportWorkers int
+
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
 
