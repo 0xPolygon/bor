@@ -25,12 +25,6 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      # This is needed because the job fails with "System.IO.IOException: No space left on device".
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # 2023/10/19
-        with:
-          tool-cache: true
-
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
