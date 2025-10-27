@@ -184,7 +184,7 @@ var mu sync.Mutex
 
 func (task *ExecutionTask) Settle() {
 	if task.index == 83 {
-		receiverBalance := task.finalStateDB.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
+		receiverBalance := task.finalStateDB.GetBalance(common.HexToAddress("0xc1DC698755061E812aC7D3efaf9d0623eFe80410"))
 		log.Error("Receiver balance Before Finalize", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
 			"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
@@ -194,21 +194,18 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	// if !task.result.Failed() {
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), false)
+	if !task.result.Failed() {
+		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), false)
 
-	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
-		task.finalStateDB.AddLog(l)
+		for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
+			task.finalStateDB.AddLog(l)
+		}
+	} else if task.index == 83 {
+		log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash())
+
+		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), true)
 	}
-	// } else {
-	// 	log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
-	// 		"txIndex", task.index, "txHash", task.tx.Hash())
-
-	// 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), true)
-	// }
-
-	// check for `#tasks/#execs` in `blockstm exec summary` log. It should be ideally 100
-	// 54876000
 
 	if *task.shouldDelayFeeCal {
 		if task.config.IsLondon(task.blockNumber) {
@@ -254,6 +251,13 @@ func (task *ExecutionTask) Settle() {
 				"output1.Sub(output1, task.result.FeeTipped)", output1.Sub(output1, task.result.FeeTipped),
 				"output2.Add(output2, task.result.FeeTipped)", output2.Add(output2, task.result.FeeTipped))
 		}
+	}
+
+	if task.index == 83 {
+		receiverBalance := task.finalStateDB.GetBalance(common.HexToAddress("0xc1DC698755061E812aC7D3efaf9d0623eFe80410"))
+		log.Error("Receiver balance After Finalize", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash(), "receiverBalance", receiverBalance,
+			"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
 	}
 
 	for k, v := range task.statedb.Preimages() {

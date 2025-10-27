@@ -423,16 +423,10 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, allowOnlyNo
 
 			switch path.GetSubpath() {
 			case BalancePath:
-				if allowOnlyNonce {
-					continue
-				}
 				balance := sr.GetBalance(addr)
 				log.Error("ApplyMVWriteSet: Balance", "addr", addr.Hex(), "balance", balance.String())
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
-				if allowOnlyNonce {
-					log.Error("ApplyMVWriteSet: Nonce", "addr", addr.Hex())
-				}
 				log.Error("ApplyMVWriteSet: Nonce", "addr", addr.Hex(), "nonce", sr.GetNonce(addr))
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
