@@ -424,7 +424,7 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 	}
 }
 
-func TestFetchStateSyncEvents_PreStateSyncHF(t *testing.T) {
+func TestFetchStateSyncEvents_PreMadhugiriHF(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
@@ -509,7 +509,7 @@ func TestFetchStateSyncEvents_PreStateSyncHF(t *testing.T) {
 	require.Equal(t, 0, len(receipts), "no normal receipts should be found")
 }
 
-func TestFetchStateSyncEvents_PostStateSyncHF(t *testing.T) {
+func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
