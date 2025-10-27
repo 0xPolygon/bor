@@ -1423,7 +1423,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		filter.BaseFee = uint256.MustFromBig(env.header.BaseFee)
 	}
 
-	isOsaka :=  w.chainConfig.IsOsaka(env.header.Number)
+	isOsaka := w.chainConfig.IsOsaka(env.header.Number)
 	isMadhugiri := w.chainConfig.Bor != nil && w.chainConfig.Bor.IsMadhugiri(env.header.Number)
 	// Verify tx gas limit does not exceed EIP-7825 cap.
 	if isOsaka || isMadhugiri {
