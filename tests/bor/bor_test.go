@@ -424,7 +424,7 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 	}
 }
 
-func TestFetchStateSyncEvents_PreStateSyncHF(t *testing.T) {
+func TestFetchStateSyncEvents_PreMadhugiriHF(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)

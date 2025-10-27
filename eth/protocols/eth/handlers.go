@@ -603,12 +603,19 @@ func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig
 	case []*ReceiptList68:
 		receiptList := packet
 		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	case *[]*ReceiptList68:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
 	case []*ReceiptList69:
 		receiptList := packet
 		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	case *[]*ReceiptList69:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
 	default:
 		// This shouldn't happen unless there's a bug in identifying type of receipt list
 		// or there's a new type which isn't handled here.
+		log.Debug("EncodeReceiptsAndPrepareHasher: unsupported receipt list type", "type", fmt.Sprintf("%T", packet))
 		return nil, nil
 	}
 	return receipts, getReceiptListHashes
