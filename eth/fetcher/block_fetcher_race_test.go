@@ -52,6 +52,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 		dropPeer,
 		false, // no block tracking
 		false, // no witness requirement
+		0,     // no gas ceiling
 	)
 
 	// Start the fetcher
@@ -249,6 +250,7 @@ func TestWitnessManagerConcurrentAccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Start the witness manager
@@ -480,6 +482,7 @@ func TestBlockFetcherMapStateConsistency(t *testing.T) {
 		dropPeer,
 		false,
 		false,
+		0,
 	)
 
 	fetcher.Start()
@@ -538,6 +541,7 @@ func TestWitnessManagerStateConsistency(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	block := createTestBlock(101)
@@ -596,6 +600,7 @@ func TestBlockFetcherMemoryLeaks(t *testing.T) {
 		dropPeer,
 		false,
 		false,
+		0,
 	)
 
 	fetcher.Start()
@@ -652,6 +657,7 @@ func TestWitnessManagerMemoryLeaks(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		0,
 	)
 
 	// Add and remove many entries to test cleanup

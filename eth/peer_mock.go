@@ -198,6 +198,21 @@ func (mr *MockWitnessPeerMockRecorder) RequestWitness(witnessPages, sink interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestWitness", reflect.TypeOf((*MockWitnessPeer)(nil).RequestWitness), witnessPages, sink)
 }
 
+// RequestWitnessMetadata mocks base method.
+func (m *MockWitnessPeer) RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RequestWitnessMetadata", hashes, sink)
+	ret0, _ := ret[0].(*wit.Request)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RequestWitnessMetadata indicates an expected call of RequestWitnessMetadata.
+func (mr *MockWitnessPeerMockRecorder) RequestWitnessMetadata(hashes, sink interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestWitnessMetadata", reflect.TypeOf((*MockWitnessPeer)(nil).RequestWitnessMetadata), hashes, sink)
+}
+
 // Version mocks base method.
 func (m *MockWitnessPeer) Version() uint {
 	m.ctrl.T.Helper()

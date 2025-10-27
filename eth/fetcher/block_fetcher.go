@@ -249,7 +249,7 @@ type BlockFetcher struct {
 }
 
 // NewBlockFetcher creates a block fetcher to retrieve blocks based on hash announcements.
-func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, enableBlockTracking bool, requireWitness bool) *BlockFetcher {
+func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, enableBlockTracking bool, requireWitness bool, gasCeil uint64) *BlockFetcher {
 	f := &BlockFetcher{
 		light:               light,
 		notify:              make(chan *blockAnnounce),
@@ -287,6 +287,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		f.getBlock,
 		f.getHeader,
 		f.chainHeight,
+		gasCeil,
 	)
 
 	return f
@@ -1296,4 +1297,9 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 		// Let's keep it for cases where forgetBlock is called directly after checking getBlock/getHeader
 		f.wm.forget(hash)
 	}
+}
+
+// GetWitnessManager returns the witness manager for external access
+func (f *BlockFetcher) GetWitnessManager() *witnessManager {
+	return f.wm
 }

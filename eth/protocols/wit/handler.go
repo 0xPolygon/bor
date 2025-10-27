@@ -117,11 +117,20 @@ type Decoder interface {
 	Time() time.Time
 }
 
-var wit0 = map[uint64]msgHandler{
+var wit1 = map[uint64]msgHandler{
 	GetMsgWitness:       handleGetWitness,
 	MsgWitness:          handleWitness,
 	NewWitnessMsg:       handleNewWitness,
 	NewWitnessHashesMsg: handleNewWitnessHashes,
+}
+
+var wit2 = map[uint64]msgHandler{
+	GetMsgWitness:         handleGetWitness,
+	MsgWitness:            handleWitness,
+	NewWitnessMsg:         handleNewWitness,
+	NewWitnessHashesMsg:   handleNewWitnessHashes,
+	GetWitnessMetadataMsg: handleGetWitnessMetadata,
+	WitnessMetadataMsg:    handleWitnessMetadata,
 }
 
 // HandleMessage is invoked whenever an inbound message is received from a
@@ -155,7 +164,18 @@ func handleMessage(backend Backend, peer *Peer) error {
 		}(start)
 	}
 
-	if handler := wit0[msg.Code]; handler != nil {
+	// Select the appropriate handler map based on protocol version
+	var handlers map[uint64]msgHandler
+	switch peer.Version() {
+	case WIT2:
+		handlers = wit2
+	case WIT1:
+		handlers = wit1
+	default:
+		handlers = wit1 // Fallback to WIT1
+	}
+
+	if handler := handlers[msg.Code]; handler != nil {
 		return handler(backend, msg, peer)
 	}
 
