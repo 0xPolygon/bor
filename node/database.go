@@ -42,7 +42,9 @@ type DatabaseOptions struct {
 	DisableFreeze    bool   // if true, the freezer is not started
 	IsLastOffset     bool   // if true, the freezer will use the last offset for pruning
 
-	Stateless bool
+	WitnessPruneEnabled bool
+	BlockPruneEnabled   bool
+	Stateless           bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -66,14 +68,16 @@ func openDatabase(o internalOpenOptions) (ethdb.Database, error) {
 		return nil, err
 	}
 	opts := rawdb.OpenOptions{
-		Ancient:          o.AncientsDirectory,
-		Era:              o.EraDirectory,
-		MetricsNamespace: o.MetricsNamespace,
-		ReadOnly:         o.ReadOnly,
-		DisableFreeze:    o.DisableFreeze,
-		IsLastOffset:     o.IsLastOffset,
-		Stateless:        o.Stateless,
-		Ephemeral:        o.Ephemeral,
+		Ancient:             o.AncientsDirectory,
+		Era:                 o.EraDirectory,
+		MetricsNamespace:    o.MetricsNamespace,
+		ReadOnly:            o.ReadOnly,
+		DisableFreeze:       o.DisableFreeze,
+		IsLastOffset:        o.IsLastOffset,
+		WitnessPruneEnabled: o.WitnessPruneEnabled,
+		BlockPruneEnabled:   o.BlockPruneEnabled,
+		Stateless:           o.Stateless,
+		Ephemeral:           o.Ephemeral,
 	}
 	frdb, err := rawdb.Open(kvdb, opts)
 	if err != nil {

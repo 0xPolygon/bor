@@ -114,6 +114,11 @@ var (
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 
+	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
+	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
+	statelessParallelImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/stateless/parallel/blocks", nil)
+	statelessSequentialImportBlocksCounter = metrics.NewRegisteredCounter("chain/imports/stateless/sequential/blocks", nil)
+
 	blockReorgMeter     = metrics.NewRegisteredMeter("chain/reorg/executes", nil)
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
 	blockReorgDropMeter = metrics.NewRegisteredMeter("chain/reorg/drop", nil)
@@ -181,6 +186,7 @@ type BlockChainConfig struct {
 	TrieDirtyLimit   int           // Memory limit (MB) at which to start flushing dirty trie nodes to disk
 	TrieTimeLimit    time.Duration // Time limit after which to flush the current in-memory trie to disk
 	TrieNoAsyncFlush bool          // Whether the asynchronous buffer flushing is disallowed
+	TriesInMemory    uint64        // Number of recent tries to keep in memory
 
 	Preimages    bool   // Whether to store preimage of trie key to the disk
 	StateHistory uint64 // Number of blocks from head whose state histories are reserved.
@@ -222,6 +228,7 @@ func DefaultConfig() *BlockChainConfig {
 		TrieCleanLimit:   256,
 		TrieDirtyLimit:   256,
 		TrieTimeLimit:    5 * time.Minute,
+		TriesInMemory:    state.TriesInMemory,
 		StateScheme:      rawdb.HashScheme,
 		SnapshotLimit:    256,
 		SnapshotWait:     true,
@@ -251,6 +258,14 @@ func (cfg BlockChainConfig) WithNoAsyncFlush(on bool) *BlockChainConfig {
 	return &cfg
 }
 
+// GetTriesInMemory returns the safe value of tries in memory (defaults to [state.TriesInMemory])
+func (cfg BlockChainConfig) GetTriesInMemory() uint64 {
+	if cfg.TriesInMemory == 0 {
+		return state.TriesInMemory
+	}
+	return cfg.TriesInMemory
+}
+
 // triedbConfig derives the configures for trie database.
 func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 	config := &triedb.Config{
@@ -268,6 +283,7 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			EnableStateIndexing: cfg.ArchiveMode,
 			TrieCleanSize:       cfg.TrieCleanLimit * 1024 * 1024,
 			StateCleanSize:      cfg.SnapshotLimit * 1024 * 1024,
+			MaxDiffLayers:       cfg.GetTriesInMemory(),
 
 			// TODO(rjl493456442): The write buffer represents the memory limit used
 			// for flushing both trie data and state data to disk. The config name
@@ -359,15 +375,17 @@ type BlockChain struct {
 	stopping      atomic.Bool   // false if chain is running, true when stopped
 	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
-	engine                       consensus.Engine
-	validator                    Validator // Block and state validator interface
-	prefetcher                   Prefetcher
-	processor                    Processor // Block transaction processor interface
-	parallelProcessor            Processor // Parallel block transaction processor interface
-	parallelSpeculativeProcesses int       // Number of parallel speculative processes
-	enforceParallelProcessor     bool
-	forker                       *ForkChoice
-	logger                       *tracing.Hooks
+	engine                         consensus.Engine
+	validator                      Validator // Block and state validator interface
+	prefetcher                     Prefetcher
+	processor                      Processor // Block transaction processor interface
+	parallelProcessor              Processor // Parallel block transaction processor interface
+	parallelSpeculativeProcesses   int       // Number of parallel speculative processes
+	enforceParallelProcessor       bool
+	parallelStatelessImportEnabled atomic.Bool // Whether parallel stateless import is enabled via config
+	parallelStatelessImportWorkers int         // Number of workers to use for parallel stateless import
+	forker                         *ForkChoice
+	logger                         *tracing.Hooks
 
 	// Bor related changes
 	borReceiptsCache    *lru.Cache[common.Hash, *types.Receipt] // Cache for the most recent bor receipt receipts per block
@@ -626,10 +644,26 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	return bc, nil
 }
 
+// ParallelStatelessImportEnable enables parallel stateless import.
+func (bc *BlockChain) ParallelStatelessImportEnable() {
+	bc.parallelStatelessImportEnabled.Store(true)
+}
+
+// SetParallelStatelessImportWorkers sets the number of workers used by parallel stateless import.
+func (bc *BlockChain) SetParallelStatelessImportWorkers(n int) {
+	if n > 0 {
+		bc.parallelStatelessImportWorkers = n
+	}
+}
+
+// IsParallelStatelessImportEnabled returns true if parallel stateless import is currently enabled.
+func (bc *BlockChain) IsParallelStatelessImportEnabled() bool {
+	return bc.parallelStatelessImportEnabled.Load()
+}
+
 // NewParallelBlockChain , similar to NewBlockChain, creates a new blockchain object, but with a parallel state processor
 func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, cfg *BlockChainConfig, numprocs int, enforce bool) (*BlockChain, error) {
 	bc, err := NewBlockChain(db, genesis, engine, cfg)
-
 	if err != nil {
 		return nil, err
 	}
@@ -799,6 +833,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
 }
+
 func (bc *BlockChain) setupSnapshot() {
 	// Short circuit if the chain is established with path scheme, as the
 	// state snapshot has been integrated into path database natively.
@@ -1609,7 +1644,8 @@ func (bc *BlockChain) Stop() {
 		if !bc.cfg.ArchiveMode {
 			triedb := bc.triedb
 
-			for _, offset := range []uint64{0, 1, state.TriesInMemory - 1} {
+			triesInMemory := bc.cfg.GetTriesInMemory()
+			for _, offset := range []uint64{0, 1, triesInMemory - 1} {
 				if number := bc.CurrentBlock().Number.Uint64(); number > offset {
 					recent := bc.GetBlockByNumber(number - offset)
 
@@ -1875,7 +1911,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Separate out bor receipts (i.e. receipts of state-sync transactions)
-		var borReceipts = make([]rlp.RawValue, len(receiptChain))
+		borReceipts := make([]rlp.RawValue, len(receiptChain))
 		for i, receipts := range receiptChain {
 			receiptChain[i], borReceipts[i] = splitReceiptsAndDeriveFields(receipts, blockChain[i].NumberU64(), blockChain[i].Hash(), bc.chainConfig.Bor)
 		}
@@ -1954,9 +1990,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		}
 
 		// Delete block data from the main database.
-		var (
-			canonHashes = make(map[common.Hash]struct{}, len(blockChain))
-		)
+
+		canonHashes := make(map[common.Hash]struct{}, len(blockChain))
+
 		batch = bc.db.NewBatch()
 		for _, block := range blockChain {
 			canonHashes[block.Hash()] = struct{}{}
@@ -2248,7 +2284,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	// Flush limits are not considered for the first TriesInMemory blocks.
 	current := block.NumberU64()
-	if current <= state.TriesInMemory {
+	triesInMemory := bc.cfg.GetTriesInMemory()
+	if current <= triesInMemory {
 		return []*types.Log{}, nil
 	}
 	// If we exceeded our memory allowance, flush matured singleton nodes to disk
@@ -2261,7 +2298,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		_ = bc.triedb.Cap(limit - ethdb.IdealBatchSize)
 	}
 	// Find the next state trie we need to commit
-	chosen := current - state.TriesInMemory
+	chosen := current - triesInMemory
 	flushInterval := time.Duration(bc.flushInterval.Load())
 	// If we exceeded time allowance, flush an entire trie to disk
 	if bc.gcproc > flushInterval {
@@ -2273,8 +2310,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		} else {
 			// If we're exceeding limits but haven't reached a large enough memory gap,
 			// warn the user that the system is becoming unstable.
-			if chosen < bc.lastWrite+state.TriesInMemory && bc.gcproc >= 2*flushInterval {
-				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/state.TriesInMemory)
+			if chosen < bc.lastWrite+triesInMemory && bc.gcproc >= 2*flushInterval {
+				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/float64(triesInMemory))
 			}
 			// Flush an entire trie and restart the counters
 			_ = bc.triedb.Commit(header.Root, true)
@@ -2438,6 +2475,265 @@ func (bc *BlockChain) InsertChainWithWitnesses(chain types.Blocks, makeWitness b
 	return n, err
 }
 
+// verifyContiguousBlocks checks that the provided blocks are ordered and linked.
+func verifyContiguousBlocks(chain types.Blocks) error {
+	for i := 1; i < len(chain); i++ {
+		block, prev := chain[i], chain[i-1]
+		if block.NumberU64() != prev.NumberU64()+1 || block.ParentHash() != prev.Hash() {
+			log.Error("Non contiguous block insert",
+				"number", block.Number(),
+				"hash", block.Hash(),
+				"parent", block.ParentHash(),
+				"prevnumber", prev.Number(),
+				"prevhash", prev.Hash(),
+			)
+			return fmt.Errorf("non contiguous insert: item %d is #%d [%x..], item %d is #%d [%x..] (parent [%x..])", i-1, prev.NumberU64(),
+				prev.Hash().Bytes()[:4], i, block.NumberU64(), block.Hash().Bytes()[:4], block.ParentHash().Bytes()[:4])
+		}
+	}
+	return nil
+}
+
+// prepareHeaderVerification starts the parallel header verifier and returns a stopper and per-header error channels.
+func (bc *BlockChain) prepareHeaderVerification(headers []*types.Header) (stop func(), errChans []chan error) {
+	abort, results := bc.engine.VerifyHeaders(bc, headers)
+	var abortOnce sync.Once
+	stop = func() { abortOnce.Do(func() { close(abort) }) }
+
+	errChans = make([]chan error, len(headers))
+	for i := range errChans {
+		errChans[i] = make(chan error, 1)
+	}
+	go func() {
+		for i := 0; i < len(headers); i++ {
+			err := <-results
+			errChans[i] <- err
+		}
+		for i := range errChans {
+			close(errChans[i])
+		}
+	}()
+	return stop, errChans
+}
+
+func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index int, hErr error) error {
+	if hErr == consensus.ErrUnknownAncestor {
+		parentNum := block.NumberU64() - 1
+		existingBlock := bc.GetBlockByNumber(parentNum)
+		if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
+			log.Info("Conflicting block detected in stateless sync",
+				"blockNum", block.NumberU64(),
+				"parentNum", parentNum,
+				"existingParent", existingBlock.Hash(),
+				"expectedParent", block.ParentHash())
+			existingHeader := existingBlock.Header()
+			verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
+			if verifyErr == nil {
+				log.Info("Existing parent block is valid, rejecting new fork",
+					"existingParent", existingBlock.Hash(),
+					"rejectedParent", block.ParentHash())
+				return fmt.Errorf("rejecting block %d: existing parent %s is valid", block.NumberU64(), existingBlock.Hash())
+			}
+			log.Info("Existing parent block is invalid, accepting reorg",
+				"existingParent", existingBlock.Hash(),
+				"newParent", block.ParentHash(),
+				"verifyErr", verifyErr)
+			if err := bc.SetHead(parentNum - 1); err != nil {
+				return fmt.Errorf("failed to rewind for reorg: %w", err)
+			}
+			return fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
+		}
+		if index != 0 {
+			return hErr
+		}
+		return nil
+	}
+	return hErr
+}
+
+// parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
+func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
+	log.Debug("Performing parallel stateless import", "chain length", len(chain))
+	start := time.Now()
+	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
+	statelessParallelImportBlocksCounter.Inc(int64(len(chain)))
+
+	// Parallel stateless execution with a worker pool
+	type execResult struct {
+		sdb        *state.StateDB
+		err        error
+		needsRetry bool
+		gasUsed    uint64
+	}
+	results := make([]execResult, len(chain))
+	defer func() {
+		for i := range results {
+			if results[i].sdb != nil {
+				results[i].sdb = nil
+			}
+		}
+	}()
+
+	workCh := make(chan int, len(chain))
+	var snapDiffItems, snapBufItems common.StorageSize
+	var wg sync.WaitGroup
+	numWorkers := runtime.GOMAXPROCS(0)
+	if bc.parallelStatelessImportEnabled.Load() && bc.parallelStatelessImportWorkers > 0 {
+		numWorkers = bc.parallelStatelessImportWorkers
+	}
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range workCh {
+				blk := chain[idx]
+				// Known block: skip execution
+				if bc.HasBlock(blk.Hash(), blk.NumberU64()) {
+					continue
+				}
+				if bc.insertStopped() {
+					results[idx].err = errInsertionInterrupted
+					continue
+				}
+				var witness *stateless.Witness
+				if idx < len(witnesses) {
+					witness = witnesses[idx]
+				}
+				sdb, res, perr := bc.ProcessBlockWithWitnesses(blk, witness)
+				if perr != nil {
+					sdb = nil
+					// Defer execution errors to the sequential writer for retry
+					log.Info("Deferring execution retry to writer stage", "block", blk.NumberU64(), "hash", blk.Hash(), "err", perr)
+					results[idx].needsRetry = true
+					continue
+				}
+
+				// If StateDB captured a database error during execution, defer to writer
+				if sdb != nil && sdb.Error() != nil {
+					err := sdb.Error()
+					log.Info("Deferring due to StateDB error", "block", blk.NumberU64(), "hash", blk.Hash(), "err", err)
+					sdb = nil
+					results[idx].needsRetry = true
+					continue
+				}
+				if witness != nil {
+					sdb.SetWitness(witness)
+				}
+				results[idx].sdb = sdb
+				results[idx].gasUsed = res.GasUsed
+			}
+		}()
+	}
+
+	for i := range chain {
+		workCh <- i
+	}
+	close(workCh)
+	wg.Wait()
+
+	// Sequentially verify headers and write blocks
+	var processed atomic.Int32
+	for i, block := range chain {
+		if bc.HasBlock(block.Hash(), block.NumberU64()) {
+			processed.Add(1)
+			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
+			if i < len(errChans) {
+				if err := <-errChans[i]; err != nil {
+					stopHeaders()
+					return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
+				}
+			}
+			stats.processed = int(processed.Load())
+			stats.usedGas += block.GasUsed()
+
+			if bc.snaps != nil {
+				snapDiffItems, snapBufItems = bc.snaps.Size()
+			}
+			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+			continue
+		}
+
+		if resErr := results[i].err; resErr != nil {
+			stopHeaders()
+			return int(processed.Load()), resErr
+		}
+
+		var hErr error
+		if i < len(errChans) {
+			hErr = <-errChans[i]
+		}
+		if hErr != nil {
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
+				stopHeaders()
+				return int(processed.Load()), err
+			}
+		}
+
+		// Validate witness pre-state for this block (if present) before writing
+		if i < len(witnesses) && witnesses[i] != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[i].HeaderReader() != nil {
+				headerReader = witnesses[i].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+				stopHeaders()
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
+			}
+		}
+
+		// Only commit blocks that don't need retry
+		if !results[i].needsRetry {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
+			results[i].sdb = nil
+		} else {
+			// Handle deferred retry for validation errors
+			log.Info("Retrying deferred validation", "block", block.NumberU64(), "hash", block.Hash())
+			var witness *stateless.Witness
+			if i < len(witnesses) {
+				witness = witnesses[i]
+			}
+			sdb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+			if perr != nil {
+				log.Error("Deferred validation failed", "block", block.NumberU64(), "hash", block.Hash(), "err", perr)
+				stopHeaders()
+				return int(processed.Load()), perr
+			}
+			if sdb != nil && sdb.Error() != nil {
+				retryErr := sdb.Error()
+				log.Error("Deferred validation captured StateDB error", "block", block.NumberU64(), "hash", block.Hash(), "err", retryErr)
+				stopHeaders()
+				return int(processed.Load()), retryErr
+			}
+			if witness != nil {
+				sdb.SetWitness(witness)
+			}
+			results[i].gasUsed = res.GasUsed
+
+			// Commit the block after successful retry
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, false, true); werr != nil {
+				stopHeaders()
+				return int(processed.Load()), werr
+			}
+		}
+
+		processed.Add(1)
+		stats.processed = int(processed.Load())
+		stats.usedGas += results[i].gasUsed
+		if bc.snaps != nil {
+			snapDiffItems, snapBufItems = bc.snaps.Size()
+		}
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+	}
+
+	return int(processed.Load()), nil
+}
+
 func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stateless.Witness) (int, error) {
 	// Sanity check that we have something meaningful to import
 	if len(chain) == 0 {
@@ -2449,21 +2745,9 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 	stats := insertStats{startTime: mclock.Now()}
 
-	// Do a sanity check that the provided chain is actually ordered and linked.
-	for i := 1; i < len(chain); i++ {
-		block, prev := chain[i], chain[i-1]
-		if block.NumberU64() != prev.NumberU64()+1 || block.ParentHash() != prev.Hash() {
-			log.Error("Non contiguous block insert",
-				"number", block.Number(),
-				"hash", block.Hash(),
-				"parent", block.ParentHash(),
-				"prevnumber", prev.Number(),
-				"prevhash", prev.Hash(),
-			)
-
-			return 0, fmt.Errorf("non contiguous insert: item %d is #%d [%x..], item %d is #%d [%x..] (parent [%x..])", i-1, prev.NumberU64(),
-				prev.Hash().Bytes()[:4], i, block.NumberU64(), block.Hash().Bytes()[:4], block.ParentHash().Bytes()[:4])
-		}
+	// Ensure blocks are ordered and linked
+	if err := verifyContiguousBlocks(chain); err != nil {
+		return 0, err
 	}
 
 	// Pre-checks passed, start the full block imports
@@ -2472,131 +2756,97 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 	}
 	defer bc.chainmu.Unlock()
 
-	// Start the parallel header verifier
+	// Prepare headers slice
 	headers := make([]*types.Header, len(chain))
 	for i, block := range chain {
 		headers[i] = block.Header()
 	}
-	abort, results := bc.engine.VerifyHeaders(bc, headers)
-	defer close(abort)
+
+	// Start header verification
+	stopHeaders, errChans := bc.prepareHeaderVerification(headers)
+	defer stopHeaders()
 
 	// Check the validity of incoming chain
 	isValid, err := bc.forker.ValidateReorg(bc.CurrentBlock(), headers)
 	if err != nil {
 		return 0, err
 	}
-
 	if !isValid {
-		// The chain to be imported is invalid as the blocks doesn't match with
-		// the whitelisted block number.
 		return 0, whitelist.ErrMismatch
 	}
 
-	// In stateless mode, we process blocks one by one without committing the state
-	var processed int
-	for i, block := range chain {
-		// Check if block is already known before attempting to process
+	if !bc.parallelStatelessImportEnabled.Load() {
+		return bc.insertChainStatelessSequential(chain, witnesses, errChans, &stats)
+	}
 
+	return bc.insertChainStatelessParallel(chain, witnesses, errChans, &stats, stopHeaders)
+}
+
+// insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
+func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
+	log.Debug("Performing sequential stateless import", "chain length", len(chain))
+	start := time.Now()
+	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
+	statelessSequentialImportBlocksCounter.Inc(int64(len(chain)))
+	var processed atomic.Int32
+	for i, block := range chain {
+		// Known block short-circuit
 		if bc.HasBlock(block.Hash(), block.NumberU64()) {
+			processed.Add(1)
 			log.Trace("Skipping known block in InsertChainStateless", "number", block.NumberU64(), "hash", block.Hash())
-			processed++ // Count as processed since we're skipping it
-			// We need to ensure the header verification result for this block is consumed
-			// even though we are skipping the processing.
-			if err := <-results; err != nil {
+			if err := <-errChans[i]; err != nil {
 				// If header verification failed for this known block (shouldn't happen often),
 				// it might indicate a deeper issue, but we can't proceed with the chain.
 				log.Warn("Header verification failed for known block", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
-				return processed - 1, fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
+				return int(processed.Load() - 1), fmt.Errorf("header verification failed for known block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 			}
-			continue // Skip to the next block
+			continue
 		}
-		// If the chain is terminating, don't even bother starting up.
 		if bc.insertStopped() {
-			return processed, errInsertionInterrupted
+			return int(processed.Load()), errInsertionInterrupted
 		}
-
-		// Wait for the block's verification to complete
-		if err := <-results; err != nil {
-			if err == consensus.ErrUnknownAncestor {
-				// For stateless nodes, check if this is a reorg situation
-				parentNum := block.NumberU64() - 1
-				existingBlock := bc.GetBlockByNumber(parentNum)
-
-				if existingBlock != nil && existingBlock.Hash() != block.ParentHash() {
-					// We have a different block at the parent's height - this could be a reorg
-					log.Info("Conflicting block detected in stateless sync",
-						"blockNum", block.NumberU64(),
-						"parentNum", parentNum,
-						"existingParent", existingBlock.Hash(),
-						"expectedParent", block.ParentHash())
-
-					// Verify the existing parent block to see if it's valid
-					// This helps avoid unnecessary rewinds if the existing block is correct
-					existingHeader := existingBlock.Header()
-					verifyErr := bc.engine.VerifyHeader(bc, existingHeader)
-
-					// Check if the existing parent is valid
-					if verifyErr == nil {
-						// Existing parent is valid, so the new block is on a wrong fork
-						log.Info("Existing parent block is valid, rejecting new fork",
-							"existingParent", existingBlock.Hash(),
-							"rejectedParent", block.ParentHash())
-						return processed, fmt.Errorf("rejecting block %d: existing parent %s is valid",
-							block.NumberU64(), existingBlock.Hash())
-					}
-
-					// Existing parent is invalid, we need to rewind and accept the new chain
-					log.Info("Existing parent block is invalid, accepting reorg",
-						"existingParent", existingBlock.Hash(),
-						"newParent", block.ParentHash(),
-						"verifyErr", verifyErr)
-
-					// For stateless nodes, we need to rewind and let the sync continue
-					// This will cause the correct parent block to be fetched and imported
-					if err := bc.SetHead(parentNum - 1); err != nil {
-						return processed, fmt.Errorf("failed to rewind for reorg: %w", err)
-					}
-
-					// Return to let the downloader retry with the correct chain
-					return processed, fmt.Errorf("reorg detected, rewound to block %d", parentNum-1)
-				} else if i != 0 {
-					// Not the first block and no reorg detected
-					return processed, err
-				}
-				// First block in batch or successful reorg handling - continue
-			} else {
-				return processed, err
-			}
-		}
-
-		// Get the witness for this block if available
 		var witness *stateless.Witness
 		if i < len(witnesses) {
 			witness = witnesses[i]
 		}
-
-		// Process the block using stateless execution
-		statedb, res, err := bc.ProcessBlockWithWitnesses(block, witness)
-		if err != nil {
-			return processed, err
+		statedb, res, perr := bc.ProcessBlockWithWitnesses(block, witness)
+		if perr != nil {
+			return int(processed.Load()), perr
 		}
-
 		statedb.SetWitness(witness)
-
-		// Write the block to the chain without committing state
-		if _, err := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); err != nil {
-			return processed, err
+		hErr := <-errChans[i]
+		if hErr != nil {
+			if err := bc.handleHeaderVerificationError(block, i, hErr); err != nil {
+				return int(processed.Load()), err
+			}
 		}
 
-		processed++
-
-		stats.processed = processed
+		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); werr != nil {
+			return int(processed.Load()), werr
+		}
+		processed.Add(1)
+		stats.processed = int(processed.Load())
 		stats.usedGas += res.GasUsed
-
-		stats.report(chain, i, 0, 0, 0, 0, true, true)
+		var snapDiffItems, snapBufItems common.StorageSize
+		if bc.snaps != nil {
+			snapDiffItems, snapBufItems = bc.snaps.Size()
+		}
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
 	}
-
-	return processed, nil
+	// End-of-batch witness validation
+	for i, block := range chain {
+		if i < len(witnesses) && witnesses[i] != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[i].HeaderReader() != nil {
+				headerReader = witnesses[i].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
+			}
+		}
+	}
+	return int(processed.Load()), nil
 }
 
 // insertChain is the internal implementation of InsertChain, which assumes that
@@ -2907,7 +3157,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
 			// 1. Validate the witness.
-			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], bc); err != nil {
+			var headerReader stateless.HeaderReader = bc
+			if witnesses[it.processed()-1].HeaderReader() != nil {
+				headerReader = witnesses[it.processed()-1].HeaderReader()
+			}
+			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], headerReader); err != nil {
 				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
@@ -3107,7 +3361,7 @@ type blockProcessingResult struct {
 // it writes the block and associated state to database.
 // nolint : unused
 func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
-	var startTime = time.Now()
+	startTime := time.Now()
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 		bc.logger.OnBlockStart(tracing.BlockEvent{
@@ -4058,9 +4312,18 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	// Validate witness.
-	if err := stateless.ValidateWitnessPreState(witness, bc); err != nil {
-		log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
-		return nil, nil, fmt.Errorf("witness validation failed: %w", err)
+	// During parallel import, defer pre-state validation to the end of the batch.
+	if !bc.parallelStatelessImportEnabled.Load() {
+		var headerReader stateless.HeaderReader
+		if witness.HeaderReader() != nil {
+			headerReader = witness.HeaderReader()
+		} else {
+			headerReader = bc
+		}
+		if err := stateless.ValidateWitnessPreState(witness, headerReader); err != nil {
+			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+			return nil, nil, fmt.Errorf("witness validation failed: %w", err)
+		}
 	}
 
 	// Remove critical computed fields from the block to force true recalculation
@@ -4074,7 +4337,6 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
 	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
-
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
@@ -4083,7 +4345,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 	if crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
-		err = fmt.Errorf("stateless self-validation state root mismatch: remote %x != local %x", block.Root(), crossStateRoot)
+		err = fmt.Errorf("%w: remote %x != local %x", ErrStatelessStateRootMismatch, block.Root(), crossStateRoot)
 		return nil, nil, err
 	}
 	if crossReceiptRoot != block.ReceiptHash() {

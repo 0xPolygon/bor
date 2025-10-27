@@ -425,7 +425,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 			case CodePath:
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
-				stateObject := sr.getStateObject(addr)
+				stateObject := s.getStateObject(addr)
 				if stateObject != nil {
 					s.SelfDestruct(addr)
 				}
@@ -1243,7 +1243,9 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 
 	if s.prefetcher != nil && len(addressesToPrefetch) > 0 {
 		if err := s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, addressesToPrefetch, nil, false); err != nil {
-			log.Error("Failed to prefetch addresses", "addresses", len(addressesToPrefetch), "err", err)
+			if !errors.Is(err, errTerminated) {
+				log.Error("Failed to prefetch addresses", "addresses", len(addressesToPrefetch), "err", err)
+			}
 		}
 	}
 	// Invalidate journal because reverting across transactions is not allowed.

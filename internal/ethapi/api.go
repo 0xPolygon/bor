@@ -949,7 +949,13 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 		// can be multiple headers with same number.
 		header, err = b.HeaderByHash(ctx, *blockNrOrHash.BlockHash)
 		if header == nil || err != nil {
-			log.Warn("Error fetching header on CallWithState", "err", err)
+			// Suppress warning during parallel stateless import as headers may not be immediately available
+			// TODO: the ideal way is to avoid relying previous block header post veblop for state sync
+			if b.IsParallelImportActive() && header == nil {
+				log.Debug("Header not yet available during parallel stateless import, operation will be retried once headers are imported", "hash", blockNrOrHash.BlockHash, "err", err)
+			} else {
+				log.Warn("Error fetching header on CallWithState", "err", err)
+			}
 			return nil, err
 		}
 	}

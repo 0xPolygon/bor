@@ -281,6 +281,8 @@ type worker struct {
 	interruptBlockBuilding atomic.Bool // A toggle to denote whether to stop block building or not
 	mockTxDelay            uint        // A mock delay for transaction execution, only used in tests
 
+	blockTime time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
 	// But in some special scenario the consensus engine will seal blocks instantaneously,
@@ -316,6 +318,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitIntervalCh:  make(chan time.Duration),
 		resubmitAdjustCh:    make(chan *intervalAdjust, resubmitAdjustChanSize),
 		interruptCommitFlag: config.CommitInterruptFlag,
+		blockTime:           config.BlockTime,
 		makeWitness:         makeWitness,
 	}
 	worker.noempty.Store(true)
@@ -678,7 +681,7 @@ func (w *worker) mainLoop() {
 
 				stopFn := func() {}
 				if w.interruptCommitFlag {
-					stopFn = createInterruptTimer(w.current.header.Number.Uint64(), w.current.header.Time, &w.interruptBlockBuilding)
+					stopFn = createInterruptTimer(w.current.header.Number.Uint64(), w.current.header.GetActualTime(), &w.interruptBlockBuilding)
 				}
 
 				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, &w.interruptBlockBuilding) // Mixed bag of everrything, yolo
@@ -1568,7 +1571,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
-		stopFn = createInterruptTimer(work.header.Number.Uint64(), work.header.Time, &w.interruptBlockBuilding)
+		stopFn = createInterruptTimer(work.header.Number.Uint64(), work.header.GetActualTime(), &w.interruptBlockBuilding)
 	}
 
 	// Create an empty block based on temporary copied state for
@@ -1626,13 +1629,14 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
 // and toggles the flag when the timer expires.
-func createInterruptTimer(number, timestamp uint64, interruptBlockBuilding *atomic.Bool) func() {
-	delay := time.Until(time.Unix(int64(timestamp), 0))
+func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool) func() {
+	delay := time.Until(actualTimestamp)
 
 	// Reduce the timeout by 500ms to give some buffer for state root computation
 	if delay > 1*time.Second {
 		delay -= 500 * time.Millisecond
 	}
+
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
 
 	// Reset the flag when timer starts for building a new block.
