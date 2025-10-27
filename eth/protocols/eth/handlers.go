@@ -351,7 +351,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			continue
 		}
 
-		// If we're past the state-sync hardfork, state-sync receipts (if present) are stored
+		// If we're past the Madhugiri hardfork, state-sync receipts (if present) are stored
 		// with normal block receipts so no special handling needed.
 		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(*number))) {
 			allReceipts := chain.GetReceiptsRLP(hash)
@@ -379,7 +379,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			continue
 		}
 
-		// Before Madhugiri HF, we need to fetch state-sync receipts separately along with fetching
+		// Before Madhugiri hardfork, we need to fetch state-sync receipts separately along with fetching
 		// block receipts. Upon fetching, decode them, merge them into a single unit and re-encode
 		// the final list to be sent over p2p.
 		normalReceipts := chain.GetReceiptsRLP(hash)
@@ -574,7 +574,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 	// The `metadata` function below was used earlier to calculate `ReceiptHash` which is further
 	// used to validate against `header.ReceiptHash`. By default, state-sync receipts (which are
 	// appended at the end of list for a block) are excluded from the `ReceiptHash` calculation.
-	// After the state-sync hard fork, they should be included in the calculation. We don't have
+	// After the Madhugiri hardfork, they should be included in the calculation. We don't have
 	// access to block number here so we can't determine whether to exclude or not. Instead, just
 	// ignore the `metadata` function and pass on the whole receipt list as is. The receipt queue
 	// handler which has access to block number will take care of the exclusion if needed.
@@ -592,7 +592,7 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 
 // EncodeReceiptsAndPrepareHasher encodes a list of receipts to the storage format (does not
 // include TxType field). It also returns a function which calculates `ReceiptHash` of a receipt list
-// based on the whether we've crossed the hardfork or not.
+// based on the whether we've crossed the Madhugiri hardfork or not.
 func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
 	// Extract receipts based on type. Add/remove support for new types here as needed.
 	var (

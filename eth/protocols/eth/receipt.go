@@ -457,7 +457,7 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue, isStateSync
 		content, _, _ := rlp.SplitList(it.Value())
 		receiptList := enc.List()
 		if isStateSyncReceipt(i) {
-			// TxType is always 0 for state-sync transactions before state-sync hardfork.
+			// TxType is always 0 for state-sync transactions before Madhugiri hardfork.
 			// Post Madhugiri HF, they will be part of normal block receipts and body so no special
 			// handling needed.
 			enc.WriteUint64(uint64(0))

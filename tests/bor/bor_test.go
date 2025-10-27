@@ -509,7 +509,7 @@ func TestFetchStateSyncEvents_PreStateSyncHF(t *testing.T) {
 	require.Equal(t, 0, len(receipts), "no normal receipts should be found")
 }
 
-func TestFetchStateSyncEvents_PostStateSyncHF(t *testing.T) {
+func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
@@ -518,7 +518,7 @@ func TestFetchStateSyncEvents_PostStateSyncHF(t *testing.T) {
 	updateGenesis := func(gen *core.Genesis) {
 		gen.Config.Bor.StateSyncConfirmationDelay = map[string]uint64{"0": uint64(stateSyncConfirmationDelay)}
 		gen.Config.Bor.Sprint = map[string]uint64{"0": sprintSize}
-		gen.Config.Bor.MadhugiriBlock = big.NewInt(0) // enable the HF from genesis
+		gen.Config.Bor.MadhugiriBlock = big.NewInt(0) // Enable Madhugiri hardfork from genesis.
 	}
 	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
 	chain := init.ethereum.BlockChain()
