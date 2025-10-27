@@ -133,31 +133,33 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			"txIndex", i, "txHash", tx.Hash(), "logRoot", logRoot,
 			"logRootHex", common.Bytes2Hex(logRoot))
 
-		receiverBalance := dbCopy.GetBalance(common.HexToAddress("0x8c78d3B9942470640C8b106bD1C510E2D554e9b2"))
-		log.Error("Receiver balance After Finalize Serial", "blockNumber", blockNumber.Uint64(),
-			"txIndex", i, "txHash", tx.Hash(), "receiverBalance", receiverBalance,
-			"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
-		contracts := []string{
-			"0x7556b97f766cd81ae136cf6e9157c7a24090f0fc",
-			"0x05f404875a3d368613e27b68a309f8891082a3c1",
-			"0x61e80f11c8eee5ebebfa45e2b90b45ed9fc7d305",
-			"0x459453ace10d838ed771c34b15ed78d1518c7bf1",
-			"0xeff00818069ea28a20a8c7d929813f030a992eab",
-			"0xbecad4ede783855546cd668fd6e80beb1cf06644",
-			"0xfc362477b22554f0b11f55afac574e47b28594db",
-			"0xd37b3a6cb6fdb77cdd006fc08938a3badb52cc95",
-			"0xb58806484ee43fde596037b137355cf44aa52735",
-			"0xa97de29e3f56815c1bb2d10939140b11c709bda3",
-		}
-		for _, contract := range contracts {
-			contractSize := dbCopy.GetCodeSize(common.HexToAddress(contract))
-			contractCode := dbCopy.GetCode(common.HexToAddress(contract))
-			contractBalance := dbCopy.GetBalance(common.HexToAddress(contract))
-			log.Error("Contract code", "blockNumber", blockNumber.Uint64(),
-				"txIndex", i, "txHash", tx.Hash(), "contract", contract,
-				"contractSize", contractSize,
-				"contractCode", common.Bytes2Hex(contractCode),
-				"contractBalance", contractBalance.Uint64())
+		if i == 83 {
+			receiverBalance := dbCopy.GetBalance(common.HexToAddress("0xc1DC698755061E812aC7D3efaf9d0623eFe80410"))
+			log.Error("Receiver balance After Finalize Serial", "blockNumber", blockNumber.Uint64(),
+				"txIndex", i, "txHash", tx.Hash(), "receiverBalance", receiverBalance,
+				"receiverBalanceHex", common.Bytes2Hex(receiverBalance.Bytes()))
+			contracts := []string{
+				"0x5ea62264e92fd654f4ed7de7d9655df214287fc5",
+				"0x7b8e81615bd175b720bf462cb5059a72e922d7fc",
+				"0xb1f4857098d97018ccc2aa2cfc8df557ef8e0cf7",
+				"0xd65468954200879fca6348587bcdea4448104277",
+				"0x22a241d243c9fbf3eb7c7250d4f2ca6970ee1b30",
+				"0x2b80b2737459ae9fd2142be8b488be87d1f94977",
+				"0x8682d0e32edcbdc35e308facb74ab358bf8f207c",
+				"0x0a9cb02501ee0b4860b1d9d3e17f7a8a1e828eca",
+				"0x869d40c6a8b427c0b87b1480d70df527d5542a0f",
+				"0x86cac4367edcea1b55afdc6b6cd67c72193dc620",
+			}
+			for _, contract := range contracts {
+				contractSize := dbCopy.GetCodeSize(common.HexToAddress(contract))
+				contractCode := dbCopy.GetCode(common.HexToAddress(contract))
+				contractBalance := dbCopy.GetBalance(common.HexToAddress(contract))
+				log.Error("Contract code", "blockNumber", blockNumber.Uint64(),
+					"txIndex", i, "txHash", tx.Hash(), "contract", contract,
+					"contractSize", contractSize,
+					"contractCode", common.Bytes2Hex(contractCode),
+					"contractBalance", contractBalance.Uint64())
+			}
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
@@ -266,7 +268,8 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if i == 83 {
 		log.Error("STARTING TO FLUSH WRITE SET")
 		statedb.FlushMVWriteSet()
-		evm.StateDB.Inner().ApplyMVWriteSet(statedb.MVFullWriteList(), false)
+		dbCopy := evm.StateDB.Inner().Copy()
+		dbCopy.ApplyMVWriteSet(statedb.MVFullWriteList(), false)
 		log.Error("ENDING TO FLUSH WRITE SET")
 	}
 	// resMap := statedb.GetMVHashmap()
