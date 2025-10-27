@@ -1422,6 +1422,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	if env.header.BaseFee != nil {
 		filter.BaseFee = uint256.MustFromBig(env.header.BaseFee)
 	}
+	if w.chainConfig.IsOsaka(env.header.Number) || (w.chainConfig.Bor != nil && w.chainConfig.Bor.IsMadhugiri(env.header.Number)) {
+		filter.GasLimitCap = params.MaxTxGas
+	}
 
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
