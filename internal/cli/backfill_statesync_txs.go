@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/internal/cli/flagset"
@@ -379,19 +378,6 @@ func hasPendingErr(errCh chan error) bool {
 	}
 }
 
-// tryDecodeKV decodes the hex key/value of a write instruction and wraps errors with kind.
-func tryDecodeKV(kind string, w WriteInstruction) (keyBytes, valBytes []byte, err error) {
-	keyBytes, err = decodeHexString(w.Key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode %s key: %w", kind, err)
-	}
-	valBytes, err = decodeHexString(w.Value)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode %s value: %w", kind, err)
-	}
-	return keyBytes, valBytes, nil
-}
-
 // enqueuePut attempts to send a put request; returns false if a hard error is pending.
 func enqueuePut(puts chan putReq, req putReq, errCh chan error) bool {
 	select {
@@ -427,8 +413,6 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 	errCh := make(chan error, 1)
 
 	var processed int64
-	var checkedRcpt int64
-	var checkedLookup int64
 	var inserted int64
 	var skippedKnown int64
 	var skippedOther int64
@@ -458,64 +442,29 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 				if hasPendingErr(errCh) {
 					return
 				}
+				trimmedKey := w.Key
+				trimmedValue := w.Value
 
-				isReceipt, number, blockHash, err := parseReceiptKey(w.Key)
-				if err != nil {
-					c.UI.Output(fmt.Sprintf("WARN: %v (key=%s)", err, w.Key))
-					atomic.AddInt64(&skippedOther, 1)
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
+				if len(trimmedKey) >= 2 && trimmedKey[:2] == "0x" {
+					trimmedKey = trimmedKey[2:]
 				}
 
-				if isReceipt {
-					atomic.AddInt64(&checkedRcpt, 1)
-
-					exists := rawdb.ReadBorReceiptRLP(chaindb, blockHash, number)
-					if len(exists) > 0 {
-						atomic.AddInt64(&skippedKnown, 1)
-						incrementAndMaybeReportProgress(c, &processed, int64(total))
-						continue
-					}
-
-					keyBytes, valBytes, err := tryDecodeKV("receipt", w)
-					if err != nil {
-						propagateOnce(errCh, err)
-						return
-					}
-					if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
-						return
-					}
-
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
+				if len(trimmedValue) >= 2 && trimmedValue[:2] == "0x" {
+					trimmedValue = trimmedValue[2:]
 				}
-
-				// txlookup path
-				txh, err := parseTxLookup(w.Key)
-				if err != nil {
-					c.UI.Output(fmt.Sprintf("WARN: cannot parse txlookup key (key=%s): %v", w.Key, err))
-					atomic.AddInt64(&skippedOther, 1)
-					incrementAndMaybeReportProgress(c, &processed, int64(total))
-					continue
-				}
-				atomic.AddInt64(&checkedLookup, 1)
-
-				if rawdb.ReadBorTxLookupEntry(chaindb, txh) != nil {
+				retrievedValue, _ := chaindb.Get(common.Hex2Bytes(trimmedKey))
+				if bytes.Equal(retrievedValue, common.Hex2Bytes(trimmedValue)) {
 					atomic.AddInt64(&skippedKnown, 1)
 					incrementAndMaybeReportProgress(c, &processed, int64(total))
 					continue
 				}
 
-				keyBytes, valBytes, err := tryDecodeKV("txlookup", w)
-				if err != nil {
-					propagateOnce(errCh, err)
-					return
-				}
-				if !enqueuePut(puts, putReq{key: keyBytes, val: valBytes}, errCh) {
+				if !enqueuePut(puts, putReq{key: common.Hex2Bytes(trimmedKey), val: common.Hex2Bytes(trimmedValue)}, errCh) {
 					return
 				}
 
 				incrementAndMaybeReportProgress(c, &processed, int64(total))
+				continue
 			}
 		}()
 	}
@@ -548,9 +497,8 @@ func (c *BackFillStateSyncTxsEntriesCommand) putMissingBackfill(chaindb ethdb.Da
 	}
 
 	c.UI.Output(fmt.Sprintf(
-		"Backfill summary: total=%d receipts_checked=%d txlookups_checked=%d inserted=%d already_present=%d skipped_other=%d",
-		total,
-		checkedRcpt, checkedLookup, inserted, skippedKnown, skippedOther,
+		"Backfill summary: total=%d inserted=%d already_present=%d skipped_other=%d",
+		total, inserted, skippedKnown, skippedOther,
 	))
 	return nil
 }
@@ -604,5 +552,9 @@ func (c *BackFillStateSyncTxsEntriesCommand) Run(args []string) int {
 		return 1
 	}
 
+	if err = chaindb.Close(); err != nil {
+		c.UI.Error("error while closing db: " + err.Error())
+		return 1
+	}
 	return 0
 }

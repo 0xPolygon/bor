@@ -1059,8 +1059,6 @@ func testWitnessFetching(t *testing.T, light bool) {
 	bodyFetcher := tester.makeBodyFetcher("valid", blocks, 0)
 	witnessFetcher := tester.makeWitnessFetcher("valid", blocks, 0)
 
-	// Start the fetcher's activity loop
-	tester.fetcher.Start()
 	defer tester.fetcher.Stop()
 
 	// Announce the blocks one by one
@@ -1106,8 +1104,6 @@ func testSequentialAnnouncementsWithDrift(t *testing.T, light bool) {
 	bodyFetcher := tester.makeBodyFetcher("valid", blocks, 0)
 	witnessFetcher := tester.makeWitnessFetcher("valid", blocks, 0)
 
-	// Start the fetcher's activity loop
-	tester.fetcher.Start()
 	defer tester.fetcher.Stop()
 
 	// Announce the blocks one by one with time drift
@@ -1153,8 +1149,6 @@ func testSequentialAnnouncementsWithTimeout(t *testing.T, light bool) {
 	bodyFetcher := tester.makeBodyFetcher("valid", blocks, 0)
 	witnessFetcher := tester.makeWitnessFetcher("valid", blocks, 0)
 
-	// Start the fetcher's activity loop
-	tester.fetcher.Start()
 	defer tester.fetcher.Stop()
 
 	// Announce the blocks one by one with timeout

@@ -131,7 +131,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	}
 	header := block.Header()
 	if block.GasUsed() != res.GasUsed {
-		return fmt.Errorf("invalid gas used (remote: %d local: %d)", block.GasUsed(), res.GasUsed)
+		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
 	}
 	// Validate the received block's bloom with the one derived from the generated receipts.
 	// For valid blocks this should always validate to true.
@@ -141,7 +141,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	// everything.
 	rbloom := types.MergeBloom(res.Receipts)
 	if rbloom != header.Bloom {
-		return fmt.Errorf("invalid bloom (remote: %x  local: %x)", header.Bloom, rbloom)
+		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
 	}
 	// In stateless mode, return early because the receipt and state root are not
 	// provided through the witness, rather the cross validator needs to return it.
@@ -151,13 +151,13 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	// The receipt Trie's root (R = (Tr [[H1, R1], ... [Hn, Rn]]))
 	receiptSha := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
 	if receiptSha != header.ReceiptHash {
-		return fmt.Errorf("invalid receipt root hash (remote: %x local: %x)", header.ReceiptHash, receiptSha)
+		return fmt.Errorf("%w (remote: %x local: %x)", ErrReceiptRootMismatch, header.ReceiptHash, receiptSha)
 	}
 	// Validate the parsed requests match the expected header value.
 	if header.RequestsHash != nil {
 		reqhash := types.CalcRequestsHash(res.Requests)
 		if reqhash != *header.RequestsHash {
-			return fmt.Errorf("invalid requests hash (remote: %x local: %x)", *header.RequestsHash, reqhash)
+			return fmt.Errorf("%w (remote: %x local: %x)", ErrRequestsHashMismatch, *header.RequestsHash, reqhash)
 		}
 	} else if res.Requests != nil {
 		return errors.New("block has requests before prague fork")

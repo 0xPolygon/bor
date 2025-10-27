@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -720,7 +721,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 
 	// Create a channel to control witness fetch timing
 	fetchStarted := make(chan struct{})
-	responseSent := false
+	var responseSent atomic.Bool
 
 	fetchWitness := func(hash common.Hash, responseCh chan *eth.Response) (*eth.Request, error) {
 		// Signal that fetch has started
@@ -744,7 +745,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 				},
 				Done: make(chan error, 1),
 			}
-			responseSent = true
+			responseSent.Store(true)
 		}()
 
 		// Return successful request
@@ -783,7 +784,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify response was sent and block is no longer pending
-	if !responseSent {
+	if !responseSent.Load() {
 		t.Error("Response should have been sent")
 	}
 
