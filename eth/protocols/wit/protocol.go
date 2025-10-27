@@ -23,7 +23,7 @@ var ProtocolVersions = []uint{WIT2, WIT1}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
-var protocolLengths = map[uint]uint64{WIT2: 6, WIT1: 4}
+var protocolLengths = map[uint]uint64{WIT2: 8, WIT1: 4}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 16 * 1024 * 1024
@@ -35,6 +35,8 @@ const (
 	MsgWitness            = 0x03
 	GetWitnessMetadataMsg = 0x04
 	WitnessMetadataMsg    = 0x05
+	GetReducedWitnessMsg  = 0x06 // Request reduced witness (omits cached states)
+	ReducedWitnessMsg     = 0x07 // Response with reduced witness data
 )
 
 var (
@@ -50,6 +52,7 @@ type Packet interface {
 }
 
 // GetWitnessRequest represents a list of witnesses query by witness pages.
+// Also used for reduced witness requests (same structure).
 type GetWitnessRequest struct {
 	WitnessPages []WitnessPageRequest // Request by list of witness pages
 }
@@ -60,12 +63,14 @@ type WitnessPageRequest struct {
 }
 
 // GetWitnessPacket represents a witness query with request ID wrapping.
+// Also used for reduced witness requests (same structure).
 type GetWitnessPacket struct {
 	RequestId uint64
 	*GetWitnessRequest
 }
 
 // WitnessPacketRLPPacket represents a witness response with request ID wrapping.
+// Also used for reduced witness responses (same structure).
 type WitnessPacketRLPPacket struct {
 	RequestId uint64
 	WitnessPacketResponse
@@ -73,6 +78,7 @@ type WitnessPacketRLPPacket struct {
 
 // WitnessPacketResponse represents a witness response, to use when we already
 // have the witness rlp encoded.
+// Also used for reduced witness responses (same structure).
 type WitnessPacketResponse []WitnessPageResponse
 
 type WitnessPageResponse struct {

@@ -179,6 +179,33 @@ func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response)
 	return req, nil
 }
 
+// RequestReducedWitness sends a request to the peer for reduced witnesses (omits cached states).
+// Reuses GetWitnessPacket structure since format is identical.
+func (p *Peer) RequestReducedWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	log.Debug("Requesting reduced witness", "peer", p.id, "pages", len(witnessPages))
+	id := rand.Uint64()
+
+	req := &Request{
+		id:   id,
+		sink: sink,
+		code: GetReducedWitnessMsg, // Different message code
+		want: ReducedWitnessMsg,
+		data: &GetWitnessPacket{ // Same structure as regular witness request
+			RequestId: id,
+			GetWitnessRequest: &GetWitnessRequest{
+				WitnessPages: witnessPages,
+			},
+		},
+	}
+	if err := p.dispatchRequest(req); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
 // Close signals the broadcast goroutine to terminate. Only ever call this if
 // you created the peer yourself via NewPeer. Otherwise let whoever created it
 // clean it up!
