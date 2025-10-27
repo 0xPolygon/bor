@@ -102,7 +102,7 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(f.begin)), f.begin)
 
 	// begin already on PIP-74, no more need for bor logs
-	if f.borConfig != nil && f.borConfig.IsStateSync(big.NewInt(f.begin)) {
+	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.begin)) {
 		return nil, nil
 	}
 
@@ -112,8 +112,8 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 	}
 
 	// end on PIP-74, reduce to fit just on preHF blocks
-	if f.borConfig != nil && f.borConfig.IsStateSync(big.NewInt(f.end)) {
-		end = f.borConfig.StateSyncBlock.Int64() - 1
+	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.end)) {
+		end = f.borConfig.MadhugiriBlock.Int64() - 1
 	}
 
 	// Gather all indexed logs, and finish with non indexed ones

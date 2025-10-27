@@ -1718,9 +1718,9 @@ func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash com
 		return nil, nil
 	}
 
-	// After the state-sync HF, no need to split receipts as all receipts for a block
+	// After the Madhugiri HF, no need to split receipts as all receipts for a block
 	// are stored together (i.e. under same key).
-	if borCfg.IsStateSync(big.NewInt(int64(number))) {
+	if borCfg.IsMadhugiri(big.NewInt(int64(number))) {
 		return receipts, nil
 	}
 
@@ -2168,7 +2168,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	if len(blockLogs) > 0 {
 		// After StateSync HF we don't write bor receipts separately
-		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsStateSync(block.Number())) && len(blockLogs) > len(logs) {
+		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsMadhugiri(block.Number())) && len(blockLogs) > len(logs) {
 			sort.SliceStable(blockLogs, func(i, j int) bool {
 				return blockLogs[i].Index < blockLogs[j].Index
 			})

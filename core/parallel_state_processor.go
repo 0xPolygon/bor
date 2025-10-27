@@ -426,7 +426,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	receipts = p.engine.Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
-	if p.config.Bor != nil && p.config.Bor.IsStateSync(block.Number()) {
+	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {

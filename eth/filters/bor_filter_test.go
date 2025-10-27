@@ -166,13 +166,13 @@ func TestBorFilters_SkipOnBeginAtStateSync(t *testing.T) {
 	// Clone test BorConfig and set the StateSync hard-fork block to 1000.
 	testBorConfig := params.TestChainConfig.Bor
 	cfgCopy := *testBorConfig
-	cfgCopy.StateSyncBlock = big.NewInt(1000)
+	cfgCopy.MadhugiriBlock = big.NewInt(1000)
 
 	// Return DB and a sufficiently new head so range logic runs.
 	backend.EXPECT().ChainDb().Return(db).AnyTimes()
 	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
 
-	// Begin at the StateSync block: after currentSprintEnd alignment, IsStateSync(begin) should be true
+	// Begin at the StateSync block: after currentSprintEnd alignment, IsMadhugiri (begin) should be true
 	// and the filter should return (nil, nil) without scanning any bor receipts.
 	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, 1000, 1100, nil, nil)
 	logs, err := filter.Logs(t.Context())
@@ -202,7 +202,7 @@ func TestBorFilters_TrimEndAtStateSync(t *testing.T) {
 	// Clone test BorConfig and set the StateSync hard-fork block to 1000.
 	testBorConfig := params.TestChainConfig.Bor
 	cfgCopy := *testBorConfig
-	cfgCopy.StateSyncBlock = big.NewInt(1000)
+	cfgCopy.MadhugiriBlock = big.NewInt(1000)
 
 	// Always returned
 	backend.EXPECT().ChainDb().Return(db).AnyTimes()

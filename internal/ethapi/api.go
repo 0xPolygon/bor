@@ -527,9 +527,9 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 			}
 		}
 
-		// State-sync tx and receipt is stored with normal block receipts post state-sync HF so skip
+		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
-		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 			return response, nil
 		}
 
@@ -551,9 +551,9 @@ func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, 
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
 
-		// State-sync tx and receipt is stored with normal block receipts post state-sync HF so skip
+		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
-		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 			return response, nil
 		}
 
@@ -675,9 +675,9 @@ func (api *BlockChainAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rp
 		result[i] = marshalReceipt(receipt, block.Hash(), block.NumberU64(), signer, txs[i], i, false)
 	}
 
-	// State-sync receipts are stored with normal block receipts post state-sync HF so skip
+	// State-sync receipts are stored with normal block receipts post Madhugiri HF so skip
 	// fetching them separately.
-	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 		return result, nil
 	}
 
@@ -1363,8 +1363,8 @@ func NewRPCPendingTransaction(tx *types.Transaction, current *types.Header, conf
 func newRPCTransactionFromBlockIndex(b *types.Block, index uint64, config *params.ChainConfig, db ethdb.Database) *RPCTransaction {
 	txs := b.Transactions()
 
-	// State-sync transaction is part of block body post state-sync HF so skip fetching it separately.
-	if config.Bor != nil && config.Bor.IsStateSync(b.Number()) {
+	// State-sync transaction is part of block body post Madhugiri HF so skip fetching it separately.
+	if config.Bor != nil && config.Bor.IsMadhugiri(b.Number()) {
 		if index >= uint64(len(txs)) {
 			return nil
 		}
@@ -1574,8 +1574,8 @@ type TransactionAPI struct {
 func (api *TransactionAPI) getAllBlockTransactions(ctx context.Context, block *types.Block) (types.Transactions, bool) {
 	txs := block.Transactions()
 
-	// State-sync transaction is part of block body post state-sync HF so skip fetching it separately.
-	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(block.Number()) {
+	// State-sync transaction is part of block body post Madhugiri HF so skip fetching it separately.
+	if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 		return txs, false
 	}
 
@@ -1705,8 +1705,8 @@ func (api *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common
 
 		resultTx := newRPCTransaction(tx, blockHash, blockNumber, header.Time, index, header.BaseFee, api.b.ChainConfig())
 
-		// Skip handling state-sync tx separately post state-sync HF
-		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsStateSync(header.Number) {
+		// Skip handling state-sync tx separately post Madhugiri HF
+		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(header.Number) {
 			return resultTx, nil
 		}
 

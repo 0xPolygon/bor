@@ -353,7 +353,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 
 		// If we're past the state-sync hardfork, state-sync receipts (if present) are stored
 		// with normal block receipts so no special handling needed.
-		if borCfg != nil && borCfg.IsStateSync(big.NewInt(int64(*number))) {
+		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(*number))) {
 			allReceipts := chain.GetReceiptsRLP(hash)
 			if allReceipts == nil {
 				if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
@@ -379,7 +379,7 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			continue
 		}
 
-		// Before state-sync HF, we need to fetch state-sync receipts separately along with fetching
+		// Before Madhugiri HF, we need to fetch state-sync receipts separately along with fetching
 		// block receipts. Upon fetching, decode them, merge them into a single unit and re-encode
 		// the final list to be sent over p2p.
 		normalReceipts := chain.GetReceiptsRLP(hash)
@@ -624,7 +624,7 @@ func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params
 	hasher := trie.NewStackTrie(nil)
 	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
 		// Don't exclude state-sync receipts for post hardfork blocks
-		if borCfg.IsStateSync(number) {
+		if borCfg.IsMadhugiri(number) {
 			return types.DeriveSha(receipts[index], hasher)
 		} else {
 			receipts[index].ExcludeStateSyncReceipt()

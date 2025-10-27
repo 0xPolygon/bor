@@ -330,7 +330,7 @@ func TestReceiptList69_WithStateSync_e2e(t *testing.T) {
 
 	// For 8 cases, test 4 pre hardfork and 4 post hardfork scenarios
 	borCfg := &params.BorConfig{
-		StateSyncBlock: big.NewInt(4),
+		MadhugiriBlock: big.NewInt(4),
 	}
 	// Simulating the way packet is delivered to the receipt queue
 	deliver := func(packet interface{}) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
@@ -353,7 +353,7 @@ func TestReceiptList69_WithStateSync_e2e(t *testing.T) {
 	for i := 0; i < len(receipts); i++ {
 		got := getReceiptListHashes(i, big.NewInt(int64(i)))
 		expected := stateSyncReceiptsTests[i].rootWithoutStateSync
-		if borCfg.IsStateSync(big.NewInt(int64(i))) {
+		if borCfg.IsMadhugiri(big.NewInt(int64(i))) {
 			expected = stateSyncReceiptsTests[i].rootWithStateSync
 		}
 		if got != expected {

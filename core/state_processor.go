@@ -153,7 +153,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
-	if p.config.Bor != nil && p.config.Bor.IsStateSync(block.Number()) {
+	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {

@@ -1075,7 +1075,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		return nil
 	}
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(header.Number) {
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
 		if len(body.Transactions) > 0 {
 			lastTx := body.Transactions[len(body.Transactions)-1]
 			if lastTx.Type() == types.StateSyncTxType {
@@ -1214,7 +1214,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsStateSync(big.NewInt(int64(headerNumber))) {
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
 			StateSyncData: stateSyncData,
 		})
