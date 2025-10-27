@@ -414,6 +414,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, allowOnlyNo
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
 			state := sr.GetState(addr, stateKey)
+			log.Error("ApplyMVWriteSet: State", "addr", addr.Hex(), "key", stateKey.Hex(), "state", state.Hex())
 			s.SetState(addr, stateKey, state)
 		} else if path.IsAddress() {
 			continue
@@ -425,16 +426,20 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, allowOnlyNo
 				if allowOnlyNonce {
 					continue
 				}
+				balance := sr.GetBalance(addr)
+				log.Error("ApplyMVWriteSet: Balance", "addr", addr.Hex(), "balance", balance.String())
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
 				if allowOnlyNonce {
 					log.Error("ApplyMVWriteSet: Nonce", "addr", addr.Hex())
 				}
+				log.Error("ApplyMVWriteSet: Nonce", "addr", addr.Hex(), "nonce", sr.GetNonce(addr))
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
 				if allowOnlyNonce {
 					continue
 				}
+				log.Error("ApplyMVWriteSet: Code", "addr", addr.Hex())
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
 				if allowOnlyNonce {
