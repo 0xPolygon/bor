@@ -93,7 +93,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(tx.Data()), params.MaxInitCodeSize)
 	}
 	// bor: apply EIP-7825 at Madhugiri block
-	if rules.IsOsaka || rules.IsMadhugiri && tx.Gas() > params.MaxTxGas {
+	if (rules.IsOsaka || rules.IsMadhugiri) && tx.Gas() > params.MaxTxGas {
 		return fmt.Errorf("%w (cap: %d, tx: %d)", core.ErrGasLimitTooHigh, params.MaxTxGas, tx.Gas())
 	}
 	// Transactions can't be negative. This may never happen using RLP decoded

@@ -201,8 +201,13 @@ func Transaction(ctx *cli.Context) error {
 		if chainConfig.IsShanghai(new(big.Int)) && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
 			r.Error = errors.New("max initcode size exceeded")
 		}
+
 		// bor: apply EIP-7825 at Madhugiri block
-		if chainConfig.IsOsaka(new(big.Int)) || (chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(new(big.Int))) && tx.Gas() > params.MaxTxGas {
+		isOsaka := chainConfig.IsOsaka(new(big.Int))
+		isMadhugiri := chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(new(big.Int))
+
+		// Verify tx gas limit does not exceed EIP-7825 cap.
+		if (isOsaka || isMadhugiri) && tx.Gas() > params.MaxTxGas {
 			r.Error = errors.New("gas limit exceeds maximum")
 		}
 
