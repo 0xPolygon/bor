@@ -187,7 +187,10 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
-		return nil, err
+		// TODO: remove this check when HistoricDB implements OpenTrie
+		if _, ok := db.(*HistoricDB); !ok {
+			return nil, err
+		}
 	}
 	sdb := &StateDB{
 		trie:                 tr,
