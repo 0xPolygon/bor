@@ -1386,7 +1386,7 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	pool.mu.Lock()
 	if reset != nil {
 		if reset.newHead != nil && reset.oldHead != nil {
-			// bor: apply EIP-7825 at Madhugiri block
+			// Bor: EIP-7825 at Madhugiri HF block
 			isOsaka := pool.chainconfig.IsOsaka(reset.newHead.Number) && !pool.chainconfig.IsOsaka(reset.oldHead.Number)
 			isMadhugiri := pool.chainconfig.Bor != nil && (pool.chainconfig.Bor.IsMadhugiri(reset.newHead.Number) && !pool.chainconfig.Bor.IsMadhugiri(reset.oldHead.Number))
 			// Discard the transactions with the gas limit higher than the cap.
