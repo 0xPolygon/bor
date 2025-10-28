@@ -203,11 +203,11 @@ func init() {
 
 func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
 	switch {
+	case rules.IsMadhugiri:
+		return PrecompiledContractsOsaka
 	case rules.IsVerkle:
 		return PrecompiledContractsVerkle
 	case rules.IsOsaka:
-		return PrecompiledContractsOsaka
-	case rules.IsMadhugiri:
 		return PrecompiledContractsOsaka
 	case rules.IsPrague:
 		return PrecompiledContractsPrague
@@ -232,9 +232,9 @@ func ActivePrecompiledContracts(rules params.Rules) PrecompiledContracts {
 // ActivePrecompiles returns the precompile addresses enabled with the current configuration.
 func ActivePrecompiles(rules params.Rules) []common.Address {
 	switch {
-	case rules.IsOsaka:
-		return PrecompiledAddressesOsaka
 	case rules.IsMadhugiri:
+		return PrecompiledAddressesOsaka
+	case rules.IsOsaka:
 		return PrecompiledAddressesOsaka
 	case rules.IsPrague:
 		return PrecompiledAddressesPrague

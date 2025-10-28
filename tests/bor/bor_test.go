@@ -575,7 +575,6 @@ func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 		insertNewBlock(t, chain, block)
 	}
 
-	// TODO marcello fix this test with gas over the limit
 	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false)
 	insertNewBlock(t, chain, block)
 
