@@ -2244,8 +2244,8 @@ func (pool *LegacyPool) PreLoadTrieNodes(txs ...*types.Transaction) {
 		}
 	}
 
-	// Set the global prefetch reader
-	state.SetGlobalPrefetchReader(state.NewPrefetchReader(combinedAccounts, combinedStorage))
+	// Set the global prefetch reader scoped to current head root to avoid staleness
+	state.SetGlobalPrefetchReaderForRoot(header.Root, state.NewPrefetchReader(combinedAccounts, combinedStorage))
 }
 
 // newEVMBlockContext creates a block context for EVM execution using the current pool state
