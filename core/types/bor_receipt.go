@@ -75,6 +75,9 @@ func DeriveFieldsForBorReceipt(receipt *Receipt, receipts Receipts, header *Head
 		logIndex++
 	}
 
+	// Also derive the Bloom if not derived yet
+	receipt.Bloom = CreateBloom(receipt)
+
 	return nil
 }
 
