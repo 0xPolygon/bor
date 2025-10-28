@@ -400,6 +400,35 @@ func (s *StateDB) FlushMVWriteSet() {
 	}
 }
 
+// ApplyFailedTxMVWriteSet applies entries in a given write set to StateDB for failed transaction. Note that this function does not change MVHashMap nor write set
+func (s *StateDB) ApplyFailedTxMVWriteSet(writes []blockstm.WriteDescriptor, sender common.Address) {
+	for i := range writes {
+		path := writes[i].Path
+		sr := writes[i].Val.(*StateDB)
+
+		if path.IsState() || path.IsAddress() {
+			continue
+		} else {
+			addr := path.GetAddress()
+
+			switch path.GetSubpath() {
+			case BalancePath:
+				if addr == sender {
+					s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
+				}
+			case NoncePath:
+				if addr == sender {
+					s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
+				}
+			case CodePath:
+			case SuicidePath:
+			default:
+				panic(fmt.Errorf("unknown key type: %d", path.GetSubpath()))
+			}
+		}
+	}
+}
+
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
 func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
