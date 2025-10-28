@@ -194,11 +194,11 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	if task.index == 83 {
+	if task.result.Failed() {
 		log.Error("Transaction failed", "blockNumber", task.blockNumber.Uint64(),
 			"txIndex", task.index, "txHash", task.tx.Hash())
 
-		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), true)
+		task.finalStateDB.ApplyFailedTxMVWriteSet(task.statedb.MVFullWriteList())
 	} else {
 		task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList(), false)
 
