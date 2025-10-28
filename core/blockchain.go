@@ -4212,6 +4212,36 @@ func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 	return false
 }
 
+// FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
+// This is used when sending reduced witnesses to peers.
+func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) (*stateless.Witness, int, int) {
+	if witness == nil {
+		return nil, 0, 0
+	}
+
+	filtered := witness.Copy()
+
+	bc.cacheLock.RLock()
+	defer bc.cacheLock.RUnlock()
+
+	originalStates := len(filtered.State)
+	filteredStates := make(map[string]struct{})
+	removed := 0
+
+	for stateNode := range filtered.State {
+		// Only include states NOT in active cache
+		if _, cached := bc.activeCacheMap[stateNode]; !cached {
+			filteredStates[stateNode] = struct{}{}
+		} else {
+			removed++
+		}
+	}
+
+	filtered.State = filteredStates
+
+	return filtered, originalStates, removed
+}
+
 // updateSlidingWindowCache updates the sliding window cache after processing a block.
 // This is used by both full nodes and witness-receiving nodes to maintain synchronized caches.
 func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *stateless.Witness, statedb *state.StateDB) {

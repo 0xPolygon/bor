@@ -52,9 +52,10 @@ type Packet interface {
 }
 
 // GetWitnessRequest represents a list of witnesses query by witness pages.
-// Also used for reduced witness requests (same structure).
+// Also used for reduced witness requests (distinguished by IsReduced flag).
 type GetWitnessRequest struct {
 	WitnessPages []WitnessPageRequest // Request by list of witness pages
+	IsReduced    bool                 // True if requesting reduced witness (omits cached states)
 }
 
 type WitnessPageRequest struct {

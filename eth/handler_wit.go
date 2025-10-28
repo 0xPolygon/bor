@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
@@ -55,13 +56,27 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 	case *wit.NewWitnessHashesPacket:
 		return h.handleWitnessHashesAnnounce(peer, packet.Hashes, packet.Numbers)
 	case *wit.GetWitnessPacket:
-		// Call handleGetWitness which returns the raw RLP data
-		response, err := h.handleGetWitness(peer, packet)
-		if err != nil {
-			return fmt.Errorf("failed to handle GetWitnessPacket: %w", err)
+		var response wit.WitnessPacketResponse
+		var err error
+
+		// Check if this is a reduced witness request
+		if packet.IsReduced {
+			// Handle reduced witness request with filtering
+			response, err = h.handleGetReducedWitness(peer, packet)
+			if err != nil {
+				return fmt.Errorf("failed to handle GetReducedWitnessPacket: %w", err)
+			}
+			// Reply with reduced witness (different message code)
+			return peer.ReplyReducedWitness(packet.RequestId, &response)
+		} else {
+			// Handle regular witness request
+			response, err = h.handleGetWitness(peer, packet)
+			if err != nil {
+				return fmt.Errorf("failed to handle GetWitnessPacket: %w", err)
+			}
+			// Reply with regular witness
+			return peer.ReplyWitness(packet.RequestId, &response)
 		}
-		// Reply using the retrieved RLP data
-		return peer.ReplyWitness(packet.RequestId, &response)
 
 	case *wit.GetWitnessMetadataPacket:
 		// Call handleGetWitnessMetadata which returns only metadata (page count)
@@ -180,6 +195,96 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 	// Return the collected RLP data
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
+}
+
+// handleGetReducedWitness retrieves witnesses and filters them using the sliding window cache.
+// This reduces bandwidth by omitting state nodes that the receiver should already have cached.
+func (h *witHandler) handleGetReducedWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
+	log.Debug("handleGetReducedWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
+
+	// First, get the full witness data (same as regular handleGetWitness)
+	fullResponse, err := h.handleGetWitness(peer, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Now filter each witness page by removing cached states
+	var filteredResponse wit.WitnessPacketResponse
+
+	for _, witnessPage := range fullResponse {
+		if len(witnessPage.Data) == 0 {
+			// Empty page, just pass through
+			filteredResponse = append(filteredResponse, witnessPage)
+			continue
+		}
+
+		// Decode the witness from the RLP data
+		witness, err := stateless.GetWitnessFromRlp(witnessPage.Data)
+		if err != nil {
+			log.Warn("Failed to decode witness for filtering", "hash", witnessPage.Hash, "err", err)
+			// If we can't decode, send the full data
+			filteredResponse = append(filteredResponse, witnessPage)
+			continue
+		}
+
+		// Filter witness using sliding window cache
+		filteredWitness := h.filterWitnessWithCache(witness)
+
+		// Re-encode the filtered witness
+		var filteredBuf []byte
+		if filteredWitness != nil {
+			var buf bytes.Buffer
+			err = filteredWitness.EncodeRLP(&buf)
+			if err != nil {
+				log.Warn("Failed to encode filtered witness", "hash", witnessPage.Hash, "err", err)
+				// If encoding fails, send the full data
+				filteredResponse = append(filteredResponse, witnessPage)
+				continue
+			}
+			filteredBuf = buf.Bytes()
+		}
+
+		// Create filtered page response
+		filteredPage := wit.WitnessPageResponse{
+			Data:       filteredBuf,
+			Hash:       witnessPage.Hash,
+			Page:       witnessPage.Page,
+			TotalPages: witnessPage.TotalPages,
+		}
+		filteredResponse = append(filteredResponse, filteredPage)
+
+		originalSize := len(witnessPage.Data)
+		filteredSize := len(filteredBuf)
+		reduction := float64(originalSize-filteredSize) * 100.0 / float64(originalSize)
+
+		log.Debug("Filtered witness for reduced transmission",
+			"hash", witnessPage.Hash,
+			"page", witnessPage.Page,
+			"originalSize", originalSize,
+			"filteredSize", filteredSize,
+			"reduction%", fmt.Sprintf("%.2f", reduction))
+	}
+
+	log.Debug("handleGetReducedWitness returning filtered witnesses", "peer", peer.ID(), "reqID", req.RequestId, "count", len(filteredResponse))
+	return filteredResponse, nil
+}
+
+// filterWitnessWithCache filters a witness by removing state nodes present in the sliding window cache.
+func (h *witHandler) filterWitnessWithCache(witness *stateless.Witness) *stateless.Witness {
+	if witness == nil {
+		return nil
+	}
+
+	// Use BlockChain's exported method to filter
+	filtered, originalStates, removed := h.chain.FilterWitnessWithSlidingCache(witness)
+
+	log.Debug("Filtered witness state using cache",
+		"blockNum", witness.Header().Number,
+		"originalStates", originalStates,
+		"filteredStates", len(filtered.State),
+		"removed", removed)
+
+	return filtered
 }
 
 // handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.

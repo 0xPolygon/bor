@@ -180,7 +180,7 @@ func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response)
 }
 
 // RequestReducedWitness sends a request to the peer for reduced witnesses (omits cached states).
-// Reuses GetWitnessPacket structure since format is identical.
+// Reuses GetWitnessPacket structure with IsReduced flag set to true.
 func (p *Peer) RequestReducedWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
@@ -193,10 +193,11 @@ func (p *Peer) RequestReducedWitness(witnessPages []WitnessPageRequest, sink cha
 		sink: sink,
 		code: GetReducedWitnessMsg, // Different message code
 		want: ReducedWitnessMsg,
-		data: &GetWitnessPacket{ // Same structure as regular witness request
+		data: &GetWitnessPacket{
 			RequestId: id,
 			GetWitnessRequest: &GetWitnessRequest{
 				WitnessPages: witnessPages,
+				IsReduced:    true, // Mark as reduced witness request
 			},
 		},
 	}
@@ -284,6 +285,21 @@ func (p *Peer) ReplyWitnessMetadata(requestID uint64, metadata []WitnessMetadata
 	return p2p.Send(p.rw, WitnessMetadataMsg, &WitnessMetadataPacket{
 		RequestId: requestID,
 		Metadata:  metadata,
+	})
+}
+
+// ReplyReducedWitness sends a reduced witness response to the peer.
+// Uses ReducedWitnessMsg code but same packet structure as regular witness.
+func (p *Peer) ReplyReducedWitness(requestID uint64, response *WitnessPacketResponse) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	log.Debug("Replying with reduced witness", "peer", p.id, "reqID", requestID, "pages", len(*response))
+
+	// Send the response with ReducedWitnessMsg code
+	return p2p.Send(p.rw, ReducedWitnessMsg, &WitnessPacketRLPPacket{
+		RequestId:             requestID,
+		WitnessPacketResponse: *response,
 	})
 }
 
