@@ -32,6 +32,22 @@ type insertStats struct {
 	startTime                  mclock.AbsTime
 	execDur                    time.Duration
 	stateCalcDur               time.Duration
+
+	// Cache stats accumulated across this segment
+	procAccHit   int64
+	procAccMiss  int64
+	procStorHit  int64
+	procStorMiss int64
+	prefAccHit   int64
+	prefAccMiss  int64
+	prefStorHit  int64
+	prefStorMiss int64
+}
+
+// getBlockchain attempts to retrieve the BlockChain instance for reading last* stats.
+// This is a shim; in this codebase we can't access bc directly here without plumbing.
+func (st *insertStats) getBlockchain() (*BlockChain, bool) {
+	return nil, false
 }
 
 // statsReportLimit is the time limit during import and export after which we
@@ -40,7 +56,7 @@ const statsReportLimit = 8 * time.Second
 
 // report prints statistics if some number of blocks have been processed
 // or more than a few seconds have passed since the last message.
-func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, snapBufItems, trieDiffNodes, triebufNodes common.StorageSize, setHead bool, stateless bool) {
+func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, snapBufItems, trieDiffNodes, triebufNodes common.StorageSize, setHead bool, stateless bool, bc *BlockChain) {
 	// Fetch the timings for the batch
 	var (
 		now     = mclock.Now()
@@ -77,6 +93,59 @@ func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, sn
 			if snapBufItems != 0 { // future snapshot refactor
 				context = append(context, []interface{}{"snapdirty", snapBufItems}...)
 			}
+		}
+		// Append cache hit/miss percentages
+		if bc != nil {
+			if total := bc.lastProcAccHit + bc.lastProcAccMiss; total > 0 {
+				pct := int64(100 * bc.lastProcAccHit / total)
+				context = append(context, []interface{}{"cacheproc_acc_pct", pct}...)
+			}
+			if total := bc.lastProcStorHit + bc.lastProcStorMiss; total > 0 {
+				pct := int64(100 * bc.lastProcStorHit / total)
+				context = append(context, []interface{}{"cacheproc_stor_pct", pct}...)
+			}
+			if total := bc.lastPrefAccHit + bc.lastPrefAccMiss; total > 0 {
+				pct := int64(100 * bc.lastPrefAccHit / total)
+				context = append(context, []interface{}{"cachepref_acc_pct", pct}...)
+			}
+			if total := bc.lastPrefStorHit + bc.lastPrefStorMiss; total > 0 {
+				pct := int64(100 * bc.lastPrefStorHit / total)
+				context = append(context, []interface{}{"cachepref_stor_pct", pct}...)
+			}
+			// reset for next segment
+			bc.lastProcAccHit, bc.lastProcAccMiss = 0, 0
+			bc.lastProcStorHit, bc.lastProcStorMiss = 0, 0
+			bc.lastPrefAccHit, bc.lastPrefAccMiss = 0, 0
+			bc.lastPrefStorHit, bc.lastPrefStorMiss = 0, 0
+		}
+		// Append cache hit/miss percentages
+		if bc, ok := st.getBlockchain(); ok {
+			st.prefAccHit, st.prefAccMiss = bc.lastPrefAccHit, bc.lastPrefAccMiss
+			st.prefStorHit, st.prefStorMiss = bc.lastPrefStorHit, bc.lastPrefStorMiss
+			st.procAccHit, st.procAccMiss = bc.lastProcAccHit, bc.lastProcAccMiss
+			st.procStorHit, st.procStorMiss = bc.lastProcStorHit, bc.lastProcStorMiss
+			// reset for next segment
+			bc.lastPrefAccHit, bc.lastPrefAccMiss = 0, 0
+			bc.lastPrefStorHit, bc.lastPrefStorMiss = 0, 0
+			bc.lastProcAccHit, bc.lastProcAccMiss = 0, 0
+			bc.lastProcStorHit, bc.lastProcStorMiss = 0, 0
+		}
+		// Append cache hit/miss percentages
+		if total := st.procAccHit + st.procAccMiss; total > 0 {
+			pct := int64(100 * st.procAccHit / total)
+			context = append(context, []interface{}{"cacheproc_acc_pct", pct}...)
+		}
+		if total := st.procStorHit + st.procStorMiss; total > 0 {
+			pct := int64(100 * st.procStorHit / total)
+			context = append(context, []interface{}{"cacheproc_stor_pct", pct}...)
+		}
+		if total := st.prefAccHit + st.prefAccMiss; total > 0 {
+			pct := int64(100 * st.prefAccHit / total)
+			context = append(context, []interface{}{"cachepref_acc_pct", pct}...)
+		}
+		if total := st.prefStorHit + st.prefStorMiss; total > 0 {
+			pct := int64(100 * st.prefStorHit / total)
+			context = append(context, []interface{}{"cachepref_stor_pct", pct}...)
 		}
 		if trieDiffNodes != 0 { // pathdb
 			context = append(context, []interface{}{"triediffs", trieDiffNodes}...)

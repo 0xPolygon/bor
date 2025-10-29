@@ -365,6 +365,10 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// EnableTxPoolPrefetch controls whether the txpool will prefetch trie nodes
+	// and warm caches for newly received transactions.
+	EnableTxPoolPrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
 }
 
 type SealerConfig struct {
@@ -750,17 +754,18 @@ func DefaultConfig() *Config {
 		BorLogs:     false,
 
 		TxPool: &TxPoolConfig{
-			Locals:       []string{},
-			NoLocals:     false,
-			Journal:      "transactions.rlp",
-			Rejournal:    1 * time.Hour,
-			PriceLimit:   params.BorDefaultTxPoolPriceLimit, // bor's default
-			PriceBump:    10,
-			AccountSlots: 16,
-			GlobalSlots:  131072,
-			AccountQueue: 64,
-			GlobalQueue:  131072,
-			LifeTime:     3 * time.Hour,
+			Locals:               []string{},
+			NoLocals:             false,
+			Journal:              "transactions.rlp",
+			Rejournal:            1 * time.Hour,
+			PriceLimit:           params.BorDefaultTxPoolPriceLimit, // bor's default
+			PriceBump:            10,
+			AccountSlots:         16,
+			GlobalSlots:          131072,
+			AccountQueue:         64,
+			GlobalQueue:          131072,
+			LifeTime:             3 * time.Hour,
+			EnableTxPoolPrefetch: false,
 		},
 		Sealer: &SealerConfig{
 			Enabled:             false,
@@ -1089,6 +1094,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
+		n.TxPool.EnableTxPoolPrefetch = c.TxPool.EnableTxPoolPrefetch
 
 		// Load filtered addresses during config initialization
 		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {

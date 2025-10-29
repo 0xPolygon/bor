@@ -379,6 +379,16 @@ type BlockChain struct {
 	chain2HeadFeed      event.Feed                              // Reorg/NewHead/Fork data feed
 	chainSideFeed       event.Feed                              // Side chain data feed (removed from geth but needed in bor)
 	checker             ethereum.ChainValidator
+
+	// Last reader cache stats from ProcessBlock (read by insertChain for logging)
+	lastPrefAccHit   int64
+	lastPrefAccMiss  int64
+	lastPrefStorHit  int64
+	lastPrefStorMiss int64
+	lastProcAccHit   int64
+	lastProcAccMiss  int64
+	lastProcStorHit  int64
+	lastProcStorMiss int64
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -683,11 +693,20 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		accountCacheMissPrefetchMeter.Mark(stats.AccountMiss)
 		storageCacheHitPrefetchMeter.Mark(stats.StorageHit)
 		storageCacheMissPrefetchMeter.Mark(stats.StorageMiss)
+		// persist for logging
+		bc.lastPrefAccHit += stats.AccountHit
+		bc.lastPrefAccMiss += stats.AccountMiss
+		bc.lastPrefStorHit += stats.StorageHit
+		bc.lastPrefStorMiss += stats.StorageMiss
 		stats = process.GetStats()
 		accountCacheHitMeter.Mark(stats.AccountHit)
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
 		storageCacheMissMeter.Mark(stats.StorageMiss)
+		bc.lastProcAccHit += stats.AccountHit
+		bc.lastProcAccMiss += stats.AccountMiss
+		bc.lastProcStorHit += stats.StorageHit
+		bc.lastProcStorMiss += stats.StorageMiss
 	}()
 
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
@@ -790,6 +809,141 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
+}
+
+// prewarmStateForBlock performs a time-limited prefetch for the given
+// block's parent root and installs a root-scoped prefetch reader.
+func (bc *BlockChain) prewarmStateForBlock(b *types.Block, parentRoot common.Hash) {
+	const maxAccounts = 256
+	const maxStoragePerAccount = 8
+	const timeLimit = 100 * time.Millisecond
+
+	start := time.Now()
+	deadline := start.Add(timeLimit)
+
+	signer := types.MakeSigner(bc.chainConfig, b.Number(), b.Time())
+	rdr, err := bc.statedb.Reader(parentRoot)
+	if err != nil {
+		return
+	}
+
+	type workerRes struct {
+		accounts map[common.Address]*types.StateAccount
+		storage  map[common.Address]map[common.Hash]common.Hash
+	}
+
+	txs := b.Transactions()
+	if len(txs) == 0 {
+		return
+	}
+
+	workers := runtime.NumCPU()
+	if workers < 4 {
+		workers = 4
+	}
+	if workers > 8 {
+		workers = 8
+	}
+
+	jobs := make(chan *types.Transaction)
+	results := make(chan workerRes, workers)
+
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+		accs := make(map[common.Address]*types.StateAccount)
+		stor := make(map[common.Address]map[common.Hash]common.Hash)
+		for tx := range jobs {
+			if time.Now().After(deadline) {
+				break
+			}
+			if from, err := types.Sender(signer, tx); err == nil {
+				if _, ok := accs[from]; !ok && len(accs) < maxAccounts {
+					if acct, _ := rdr.Account(from); acct != nil {
+						accs[from] = acct
+					}
+				}
+			}
+			if to := tx.To(); to != nil {
+				addr := *to
+				if _, ok := accs[addr]; !ok && len(accs) < maxAccounts {
+					if acct, _ := rdr.Account(addr); acct != nil {
+						accs[addr] = acct
+					}
+				}
+			}
+			for _, al := range tx.AccessList() {
+				if time.Now().After(deadline) {
+					break
+				}
+				if _, ok := accs[al.Address]; !ok && len(accs) < maxAccounts {
+					if acct, _ := rdr.Account(al.Address); acct != nil {
+						accs[al.Address] = acct
+					}
+				}
+				if len(al.StorageKeys) > 0 {
+					bucket := stor[al.Address]
+					if bucket == nil {
+						bucket = make(map[common.Hash]common.Hash)
+						stor[al.Address] = bucket
+					}
+					for _, slot := range al.StorageKeys {
+						if len(bucket) >= maxStoragePerAccount || time.Now().After(deadline) {
+							break
+						}
+						if val, _ := rdr.Storage(al.Address, slot); (val != common.Hash{}) {
+							bucket[slot] = val
+						}
+					}
+				}
+			}
+		}
+		results <- workerRes{accounts: accs, storage: stor}
+	}
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	for _, tx := range txs {
+		if time.Now().After(deadline) {
+			break
+		}
+		jobs <- tx
+	}
+	close(jobs)
+	wg.Wait()
+
+	// Collate results with caps
+	accounts := make(map[common.Address]*types.StateAccount)
+	storage := make(map[common.Address]map[common.Hash]common.Hash)
+	for i := 0; i < workers; i++ {
+		res := <-results
+		for a, acct := range res.accounts {
+			if len(accounts) >= maxAccounts {
+				break
+			}
+			accounts[a] = acct
+		}
+		for addr, bucket := range res.storage {
+			dst := storage[addr]
+			if dst == nil {
+				dst = make(map[common.Hash]common.Hash)
+				storage[addr] = dst
+			}
+			for k, v := range bucket {
+				if len(dst) >= maxStoragePerAccount {
+					break
+				}
+				dst[k] = v
+			}
+		}
+	}
+
+	if len(accounts) > 0 || len(storage) > 0 {
+		state.SetGlobalPrefetchReaderForRoot(parentRoot, state.NewPrefetchReader(accounts, storage))
+	}
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -2582,7 +2736,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 		stats.processed = processed
 		stats.usedGas += res.GasUsed
 
-		stats.report(chain, i, 0, 0, 0, 0, true, true)
+		stats.report(chain, i, 0, 0, 0, 0, true, true, bc)
 	}
 
 	return processed, nil
@@ -2862,6 +3016,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
+
+		// Prewarm the state for the block's parent root before creating statedb
+		bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3012,7 +3169,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
+		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false, bc)
 
 		/*
 			// Print confirmation that a future fork is scheduled, but not yet active.

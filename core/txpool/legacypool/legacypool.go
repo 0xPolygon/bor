@@ -179,6 +179,10 @@ type Config struct {
 
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
+
+	// EnableTxPoolPrefetch controls whether the txpool will prefetch trie nodes
+	// and warm caches for newly received transactions.
+	EnableTxPoolPrefetch bool
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -194,8 +198,9 @@ var DefaultConfig = Config{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime:            3 * time.Hour,
-	AllowUnprotectedTxs: false,
+	Lifetime:             3 * time.Hour,
+	AllowUnprotectedTxs:  false,
+	EnableTxPoolPrefetch: false,
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -1100,7 +1105,9 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 	}
 
 	// Warm state for the new transactions
-	go pool.PreLoadTrieNodes(news...)
+	if pool.config.EnableTxPoolPrefetch {
+		go pool.PreLoadTrieNodes(news...)
+	}
 
 	// Process all the new transaction and merge any errors into the original slice. Avoid
 	// locking here as we'll use the global lock optimally.
@@ -2110,6 +2117,9 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 // PreLoadTrieNodes warms relevant trie nodes and code for transactions concurrently
 // then sets a single global prefetch reader.
 func (pool *LegacyPool) PreLoadTrieNodes(txs ...*types.Transaction) {
+	if !pool.config.EnableTxPoolPrefetch {
+		return
+	}
 	pool.mu.RLock()
 	header := pool.currentHead.Load()
 	signer := pool.signer

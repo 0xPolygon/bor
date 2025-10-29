@@ -306,6 +306,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.LifeTime,
 		Group:   "Transaction Pool",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.prefetch",
+		Usage:   "Enable trie/node prefetch in txpool for newly received transactions",
+		Value:   &c.cliConfig.TxPool.EnableTxPoolPrefetch,
+		Default: c.cliConfig.TxPool.EnableTxPoolPrefetch,
+		Group:   "Transaction Pool",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "txpool.filtered-addresses",
 		Usage:   "Path to the file containing a newline-separated list of addresses whose transactions will be filtered",
