@@ -813,137 +813,143 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 // prewarmStateForBlock performs a time-limited prefetch for the given
 // block's parent root and installs a root-scoped prefetch reader.
-func (bc *BlockChain) prewarmStateForBlock(b *types.Block, parentRoot common.Hash) {
+func (bc *BlockChain) prewarmStateForBlock(b *types.Block, parentRoot common.Hash) (func(), <-chan struct{}) {
 	const maxAccounts = 256
 	const maxStoragePerAccount = 8
-	const timeLimit = 100 * time.Millisecond
 
-	start := time.Now()
-	deadline := start.Add(timeLimit)
+	stop := make(chan struct{})
+	done := make(chan struct{})
 
-	signer := types.MakeSigner(bc.chainConfig, b.Number(), b.Time())
-	rdr, err := bc.statedb.Reader(parentRoot)
-	if err != nil {
-		return
-	}
+	go func() {
+		defer close(done)
 
-	type workerRes struct {
-		accounts map[common.Address]*types.StateAccount
-		storage  map[common.Address]map[common.Hash]common.Hash
-	}
+		signer := types.MakeSigner(bc.chainConfig, b.Number(), b.Time())
+		rdr, err := bc.statedb.Reader(parentRoot)
+		if err != nil {
+			return
+		}
 
-	txs := b.Transactions()
-	if len(txs) == 0 {
-		return
-	}
+		type workerRes struct {
+			accounts map[common.Address]*types.StateAccount
+			storage  map[common.Address]map[common.Hash]common.Hash
+		}
 
-	workers := runtime.NumCPU()
-	if workers < 4 {
-		workers = 4
-	}
-	if workers > 8 {
-		workers = 8
-	}
+		txs := b.Transactions()
+		if len(txs) == 0 {
+			return
+		}
 
-	jobs := make(chan *types.Transaction)
-	results := make(chan workerRes, workers)
+		workers := runtime.NumCPU()
+		if workers < 4 {
+			workers = 4
+		}
+		if workers > 8 {
+			workers = 8
+		}
 
-	var wg sync.WaitGroup
-	worker := func() {
-		defer wg.Done()
-		accs := make(map[common.Address]*types.StateAccount)
-		stor := make(map[common.Address]map[common.Hash]common.Hash)
-		for tx := range jobs {
-			if time.Now().After(deadline) {
-				break
-			}
-			if from, err := types.Sender(signer, tx); err == nil {
-				if _, ok := accs[from]; !ok && len(accs) < maxAccounts {
-					if acct, _ := rdr.Account(from); acct != nil {
-						accs[from] = acct
-					}
-				}
-			}
-			if to := tx.To(); to != nil {
-				addr := *to
-				if _, ok := accs[addr]; !ok && len(accs) < maxAccounts {
-					if acct, _ := rdr.Account(addr); acct != nil {
-						accs[addr] = acct
-					}
-				}
-			}
-			for _, al := range tx.AccessList() {
-				if time.Now().After(deadline) {
-					break
-				}
-				if _, ok := accs[al.Address]; !ok && len(accs) < maxAccounts {
-					if acct, _ := rdr.Account(al.Address); acct != nil {
-						accs[al.Address] = acct
-					}
-				}
-				if len(al.StorageKeys) > 0 {
-					bucket := stor[al.Address]
-					if bucket == nil {
-						bucket = make(map[common.Hash]common.Hash)
-						stor[al.Address] = bucket
-					}
-					for _, slot := range al.StorageKeys {
-						if len(bucket) >= maxStoragePerAccount || time.Now().After(deadline) {
-							break
+		jobs := make(chan *types.Transaction)
+		results := make(chan workerRes, workers)
+
+		var wg sync.WaitGroup
+		worker := func() {
+			defer wg.Done()
+			accs := make(map[common.Address]*types.StateAccount)
+			stor := make(map[common.Address]map[common.Hash]common.Hash)
+			for tx := range jobs {
+				if from, err := types.Sender(signer, tx); err == nil {
+					if _, ok := accs[from]; !ok && len(accs) < maxAccounts {
+						if acct, _ := rdr.Account(from); acct != nil {
+							accs[from] = acct
 						}
-						if val, _ := rdr.Storage(al.Address, slot); (val != common.Hash{}) {
-							bucket[slot] = val
+					}
+				}
+				if to := tx.To(); to != nil {
+					addr := *to
+					if _, ok := accs[addr]; !ok && len(accs) < maxAccounts {
+						if acct, _ := rdr.Account(addr); acct != nil {
+							accs[addr] = acct
+						}
+					}
+				}
+				for _, al := range tx.AccessList() {
+					if _, ok := accs[al.Address]; !ok && len(accs) < maxAccounts {
+						if acct, _ := rdr.Account(al.Address); acct != nil {
+							accs[al.Address] = acct
+						}
+					}
+					if len(al.StorageKeys) > 0 {
+						bucket := stor[al.Address]
+						if bucket == nil {
+							bucket = make(map[common.Hash]common.Hash)
+							stor[al.Address] = bucket
+						}
+						for _, slot := range al.StorageKeys {
+							if len(bucket) >= maxStoragePerAccount {
+								break
+							}
+							if val, _ := rdr.Storage(al.Address, slot); (val != common.Hash{}) {
+								bucket[slot] = val
+							}
 						}
 					}
 				}
 			}
+			results <- workerRes{accounts: accs, storage: stor}
 		}
-		results <- workerRes{accounts: accs, storage: stor}
-	}
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go worker()
-	}
-
-	for _, tx := range txs {
-		if time.Now().After(deadline) {
-			break
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go worker()
 		}
-		jobs <- tx
-	}
-	close(jobs)
-	wg.Wait()
 
-	// Collate results with caps
-	accounts := make(map[common.Address]*types.StateAccount)
-	storage := make(map[common.Address]map[common.Hash]common.Hash)
-	for i := 0; i < workers; i++ {
-		res := <-results
-		for a, acct := range res.accounts {
-			if len(accounts) >= maxAccounts {
-				break
+		// Producer: feed jobs until canceled or exhausted
+		produce := func() {
+			for _, tx := range txs {
+				select {
+				case <-stop:
+					close(jobs)
+					return
+				case jobs <- tx:
+				}
 			}
-			accounts[a] = acct
+			close(jobs)
 		}
-		for addr, bucket := range res.storage {
-			dst := storage[addr]
-			if dst == nil {
-				dst = make(map[common.Hash]common.Hash)
-				storage[addr] = dst
-			}
-			for k, v := range bucket {
-				if len(dst) >= maxStoragePerAccount {
+		produce()
+		wg.Wait()
+
+		// Collate results with caps and install reader
+		accounts := make(map[common.Address]*types.StateAccount)
+		storage := make(map[common.Address]map[common.Hash]common.Hash)
+		for i := 0; i < workers; i++ {
+			res := <-results
+			for a, acct := range res.accounts {
+				if len(accounts) >= maxAccounts {
 					break
 				}
-				dst[k] = v
+				accounts[a] = acct
+			}
+			for addr, bucket := range res.storage {
+				dst := storage[addr]
+				if dst == nil {
+					dst = make(map[common.Hash]common.Hash)
+					storage[addr] = dst
+				}
+				for k, v := range bucket {
+					if len(dst) >= maxStoragePerAccount {
+						break
+					}
+					dst[k] = v
+				}
 			}
 		}
-	}
 
-	if len(accounts) > 0 || len(storage) > 0 {
-		state.SetGlobalPrefetchReaderForRoot(parentRoot, state.NewPrefetchReader(accounts, storage))
-	}
+		if len(accounts) > 0 || len(storage) > 0 {
+			state.SetGlobalPrefetchReaderForRoot(parentRoot, state.NewPrefetchReader(accounts, storage))
+		}
+	}()
+
+	cancel := func() { close(stop) }
+	return cancel, done
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -3017,8 +3023,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 
-		// Prewarm the state for the block's parent root before creating statedb
-		bc.prewarmStateForBlock(block, parent.Root)
+		// Prewarm the state for the block's parent root in background before creating statedb
+		prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3074,6 +3080,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
+		// Stop prewarm and wait for it to install the prefetch reader just before execution
+		if prewarmCancel != nil {
+			prewarmCancel()
+			<-prewarmDone
+		}
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
