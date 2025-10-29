@@ -18,6 +18,7 @@ package vm
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"sync/atomic"
 
@@ -42,6 +43,11 @@ type (
 
 func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 	p, ok := evm.precompiles[addr]
+	if addr == common.BytesToAddress([]byte{0x05}) && ok {
+		if bm, isBigModExp := p.(*bigModExp); isBigModExp {
+			fmt.Printf(">>>>>>>>>>> precompilr ModExp precompile eip7883=%v, block=%v\n", bm.eip7883, evm.Context.BlockNumber)
+		}
+	}
 	return p, ok
 }
 

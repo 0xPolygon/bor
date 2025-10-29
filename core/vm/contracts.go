@@ -483,8 +483,12 @@ func (c *bigModExp) RequiredGas(input []byte) uint64 {
 			gas.Mul(gas, adjExpLen)
 		}
 		// 2. Different divisor (`GQUADDIVISOR`) (3)
+		fmt.Println(">>>>>>>>>>> RequireGas")
 		if !c.eip7883 {
+			fmt.Println(">>>>>>>>>>> RequireGas 7883 NOT-ACTIVE")
 			gas.Div(gas, big3)
+		} else {
+			fmt.Println(">>>>>>>>>>> RequireGas 7883 ACTIVE")
 		}
 
 		if gas.BitLen() > 64 {
