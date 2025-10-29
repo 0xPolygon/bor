@@ -208,7 +208,7 @@ func Transaction(ctx *cli.Context) error {
 
 		// Verify tx gas limit does not exceed EIP-7825 cap.
 		if (isOsaka || isMadhugiri) && tx.Gas() > params.MaxTxGas {
-			r.Error = errors.New("tx gas limit exceeds maximum")
+			r.Error = errors.New("gas limit exceeds maximum")
 		}
 
 		results = append(results, r)
