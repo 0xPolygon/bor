@@ -118,26 +118,59 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 		}
 	}
 
-	var witnessRequester func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error)
 	if h.statelessSync.Load() || h.syncWithWitnesses {
-		// Create a witness requester that uses the wit.Peer's RequestWitness method
-		witnessRequester = func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+		for i := 0; i < len(unknownHashes); i++ {
+			hash := unknownHashes[i]
+			number := unknownNumbers[i]
+
+			// Create witness requester closure that captures block number
+			witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+				// Get the ethPeer from the peerSet
+				ethPeer := h.peers.getOnePeerWithWitness(hash)
+				if ethPeer == nil {
+					return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+				}
+
+				// Determine if we should request reduced witness based on sliding window
+				useReduced := h.shouldRequestReducedWitness(number)
+
+				// Request witnesses (reduced or full) using the wit peer with verification
+				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useReduced)
 			}
 
-			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount)
+			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
+		}
+	} else {
+		for i := 0; i < len(unknownHashes); i++ {
+			h.blockFetcher.Notify(peer.ID(), unknownHashes[i], unknownNumbers[i], time.Now(), peer.RequestOneHeader, peer.RequestBodies, nil)
 		}
 	}
 
-	for i := 0; i < len(unknownHashes); i++ {
-		h.blockFetcher.Notify(peer.ID(), unknownHashes[i], unknownNumbers[i], time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
+	return nil
+}
+
+// shouldRequestReducedWitness determines if we should request a reduced witness based on
+// the sliding window cache state. Returns true if witness should be reduced, false for full.
+func (h *ethHandler) shouldRequestReducedWitness(blockNum uint64) bool {
+
+	// TODO(@pratikspatil024) - handle node out of sync case
+
+	// Get the blockchain's current window start
+	windowStart := h.chain.GetCacheWindowStart()
+	windowSize := h.chain.GetCacheWindowSize()
+
+	// If block is at window start, need full witness (cache was just cleared/slid)
+	if blockNum == windowStart {
+		return false
 	}
 
-	return nil
+	// If block is within current window but not at start, can use reduced witness
+	if blockNum > windowStart && blockNum < windowStart+windowSize {
+		return true
+	}
+
+	// Block is outside current window, need full witness
+	return false
 }
 
 // verifyPageCount verifies the witness page count for a given block hash by
@@ -192,6 +225,10 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 	if h.statelessSync.Load() || h.syncWithWitnesses {
 		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 
+		// Determine if we should request reduced witness for this block
+		blockNum := block.NumberU64()
+		useReduced := h.shouldRequestReducedWitness(blockNum)
+
 		// Create a witness requester closure *only if* the peer supports the protocol.
 		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
 			// Get the ethPeer from the peerSet
@@ -200,8 +237,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount)
+			// Request witnesses (reduced or full) using the wit peer with verification
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useReduced)
 		}
 
 		// Call the new fetcher method to inject the block

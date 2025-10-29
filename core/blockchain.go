@@ -4212,6 +4212,18 @@ func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 	return false
 }
 
+// GetCacheWindowStart returns the current cache window start block number.
+func (bc *BlockChain) GetCacheWindowStart() uint64 {
+	bc.cacheLock.RLock()
+	defer bc.cacheLock.RUnlock()
+	return bc.cacheWindowStart
+}
+
+// GetCacheWindowSize returns the cache window size.
+func (bc *BlockChain) GetCacheWindowSize() uint64 {
+	return bc.cacheWindowSize
+}
+
 // FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
 // This is used when sending reduced witnesses to peers.
 func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) (*stateless.Witness, int, int) {
