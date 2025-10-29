@@ -152,7 +152,6 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // shouldRequestReducedWitness determines if we should request a reduced witness based on
 // the sliding window cache state. Returns true if witness should be reduced, false for full.
 func (h *ethHandler) shouldRequestReducedWitness(blockNum uint64) bool {
-
 	// TODO(@pratikspatil024) - handle node out of sync case
 
 	// Get the blockchain's current window start
