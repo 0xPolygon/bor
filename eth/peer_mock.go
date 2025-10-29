@@ -169,6 +169,20 @@ func (mr *MockWitnessPeerMockRecorder) Log() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Log", reflect.TypeOf((*MockWitnessPeer)(nil).Log))
 }
 
+// ReplyReducedWitness mocks base method.
+func (m *MockWitnessPeer) ReplyReducedWitness(requestID uint64, response *wit.WitnessPacketResponse) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReplyReducedWitness", requestID, response)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ReplyReducedWitness indicates an expected call of ReplyReducedWitness.
+func (mr *MockWitnessPeerMockRecorder) ReplyReducedWitness(requestID, response interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplyReducedWitness", reflect.TypeOf((*MockWitnessPeer)(nil).ReplyReducedWitness), requestID, response)
+}
+
 // ReplyWitness mocks base method.
 func (m *MockWitnessPeer) ReplyWitness(requestID uint64, response *wit.WitnessPacketResponse) error {
 	m.ctrl.T.Helper()
@@ -181,6 +195,21 @@ func (m *MockWitnessPeer) ReplyWitness(requestID uint64, response *wit.WitnessPa
 func (mr *MockWitnessPeerMockRecorder) ReplyWitness(requestID, response interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplyWitness", reflect.TypeOf((*MockWitnessPeer)(nil).ReplyWitness), requestID, response)
+}
+
+// RequestReducedWitness mocks base method.
+func (m *MockWitnessPeer) RequestReducedWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RequestReducedWitness", witnessPages, sink)
+	ret0, _ := ret[0].(*wit.Request)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RequestReducedWitness indicates an expected call of RequestReducedWitness.
+func (mr *MockWitnessPeerMockRecorder) RequestReducedWitness(witnessPages, sink interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestReducedWitness", reflect.TypeOf((*MockWitnessPeer)(nil).RequestReducedWitness), witnessPages, sink)
 }
 
 // RequestWitness mocks base method.
