@@ -158,7 +158,7 @@ func (task *ExecutionTask) MVReadList() []blockstm.ReadDescriptor {
 }
 
 func (task *ExecutionTask) MVWriteList() []blockstm.WriteDescriptor {
-	return task.statedb.MVWriteList()
+	return task.statedb.MVWriteList(false)
 }
 
 func (task *ExecutionTask) MVFullWriteList() []blockstm.WriteDescriptor {
@@ -188,7 +188,7 @@ func (task *ExecutionTask) Settle() {
 		log.Error("Executing interesting tx")
 		show = true
 	}
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList(), show)
+	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList(show), show)
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
