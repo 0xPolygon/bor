@@ -144,6 +144,11 @@ const (
 	maxFutureBlocks     = 256
 	maxTimeFutureBlocks = 30
 
+	// Compact witness cache parameters (consensus-critical)
+	// These values must be identical across all nodes for compact witness protocol to work
+	compactWitnessCacheWindowSize  = 20 // Blocks per cache window
+	compactWitnessCacheOverlapSize = 10 // Overlap between consecutive windows
+
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
 	// Changelog:
@@ -366,8 +371,6 @@ type BlockChain struct {
 	activeCacheMap   map[string]struct{} // Currently active cache map
 	nextCacheMap     map[string]struct{} // Pre-warming map for next window
 	cacheWindowStart uint64              // Start block of current window
-	cacheWindowSize  uint64              // Size of each window (e.g., 20 blocks)
-	cacheOverlapSize uint64              // Overlap between windows (e.g., 10 blocks)
 	cacheLock        sync.RWMutex        // Lock for cache operations
 
 	wg            sync.WaitGroup
@@ -452,8 +455,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		activeCacheMap:   make(map[string]struct{}),
 		nextCacheMap:     make(map[string]struct{}),
 		cacheWindowStart: 0,
-		cacheWindowSize:  20, // 20 blocks per window
-		cacheOverlapSize: 10, // 10 blocks overlap
 
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -4193,7 +4194,7 @@ func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int 
 func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
 
-	if blocksSinceWindowStart >= bc.cacheWindowSize {
+	if blocksSinceWindowStart >= compactWitnessCacheWindowSize {
 		// Time to slide the window: discard active, promote next, create new next
 		bc.cacheLock.Lock()
 		oldActiveSize := len(bc.activeCacheMap)
@@ -4221,7 +4222,7 @@ func (bc *BlockChain) GetCacheWindowStart() uint64 {
 
 // GetCacheWindowSize returns the cache window size.
 func (bc *BlockChain) GetCacheWindowSize() uint64 {
-	return bc.cacheWindowSize
+	return compactWitnessCacheWindowSize
 }
 
 // FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
@@ -4266,7 +4267,7 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *statele
 
 	// Determine if we're in overlap period (should cache to both maps)
 	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
-	inOverlapPeriod := blocksSinceWindowStart >= bc.cacheOverlapSize
+	inOverlapPeriod := blocksSinceWindowStart >= compactWitnessCacheOverlapSize
 
 	cachedToActive := 0
 	cachedToNext := 0
