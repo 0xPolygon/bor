@@ -191,6 +191,7 @@ func (j *journal) refundChange(previous uint64) {
 }
 
 func (j *journal) balanceChange(addr common.Address, previous *uint256.Int) {
+	log.Error("BalanceChange", "addr", addr.Hex(), "previous", previous.Uint64())
 	j.append(balanceChange{
 		account: addr,
 		prev:    previous.Clone(),
@@ -205,6 +206,7 @@ func (j *journal) setCode(address common.Address, prevCode []byte) {
 }
 
 func (j *journal) nonceChange(address common.Address, prev uint64) {
+	log.Error("NonceChange", "addr", address.Hex(), "prev", prev)
 	j.append(nonceChange{
 		account: address,
 		prev:    prev,
