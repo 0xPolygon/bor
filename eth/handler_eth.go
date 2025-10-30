@@ -131,11 +131,11 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 					return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 				}
 
-				// Determine if we should request reduced witness based on sliding window
-				useReduced := h.shouldRequestReducedWitness(number)
+				// Determine if we should request compact witness based on sliding window
+				useCompact := h.shouldRequestCompactWitness(number)
 
-				// Request witnesses (reduced or full) using the wit peer with verification
-				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useReduced)
+				// Request witnesses (compact or full) using the wit peer with verification
+				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
 			}
 
 			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
@@ -149,9 +149,9 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	return nil
 }
 
-// shouldRequestReducedWitness determines if we should request a reduced witness based on
-// the sliding window cache state. Returns true if witness should be reduced, false for full.
-func (h *ethHandler) shouldRequestReducedWitness(blockNum uint64) bool {
+// shouldRequestCompactWitness determines if we should request a compact witness based on
+// the sliding window cache state. Returns true if witness should be compact, false for full.
+func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	// TODO(@pratikspatil024) - handle node out of sync case
 
 	// Get the blockchain's current window start
@@ -163,7 +163,7 @@ func (h *ethHandler) shouldRequestReducedWitness(blockNum uint64) bool {
 		return false
 	}
 
-	// If block is within current window but not at start, can use reduced witness
+	// If block is within current window but not at start, can use compact witness
 	if blockNum > windowStart && blockNum < windowStart+windowSize {
 		return true
 	}
@@ -224,9 +224,9 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 	if h.statelessSync.Load() || h.syncWithWitnesses {
 		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 
-		// Determine if we should request reduced witness for this block
+		// Determine if we should request compact witness for this block
 		blockNum := block.NumberU64()
-		useReduced := h.shouldRequestReducedWitness(blockNum)
+		useCompact := h.shouldRequestCompactWitness(blockNum)
 
 		// Create a witness requester closure *only if* the peer supports the protocol.
 		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
@@ -236,8 +236,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 			}
 
-			// Request witnesses (reduced or full) using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useReduced)
+			// Request witnesses (compact or full) using the wit peer with verification
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
 		}
 
 		// Call the new fetcher method to inject the block

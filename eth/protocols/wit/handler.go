@@ -131,8 +131,8 @@ var wit2 = map[uint64]msgHandler{
 	NewWitnessHashesMsg:   handleNewWitnessHashes,
 	GetWitnessMetadataMsg: handleGetWitnessMetadata,
 	WitnessMetadataMsg:    handleWitnessMetadata,
-	GetReducedWitnessMsg:  handleGetReducedWitness,
-	ReducedWitnessMsg:     handleReducedWitness,
+	GetCompactWitnessMsg:  handleGetCompactWitness,
+	CompactWitnessMsg:     handleCompactWitness,
 }
 
 // HandleMessage is invoked whenever an inbound message is received from a

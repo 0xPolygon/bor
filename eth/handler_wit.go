@@ -59,15 +59,15 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 		var response wit.WitnessPacketResponse
 		var err error
 
-		// Check if this is a reduced witness request
-		if packet.IsReduced {
-			// Handle reduced witness request with filtering
-			response, err = h.handleGetReducedWitness(peer, packet)
+		// Check if this is a compact witness request
+		if packet.Compact {
+			// Handle compact witness request with filtering
+			response, err = h.handleGetCompactWitness(peer, packet)
 			if err != nil {
-				return fmt.Errorf("failed to handle GetReducedWitnessPacket: %w", err)
+				return fmt.Errorf("failed to handle GetCompactWitnessPacket: %w", err)
 			}
-			// Reply with reduced witness (different message code)
-			return peer.ReplyReducedWitness(packet.RequestId, &response)
+			// Reply with compact witness (different message code)
+			return peer.ReplyCompactWitness(packet.RequestId, &response)
 		} else {
 			// Handle regular witness request
 			response, err = h.handleGetWitness(peer, packet)
@@ -197,10 +197,10 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 	return response, nil
 }
 
-// handleGetReducedWitness retrieves witnesses and filters them using the sliding window cache.
+// handleGetCompactWitness retrieves witnesses and filters them using the sliding window cache.
 // This reduces bandwidth by omitting state nodes that the receiver should already have cached.
-func (h *witHandler) handleGetReducedWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
-	log.Debug("handleGetReducedWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
+func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
+	log.Debug("handleGetCompactWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
 
 	// First, get the full witness data (same as regular handleGetWitness)
 	fullResponse, err := h.handleGetWitness(peer, req)
@@ -257,7 +257,7 @@ func (h *witHandler) handleGetReducedWitness(peer *wit.Peer, req *wit.GetWitness
 		filteredSize := len(filteredBuf)
 		reduction := float64(originalSize-filteredSize) * 100.0 / float64(originalSize)
 
-		log.Debug("Filtered witness for reduced transmission",
+		log.Debug("Filtered witness for compact transmission",
 			"hash", witnessPage.Hash,
 			"page", witnessPage.Page,
 			"originalSize", originalSize,
@@ -265,7 +265,7 @@ func (h *witHandler) handleGetReducedWitness(peer *wit.Peer, req *wit.GetWitness
 			"reduction%", fmt.Sprintf("%.2f", reduction))
 	}
 
-	log.Debug("handleGetReducedWitness returning filtered witnesses", "peer", peer.ID(), "reqID", req.RequestId, "count", len(filteredResponse))
+	log.Debug("handleGetCompactWitness returning filtered witnesses", "peer", peer.ID(), "reqID", req.RequestId, "count", len(filteredResponse))
 	return filteredResponse, nil
 }
 

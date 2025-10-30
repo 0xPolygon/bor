@@ -35,8 +35,8 @@ const (
 	MsgWitness            = 0x03
 	GetWitnessMetadataMsg = 0x04
 	WitnessMetadataMsg    = 0x05
-	GetReducedWitnessMsg  = 0x06 // Request reduced witness (omits cached states)
-	ReducedWitnessMsg     = 0x07 // Response with reduced witness data
+	GetCompactWitnessMsg  = 0x06 // Request compact witness (omits cached states)
+	CompactWitnessMsg     = 0x07 // Response with compact witness data
 )
 
 var (
@@ -52,10 +52,10 @@ type Packet interface {
 }
 
 // GetWitnessRequest represents a list of witnesses query by witness pages.
-// Also used for reduced witness requests (distinguished by IsReduced flag).
+// Also used for compact witness requests (distinguished by Compact flag).
 type GetWitnessRequest struct {
 	WitnessPages []WitnessPageRequest // Request by list of witness pages
-	IsReduced    bool                 // True if requesting reduced witness (omits cached states)
+	Compact      bool                 // True if requesting compact witness (omits cached states)
 }
 
 type WitnessPageRequest struct {
@@ -64,14 +64,14 @@ type WitnessPageRequest struct {
 }
 
 // GetWitnessPacket represents a witness query with request ID wrapping.
-// Also used for reduced witness requests (same structure).
+// Also used for compact witness requests (same structure).
 type GetWitnessPacket struct {
 	RequestId uint64
 	*GetWitnessRequest
 }
 
 // WitnessPacketRLPPacket represents a witness response with request ID wrapping.
-// Also used for reduced witness responses (same structure).
+// Also used for compact witness responses (same structure).
 type WitnessPacketRLPPacket struct {
 	RequestId uint64
 	WitnessPacketResponse
@@ -79,7 +79,7 @@ type WitnessPacketRLPPacket struct {
 
 // WitnessPacketResponse represents a witness response, to use when we already
 // have the witness rlp encoded.
-// Also used for reduced witness responses (same structure).
+// Also used for compact witness responses (same structure).
 type WitnessPacketResponse []WitnessPageResponse
 
 type WitnessPageResponse struct {

@@ -179,25 +179,25 @@ func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response)
 	return req, nil
 }
 
-// RequestReducedWitness sends a request to the peer for reduced witnesses (omits cached states).
-// Reuses GetWitnessPacket structure with IsReduced flag set to true.
-func (p *Peer) RequestReducedWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
+// RequestCompactWitness sends a request to the peer for compact witnesses (omits cached states).
+// Reuses GetWitnessPacket structure with Compact flag set to true.
+func (p *Peer) RequestCompactWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	log.Debug("Requesting reduced witness", "peer", p.id, "pages", len(witnessPages))
+	log.Debug("Requesting compact witness", "peer", p.id, "pages", len(witnessPages))
 	id := rand.Uint64()
 
 	req := &Request{
 		id:   id,
 		sink: sink,
-		code: GetReducedWitnessMsg, // Different message code
-		want: ReducedWitnessMsg,
+		code: GetCompactWitnessMsg, // Different message code
+		want: CompactWitnessMsg,
 		data: &GetWitnessPacket{
 			RequestId: id,
 			GetWitnessRequest: &GetWitnessRequest{
 				WitnessPages: witnessPages,
-				IsReduced:    true, // Mark as reduced witness request
+				Compact:      true, // Mark as compact witness request
 			},
 		},
 	}
@@ -288,16 +288,16 @@ func (p *Peer) ReplyWitnessMetadata(requestID uint64, metadata []WitnessMetadata
 	})
 }
 
-// ReplyReducedWitness sends a reduced witness response to the peer.
-// Uses ReducedWitnessMsg code but same packet structure as regular witness.
-func (p *Peer) ReplyReducedWitness(requestID uint64, response *WitnessPacketResponse) error {
+// ReplyCompactWitness sends a compact witness response to the peer.
+// Uses CompactWitnessMsg code but same packet structure as regular witness.
+func (p *Peer) ReplyCompactWitness(requestID uint64, response *WitnessPacketResponse) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
-	log.Debug("Replying with reduced witness", "peer", p.id, "reqID", requestID, "pages", len(*response))
+	log.Debug("Replying with compact witness", "peer", p.id, "reqID", requestID, "pages", len(*response))
 
-	// Send the response with ReducedWitnessMsg code
-	return p2p.Send(p.rw, ReducedWitnessMsg, &WitnessPacketRLPPacket{
+	// Send the response with CompactWitnessMsg code
+	return p2p.Send(p.rw, CompactWitnessMsg, &WitnessPacketRLPPacket{
 		RequestId:             requestID,
 		WitnessPacketResponse: *response,
 	})

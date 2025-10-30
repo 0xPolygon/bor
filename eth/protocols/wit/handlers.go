@@ -100,41 +100,41 @@ func handleWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
 	return peer.dispatchResponse(res, nil)
 }
 
-// handleGetReducedWitness processes a GetReducedWitnessPacket request from a peer.
+// handleGetCompactWitness processes a GetCompactWitnessPacket request from a peer.
 // Reuses GetWitnessPacket structure since format is identical.
-func handleGetReducedWitness(backend Backend, msg Decoder, peer *Peer) error {
-	// Decode the GetWitnessPacket request (same structure for reduced witness)
+func handleGetCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the GetWitnessPacket request (same structure for compact witness)
 	req := new(GetWitnessPacket)
 	if err := msg.Decode(&req); err != nil {
-		return fmt.Errorf("failed to decode GetReducedWitnessPacket: %w", err)
+		return fmt.Errorf("failed to decode GetCompactWitnessPacket: %w", err)
 	}
 
 	// Validate request parameters
 	if len(req.WitnessPages) == 0 {
-		return fmt.Errorf("invalid GetReducedWitnessPacket: WitnessPages cannot be empty")
+		return fmt.Errorf("invalid GetCompactWitnessPacket: WitnessPages cannot be empty")
 	}
 
 	return backend.Handle(peer, req)
 }
 
-// handleReducedWitness processes an incoming reduced witness response from a peer.
+// handleCompactWitness processes an incoming compact witness response from a peer.
 // Reuses WitnessPacketRLPPacket structure since format is identical.
-func handleReducedWitness(backend Backend, msg Decoder, peer *Peer) error {
-	// Decode the WitnessPacketRLPPacket response (same structure for reduced witness)
+func handleCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the WitnessPacketRLPPacket response (same structure for compact witness)
 	packet := new(WitnessPacketRLPPacket)
 	if err := msg.Decode(packet); err != nil {
-		log.Error("Failed to decode reduced witness response packet", "err", err)
+		log.Error("Failed to decode compact witness response packet", "err", err)
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
 
 	// Construct the response object
 	res := &Response{
 		id:   packet.RequestId,
-		code: ReducedWitnessMsg, // Different message code for routing
+		code: CompactWitnessMsg, // Different message code for routing
 		Res:  packet,
 	}
 
 	// Forward the response to the dispatcher
-	log.Debug("Dispatching reduced witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
+	log.Debug("Dispatching compact witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
 	return peer.dispatchResponse(res, nil)
 }
