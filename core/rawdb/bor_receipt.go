@@ -94,13 +94,13 @@ func ReadBorReceipt(db ethdb.Reader, hash common.Hash, number uint64, config *pa
 	// receipts are present as a block with only state-sync transaction can exist.
 	receipts := ReadRawReceipts(db, hash, number)
 
-	body := ReadBody(db, hash, number)
-	if body == nil {
-		log.Error("Missing body but have bor receipt", "hash", hash, "number", number)
+	header := ReadHeader(db, hash, number)
+	if header == nil {
+		log.Error("Missing header but have bor receipt", "hash", hash, "number", number)
 		return nil
 	}
 
-	if err := types.DeriveFieldsForBorReceipt(borReceipt, hash, number, receipts); err != nil {
+	if err := types.DeriveFieldsForBorReceipt(borReceipt, receipts, header); err != nil {
 		log.Error("Failed to derive bor receipt fields", "hash", hash, "number", number, "err", err)
 		return nil
 	}

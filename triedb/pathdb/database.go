@@ -120,6 +120,10 @@ type Config struct {
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
 	MaxDiffLayers       uint64 // Maximum diff layers allowed in the layer tree.
 
+	// Address-specific cache configuration for biased caching
+	// Maps account address to cache size in bytes
+	AddressCacheSizes map[common.Address]int
+
 	// Testing configurations
 	SnapshotNoBuild   bool // Flag Whether the state generation is allowed
 	NoAsyncFlush      bool // Flag whether the background buffer flushing is allowed

@@ -256,18 +256,19 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 	options := &core.BlockChainConfig{
-		TrieCleanLimit:   config.TrieCleanCache,
-		NoPrefetch:       config.NoPrefetch,
-		TrieDirtyLimit:   config.TrieDirtyCache,
-		ArchiveMode:      config.NoPruning,
-		TrieTimeLimit:    config.TrieTimeout,
-		SnapshotLimit:    config.SnapshotCache,
-		Preimages:        config.Preimages,
-		StateHistory:     config.StateHistory,
-		StateScheme:      scheme,
-		TriesInMemory:    config.TriesInMemory,
-		ChainHistoryMode: config.HistoryMode,
-		TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+		TrieCleanLimit:    config.TrieCleanCache,
+		NoPrefetch:        config.NoPrefetch,
+		TrieDirtyLimit:    config.TrieDirtyCache,
+		ArchiveMode:       config.NoPruning,
+		TrieTimeLimit:     config.TrieTimeout,
+		SnapshotLimit:     config.SnapshotCache,
+		Preimages:         config.Preimages,
+		StateHistory:      config.StateHistory,
+		StateScheme:       scheme,
+		TriesInMemory:     config.TriesInMemory,
+		ChainHistoryMode:  config.HistoryMode,
+		TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
+		AddressCacheSizes: config.AddressCacheSizes,
 		VmConfig: vm.Config{
 			EnablePreimageRecording: config.EnablePreimageRecording,
 		},
@@ -305,6 +306,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewParallelBlockChain(chainDb, config.Genesis, eth.engine, options, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
+	}
+
+	// Set parallel stateless import toggle on blockchain
+	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
+		eth.blockchain.ParallelStatelessImportEnable()
+		if config.EnableParallelStatelessImportWorkers > 0 {
+			eth.blockchain.SetParallelStatelessImportWorkers(config.EnableParallelStatelessImportWorkers)
+		}
 	}
 
 	if err != nil {

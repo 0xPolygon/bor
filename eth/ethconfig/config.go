@@ -148,6 +148,10 @@ type Config struct {
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int
 
+	// Address-specific cache sizes for biased caching (pathdb only)
+	// Maps account address to cache size in bytes
+	AddressCacheSizes map[common.Address]int
+
 	// Mining options
 	Miner miner.Config
 
@@ -234,6 +238,19 @@ type Config struct {
 
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64
+
+	// Minimum necessary distance between local header and latest non pruned witness
+	WitnessPruneThreshold uint64
+
+	// The time interval between each witness prune routine
+	WitnessPruneInterval time.Duration
+
+	// EnableParallelStatelessImport toggles parallel stateless block import (download path)
+	EnableParallelStatelessImport bool
+
+	// EnableParallelStatelessImportWorkers sets the number of workers (CPUs) used for parallel stateless import.
+	// If 0, defaults to GOMAXPROCS.
+	EnableParallelStatelessImportWorkers int
 
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool

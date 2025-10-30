@@ -468,6 +468,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.Preimages,
 		Group:   "Cache",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.addresscachesizes",
+		Usage:   "Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)",
+		Value:   &c.cliConfig.Cache.AddressCacheSizesRaw,
+		Default: c.cliConfig.Cache.AddressCacheSizesRaw,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",
@@ -1077,6 +1084,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Produce witnesses while syncing",
 		Value:   &c.cliConfig.Witness.ProduceWitnesses,
 		Default: c.cliConfig.Witness.ProduceWitnesses,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.parallelstatelessimport",
+		Usage:   "Enable parallel stateless block import",
+		Value:   &c.cliConfig.Witness.EnableParallelStatelessImport,
+		Default: c.cliConfig.Witness.EnableParallelStatelessImport,
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "witness.parallelstatelessimportworkers",
+		Usage:   "Number of workers to use for parallel stateless import (0 = GOMAXPROCS)",
+		Value:   &c.cliConfig.Witness.ParallelStatelessImportWorkers,
+		Default: c.cliConfig.Witness.ParallelStatelessImportWorkers,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "witness.witnessapi",
