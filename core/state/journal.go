@@ -111,6 +111,7 @@ func (j *journal) append(entry journalEntry) {
 // revert undoes a batch of journalled modifications along with any reverted
 // dirty handling too.
 func (j *journal) revert(statedb *StateDB, snapshot int) {
+	log.Error("revert", "snapshot", snapshot, "entries", len(j.entries))
 	for i := len(j.entries) - 1; i >= snapshot; i-- {
 		// Undo the changes made by the operation
 		j.entries[i].revert(statedb)
