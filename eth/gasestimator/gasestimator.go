@@ -65,16 +65,15 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 
 	// Cap the maximum gas allowance according to EIP-7825 if the estimation targets Osaka
 	if hi > params.MaxTxGas {
-		blockNumber, blockTime := opts.Header.Number, opts.Header.Time
+		blockNumber := opts.Header.Number
 		if opts.BlockOverrides != nil {
 			if opts.BlockOverrides.Number != nil {
 				blockNumber = opts.BlockOverrides.Number.ToInt()
 			}
-			if opts.BlockOverrides.Time != nil {
-				blockTime = uint64(*opts.BlockOverrides.Time)
-			}
 		}
-		if opts.Config.IsOsaka(blockNumber, blockTime) {
+		isOsaka := opts.Config.IsOsaka(blockNumber)
+		isMadhugiri := opts.Config.Bor != nil && opts.Config.Bor.IsMadhugiri(blockNumber)
+		if isOsaka || isMadhugiri {
 			hi = params.MaxTxGas
 		}
 	}
