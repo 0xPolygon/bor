@@ -123,7 +123,7 @@ func (gc *GenesisContractsClient) LastStateId(state *state.StateDB, number uint6
 	// Bor: EIP-7825 at Madhugiri HF block
 	IsMadhugiri := gc.chainConfig.Bor != nil && gc.chainConfig.Bor.IsMadhugiri(big.NewInt(int64(number)))
 	if IsMadhugiri {
-		gas = (hexutil.Uint64)(params.MaxTxGas / 2)
+		gas = (hexutil.Uint64)(params.MaxTxGas)
 	} else {
 		gas = (hexutil.Uint64)(math.MaxUint64 / 2)
 	}
