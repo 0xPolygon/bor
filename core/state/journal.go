@@ -85,6 +85,7 @@ func (j *journal) snapshot() int {
 
 // revertToSnapshot reverts all state changes made since the given revision.
 func (j *journal) revertToSnapshot(revid int, s *StateDB) {
+	log.Error("revertToSnapshot")
 	// Find the snapshot in the stack of valid snapshots.
 	idx := sort.Search(len(j.validRevisions), func(i int) bool {
 		return j.validRevisions[i].id >= revid
