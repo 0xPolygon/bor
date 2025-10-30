@@ -535,6 +535,8 @@ func (s *StateDB) StopPrefetcher() {
 func (s *StateDB) ResetPrefetcher() {
 	s.prefetcher = nil
 	s.mutations = make(map[common.Address]*mutation)
+	s.stateObjects = make(map[common.Address]*stateObject)
+	s.stateObjectsDestruct = make(map[common.Address]*stateObject)
 }
 
 // setError remembers the first non-nil error it is called with.
