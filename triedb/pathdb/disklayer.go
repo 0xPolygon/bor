@@ -38,8 +38,8 @@ type diskLayer struct {
 	// These two caches must be maintained separately, because the key
 	// for the root node of the storage trie (accountHash) is identical
 	// to the key for the account data.
-	nodes  *fastcache.Cache // GC friendly memory cache of clean nodes
-	states *fastcache.Cache // GC friendly memory cache of clean states
+	nodes  *AddressBiasedCache // GC friendly memory cache of clean nodes
+	states *fastcache.Cache    // GC friendly memory cache of clean states
 
 	buffer *buffer // Live buffer to aggregate writes
 	frozen *buffer // Frozen node buffer waiting for flushing
@@ -54,12 +54,16 @@ type diskLayer struct {
 }
 
 // newDiskLayer creates a new disk layer based on the passing arguments.
-func newDiskLayer(root common.Hash, id uint64, db *Database, nodes *fastcache.Cache, states *fastcache.Cache, buffer *buffer, frozen *buffer) *diskLayer {
+func newDiskLayer(root common.Hash, id uint64, db *Database, nodes *AddressBiasedCache, states *fastcache.Cache, buffer *buffer, frozen *buffer) *diskLayer {
 	// Initialize the clean caches if the memory allowance is not zero
 	// or reuse the provided caches if they are not nil (inherited from
 	// the original disk layer).
 	if nodes == nil && db.config.TrieCleanSize != 0 {
-		nodes = fastcache.New(db.config.TrieCleanSize)
+		cachedNodes, err := NewAddressBiasedCache(db.diskdb, db.config.AddressCacheSizes, db.config.TrieCleanSize)
+		if err != nil {
+			panic(err)
+		}
+		nodes = cachedNodes
 	}
 	if states == nil && db.config.StateCleanSize != 0 {
 		states = fastcache.New(db.config.StateCleanSize)
@@ -137,7 +141,7 @@ func (dl *diskLayer) node(owner common.Hash, path []byte, depth int) ([]byte, co
 	// Try to retrieve the trie node from the clean memory cache
 	key := nodeCacheKey(owner, path)
 	if dl.nodes != nil {
-		if blob := dl.nodes.Get(nil, key); len(blob) > 0 {
+		if blob := dl.nodes.Get(key); len(blob) > 0 {
 			cleanNodeHitMeter.Mark(1)
 			cleanNodeReadMeter.Mark(int64(len(blob)))
 			return blob, crypto.Keccak256Hash(blob), &nodeLoc{loc: locCleanCache, depth: depth}, nil
@@ -605,7 +609,8 @@ func (dl *diskLayer) waitFlush() error {
 }
 
 // terminate releases the frozen buffer if it's not nil and terminates the
-// background state generator.
+// background state generator. It also stops any background preload operations
+// in the address-biased cache.
 func (dl *diskLayer) terminate() error {
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
@@ -618,6 +623,10 @@ func (dl *diskLayer) terminate() error {
 	}
 	if dl.generator != nil {
 		dl.generator.stop()
+	}
+	// Stop background preload operations in the address-biased cache
+	if dl.nodes != nil {
+		dl.nodes.Close()
 	}
 	return nil
 }

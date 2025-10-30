@@ -132,7 +132,7 @@ func (b *buffer) size() uint64 {
 
 // flush persists the in-memory dirty trie node into the disk if the configured
 // memory threshold is reached. Note, all data must be written atomically.
-func (b *buffer) flush(root common.Hash, db ethdb.KeyValueStore, freezer ethdb.AncientWriter, progress []byte, nodesCache, statesCache *fastcache.Cache, id uint64, postFlush func()) {
+func (b *buffer) flush(root common.Hash, db ethdb.KeyValueStore, freezer ethdb.AncientWriter, progress []byte, nodesCache *AddressBiasedCache, statesCache *fastcache.Cache, id uint64, postFlush func()) {
 	if b.done != nil {
 		panic("duplicated flush operation")
 	}
