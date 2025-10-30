@@ -185,6 +185,7 @@ func (task *ExecutionTask) Settle() {
 
 	show := false
 	if task.index == 168 {
+		log.Error("Executing interesting tx")
 		show = true
 	}
 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList(), show)
