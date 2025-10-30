@@ -118,7 +118,15 @@ func (gc *GenesisContractsClient) LastStateId(state *state.StateDB, number uint6
 
 	msgData := (hexutil.Bytes)(data)
 	toAddress := common.HexToAddress(gc.StateReceiverContract)
-	gas := (hexutil.Uint64)(uint64(math.MaxUint64 / 2))
+	var gas hexutil.Uint64
+
+	// Bor: EIP-7825 at Madhugiri HF block
+	IsMadhugiri := gc.chainConfig.Bor != nil && gc.chainConfig.Bor.IsMadhugiri(big.NewInt(int64(number)))
+	if IsMadhugiri {
+		gas = (hexutil.Uint64)(params.MaxTxGas)
+	} else {
+		gas = (hexutil.Uint64)(math.MaxUint64 / 2)
+	}
 
 	// BOR: Do a 'CallWithState' so that we can fetch the last state ID from a given (incoming)
 	// state instead of local(canonical) chain's state.
