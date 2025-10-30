@@ -178,7 +178,7 @@ func (task *ExecutionTask) Dependencies() []int {
 }
 
 func (task *ExecutionTask) Settle() {
-	log.Error("Settle")
+
 	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
