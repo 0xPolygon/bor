@@ -128,6 +128,8 @@ var (
 	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
 	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
 
+	compactWitnessCacheUpdateTimer = metrics.NewRegisteredTimer("chain/witness/compactcache/update", nil)
+
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
@@ -4258,6 +4260,9 @@ func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) 
 // updateSlidingWindowCache updates the sliding window cache after processing a block.
 // This is used by both full nodes and witness-receiving nodes to maintain synchronized caches.
 func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *stateless.Witness, statedb *state.StateDB) {
+	start := time.Now()
+	defer func() { compactWitnessCacheUpdateTimer.UpdateSince(start) }()
+
 	if witness == nil && statedb == nil {
 		return
 	}
