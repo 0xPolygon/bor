@@ -673,10 +673,15 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
-	if err != nil {
-		return nil, nil, 0, nil, 0, err
+	// Seed the process reader's cache then use it for execution
+	if warmed := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
+		process = warmed
 	}
+	// Create a prefetch statedb if needed in future; currently unused to avoid contention
+	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
+	// if err != nil {
+	//     return nil, nil, 0, nil, 0, err
+	// }
 	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
@@ -709,17 +714,17 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		bc.lastProcStorMiss += stats.StorageMiss
 	}()
 
-	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
-		// Disable tracing for prefetcher executions.
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+	// go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+	// 	// Disable tracing for prefetcher executions.
+	// 	vmCfg := bc.cfg.VmConfig
+	// 	vmCfg.Tracer = nil
+	// 	bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
 
-		blockPrefetchExecuteTimer.Update(time.Since(start))
-		if followupInterrupt.Load() {
-			blockPrefetchInterruptMeter.Mark(1)
-		}
-	}(time.Now(), throwaway, block)
+	// 	blockPrefetchExecuteTimer.Update(time.Since(start))
+	// 	if followupInterrupt.Load() {
+	// 		blockPrefetchInterruptMeter.Mark(1)
+	// 	}
+	// }(time.Now(), throwaway, block)
 
 	type Result struct {
 		receipts types.Receipts
@@ -809,6 +814,23 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
+}
+
+// seedReaderCache preloads the supplied readerWithCache
+func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) state.ReaderWithStats {
+	if reader == nil || b == nil || len(b.Transactions()) == 0 {
+		return nil
+	}
+	// Synchronous warm-up using the same reader and triedb
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
+	if err != nil {
+		return nil
+	}
+	// Warm the exact accounts/storage and trie nodes used by the block
+	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
+	return reader
 }
 
 // prewarmStateForBlock performs a time-limited prefetch for the given
@@ -3024,7 +3046,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		// Prewarm the state for the block's parent root in background before creating statedb
-		prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
+		// prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3080,11 +3102,10 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		// Stop prewarm and wait for it to install the prefetch reader just before execution
-		if prewarmCancel != nil {
-			prewarmCancel()
-			<-prewarmDone
-		}
+		// if prewarmCancel != nil {
+		// 	prewarmCancel()
+		// 	<-prewarmDone
+		// }
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
