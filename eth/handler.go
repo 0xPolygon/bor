@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
@@ -157,6 +158,11 @@ type handler struct {
 	syncWithWitnesses       bool
 	syncAndProduceWitnesses bool // Whether to sync blocks and produce witnesses simultaneously
 
+	// Compact witness cache: caches filtered witnesses to avoid recomputation for multiple peers
+	// Cache key: witnessHash + cacheWindowStart (as cache validity depends on sliding window state)
+	compactWitnessCache     *lru.Cache[compactWitnessCacheKey, []byte]
+	compactWitnessCacheLock sync.RWMutex
+
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
 
@@ -165,6 +171,13 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+}
+
+// compactWitnessCacheKey uniquely identifies a filtered compact witness
+// The filtered witness is valid only for a specific cacheWindowStart
+type compactWitnessCacheKey struct {
+	hash        common.Hash
+	windowStart uint64
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
@@ -192,6 +205,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		handlerStartCh:          make(chan struct{}),
 		syncWithWitnesses:       config.syncWithWitnesses,
 		syncAndProduceWitnesses: config.syncAndProduceWitnesses,
+		compactWitnessCache:     lru.NewCache[compactWitnessCacheKey, []byte](256), // Cache up to 256 filtered witnesses
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)

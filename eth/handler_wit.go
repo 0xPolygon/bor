@@ -12,7 +12,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+)
+
+var (
+	compactWitnessCacheHitMeter  = metrics.NewRegisteredMeter("eth/witness/compactcache/hit", nil)
+	compactWitnessCacheMissMeter = metrics.NewRegisteredMeter("eth/witness/compactcache/miss", nil)
 )
 
 const (
@@ -202,6 +208,9 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetCompactWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
 
+	// Get current cache window start for cache key
+	cacheWindowStart := h.chain.GetCacheWindowStart()
+
 	// First, get the full witness data (same as regular handleGetWitness)
 	fullResponse, err := h.handleGetWitness(peer, req)
 	if err != nil {
@@ -218,7 +227,33 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			continue
 		}
 
-		// Decode the witness from the RLP data
+		// Check cache first
+		cacheKey := compactWitnessCacheKey{
+			hash:        witnessPage.Hash,
+			windowStart: cacheWindowStart,
+		}
+
+		(*handler)(h).compactWitnessCacheLock.RLock()
+		cachedFiltered, cacheHit := (*handler)(h).compactWitnessCache.Get(cacheKey)
+		(*handler)(h).compactWitnessCacheLock.RUnlock()
+
+		if cacheHit {
+			compactWitnessCacheHitMeter.Mark(1)
+			log.Debug("Compact witness cache hit", "hash", witnessPage.Hash, "windowStart", cacheWindowStart)
+
+			filteredPage := wit.WitnessPageResponse{
+				Data:       cachedFiltered,
+				Hash:       witnessPage.Hash,
+				Page:       witnessPage.Page,
+				TotalPages: witnessPage.TotalPages,
+			}
+			filteredResponse = append(filteredResponse, filteredPage)
+			continue
+		}
+
+		compactWitnessCacheMissMeter.Mark(1)
+
+		// Cache miss: decode, filter, and encode
 		witness, err := stateless.GetWitnessFromRlp(witnessPage.Data)
 		if err != nil {
 			log.Warn("Failed to decode witness for filtering", "hash", witnessPage.Hash, "err", err)
@@ -243,6 +278,11 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			}
 			filteredBuf = buf.Bytes()
 		}
+
+		// Store in cache
+		(*handler)(h).compactWitnessCacheLock.Lock()
+		(*handler)(h).compactWitnessCache.Add(cacheKey, filteredBuf)
+		(*handler)(h).compactWitnessCacheLock.Unlock()
 
 		// Create filtered page response
 		filteredPage := wit.WitnessPageResponse{
@@ -285,6 +325,29 @@ func (h *witHandler) filterWitnessWithCache(witness *stateless.Witness) *statele
 		"removed", removed)
 
 	return filtered
+}
+
+// ClearStaleCompactWitnessCache removes cache entries that are no longer valid
+// due to sliding window movement. Should be called when cache window slides.
+func (h *witHandler) ClearStaleCompactWitnessCache(currentWindowStart uint64) {
+	(*handler)(h).compactWitnessCacheLock.Lock()
+	defer (*handler)(h).compactWitnessCacheLock.Unlock()
+
+	// Get all keys and remove those with old windowStart
+	keys := (*handler)(h).compactWitnessCache.Keys()
+	removed := 0
+	for _, key := range keys {
+		if key.windowStart < currentWindowStart {
+			(*handler)(h).compactWitnessCache.Remove(key)
+			removed++
+		}
+	}
+
+	if removed > 0 {
+		log.Debug("Cleared stale compact witness cache entries",
+			"removed", removed,
+			"currentWindowStart", currentWindowStart)
+	}
 }
 
 // handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.
