@@ -849,7 +849,11 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	}
 	// Warm the exact accounts/storage and trie nodes used by the block
 	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
-	return reader
+	// Return the reader from warmdb, which now has its cache populated (fully or partially)
+	if readerWithStats, ok := warmdb.Reader().(state.ReaderWithStats); ok {
+		return readerWithStats
+	}
+	return nil
 }
 
 // prewarmStateForBlock performs a time-limited prefetch for the given
@@ -3081,11 +3085,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// Seed the process reader's cache, it will stop when followupInterrupt is signaled
 			warmed := bc.seedReaderCache(parentRoot, process, block, &followupInterrupt)
 			interrupted := followupInterrupt.Load()
-			if warmed != nil {
-				warmupChan <- WarmupResult{Reader: warmed, Interrupted: interrupted}
-			} else {
-				warmupChan <- WarmupResult{Reader: process, Interrupted: interrupted}
-			}
+			// Only send the warmed reader (which may be nil if warming failed)
+			warmupChan <- WarmupResult{Reader: warmed, Interrupted: interrupted}
 		}()
 
 		statedb, err := state.New(parent.Root, bc.statedb)
