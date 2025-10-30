@@ -806,7 +806,7 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 
 func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, timeout time.Duration, gp *core.GasPool, blockContext *vm.BlockContext, vmConfig *vm.Config, precompiles vm.PrecompiledContracts) (*core.ExecutionResult, error) {
 	// Get a new instance of the EVM.
-	if err := args.CallDefaults(globalGasCap, blockContext.BaseFee, b.ChainConfig().ChainID); err != nil {
+	if err := args.CallDefaults(gp.Gas(), blockContext.BaseFee, b.ChainConfig().ChainID); err != nil {
 		return nil, err
 	}
 	msg := args.ToMessage(header.BaseFee, true)
