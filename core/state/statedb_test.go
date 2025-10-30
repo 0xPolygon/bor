@@ -1370,6 +1370,171 @@ func TestCopyCommitCopy(t *testing.T) {
 	}
 }
 
+// containsKey returns true if the provided write descriptor list contains the given key.
+func containsKey(writes []blockstm.WriteDescriptor, key blockstm.Key) bool {
+	for _, w := range writes {
+		if w.Path == key {
+			return true
+		}
+	}
+	return false
+}
+
+// Test that create-object write is excluded from MVWriteList after revert via RevertWrite.
+func TestRevertWrite_CreateObject(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x01")
+
+	snap := s.Snapshot()
+	s.CreateAccount(addr)
+
+	key := blockstm.NewAddressKey(addr)
+	// Sanity: before revert, both Full and Filtered lists should contain the key
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.True(t, containsKey(s.MVWriteList(), key))
+
+	// Revert and expect the filtered list to exclude it
+	s.RevertToSnapshot(snap)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.False(t, containsKey(s.MVWriteList(), key))
+}
+
+// Test that balance write is excluded from MVWriteList after revert.
+func TestRevertWrite_BalanceChange(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x02")
+	s.CreateAccount(addr)
+	// Clear initial address write to focus test on balance key behavior
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	s.SetBalance(addr, uint256.NewInt(123), tracing.BalanceChangeTransfer)
+
+	key := blockstm.NewSubpathKey(addr, BalancePath)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.True(t, containsKey(s.MVWriteList(), key))
+
+	s.RevertToSnapshot(snap)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.False(t, containsKey(s.MVWriteList(), key))
+}
+
+// Test that nonce write is excluded from MVWriteList after revert.
+func TestRevertWrite_NonceChange(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x03")
+	s.CreateAccount(addr)
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	s.SetNonce(addr, 7, tracing.NonceChangeUnspecified)
+
+	key := blockstm.NewSubpathKey(addr, NoncePath)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.True(t, containsKey(s.MVWriteList(), key))
+
+	s.RevertToSnapshot(snap)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.False(t, containsKey(s.MVWriteList(), key))
+}
+
+// Test that code write is excluded from MVWriteList after revert.
+func TestRevertWrite_CodeChange(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x04")
+	s.CreateAccount(addr)
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	s.SetCode(addr, []byte{1, 2, 3})
+
+	key := blockstm.NewSubpathKey(addr, CodePath)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.True(t, containsKey(s.MVWriteList(), key))
+
+	s.RevertToSnapshot(snap)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.False(t, containsKey(s.MVWriteList(), key))
+}
+
+// Test that storage write is excluded from MVWriteList after revert.
+func TestRevertWrite_StorageChange(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x05")
+	s.CreateAccount(addr)
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	k := common.HexToHash("0x99")
+	v := common.HexToHash("0xaa")
+	s.SetState(addr, k, v)
+
+	key := blockstm.NewStateKey(addr, k)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.True(t, containsKey(s.MVWriteList(), key))
+
+	s.RevertToSnapshot(snap)
+	assert.True(t, containsKey(s.MVFullWriteList(), key))
+	assert.False(t, containsKey(s.MVWriteList(), key))
+}
+
+// Test that selfdestruct writes (suicide and balance) are excluded after revert.
+func TestRevertWrite_SelfDestruct(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x06")
+	s.CreateAccount(addr)
+	s.SetBalance(addr, uint256.NewInt(100), tracing.BalanceChangeTransfer)
+	// Clear writes so only selfdestruct writes are tracked
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	s.SelfDestruct(addr)
+
+	keySuicide := blockstm.NewSubpathKey(addr, SuicidePath)
+	keyBalance := blockstm.NewSubpathKey(addr, BalancePath)
+	assert.True(t, containsKey(s.MVFullWriteList(), keySuicide))
+	assert.True(t, containsKey(s.MVFullWriteList(), keyBalance))
+	assert.True(t, containsKey(s.MVWriteList(), keySuicide))
+	assert.True(t, containsKey(s.MVWriteList(), keyBalance))
+
+	s.RevertToSnapshot(snap)
+	// Full list still contains both, filtered excludes both
+	assert.True(t, containsKey(s.MVFullWriteList(), keySuicide))
+	assert.True(t, containsKey(s.MVFullWriteList(), keyBalance))
+	assert.False(t, containsKey(s.MVWriteList(), keySuicide))
+	assert.False(t, containsKey(s.MVWriteList(), keyBalance))
+}
+
 // Tests a regression where committing a copy lost some internal meta information,
 // leading to corrupted subsequent copies.
 //
