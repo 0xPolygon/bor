@@ -795,17 +795,21 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	// Make sure the context is cancelled when the call has completed
 	// this makes sure resources are cleaned up.
 	defer cancel()
-	// Note(bor): don't set this to global max cap (as done in geth) as it leads to issues in devnet.
-	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
-	return applyMessage(ctx, b, args, state, header, timeout, globalGasCap, gp, &blockCtx, &vm.Config{NoBaseFee: true}, precompiles, true)
+	gp := new(core.GasPool)
+	if globalGasCap == 0 {
+		gp.AddGas(gomath.MaxUint64)
+	} else {
+		gp.AddGas(globalGasCap)
+	}
+	return applyMessage(ctx, b, args, state, header, timeout, gp, &blockCtx, &vm.Config{NoBaseFee: true}, precompiles)
 }
 
-func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, timeout time.Duration, globalGasCap uint64, gp *core.GasPool, blockContext *vm.BlockContext, vmConfig *vm.Config, precompiles vm.PrecompiledContracts, skipChecks bool) (*core.ExecutionResult, error) {
+func applyMessage(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, timeout time.Duration, gp *core.GasPool, blockContext *vm.BlockContext, vmConfig *vm.Config, precompiles vm.PrecompiledContracts) (*core.ExecutionResult, error) {
 	// Get a new instance of the EVM.
-	if err := args.CallDefaults(globalGasCap, blockContext.BaseFee, b.ChainConfig().ChainID); err != nil {
+	if err := args.CallDefaults(gp.Gas(), blockContext.BaseFee, b.ChainConfig().ChainID); err != nil {
 		return nil, err
 	}
-	msg := args.ToMessage(header.BaseFee, skipChecks, skipChecks)
+	msg := args.ToMessage(header.BaseFee, true)
 	// Lower the basefee to 0 to avoid breaking EVM
 	// invariants (basefee < feecap).
 	if msg.GasPrice.Sign() == 0 {
@@ -1002,7 +1006,7 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 	if err := args.CallDefaults(gasCap, header.BaseFee, b.ChainConfig().ChainID); err != nil {
 		return 0, err
 	}
-	call := args.ToMessage(header.BaseFee, true, true)
+	call := args.ToMessage(header.BaseFee, true)
 
 	// Run the gas estimation and wrap any revertals into a custom return
 	estimate, revert, err := gasestimator.Estimate(ctx, call, opts, gasCap)
@@ -1537,7 +1541,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		statedb := db.Copy()
 		// Set the accesslist to the last al
 		args.AccessList = &accessList
-		msg := args.ToMessage(header.BaseFee, true, true)
+		msg := args.ToMessage(header.BaseFee, true)
 		msg.GasPrice = big.NewInt(0)
 		msg.GasFeeCap = big.NewInt(0)
 		msg.GasTipCap = big.NewInt(0)

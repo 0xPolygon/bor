@@ -179,8 +179,12 @@ type Message struct {
 	// or the state prefetching.
 	SkipNonceChecks bool
 
-	// When SkipFromEOACheck is true, the message sender is not checked to be an EOA.
-	SkipFromEOACheck bool
+	// When set, the message is not treated as a transaction, and certain
+	// transaction-specific checks are skipped:
+	//
+	// - From is not verified to be an EOA
+	// - GasLimit is not checked against the protocol defined tx gaslimit
+	SkipTransactionChecks bool
 }
 
 // TransactionToMessage converts a transaction into a Message.
@@ -197,7 +201,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 		AccessList:            tx.AccessList(),
 		SetCodeAuthorizations: tx.SetCodeAuthorizations(),
 		SkipNonceChecks:       false,
-		SkipFromEOACheck:      false,
+		SkipTransactionChecks: false,
 		BlobHashes:            tx.BlobHashes(),
 		BlobGasFeeCap:         tx.BlobGasFeeCap(),
 	}
@@ -351,7 +355,14 @@ func (st *stateTransition) preCheck() error {
 				msg.From.Hex(), stNonce)
 		}
 	}
-	if !msg.SkipFromEOACheck {
+	isOsaka := st.evm.ChainConfig().IsOsaka(st.evm.Context.BlockNumber)
+	isMadhugiri := st.evm.ChainConfig().Bor != nil && st.evm.ChainConfig().Bor.IsMadhugiri(st.evm.Context.BlockNumber)
+
+	if !msg.SkipTransactionChecks {
+		// Verify tx gas limit does not exceed EIP-7825 cap.
+		if (isOsaka || isMadhugiri) && msg.GasLimit > params.MaxTxGas {
+			return fmt.Errorf("%w (cap: %d, tx: %d)", ErrGasLimitTooHigh, params.MaxTxGas, msg.GasLimit)
+		}
 		// Make sure the sender is an EOA
 		code := st.state.GetCode(msg.From)
 		_, delegated := types.ParseDelegation(code)

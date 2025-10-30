@@ -62,6 +62,22 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 	if call.GasLimit >= params.TxGas {
 		hi = call.GasLimit
 	}
+
+	// Cap the maximum gas allowance according to EIP-7825 if the estimation targets Osaka
+	if hi > params.MaxTxGas {
+		blockNumber := opts.Header.Number
+		if opts.BlockOverrides != nil {
+			if opts.BlockOverrides.Number != nil {
+				blockNumber = opts.BlockOverrides.Number.ToInt()
+			}
+		}
+		isOsaka := opts.Config.IsOsaka(blockNumber)
+		isMadhugiri := opts.Config.Bor != nil && opts.Config.Bor.IsMadhugiri(blockNumber)
+		if isOsaka || isMadhugiri {
+			hi = params.MaxTxGas
+		}
+	}
+
 	// Normalize the max fee per gas the call is willing to spend.
 	var feeCap *big.Int
 	if call.GasFeeCap != nil {
@@ -208,6 +224,9 @@ func execute(ctx context.Context, call *core.Message, opts *Options, gasLimit ui
 	if err != nil {
 		if errors.Is(err, core.ErrIntrinsicGas) {
 			return true, nil, nil // Special case, raise gas limit
+		}
+		if errors.Is(err, core.ErrGasLimitTooHigh) {
+			return true, nil, nil // Special case, lower gas limit
 		}
 		return true, nil, err // Bail out
 	}
