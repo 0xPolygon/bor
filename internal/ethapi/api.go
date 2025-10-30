@@ -795,12 +795,7 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	// Make sure the context is cancelled when the call has completed
 	// this makes sure resources are cleaned up.
 	defer cancel()
-	gp := new(core.GasPool)
-	if globalGasCap == 0 {
-		gp.AddGas(gomath.MaxUint64)
-	} else {
-		gp.AddGas(globalGasCap)
-	}
+	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
 	return applyMessage(ctx, b, args, state, header, timeout, gp, &blockCtx, &vm.Config{NoBaseFee: true}, precompiles)
 }
 
