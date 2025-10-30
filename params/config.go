@@ -343,7 +343,8 @@ var (
 				"0": 128,
 			},
 			Period: map[string]uint64{
-				"0": 2,
+				"0":        2,
+				"28899616": 1,
 			},
 			ProducerDelay: map[string]uint64{
 				"0": 4,
