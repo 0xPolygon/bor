@@ -3046,7 +3046,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 
 		// Prewarm the state for the block's parent root in background before creating statedb
-		// prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
+		prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3102,10 +3102,10 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		// if prewarmCancel != nil {
-		// 	prewarmCancel()
-		// 	<-prewarmDone
-		// }
+		if prewarmCancel != nil {
+			prewarmCancel()
+			<-prewarmDone
+		}
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
