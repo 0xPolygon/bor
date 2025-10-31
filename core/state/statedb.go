@@ -1977,3 +1977,41 @@ func (s *StateDB) AccessEvents() *AccessEvents {
 func (s *StateDB) Inner() *StateDB {
 	return s
 }
+
+// WarmSnapshot returns copies of accounts and storage values that were
+// touched during pre-execution in this StateDB.
+func (s *StateDB) WarmSnapshot() (map[common.Address]*types.StateAccount, map[common.Address]map[common.Hash]common.Hash) {
+	accounts := make(map[common.Address]*types.StateAccount)
+	storage := make(map[common.Address]map[common.Hash]common.Hash)
+
+	for addr, obj := range s.stateObjects {
+		if obj.origin != nil {
+			tmp := *obj.origin
+			accounts[addr] = &tmp
+		}
+		if len(obj.originStorage) > 0 {
+			dst := storage[addr]
+			if dst == nil {
+				dst = make(map[common.Hash]common.Hash, len(obj.originStorage))
+				storage[addr] = dst
+			}
+			for k, v := range obj.originStorage {
+				dst[k] = v
+			}
+		}
+		if len(obj.uncommittedStorage) > 0 {
+			dst := storage[addr]
+			if dst == nil {
+				dst = make(map[common.Hash]common.Hash, len(obj.uncommittedStorage))
+				storage[addr] = dst
+			}
+			for k, origin := range obj.uncommittedStorage {
+				// Do not overwrite if we already have a read value recorded
+				if _, ok := dst[k]; !ok {
+					dst[k] = origin
+				}
+			}
+		}
+	}
+	return accounts, storage
+}

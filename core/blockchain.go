@@ -674,9 +674,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		return nil, nil, 0, nil, 0, err
 	}
 	// Seed the process reader's cache then use it for execution
-	if warmed := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
-		process = warmed
+	warmed, err := bc.seedReaderCache(parentRoot, process, block, followupInterrupt)
+	if err != nil {
+		log.Error("Failed to seed reader cache", "err", err)
+		return nil, nil, 0, nil, 0, err
 	}
+	process = warmed
 	// Create a prefetch statedb if needed in future; currently unused to avoid contention
 	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
 	// if err != nil {
@@ -817,20 +820,33 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 }
 
 // seedReaderCache preloads the supplied readerWithCache
-func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) state.ReaderWithStats {
+func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, error) {
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Synchronous warm-up using the same reader and triedb
 	vmCfg := bc.cfg.VmConfig
 	vmCfg.Tracer = nil
 	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	// Warm the exact accounts/storage and trie nodes used by the block
 	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
-	return reader
+
+	if warmdb != nil {
+		accs, storage := warmdb.WarmSnapshot()
+		if len(accs) > 0 || len(storage) > 0 {
+			prefetch := state.NewPrefetchReader(accs, storage)
+			state.SetGlobalPrefetchReaderForRoot(parentRoot, prefetch)
+
+			// Rebuild reader so the global prefetch reader is injected into multiStateReader
+			if _, r, err := bc.statedb.ReadersWithCacheStats(parentRoot); err == nil {
+				return r, nil
+			}
+		}
+	}
+	return reader, nil
 }
 
 // prewarmStateForBlock performs a time-limited prefetch for the given
