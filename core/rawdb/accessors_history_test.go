@@ -42,7 +42,7 @@ func TestDeleteStateHistoryIndex_WithoutBorReceipts(t *testing.T) {
 	db.Put([]byte("z"), []byte{})
 
 	// Call the state history deletor
-	DeleteStateHistoryIndex(db)
+	DeleteStateHistoryIndexes(db)
 
 	type Testcase struct {
 		name  string

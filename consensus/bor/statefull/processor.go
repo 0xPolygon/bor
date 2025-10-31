@@ -24,6 +24,22 @@ type ChainContext struct {
 	Bor   consensus.Engine
 }
 
+func (c ChainContext) CurrentHeader() *types.Header {
+	return c.Chain.CurrentHeader()
+}
+
+func (c ChainContext) GetHeaderByNumber(number uint64) *types.Header {
+	return c.Chain.GetHeaderByNumber(number)
+}
+
+func (c ChainContext) GetHeaderByHash(hash common.Hash) *types.Header {
+	return c.Chain.GetHeaderByHash(hash)
+}
+
+func (c ChainContext) GetTd(hash common.Hash, number uint64) *big.Int {
+	return c.Chain.GetTd(hash, number)
+}
+
 func (c ChainContext) Engine() consensus.Engine {
 	return c.Bor
 }

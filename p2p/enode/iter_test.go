@@ -46,7 +46,7 @@ func TestReadNodesCycle(t *testing.T) {
 	checkNodes(t, nodes, 3)
 
 	if iter.count != 10 {
-		t.Fatalf("%d calls to Next, want %d", iter.count, 100)
+		t.Fatalf("%d calls to Next, want %d", iter.count, 10)
 	}
 }
 

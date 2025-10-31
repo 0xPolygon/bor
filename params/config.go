@@ -803,13 +803,13 @@ type ChainConfig struct {
 	GrayGlacierBlock    *big.Int `json:"grayGlacierBlock,omitempty"`    // Eip-5133 (bomb delay) switch block (nil = no fork, 0 = already activated)
 	MergeNetsplitBlock  *big.Int `json:"mergeNetsplitBlock,omitempty"`  // Virtual fork after The Merge to use as a network splitter
 
-	// Fork scheduling was switched from blocks to timestamps here
 	// Fork scheduling switched back to blockNumber in Bor
-	ShanghaiBlock *big.Int `json:"shanghaiBlock,omitempty"` // Shanghai switch Block (nil = no fork, 0 = already on shanghai)
-	CancunBlock   *big.Int `json:"cancunBlock,omitempty"`   // Cancun switch Block (nil = no fork, 0 = already on cancun)
-	PragueBlock   *big.Int `json:"pragueBlock,omitempty"`   // Prague switch Block (nil = no fork, 0 = already on prague)
-	VerkleBlock   *big.Int `json:"verkleBlock,omitempty"`   // Verkle switch Block (nil = no fork, 0 = already on verkle)
-	OsakaBlock    *big.Int `json:"osakaBlock,omitempty"`    // Osaka switch Block (nil = no fork, 0 = already on osaka)
+	ShanghaiBlock  *big.Int `json:"shanghaiBlock,omitempty"` // Shanghai switch Block (nil = no fork, 0 = already on shanghai)
+	CancunBlock    *big.Int `json:"cancunBlock,omitempty"`   // Cancun switch Block (nil = no fork, 0 = already on cancun)
+	PragueBlock    *big.Int `json:"pragueBlock,omitempty"`   // Prague switch Block (nil = no fork, 0 = already on prague)
+	OsakaBlock     *big.Int `json:"osakaBlock,omitempty"`    // Osaka switch Block (nil = no fork, 0 = already on osaka)
+	AmsterdamBlock *big.Int `json:"amsterdamTime,omitempty"` // Amsterdam switch time (nil = no fork, 0 = already on amsterdam)
+	VerkleBlock    *big.Int `json:"verkleBlock,omitempty"`   // Verkle switch Block (nil = no fork, 0 = already on verkle)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
@@ -1001,6 +1001,79 @@ func (c *BorConfig) GetOverrideStateSyncRecord(block uint64) (int, bool) {
 	return 0, false
 }
 
+// String implements the fmt.Stringer interface, returning a string representation
+// of ChainConfig.
+func (c *ChainConfig) String() string {
+	result := fmt.Sprintf("ChainConfig{ChainID: %v", c.ChainID)
+
+	// Add block-based forks
+	if c.HomesteadBlock != nil {
+		result += fmt.Sprintf(", HomesteadBlock: %v", c.HomesteadBlock)
+	}
+	if c.DAOForkBlock != nil {
+		result += fmt.Sprintf(", DAOForkBlock: %v", c.DAOForkBlock)
+	}
+	if c.EIP150Block != nil {
+		result += fmt.Sprintf(", EIP150Block: %v", c.EIP150Block)
+	}
+	if c.EIP155Block != nil {
+		result += fmt.Sprintf(", EIP155Block: %v", c.EIP155Block)
+	}
+	if c.EIP158Block != nil {
+		result += fmt.Sprintf(", EIP158Block: %v", c.EIP158Block)
+	}
+	if c.ByzantiumBlock != nil {
+		result += fmt.Sprintf(", ByzantiumBlock: %v", c.ByzantiumBlock)
+	}
+	if c.ConstantinopleBlock != nil {
+		result += fmt.Sprintf(", ConstantinopleBlock: %v", c.ConstantinopleBlock)
+	}
+	if c.PetersburgBlock != nil {
+		result += fmt.Sprintf(", PetersburgBlock: %v", c.PetersburgBlock)
+	}
+	if c.IstanbulBlock != nil {
+		result += fmt.Sprintf(", IstanbulBlock: %v", c.IstanbulBlock)
+	}
+	if c.MuirGlacierBlock != nil {
+		result += fmt.Sprintf(", MuirGlacierBlock: %v", c.MuirGlacierBlock)
+	}
+	if c.BerlinBlock != nil {
+		result += fmt.Sprintf(", BerlinBlock: %v", c.BerlinBlock)
+	}
+	if c.LondonBlock != nil {
+		result += fmt.Sprintf(", LondonBlock: %v", c.LondonBlock)
+	}
+	if c.ArrowGlacierBlock != nil {
+		result += fmt.Sprintf(", ArrowGlacierBlock: %v", c.ArrowGlacierBlock)
+	}
+	if c.GrayGlacierBlock != nil {
+		result += fmt.Sprintf(", GrayGlacierBlock: %v", c.GrayGlacierBlock)
+	}
+	if c.MergeNetsplitBlock != nil {
+		result += fmt.Sprintf(", MergeNetsplitBlock: %v", c.MergeNetsplitBlock)
+	}
+	if c.ShanghaiBlock != nil {
+		result += fmt.Sprintf(", ShanghaiBlock: %v", *c.ShanghaiBlock)
+	}
+	if c.CancunBlock != nil {
+		result += fmt.Sprintf(", CancunBlock: %v", *c.CancunBlock)
+	}
+	if c.PragueBlock != nil {
+		result += fmt.Sprintf(", PragueBlock: %v", *c.PragueBlock)
+	}
+	if c.OsakaBlock != nil {
+		result += fmt.Sprintf(", OsakaBlock: %v", *c.OsakaBlock)
+	}
+	if c.AmsterdamBlock != nil {
+		result += fmt.Sprintf(", AmsterdamBlock: %v", *c.AmsterdamBlock)
+	}
+	if c.VerkleBlock != nil {
+		result += fmt.Sprintf(", VerkleBlock: %v", *c.VerkleBlock)
+	}
+	result += "}"
+	return result
+}
+
 // Description returns a human-readable description of ChainConfig.
 func (c *ChainConfig) Description() string {
 	var banner string
@@ -1030,36 +1103,34 @@ func (c *ChainConfig) Description() string {
 	// makes sense for mainnet should be optional at printing to avoid bloating
 	// the output for testnets and private networks.
 	banner += "Pre-Merge hard forks (block based):\n"
-	banner += fmt.Sprintf(" - Homestead:                   #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/homestead/__init__.py.html)\n", c.HomesteadBlock)
+	banner += fmt.Sprintf(" - Homestead:                   #%-8v\n", c.HomesteadBlock)
 	if c.DAOForkBlock != nil {
-		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/dao_fork/__init__.py.html)\n", c.DAOForkBlock)
+		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v\n", c.DAOForkBlock)
 	}
-	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/tangerine_whistle/__init__.py.html)\n", c.EIP150Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/spurious_dragon/__init__.py.html)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/spurious_dragon/__init__.py.html)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Byzantium:                   #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/byzantium/__init__.py.html)\n", c.ByzantiumBlock)
-	banner += fmt.Sprintf(" - Constantinople:              #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/constantinople/__init__.py.html)\n", c.ConstantinopleBlock)
-	banner += fmt.Sprintf(" - Petersburg:                  #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/constantinople/__init__.py.html)\n", c.PetersburgBlock)
-	banner += fmt.Sprintf(" - Istanbul:                    #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/istanbul/__init__.py.html)\n", c.IstanbulBlock)
+	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v\n", c.EIP150Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v\n", c.EIP155Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v\n", c.EIP158Block)
+	banner += fmt.Sprintf(" - Byzantium:                   #%-8v\n", c.ByzantiumBlock)
+	banner += fmt.Sprintf(" - Constantinople:              #%-8v\n", c.ConstantinopleBlock)
+	banner += fmt.Sprintf(" - Petersburg:                  #%-8v\n", c.PetersburgBlock)
+	banner += fmt.Sprintf(" - Istanbul:                    #%-8v\n", c.IstanbulBlock)
 	if c.MuirGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/muir_glacier/__init__.py.html)\n", c.MuirGlacierBlock)
+		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v\n", c.MuirGlacierBlock)
 	}
-	banner += fmt.Sprintf(" - Berlin:                      #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/berlin/__init__.py.html)\n", c.BerlinBlock)
-	banner += fmt.Sprintf(" - London:                      #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/london/__init__.py.html)\n", c.LondonBlock)
+	banner += fmt.Sprintf(" - Berlin:                      #%-8v\n", c.BerlinBlock)
+	banner += fmt.Sprintf(" - London:                      #%-8v\n", c.LondonBlock)
 	if c.ArrowGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/arrow_glacier/__init__.py.html)\n", c.ArrowGlacierBlock)
+		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v\n", c.ArrowGlacierBlock)
 	}
 
 	if c.GrayGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/gray_glacier/__init__.py.html)\n", c.GrayGlacierBlock)
+		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v\n", c.GrayGlacierBlock)
 	}
 
 	banner += "\n"
 
 	// Add a special section for the merge as it's non-obvious
 	banner += "Merge configured:\n"
-	banner += " - Hard-fork specification:    https://ethereum.github.io/execution-specs/src/ethereum/forks/paris/__init__.py.html\n"
-	banner += " - Network known to be merged\n"
 	banner += fmt.Sprintf(" - Total terminal difficulty:  %v\n", c.TerminalTotalDifficulty)
 	if c.MergeNetsplitBlock != nil {
 		banner += fmt.Sprintf(" - Merge netsplit block:       #%-8v\n", c.MergeNetsplitBlock)
@@ -1085,6 +1156,13 @@ func (c *ChainConfig) Description() string {
 	if c.OsakaBlock != nil {
 		banner += fmt.Sprintf(" - Osaka:                      #%-8v\n", *c.OsakaBlock)
 	}
+	if c.AmsterdamBlock != nil {
+		banner += fmt.Sprintf(" - Amsterdam:				  @%-10v\n ", *c.AmsterdamBlock)
+	}
+	if c.VerkleBlock != nil {
+		banner += fmt.Sprintf(" - Verkle:                      @%-10v\n", *c.VerkleBlock)
+	}
+	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
 	return banner
 }
 
@@ -1095,12 +1173,21 @@ type BlobConfig struct {
 	UpdateFraction uint64 `json:"baseFeeUpdateFraction"`
 }
 
+// String implement fmt.Stringer, returning string format blob config.
+func (bc *BlobConfig) String() string {
+	if bc == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("target: %d, max: %d, fraction: %d", bc.Target, bc.Max, bc.UpdateFraction)
+}
+
 // BlobScheduleConfig determines target and max number of blobs allow per fork.
 type BlobScheduleConfig struct {
-	Cancun *BlobConfig `json:"cancun,omitempty"`
-	Prague *BlobConfig `json:"prague,omitempty"`
-	Osaka  *BlobConfig `json:"osaka,omitempty"`
-	Verkle *BlobConfig `json:"verkle,omitempty"`
+	Cancun    *BlobConfig `json:"cancun,omitempty"`
+	Prague    *BlobConfig `json:"prague,omitempty"`
+	Osaka     *BlobConfig `json:"osaka,omitempty"`
+	Verkle    *BlobConfig `json:"verkle,omitempty"`
+	Amsterdam *BlobConfig `json:"amsterdam,omitempty"`
 }
 
 // IsHomestead returns whether num is either equal to the homestead block or greater.
@@ -1210,14 +1297,19 @@ func (c *ChainConfig) IsPrague(num *big.Int) bool {
 	return isBlockForked(c.PragueBlock, num)
 }
 
-// IsVerkle returns whether num is either equal to the Verkle fork block or greater.
-func (c *ChainConfig) IsVerkle(num *big.Int) bool {
-	return c.IsLondon(num) && isBlockForked(c.VerkleBlock, num)
-}
-
 // IsOsaka returns whether num is either equal to the Osaka fork block or greater.
 func (c *ChainConfig) IsOsaka(num *big.Int) bool {
 	return c.IsLondon(num) && isBlockForked(c.OsakaBlock, num)
+}
+
+// IsAmsterdam returns whether num is either equal to the Amsterdam fork block or greater.
+func (c *ChainConfig) IsAmsterdam(num *big.Int) bool {
+	return c.IsLondon(num) && isBlockForked(c.AmsterdamBlock, num)
+}
+
+// IsVerkle returns whether num is either equal to the Verkle fork block or greater.
+func (c *ChainConfig) IsVerkle(num *big.Int) bool {
+	return c.IsLondon(num) && isBlockForked(c.VerkleBlock, num)
 }
 
 // IsVerkleGenesis checks whether the verkle fork is activated at the genesis block.
@@ -1299,6 +1391,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "pragueBlock", block: c.PragueBlock, optional: true},
 		{name: "osakaBlock", block: c.OsakaBlock, optional: true},
 		{name: "verkleBlock", block: c.VerkleBlock, optional: true},
+		{name: "amsterdamBlock", block: c.AmsterdamBlock, optional: true},
 	} {
 		if lastFork.name != "" {
 			switch {
@@ -1348,6 +1441,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "cancun", timestamp: nil, config: bsc.Cancun},
 		{name: "prague", timestamp: nil, config: bsc.Prague},
 		{name: "osaka", timestamp: nil, config: bsc.Osaka},
+		{name: "amsterdam", timestamp: nil, config: bsc.Amsterdam},
 	} {
 		if cur.config != nil {
 			if err := cur.config.validate(); err != nil {
@@ -1488,6 +1582,8 @@ func (c *ChainConfig) LatestFork(_ uint64) forks.Fork {
 	london := c.LondonBlock
 
 	switch {
+	case c.IsAmsterdam(london):
+		return forks.Amsterdam
 	case c.IsPrague(london):
 		return forks.Prague
 	case c.IsOsaka(london):
@@ -1674,8 +1770,8 @@ type Rules struct {
 	IsByzantium, IsConstantinople, IsPetersburg, IsIstanbul bool
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
-	IsVerkle                                                bool
 	IsMadhugiri                                             bool
+	IsAmsterdam, IsVerkle                                   bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1704,8 +1800,9 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsShanghai:       c.IsShanghai(num),
 		IsCancun:         c.IsCancun(num),
 		IsPrague:         c.IsPrague(num),
-		IsVerkle:         c.IsVerkle(num),
 		IsOsaka:          c.IsOsaka(num),
+		IsAmsterdam:      isMerge && c.IsAmsterdam(num),
+		IsVerkle:         c.IsVerkle(num),
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 	}

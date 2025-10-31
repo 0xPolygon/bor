@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -60,6 +61,8 @@ type Blockchain interface {
 
 	// CurrentHeader retrieves the current head header of the canonical chain.
 	CurrentHeader() *types.Header
+
+	GetTd(hash common.Hash, u uint64) *big.Int
 }
 
 // ID is a fork identifier as defined by EIP-2124.

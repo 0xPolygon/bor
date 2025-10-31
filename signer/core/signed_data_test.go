@@ -205,7 +205,7 @@ func TestSignData(t *testing.T) {
 	}
 
 	if err != keystore.ErrDecrypt {
-		t.Errorf("Expected ErrLocked! '%v'", err)
+		t.Errorf("Expected ErrDecrypt! '%v'", err)
 	}
 	control.approveCh <- "No way"
 

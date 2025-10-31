@@ -99,12 +99,12 @@ func (ui *headlessUi) ApproveNewAccount(request *core.NewAccountRequest) (core.N
 }
 
 func (ui *headlessUi) ShowError(message string) {
-	//stdout is used by communication
+	// stdout is used by communication
 	fmt.Fprintln(os.Stderr, message)
 }
 
 func (ui *headlessUi) ShowInfo(message string) {
-	//stdout is used by communication
+	// stdout is used by communication
 	fmt.Fprintln(os.Stderr, message)
 }
 
@@ -134,7 +134,6 @@ func setup(t *testing.T) (*core.SignerAPI, *headlessUi) {
 func createAccount(ui *headlessUi, api *core.SignerAPI, t *testing.T) {
 	ui.approveCh <- "Y"
 	ui.inputCh <- "a_long_password"
-
 	_, err := api.New(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +161,6 @@ func failCreateAccountWithPassword(ui *headlessUi, api *core.SignerAPI, password
 
 func failCreateAccount(ui *headlessUi, api *core.SignerAPI, t *testing.T) {
 	ui.approveCh <- "N"
-
 	addr, err := api.New(t.Context())
 	if err != core.ErrRequestDenied {
 		t.Fatal(err)
@@ -210,7 +208,6 @@ func TestNewAcc(t *testing.T) {
 	// Testing listing:
 	// Listing one Account
 	control.approveCh <- "1"
-
 	list, err := api.List(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +218,6 @@ func TestNewAcc(t *testing.T) {
 	}
 	// Listing denied
 	control.approveCh <- "Nope"
-
 	list, err = api.List(t.Context())
 	if len(list) != 0 {
 		t.Fatalf("List should be empty")
@@ -262,7 +258,6 @@ func TestSignTx(t *testing.T) {
 	api, control := setup(t)
 	createAccount(control, api, t)
 	control.approveCh <- "A"
-
 	list, err = api.List(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -279,17 +274,15 @@ func TestSignTx(t *testing.T) {
 
 	control.approveCh <- "Y"
 	control.inputCh <- "wrongpassword"
-
 	res, err = api.SignTransaction(t.Context(), tx, &methodSig)
 	if res != nil {
 		t.Errorf("Expected nil-response, got %v", res)
 	}
 
 	if err != keystore.ErrDecrypt {
-		t.Errorf("Expected ErrLocked! %v", err)
+		t.Errorf("Expected ErrDecrypt! %v", err)
 	}
 	control.approveCh <- "No way"
-
 	res, err = api.SignTransaction(t.Context(), tx, &methodSig)
 	if res != nil {
 		t.Errorf("Expected nil-response, got %v", res)
@@ -301,9 +294,7 @@ func TestSignTx(t *testing.T) {
 	// Sign with correct password
 	control.approveCh <- "Y"
 	control.inputCh <- "a_long_password"
-
 	res, err = api.SignTransaction(t.Context(), tx, &methodSig)
-
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +302,7 @@ func TestSignTx(t *testing.T) {
 	parsedTx := &types.Transaction{}
 	rlp.DecodeBytes(res.Raw, parsedTx)
 
-	//The tx should NOT be modified by the UI
+	// The tx should NOT be modified by the UI
 	if parsedTx.Value().Cmp(tx.Value.ToInt()) != 0 {
 		t.Errorf("Expected value to be unchanged, expected %v got %v", tx.Value, parsedTx.Value())
 	}
@@ -327,7 +318,7 @@ func TestSignTx(t *testing.T) {
 		t.Error("Expected tx to be unmodified by UI")
 	}
 
-	//The tx is modified by the UI
+	// The tx is modified by the UI
 	control.approveCh <- "M"
 	control.inputCh <- "a_long_password"
 
@@ -337,11 +328,11 @@ func TestSignTx(t *testing.T) {
 	}
 
 	parsedTx2 := &types.Transaction{}
-	rlp.DecodeBytes(res.Raw, parsedTx2)
+	rlp.DecodeBytes(res2.Raw, parsedTx2)
 
-	//The tx should be modified by the UI
-	if parsedTx2.Value().Cmp(tx.Value.ToInt()) != 0 {
-		t.Errorf("Expected value to be unchanged, got %v", parsedTx.Value())
+	// The tx should be modified by the UI
+	if parsedTx2.Value().Cmp(tx.Value.ToInt()) == 0 {
+		t.Errorf("Expected value to be changed, got %v", parsedTx2.Value())
 	}
 
 	if bytes.Equal(res.Raw, res2.Raw) {

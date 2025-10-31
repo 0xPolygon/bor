@@ -53,6 +53,11 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 	}
 }
 
+// chainConfig returns the chain configuration.
+func (p *StateProcessor) chainConfig() *params.ChainConfig {
+	return p.chain.Config()
+}
+
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both
 // the processor (coinbase) and any included uncles.
@@ -62,6 +67,7 @@ func NewStateProcessor(config *params.ChainConfig, chain *HeaderChain) *StatePro
 // transactions failed to execute due to insufficient gas it will return an error.
 func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
 	var (
+		config      = p.chainConfig()
 		receipts    types.Receipts
 		usedGas     = new(uint64)
 		header      = block.Header()
@@ -77,12 +83,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Mutate the block and state according to any hard-fork specs
-	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
+	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
 	var (
 		context vm.BlockContext
-		signer  = types.MakeSigner(p.config, header.Number, header.Time)
+		signer  = types.MakeSigner(config, header.Number, header.Time)
 	)
 
 	// Apply pre-execution system calls.
@@ -91,13 +97,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		tracingStateDB = state.NewHookedState(statedb, hooks)
 	}
 	context = NewEVMBlockContext(header, p.chain, author)
-	evm := vm.NewEVM(context, tracingStateDB, p.config, cfg)
+	evm := vm.NewEVM(context, tracingStateDB, config, cfg)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
 	}
-	if p.config.IsPrague(block.Number()) || p.config.IsVerkle(block.Number()) {
-		// EIP-2935
+	if config.IsPrague(block.Number()) || config.IsVerkle(block.Number()) {
 		ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 
@@ -132,10 +137,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	// Read requests if Prague is enabled.
 	var requests [][]byte
-	if p.config.IsPrague(block.Number()) && p.config.Bor == nil {
+	if config.IsPrague(block.Number()) && config.Bor == nil {
 		requests = [][]byte{}
 		// EIP-6110
-		if err := ParseDepositLogs(&requests, allLogs, p.config); err != nil {
+		if err := ParseDepositLogs(&requests, allLogs, config); err != nil {
 			return nil, fmt.Errorf("failed to parse deposit logs: %w", err)
 		}
 		// EIP-7002
@@ -150,10 +155,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
+	p.chain.Engine().Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
 
 	// apply state sync logs
-	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
+	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {

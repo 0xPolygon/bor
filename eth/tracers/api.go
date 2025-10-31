@@ -95,6 +95,7 @@ var allowIOTracing = false // Change this to true to enable IO tracing for debug
 type Backend interface {
 	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)
+	CurrentHeader() *types.Header
 	BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error)
 	BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error)
 	GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64)
