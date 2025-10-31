@@ -852,11 +852,9 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	if err != nil {
 		return nil, err
 	}
-	// Warm the exact accounts/storage and trie nodes used by the block
-	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
-
+	// Warm the exact accounts/storage and trie nodes used by the block and consolidate into warmdb
 	if warmdb != nil {
-		accs, storage := warmdb.WarmSnapshot()
+		accs, storage := bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
 		if len(accs) > 0 || len(storage) > 0 {
 			// Compute storage slot count
 			totalSlots := 0

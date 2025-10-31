@@ -49,7 +49,7 @@ func newStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *statePr
 // Prefetch processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb, but any changes are discarded. The
 // only goal is to warm the state caches.
-func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) {
+func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) (map[common.Address]*types.StateAccount, map[common.Address]map[common.Hash]common.Hash) {
 	var (
 		fails   atomic.Int64
 		header  = block.Header()
@@ -58,6 +58,12 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 		reader  = statedb.Reader()
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
+
+	type workerRes struct {
+		accs map[common.Address]*types.StateAccount
+		stor map[common.Address]map[common.Hash]common.Hash
+	}
+	results := make(chan workerRes, len(block.Transactions()))
 
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
@@ -117,12 +123,39 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 			// trie hashing and node decoding. TODO(rjl493456442): investigate
 			// ways to mitigate this overhead.
 			stateCpy.IntermediateRoot(true)
+
+			// Aggregate warmed accounts and storage from this tx copy and send to collator
+			acc2, stor2 := stateCpy.WarmSnapshot()
+			results <- workerRes{accs: acc2, stor: stor2}
 			return nil
 		})
 	}
 	workers.Wait()
+	close(results)
+
+	accounts := make(map[common.Address]*types.StateAccount)
+	storage := make(map[common.Address]map[common.Hash]common.Hash)
+	for res := range results {
+		for addr, acct := range res.accs {
+			if _, ok := accounts[addr]; !ok {
+				accounts[addr] = acct
+			}
+		}
+		for addr, slots := range res.stor {
+			dst := storage[addr]
+			if dst == nil {
+				dst = make(map[common.Hash]common.Hash, len(slots))
+				storage[addr] = dst
+			}
+			for k, v := range slots {
+				if _, ok := dst[k]; !ok {
+					dst[k] = v
+				}
+			}
+		}
+	}
 
 	blockPrefetchTxsValidMeter.Mark(int64(len(block.Transactions())) - fails.Load())
 	blockPrefetchTxsInvalidMeter.Mark(fails.Load())
-	return
+	return accounts, storage
 }
