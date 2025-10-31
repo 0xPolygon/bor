@@ -260,7 +260,7 @@ func TestStateProcessorErrors(t *testing.T) {
 				txs: []*types.Transaction{
 					makeTx(key1, 0, common.Address{}, big.NewInt(0), params.MaxTxGas+1, big.NewInt(875000000), nil),
 				},
-				want: "could not apply tx 0 [0x16505812a6da0b0150593e4d4eb90190ba64816a04b27d19ca926ebd6aff8aa0]: transaction gas limit too high (cap: 16777216, tx: 16777217)",
+				want: "could not apply tx 0 [0xc63b687cdc475aee795213665fdb96d458f09ec72cc61a184f84e6832aeb0e86]: transaction gas limit too high (cap: 33554432, tx: 33554433)",
 			},
 		} {
 			block := GenerateBadBlock(gspec.ToBlock(), beacon.New(ethash.NewFaker()), tt.txs, gspec.Config, false)
