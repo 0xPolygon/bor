@@ -278,7 +278,7 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 	stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 	log.Error("StateAndHeaderByNumber 1", "number", number.String(), "root", header.Root.Hex(), "err", err)
 	if err != nil {
-		stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+		stateDb, err = b.eth.BlockChain().HistoricState(common.HexToHash("0x02e2e7dc81aa521a9aa8c362a3efb6e33a852caca359ecd0c287c814dd778306"))
 		log.Error("StateAndHeaderByNumber 2", "number", number.String(), "root", header.Root.Hex(), "err", err)
 		if err != nil {
 			return nil, nil, err
