@@ -160,22 +160,20 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 		return false
 	}
 
-	// Get the blockchain's current window start
-	windowStart := h.chain.GetCacheWindowStart()
+	// Calculate the consensus-aligned window start for the requested block
+	// This must match the sender's calculation to ensure cache consistency
 	windowSize := h.chain.GetCacheWindowSize()
+	expectedWindowStart := (blockNum / windowSize) * windowSize
 
-	// If block is at window start, need full witness (cache was just cleared/slid)
-	if blockNum == windowStart {
+	// If block is at window start, need full witness (this is first block of window)
+	// The sender will have just cleared/slid their cache at this block
+	if blockNum == expectedWindowStart {
 		return false
 	}
 
-	// If block is within current window but not at start, can use compact witness
-	if blockNum > windowStart && blockNum < windowStart+windowSize {
-		return true
-	}
-
-	// Block is outside current window, need full witness
-	return false
+	// Block is within window but not at start, can use compact witness
+	// The sender should have cached states from earlier blocks in this window
+	return true
 }
 
 // verifyPageCount verifies the witness page count for a given block hash by

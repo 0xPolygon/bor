@@ -456,7 +456,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		// Initialize sliding window cache for witness bandwidth reduction
 		activeCacheMap:   make(map[string]struct{}),
 		nextCacheMap:     make(map[string]struct{}),
-		cacheWindowStart: 0,
+		cacheWindowStart: 0, // Will be set to consensus-aligned value on first block processing
 
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -4196,23 +4196,33 @@ func (bc *BlockChain) mergeSpanCacheIntoWitness(witness *stateless.Witness) int 
 	return mergedCount
 }
 
+// calculateCacheWindowStart returns the consensus-aligned window start for a given block number.
+// This ensures all nodes agree on window boundaries regardless of when they started syncing.
+func calculateCacheWindowStart(blockNum uint64) uint64 {
+	return (blockNum / compactWitnessCacheWindowSize) * compactWitnessCacheWindowSize
+}
+
 // manageSlidingWindow handles window sliding logic.
 // Returns true if window was slid, false otherwise.
 func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
-	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
+	// Calculate consensus-aligned window start for this block
+	expectedWindowStart := calculateCacheWindowStart(blockNum)
 
-	if blocksSinceWindowStart >= compactWitnessCacheWindowSize {
+	// Check if we need to slide to a new window
+	if bc.cacheWindowStart != expectedWindowStart {
 		// Time to slide the window: discard active, promote next, create new next
 		bc.cacheLock.Lock()
 		oldActiveSize := len(bc.activeCacheMap)
+		oldWindowStart := bc.cacheWindowStart
 		bc.activeCacheMap = bc.nextCacheMap
 		bc.nextCacheMap = make(map[string]struct{})
-		bc.cacheWindowStart = blockNum
+		bc.cacheWindowStart = expectedWindowStart
 		bc.cacheLock.Unlock()
 
 		log.Info("Sliding window: switched to next cache map",
 			"block", blockNum,
-			"newWindowStart", blockNum,
+			"oldWindowStart", oldWindowStart,
+			"newWindowStart", expectedWindowStart,
 			"discardedSize", oldActiveSize,
 			"newActiveSize", len(bc.activeCacheMap))
 		return true
