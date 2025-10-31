@@ -4343,19 +4343,23 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.Number().Uint64()
 
-	// Manage sliding window (slide if needed)
-	bc.manageSlidingWindow(blockNum)
+	// Compact witness cache operations are only compatible with sequential import
+	// In parallel mode, blocks are processed concurrently which breaks cache assumptions
+	if !bc.parallelStatelessImportEnabled.Load() {
+		// Manage sliding window (slide if needed)
+		bc.manageSlidingWindow(blockNum)
 
-	// Merge cached states into witness for blocks that aren't at window start
-	if blockNum != bc.cacheWindowStart {
-		witnessStatesBefore := len(witness.State)
-		mergedCount := bc.mergeSpanCacheIntoWitness(witness)
-		if mergedCount > 0 {
-			log.Debug("Merged cached states into witness",
-				"block", blockNum,
-				"witnessStatesBefore", witnessStatesBefore,
-				"mergedFromCache", mergedCount,
-				"witnessStatesAfter", len(witness.State))
+		// Merge cached states into witness for blocks that aren't at window start
+		if blockNum != bc.cacheWindowStart {
+			witnessStatesBefore := len(witness.State)
+			mergedCount := bc.mergeSpanCacheIntoWitness(witness)
+			if mergedCount > 0 {
+				log.Debug("Merged cached states into witness",
+					"block", blockNum,
+					"witnessStatesBefore", witnessStatesBefore,
+					"mergedFromCache", mergedCount,
+					"witnessStatesAfter", len(witness.State))
+			}
 		}
 	}
 
@@ -4403,7 +4407,10 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	// Update sliding window cache with witness and execution data
-	bc.updateSlidingWindowCache(blockNum, witness, statedb)
+	// Only in sequential mode - parallel import is incompatible with cache
+	if !bc.parallelStatelessImportEnabled.Load() {
+		bc.updateSlidingWindowCache(blockNum, witness, statedb)
+	}
 
 	return statedb, res, nil
 }

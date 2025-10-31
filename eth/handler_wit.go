@@ -208,14 +208,23 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetCompactWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
 
-	// Get current cache window start for cache key
-	cacheWindowStart := h.chain.GetCacheWindowStart()
-
 	// First, get the full witness data (same as regular handleGetWitness)
 	fullResponse, err := h.handleGetWitness(peer, req)
 	if err != nil {
 		return nil, err
 	}
+
+	// If parallel import is enabled on this node, cache isn't maintained
+	// Return full witness instead of trying to filter
+	if h.chain.IsParallelStatelessImportEnabled() {
+		log.Debug("Parallel import enabled, returning full witness instead of compact",
+			"peer", peer.ID(),
+			"reqID", req.RequestId)
+		return fullResponse, nil
+	}
+
+	// Get current cache window start for cache key
+	cacheWindowStart := h.chain.GetCacheWindowStart()
 
 	// Now filter each witness page by removing cached states
 	var filteredResponse wit.WitnessPacketResponse
