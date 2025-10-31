@@ -640,13 +640,13 @@ const SuicidePath = 4
 
 // GetBalance retrieves the balance from the given address or 0 if object not found
 func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
-	return MVRead(s, blockstm.NewSubpathKey(addr, BalancePath), uint256.NewInt(0), func(s *StateDB) *uint256.Int {
-		stateObject := s.getStateObject(addr)
-		if stateObject != nil {
-			return stateObject.Balance()
-		}
-		return uint256.NewInt(0)
-	})
+	// return MVRead(s, blockstm.NewSubpathKey(addr, BalancePath), uint256.NewInt(0), func(s *StateDB) *uint256.Int {
+	stateObject := s.getStateObject(addr)
+	if stateObject != nil {
+		return stateObject.Balance()
+	}
+	return uint256.NewInt(0)
+	//})
 }
 
 // GetNonce retrieves the nonce from the given address or 0 if object not found
