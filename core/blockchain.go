@@ -643,12 +643,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 	return bc, nil
 }
 
-type WarmupResult struct {
-	Reader      state.ReaderWithStats
-	Interrupted bool
-}
-
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, warmupChan <-chan WarmupResult) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -678,25 +673,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-
-	// Signal the warmup to stop and get the (semi)warmed reader
-	var warmupInterrupted bool
-	if warmupChan != nil {
-		followupInterrupt.Store(true)
-		result := <-warmupChan
-		warmupInterrupted = result.Interrupted
-
-		// Use the pre-warmed reader if available
-		if result.Reader != nil {
-			process = result.Reader
-		}
-
-		// Log if warmup was interrupted before completion
-		if warmupInterrupted {
-			log.Info("Reader cache warmup interrupted before completion", "block", block.Number(), "hash", block.Hash())
-		}
+	// Seed the process reader's cache then use it for execution
+	if warmed := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
+		process = warmed
 	}
-
 	// Create a prefetch statedb if needed in future; currently unused to avoid contention
 	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
 	// if err != nil {
@@ -841,6 +821,7 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
 		return nil
 	}
+	// Synchronous warm-up using the same reader and triedb
 	vmCfg := bc.cfg.VmConfig
 	vmCfg.Tracer = nil
 	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
@@ -3066,28 +3047,6 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// Prewarm the state for the block's parent root in background before creating statedb
 		// prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
-
-		var followupInterrupt atomic.Bool
-		parentRoot := parent.Root
-
-		warmupChan := make(chan WarmupResult, 1)
-
-		go func() {
-			_, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
-			if err != nil {
-				warmupChan <- WarmupResult{Reader: nil, Interrupted: false}
-				return
-			}
-			// Seed the process reader's cache, it will stop when followupInterrupt is signaled
-			warmed := bc.seedReaderCache(parentRoot, process, block, &followupInterrupt)
-			interrupted := followupInterrupt.Load()
-			if warmed != nil {
-				warmupChan <- WarmupResult{Reader: warmed, Interrupted: interrupted}
-			} else {
-				warmupChan <- WarmupResult{Reader: process, Interrupted: interrupted}
-			}
-		}()
-
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3112,6 +3071,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// statedb.StartPrefetcher("chain", witness)
 		}
 		activeState = statedb
+
+		var followupInterrupt atomic.Bool
 
 		// Process block using the parent state as reference point
 		pstart := time.Now()
@@ -3141,7 +3102,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, warmupChan)
+		// if prewarmCancel != nil {
+		// 	prewarmCancel()
+		// 	<-prewarmDone
+		// }
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
