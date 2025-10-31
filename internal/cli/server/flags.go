@@ -468,6 +468,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.Preimages,
 		Group:   "Cache",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.addresscachesizes",
+		Usage:   "Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)",
+		Value:   &c.cliConfig.Cache.AddressCacheSizesRaw,
+		Default: c.cliConfig.Cache.AddressCacheSizesRaw,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",

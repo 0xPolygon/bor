@@ -18,6 +18,7 @@ package filters
 
 import (
 	"context"
+	big "math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -100,9 +101,19 @@ func (f *BorBlockLogsFilter) Logs(ctx context.Context) ([]*types.Log, error) {
 	// adjust begin for sprint
 	f.begin = currentSprintEnd(f.borConfig.CalculateSprint(uint64(f.begin)), f.begin)
 
+	// begin already on PIP-74, no more need for bor logs
+	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.begin)) {
+		return nil, nil
+	}
+
 	end := f.end
 	if f.end == -1 {
 		end = int64(head)
+	}
+
+	// end on PIP-74, reduce to fit just on preHF blocks
+	if f.borConfig != nil && f.borConfig.IsMadhugiri(big.NewInt(f.end)) {
+		end = f.borConfig.MadhugiriBlock.Int64() - 1
 	}
 
 	// Gather all indexed logs, and finish with non indexed ones

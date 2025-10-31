@@ -4021,7 +4021,7 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 func TestRPCGetTransactionReceiptsByBlock(t *testing.T) {
 	api, blockNrOrHash, testSuite := setupBlocksToApiTest(t)
 
-	receipts, err := api.GetTransactionReceiptsByBlock(t.Context(), blockNrOrHash)
+	receipts, err := api.GetBlockReceipts(t.Context(), blockNrOrHash)
 	if err != nil {
 		t.Fatal("api error")
 	}
