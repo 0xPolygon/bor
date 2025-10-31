@@ -34,6 +34,7 @@ func ReadStateHistoryIndexMetadata(db ethdb.KeyValueReader) []byte {
 // WriteStateHistoryIndexMetadata stores the metadata of state history index
 // into database.
 func WriteStateHistoryIndexMetadata(db ethdb.KeyValueWriter, blob []byte) {
+	log.Error("Writing the metadata of state history index")
 	if err := db.Put(headStateHistoryIndexKey, blob); err != nil {
 		log.Crit("Failed to store the metadata of state history index", "err", err)
 	}
@@ -41,6 +42,7 @@ func WriteStateHistoryIndexMetadata(db ethdb.KeyValueWriter, blob []byte) {
 
 // DeleteStateHistoryIndexMetadata removes the metadata of state history index.
 func DeleteStateHistoryIndexMetadata(db ethdb.KeyValueWriter) {
+	log.Error("Deleting the metadata of state history index")
 	if err := db.Delete(headStateHistoryIndexKey); err != nil {
 		log.Crit("Failed to delete the metadata of state history index", "err", err)
 	}
@@ -58,6 +60,7 @@ func ReadAccountHistoryIndex(db ethdb.KeyValueReader, addressHash common.Hash) [
 
 // WriteAccountHistoryIndex writes the provided account history index into database.
 func WriteAccountHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash, data []byte) {
+	log.Error("Writing account history index", "address", addressHash.Hex())
 	if err := db.Put(accountHistoryIndexKey(addressHash), data); err != nil {
 		log.Crit("Failed to store account history index", "err", err)
 	}
@@ -66,6 +69,7 @@ func WriteAccountHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash, 
 // DeleteAccountHistoryIndex deletes the specified account history index from
 // the database.
 func DeleteAccountHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash) {
+	log.Error("Deleting account history index", "address", addressHash.Hex())
 	if err := db.Delete(accountHistoryIndexKey(addressHash)); err != nil {
 		log.Crit("Failed to delete account history index", "err", err)
 	}
@@ -83,6 +87,7 @@ func ReadStorageHistoryIndex(db ethdb.KeyValueReader, addressHash common.Hash, s
 
 // WriteStorageHistoryIndex writes the provided storage history index into database.
 func WriteStorageHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash, storageHash common.Hash, data []byte) {
+	log.Error("Writing storage history index", "address", addressHash.Hex(), "storageHash", storageHash.Hex())
 	if err := db.Put(storageHistoryIndexKey(addressHash, storageHash), data); err != nil {
 		log.Crit("Failed to store storage history index", "err", err)
 	}
@@ -90,6 +95,7 @@ func WriteStorageHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash, 
 
 // DeleteStorageHistoryIndex deletes the specified state index from the database.
 func DeleteStorageHistoryIndex(db ethdb.KeyValueWriter, addressHash common.Hash, storageHash common.Hash) {
+	log.Error("Deleting storage history index", "address", addressHash.Hex(), "storageHash", storageHash.Hex())
 	if err := db.Delete(storageHistoryIndexKey(addressHash, storageHash)); err != nil {
 		log.Crit("Failed to delete storage history index", "err", err)
 	}
@@ -107,6 +113,7 @@ func ReadAccountHistoryIndexBlock(db ethdb.KeyValueReader, addressHash common.Ha
 
 // WriteAccountHistoryIndexBlock writes the provided index block into database.
 func WriteAccountHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.Hash, blockID uint32, data []byte) {
+	log.Error("Writing account history index block", "address", addressHash.Hex(), "blockID", blockID)
 	if err := db.Put(accountHistoryIndexBlockKey(addressHash, blockID), data); err != nil {
 		log.Crit("Failed to store account index block", "err", err)
 	}
@@ -114,6 +121,7 @@ func WriteAccountHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.H
 
 // DeleteAccountHistoryIndexBlock deletes the specified index block from the database.
 func DeleteAccountHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.Hash, blockID uint32) {
+	log.Error("Deleting account history index block", "address", addressHash.Hex(), "blockID", blockID)
 	if err := db.Delete(accountHistoryIndexBlockKey(addressHash, blockID)); err != nil {
 		log.Crit("Failed to delete account index block", "err", err)
 	}
@@ -131,6 +139,7 @@ func ReadStorageHistoryIndexBlock(db ethdb.KeyValueReader, addressHash common.Ha
 
 // WriteStorageHistoryIndexBlock writes the provided index block into database.
 func WriteStorageHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.Hash, storageHash common.Hash, id uint32, data []byte) {
+	log.Error("Write storage history index block", "address", addressHash.Hex(), "storageHash", storageHash.Hex(), "id", id)
 	if err := db.Put(storageHistoryIndexBlockKey(addressHash, storageHash, id), data); err != nil {
 		log.Crit("Failed to store storage index block", "err", err)
 	}
@@ -138,6 +147,7 @@ func WriteStorageHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.H
 
 // DeleteStorageHistoryIndexBlock deletes the specified index block from the database.
 func DeleteStorageHistoryIndexBlock(db ethdb.KeyValueWriter, addressHash common.Hash, storageHash common.Hash, id uint32) {
+	log.Error("Deleting storage history index block", "address", addressHash.Hex(), "storageHash", storageHash.Hex(), "id", id)
 	if err := db.Delete(storageHistoryIndexBlockKey(addressHash, storageHash, id)); err != nil {
 		log.Crit("Failed to delete storage index block", "err", err)
 	}
@@ -164,6 +174,7 @@ func increaseKey(key []byte) []byte {
 // Note, as bor receipts and tx lookup are also stored with prefix "matic-bor", it needs
 // to be excluded from range deletion.
 func DeleteStateHistoryIndex(db ethdb.KeyValueRangeDeleter) {
+	log.Error("Deleting all state history index data")
 	// We split the delete range queries into 2 parts to ensure that bor receipts related data isn't deleted.
 	// 1. `StateHistoryIndexPrefix` (i.e. "m") to "matic-bor" key (exclusive)
 	// 2. Immediate next key after "matic-bor" to next key after `StateHistoryIndexPrefix` (i.e. "n")

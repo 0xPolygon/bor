@@ -276,6 +276,7 @@ func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
 	}
 	// TODO (rjl493456442) disable the background indexing in read-only mode
 	if db.freezer != nil && db.config.EnableStateIndexing {
+		log.Error("Indexer enabled in DB")
 		db.indexer = newHistoryIndexer(db.diskdb, db.freezer, db.tree.bottom().stateID())
 		log.Info("Enabled state history indexing")
 	}
@@ -535,6 +536,7 @@ func (db *Database) Enable(root common.Hash) error {
 	//   1. Close any existing indexer
 	//   2. Re-initialize the indexer so it starts indexing from the new state root.
 	if db.indexer != nil && db.freezer != nil && db.config.EnableStateIndexing {
+		log.Error("Indexer enabled in Enable")
 		db.indexer.close()
 		db.indexer = newHistoryIndexer(db.diskdb, db.freezer, db.tree.bottom().stateID())
 		log.Info("Re-enabled state history indexing")
