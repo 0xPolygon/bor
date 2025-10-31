@@ -997,42 +997,42 @@ func (s *StateDB) deleteStateObject(addr common.Address) {
 // getStateObject retrieves a state object given by the address, returning nil if
 // the object is not found or was deleted in this execution context.
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
-	return MVRead(s, blockstm.NewAddressKey(addr), nil, func(s *StateDB) *stateObject {
-		// Prefer live objects if any is available
-		if obj := s.stateObjects[addr]; obj != nil {
-			return obj
-		}
-		// Short circuit if the account is already destructed in this block.
-		if _, ok := s.stateObjectsDestruct[addr]; ok {
-			return nil
-		}
-		s.AccountLoaded++
-
-		start := time.Now()
-		acct, err := s.reader.Account(addr)
-		if err != nil {
-			s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
-			return nil
-		}
-		s.AccountReads += time.Since(start)
-		// Independent of where we loaded the data from, add it to the prefetcher.
-		// Whilst this would be a bit weird if snapshots are disabled, but we still
-		// want the trie nodes to end up in the prefetcher too, so just push through.
-		// if s.prefetcher != nil {
-		// 	if err = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
-		// 		log.Error("Failed to prefetch account", "addr", addr, "err", err)
-		// 	}
-		// }
-		// Short circuit if the account is not found
-		if acct == nil {
-			return nil
-		}
-		// Insert into the live set
-		obj := newObject(s, addr, acct)
-		s.setStateObject(obj)
-		s.AccountLoaded++
+	// return MVRead(s, blockstm.NewAddressKey(addr), nil, func(s *StateDB) *stateObject {
+	// Prefer live objects if any is available
+	if obj := s.stateObjects[addr]; obj != nil {
 		return obj
-	})
+	}
+	// Short circuit if the account is already destructed in this block.
+	if _, ok := s.stateObjectsDestruct[addr]; ok {
+		return nil
+	}
+	s.AccountLoaded++
+
+	start := time.Now()
+	acct, err := s.reader.Account(addr)
+	if err != nil {
+		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
+		return nil
+	}
+	s.AccountReads += time.Since(start)
+	// Independent of where we loaded the data from, add it to the prefetcher.
+	// Whilst this would be a bit weird if snapshots are disabled, but we still
+	// want the trie nodes to end up in the prefetcher too, so just push through.
+	// if s.prefetcher != nil {
+	// 	if err = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, []common.Address{addr}, nil, true); err != nil {
+	// 		log.Error("Failed to prefetch account", "addr", addr, "err", err)
+	// 	}
+	// }
+	// Short circuit if the account is not found
+	if acct == nil {
+		return nil
+	}
+	// Insert into the live set
+	obj := newObject(s, addr, acct)
+	s.setStateObject(obj)
+	s.AccountLoaded++
+	return obj
+	// })
 }
 
 func (s *StateDB) setStateObject(object *stateObject) {
