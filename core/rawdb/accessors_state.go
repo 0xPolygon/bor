@@ -107,6 +107,7 @@ func DeleteCode(db ethdb.KeyValueWriter, hash common.Hash) {
 
 // ReadStateID retrieves the state id with the provided state root.
 func ReadStateID(db ethdb.KeyValueReader, root common.Hash) *uint64 {
+	log.Error("ReadStateID", root.Hex())
 	data, err := db.Get(stateIDKey(root))
 	if err != nil || len(data) == 0 {
 		return nil
@@ -117,6 +118,7 @@ func ReadStateID(db ethdb.KeyValueReader, root common.Hash) *uint64 {
 
 // WriteStateID writes the provided state lookup to database.
 func WriteStateID(db ethdb.KeyValueWriter, root common.Hash, id uint64) {
+	log.Error("WriteStateID", "root", root.Hex(), "id", id)
 	var buff [8]byte
 	binary.BigEndian.PutUint64(buff[:], id)
 	if err := db.Put(stateIDKey(root), buff[:]); err != nil {
@@ -126,6 +128,7 @@ func WriteStateID(db ethdb.KeyValueWriter, root common.Hash, id uint64) {
 
 // DeleteStateID deletes the specified state lookup from the database.
 func DeleteStateID(db ethdb.KeyValueWriter, root common.Hash) {
+	log.Error("DeleteStateID", "root", root.Hex())
 	if err := db.Delete(stateIDKey(root)); err != nil {
 		log.Crit("Failed to delete state ID", "err", err)
 	}
