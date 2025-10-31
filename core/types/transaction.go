@@ -50,6 +50,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
+	StateSyncTxType  = 0x7f
 )
 
 // Transaction is an Ethereum transaction.
@@ -226,6 +227,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case SetCodeTxType:
 		inner = new(SetCodeTx)
+	case StateSyncTxType:
+		inner = new(StateSyncTx)
 	default:
 		return nil, ErrTxTypeNotSupported
 	}
@@ -555,6 +558,13 @@ func (tx *Transaction) Hash() common.Hash {
 	var h common.Hash
 	if tx.Type() == LegacyTxType {
 		h = rlpHash(tx.inner)
+	} else if tx.Type() == StateSyncTxType {
+		// StateSyncTx hash must be computed from the payload ([]StateSyncData), not the wrapper struct.
+		// This matches the MarshalBinary encoding used in EncodeIndex for transactionsRoot.
+		// Using prefixedRlpHash(type, inner) would encode the StateSyncTx struct instead of
+		// the array, producing a different hash than the canonical encoding.
+		stateSyncTx := tx.inner.(*StateSyncTx)
+		h = prefixedRlpHash(tx.Type(), stateSyncTx.StateSyncData)
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}

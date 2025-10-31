@@ -192,6 +192,10 @@ type BlockChainConfig struct {
 	StateScheme  string // Scheme used to store ethereum states and merkle tree nodes on top
 	ArchiveMode  bool   // Whether to enable the archive mode
 
+	// Address-specific cache sizes for biased caching (pathdb only)
+	// Maps account address to cache size in bytes
+	AddressCacheSizes map[common.Address]int
+
 	// State snapshot related options
 	SnapshotLimit   int  // Memory allowance (MB) to use for caching snapshot entries in memory
 	SnapshotNoBuild bool // Whether the background generation is allowed
@@ -287,8 +291,9 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			// TODO(rjl493456442): The write buffer represents the memory limit used
 			// for flushing both trie data and state data to disk. The config name
 			// should be updated to eliminate the confusion.
-			WriteBufferSize: cfg.TrieDirtyLimit * 1024 * 1024,
-			NoAsyncFlush:    cfg.TrieNoAsyncFlush,
+			WriteBufferSize:   cfg.TrieDirtyLimit * 1024 * 1024,
+			NoAsyncFlush:      cfg.TrieNoAsyncFlush,
+			AddressCacheSizes: cfg.AddressCacheSizes,
 		}
 	}
 	return config
@@ -1742,6 +1747,12 @@ func splitReceiptsAndDeriveFields(receipts rlp.RawValue, number uint64, hash com
 		return nil, nil
 	}
 
+	// After the Madhugiri HF, no need to split receipts as all receipts for a block
+	// are stored together (i.e. under same key).
+	if borCfg.IsMadhugiri(big.NewInt(int64(number))) {
+		return receipts, nil
+	}
+
 	// Bor receipts can only exist on sprint end blocks. Avoid decoding if possible.
 	if !types.IsSprintEndBlock(borCfg, number) {
 		return receipts, nil
@@ -2185,11 +2196,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	var stateSyncLogs []*types.Log
 
 	if len(blockLogs) > 0 {
-		sort.SliceStable(blockLogs, func(i, j int) bool {
-			return blockLogs[i].Index < blockLogs[j].Index
-		})
-
-		if len(blockLogs) > len(logs) {
+		// After Madhugiri HF we don't write bor receipts separately
+		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsMadhugiri(block.Number())) && len(blockLogs) > len(logs) {
+			sort.SliceStable(blockLogs, func(i, j int) bool {
+				return blockLogs[i].Index < blockLogs[j].Index
+			})
 			stateSyncLogs = blockLogs[len(logs):] // get state-sync logs from `state.Logs()`
 
 			// State sync logs don't have tx index, tx hash and other necessary fields
@@ -2371,7 +2382,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 			// BOR state sync feed related changes
 			bc.stateSyncMu.RLock()
-			for _, data := range bc.stateSyncData {
+			for _, data := range bc.GetStateSync() {
 				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 			}
 			bc.stateSyncMu.RUnlock()
@@ -2661,7 +2672,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 
 		// Only commit blocks that don't need retry
 		if !results[i].needsRetry {
-			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, false, true); werr != nil {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, results[i].sdb, true, true); werr != nil {
 				stopHeaders()
 				return int(processed.Load()), werr
 			}
@@ -2691,7 +2702,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			results[i].gasUsed = res.GasUsed
 
 			// Commit the block after successful retry
-			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, false, true); werr != nil {
+			if _, werr := bc.writeBlockAndSetHead(block, nil, nil, sdb, true, true); werr != nil {
 				stopHeaders()
 				return int(processed.Load()), werr
 			}
@@ -2797,7 +2808,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			}
 		}
 
-		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, false, true); werr != nil {
+		if _, werr := bc.writeBlockAndSetHead(block, nil, nil, statedb, true, true); werr != nil {
 			return int(processed.Load()), werr
 		}
 		processed.Add(1)
@@ -3171,7 +3182,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// BOR state sync feed related changes
 		bc.stateSyncMu.RLock()
-		for _, data := range bc.stateSyncData {
+		for _, data := range bc.GetStateSync() {
 			bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
 		}
 		bc.stateSyncMu.RUnlock()

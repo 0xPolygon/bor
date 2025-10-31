@@ -470,12 +470,11 @@ func XTestDelivery(t *testing.T) {
 				}
 
 				hasher := trie.NewStackTrie(nil)
-				hashes := make([]common.Hash, len(rcs))
-
-				for i, receipt := range rcs {
-					hashes[i] = types.DeriveSha(receipt, hasher)
+				getHashes := func(index int, number *big.Int) common.Hash {
+					return types.DeriveSha(rcs[index], hasher)
 				}
-				_, err := q.DeliverReceipts(peer.id, types.EncodeBlockReceiptLists(rcs), hashes)
+
+				_, err := q.DeliverReceipts(peer.id, types.EncodeBlockReceiptLists(rcs), getHashes)
 				if err != nil {
 					fmt.Printf("delivered %d receipts %v\n", len(rcs), err)
 				}

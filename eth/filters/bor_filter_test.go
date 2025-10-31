@@ -153,3 +153,77 @@ func TestBorFilters(t *testing.T) {
 		t.Error("expected 0 log, got", len(logs))
 	}
 }
+
+func TestBorFilters_SkipOnBeginAtStateSync(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	db := NewMockDatabase(ctrl)
+	backend := NewMockBackend(ctrl)
+
+	// Clone test BorConfig and set the StateSync hard-fork block to 1000.
+	testBorConfig := params.TestChainConfig.Bor
+	cfgCopy := *testBorConfig
+	cfgCopy.MadhugiriBlock = big.NewInt(1000)
+
+	// Return DB and a sufficiently new head so range logic runs.
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+
+	// Begin at the StateSync block: after currentSprintEnd alignment, IsMadhugiri (begin) should be true
+	// and the filter should return (nil, nil) without scanning any bor receipts.
+	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, 1000, 1100, nil, nil)
+	logs, err := filter.Logs(t.Context())
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if logs != nil {
+		t.Fatalf("expected nil logs due to early return at StateSync begin, got %v", len(logs))
+	}
+}
+
+func TestBorFilters_TrimEndAtStateSync(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var (
+		hash1 = common.BytesToHash([]byte("topic1"))
+		hash3 = common.BytesToHash([]byte("topic3"))
+		db    = NewMockDatabase(ctrl)
+	)
+
+	backend := NewMockBackend(ctrl)
+
+	// Clone test BorConfig and set the StateSync hard-fork block to 1000.
+	testBorConfig := params.TestChainConfig.Bor
+	cfgCopy := *testBorConfig
+	cfgCopy.MadhugiriBlock = big.NewInt(1000)
+
+	// Always returned
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).Return(newTestHeader(1500), nil).AnyTimes()
+
+	// We’ll ask for [990, 1000]. Since 1000 is the StateSync block, the filter should trim f.end to 999
+	// and only scan pre-fork bor receipts. Following the pattern in existing tests, two bor-receipt
+	// checks will occur for this range, so prepare two receipts in sequence.
+	backend.expectBorReceiptsFromMock([]*common.Hash{&hash1, &hash3})
+
+	// Filter for only hash3 so we expect exactly 1 matching log from the second receipt.
+	filter := NewBorBlockLogsRangeFilter(backend, &cfgCopy, 990, 1000, []common.Address{addr}, [][]common.Hash{{hash3}})
+	logs, err := filter.Logs(t.Context())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log (trimmed to pre-fork, matched hash3), got %d", len(logs))
+	}
+	if logs[0].Topics[0] != hash3 {
+		t.Fatalf("expected log topic %x, got %x", hash3, logs[0].Topics[0])
+	}
+}

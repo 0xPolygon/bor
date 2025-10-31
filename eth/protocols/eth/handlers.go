@@ -19,13 +19,16 @@ package eth
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -336,18 +339,49 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 		bytes    int
 		receipts []rlp.RawValue
 	)
+	borCfg := chain.Config().Bor
 	for lookups, hash := range query {
 		if bytes >= softResponseLimit || len(receipts) >= maxReceiptsServe ||
 			lookups >= 2*maxReceiptsServe {
 			break
 		}
 
-		// In order to include state-sync transaction receipts, which resides in a separate
-		// table in db, we need to separately fetch normal and state-sync transaction receipts.
-		// Later, decode them, merge them into a single unit and re-encode the final list to
-		// be sent over p2p.
+		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if number == nil {
+			continue
+		}
 
-		// Fetch receipts of normal evm transactions
+		// If we're past the Madhugiri hardfork, state-sync receipts (if present) are stored
+		// with normal block receipts so no special handling needed.
+		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(*number))) {
+			allReceipts := chain.GetReceiptsRLP(hash)
+			if allReceipts == nil {
+				if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
+					continue
+				}
+			}
+			body := chain.GetBodyRLP(hash)
+			if body == nil {
+				continue
+			}
+			// Noop as no special handling is needed
+			isStateSyncReceipt := func(index int) bool {
+				return false
+			}
+			results, err := blockReceiptsToNetwork69(allReceipts, body, isStateSyncReceipt)
+			if err != nil {
+				log.Error("Error in block receipts conversion", "hash", hash, "err", err)
+				continue
+			}
+
+			receipts = append(receipts, results)
+			bytes += len(results)
+			continue
+		}
+
+		// Before Madhugiri hardfork, we need to fetch state-sync receipts separately along with fetching
+		// block receipts. Upon fetching, decode them, merge them into a single unit and re-encode
+		// the final list to be sent over p2p.
 		normalReceipts := chain.GetReceiptsRLP(hash)
 		var normalReceiptsDecoded []*types.ReceiptForStorage
 		if normalReceipts != nil {
@@ -374,10 +408,6 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
 				continue
 			}
-
-			// Append an empty entry for this block and continue
-			receipts = append(receipts, nil)
-			continue
 		}
 
 		// Track existence of bor receipts for encoding
@@ -534,19 +564,6 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		return err
 	}
 
-	// The response in p2p packet can only be consumed once. As we need a copy of receipt
-	// to exclude state-sync transaction receipt from receipt root calculation, encode
-	// and decode the response back.
-	packet, err := rlp.EncodeToBytes(res)
-	if err != nil {
-		return fmt.Errorf("failed to re-encode receipt packet for making copy: %w", err)
-	}
-
-	resWithoutStateSync := new(ReceiptsPacket[L])
-	if err := rlp.DecodeBytes(packet, resWithoutStateSync); err != nil {
-		return fmt.Errorf("failed to decode re-encoded receipt packet for making copy: %w", err)
-	}
-
 	// Assign temporary hashing buffer to each list item, the same buffer is shared
 	// between all receipt list instances.
 	buffers := new(receiptListBuffers)
@@ -554,28 +571,75 @@ func handleReceipts[L ReceiptsList](backend Backend, msg Decoder, peer *Peer) er
 		res.List[i].setBuffers(buffers)
 	}
 
+	// The `metadata` function below was used earlier to calculate `ReceiptHash` which is further
+	// used to validate against `header.ReceiptHash`. By default, state-sync receipts (which are
+	// appended at the end of list for a block) are excluded from the `ReceiptHash` calculation.
+	// After the Madhugiri hardfork, they should be included in the calculation. We don't have
+	// access to block number here so we can't determine whether to exclude or not. Instead, just
+	// ignore the `metadata` function and pass on the whole receipt list as is. The receipt queue
+	// handler which has access to block number will take care of the exclusion if needed.
 	metadata := func() interface{} {
-		hasher := trie.NewStackTrie(nil)
-		hashes := make([]common.Hash, len(resWithoutStateSync.List))
-		for i := range resWithoutStateSync.List {
-			// The receipt root of a block doesn't include receipts from state-sync
-			// transactions specific to polygon. Exclude them for calculating the
-			// hashes of all receipts.
-			resWithoutStateSync.List[i].ExcludeStateSyncReceipt()
-			hashes[i] = types.DeriveSha(resWithoutStateSync.List[i], hasher)
-		}
+		return nil
+	}
 
-		return hashes
-	}
-	var enc ReceiptsRLPResponse
-	for i := range res.List {
-		enc = append(enc, res.List[i].EncodeForStorage())
-	}
+	// Assign the decoded receipt list to the result of `Response` packet.
 	return peer.dispatchResponse(&Response{
 		id:   res.RequestId,
 		code: ReceiptsMsg,
-		Res:  &enc,
+		Res:  &res.List,
 	}, metadata)
+}
+
+// EncodeReceiptsAndPrepareHasher encodes a list of receipts to the storage format (does not
+// include TxType field). It also returns a function which calculates `ReceiptHash` of a receipt list
+// based on the whether we've crossed the Madhugiri hardfork or not.
+func EncodeReceiptsAndPrepareHasher(packet interface{}, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
+	// Extract receipts based on type. Add/remove support for new types here as needed.
+	var (
+		receipts             ReceiptsRLPResponse
+		getReceiptListHashes func(int, *big.Int) common.Hash
+	)
+	switch packet := packet.(type) {
+	case []*ReceiptList68:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	case *[]*ReceiptList68:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
+	case []*ReceiptList69:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(receiptList, borCfg)
+	case *[]*ReceiptList69:
+		receiptList := packet
+		receipts, getReceiptListHashes = encodeReceiptsAndPrepareHasher(*receiptList, borCfg)
+	default:
+		// This shouldn't happen unless there's a bug in identifying type of receipt list
+		// or there's a new type which isn't handled here.
+		log.Debug("EncodeReceiptsAndPrepareHasher: unsupported receipt list type", "type", fmt.Sprintf("%T", packet))
+		return nil, nil
+	}
+	return receipts, getReceiptListHashes
+}
+
+// encodeReceiptsAndPrepareHasher is an internal generic function for all receipt types
+func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params.BorConfig) (ReceiptsRLPResponse, func(int, *big.Int) common.Hash) {
+	var encodedReceipts ReceiptsRLPResponse = make(ReceiptsRLPResponse, len(receipts))
+	for i := range receipts {
+		encodedReceipts[i] = receipts[i].EncodeForStorage()
+	}
+
+	hasher := trie.NewStackTrie(nil)
+	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
+		// Don't exclude state-sync receipts for post hardfork blocks
+		if borCfg.IsMadhugiri(number) {
+			return types.DeriveSha(receipts[index], hasher)
+		} else {
+			receipts[index].ExcludeStateSyncReceipt()
+			return types.DeriveSha(receipts[index], hasher)
+		}
+	}
+
+	return encodedReceipts, calculateReceiptHashes
 }
 
 func handleNewPooledTransactionHashes(backend Backend, msg Decoder, peer *Peer) error {

@@ -621,6 +621,12 @@ type CacheConfig struct {
 	// Raise the open file descriptor resource limit (default = system fd limit)
 	FDLimit int `hcl:"fdlimit,optional" toml:"fdlimit,optional"`
 
+	// Address-specific cache sizes for biased caching (format: "address=sizeMB,address=sizeMB")
+	// Size is specified in MB (megabytes)
+	// Example: "0x1234...=1024,0x5678...=512" (1024MB and 512MB)
+	AddressCacheSizesRaw string            `hcl:"addresscachesizes,optional" toml:"addresscachesizes,optional"`
+	AddressCacheSizes    map[string]string `hcl:"-,optional" toml:"-"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -1288,6 +1294,16 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
+
+		// Parse address-specific cache sizes
+		if c.Cache.AddressCacheSizesRaw != "" {
+			addressCacheSizes, err := parseAddressCacheSizes(c.Cache.AddressCacheSizesRaw)
+			if err != nil {
+				log.Warn("Failed to parse address cache sizes", "error", err)
+			} else {
+				n.AddressCacheSizes = addressCacheSizes
+			}
+		}
 	}
 
 	// History
@@ -1400,6 +1416,51 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
 	return &n, nil
+}
+
+// parseAddressCacheSizes parses address cache sizes from a string format
+// Expected format: "address1=sizeMB1,address2=sizeMB2,..."
+// Sizes are specified in MB (megabytes) and converted to bytes
+// Example: "0x1234...=1024,0x5678...=512" means 1024MB and 512MB
+func parseAddressCacheSizes(input string) (map[common.Address]int, error) {
+	result := make(map[common.Address]int)
+	if input == "" {
+		return result, nil
+	}
+
+	// Split by comma
+	pairs := strings.Split(input, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+
+		// Split by equals
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid format for address cache size pair: %s", pair)
+		}
+
+		// Parse address
+		addressStr := strings.TrimSpace(parts[0])
+		if !strings.HasPrefix(addressStr, "0x") {
+			addressStr = "0x" + addressStr
+		}
+		address := common.HexToAddress(addressStr)
+
+		// Parse size in MB and convert to bytes
+		sizeMB, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return nil, fmt.Errorf("invalid size for address %s: %v (must be integer MB)", addressStr, err)
+		}
+
+		// Convert MB to bytes
+		sizeBytes := sizeMB * 1024 * 1024
+		result[address] = sizeBytes
+	}
+
+	return result, nil
 }
 
 var (

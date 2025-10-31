@@ -22,6 +22,7 @@ package downloader
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1034,12 +1035,13 @@ func (q *queue) DeliverBodies(id string, txLists [][]*types.Transaction, txListH
 // DeliverReceipts injects a receipt retrieval response into the results queue.
 // The method returns the number of transaction receipts accepted from the delivery
 // and also wakes any threads waiting for data delivery.
-func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, receiptListHashes []common.Hash) (int, error) {
+func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, getReceiptListHash func(int, *big.Int) common.Hash) (int, error) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
 
 	validate := func(index int, header *types.Header) error {
-		if receiptListHashes[index] != header.ReceiptHash {
+		receiptListHash := getReceiptListHash(index, header.Number)
+		if receiptListHash != header.ReceiptHash {
 			return errInvalidReceipt
 		}
 
