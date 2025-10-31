@@ -824,6 +824,27 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
 		return nil, nil
 	}
+	// If a global prefetch reader existed from previous block, log its stats and reset
+	if stats, ok := state.GlobalPrefetchStats(); ok {
+		if stats.AccountHit+stats.AccountMiss+stats.StorageHit+stats.StorageMiss > 0 {
+			acctTotal := stats.AccountHit + stats.AccountMiss
+			storTotal := stats.StorageHit + stats.StorageMiss
+			var acctPct, storPct float64
+			if acctTotal > 0 {
+				acctPct = float64(stats.AccountHit) * 100 / float64(acctTotal)
+			}
+			if storTotal > 0 {
+				storPct = float64(stats.StorageHit) * 100 / float64(storTotal)
+			}
+			log.Info(
+				"Prefetch reader stats",
+				"root", parentRoot,
+				"accountHit", stats.AccountHit, "accountMiss", stats.AccountMiss, "accountHitPct", acctPct,
+				"storageHit", stats.StorageHit, "storageMiss", stats.StorageMiss, "storageHitPct", storPct,
+			)
+		}
+		state.ResetGlobalPrefetchStats()
+	}
 	// Synchronous warm-up using the same reader and triedb
 	vmCfg := bc.cfg.VmConfig
 	vmCfg.Tracer = nil
@@ -837,6 +858,29 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	if warmdb != nil {
 		accs, storage := warmdb.WarmSnapshot()
 		if len(accs) > 0 || len(storage) > 0 {
+			// Compute storage slot count
+			totalSlots := 0
+			for _, m := range storage {
+				totalSlots += len(m)
+			}
+			st := reader.GetStats()
+			acctTotal := st.AccountHit + st.AccountMiss
+			storTotal := st.StorageHit + st.StorageMiss
+			var acctPct, storPct float64
+			if acctTotal > 0 {
+				acctPct = float64(st.AccountHit) * 100 / float64(acctTotal)
+			}
+			if storTotal > 0 {
+				storPct = float64(st.StorageHit) * 100 / float64(storTotal)
+			}
+			log.Info(
+				"Warm snapshot ready",
+				"root", parentRoot,
+				"cachedAccounts", len(accs), "cachedSlots", totalSlots,
+				"warmAccountHit", st.AccountHit, "warmAccountMiss", st.AccountMiss, "warmAccountHitPct", acctPct,
+				"warmStorageHit", st.StorageHit, "warmStorageMiss", st.StorageMiss, "warmStorageHitPct", storPct,
+			)
+
 			prefetch := state.NewPrefetchReader(accs, storage)
 			state.SetGlobalPrefetchReaderForRoot(parentRoot, prefetch)
 
@@ -844,6 +888,8 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 			if _, r, err := bc.statedb.ReadersWithCacheStats(parentRoot); err == nil {
 				return r, nil
 			}
+		} else {
+			log.Info("Warm snapshot empty", "root", parentRoot)
 		}
 	}
 	return reader, nil

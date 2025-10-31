@@ -563,6 +563,11 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 type prefetchReader struct {
 	accounts map[common.Address]*types.StateAccount
 	storage  map[common.Address]map[common.Hash]common.Hash
+	// stats
+	accountHit  atomic.Int64
+	accountMiss atomic.Int64
+	storageHit  atomic.Int64
+	storageMiss atomic.Int64
 }
 
 // NewPrefetchReader constructs a StateReader backed by the provided maps.
@@ -572,24 +577,79 @@ func NewPrefetchReader(accounts map[common.Address]*types.StateAccount, storage 
 
 func (p *prefetchReader) Account(addr common.Address) (*types.StateAccount, error) {
 	if p == nil || p.accounts == nil {
+		p.accountMiss.Add(1)
 		return nil, nil
 	}
 	if acct, ok := p.accounts[addr]; ok {
+		p.accountHit.Add(1)
 		return acct, nil
 	}
+	p.accountMiss.Add(1)
 	return nil, nil
 }
 
 func (p *prefetchReader) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	if p == nil || p.storage == nil {
+		p.storageMiss.Add(1)
 		return common.Hash{}, nil
 	}
 	if slots, ok := p.storage[addr]; ok {
 		if val, ok := slots[slot]; ok {
+			p.storageHit.Add(1)
 			return val, nil
 		}
 	}
+	p.storageMiss.Add(1)
 	return common.Hash{}, nil
+}
+
+// PrefetchStats returns the current hit/miss counters.
+func (p *prefetchReader) PrefetchStats() ReaderStats {
+	if p == nil {
+		return ReaderStats{}
+	}
+	return ReaderStats{
+		AccountHit:  p.accountHit.Load(),
+		AccountMiss: p.accountMiss.Load(),
+		StorageHit:  p.storageHit.Load(),
+		StorageMiss: p.storageMiss.Load(),
+	}
+}
+
+// resetStats zeroes the counters.
+func (p *prefetchReader) resetStats() {
+	if p == nil {
+		return
+	}
+	p.accountHit.Store(0)
+	p.accountMiss.Store(0)
+	p.storageHit.Store(0)
+	p.storageMiss.Store(0)
+}
+
+// GlobalPrefetchStats returns the stats of the globally installed prefetch reader, if any.
+func GlobalPrefetchStats() (ReaderStats, bool) {
+	if v := globalPrefetchReader.Load(); v != nil {
+		if rp, ok := v.(*rootedPrefetchReader); ok {
+			if pr, ok := rp.prefetch.(*prefetchReader); ok {
+				return pr.PrefetchStats(), true
+			}
+		}
+	}
+	return ReaderStats{}, false
+}
+
+// ResetGlobalPrefetchStats resets the stats of the globally installed prefetch reader, if any.
+func ResetGlobalPrefetchStats() bool {
+	if v := globalPrefetchReader.Load(); v != nil {
+		if rp, ok := v.(*rootedPrefetchReader); ok {
+			if pr, ok := rp.prefetch.(*prefetchReader); ok {
+				pr.resetStats()
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type readerWithCacheStats struct {
