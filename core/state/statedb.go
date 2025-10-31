@@ -997,11 +997,13 @@ func (s *StateDB) deleteStateObject(addr common.Address) {
 // getStateObject retrieves a state object given by the address, returning nil if
 // the object is not found or was deleted in this execution context.
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
+	log.Error("getStateObject 1")
 	// return MVRead(s, blockstm.NewAddressKey(addr), nil, func(s *StateDB) *stateObject {
 	// Prefer live objects if any is available
 	if obj := s.stateObjects[addr]; obj != nil {
 		return obj
 	}
+	log.Error("getStateObject 2")
 	// Short circuit if the account is already destructed in this block.
 	if _, ok := s.stateObjectsDestruct[addr]; ok {
 		return nil
@@ -1009,11 +1011,13 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	s.AccountLoaded++
 
 	start := time.Now()
+	log.Error("getStateObject 3")
 	acct, err := s.reader.Account(addr)
 	if err != nil {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil
 	}
+	log.Error("getStateObject 4")
 	s.AccountReads += time.Since(start)
 	// Independent of where we loaded the data from, add it to the prefetcher.
 	// Whilst this would be a bit weird if snapshots are disabled, but we still
@@ -1027,9 +1031,12 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	if acct == nil {
 		return nil
 	}
+	log.Error("getStateObject 5")
 	// Insert into the live set
 	obj := newObject(s, addr, acct)
+	log.Error("getStateObject 6")
 	s.setStateObject(obj)
+	log.Error("getStateObject 7")
 	s.AccountLoaded++
 	return obj
 	// })
