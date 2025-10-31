@@ -2250,8 +2250,13 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		// Manage sliding window for full nodes (mirrors witness-receiving nodes)
 		bc.manageSlidingWindow(block.NumberU64())
 
-		// Update sliding window cache - allows full nodes to send reduced witnesses
-		bc.updateSlidingWindowCache(block.NumberU64(), statedb.Witness(), statedb)
+		// Update sliding window cache - allows full nodes to send compact witnesses
+		// For full nodes, witness is generated during execution (no merging), so pass witness.State directly
+		var witnessStates map[string]struct{}
+		if witness := statedb.Witness(); witness != nil {
+			witnessStates = witness.State
+		}
+		bc.updateSlidingWindowCache(block.NumberU64(), witnessStates, statedb)
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
@@ -4259,11 +4264,13 @@ func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) 
 
 // updateSlidingWindowCache updates the sliding window cache after processing a block.
 // This is used by both full nodes and witness-receiving nodes to maintain synchronized caches.
-func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *stateless.Witness, statedb *state.StateDB) {
+// originalWitnessStates should contain ONLY the states from the original compact witness (before merging),
+// to avoid re-caching already-cached states and causing cache bloat.
+func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessStates map[string]struct{}, statedb *state.StateDB) {
 	start := time.Now()
 	defer func() { compactWitnessCacheUpdateTimer.UpdateSince(start) }()
 
-	if witness == nil && statedb == nil {
+	if originalWitnessStates == nil && statedb == nil {
 		return
 	}
 
@@ -4277,9 +4284,10 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, witness *statele
 	cachedToActive := 0
 	cachedToNext := 0
 
-	// Cache witness state nodes if available
-	if witness != nil {
-		for stateNode := range witness.State {
+	// Cache ORIGINAL witness state nodes (not merged states)
+	// This ensures we only cache new states for this block, not re-cache old states
+	if originalWitnessStates != nil {
+		for stateNode := range originalWitnessStates {
 			// Add to active map
 			if _, exists := bc.activeCacheMap[stateNode]; !exists {
 				bc.activeCacheMap[stateNode] = struct{}{}
@@ -4342,6 +4350,17 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	blockNum := block.Number().Uint64()
+
+	// Track original witness states before any merging (for cache update later)
+	// We only want to cache NEW states from this block, not re-cache merged states
+	var originalWitnessStates map[string]struct{}
+	if !bc.parallelStatelessImportEnabled.Load() {
+		// Copy original witness states before merging
+		originalWitnessStates = make(map[string]struct{}, len(witness.State))
+		for stateNode := range witness.State {
+			originalWitnessStates[stateNode] = struct{}{}
+		}
+	}
 
 	// Compact witness cache operations are only compatible with sequential import
 	// In parallel mode, blocks are processed concurrently which breaks cache assumptions
@@ -4406,10 +4425,11 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		return nil, nil, err
 	}
 
-	// Update sliding window cache with witness and execution data
+	// Update sliding window cache with ORIGINAL witness states and execution data
 	// Only in sequential mode - parallel import is incompatible with cache
+	// Pass originalWitnessStates (not full witness) to avoid re-caching merged states
 	if !bc.parallelStatelessImportEnabled.Load() {
-		bc.updateSlidingWindowCache(blockNum, witness, statedb)
+		bc.updateSlidingWindowCache(blockNum, originalWitnessStates, statedb)
 	}
 
 	return statedb, res, nil
