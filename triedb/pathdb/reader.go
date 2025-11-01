@@ -65,19 +65,15 @@ type reader struct {
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
-	// When disk bypass is active, read nodes straight from disk layer to
-	// populate clean cache quickly during prefetch.
-	var (
-		blob []byte
-		got  common.Hash
-		loc  *nodeLoc
-		err  error
-	)
-	if r.disk != nil && r.db.forceDiskReader {
-		blob, got, loc, err = r.disk.node(owner, path, 0)
-	} else {
-		blob, got, loc, err = r.layer.node(owner, path, 0)
+	// If prefetch hint is enabled, try disk layer first. If the node content
+	// matches the requested hash, return immediately and avoid traversing the
+	// layer tree. Otherwise, fall back to the normal layered read.
+	if r.db.forceDiskReader && r.disk != nil {
+		if blob, got, _, err := r.disk.node(owner, path, 0); err == nil && (r.noHashCheck || got == hash) {
+			return blob, nil
+		}
 	}
+	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
 		return nil, err
 	}
