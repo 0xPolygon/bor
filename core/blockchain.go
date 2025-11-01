@@ -677,11 +677,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if warmed := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
 		process = warmed
 	}
-	// Create a prefetch statedb if needed in future; currently unused to avoid contention
-	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
-	// if err != nil {
-	//     return nil, nil, 0, nil, 0, err
-	// }
+	// Create a prefetch statedb for background prefetch
+	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
+	if err != nil {
+		return nil, nil, 0, nil, 0, err
+	}
 	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
@@ -714,17 +714,17 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		bc.lastProcStorMiss += stats.StorageMiss
 	}()
 
-	// go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
-	// 	// Disable tracing for prefetcher executions.
-	// 	vmCfg := bc.cfg.VmConfig
-	// 	vmCfg.Tracer = nil
-	// 	bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+		// Disable tracing for prefetcher executions.
+		vmCfg := bc.cfg.VmConfig
+		vmCfg.Tracer = nil
+		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
 
-	// 	blockPrefetchExecuteTimer.Update(time.Since(start))
-	// 	if followupInterrupt.Load() {
-	// 		blockPrefetchInterruptMeter.Mark(1)
-	// 	}
-	// }(time.Now(), throwaway, block)
+		blockPrefetchExecuteTimer.Update(time.Since(start))
+		if followupInterrupt.Load() {
+			blockPrefetchInterruptMeter.Mark(1)
+		}
+	}(time.Now(), throwaway, block)
 
 	type Result struct {
 		receipts types.Receipts
@@ -3149,6 +3149,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		stateCalc := (triehash + trieUpdate + trieRead)
 		stats.execDur += execOnly
 		stats.stateCalcDur += stateCalc
+		stats.valDur += (vtime - (triehash + trieUpdate))
 		// Write the block to the chain and get the status.
 		var (
 			wstart = time.Now()
