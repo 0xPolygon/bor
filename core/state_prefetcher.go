@@ -59,6 +59,11 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
+	// Force trie node reads to resolve against the disk layer to fill clean caches fast.
+	// This avoids walking diff layers during prefetch. Restore on exit.
+	restore := statedb.Database().TrieDB().EnableDiskLayerPrefetch()
+	defer restore()
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		stateCpy := statedb.Copy() // closure
@@ -124,5 +129,4 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 	blockPrefetchTxsValidMeter.Mark(int64(len(block.Transactions())) - fails.Load())
 	blockPrefetchTxsInvalidMeter.Mark(fails.Load())
-	return
 }

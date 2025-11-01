@@ -130,6 +130,16 @@ func (db *Database) NodeReader(blockRoot common.Hash) (database.NodeReader, erro
 	return db.backend.NodeReader(blockRoot)
 }
 
+// EnableDiskLayerPrefetch forces NodeReader to read from the disk layer in path mode.
+// Returns a restore function to revert the behavior after prefetch completes.
+func (db *Database) EnableDiskLayerPrefetch() func() {
+	if pdb, ok := db.backend.(*pathdb.Database); ok {
+		pdb.SetForceDiskReader(true)
+		return func() { pdb.SetForceDiskReader(false) }
+	}
+	return func() {}
+}
+
 // StateReader returns a reader that allows access to the state data associated
 // with the specified state. An error will be returned if the specified state is
 // not available.

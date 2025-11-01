@@ -682,10 +682,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		bc.lastWarmSeedDur = 0
 	}
 	// Create a prefetch statedb for background prefetch
-	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
-	if err != nil {
-		return nil, nil, 0, nil, 0, err
-	}
+	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
+	// if err != nil {
+	// 	return nil, nil, 0, nil, 0, err
+	// }
 	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
@@ -718,17 +718,17 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		bc.lastProcStorMiss += stats.StorageMiss
 	}()
 
-	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
-		// Disable tracing for prefetcher executions.
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+	// go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+	// 	// Disable tracing for prefetcher executions.
+	// 	vmCfg := bc.cfg.VmConfig
+	// 	vmCfg.Tracer = nil
+	// 	bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
 
-		blockPrefetchExecuteTimer.Update(time.Since(start))
-		if followupInterrupt.Load() {
-			blockPrefetchInterruptMeter.Mark(1)
-		}
-	}(time.Now(), throwaway, block)
+	// 	blockPrefetchExecuteTimer.Update(time.Since(start))
+	// 	if followupInterrupt.Load() {
+	// 		blockPrefetchInterruptMeter.Mark(1)
+	// 	}
+	// }(time.Now(), throwaway, block)
 
 	type Result struct {
 		receipts types.Receipts
