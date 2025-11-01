@@ -389,6 +389,7 @@ type BlockChain struct {
 	lastProcAccMiss  int64
 	lastProcStorHit  int64
 	lastProcStorMiss int64
+	lastWarmSeedDur  time.Duration
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -674,8 +675,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		return nil, nil, 0, nil, 0, err
 	}
 	// Seed the process reader's cache then use it for execution
-	if warmed := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
+	if warmed, warmDur := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
 		process = warmed
+		bc.lastWarmSeedDur = warmDur
+	} else {
+		bc.lastWarmSeedDur = 0
 	}
 	// Create a prefetch statedb for background prefetch
 	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
@@ -817,20 +821,21 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 }
 
 // seedReaderCache preloads the supplied readerWithCache
-func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) state.ReaderWithStats {
+func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, time.Duration) {
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
-		return nil
+		return nil, 0
 	}
 	// Synchronous warm-up using the same reader and triedb
 	vmCfg := bc.cfg.VmConfig
 	vmCfg.Tracer = nil
 	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	// Warm the exact accounts/storage and trie nodes used by the block
+	start := time.Now()
 	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
-	return reader
+	return reader, time.Since(start)
 }
 
 // prewarmStateForBlock performs a time-limited prefetch for the given
@@ -3149,6 +3154,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		stateCalc := (triehash + trieUpdate + trieRead)
 		stats.execDur += execOnly
 		stats.stateCalcDur += stateCalc
+		if bc.lastWarmSeedDur > 0 {
+			stats.warmDur += bc.lastWarmSeedDur
+		}
 		stats.valDur += (vtime - (triehash + trieUpdate))
 		// Write the block to the chain and get the status.
 		var (

@@ -33,6 +33,7 @@ type insertStats struct {
 	execDur                    time.Duration
 	stateCalcDur               time.Duration
 	valDur                     time.Duration
+	warmDur                    time.Duration
 
 	// Cache stats accumulated across this segment
 	procAccHit   int64
@@ -88,6 +89,9 @@ func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, sn
 		}
 		if st.stateCalcDur != 0 {
 			context = append(context, []interface{}{"statecalc", common.PrettyDuration(st.stateCalcDur)}...)
+		}
+		if st.warmDur != 0 {
+			context = append(context, []interface{}{"warm", common.PrettyDuration(st.warmDur)}...)
 		}
 		if timestamp := time.Unix(int64(end.Time()), 0); time.Since(timestamp) > time.Minute {
 			context = append(context, []interface{}{"age", common.PrettyAge(timestamp)}...)
