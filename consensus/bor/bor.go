@@ -1172,8 +1172,9 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
 	// set state sync
-	bc := chain.(core.BorStateSyncer)
-	bc.SetStateSync(stateSyncData)
+	if bc, ok := chain.(core.BorStateSyncer); ok {
+		bc.SetStateSync(stateSyncData)
+	}
 
 	// return the final block for sealing
 	return block, nil

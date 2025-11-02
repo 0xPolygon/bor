@@ -16,6 +16,18 @@
     "shanghaiBlock": 50523000,
     "cancunBlock": 54876000,
     "pragueBlock": 73440256,
+    "blobSchedule": {
+      "cancun": {
+        "target": 3,
+        "max": 6,
+        "baseFeeUpdateFraction": 3338477
+      },
+      "prague": {
+        "target": 3,
+        "max": 6,
+        "baseFeeUpdateFraction": 5007716
+      }
+    },
     "bor": {
       "jaipurBlock": 23850000,
       "delhiBlock": 38189056,

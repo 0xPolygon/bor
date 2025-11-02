@@ -82,7 +82,7 @@ func CalcExcessBlobGas(config *params.ChainConfig, parent *types.Header, headTim
 // CalcBlobFee calculates the blobfee from the header's excess blob gas field.
 func CalcBlobFee(config *params.ChainConfig, header *types.Header) *big.Int {
 	var frac uint64
-	switch config.LatestFork(header.Time) {
+	switch config.LatestForkBlockNumber(header.Number) {
 	case forks.Osaka:
 		frac = config.BlobScheduleConfig.Osaka.UpdateFraction
 	case forks.Prague:

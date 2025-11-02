@@ -1487,6 +1487,22 @@ func (c *ChainConfig) LatestFork(time uint64) forks.Fork {
 	}
 }
 
+// LatestForkBlockNumber returns the latest block-based fork that would be active for the given block number.
+func (c *ChainConfig) LatestForkBlockNumber(blockNumber *big.Int) forks.Fork {
+	switch {
+	case c.IsPrague(blockNumber):
+		return forks.Prague
+	case c.IsOsaka(blockNumber):
+		return forks.Osaka
+	case c.IsCancun(blockNumber):
+		return forks.Cancun
+	case c.IsShanghai(blockNumber):
+		return forks.Shanghai
+	default:
+		return forks.Paris
+	}
+}
+
 /*
 // Timestamp returns the timestamp associated with the fork or returns nil if
 // the fork isn't defined or isn't a time-based fork.
