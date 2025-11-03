@@ -52,10 +52,9 @@ type Packet interface {
 }
 
 // GetWitnessRequest represents a list of witnesses query by witness pages.
-// Also used for compact witness requests (distinguished by Compact flag).
+// Used for both full and compact witness requests - message code distinguishes the type.
 type GetWitnessRequest struct {
 	WitnessPages []WitnessPageRequest // Request by list of witness pages
-	Compact      bool                 // True if requesting compact witness (omits cached states)
 }
 
 type WitnessPageRequest struct {
@@ -64,8 +63,14 @@ type WitnessPageRequest struct {
 }
 
 // GetWitnessPacket represents a witness query with request ID wrapping.
-// Also used for compact witness requests (same structure).
 type GetWitnessPacket struct {
+	RequestId uint64
+	*GetWitnessRequest
+}
+
+// GetCompactWitnessPacket is a marker type for compact witness requests.
+// It has the same wire format as GetWitnessPacket but allows backend to distinguish.
+type GetCompactWitnessPacket struct {
 	RequestId uint64
 	*GetWitnessRequest
 }

@@ -101,17 +101,23 @@ func handleWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
 }
 
 // handleGetCompactWitness processes a GetCompactWitnessPacket request from a peer.
-// Reuses GetWitnessPacket structure since format is identical.
+// Uses GetCompactWitnessPacket marker type to distinguish from regular witness requests.
 func handleGetCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
-	// Decode the GetWitnessPacket request (same structure for compact witness)
-	req := new(GetWitnessPacket)
-	if err := msg.Decode(&req); err != nil {
+	// Decode into GetWitnessRequest first (wire format)
+	wireReq := new(GetWitnessPacket)
+	if err := msg.Decode(&wireReq); err != nil {
 		return fmt.Errorf("failed to decode GetCompactWitnessPacket: %w", err)
 	}
 
 	// Validate request parameters
-	if len(req.WitnessPages) == 0 {
+	if len(wireReq.WitnessPages) == 0 {
 		return fmt.Errorf("invalid GetCompactWitnessPacket: WitnessPages cannot be empty")
+	}
+
+	// Wrap in marker type for backend
+	req := &GetCompactWitnessPacket{
+		RequestId:         wireReq.RequestId,
+		GetWitnessRequest: wireReq.GetWitnessRequest,
 	}
 
 	return backend.Handle(peer, req)
