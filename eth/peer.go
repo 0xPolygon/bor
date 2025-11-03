@@ -676,6 +676,13 @@ func (p *ethPeer) doWitnessRequest(
 	witTotalRequest map[common.Hash]uint64,
 	useCompact bool,
 ) error {
+	// Compact witness requires WIT2 protocol support
+	// Fallback to full witness for WIT1 peers for backward compatibility
+	if useCompact && p.witPeer.Peer.Version() < wit.WIT2 {
+		p.witPeer.Peer.Log().Debug("Peer doesn't support WIT2, falling back to full witness", "peer", p.ID(), "version", p.witPeer.Peer.Version())
+		useCompact = false
+	}
+
 	p.witPeer.Peer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page, "compact", useCompact)
 	witReqSem <- 1
 	witResCh := make(chan *wit.Response)
