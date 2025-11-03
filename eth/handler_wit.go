@@ -62,27 +62,27 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 	case *wit.NewWitnessHashesPacket:
 		return h.handleWitnessHashesAnnounce(peer, packet.Hashes, packet.Numbers)
 	case *wit.GetWitnessPacket:
-		var response wit.WitnessPacketResponse
-		var err error
-
-		// Check if this is a compact witness request
-		if packet.Compact {
-			// Handle compact witness request with filtering
-			response, err = h.handleGetCompactWitness(peer, packet)
-			if err != nil {
-				return fmt.Errorf("failed to handle GetCompactWitnessPacket: %w", err)
-			}
-			// Reply with compact witness (different message code)
-			return peer.ReplyCompactWitness(packet.RequestId, &response)
-		} else {
-			// Handle regular witness request
-			response, err = h.handleGetWitness(peer, packet)
-			if err != nil {
-				return fmt.Errorf("failed to handle GetWitnessPacket: %w", err)
-			}
-			// Reply with regular witness
-			return peer.ReplyWitness(packet.RequestId, &response)
+		// Handle regular witness request
+		response, err := h.handleGetWitness(peer, packet)
+		if err != nil {
+			return fmt.Errorf("failed to handle GetWitnessPacket: %w", err)
 		}
+		// Reply with regular witness
+		return peer.ReplyWitness(packet.RequestId, &response)
+
+	case *wit.GetCompactWitnessPacket:
+		// Handle compact witness request with filtering
+		// Convert to regular GetWitnessPacket for internal handling
+		regularPacket := &wit.GetWitnessPacket{
+			RequestId:         packet.RequestId,
+			GetWitnessRequest: packet.GetWitnessRequest,
+		}
+		response, err := h.handleGetCompactWitness(peer, regularPacket)
+		if err != nil {
+			return fmt.Errorf("failed to handle GetCompactWitnessPacket: %w", err)
+		}
+		// Reply with compact witness (different message code)
+		return peer.ReplyCompactWitness(packet.RequestId, &response)
 
 	case *wit.GetWitnessMetadataPacket:
 		// Call handleGetWitnessMetadata which returns only metadata (page count)
@@ -248,7 +248,6 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 
 		if cacheHit {
 			compactWitnessCacheHitMeter.Mark(1)
-			log.Debug("Compact witness cache hit", "hash", witnessPage.Hash, "windowStart", cacheWindowStart)
 
 			filteredPage := wit.WitnessPageResponse{
 				Data:       cachedFiltered,

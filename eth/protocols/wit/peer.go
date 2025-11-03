@@ -191,13 +191,12 @@ func (p *Peer) RequestCompactWitness(witnessPages []WitnessPageRequest, sink cha
 	req := &Request{
 		id:   id,
 		sink: sink,
-		code: GetCompactWitnessMsg, // Different message code
+		code: GetCompactWitnessMsg, // Message code distinguishes compact from full
 		want: CompactWitnessMsg,
 		data: &GetWitnessPacket{
 			RequestId: id,
 			GetWitnessRequest: &GetWitnessRequest{
 				WitnessPages: witnessPages,
-				Compact:      true, // Mark as compact witness request
 			},
 		},
 	}

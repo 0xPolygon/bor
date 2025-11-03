@@ -4238,6 +4238,7 @@ func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 			"newActiveSize", len(bc.activeCacheMap))
 		return true
 	}
+
 	return false
 }
 
@@ -4371,11 +4372,12 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	}
 
 	blockNum := block.Number().Uint64()
+	parallelMode := bc.parallelStatelessImportEnabled.Load()
 
 	// Track original witness states before any merging (for cache update later)
 	// We only want to cache NEW states from this block, not re-cache merged states
 	var originalWitnessStates map[string]struct{}
-	if !bc.parallelStatelessImportEnabled.Load() {
+	if !parallelMode {
 		// Copy original witness states before merging
 		originalWitnessStates = make(map[string]struct{}, len(witness.State))
 		for stateNode := range witness.State {
@@ -4385,7 +4387,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	// Compact witness cache operations are only compatible with sequential import
 	// In parallel mode, blocks are processed concurrently which breaks cache assumptions
-	if !bc.parallelStatelessImportEnabled.Load() {
+	if !parallelMode {
 		// Manage sliding window (slide if needed)
 		bc.manageSlidingWindow(blockNum)
 

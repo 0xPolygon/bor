@@ -679,7 +679,7 @@ func (p *ethPeer) doWitnessRequest(
 	// Compact witness requires WIT2 protocol support
 	// Fallback to full witness for WIT1 peers for backward compatibility
 	if useCompact && p.witPeer.Peer.Version() < wit.WIT2 {
-		p.witPeer.Peer.Log().Debug("Peer doesn't support WIT2, falling back to full witness", "peer", p.ID(), "version", p.witPeer.Peer.Version())
+		p.witPeer.Peer.Log().Info("Peer doesn't support WIT2, falling back to full witness", "peer", p.ID(), "version", p.witPeer.Peer.Version())
 		useCompact = false
 	}
 
