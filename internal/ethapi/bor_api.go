@@ -11,8 +11,11 @@ import (
 )
 
 // isBorSystemTx checks if the tx is for bor genesis contract addresses or not
-func isBorSystemTx(borCfg *params.BorConfig, to common.Address) bool {
+func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
 	if borCfg == nil {
+		return false
+	}
+	if to == nil {
 		return false
 	}
 
