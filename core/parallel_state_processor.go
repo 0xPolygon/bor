@@ -184,7 +184,7 @@ func (task *ExecutionTask) Settle() {
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
 	show := false
-	if task.index == 168 {
+	if task.index == 71 || task.index == 75 {
 		log.Error("Executing interesting tx")
 		show = true
 	}
