@@ -365,10 +365,6 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
-
-	// EnableTxPoolPrefetch controls whether the txpool will prefetch trie nodes
-	// and warm caches for newly received transactions.
-	EnableTxPoolPrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
 }
 
 type SealerConfig struct {
@@ -606,6 +602,9 @@ type CacheConfig struct {
 	// NoPrefetch is used to disable prefetch of tries
 	NoPrefetch bool `hcl:"noprefetch,optional" toml:"noprefetch,optional"`
 
+	// WaitForWarm, if true, waits for warm-up to finish before executing blocks
+	WaitForWarm bool `hcl:"waitforwarm,optional" toml:"waitforwarm,optional"`
+
 	// Preimages is used to enable the track of hash preimages
 	Preimages bool `hcl:"preimages,optional" toml:"preimages,optional"`
 
@@ -754,18 +753,17 @@ func DefaultConfig() *Config {
 		BorLogs:     false,
 
 		TxPool: &TxPoolConfig{
-			Locals:               []string{},
-			NoLocals:             false,
-			Journal:              "transactions.rlp",
-			Rejournal:            1 * time.Hour,
-			PriceLimit:           params.BorDefaultTxPoolPriceLimit, // bor's default
-			PriceBump:            10,
-			AccountSlots:         16,
-			GlobalSlots:          131072,
-			AccountQueue:         64,
-			GlobalQueue:          131072,
-			LifeTime:             3 * time.Hour,
-			EnableTxPoolPrefetch: false,
+			Locals:       []string{},
+			NoLocals:     false,
+			Journal:      "transactions.rlp",
+			Rejournal:    1 * time.Hour,
+			PriceLimit:   params.BorDefaultTxPoolPriceLimit, // bor's default
+			PriceBump:    10,
+			AccountSlots: 16,
+			GlobalSlots:  131072,
+			AccountQueue: 64,
+			GlobalQueue:  131072,
+			LifeTime:     3 * time.Hour,
 		},
 		Sealer: &SealerConfig{
 			Enabled:             false,
@@ -1094,7 +1092,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TxPool.AccountQueue = c.TxPool.AccountQueue
 		n.TxPool.GlobalQueue = c.TxPool.GlobalQueue
 		n.TxPool.Lifetime = c.TxPool.LifeTime
-		n.TxPool.EnableTxPoolPrefetch = c.TxPool.EnableTxPoolPrefetch
 
 		// Load filtered addresses during config initialization
 		if filteredAddrs, err := loadFilteredAddresses(c.TxPool.FilteredAddressesFile); err != nil {
@@ -1280,6 +1277,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieCleanCache = calcPerc(c.Cache.PercTrie)
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
 		n.NoPrefetch = c.Cache.NoPrefetch
+		n.WaitForWarm = c.Cache.WaitForWarm
 		n.Preimages = c.Cache.Preimages
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit

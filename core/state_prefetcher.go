@@ -59,10 +59,7 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
-	// Force trie node reads to resolve against the disk layer to fill clean caches fast.
-	// This avoids walking diff layers during prefetch. Restore on exit.
-	restore := statedb.Database().TrieDB().EnableDiskLayerPrefetch()
-	defer restore()
+	// Use normal layered reads; no forced disk-layer prefetch.
 
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
@@ -116,12 +113,16 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
-			// Pre-load trie nodes for the intermediate root.
-			//
-			// This operation incurs significant memory allocations due to
-			// trie hashing and node decoding. TODO(rjl493456442): investigate
-			// ways to mitigate this overhead.
-			stateCpy.IntermediateRoot(true)
+			// Aggregate touched pre-state from stateCpy and populate the process reader cache directly
+			acc, stor := stateCpy.PrefetchTouched()
+			for a := range acc {
+				reader.Account(a)
+			}
+			for a, bucket := range stor {
+				for k := range bucket {
+					reader.Storage(a, k)
+				}
+			}
 			return nil
 		})
 	}

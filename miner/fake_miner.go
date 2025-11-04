@@ -254,6 +254,9 @@ func (bc *testBlockChainBor) StateAt(common.Hash) (*state.StateDB, error) {
 	return bc.statedb, nil
 }
 
+// PrefetchFromTxpool is a no-op stub to satisfy legacypool.BlockChain in tests.
+func (bc *testBlockChainBor) PrefetchFromTxpool(header *types.Header, txs []*types.Transaction) {}
+
 func (bc *testBlockChainBor) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	return bc.chainHeadFeed.Subscribe(ch)
 }

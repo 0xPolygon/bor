@@ -122,6 +122,9 @@ var (
 	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
 	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
 
+	// Warm-up timing (seedReaderCache)
+	triewarmTimer = metrics.NewRegisteredTimer("chain/warm", nil)
+
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
@@ -195,9 +198,10 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch bool            // Whether to disable heuristic state prefetching when processing blocks
-	Overrides  *ChainOverrides // Optional chain config overrides
-	VmConfig   vm.Config       // Config options for the EVM Interpreter
+	NoPrefetch  bool            // Whether to disable heuristic state prefetching when processing blocks
+	WaitForWarm bool            // If true, block execution waits for the warm-up to finish
+	Overrides   *ChainOverrides // Optional chain config overrides
+	VmConfig    vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -644,7 +648,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 	return bc, nil
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, warmCh <-chan warmOutcome) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -674,10 +678,20 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	// Seed the process reader's cache then use it for execution
-	if warmed, warmDur := bc.seedReaderCache(parentRoot, process, block, followupInterrupt); warmed != nil {
-		process = warmed
-		bc.lastWarmSeedDur = warmDur
+	// If an async warm was started earlier for this root, wait for it to finish.
+	var warmedProc state.ReaderWithStats
+	if warmCh != nil {
+		if res, ok := <-warmCh; ok {
+			warmedProc = res.Reader
+			bc.lastWarmSeedDur = res.Dur
+			if res.Dur > 0 {
+				triewarmTimer.Update(res.Dur)
+			}
+		}
+	}
+	// Prefer an asynchronously warmed reader if available.
+	if warmedProc != nil {
+		process = warmedProc
 	} else {
 		bc.lastWarmSeedDur = 0
 	}
@@ -821,7 +835,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 }
 
 // seedReaderCache preloads the supplied readerWithCache
-func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, time.Duration) {
+// warmReaderCache preloads the supplied readerWithCache with accounts/storage and trie nodes.
+func (bc *BlockChain) warmReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, time.Duration) {
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
 		return nil, 0
 	}
@@ -836,147 +851,6 @@ func (bc *BlockChain) seedReaderCache(parentRoot common.Hash, reader state.Reade
 	start := time.Now()
 	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
 	return reader, time.Since(start)
-}
-
-// prewarmStateForBlock performs a time-limited prefetch for the given
-// block's parent root and installs a root-scoped prefetch reader.
-func (bc *BlockChain) prewarmStateForBlock(b *types.Block, parentRoot common.Hash) (func(), <-chan struct{}) {
-	const maxAccounts = 256
-	const maxStoragePerAccount = 8
-
-	stop := make(chan struct{})
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-
-		signer := types.MakeSigner(bc.chainConfig, b.Number(), b.Time())
-		rdr, err := bc.statedb.Reader(parentRoot)
-		if err != nil {
-			return
-		}
-
-		type workerRes struct {
-			accounts map[common.Address]*types.StateAccount
-			storage  map[common.Address]map[common.Hash]common.Hash
-		}
-
-		txs := b.Transactions()
-		if len(txs) == 0 {
-			return
-		}
-
-		workers := runtime.NumCPU()
-		if workers < 4 {
-			workers = 4
-		}
-		if workers > 8 {
-			workers = 8
-		}
-
-		jobs := make(chan *types.Transaction)
-		results := make(chan workerRes, workers)
-
-		var wg sync.WaitGroup
-		worker := func() {
-			defer wg.Done()
-			accs := make(map[common.Address]*types.StateAccount)
-			stor := make(map[common.Address]map[common.Hash]common.Hash)
-			for tx := range jobs {
-				if from, err := types.Sender(signer, tx); err == nil {
-					if _, ok := accs[from]; !ok && len(accs) < maxAccounts {
-						if acct, _ := rdr.Account(from); acct != nil {
-							accs[from] = acct
-						}
-					}
-				}
-				if to := tx.To(); to != nil {
-					addr := *to
-					if _, ok := accs[addr]; !ok && len(accs) < maxAccounts {
-						if acct, _ := rdr.Account(addr); acct != nil {
-							accs[addr] = acct
-						}
-					}
-				}
-				for _, al := range tx.AccessList() {
-					if _, ok := accs[al.Address]; !ok && len(accs) < maxAccounts {
-						if acct, _ := rdr.Account(al.Address); acct != nil {
-							accs[al.Address] = acct
-						}
-					}
-					if len(al.StorageKeys) > 0 {
-						bucket := stor[al.Address]
-						if bucket == nil {
-							bucket = make(map[common.Hash]common.Hash)
-							stor[al.Address] = bucket
-						}
-						for _, slot := range al.StorageKeys {
-							if len(bucket) >= maxStoragePerAccount {
-								break
-							}
-							if val, _ := rdr.Storage(al.Address, slot); (val != common.Hash{}) {
-								bucket[slot] = val
-							}
-						}
-					}
-				}
-			}
-			results <- workerRes{accounts: accs, storage: stor}
-		}
-
-		for i := 0; i < workers; i++ {
-			wg.Add(1)
-			go worker()
-		}
-
-		// Producer: feed jobs until canceled or exhausted
-		produce := func() {
-			for _, tx := range txs {
-				select {
-				case <-stop:
-					close(jobs)
-					return
-				case jobs <- tx:
-				}
-			}
-			close(jobs)
-		}
-		produce()
-		wg.Wait()
-
-		// Collate results with caps and install reader
-		accounts := make(map[common.Address]*types.StateAccount)
-		storage := make(map[common.Address]map[common.Hash]common.Hash)
-		for i := 0; i < workers; i++ {
-			res := <-results
-			for a, acct := range res.accounts {
-				if len(accounts) >= maxAccounts {
-					break
-				}
-				accounts[a] = acct
-			}
-			for addr, bucket := range res.storage {
-				dst := storage[addr]
-				if dst == nil {
-					dst = make(map[common.Hash]common.Hash)
-					storage[addr] = dst
-				}
-				for k, v := range bucket {
-					if len(dst) >= maxStoragePerAccount {
-						break
-					}
-					dst[k] = v
-				}
-			}
-		}
-
-		if len(accounts) > 0 || len(storage) > 0 {
-			state.SetGlobalPrefetchReaderForRoot(parentRoot, state.NewPrefetchReader(accounts, storage))
-		}
-	}()
-
-	cancel := func() { close(stop) }
-	return cancel, done
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -3050,6 +2924,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 
+		// Start reader warming as early as possible for this block's parent root
+		warmCh := bc.StartWarmReaderCache(parent.Root, block)
+
 		// Prewarm the state for the block's parent root in background before creating statedb
 		// prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
@@ -3107,11 +2984,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		// if prewarmCancel != nil {
-		// 	prewarmCancel()
-		// 	<-prewarmDone
-		// }
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		var execWarmCh <-chan warmOutcome
+		if bc.cfg.WaitForWarm {
+			execWarmCh = warmCh
+		}
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, execWarmCh)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -4237,4 +4114,66 @@ func (bc *BlockChain) verifyPendingHeaders() {
 			lastValidNumber = header.Number.Uint64()
 		}
 	}
+}
+
+// warmOutcome is the result of an asynchronous seedReaderCache run.
+type warmOutcome struct {
+	Reader state.ReaderWithStats
+	Dur    time.Duration
+}
+
+// StartSeedReaderCacheAsync launches seeding of the reader cache for a block's parent root and returns a result channel.
+func (bc *BlockChain) StartWarmReaderCache(parentRoot common.Hash, b *types.Block) <-chan warmOutcome {
+	ch := make(chan warmOutcome, 1)
+	if b == nil || len(b.Transactions()) == 0 || bc.prefetcher == nil {
+		close(ch)
+		return ch
+	}
+	go func() {
+		// Build process reader and warm it
+		_, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
+		if err == nil && process != nil {
+			if warmed, dur := bc.warmReaderCache(parentRoot, process, b, nil); warmed != nil {
+				ch <- warmOutcome{Reader: warmed, Dur: dur}
+				close(ch)
+				return
+			}
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+// StateAtWithProcessReader creates a StateDB bound to the given root using the
+// process ReaderWithStats (so any prewarmed cache on the process reader applies).
+
+// WaitForWarmEnabled reports whether execution should wait for warm-up to finish.
+func (bc *BlockChain) WaitForWarmEnabled() bool {
+	if bc.cfg == nil {
+		return false
+	}
+	return bc.cfg.WaitForWarm
+}
+
+// NewStateWithReader creates a new StateDB bound to the given reader for the root.
+func (bc *BlockChain) NewStateWithReader(root common.Hash, rdr state.ReaderWithStats) (*state.StateDB, error) {
+	return state.NewWithReader(root, bc.statedb, rdr)
+}
+
+// PrefetchFromTxpool launches background prefetching for pending txs against a header root.
+func (bc *BlockChain) PrefetchFromTxpool(header *types.Header, txs []*types.Transaction) {
+	if header == nil || len(txs) == 0 || bc.prefetcher == nil {
+		return
+	}
+	go func() {
+		warmdb, err := state.New(header.Root, bc.statedb)
+		if err != nil {
+			return
+		}
+		vmCfg := bc.cfg.VmConfig
+		vmCfg.Tracer = nil
+		synthetic := types.NewBlockWithHeader(header).WithBody(types.Body{Transactions: txs})
+		var noop atomic.Bool
+		bc.prefetcher.Prefetch(synthetic, warmdb, vmCfg, &noop)
+	}()
 }

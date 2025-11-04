@@ -224,9 +224,6 @@ type Database struct {
 	forceDiskReader bool                         // If true, NodeReader returns disk-layer reader
 }
 
-// SetForceDiskReader toggles disk-only reads for NodeReader.
-func (db *Database) SetForceDiskReader(on bool) { db.forceDiskReader = on }
-
 // New attempts to load an already existing layer from a persistent key-value
 // store (with a number of memory layers from a journal). If the journal is not
 // matched with the base persistent layer, all the recorded diff layers are discarded.

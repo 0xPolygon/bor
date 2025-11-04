@@ -1444,22 +1444,62 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
-	// Fill the block with all available pending transactions.
-	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+	var plainTxsPrio, blobTxsPrio *transactionsByPriceAndNonce
+	var plainTxsNormal, blobTxsNormal *transactionsByPriceAndNonce
+	{
+		if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
+			plainTxsPrio = newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			blobTxsPrio = newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		}
+		if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
+			heapInitTime := time.Now()
+			plainTxsNormal = newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			blobTxsNormal = newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			txHeapInitTimer.Update(time.Since(heapInitTime))
+		}
+		// Flatten pending txs into a slice (no capping)
+		txs := make([]*types.Transaction, 0)
+		appendMap := func(m map[common.Address][]*txpool.LazyTransaction) {
+			for _, list := range m {
+				for _, ltx := range list {
+					if ltx == nil || ltx.Tx == nil {
+						continue
+					}
+					txs = append(txs, ltx.Tx)
+				}
+			}
+		}
+		appendMap(prioPlainTxs)
+		appendMap(prioBlobTxs)
+		appendMap(normalPlainTxs)
+		appendMap(normalBlobTxs)
 
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+		// start warm reader cache
+		if len(txs) > 0 {
+			parent := w.chain.GetHeader(env.header.ParentHash, env.header.Number.Uint64()-1)
+			if parent != nil {
+				synthetic := types.NewBlockWithHeader(env.header).WithBody(types.Body{Transactions: txs})
+				ch := w.chain.StartWarmReaderCache(parent.Root, synthetic)
+				if w.chain.WaitForWarmEnabled() {
+					if res, ok := <-ch; ok && res.Reader != nil {
+						if newState, err := w.chain.NewStateWithReader(parent.Root, res.Reader); err == nil {
+							env.state = newState
+							env.evm = vm.NewEVM(core.NewEVMBlockContext(env.header, w.chain, &env.coinbase), env.state, w.chainConfig, vm.Config{})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// commit transactions
+	if plainTxsPrio != nil || blobTxsPrio != nil {
+		if err := w.commitTransactions(env, plainTxsPrio, blobTxsPrio, interrupt, new(uint256.Int)); err != nil {
 			return err
 		}
 	}
-	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
-		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		txHeapInitTimer.Update(time.Since(heapInitTime))
-
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+	if plainTxsNormal != nil || blobTxsNormal != nil {
+		if err := w.commitTransactions(env, plainTxsNormal, blobTxsNormal, interrupt, new(uint256.Int)); err != nil {
 			return err
 		}
 	}

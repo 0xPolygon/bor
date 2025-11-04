@@ -18,12 +18,10 @@
 package legacypool
 
 import (
-	"bytes"
 	"errors"
 	"maps"
 	"math"
 	"math/big"
-	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -157,6 +155,9 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
+
+	// PrefetchFromTxpool triggers background prefetch for pending txs at the given head.
+	PrefetchFromTxpool(header *types.Header, txs []*types.Transaction)
 }
 
 // Config are the configuration parameters of the transaction pool.
@@ -180,9 +181,6 @@ type Config struct {
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
 
-	// EnableTxPoolPrefetch controls whether the txpool will prefetch trie nodes
-	// and warm caches for newly received transactions.
-	EnableTxPoolPrefetch bool
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -198,9 +196,8 @@ var DefaultConfig = Config{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime:             3 * time.Hour,
-	AllowUnprotectedTxs:  false,
-	EnableTxPoolPrefetch: false,
+	Lifetime:            3 * time.Hour,
+	AllowUnprotectedTxs: false,
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -1105,9 +1102,7 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 	}
 
 	// Warm state for the new transactions
-	if pool.config.EnableTxPoolPrefetch {
-		go pool.PreLoadTrieNodes(news...)
-	}
+	go pool.PreLoadTrieNodes(news...)
 
 	// Process all the new transaction and merge any errors into the original slice. Avoid
 	// locking here as we'll use the global lock optimally.
@@ -2117,145 +2112,15 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 // PreLoadTrieNodes warms relevant trie nodes and code for transactions concurrently
 // then sets a single global prefetch reader.
 func (pool *LegacyPool) PreLoadTrieNodes(txs ...*types.Transaction) {
-	if !pool.config.EnableTxPoolPrefetch {
-		return
-	}
 	pool.mu.RLock()
 	header := pool.currentHead.Load()
-	signer := pool.signer
 	pool.mu.RUnlock()
 
 	if header == nil || len(txs) == 0 {
 		return
 	}
-
-	tempState, err := pool.chain.StateAt(header.Root)
-	if err != nil {
-		return
-	}
-	reader := tempState.Reader()
-
-	type workerRes struct {
-		accounts map[common.Address]*types.StateAccount
-		storage  map[common.Address]map[common.Hash]common.Hash
-		codes    map[common.Hash][]byte
-	}
-
-	jobs := make(chan *types.Transaction)
-	var wg sync.WaitGroup
-	workers := runtime.NumCPU()
-	if workers < 4 {
-		workers = 4
-	}
-	if workers > 8 {
-		workers = 8
-	}
-
-	results := make(chan workerRes, workers)
-
-	worker := func() {
-		defer wg.Done()
-		accs := make(map[common.Address]*types.StateAccount)
-		stor := make(map[common.Address]map[common.Hash]common.Hash)
-		codes := make(map[common.Hash][]byte)
-		for tx := range jobs {
-			// Sender
-			if sender, serr := types.Sender(signer, tx); serr == nil {
-				if acct, _ := reader.Account(sender); acct != nil {
-					if len(accs) < prefetchMaxAccounts {
-						accs[sender] = acct
-					}
-				}
-			}
-			// Recipient + code
-			if to := tx.To(); to != nil {
-				d := *to
-				if acct, _ := reader.Account(d); acct != nil {
-					if len(accs) < prefetchMaxAccounts {
-						accs[d] = acct
-					}
-					if !bytes.Equal(acct.CodeHash, types.EmptyCodeHash.Bytes()) {
-						if code, _ := reader.Code(d, common.BytesToHash(acct.CodeHash)); len(code) > 0 {
-							h := common.BytesToHash(acct.CodeHash)
-							if len(codes) < prefetchMaxCodes {
-								codes[h] = code
-							}
-						}
-					}
-				}
-			}
-			// Access list
-			for _, al := range tx.AccessList() {
-				addr := al.Address
-				if acct, _ := reader.Account(addr); acct != nil {
-					if len(accs) < prefetchMaxAccounts {
-						accs[addr] = acct
-					}
-				}
-				for _, slot := range al.StorageKeys {
-					if val, _ := reader.Storage(addr, slot); (val != common.Hash{}) {
-						bucket := stor[addr]
-						if bucket == nil {
-							bucket = make(map[common.Hash]common.Hash)
-							stor[addr] = bucket
-						}
-						if len(bucket) < prefetchMaxStoragePerAccount {
-							bucket[slot] = val
-						}
-					}
-				}
-			}
-		}
-		results <- workerRes{accounts: accs, storage: stor, codes: codes}
-	}
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go worker()
-	}
-	for _, tx := range txs {
-		if tx != nil {
-			jobs <- tx
-		}
-	}
-	close(jobs)
-	wg.Wait()
-
-	// Collate worker results into combined maps
-	combinedAccounts := make(map[common.Address]*types.StateAccount)
-	combinedStorage := make(map[common.Address]map[common.Hash]common.Hash)
-	combinedCodes := make(map[common.Hash][]byte)
-	for i := 0; i < workers; i++ {
-		res := <-results
-		for k, v := range res.accounts {
-			if len(combinedAccounts) >= prefetchMaxAccounts {
-				break
-			}
-			combinedAccounts[k] = v
-		}
-		for a, bucket := range res.storage {
-			dst := combinedStorage[a]
-			if dst == nil {
-				dst = make(map[common.Hash]common.Hash)
-				combinedStorage[a] = dst
-			}
-			for sk, sv := range bucket {
-				if len(dst) >= prefetchMaxStoragePerAccount {
-					break
-				}
-				dst[sk] = sv
-			}
-		}
-		for h, code := range res.codes {
-			if len(combinedCodes) >= prefetchMaxCodes {
-				break
-			}
-			combinedCodes[h] = code
-		}
-	}
-
-	// Set the global prefetch reader scoped to current head root to avoid staleness
-	state.SetGlobalPrefetchReaderForRoot(header.Root, state.NewPrefetchReader(combinedAccounts, combinedStorage))
+	// Delegate prefetching to blockchain so it shares the same triedb/pathdb
+	pool.chain.PrefetchFromTxpool(header, txs)
 }
 
 // newEVMBlockContext creates a block context for EVM execution using the current pool state
