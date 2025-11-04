@@ -163,16 +163,21 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	// Calculate the consensus-aligned window start for the requested block
 	// This must match the sender's calculation to ensure cache consistency
 	windowSize := h.chain.GetCacheWindowSize()
+	overlapSize := h.chain.GetCacheOverlapSize()
 	expectedWindowStart := (blockNum / windowSize) * windowSize
 
-	// If block is at window start, need full witness (this is first block of window)
-	// The sender will have just cleared/slid their cache at this block
-	if blockNum == expectedWindowStart {
+	// Calculate position within the window
+	blocksSinceWindowStart := blockNum - expectedWindowStart
+
+	// Need full witness at:
+	// 1. Window start (block 0, 20, 40...) - new window begins
+	// 2. Overlap start (block 10, 30, 50...) - pre-warming next window
+	// This ensures nextCacheMap has complete state coverage for the next window
+	if blockNum == expectedWindowStart || blocksSinceWindowStart == overlapSize {
 		return false
 	}
 
-	// Block is within window but not at start, can use compact witness
-	// The sender should have cached states from earlier blocks in this window
+	// Block is within window (not at window start or overlap start), can use compact witness
 	return true
 }
 

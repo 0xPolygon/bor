@@ -4254,6 +4254,11 @@ func (bc *BlockChain) GetCacheWindowSize() uint64 {
 	return compactWitnessCacheWindowSize
 }
 
+// GetCacheOverlapSize returns the cache overlap size.
+func (bc *BlockChain) GetCacheOverlapSize() uint64 {
+	return compactWitnessCacheOverlapSize
+}
+
 // FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
 // This is used when sending reduced witnesses to peers.
 func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) (*stateless.Witness, int, int) {
