@@ -5892,3 +5892,339 @@ func TestSplitReceiptsAndDeriveFields(t *testing.T) {
 		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
 	}
 }
+
+// TestCalculateCacheWindowStart tests the consensus-aligned window calculation
+func TestCalculateCacheWindowStart(t *testing.T) {
+	tests := []struct {
+		name          string
+		blockNum      uint64
+		expectedStart uint64
+	}{
+		{"Genesis block", 0, 0},
+		{"Within first window", 5, 0},
+		{"At window boundary", 20, 20},
+		{"Just after window boundary", 21, 20},
+		{"Within second window", 35, 20},
+		{"At second window boundary", 40, 40},
+		{"Large block number", 1000, 1000},
+		{"Large block in window", 1015, 1000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculateCacheWindowStart(tt.blockNum)
+			require.Equal(t, tt.expectedStart, result,
+				"calculateCacheWindowStart(%d) = %d, want %d",
+				tt.blockNum, result, tt.expectedStart)
+		})
+	}
+}
+
+// TestManageSlidingWindow tests window sliding logic
+func TestManageSlidingWindow(t *testing.T) {
+	// Create a minimal blockchain instance for testing
+	bc := &BlockChain{
+		activeCacheMap:   make(map[string]struct{}),
+		nextCacheMap:     make(map[string]struct{}),
+		cacheWindowStart: 0,
+	}
+
+	// Populate active cache with test data
+	bc.activeCacheMap["state1"] = struct{}{}
+	bc.activeCacheMap["state2"] = struct{}{}
+
+	// Populate next cache with test data
+	bc.nextCacheMap["state3"] = struct{}{}
+	bc.nextCacheMap["state4"] = struct{}{}
+
+	tests := []struct {
+		name                string
+		blockNum            uint64
+		expectSlide         bool
+		expectedWindowStart uint64
+		expectedActiveSize  int
+	}{
+		{
+			name:                "No slide - within same window",
+			blockNum:            5,
+			expectSlide:         false,
+			expectedWindowStart: 0,
+			expectedActiveSize:  2,
+		},
+		{
+			name:                "Slide at window boundary",
+			blockNum:            20,
+			expectSlide:         true,
+			expectedWindowStart: 20,
+			expectedActiveSize:  2, // next becomes active
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			slid := bc.manageSlidingWindow(tt.blockNum)
+			require.Equal(t, tt.expectSlide, slid, "Slide result mismatch")
+			require.Equal(t, tt.expectedWindowStart, bc.cacheWindowStart, "Window start mismatch")
+			require.Equal(t, tt.expectedActiveSize, len(bc.activeCacheMap), "Active cache size mismatch")
+
+			if tt.expectSlide {
+				// After slide, next cache should be empty
+				require.Equal(t, 0, len(bc.nextCacheMap), "Next cache should be empty after slide")
+			}
+		})
+	}
+}
+
+// TestMergeSpanCacheIntoWitness tests merging cached states into witness
+func TestMergeSpanCacheIntoWitness(t *testing.T) {
+	bc := &BlockChain{
+		activeCacheMap: make(map[string]struct{}),
+	}
+
+	// Populate cache
+	bc.activeCacheMap["cachedState1"] = struct{}{}
+	bc.activeCacheMap["cachedState2"] = struct{}{}
+
+	tests := []struct {
+		name           string
+		witness        *stateless.Witness
+		expectedMerged int
+		expectedTotal  int
+	}{
+		{
+			name:           "Nil witness",
+			witness:        nil,
+			expectedMerged: 0,
+			expectedTotal:  0,
+		},
+		{
+			name: "Empty witness state",
+			witness: &stateless.Witness{
+				State: make(map[string]struct{}),
+			},
+			expectedMerged: 2,
+			expectedTotal:  2,
+		},
+		{
+			name: "Witness with one cached state",
+			witness: &stateless.Witness{
+				State: map[string]struct{}{
+					"cachedState1": {},
+					"newState1":    {},
+				},
+			},
+			expectedMerged: 1, // Only cachedState2 is new
+			expectedTotal:  3, // cachedState1, cachedState2, newState1
+		},
+		{
+			name: "Witness with no cached states",
+			witness: &stateless.Witness{
+				State: map[string]struct{}{
+					"newState1": {},
+					"newState2": {},
+				},
+			},
+			expectedMerged: 2, // Both cached states merged
+			expectedTotal:  4, // newState1, newState2, cachedState1, cachedState2
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.witness != nil {
+				originalSize := len(tt.witness.State)
+				merged := bc.mergeSpanCacheIntoWitness(tt.witness)
+				require.Equal(t, tt.expectedMerged, merged, "Merged count mismatch")
+				require.Equal(t, tt.expectedTotal, len(tt.witness.State), "Total witness size mismatch")
+				require.Equal(t, originalSize+merged, len(tt.witness.State), "Size calculation mismatch")
+			} else {
+				merged := bc.mergeSpanCacheIntoWitness(tt.witness)
+				require.Equal(t, tt.expectedMerged, merged, "Merged count mismatch for nil witness")
+			}
+		})
+	}
+}
+
+// TestUpdateSlidingWindowCache tests cache updates during overlap period
+func TestUpdateSlidingWindowCache(t *testing.T) {
+	bc := &BlockChain{
+		activeCacheMap:   make(map[string]struct{}),
+		nextCacheMap:     make(map[string]struct{}),
+		cacheWindowStart: 0,
+	}
+
+	tests := []struct {
+		name               string
+		blockNum           uint64
+		originalStates     map[string]struct{}
+		inOverlapPeriod    bool
+		expectedActiveSize int
+		expectedNextSize   int
+	}{
+		{
+			name:     "Block before overlap - cache to active only",
+			blockNum: 5,
+			originalStates: map[string]struct{}{
+				"state1": {},
+				"state2": {},
+			},
+			inOverlapPeriod:    false,
+			expectedActiveSize: 2,
+			expectedNextSize:   0,
+		},
+		{
+			name:     "Block in overlap period - cache to both",
+			blockNum: 15, // 15 >= 10 (overlap start)
+			originalStates: map[string]struct{}{
+				"state3": {},
+				"state4": {},
+			},
+			inOverlapPeriod:    true,
+			expectedActiveSize: 4, // state1, state2, state3, state4
+			expectedNextSize:   2, // state3, state4
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bc.updateSlidingWindowCache(tt.blockNum, tt.originalStates, nil)
+			require.Equal(t, tt.expectedActiveSize, len(bc.activeCacheMap),
+				"Active cache size mismatch at block %d", tt.blockNum)
+			require.Equal(t, tt.expectedNextSize, len(bc.nextCacheMap),
+				"Next cache size mismatch at block %d", tt.blockNum)
+		})
+	}
+}
+
+// TestFilterWitnessWithSlidingCache tests witness filtering
+func TestFilterWitnessWithSlidingCache(t *testing.T) {
+	bc := &BlockChain{
+		activeCacheMap: make(map[string]struct{}),
+	}
+
+	// Populate cache
+	bc.activeCacheMap["cachedState1"] = struct{}{}
+	bc.activeCacheMap["cachedState2"] = struct{}{}
+
+	tests := []struct {
+		name             string
+		witness          *stateless.Witness
+		expectedRemoved  int
+		expectedFiltered int
+	}{
+		{
+			name:             "Nil witness",
+			witness:          nil,
+			expectedRemoved:  0,
+			expectedFiltered: 0,
+		},
+		{
+			name: "Witness with all cached states",
+			witness: &stateless.Witness{
+				State: map[string]struct{}{
+					"cachedState1": {},
+					"cachedState2": {},
+				},
+			},
+			expectedRemoved:  2,
+			expectedFiltered: 0,
+		},
+		{
+			name: "Witness with no cached states",
+			witness: &stateless.Witness{
+				State: map[string]struct{}{
+					"newState1": {},
+					"newState2": {},
+				},
+			},
+			expectedRemoved:  0,
+			expectedFiltered: 2,
+		},
+		{
+			name: "Witness with mixed states",
+			witness: &stateless.Witness{
+				State: map[string]struct{}{
+					"cachedState1": {},
+					"newState1":    {},
+					"cachedState2": {},
+					"newState2":    {},
+				},
+			},
+			expectedRemoved:  2,
+			expectedFiltered: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filtered, originalSize, removed := bc.FilterWitnessWithSlidingCache(tt.witness)
+
+			if tt.witness == nil {
+				require.Nil(t, filtered, "Filtered witness should be nil")
+				require.Equal(t, 0, originalSize, "Original size should be 0 for nil")
+				require.Equal(t, 0, removed, "Removed count should be 0 for nil")
+			} else {
+				require.Equal(t, tt.expectedRemoved, removed, "Removed count mismatch")
+				require.Equal(t, tt.expectedFiltered, len(filtered.State), "Filtered size mismatch")
+				require.Equal(t, len(tt.witness.State), originalSize, "Original size mismatch")
+			}
+		})
+	}
+}
+
+// TestSlidingWindowEndToEnd tests the complete sliding window lifecycle
+func TestSlidingWindowEndToEnd(t *testing.T) {
+	bc := &BlockChain{
+		activeCacheMap:   make(map[string]struct{}),
+		nextCacheMap:     make(map[string]struct{}),
+		cacheWindowStart: 0,
+	}
+
+	// Simulate processing blocks with sliding window
+	// Window size: 20, Overlap: 10
+
+	// Blocks 0-9: Build active cache
+	for blockNum := uint64(0); blockNum < 10; blockNum++ {
+		bc.manageSlidingWindow(blockNum)
+		states := map[string]struct{}{
+			fmt.Sprintf("state_%d", blockNum): {},
+		}
+		bc.updateSlidingWindowCache(blockNum, states, nil)
+	}
+
+	require.Equal(t, 10, len(bc.activeCacheMap), "Active cache should have 10 states after blocks 0-9")
+	require.Equal(t, 0, len(bc.nextCacheMap), "Next cache should be empty before overlap")
+
+	// Blocks 10-19: Overlap period - cache to both
+	for blockNum := uint64(10); blockNum < 20; blockNum++ {
+		bc.manageSlidingWindow(blockNum)
+		states := map[string]struct{}{
+			fmt.Sprintf("state_%d", blockNum): {},
+		}
+		bc.updateSlidingWindowCache(blockNum, states, nil)
+	}
+
+	require.Equal(t, 20, len(bc.activeCacheMap), "Active cache should have 20 states after blocks 0-19")
+	require.Equal(t, 10, len(bc.nextCacheMap), "Next cache should have 10 states from overlap")
+
+	// Block 20: Window slide
+	slid := bc.manageSlidingWindow(20)
+	require.True(t, slid, "Window should slide at block 20")
+	require.Equal(t, uint64(20), bc.cacheWindowStart, "Window start should be 20")
+	require.Equal(t, 10, len(bc.activeCacheMap), "Active cache should have 10 states from previous next cache")
+	require.Equal(t, 0, len(bc.nextCacheMap), "Next cache should be empty after slide")
+
+	// Verify the active cache has states from overlap period (10-19)
+	for blockNum := uint64(10); blockNum < 20; blockNum++ {
+		stateKey := fmt.Sprintf("state_%d", blockNum)
+		_, exists := bc.activeCacheMap[stateKey]
+		require.True(t, exists, "Active cache should contain %s after slide", stateKey)
+	}
+
+	// Verify states from before overlap (0-9) are gone
+	for blockNum := uint64(0); blockNum < 10; blockNum++ {
+		stateKey := fmt.Sprintf("state_%d", blockNum)
+		_, exists := bc.activeCacheMap[stateKey]
+		require.False(t, exists, "Active cache should NOT contain %s after slide", stateKey)
+	}
+}
