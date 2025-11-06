@@ -97,32 +97,7 @@ type ReaderWithStats interface {
 	GetStats() ReaderStats
 }
 
-// rootedPrefetchReader pairs a prefetch reader with the state root it was built for
-type rootedPrefetchReader struct {
-	root     common.Hash
-	prefetch StateReader
-}
-
-var globalPrefetchReader atomic.Value // stores *rootedPrefetchReader or nil
-
-// SetGlobalPrefetchReader sets a process-wide StateReader that will be consulted
-// first for Account and Storage lookups.
-func SetGlobalPrefetchReader(r StateReader) { // legacy setter
-	if r == nil {
-		globalPrefetchReader.Store(nil)
-		return
-	}
-	globalPrefetchReader.Store(&rootedPrefetchReader{prefetch: r})
-}
-
-// SetGlobalPrefetchReaderForRoot sets a prefetch reader valid only for the given state root.
-func SetGlobalPrefetchReaderForRoot(root common.Hash, r StateReader) {
-	if r == nil {
-		globalPrefetchReader.Store(nil)
-		return
-	}
-	globalPrefetchReader.Store(&rootedPrefetchReader{root: root, prefetch: r})
-}
+// (global prefetch reader removed)
 
 // cachingCodeReader implements ContractCodeReader, accessing contract code either in
 // local key-value store or the shared code cache.
@@ -373,16 +348,9 @@ type multiStateReader struct {
 // newMultiStateReader constructs a multiStateReader instance with the given
 // readers. The priority among readers is assumed to be sorted. Note, it must
 // contain at least one reader for constructing a multiStateReader.
-func newMultiStateReader(stateRoot common.Hash, readers ...StateReader) (*multiStateReader, error) {
+func newMultiStateReader(readers ...StateReader) (*multiStateReader, error) {
 	if len(readers) == 0 {
 		return nil, errors.New("empty reader set")
-	}
-	if v := globalPrefetchReader.Load(); v != nil {
-		if rp, ok := v.(*rootedPrefetchReader); ok {
-			if (rp.root == common.Hash{}) || (rp.root == stateRoot) {
-				readers = append([]StateReader{rp.prefetch}, readers...)
-			}
-		}
 	}
 	return &multiStateReader{readers: readers}, nil
 }
@@ -557,39 +525,6 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash) (common
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	value, _, err := r.storage(addr, slot)
 	return value, err
-}
-
-// prefetchReader is a simple StateReader backed by in-memory maps.
-type prefetchReader struct {
-	accounts map[common.Address]*types.StateAccount
-	storage  map[common.Address]map[common.Hash]common.Hash
-}
-
-// NewPrefetchReader constructs a StateReader backed by the provided maps.
-func NewPrefetchReader(accounts map[common.Address]*types.StateAccount, storage map[common.Address]map[common.Hash]common.Hash) StateReader {
-	return &prefetchReader{accounts: accounts, storage: storage}
-}
-
-func (p *prefetchReader) Account(addr common.Address) (*types.StateAccount, error) {
-	if p == nil || p.accounts == nil {
-		return nil, nil
-	}
-	if acct, ok := p.accounts[addr]; ok {
-		return acct, nil
-	}
-	return nil, nil
-}
-
-func (p *prefetchReader) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	if p == nil || p.storage == nil {
-		return common.Hash{}, nil
-	}
-	if slots, ok := p.storage[addr]; ok {
-		if val, ok := slots[slot]; ok {
-			return val, nil
-		}
-	}
-	return common.Hash{}, nil
 }
 
 type readerWithCacheStats struct {

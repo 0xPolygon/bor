@@ -219,13 +219,12 @@ type Database struct {
 	isVerkle bool       // Flag if database is used for verkle tree
 	hasher   nodeHasher // Trie node hasher
 
-	config          *Config                      // Configuration for database
-	diskdb          ethdb.Database               // Persistent storage for matured trie nodes
-	tree            *layerTree                   // The group for all known layers
-	freezer         ethdb.ResettableAncientStore // Freezer for storing trie histories, nil possible in tests
-	lock            sync.RWMutex                 // Lock to prevent mutations from happening at the same time
-	indexer         *historyIndexer              // History indexer
-	forceDiskReader bool                         // If true, NodeReader returns disk-layer reader
+	config  *Config                      // Configuration for database
+	diskdb  ethdb.Database               // Persistent storage for matured trie nodes
+	tree    *layerTree                   // The group for all known layers
+	freezer ethdb.ResettableAncientStore // Freezer for storing trie histories, nil possible in tests
+	lock    sync.RWMutex                 // Lock to prevent mutations from happening at the same time
+	indexer *historyIndexer              // History indexer
 }
 
 // New attempts to load an already existing layer from a persistent key-value

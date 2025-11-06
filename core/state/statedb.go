@@ -201,18 +201,6 @@ func (s *StateDB) PrefetchTouched() (map[common.Address]*types.StateAccount, map
 				dst[k] = v
 			}
 		}
-		if len(obj.uncommittedStorage) > 0 {
-			dst := storage[addr]
-			if dst == nil {
-				dst = make(map[common.Hash]common.Hash, len(obj.uncommittedStorage))
-				storage[addr] = dst
-			}
-			for k, origin := range obj.uncommittedStorage {
-				if _, ok := dst[k]; !ok {
-					dst[k] = origin
-				}
-			}
-		}
 	}
 	return accounts, storage
 }

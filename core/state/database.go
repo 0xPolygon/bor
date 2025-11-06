@@ -214,7 +214,7 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	}
 	readers = append(readers, tr)
 
-	combined, err := newMultiStateReader(stateRoot, readers...)
+	combined, err := newMultiStateReader(readers...)
 	if err != nil {
 		return nil, err
 	}

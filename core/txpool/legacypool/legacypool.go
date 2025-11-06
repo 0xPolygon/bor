@@ -35,7 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -56,13 +55,6 @@ const (
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
 	txMaxSize = 4 * txSlotSize // 128KB
-)
-
-// Caps for txpool prefetch caches to avoid unbounded memory growth
-const (
-	prefetchMaxAccounts          = 10000
-	prefetchMaxCodes             = 2000
-	prefetchMaxStoragePerAccount = 128
 )
 
 var (
@@ -180,7 +172,6 @@ type Config struct {
 
 	// Transaction filtering configuration
 	FilteredAddresses map[common.Address]struct{} // Pre-loaded filtered addresses (populated by config)
-
 }
 
 // DefaultConfig contains the default configurations for the transaction pool.
@@ -320,7 +311,6 @@ func New(config Config, chain BlockChain, options ...func(pool *LegacyPool)) *Le
 		initDoneCh:      make(chan struct{}),
 		filteredAddrs:   make(map[common.Address]struct{}),
 	}
-
 	pool.priced = newPricedList(pool.all)
 
 	// Copy pre-loaded filtered addresses
@@ -801,8 +791,6 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
 
-	// warming is handled in batch via PreLoadTrieNodesBatch in Add()
-
 	// If the address is not yet known, request exclusivity to track the account
 	// only by this subpool until all transactions are evicted
 	var (
@@ -1108,9 +1096,6 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 	if len(news) == 0 {
 		return errs
 	}
-
-	// Warm state for the new transactions
-	go pool.PreLoadTrieNodes(news...)
 
 	// Process all the new transaction and merge any errors into the original slice. Avoid
 	// locking here as we'll use the global lock optimally.
@@ -2147,49 +2132,4 @@ func (pool *LegacyPool) PreLoadTrieNodes(txs ...*types.Transaction) {
 	}
 	// Delegate prefetching to blockchain so it shares the same triedb/pathdb
 	pool.chain.PrefetchFromTxpool(header, txs)
-}
-
-// newEVMBlockContext creates a block context for EVM execution using the current pool state
-func (pool *LegacyPool) newEVMBlockContext(header *types.Header) vm.BlockContext {
-	return vm.BlockContext{
-		CanTransfer: core.CanTransfer,
-		Transfer:    core.Transfer,
-		GetHash:     pool.newGetHashFunc(header),
-		Coinbase:    header.Coinbase,
-		BlockNumber: new(big.Int).Set(header.Number),
-		Time:        header.Time,
-		Difficulty:  new(big.Int).Set(header.Difficulty),
-		BaseFee:     new(big.Int).Set(header.BaseFee),
-		GasLimit:    header.GasLimit,
-		Random:      &header.MixDigest,
-	}
-}
-
-// newGetHashFunc creates a GetHash function for block context using the chain interface
-func (pool *LegacyPool) newGetHashFunc(header *types.Header) func(uint64) common.Hash {
-	return func(n uint64) common.Hash {
-		// For pre-execution, we only need recent block hashes
-		// If the requested block is too old or in the future, return zero hash
-		current := header.Number.Uint64()
-		if n >= current || current-n > 256 {
-			return common.Hash{}
-		}
-
-		// Get the block from the chain
-		block := pool.chain.GetBlock(header.ParentHash, current-1)
-		if block == nil {
-			return common.Hash{}
-		}
-
-		// Walk backwards to find the requested block
-		for i := current - 1; i > n && block != nil; i-- {
-			block = pool.chain.GetBlock(block.ParentHash(), i-1)
-		}
-
-		if block != nil && block.NumberU64() == n {
-			return block.Hash()
-		}
-
-		return common.Hash{}
-	}
 }

@@ -57,22 +57,13 @@ type reader struct {
 	db          *Database
 	state       common.Hash
 	noHashCheck bool
-	layer       layer      // entry layer (may be a diff layer)
-	disk        *diskLayer // optional direct pointer to disk layer for bypass reads
+	layer       layer // entry layer (may be a diff layer)
 }
 
 // Node implements database.NodeReader interface, retrieving the node with specified
 // node info. Don't modify the returned byte slice since it's not deep-copied
 // and still be referenced by database.
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
-	// If prefetch hint is enabled, try disk layer first. If the node content
-	// matches the requested hash, return immediately and avoid traversing the
-	// layer tree. Otherwise, fall back to the normal layered read.
-	if r.db.forceDiskReader && r.disk != nil {
-		if blob, got, _, err := r.disk.node(owner, path, 0); err == nil && (r.noHashCheck || got == hash) {
-			return blob, nil
-		}
-	}
 	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
 		return nil, err
@@ -183,27 +174,11 @@ func (db *Database) NodeReader(root common.Hash) (database.NodeReader, error) {
 	if layer == nil {
 		return nil, fmt.Errorf("state %#x is not available", root)
 	}
-	if db.forceDiskReader {
-		// Resolve disk layer separately, keep entry layer intact
-		bottom := layer
-		for {
-			p := bottom.parentLayer()
-			if p == nil {
-				break
-			}
-			bottom = p
-		}
-		dl, ok := bottom.(*diskLayer)
-		if !ok {
-			return nil, fmt.Errorf("unexpected non-disk layer: %T", layer)
-		}
-		return &reader{db: db, state: root, noHashCheck: db.isVerkle, layer: layer, disk: dl}, nil
-	}
+
 	return &reader{db: db,
 		state:       root,
 		noHashCheck: db.isVerkle,
 		layer:       layer,
-		disk:        nil,
 	}, nil
 }
 

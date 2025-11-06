@@ -397,10 +397,6 @@ type BlockChain struct {
 	checker             ethereum.ChainValidator
 
 	// Last reader cache stats from ProcessBlock (read by insertChain for logging)
-	lastPrefAccHit   int64
-	lastPrefAccMiss  int64
-	lastPrefStorHit  int64
-	lastPrefStorMiss int64
 	lastProcAccHit   int64
 	lastProcAccMiss  int64
 	lastProcStorHit  int64
@@ -704,7 +700,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	parentRoot := parent.Root
-	prefetch, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
+	_, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
@@ -741,17 +737,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	// Upload the statistics of reader at the end
 	defer func() {
-		stats := prefetch.GetStats()
-		accountCacheHitPrefetchMeter.Mark(stats.AccountHit)
-		accountCacheMissPrefetchMeter.Mark(stats.AccountMiss)
-		storageCacheHitPrefetchMeter.Mark(stats.StorageHit)
-		storageCacheMissPrefetchMeter.Mark(stats.StorageMiss)
-		// persist for logging
-		bc.lastPrefAccHit += stats.AccountHit
-		bc.lastPrefAccMiss += stats.AccountMiss
-		bc.lastPrefStorHit += stats.StorageHit
-		bc.lastPrefStorMiss += stats.StorageMiss
-		stats = process.GetStats()
+		stats := process.GetStats()
 		accountCacheHitMeter.Mark(stats.AccountHit)
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
@@ -864,20 +850,18 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
 }
 
-// seedReaderCache preloads the supplied readerWithCache
 // warmReaderCache preloads the supplied readerWithCache with accounts/storage and trie nodes.
 func (bc *BlockChain) warmReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, time.Duration) {
 	if reader == nil || b == nil || len(b.Transactions()) == 0 {
 		return nil, 0
 	}
-	// Synchronous warm-up using the same reader and triedb
 	vmCfg := bc.cfg.VmConfig
 	vmCfg.Tracer = nil
 	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
 	if err != nil {
 		return nil, 0
 	}
-	// Warm the exact accounts/storage and trie nodes used by the block
+
 	start := time.Now()
 	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
 	return reader, time.Since(start)
@@ -2700,7 +2684,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				snapDiffItems, snapBufItems = bc.snaps.Size()
 			}
 			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 			continue
 		}
 
@@ -2777,7 +2761,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 	}
 
 	return int(processed.Load()), nil
@@ -2881,7 +2865,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 	}
 	// End-of-batch witness validation
 	for i, block := range chain {
@@ -3173,11 +3157,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 
-		// Start reader warming as early as possible for this block's parent root
+		// Start reader cache warming
 		warmCh := bc.StartWarmReaderCache(parent.Root, block)
 
-		// Prewarm the state for the block's parent root in background before creating statedb
-		// prewarmCancel, prewarmDone := bc.prewarmStateForBlock(block, parent.Root)
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -4378,13 +4360,12 @@ func (bc *BlockChain) verifyPendingHeaders() {
 	}
 }
 
-// warmOutcome is the result of an asynchronous seedReaderCache run.
 type warmOutcome struct {
 	Reader state.ReaderWithStats
 	Dur    time.Duration
 }
 
-// StartSeedReaderCacheAsync launches seeding of the reader cache for a block's parent root and returns a result channel.
+// StartWarmReaderCache launches a goroutine to warm up a state reader's cache
 func (bc *BlockChain) StartWarmReaderCache(parentRoot common.Hash, b *types.Block) <-chan warmOutcome {
 	ch := make(chan warmOutcome, 1)
 	if b == nil || len(b.Transactions()) == 0 || bc.prefetcher == nil {
@@ -4405,9 +4386,6 @@ func (bc *BlockChain) StartWarmReaderCache(parentRoot common.Hash, b *types.Bloc
 	}()
 	return ch
 }
-
-// StateAtWithProcessReader creates a StateDB bound to the given root using the
-// process ReaderWithStats (so any prewarmed cache on the process reader applies).
 
 // WaitForWarmEnabled reports whether execution should wait for warm-up to finish.
 func (bc *BlockChain) WaitForWarmEnabled() bool {
