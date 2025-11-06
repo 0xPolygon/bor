@@ -711,28 +711,6 @@ const (
 	testCacheOverlapSize = 10 // Must match compactWitnessCacheOverlapSize
 )
 
-// mockBlockChainForCompactWitness mocks the minimal BlockChain interface needed for compact witness tests
-type mockBlockChainForCompactWitness struct {
-	parallelImportEnabled bool
-	cacheWindowStart      uint64
-}
-
-func (m *mockBlockChainForCompactWitness) IsParallelStatelessImportEnabled() bool {
-	return m.parallelImportEnabled
-}
-
-func (m *mockBlockChainForCompactWitness) GetCacheWindowStart() uint64 {
-	return m.cacheWindowStart
-}
-
-func (m *mockBlockChainForCompactWitness) GetCacheWindowSize() uint64 {
-	return testCacheWindowSize
-}
-
-func (m *mockBlockChainForCompactWitness) GetCacheOverlapSize() uint64 {
-	return testCacheOverlapSize
-}
-
 // TestShouldRequestCompactWitness tests the compact witness request decision logic
 // This test validates the critical window and overlap boundaries
 func TestShouldRequestCompactWitness(t *testing.T) {
