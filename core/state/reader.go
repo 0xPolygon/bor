@@ -97,8 +97,6 @@ type ReaderWithStats interface {
 	GetStats() ReaderStats
 }
 
-// (global prefetch reader removed)
-
 // cachingCodeReader implements ContractCodeReader, accessing contract code either in
 // local key-value store or the shared code cache.
 //
@@ -366,15 +364,9 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 	for _, reader := range r.readers {
 		acct, err := reader.Account(addr)
 		if err == nil {
-			if acct != nil {
-				return acct, nil
-			}
-			continue // miss, try next
+			return acct, nil
 		}
 		errs = append(errs, err)
-	}
-	if len(errs) == 0 {
-		return nil, nil
 	}
 	return nil, errors.Join(errs...)
 }
@@ -388,17 +380,11 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 func (r *multiStateReader) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	var errs []error
 	for _, reader := range r.readers {
-		val, err := reader.Storage(addr, slot)
+		slot, err := reader.Storage(addr, slot)
 		if err == nil {
-			if (val != common.Hash{}) {
-				return val, nil
-			}
-			continue // miss, try next
+			return slot, nil
 		}
 		errs = append(errs, err)
-	}
-	if len(errs) == 0 {
-		return common.Hash{}, nil
 	}
 	return common.Hash{}, errors.Join(errs...)
 }

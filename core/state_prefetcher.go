@@ -59,8 +59,6 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
-	// Use normal layered reads; no forced disk-layer prefetch.
-
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		stateCpy := statedb.Copy() // closure
