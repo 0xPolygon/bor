@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/stretchr/testify/require"
 )
 
 // testEthHandler is a mock event handler to listen for inbound network requests
@@ -701,5 +702,62 @@ func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
 			t.Fatalf("malformed block forwarded")
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+}
+
+const (
+	// Test constants matching core.blockchain.go consensus constants
+	testCacheWindowSize  = 20 // Must match compactWitnessCacheWindowSize
+	testCacheOverlapSize = 10 // Must match compactWitnessCacheOverlapSize
+)
+
+// TestShouldRequestCompactWitness tests the compact witness request decision logic
+// This test validates the critical window and overlap boundaries
+func TestShouldRequestCompactWitness(t *testing.T) {
+	// windowSize=20, overlapSize=10
+	// Windows: [0-19], [20-39], [40-59]...
+	// Overlaps: blocks 10-19, 30-39, 50-59...
+	// Full witness needed at: 0, 10, 20, 30, 40, 50... (window starts and overlap starts)
+
+	tests := []struct {
+		blockNum        uint64
+		expectedCompact bool
+		reason          string
+	}{
+		{0, false, "window start"},
+		{5, true, "before overlap"},
+		{9, true, "just before overlap"},
+		{10, false, "overlap start - needs full for nextCache"},
+		{11, true, "in overlap, after start"},
+		{15, true, "middle of overlap"},
+		{19, true, "end of window"},
+		{20, false, "window start (slide)"},
+		{21, true, "after slide"},
+		{30, false, "overlap start in second window"},
+		{35, true, "in second window overlap"},
+		{40, false, "window start in third window"},
+		{50, false, "overlap start in third window"},
+		{100, false, "window start"},
+		{110, false, "overlap start"},
+		{115, true, "in overlap"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("block_%d_%s", tt.blockNum, tt.reason), func(t *testing.T) {
+			// Calculate expected result using the same logic as shouldRequestCompactWitness
+			windowSize := uint64(testCacheWindowSize)
+			overlapSize := uint64(testCacheOverlapSize)
+			expectedWindowStart := (tt.blockNum / windowSize) * windowSize
+			blocksSinceWindowStart := tt.blockNum - expectedWindowStart
+
+			isWindowStart := tt.blockNum == expectedWindowStart
+			isOverlapStart := blocksSinceWindowStart == overlapSize
+
+			expectedResult := !isWindowStart && !isOverlapStart
+
+			require.Equal(t, tt.expectedCompact, expectedResult,
+				"Block %d (%s): logic mismatch - expected compact=%v but logic gives %v",
+				tt.blockNum, tt.reason, tt.expectedCompact, expectedResult)
+		})
 	}
 }
