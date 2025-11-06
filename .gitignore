@@ -46,6 +46,9 @@ profile.cov
 
 tests/spec-tests/
 
+# Test output
+eth/tracers/data.csv
+
 # binaries
 cmd/abidump/abidump
 cmd/abigen/abigen

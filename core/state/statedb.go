@@ -229,12 +229,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 // NewWithReader creates a new state for the specified state root. Unlike New,
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
-	tr, err := db.OpenTrie(root)
-	if err != nil {
-		return nil, err
-	}
 	sdb := &StateDB{
-		trie:                 tr,
 		db:                   db,
 		originalRoot:         root,
 		reader:               reader,
@@ -579,6 +574,8 @@ func (s *StateDB) StopPrefetcher() {
 func (s *StateDB) ResetPrefetcher() {
 	s.prefetcher = nil
 	s.mutations = make(map[common.Address]*mutation)
+	s.stateObjects = make(map[common.Address]*stateObject)
+	s.stateObjectsDestruct = make(map[common.Address]*stateObject)
 }
 
 // setError remembers the first non-nil error it is called with.

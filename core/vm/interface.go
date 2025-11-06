@@ -100,6 +100,8 @@ type StateDB interface {
 
 	AccessEvents() *state.AccessEvents
 
+	Logs() []*types.Log
+
 	// Finalise must be invoked at the end of a transaction
 	Finalise(bool)
 

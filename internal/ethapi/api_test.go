@@ -781,6 +781,10 @@ func (b testBackend) HistoryPruningCutoff() uint64 {
 	return bn
 }
 
+func (b testBackend) IsParallelImportActive() bool {
+	return false
+}
+
 func TestEstimateGas(t *testing.T) {
 	t.Parallel()
 	// Initialize test accounts
@@ -4017,7 +4021,7 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 func TestRPCGetTransactionReceiptsByBlock(t *testing.T) {
 	api, blockNrOrHash, testSuite := setupBlocksToApiTest(t)
 
-	receipts, err := api.GetTransactionReceiptsByBlock(t.Context(), blockNrOrHash)
+	receipts, err := api.GetBlockReceipts(t.Context(), blockNrOrHash)
 	if err != nil {
 		t.Fatal("api error")
 	}

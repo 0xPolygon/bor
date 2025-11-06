@@ -359,10 +359,9 @@ func (beacon *Beacon) Prepare(chain consensus.ChainHeaderReader, header *types.H
 }
 
 // Finalize implements consensus.Engine and processes withdrawals on top.
-func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body) {
+func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
 	if !beacon.IsPoSHeader(header) {
-		beacon.ethone.Finalize(chain, header, state, body)
-		return
+		return beacon.ethone.Finalize(chain, header, state, body, receipts)
 	}
 	// Withdrawals processing.
 	for _, w := range body.Withdrawals {
@@ -372,11 +371,12 @@ func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.
 		state.AddBalance(w.Address, amount, tracing.BalanceIncreaseWithdrawal)
 	}
 	// No block reward which is issued by consensus layer instead.
+	return receipts
 }
 
 // FinalizeAndAssemble implements consensus.Engine, setting the final state and
 // assembling the block.
-func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, error) {
+func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
 	if !beacon.IsPoSHeader(header) {
 		return beacon.ethone.FinalizeAndAssemble(chain, header, state, body, receipts)
 	}
@@ -389,11 +389,11 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 	} else {
 		if len(body.Withdrawals) > 0 {
-			return nil, errors.New("withdrawals set before Shanghai activation")
+			return nil, nil, errors.New("withdrawals set before Shanghai activation")
 		}
 	}
 	// Finalize and assemble the block.
-	beacon.Finalize(chain, header, state, body)
+	receipts = beacon.Finalize(chain, header, state, body, receipts)
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(true)
@@ -409,15 +409,15 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		// Open the pre-tree to prove the pre-state against
 		parent := chain.GetHeaderByNumber(header.Number.Uint64() - 1)
 		if parent == nil {
-			return nil, fmt.Errorf("nil parent header for block %d", header.Number)
+			return nil, nil, fmt.Errorf("nil parent header for block %d", header.Number)
 		}
 		preTrie, err := state.Database().OpenTrie(parent.Root)
 		if err != nil {
-			return nil, fmt.Errorf("error opening pre-state tree root: %w", err)
+			return nil, nil, fmt.Errorf("error opening pre-state tree root: %w", err)
 		}
 		postTrie := state.GetTrie()
 		if postTrie == nil {
-			return nil, errors.New("post-state tree is not available")
+			return nil, nil, errors.New("post-state tree is not available")
 		}
 		vktPreTrie, okpre := preTrie.(*trie.VerkleTrie)
 		vktPostTrie, okpost := postTrie.(*trie.VerkleTrie)
@@ -428,7 +428,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 			if len(keys) > 0 {
 				verkleProof, stateDiff, err := vktPreTrie.Proof(vktPostTrie, keys)
 				if err != nil {
-					return nil, fmt.Errorf("error generating verkle proof for block %d: %w", header.Number, err)
+					return nil, nil, fmt.Errorf("error generating verkle proof for block %d: %w", header.Number, err)
 				}
 				block = block.WithWitness(&types.ExecutionWitness{
 					StateDiff:   stateDiff,
@@ -438,7 +438,7 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 	}
 
-	return block, nil
+	return block, receipts, nil
 }
 
 // Seal generates a new sealing request for the given input block and pushes

@@ -880,6 +880,7 @@ type BorConfig struct {
 	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -929,6 +930,10 @@ func (c *BorConfig) IsBhilai(number *big.Int) bool {
 
 func (c *BorConfig) IsRio(number *big.Int) bool {
 	return isBlockForked(c.RioBlock, number)
+}
+
+func (c *BorConfig) IsMadhugiri(number *big.Int) bool {
+	return isBlockForked(c.MadhugiriBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
@@ -1630,6 +1635,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsVerkle                                                bool
+	IsMadhugiri                                             bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1661,5 +1667,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsVerkle:         c.IsVerkle(num),
 		IsOsaka:          c.IsOsaka(num),
 		IsEIP4762:        c.IsVerkle(num),
+		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 	}
 }

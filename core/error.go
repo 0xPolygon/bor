@@ -33,6 +33,27 @@ var (
 	ErrNoGenesis = errors.New("genesis not found in chain")
 
 	errSideChainReceipts = errors.New("side blocks can't be accepted as ancient chain data")
+
+	// ErrStatelessStateRootMismatch indicates a mismatch between locally computed
+	// state root and the cross-validated (remote) state root during stateless
+	// self-validation.
+	ErrStatelessStateRootMismatch = errors.New("stateless self-validation state root mismatch")
+
+	// ErrGasUsedMismatch indicates a mismatch between locally computed
+	// gas used and the block's gas used during validation.
+	ErrGasUsedMismatch = errors.New("invalid gas used")
+
+	// ErrBloomMismatch indicates a mismatch between locally computed
+	// bloom filter and the block's bloom during validation.
+	ErrBloomMismatch = errors.New("invalid bloom")
+
+	// ErrReceiptRootMismatch indicates a mismatch between locally computed
+	// receipt root and the block's receipt root during validation.
+	ErrReceiptRootMismatch = errors.New("invalid receipt root hash")
+
+	// ErrRequestsHashMismatch indicates a mismatch between locally computed
+	// requests hash and the block's requests hash during validation.
+	ErrRequestsHashMismatch = errors.New("invalid requests hash")
 )
 
 // List of evm-call-message pre-checking errors. All state transition messages will
@@ -127,6 +148,9 @@ var (
 	// Message validation errors:
 	ErrEmptyAuthList   = errors.New("EIP-7702 transaction with empty auth list")
 	ErrSetCodeTxCreate = errors.New("EIP-7702 transaction cannot be used to create contract")
+
+	// -- EIP-7825 errors --
+	ErrGasLimitTooHigh = errors.New("transaction gas limit too high")
 )
 
 // EIP-7702 state transition errors.

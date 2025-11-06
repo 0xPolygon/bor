@@ -285,6 +285,10 @@ func (s *hookedStateDB) Finalise(deleteEmptyObjects bool) {
 	}
 }
 
+func (s *hookedStateDB) Logs() []*types.Log {
+	return s.inner.Logs()
+}
+
 // Inner receives the underlying state db
 func (s *hookedStateDB) Inner() *StateDB {
 	return s.inner

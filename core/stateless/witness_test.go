@@ -8,25 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// MockHeaderReader is a mock implementation of HeaderReader for testing.
-type mockHeaderReader struct {
-	headers map[common.Hash]*types.Header
-}
-
-func (m *mockHeaderReader) GetHeader(hash common.Hash, number uint64) *types.Header {
-	return m.headers[hash]
-}
-
-func newMockHeaderReader() *mockHeaderReader {
-	return &mockHeaderReader{
-		headers: make(map[common.Hash]*types.Header),
-	}
-}
-
-func (m *mockHeaderReader) addHeader(header *types.Header) {
-	m.headers[header.Hash()] = header
-}
-
 func TestValidateWitnessPreState_Success(t *testing.T) {
 	// Create test headers.
 	parentStateRoot := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
@@ -47,8 +28,8 @@ func TestValidateWitnessPreState_Success(t *testing.T) {
 	}
 
 	// Set up mock header reader.
-	mockReader := newMockHeaderReader()
-	mockReader.addHeader(parentHeader)
+	mockReader := NewMockHeaderReader()
+	mockReader.AddHeader(parentHeader)
 
 	// Create witness with matching pre-state root.
 	witness := &Witness{
@@ -93,8 +74,8 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 	}
 
 	// Set up mock header reader.
-	mockReader := newMockHeaderReader()
-	mockReader.addHeader(parentHeader)
+	mockReader := NewMockHeaderReader()
+	mockReader.AddHeader(parentHeader)
 
 	// Create witness with mismatched pre-state root.
 	witness := &Witness{
@@ -119,7 +100,7 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 }
 
 func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
-	mockReader := newMockHeaderReader()
+	mockReader := NewMockHeaderReader()
 
 	// Test case 1: Nil witness.
 	t.Run("NilWitness", func(t *testing.T) {
@@ -238,9 +219,9 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 
 	// Set up mock header reader.
-	mockReader := newMockHeaderReader()
-	mockReader.addHeader(parentHeader)
-	mockReader.addHeader(grandParentHeader)
+	mockReader := NewMockHeaderReader()
+	mockReader.AddHeader(parentHeader)
+	mockReader.AddHeader(grandParentHeader)
 
 	// Create witness with multiple headers (parent should be first).
 	witness := &Witness{

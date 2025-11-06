@@ -3,7 +3,6 @@ package statefull
 import (
 	"bytes"
 	"context"
-	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
@@ -55,7 +54,7 @@ func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	return Callmsg{
 		ethereum.CallMsg{
 			From:     systemAddress,
-			Gas:      math.MaxUint64 / 2,
+			Gas:      params.MaxTxGas, // should be more than enough for state-sync related syscalls
 			GasPrice: big.NewInt(0),
 			Value:    big.NewInt(0),
 			To:       &toAddress,

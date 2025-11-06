@@ -130,6 +130,10 @@ type Backend interface {
 
 	CurrentView() *filtermaps.ChainView
 	NewMatcherBackend() filtermaps.MatcherBackend
+
+	// TODO: remove once we stop relying on previous headers for state sync
+	// IsParallelImportActive returns true if parallel stateless import is currently active
+	IsParallelImportActive() bool
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {

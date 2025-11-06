@@ -109,6 +109,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			return nil, interruptCtx.Err()
 		default:
 		}
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
 
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
@@ -146,7 +149,17 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	p.chain.engine.Finalize(p.chain, header, statedb, block.Body())
+	receiptsCountBeforeFinalize := len(receipts)
+	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
+
+	// apply state sync logs
+	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
+		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
+
+		if appliedNewStateSyncReceipt {
+			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+	}
 
 	return &ProcessResult{
 		Receipts: receipts,

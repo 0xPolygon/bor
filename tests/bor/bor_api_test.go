@@ -57,7 +57,7 @@ func areDifferentHashes(receipts []map[string]interface{}) bool {
 // Test for GetTransactionReceiptsByBlock
 func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi.BlockChainAPI) {
 	// check 1 : zero transactions
-	receiptsOut, err := publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(1))
+	receiptsOut, err := publicBlockchainAPI.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(1))
 	if err != nil {
 		t.Error(err)
 	}
@@ -65,7 +65,7 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	assert.Equal(t, 0, len(receiptsOut))
 
 	// check 2 : one transactions ( normal )
-	receiptsOut, err = publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(2))
+	receiptsOut, err = publicBlockchainAPI.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(2))
 	if err != nil {
 		t.Error(err)
 	}
@@ -74,7 +74,7 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	assert.True(t, areDifferentHashes(receiptsOut))
 
 	// check 3 : two transactions ( both normal )
-	receiptsOut, err = publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(3))
+	receiptsOut, err = publicBlockchainAPI.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(3))
 	if err != nil {
 		t.Error(err)
 	}
@@ -83,7 +83,7 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	assert.True(t, areDifferentHashes(receiptsOut))
 
 	// check 4 : two transactions ( one normal + one state-sync)
-	receiptsOut, err = publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(4))
+	receiptsOut, err = publicBlockchainAPI.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(4))
 	if err != nil {
 		t.Error(err)
 	}
@@ -97,7 +97,7 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	blockHash := block["hash"].(common.Hash)
 	txHash := types.GetDerivedBorTxHash(types.BorReceiptKey(4, blockHash))
 	// Compare tx hash from GetTransactionReceiptsByBlock with hash computed above
-	txReceipts, err := publicBlockchainAPI.GetTransactionReceiptsByBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(4))
+	txReceipts, err := publicBlockchainAPI.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(4))
 	assert.Nil(t, err)
 
 	assert.Equal(t, txHash, txReceipts[1]["transactionHash"].(common.Hash))

@@ -22,7 +22,6 @@ import (
 	"io"
 	"maps"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -274,7 +273,7 @@ func (s *nodeSet) decode(r *rlp.Stream) error {
 }
 
 // write flushes nodes into the provided database batch as a whole.
-func (s *nodeSet) write(batch ethdb.Batch, clean *fastcache.Cache) int {
+func (s *nodeSet) write(batch ethdb.Batch, clean *AddressBiasedCache) int {
 	nodes := make(map[common.Hash]map[string]*trienode.Node)
 	if len(s.accountNodes) > 0 {
 		nodes[common.Hash{}] = s.accountNodes
