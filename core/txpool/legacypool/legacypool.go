@@ -2119,17 +2119,3 @@ func (pool *LegacyPool) isFiltered(addr common.Address) bool {
 	_, exists := pool.filteredAddrs[addr]
 	return exists
 }
-
-// PreLoadTrieNodes warms relevant trie nodes and code for transactions concurrently
-// then sets a single global prefetch reader.
-func (pool *LegacyPool) PreLoadTrieNodes(txs ...*types.Transaction) {
-	pool.mu.RLock()
-	header := pool.currentHead.Load()
-	pool.mu.RUnlock()
-
-	if header == nil || len(txs) == 0 {
-		return
-	}
-	// Delegate prefetching to blockchain so it shares the same triedb/pathdb
-	pool.chain.PrefetchFromTxpool(header, txs)
-}
