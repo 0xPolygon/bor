@@ -119,9 +119,6 @@ func (bc *testBlockChain) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent)
 	return bc.chainHeadFeed.Subscribe(ch)
 }
 
-// PrefetchFromTxpool is a no-op to satisfy BlockChain interface in tests.
-func (bc *testBlockChain) PrefetchFromTxpool(header *types.Header, txs []*types.Transaction) {}
-
 func transaction(nonce uint64, gaslimit uint64, key *ecdsa.PrivateKey) *types.Transaction {
 	return pricedTransaction(nonce, gaslimit, big.NewInt(1), key)
 }

@@ -4399,21 +4399,3 @@ func (bc *BlockChain) WaitForWarmEnabled() bool {
 func (bc *BlockChain) NewStateWithReader(root common.Hash, rdr state.ReaderWithStats) (*state.StateDB, error) {
 	return state.NewWithReader(root, bc.statedb, rdr)
 }
-
-// PrefetchFromTxpool launches background prefetching for pending txs against a header root.
-func (bc *BlockChain) PrefetchFromTxpool(header *types.Header, txs []*types.Transaction) {
-	if header == nil || len(txs) == 0 || bc.prefetcher == nil {
-		return
-	}
-	go func() {
-		warmdb, err := state.New(header.Root, bc.statedb)
-		if err != nil {
-			return
-		}
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		synthetic := types.NewBlockWithHeader(header).WithBody(types.Body{Transactions: txs})
-		var noop atomic.Bool
-		bc.prefetcher.Prefetch(synthetic, warmdb, vmCfg, &noop)
-	}()
-}

@@ -147,9 +147,6 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
-
-	// PrefetchFromTxpool triggers background prefetch for pending txs at the given head.
-	PrefetchFromTxpool(header *types.Header, txs []*types.Transaction)
 }
 
 // Config are the configuration parameters of the transaction pool.
