@@ -4260,6 +4260,13 @@ func (bc *BlockChain) GetCacheOverlapSize() uint64 {
 	return compactWitnessCacheOverlapSize
 }
 
+// GetCompactCacheSizes returns the current sizes of the active and next compact witness caches.
+func (bc *BlockChain) GetCompactCacheSizes() (int, int) {
+	bc.cacheLock.RLock()
+	defer bc.cacheLock.RUnlock()
+	return len(bc.activeCacheMap), len(bc.nextCacheMap)
+}
+
 // FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
 // This is used when sending reduced witnesses to peers.
 func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) (*stateless.Witness, int, int) {
@@ -4287,6 +4294,20 @@ func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) 
 
 	filtered.State = filteredStates
 
+	blockNum := uint64(0)
+	if header := filtered.Header(); header != nil {
+		blockNum = header.Number.Uint64()
+	}
+
+	log.Info("PSP - Sliding cache filtered witness",
+		"block", blockNum,
+		"originalStates", originalStates,
+		"filteredStates", len(filteredStates),
+		"removedStates", removed,
+		"windowStart", bc.cacheWindowStart,
+		"activeCacheSize", len(bc.activeCacheMap),
+		"nextCacheSize", len(bc.nextCacheMap))
+
 	return filtered, originalStates, removed
 }
 
@@ -4311,6 +4332,11 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 
 	cachedToActive := 0
 	cachedToNext := 0
+	originalStateCount := 0
+	if originalWitnessStates != nil {
+		originalStateCount = len(originalWitnessStates)
+	}
+	executionNodesProcessed := 0
 
 	// Cache ORIGINAL witness state nodes (not merged states)
 	// This ensures we only cache new states for this block, not re-cache old states
@@ -4343,6 +4369,7 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 				subset.ForEachWithOrder(func(path string, n *trienode.Node) {
 					if !n.IsDeleted() && n.Blob != nil {
 						stateNode := string(n.Blob)
+						executionNodesProcessed++
 						// Add to active map
 						if _, exists := bc.activeCacheMap[stateNode]; !exists {
 							bc.activeCacheMap[stateNode] = struct{}{}
@@ -4361,10 +4388,12 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 		}
 	}
 
-	log.Debug("Updated sliding window cache",
+	log.Info("PSP - Updated sliding window cache",
 		"block", blockNum,
 		"windowStart", bc.cacheWindowStart,
 		"inOverlap", inOverlapPeriod,
+		"originalWitnessStates", originalStateCount,
+		"executionNodesProcessed", executionNodesProcessed,
 		"cachedToActive", cachedToActive,
 		"cachedToNext", cachedToNext,
 		"activeMapSize", len(bc.activeCacheMap),
@@ -4379,6 +4408,26 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.Number().Uint64()
 	parallelMode := bc.parallelStatelessImportEnabled.Load()
+
+	incomingStateCount := len(witness.State)
+	var witnessBytes int
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err == nil {
+		witnessBytes = buf.Len()
+	} else {
+		log.Warn("PSP - Failed to measure witness payload size", "block", blockNum, "err", err)
+	}
+
+	activeCacheSize, nextCacheSize := bc.GetCompactCacheSizes()
+
+	log.Info("PSP - Processing block with witness",
+		"block", blockNum,
+		"parallelMode", parallelMode,
+		"incomingStates", incomingStateCount,
+		"payloadBytes", witnessBytes,
+		"activeCacheSize", activeCacheSize,
+		"nextCacheSize", nextCacheSize,
+		"windowStart", bc.GetCacheWindowStart())
 
 	// Track original witness states before any merging (for cache update later)
 	// We only want to cache NEW states from this block, not re-cache merged states
@@ -4402,11 +4451,15 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			witnessStatesBefore := len(witness.State)
 			mergedCount := bc.mergeSpanCacheIntoWitness(witness)
 			if mergedCount > 0 {
-				log.Debug("Merged cached states into witness",
+				activeSize, nextSize := bc.GetCompactCacheSizes()
+				log.Info("PSP - Merged cached states into witness",
 					"block", blockNum,
 					"witnessStatesBefore", witnessStatesBefore,
 					"mergedFromCache", mergedCount,
-					"witnessStatesAfter", len(witness.State))
+					"witnessStatesAfter", len(witness.State),
+					"activeCacheSize", activeSize,
+					"nextCacheSize", nextSize,
+					"windowStart", bc.GetCacheWindowStart())
 			}
 		}
 	}
