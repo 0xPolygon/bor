@@ -379,6 +379,7 @@ type BlockChain struct {
 	nextCacheMap     map[string]struct{} // Pre-warming map for next window
 	cacheWindowStart uint64              // Start block of current window
 	cacheLock        sync.RWMutex        // Lock for cache operations
+	compactCacheWarm atomic.Bool         // Whether the current window already has a full witness cached
 
 	wg            sync.WaitGroup
 	quit          chan struct{} // shutdown signal, closed in Stop.
@@ -4229,6 +4230,7 @@ func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
 		bc.activeCacheMap = bc.nextCacheMap
 		bc.nextCacheMap = make(map[string]struct{})
 		bc.cacheWindowStart = expectedWindowStart
+		bc.compactCacheWarm.Store(false)
 		bc.cacheLock.Unlock()
 
 		log.Info("Sliding window: switched to next cache map",
@@ -4265,6 +4267,12 @@ func (bc *BlockChain) GetCompactCacheSizes() (int, int) {
 	bc.cacheLock.RLock()
 	defer bc.cacheLock.RUnlock()
 	return len(bc.activeCacheMap), len(bc.nextCacheMap)
+}
+
+// IsCompactCacheWarm reports whether we've already refilled the cache for the
+// current window by processing a full witness (after startup or the latest slide).
+func (bc *BlockChain) IsCompactCacheWarm() bool {
+	return bc.compactCacheWarm.Load()
 }
 
 // FilterWitnessWithSlidingCache filters a witness by removing state nodes present in the sliding window cache.
@@ -4385,6 +4393,11 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 				})
 			}
 		}
+	}
+
+	// Mark cache primed if we've just processed the window start block.
+	if blockNum == bc.cacheWindowStart {
+		bc.compactCacheWarm.Store(true)
 	}
 
 	log.Info("PSP - Updated sliding window cache",
