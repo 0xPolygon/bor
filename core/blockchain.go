@@ -4402,20 +4402,22 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
-	if witness == nil {
-		return nil, nil, errors.New("nil witness")
-	}
-
 	blockNum := block.Number().Uint64()
 	parallelMode := bc.parallelStatelessImportEnabled.Load()
 
-	incomingStateCount := len(witness.State)
+	hasWitness := witness != nil
+	incomingStateCount := 0
+	if hasWitness {
+		incomingStateCount = len(witness.State)
+	}
 	var witnessBytes int
-	var buf bytes.Buffer
-	if err := witness.EncodeRLP(&buf); err == nil {
-		witnessBytes = buf.Len()
-	} else {
-		log.Warn("PSP - Failed to measure witness payload size", "block", blockNum, "err", err)
+	if hasWitness {
+		var buf bytes.Buffer
+		if err := witness.EncodeRLP(&buf); err == nil {
+			witnessBytes = buf.Len()
+		} else {
+			log.Warn("PSP - Failed to measure witness payload size", "block", blockNum, "err", err)
+		}
 	}
 
 	activeCacheSize, nextCacheSize := bc.GetCompactCacheSizes()
@@ -4423,11 +4425,16 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	log.Info("PSP - Processing block with witness",
 		"block", blockNum,
 		"parallelMode", parallelMode,
+		"hasWitness", hasWitness,
 		"incomingStates", incomingStateCount,
 		"payloadBytes", witnessBytes,
 		"activeCacheSize", activeCacheSize,
 		"nextCacheSize", nextCacheSize,
 		"windowStart", bc.GetCacheWindowStart())
+
+	if !hasWitness {
+		return nil, nil, errors.New("nil witness")
+	}
 
 	// Track original witness states before any merging (for cache update later)
 	// We only want to cache NEW states from this block, not re-cache merged states
