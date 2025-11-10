@@ -118,6 +118,7 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 			}
 			acc, stor := stateCpy.PrefetchTouched()
 			results[i] = prefetchResult{accounts: acc, storage: stor}
+			stateCpy.IntermediateRoot(true)
 			return nil
 		})
 	}
