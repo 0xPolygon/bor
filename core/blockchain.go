@@ -86,11 +86,6 @@ var (
 	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
 	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
 
-	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
-	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
-	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
-	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
-
 	accountReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
 	storageReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
