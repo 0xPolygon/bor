@@ -152,11 +152,15 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // shouldRequestCompactWitness determines if we should request a compact witness based on
 // the sliding window cache state. Returns true if witness should be compact, false for full.
 func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
-	// TODO(@pratikspatil024) - handle node out of sync case
-
 	// Compact witness requires sequential block processing
 	// If parallel import is enabled, cache won't be maintained, so always request full witness
 	if h.chain.IsParallelStatelessImportEnabled() {
+		return false
+	}
+
+	// If the compact cache hasn't been primed yet (e.g. node restarted mid-window),
+	// request full witnesses until we process the next window start.
+	if !h.chain.IsCompactCacheWarm() {
 		return false
 	}
 
