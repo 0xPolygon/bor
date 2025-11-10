@@ -4295,6 +4295,10 @@ func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) 
 // originalWitnessStates should contain ONLY the states from the original compact witness (before merging),
 // to avoid re-caching already-cached states and causing cache bloat.
 func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessStates map[string]struct{}, statedb *state.StateDB) {
+	if bc.parallelStatelessImportEnabled.Load() {
+		return
+	}
+
 	start := time.Now()
 	defer func() { compactWitnessCacheUpdateTimer.UpdateSince(start) }()
 
@@ -4312,21 +4316,19 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 	cachedToActive := 0
 	cachedToNext := 0
 
-	// Cache ORIGINAL witness state nodes (not merged states)
-	// This ensures we only cache new states for this block, not re-cache old states
-	if originalWitnessStates != nil {
-		for stateNode := range originalWitnessStates {
-			// Add to active map
-			if _, exists := bc.activeCacheMap[stateNode]; !exists {
-				bc.activeCacheMap[stateNode] = struct{}{}
-				cachedToActive++
-			}
-			// Also add to next map if in overlap period
-			if inOverlapPeriod {
-				if _, exists := bc.nextCacheMap[stateNode]; !exists {
-					bc.nextCacheMap[stateNode] = struct{}{}
-					cachedToNext++
-				}
+	// Cache ORIGINAL witness state nodes (not merged states).
+	// This ensures we only cache new states for this block, not re-cache old states.
+	for stateNode := range originalWitnessStates {
+		// Add to active map
+		if _, exists := bc.activeCacheMap[stateNode]; !exists {
+			bc.activeCacheMap[stateNode] = struct{}{}
+			cachedToActive++
+		}
+		// Also add to next map if in overlap period
+		if inOverlapPeriod {
+			if _, exists := bc.nextCacheMap[stateNode]; !exists {
+				bc.nextCacheMap[stateNode] = struct{}{}
+				cachedToNext++
 			}
 		}
 	}
