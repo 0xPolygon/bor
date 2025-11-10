@@ -4339,8 +4339,8 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 	originalStateCount := len(originalWitnessStates)
 	executionNodesProcessed := 0
 
-	// Cache ORIGINAL witness state nodes (not merged states)
-	// This ensures we only cache new states for this block, not re-cache old states
+	// Cache ORIGINAL witness state nodes (not merged states).
+	// This ensures we only cache new states for this block, not re-cache old states.
 	for stateNode := range originalWitnessStates {
 		// Add to active map
 		if _, exists := bc.activeCacheMap[stateNode]; !exists {
