@@ -621,8 +621,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	}
 
 	// Start tx indexer if it's enabled.
-	// Disable tx indexer in stateless mode to avoid potential issues with pruning in stateless mode.
-	if bc.cfg.TxLookupLimit >= 0 && !bc.cfg.Stateless {
+	if bc.cfg.TxLookupLimit >= 0 {
 		bc.txIndexer = newTxIndexer(uint64(bc.cfg.TxLookupLimit), bc)
 	}
 

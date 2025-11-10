@@ -64,17 +64,28 @@ type txIndexer struct {
 	db     ethdb.Database
 	term   chan chan struct{}
 	closed chan struct{}
+
+	// isStateless is a flag indicating if the node is in stateless mode.
+	isStateless bool
 }
 
 // newTxIndexer initializes the transaction indexer.
 func newTxIndexer(limit uint64, chain *BlockChain) *txIndexer {
-	cutoff, _ := chain.HistoryPruningCutoff()
+	var cutoff uint64
+	if chain.cfg.Stateless {
+		cutoff = getBlockPruneCutoff(chain.db)
+	} else {
+		cutoff, _ = chain.HistoryPruningCutoff()
+	}
+
 	indexer := &txIndexer{
 		limit:  limit,
 		cutoff: cutoff,
 		db:     chain.db,
 		term:   make(chan chan struct{}),
 		closed: make(chan struct{}),
+
+		isStateless: chain.cfg.Stateless,
 	}
 	indexer.head.Store(indexer.resolveHead())
 	indexer.tail.Store(rawdb.ReadTxIndexTail(chain.db))
@@ -105,6 +116,12 @@ func newTxIndexer(limit uint64, chain *BlockChain) *txIndexer {
 func (indexer *txIndexer) run(head uint64, stop chan struct{}, done chan struct{}) {
 	defer func() { close(done) }()
 
+	// Refresh cutoff in stateless mode before starting indexing, as blocks
+	// may have been pruned since the task was scheduled.
+	if indexer.isStateless {
+		indexer.cutoff = getBlockPruneCutoff(indexer.db)
+	}
+
 	// Short circuit if the chain is either empty, or entirely below the
 	// cutoff point.
 	if head == 0 || head < indexer.cutoff {
@@ -124,6 +141,15 @@ func (indexer *txIndexer) run(head uint64, stop chan struct{}, done chan struct{
 		from = max(from, indexer.cutoff)
 		rawdb.IndexTransactions(indexer.db, from, head+1, stop, true)
 		return
+	}
+
+	// If the node is in stateless mode and the tail is below the cutoff,
+	// adjust the tail to the cutoff.
+	if indexer.isStateless && *tail < indexer.cutoff {
+		tailVal := indexer.cutoff
+		tail = &tailVal
+		indexer.tail.Store(tail)
+		rawdb.WriteTxIndexTail(indexer.db, indexer.cutoff)
 	}
 	// The tail flag is existent (which means indexes in [tail, head] should be
 	// present), while the whole chain are requested for indexing.
@@ -330,4 +356,15 @@ func (indexer *txIndexer) close() {
 		<-ch
 	case <-indexer.closed:
 	}
+}
+
+// getBlockPruneCutoff reads the block prune cursor from the database and returns
+// the cutoff block number. Returns 0 if no blocks have been pruned yet.
+func getBlockPruneCutoff(db ethdb.Database) uint64 {
+	blockPruneCursor := rawdb.ReadBlockPruneCursor(db)
+	if blockPruneCursor != nil {
+		return *blockPruneCursor
+	}
+	// No blocks have been pruned yet.
+	return 0
 }
