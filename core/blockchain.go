@@ -4319,7 +4319,13 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 
 	// Determine if we're in overlap period (should cache to both maps)
 	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
-	inOverlapPeriod := blocksSinceWindowStart >= compactWitnessCacheOverlapSize
+	var overlapStartOffset uint64
+	if compactWitnessCacheOverlapSize >= compactWitnessCacheWindowSize {
+		overlapStartOffset = 0
+	} else {
+		overlapStartOffset = compactWitnessCacheWindowSize - compactWitnessCacheOverlapSize
+	}
+	inOverlapPeriod := compactWitnessCacheOverlapSize > 0 && blocksSinceWindowStart >= overlapStartOffset
 
 	cachedToActive := 0
 	cachedToNext := 0
