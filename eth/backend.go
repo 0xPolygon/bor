@@ -51,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/preconfs"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
@@ -220,14 +221,21 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		closeCh:         make(chan struct{}),
 	}
 
-	// START: Bor changes
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
+	// Initialise a multi client based on block producer's rpc endpoints.
+	multiClient := preconfs.NewMultiClient([]string{"https://polygon-rpc.com"})
+
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, multiClient}
 	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("------Unprotected transactions allowed-------")
+		log.Info("Unprotected transactions allowed")
 		config.TxPool.AllowUnprotectedTxs = true
 	}
 
-	gpoParams := config.GPO
+	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
+	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
+
+	// BOR changes
+	eth.APIBackend.gpo.ProcessCache()
+	// BOR changes
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
@@ -323,18 +331,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Set blockchain reference for fork detection in whitelist service
 	checker.SetBlockchain(eth.blockchain)
 
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
-
-	// bor: this is nor present in geth
-	/*
-		_ = eth.engine.VerifyHeader(eth.blockchain, eth.blockchain.CurrentHeader()) // TODO think on it
-	*/
-
-	// BOR changes
-	eth.APIBackend.gpo.ProcessCache()
-	// BOR changes
-
 	// Initialize filtermaps log index.
 	fmConfig := filtermaps.Config{
 		History:        config.LogHistory,
@@ -421,13 +417,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetExtra(makeExtraData(config.Miner.ExtraData))
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
-
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
-	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("Unprotected transactions allowed")
-	}
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
 
 	// Start the RPC service
 	eth.netRPCService = ethapi.NewNetAPI(eth.p2pServer, config.NetworkId)

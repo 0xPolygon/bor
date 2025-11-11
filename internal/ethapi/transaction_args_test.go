@@ -340,7 +340,10 @@ func (b *backendMock) RPCGasCap() uint64                 { return 0 }
 func (b *backendMock) RPCEVMTimeout() time.Duration      { return time.Second }
 func (b *backendMock) RPCTxFeeCap() float64              { return 0 }
 func (b *backendMock) UnprotectedAllowed() bool          { return false }
-func (b *backendMock) SetHead(number uint64)             {}
+func (b *backendMock) ValidateTxInclusion(tx *types.Transaction, sender common.Address) bool {
+	return false
+}
+func (b *backendMock) SetHead(number uint64) {}
 func (b *backendMock) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	//nolint:nilnil
 	return nil, nil

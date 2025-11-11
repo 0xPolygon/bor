@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/preconfs"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -54,6 +55,9 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
+
+	// multi-client instance to validate tx inclusion for preconfs
+	multiClient *preconfs.MultiClient
 }
 
 // ChainConfig returns the active chain configuration.
@@ -487,6 +491,13 @@ func (b *EthAPIBackend) TxPool() *txpool.TxPool {
 
 func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
 	return b.eth.txPool.SubscribeTransactions(ch, true)
+}
+
+func (b *EthAPIBackend) ValidateTxInclusion(tx *types.Transaction, sender common.Address) bool {
+	if b.multiClient == nil {
+		return false
+	}
+	return b.multiClient.ValidateTxInclusionInMempool(tx, sender)
 }
 
 func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {

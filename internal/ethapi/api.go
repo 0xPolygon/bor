@@ -1958,6 +1958,29 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	return SubmitTransaction(ctx, api.b, tx)
 }
 
+func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (bool, error) {
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return false, err
+	}
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+	if err != nil {
+		return false, err
+	}
+	log.Info("Submitted transaction for preconfs", "hash", hash.Hex())
+
+	// TODO: Do we want to validate against local mempool or not? Good option but
+	// can give wrong result if node is out of sync.
+	head := api.b.CurrentBlock()
+	signer := types.MakeSigner(api.b.ChainConfig(), head.Number, head.Time)
+	from, err := types.Sender(signer, tx)
+
+	// TODO: Rough time to propagate tx to the block producer, make it a loop later
+	time.Sleep(500 * time.Millisecond)
+
+	return api.b.ValidateTxInclusion(tx, from), nil
+}
+
 // Sign calculates an ECDSA signature for:
 // keccak256("\x19Ethereum Signed Message:\n" + len(message) + message).
 //
