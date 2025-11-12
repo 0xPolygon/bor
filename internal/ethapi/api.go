@@ -1979,9 +1979,6 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	signer := types.MakeSigner(api.b.ChainConfig(), head.Number, head.Time)
 	from, err := types.Sender(signer, tx)
 
-	// TODO: Rough time to propagate tx to the block producer, make it a loop later
-	time.Sleep(500 * time.Millisecond)
-
 	return api.b.ValidateTxInclusionForPreconf(tx, from), nil
 }
 
