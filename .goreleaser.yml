@@ -6,6 +6,36 @@ release:
   prerelease: auto
 
 builds:
+  - id: darwin-amd64
+    main: ./cmd/cli
+    binary: bor
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    env:
+      - CC=o64-clang
+      - CXX=o64-clang++
+    tags:
+      - netgo
+    ldflags:
+      -s -w
+
+  - id: darwin-arm64
+    main: ./cmd/cli
+    binary: bor
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    env:
+      - CC=oa64-clang
+      - CXX=oa64-clang++
+    tags:
+      - netgo
+    ldflags:
+      -s -w
+
   - id: linux-amd64
     main: ./cmd/cli
     binary: bor
@@ -38,47 +68,52 @@ builds:
       # We need to build a static binary because we are building in a glibc based system and running in a musl container 
       -s -w -extldflags "-static"
 
-# Disable package generation to save disk space
-# nfpms:
-#   - vendor: 0xPolygon
-#     homepage: https://polygon.technology
-#     maintainer: Polygon Team <team@polygon.technology>
-#     description: Polygon Blockchain
-#     license: GPLv3 LGPLv3
-#     bindir: /usr/local/bin
-#     formats:
-#       - apk
-#       - deb
-#       - rpm
-#     contents:
-#       - dst: /var/lib/bor
-#         type: dir
-#         file_info:
-#           mode: 0777
-#       - src: builder/files/bor.service
-#         dst: /lib/systemd/system/bor.service
-#         type: config
-#       - src: builder/files/genesis-mainnet-v1.json
-#         dst: /etc/bor/genesis-mainnet-v1.json
-#         type: config
-#       - src: builder/files/genesis-testnet-v4.json
-#         dst: /etc/bor/genesis-testnet-v4.json
-#         type: config
-#       - src: builder/files/genesis-amoy.json
-#         dst: /etc/bor/genesis-amoy.json
-#         type: config
-#       - src: builder/files/config.toml
-#         dst: /var/lib/bor/config.toml
-#         type: config
-#     scripts:
-#       postinstall: builder/files/bor-post-install.sh
+nfpms:
+  - vendor: 0xPolygon
+    homepage: https://polygon.technology
+    maintainer: Polygon Team <team@polygon.technology>
+    description: Polygon Blockchain
+    license: GPLv3 LGPLv3
+
+    bindir: /usr/local/bin
+
+    formats:
+      - apk
+      - deb
+      - rpm
+
+    contents:
+      - dst: /var/lib/bor
+        type: dir
+        file_info:
+          mode: 0777
+      - src: builder/files/bor.service
+        dst: /lib/systemd/system/bor.service
+        type: config
+      - src: builder/files/genesis-mainnet-v1.json
+        dst: /etc/bor/genesis-mainnet-v1.json
+        type: config
+      - src: builder/files/genesis-testnet-v4.json
+        dst: /etc/bor/genesis-testnet-v4.json
+        type: config
+      - src: builder/files/genesis-amoy.json
+        dst: /etc/bor/genesis-amoy.json
+        type: config
+      - src: builder/files/config.toml
+        dst: /var/lib/bor/config.toml
+        type: config
+
+    scripts:
+      postinstall: builder/files/bor-post-install.sh
 
 snapshot:
   name_template: "{{ .Tag }}.next"
 
 dockers:
   - image_templates:
-      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
+      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}
+      - bbaktaeho/{{ .ProjectName }}:fix-concurrent-map
+      - bbaktaeho/{{ .ProjectName }}:latest
     dockerfile: Dockerfile.release
     use: buildx
     goarch: amd64
@@ -90,36 +125,6 @@ dockers:
       - builder/files/genesis-mainnet-v1.json
       - builder/files/genesis-testnet-v4.json
       - builder/files/genesis-amoy.json
-
-  - image_templates:
-      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
-    dockerfile: Dockerfile.release
-    use: buildx
-    goarch: arm64
-    ids:
-      - linux-arm64
-    build_flag_templates:
-      - --platform=linux/arm64/v8
-    extra_files:
-      - builder/files/genesis-mainnet-v1.json
-      - builder/files/genesis-testnet-v4.json
-      - builder/files/genesis-amoy.json
-
-docker_manifests:
-  - name_template: bbaktaeho/{{ .ProjectName }}:{{ .Version }}
-    image_templates:
-      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
-      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
-
-  - name_template: bbaktaeho/{{ .ProjectName }}:fix-concurrent-map
-    image_templates:
-    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
-    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
-
-  - name_template: bbaktaeho/{{ .ProjectName }}:latest
-    image_templates:
-    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
-    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
 
 announce:
   slack:
