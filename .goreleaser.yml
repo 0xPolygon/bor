@@ -111,7 +111,7 @@ snapshot:
 
 dockers:
   - image_templates:
-      - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-amd64
+      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
     dockerfile: Dockerfile.release
     use: buildx
     goarch: amd64
@@ -125,7 +125,7 @@ dockers:
       - builder/files/genesis-amoy.json
 
   - image_templates:
-      - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-arm64
+      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
     dockerfile: Dockerfile.release
     use: buildx
     goarch: arm64
@@ -139,15 +139,20 @@ dockers:
       - builder/files/genesis-amoy.json
 
 docker_manifests:
-  - name_template: 0xpolygon/{{ .ProjectName }}:{{ .Version }}
+  - name_template: bbaktaeho/{{ .ProjectName }}:{{ .Version }}
     image_templates:
-      - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-amd64
-      - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-arm64
+      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
+      - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
 
-  - name_template: 0xpolygon/{{ .ProjectName }}:latest
+  - name_template: bbaktaeho/{{ .ProjectName }}:fix-concurrent-map
     image_templates:
-    - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-amd64
-    - 0xpolygon/{{ .ProjectName }}:{{ .Version }}-arm64
+    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
+    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
+
+  - name_template: bbaktaeho/{{ .ProjectName }}:latest
+    image_templates:
+    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-amd64
+    - bbaktaeho/{{ .ProjectName }}:{{ .Version }}-arm64
 
 announce:
   slack:
