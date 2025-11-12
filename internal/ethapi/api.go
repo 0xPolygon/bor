@@ -1959,6 +1959,10 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 }
 
 func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (bool, error) {
+	if !api.b.IsPreconfEnabled() {
+		return false, errors.New("preconf service disabled")
+	}
+
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return false, err
@@ -1978,7 +1982,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	// TODO: Rough time to propagate tx to the block producer, make it a loop later
 	time.Sleep(500 * time.Millisecond)
 
-	return api.b.ValidateTxInclusion(tx, from), nil
+	return api.b.ValidateTxInclusionForPreconf(tx, from), nil
 }
 
 // Sign calculates an ECDSA signature for:

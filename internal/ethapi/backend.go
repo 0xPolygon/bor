@@ -58,8 +58,9 @@ type Backend interface {
 	RPCTxFeeCap() float64          // global tx fee cap for all transaction related APIs
 	UnprotectedAllowed() bool      // allows only for EIP155 transactions.
 
-	// Preconfs
-	ValidateTxInclusion(tx *types.Transaction, sender common.Address) bool // Validate if a tx is included in by the block producers
+	// Preconfs related API
+	IsPreconfEnabled() bool
+	ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool // Validate if a tx is included in by the block producers
 
 	// Blockchain API
 	SetHead(number uint64)

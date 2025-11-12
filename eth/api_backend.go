@@ -493,7 +493,11 @@ func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.S
 	return b.eth.txPool.SubscribeTransactions(ch, true)
 }
 
-func (b *EthAPIBackend) ValidateTxInclusion(tx *types.Transaction, sender common.Address) bool {
+func (b *EthAPIBackend) IsPreconfEnabled() bool {
+	return b.multiClient != nil
+}
+
+func (b *EthAPIBackend) ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool {
 	if b.multiClient == nil {
 		return false
 	}

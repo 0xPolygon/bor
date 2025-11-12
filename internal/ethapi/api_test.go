@@ -482,7 +482,8 @@ func (b testBackend) RPCGasCap() uint64                        { return 10000000
 func (b testBackend) RPCEVMTimeout() time.Duration             { return time.Second }
 func (b testBackend) RPCTxFeeCap() float64                     { return 0 }
 func (b testBackend) UnprotectedAllowed() bool                 { return false }
-func (b testBackend) ValidateTxInclusion(tx *types.Transaction, sender common.Address) bool {
+func (b testBackend) IsPreconfEnabled() bool                   { return false }
+func (b testBackend) ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool {
 	return false
 }
 func (b testBackend) SetHead(number uint64) {}
