@@ -33,6 +33,9 @@ RUN apk add --no-cache bash ca-certificates && \
 WORKDIR ${BOR_DIR}
 
 COPY --from=builder ${BOR_DIR}/build/bin/bor /usr/bin/
+COPY --from=builder ${BOR_DIR}/builder/files/genesis-amoy.json ${BOR_DIR}
+COPY --from=builder ${BOR_DIR}/builder/files/genesis-mainnet-v1.json ${BOR_DIR}
+COPY --from=builder ${BOR_DIR}/builder/files/genesis-testnet-v4.json ${BOR_DIR}
 
 EXPOSE 8545 8546 8547 30303 30303/udp
 
