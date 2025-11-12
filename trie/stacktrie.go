@@ -92,6 +92,25 @@ func (t *StackTrie) Update(key, value []byte) error {
 	return nil
 }
 
+// UpdateHex inserts a (key, value) pair where key is already a hex-nibble slice
+// The key must be strictly ascending across calls.
+func (t *StackTrie) UpdateHex(hexKey, value []byte) error {
+	if len(value) == 0 {
+		return errors.New("trying to insert empty (deletion)")
+	}
+	// Enforce strictly ascending order in nibble space.
+	if bytes.Compare(t.last, hexKey) >= 0 {
+		return errors.New("non-ascending key order")
+	}
+	if t.last == nil {
+		t.last = append([]byte{}, hexKey...)
+	} else {
+		t.last = append(t.last[:0], hexKey...)
+	}
+	t.insert(t.root, hexKey, value, t.pBuf[:0])
+	return nil
+}
+
 // Reset resets the stack trie object to empty state.
 func (t *StackTrie) Reset() {
 	t.root = stPool.Get().(*stNode)
