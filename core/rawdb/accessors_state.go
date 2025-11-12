@@ -319,12 +319,34 @@ func ReadWitness(db ethdb.KeyValueReader, blockHash common.Hash) []byte {
 	return data
 }
 
+func ReadCompactWitness(db ethdb.KeyValueReader, blockHash common.Hash) (uint64, []byte) {
+	log.Debug("ReadCompactWitness", "blockHash", blockHash)
+	data, err := db.Get(compactWitnessKey(blockHash))
+	if err != nil || len(data) == 0 {
+		return 0, nil
+	}
+	meta, err := db.Get(compactWitnessMetaKey(blockHash))
+	if err != nil || len(meta) == 0 {
+		return 0, data
+	}
+	windowStart := binary.BigEndian.Uint64(meta)
+	return windowStart, data
+}
+
 // HasWitness verifies the existence of a witness corresponding to the hash.
 func HasWitness(db ethdb.Reader, blockHash common.Hash) bool {
 	if has, err := db.Has(witnessKey(blockHash)); !has || err != nil {
 		return false
 	}
 
+	return true
+}
+
+// HasCompactWitness verifies the existence of a compact witness corresponding to the hash.
+func HasCompactWitness(db ethdb.Reader, blockHash common.Hash) bool {
+	if has, err := db.Has(compactWitnessKey(blockHash)); !has || err != nil {
+		return false
+	}
 	return true
 }
 
@@ -339,6 +361,16 @@ func ReadWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
 	return &number
 }
 
+func ReadCompactWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
+	log.Debug("ReadCompactWitnessSize", "blockHash", blockHash)
+	data, err := db.Get(compactWitnessSizeKey(blockHash))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	number := binary.BigEndian.Uint64(data)
+	return &number
+}
+
 func WriteWitness(db ethdb.KeyValueWriter, blockHash common.Hash, witness []byte) {
 	log.Debug("WriteWitness", "blockHash", blockHash)
 	if err := db.Put(witnessKey(blockHash), witness); err != nil {
@@ -349,6 +381,19 @@ func WriteWitness(db ethdb.KeyValueWriter, blockHash common.Hash, witness []byte
 	}
 }
 
+func WriteCompactWitness(db ethdb.KeyValueWriter, blockHash common.Hash, windowStart uint64, witness []byte) {
+	log.Debug("WriteCompactWitness", "blockHash", blockHash, "windowStart", windowStart)
+	if err := db.Put(compactWitnessKey(blockHash), witness); err != nil {
+		log.Crit("Failed to store compact witness", "err", err)
+	}
+	if err := db.Put(compactWitnessSizeKey(blockHash), encodeBlockNumber(uint64(len(witness)))); err != nil {
+		log.Crit("Failed to store compact witness size", "err", err)
+	}
+	if err := db.Put(compactWitnessMetaKey(blockHash), encodeBlockNumber(windowStart)); err != nil {
+		log.Crit("Failed to store compact witness metadata", "err", err)
+	}
+}
+
 func DeleteWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
 	log.Debug("DeleteWitness", "blockHash", blockHash)
 	if err := db.Delete(witnessKey(blockHash)); err != nil {
@@ -356,6 +401,19 @@ func DeleteWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
 	}
 	if err := db.Delete(witnessSizeKey(blockHash)); err != nil {
 		log.Crit("Failed to remove witness size", "err", err)
+	}
+}
+
+func DeleteCompactWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
+	log.Debug("DeleteCompactWitness", "blockHash", blockHash)
+	if err := db.Delete(compactWitnessKey(blockHash)); err != nil {
+		log.Crit("Failed to remove compact witness", "err", err)
+	}
+	if err := db.Delete(compactWitnessSizeKey(blockHash)); err != nil {
+		log.Crit("Failed to remove compact witness size", "err", err)
+	}
+	if err := db.Delete(compactWitnessMetaKey(blockHash)); err != nil {
+		log.Crit("Failed to remove compact witness metadata", "err", err)
 	}
 }
 

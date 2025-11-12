@@ -34,6 +34,43 @@ func buildCanonicalChain(t *testing.T, db ethdb.Database, n uint64) []common.Has
 	return hashes
 }
 
+func TestCompactWitnessAccessors(t *testing.T) {
+	db := NewMemoryDatabase()
+	hash := common.HexToHash("0x1")
+	windowStart := uint64(40)
+	payload := []byte{0x10, 0x20, 0x30}
+
+	if ws, data := ReadCompactWitness(db, hash); len(data) != 0 || ws != 0 {
+		t.Fatalf("expected empty compact witness before write")
+	}
+
+	WriteCompactWitness(db, hash, windowStart, payload)
+
+	readWindow, readData := ReadCompactWitness(db, hash)
+	if readWindow != windowStart {
+		t.Fatalf("window mismatch: want %d got %d", windowStart, readWindow)
+	}
+	if len(readData) != len(payload) {
+		t.Fatalf("data length mismatch: want %d got %d", len(payload), len(readData))
+	}
+	for i := range payload {
+		if payload[i] != readData[i] {
+			t.Fatalf("data mismatch at %d", i)
+		}
+	}
+	if size := ReadCompactWitnessSize(db, hash); size == nil || *size != uint64(len(payload)) {
+		t.Fatalf("unexpected compact witness size: %#v", size)
+	}
+	if !HasCompactWitness(db, hash) {
+		t.Fatalf("expected compact witness to exist")
+	}
+
+	DeleteCompactWitness(db, hash)
+	if HasCompactWitness(db, hash) {
+		t.Fatalf("expected compact witness to be deleted")
+	}
+}
+
 // --- test ---
 
 func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
@@ -44,6 +81,7 @@ func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
 	hashes := buildCanonicalChain(t, db, head)
 	for i := uint64(0); i <= head; i++ {
 		WriteWitness(db, hashes[i], []byte{0xAB, 0xCD})
+		WriteCompactWitness(db, hashes[i], 0, []byte{0x01, 0x02})
 	}
 
 	// Strategy: keep only last 5 blocks -> cutoff = 20 - 5 = 15
@@ -68,10 +106,11 @@ func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
 
 	for i := uint64(1); i <= head; i++ {
 		exists := HasWitness(db, hashes[i])
-		if i < cutoff && exists {
+		compactExists := HasCompactWitness(db, hashes[i])
+		if i < cutoff && (exists || compactExists) {
 			badDeleted = append(badDeleted, i)
 		}
-		if i >= cutoff && !exists {
+		if i >= cutoff && (!exists || !compactExists) {
 			badRetained = append(badRetained, i)
 		}
 	}
@@ -106,6 +145,7 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 	// Write witnesses only from 'earliest'..head.
 	for i := earliest; i <= head; i++ {
 		WriteWitness(db, hashes[i], []byte{0xDE, 0xAD})
+		WriteCompactWitness(db, hashes[i], 0, []byte{0x03, 0x04})
 	}
 
 	// Keep only last 10 blocks -> cutoff = 60 - 10 = 50.
@@ -130,6 +170,7 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 
 	for i := uint64(1); i <= head; i++ {
 		exists := HasWitness(db, hashes[i])
+		compactExists := HasCompactWitness(db, hashes[i])
 
 		switch {
 		case i < earliest:
@@ -139,12 +180,12 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 			}
 		case i < cutoff:
 			// These had witnesses originally; must be deleted now.
-			if exists {
+			if exists || compactExists {
 				badDeleted = append(badDeleted, i)
 			}
 		default: // i >= cutoff
 			// Recent witnesses must be retained.
-			if !exists {
+			if !exists || !compactExists {
 				badRetained = append(badRetained, i)
 			}
 		}
