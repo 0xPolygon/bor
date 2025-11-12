@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -12,25 +13,29 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+const (
+	rpcTimeout = time.Second
+	maxRetry   = 5
+	threshold  = int(1) // reduce later based on how testing goes
+)
+
 // MultiClient holds multiple rpc client instances for each block producer
 // to perform certain queries across all of them.
 type MultiClient struct {
-	urls    []string      // valid rpc urls of block producers
 	clients []*rpc.Client // rpc client instances dialed to each block producer
 }
 
-func NewMultiClient(rpcUrls []string) *MultiClient {
-	if len(rpcUrls) == 0 {
+func NewMultiClient(urls []string) *MultiClient {
+	if len(urls) == 0 {
 		return nil
 	}
 
 	var (
-		urls    []string      = make([]string, 0, len(rpcUrls))
-		clients []*rpc.Client = make([]*rpc.Client, 0, len(rpcUrls))
+		clients []*rpc.Client = make([]*rpc.Client, 0, len(urls))
 		failed  int           = 0
 	)
 
-	for _, url := range rpcUrls {
+	for _, url := range urls {
 		// We use the rpc dialer for primarily 2 reasons:
 		// 1. It supports automatic reconnection when connection is lost
 		// 2. It allows us to do rpc queries which aren't directly available in ethclient (like txpool_contentFrom)
@@ -40,18 +45,16 @@ func NewMultiClient(rpcUrls []string) *MultiClient {
 			log.Warn("Failed to dial rpc endpoint for preconf multi-client, skipping", "url", url, "err", err)
 			continue
 		}
-		urls = append(urls, url)
 		clients = append(clients, client)
 	}
 
-	if failed == len(rpcUrls) {
-		log.Info("Failed to dial all rpc endpoints for preconf multi-client, disabling", "count", len(rpcUrls))
+	if failed == len(urls) {
+		log.Info("Failed to dial all rpc endpoints for preconf multi-client, disabling", "count", len(urls))
 		return nil
 	}
 
-	log.Info("Initialised preconf multi-client for each block producer", "count", len(urls), "failed", failed)
+	log.Info("Initialised preconf multi-client for each block producer", "count", len(clients), "failed", failed)
 	return &MultiClient{
-		urls:    urls,
 		clients: clients,
 	}
 }
@@ -74,37 +77,51 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 		return false
 	}
 
-	// TODOs:
-	// 1. Add threshold for acceptance criteria
-	// 2. Add checks to see if the block producers are in sync before checking mempool
-	// 3. Add timeout for each rpc call via context
+	// TODO: check if bp's are in sync or not before validating
 
 	// Check inclusion of given tx against each block producer
-	count := 0
+	validationCount := 0
 	var wg sync.WaitGroup
-	for _, client := range mc.clients {
+	for i, client := range mc.clients {
 		wg.Add(1)
-		go func(client *rpc.Client) {
+		go func(client *rpc.Client, index int) {
 			defer wg.Done()
-			var txsInMempool MinimalTxPoolContent
-			err := client.CallContext(context.Background(), &txsInMempool, "txpool_contentFrom", sender)
-			if err != nil {
-				log.Debug("Failed to get txpool content for sender via preconf multi-client", "sender", sender.Hex(), "err", err)
-			} else {
-				if isTxPresentInPending(tx, sender, txsInMempool) {
-					count++
+
+			tries := 0
+			for {
+				if tries >= maxRetry {
+					break
 				}
+				var txsInMempool MinimalTxPoolContent
+				ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+				err := client.CallContext(ctx, &txsInMempool, "txpool_contentFrom", sender)
+				cancel()
+				if err != nil {
+					tries++
+					log.Info("Failed to get txpool content for sender via preconf multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries, "err", err)
+					continue
+				}
+				isTxPresent := isTxPresentInPending(tx, sender, txsInMempool)
+				if !isTxPresent {
+					tries++
+					log.Info("Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries)
+					time.Sleep(time.Second)
+					continue
+				}
+				validationCount++
+				break
 			}
-		}(client)
+		}(client, i)
 	}
 	wg.Wait()
 
-	// Currently, the acceptance criteria is that the transaction should be present in all
-	// producer's pending mempool. A threshold should be introduced later if needed.
-	if count == len(mc.clients) {
-		return true
+	if validationCount/len(mc.clients) < threshold {
+		log.Info("Transaction not present in enough block producers", "sender", sender.Hex(), "validations", validationCount, "total", len(mc.clients), "threshold", threshold)
+		return false
 	}
-	return false
+
+	log.Info("Tx present in enough block producers", "sender", sender.Hash(), "hash", tx.Hash())
+	return true
 }
 
 func isTxPresentInPending(tx *types.Transaction, sender common.Address, txsInMempool MinimalTxPoolContent) bool {
