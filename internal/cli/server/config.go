@@ -161,6 +161,9 @@ type Config struct {
 
 	// HealthConfig has health check related settings
 	Health *HealthConfig `hcl:"health,block" toml:"health,block"`
+
+	// Preconf has pre-confirmations related settings
+	Preconf *PreconfConfig `hcl:"preconfs,block" toml:"preconfs,block"`
 }
 
 type HistoryConfig struct {
@@ -704,6 +707,12 @@ type WitnessConfig struct {
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 }
 
+type PreconfConfig struct {
+	Enable bool `hcl:"enable,optional" toml:"enable,optional"`
+	// Comma separated rpc endpoints of block producers
+	BpRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
@@ -931,6 +940,10 @@ func DefaultConfig() *Config {
 			WarnGoRoutineThreshold: 0,
 			MinPeerThreshold:       0,
 			WarnPeerThreshold:      0,
+		},
+		Preconf: &PreconfConfig{
+			Enable:         false,
+			BpRpcEndpoints: []string{},
 		},
 	}
 }
@@ -1414,6 +1427,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	// Blind fork acceptance configs
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
+
+	// Preconf related configs
+	n.EnablePreconfs = c.Preconf.Enable
+	n.BpRpcEndpoints = c.Preconf.BpRpcEndpoints
 
 	return &n, nil
 }

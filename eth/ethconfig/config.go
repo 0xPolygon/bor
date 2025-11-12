@@ -260,6 +260,10 @@ type Config struct {
 
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
+
+	// Preconf related configs
+	EnablePreconfs bool
+	BpRpcEndpoints []string // rpc endpoints of block producers
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

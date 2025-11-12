@@ -222,7 +222,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// Initialise a multi client based on block producer's rpc endpoints.
-	multiClient := preconfs.NewMultiClient([]string{"https://polygon-rpc.com"})
+	var multiClient *preconfs.MultiClient
+	if config.EnablePreconfs {
+		multiClient = preconfs.NewMultiClient(config.BpRpcEndpoints)
+	}
 
 	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, multiClient}
 	if eth.APIBackend.allowUnprotectedTxs {
