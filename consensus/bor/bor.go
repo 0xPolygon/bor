@@ -986,10 +986,14 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	var succession int
 	// if signer is not empty
 	if currentSigner.signer != (common.Address{}) {
+		log.Error("Current signer is not nil", "signer", currentSigner.signer)
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
+			log.Error("Error getting signer succession number", "err", err)
 			return err
 		}
+	} else {
+		log.Error("Current signer is nil, cannot set block time")
 	}
 
 	if c.blockTime > 0 && uint64(c.blockTime.Seconds()) < c.config.CalculatePeriod(number) {

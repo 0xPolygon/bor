@@ -247,6 +247,12 @@ func (s *SpanStore) spanByBlockNumber(ctx context.Context, blockNumber uint64) (
 	// that we still check if the block number lies in the range of span before returning it.
 	estimatedSpanId := s.estimateSpanId(blockNumber)
 	defer func() {
+		log.Error("spanByBlockNumber", "blockNumber", blockNumber, "estimatedSpanId", estimatedSpanId, "foundSpanId", func() uint64 {
+			if res != nil {
+				return res.Id
+			}
+			return 0
+		}(), "err", err)
 		if res != nil && len(res.SelectedProducers) > 0 && err == nil {
 			s.lastUsedSpan.Store(res)
 		}
