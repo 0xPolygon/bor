@@ -42,18 +42,18 @@ func NewMultiClient(urls []string) *MultiClient {
 		client, err := rpc.Dial(url)
 		if err != nil {
 			failed++
-			log.Warn("Failed to dial rpc endpoint for preconf multi-client, skipping", "url", url, "err", err)
+			log.Warn("[preconfs] Failed to dial rpc endpoint for preconf multi-client, skipping", "url", url, "err", err)
 			continue
 		}
 		clients = append(clients, client)
 	}
 
 	if failed == len(urls) {
-		log.Info("Failed to dial all rpc endpoints for preconf multi-client, disabling", "count", len(urls))
+		log.Info("[preconfs] Failed to dial all rpc endpoints for preconf multi-client, disabling", "count", len(urls))
 		return nil
 	}
 
-	log.Info("Initialised preconf multi-client for each block producer", "count", len(clients), "failed", failed)
+	log.Info("[preconfs] Initialised preconf multi-client for each block producer", "count", len(clients), "failed", failed)
 	return &MultiClient{
 		clients: clients,
 	}
@@ -77,6 +77,9 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 		return false
 	}
 
+	var d []time.Duration = make([]time.Duration, len(mc.clients))
+	var t []int = make([]int, len(mc.clients))
+
 	// TODO: check if bp's are in sync or not before validating
 
 	// Check inclusion of given tx against each block producer
@@ -86,8 +89,14 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 		wg.Add(1)
 		go func(client *rpc.Client, index int) {
 			defer wg.Done()
-
+			start := time.Now()
 			tries := 0
+			defer func() {
+				d[index] = time.Since(start)
+			}()
+			defer func() {
+				t[index] = tries
+			}()
 			for {
 				if tries >= maxRetry {
 					break
@@ -98,13 +107,13 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 				cancel()
 				if err != nil {
 					tries++
-					log.Info("Failed to get txpool content for sender via preconf multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries, "err", err)
+					log.Info("[preconfs] Failed to get txpool content for sender via preconf multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries, "err", err)
 					continue
 				}
 				isTxPresent := isTxPresentInPending(tx, sender, txsInMempool)
 				if !isTxPresent {
 					tries++
-					log.Info("Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries)
+					log.Info("[preconfs] Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries)
 					time.Sleep(time.Second)
 					continue
 				}
@@ -115,12 +124,14 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 	}
 	wg.Wait()
 
+	log.Info("[preconfs] done with validation, stats", "duration", d, "retries", t)
+
 	if validationCount/len(mc.clients) < threshold {
-		log.Info("Transaction not present in enough block producers", "sender", sender.Hex(), "validations", validationCount, "total", len(mc.clients), "threshold", threshold)
+		log.Info("[preconfs] Transaction not present in enough block producers", "sender", sender.Hex(), "validations", validationCount, "total", len(mc.clients), "threshold", threshold)
 		return false
 	}
 
-	log.Info("Tx present in enough block producers", "sender", sender.Hash(), "hash", tx.Hash())
+	log.Info("[preconfs] Tx present in enough block producers", "sender", sender.Hash(), "hash", tx.Hash())
 	return true
 }
 

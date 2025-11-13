@@ -1979,7 +1979,10 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	signer := types.MakeSigner(api.b.ChainConfig(), head.Number, head.Time)
 	from, err := types.Sender(signer, tx)
 
-	return api.b.ValidateTxInclusionForPreconf(tx, from), nil
+	start := time.Now()
+	valid := api.b.ValidateTxInclusionForPreconf(tx, from)
+	log.Info("Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
+	return valid, nil
 }
 
 // Sign calculates an ECDSA signature for:
