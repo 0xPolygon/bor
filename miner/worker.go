@@ -1483,10 +1483,16 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		appendMap(normalBlobTxs)
 
 		// start warm reader cache
-		if len(txs) > 0 {
+		if len(txs) > 0 && w.chain.WarmInWorkerEnabled() {
 			tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, txs, vm.Config{})
 			numProcs := max(1, 4*runtime.NumCPU()/5)
-			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+			if w.chain.WaitForWarmEnabled() {
+				_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+			} else {
+				go func() {
+					_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+				}()
+			}
 		}
 	}
 

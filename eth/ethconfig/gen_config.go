@@ -28,6 +28,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		NoPruning                            bool
 		NoPrefetch                           bool
 		WaitForWarm                          bool
+		WarmInWorker                         bool
 		TxLookupLimit                        uint64 `toml:",omitempty"`
 		TransactionHistory                   uint64 `toml:",omitempty"`
 		LogHistory                           uint64 `toml:",omitempty"`
@@ -96,6 +97,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.NoPruning = c.NoPruning
 	enc.NoPrefetch = c.NoPrefetch
 	enc.WaitForWarm = c.WaitForWarm
+	enc.WarmInWorker = c.WarmInWorker
 	enc.TxLookupLimit = c.TxLookupLimit
 	enc.TransactionHistory = c.TransactionHistory
 	enc.LogHistory = c.LogHistory
@@ -164,6 +166,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		NoPruning                            *bool
 		NoPrefetch                           *bool
 		WaitForWarm                          *bool
+		WarmInWorker                         *bool
 		TxLookupLimit                        *uint64 `toml:",omitempty"`
 		TransactionHistory                   *uint64 `toml:",omitempty"`
 		LogHistory                           *uint64 `toml:",omitempty"`
@@ -252,6 +255,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.WaitForWarm != nil {
 		c.WaitForWarm = *dec.WaitForWarm
+	}
+	if dec.WarmInWorker != nil {
+		c.WarmInWorker = *dec.WarmInWorker
 	}
 	if dec.TxLookupLimit != nil {
 		c.TxLookupLimit = *dec.TxLookupLimit

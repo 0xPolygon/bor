@@ -106,6 +106,8 @@ type Config struct {
 	NoPruning   bool // Whether to disable pruning and flush everything to disk
 	NoPrefetch  bool // Whether to disable prefetching and only load state on demand
 	WaitForWarm bool // If true, block execution waits for warm-up to finish
+	// If true, warm-up runs in miner worker (not during import).
+	WarmInWorker bool
 
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.

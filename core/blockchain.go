@@ -202,10 +202,11 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch  bool            // Whether to disable heuristic state prefetching when processing blocks
-	WaitForWarm bool            // If true, block execution waits for the warm-up to finish
-	Overrides   *ChainOverrides // Optional chain config overrides
-	VmConfig    vm.Config       // Config options for the EVM Interpreter
+	NoPrefetch   bool            // Whether to disable heuristic state prefetching when processing blocks
+	WaitForWarm  bool            // If true, block execution waits for the warm-up to finish
+	WarmInWorker bool            // If true, warming is done in miner worker; import-time warming is disabled
+	Overrides    *ChainOverrides // Optional chain config overrides
+	VmConfig     vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -239,6 +240,7 @@ func DefaultConfig() *BlockChainConfig {
 		// This is appropriate for most unit tests.
 		TxLookupLimit: -1,
 		VmConfig:      vm.Config{},
+		WarmInWorker:  false,
 	}
 }
 
@@ -4363,7 +4365,7 @@ type warmOutcome struct {
 // StartWarmReaderCache launches a goroutine to warm up a state reader's cache
 func (bc *BlockChain) StartWarmReaderCache(parentRoot common.Hash, b *types.Block) <-chan warmOutcome {
 	ch := make(chan warmOutcome, 1)
-	if b == nil || len(b.Transactions()) == 0 || bc.prefetcher == nil {
+	if b == nil || len(b.Transactions()) == 0 || bc.prefetcher == nil || (bc.cfg != nil && bc.cfg.WarmInWorker) {
 		close(ch)
 		return ch
 	}
@@ -4388,6 +4390,14 @@ func (bc *BlockChain) WaitForWarmEnabled() bool {
 		return false
 	}
 	return bc.cfg.WaitForWarm
+}
+
+// WarmInWorkerEnabled reports whether warming should be done in miner worker.
+func (bc *BlockChain) WarmInWorkerEnabled() bool {
+	if bc.cfg == nil {
+		return false
+	}
+	return bc.cfg.WarmInWorker
 }
 
 // NewStateWithReader creates a new StateDB bound to the given reader for the root.
