@@ -95,6 +95,66 @@ type ExecutionTask struct {
 	blockContext vm.BlockContext
 }
 
+// NewWarmExecTasks creates a list of ExecutionTask objects for warming up the state reader cache.
+func NewWarmExecTasks(bc *BlockChain, chainCfg *params.ChainConfig, header *types.Header, baseState *state.StateDB, coinbase common.Address, txs []*types.Transaction, evmCfg vm.Config) ([]blockstm.ExecTask, error) {
+	tasks := make([]blockstm.ExecTask, 0, len(txs))
+	if len(txs) == 0 {
+		return tasks, nil
+	}
+
+	finalState := baseState.Copy()
+	var (
+		receipts types.Receipts
+		allLogs  []*types.Log
+		usedGas  = new(uint64)
+	)
+	// Create block and EVM block context
+	blockNumber := header.Number
+	blockHash := header.Hash()
+	blockTime := header.Time
+	blockCtx := NewEVMBlockContext(header, bc, &coinbase)
+	shouldDelayFeeCal := false
+
+	for i, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
+		msg, err := TransactionToMessage(tx, types.MakeSigner(chainCfg, header.Number, header.Time), header.BaseFee)
+		if err != nil {
+			continue
+		}
+		cleanState := baseState.Copy()
+		task := &ExecutionTask{
+			msg:               *msg,
+			config:            chainCfg,
+			gasLimit:          header.GasLimit,
+			blockNumber:       blockNumber,
+			blockHash:         blockHash,
+			blockTime:         blockTime,
+			tx:                tx,
+			index:             i,
+			cleanStateDB:      cleanState,
+			finalStateDB:      finalState,
+			blockChain:        bc,
+			header:            header,
+			evmConfig:         evmCfg,
+			shouldDelayFeeCal: &shouldDelayFeeCal,
+			sender:            msg.From,
+			totalUsedGas:      usedGas,
+			receipts:          &receipts,
+			allLogs:           &allLogs,
+			dependencies:      nil,
+			coinbase:          coinbase,
+			blockContext:      blockCtx,
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
 func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (err error) {
 	task.statedb = task.cleanStateDB.Copy()
 	task.statedb.SetTxContext(task.tx.Hash(), task.index)

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1483,19 +1484,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 		// start warm reader cache
 		if len(txs) > 0 {
-			parent := w.chain.GetHeader(env.header.ParentHash, env.header.Number.Uint64()-1)
-			if parent != nil {
-				synthetic := types.NewBlockWithHeader(env.header).WithBody(types.Body{Transactions: txs})
-				ch := w.chain.StartWarmReaderCache(parent.Root, synthetic)
-				if w.chain.WaitForWarmEnabled() {
-					if res, ok := <-ch; ok && res.Reader != nil {
-						if newState, err := w.chain.NewStateWithReader(parent.Root, res.Reader); err == nil {
-							env.state = newState
-							env.evm = vm.NewEVM(core.NewEVMBlockContext(env.header, w.chain, &env.coinbase), env.state, w.chainConfig, vm.Config{})
-						}
-					}
-				}
-			}
+			tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, txs, vm.Config{})
+			numProcs := max(1, 4*runtime.NumCPU()/5)
+			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
 		}
 	}
 
