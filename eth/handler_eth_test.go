@@ -705,65 +705,88 @@ func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
 	}
 }
 
-const (
-	// Test constants matching core.blockchain.go consensus constants
-	testCacheWindowSize  = 20 // Must match compactWitnessCacheWindowSize
-	testCacheOverlapSize = 10 // Must match compactWitnessCacheOverlapSize
-)
-
-// TestShouldRequestCompactWitness tests the compact witness request decision logic
-// This test validates the critical window and overlap boundaries
-func TestShouldRequestCompactWitness(t *testing.T) {
-	// windowSize=20, overlapSize=10
-	// Windows: [0-19], [20-39], [40-59]...
-	// Overlaps: blocks 10-19, 30-39, 50-59...
-	// Full witness needed at: 0, 10, 20, 30, 40, 50... (window starts and overlap starts)
-
+// TestShouldUseCompactWitness exercises the pure window/overlap decision helper.
+func TestShouldUseCompactWitness(t *testing.T) {
 	tests := []struct {
-		blockNum        uint64
-		cacheWarm       bool
-		expectedCompact bool
-		reason          string
+		name          string
+		cacheWarm     bool
+		parallel      bool
+		windowSize    uint64
+		overlapSize   uint64
+		blockNum      uint64
+		expectCompact bool
 	}{
-		{0, true, false, "window start"},
-		{5, true, true, "before overlap"},
-		{9, true, true, "just before overlap"},
-		{10, true, false, "overlap start - needs full for nextCache"},
-		{11, true, true, "in overlap, after start"},
-		{15, true, true, "middle of overlap"},
-		{19, true, true, "end of window"},
-		{20, true, false, "window start (slide)"},
-		{21, true, true, "after slide"},
-		{30, true, false, "overlap start in second window"},
-		{35, true, true, "in second window overlap"},
-		{40, true, false, "window start in third window"},
-		{50, true, false, "overlap start in third window"},
-		{100, true, false, "window start"},
-		{110, true, false, "overlap start"},
-		{115, true, true, "in overlap"},
-		// Cold cache scenarios: cacheWarm=false forces full witnesses.
-		{5, false, false, "cold cache before overlap"},
-		{15, false, false, "cold cache mid overlap"},
-		{25, false, false, "cold cache mid window"},
-		{35, false, false, "cold cache in overlap of next window"},
+		{
+			name:          "window start always full",
+			cacheWarm:     true,
+			windowSize:    20,
+			overlapSize:   10,
+			blockNum:      0,
+			expectCompact: false,
+		},
+		{
+			name:          "before overlap uses compact",
+			cacheWarm:     true,
+			windowSize:    20,
+			overlapSize:   10,
+			blockNum:      9,
+			expectCompact: true,
+		},
+		{
+			name:          "overlap start needs full",
+			cacheWarm:     true,
+			windowSize:    20,
+			overlapSize:   10,
+			blockNum:      10,
+			expectCompact: false,
+		},
+		{
+			name:          "non symmetric overlap start",
+			cacheWarm:     true,
+			windowSize:    30,
+			overlapSize:   10,
+			blockNum:      20, // windowStart + (windowSize - overlapSize)
+			expectCompact: false,
+		},
+		{
+			name:          "non symmetric before overlap stays compact",
+			cacheWarm:     true,
+			windowSize:    30,
+			overlapSize:   10,
+			blockNum:      10,
+			expectCompact: true,
+		},
+		{
+			name:          "parallel import always full",
+			cacheWarm:     true,
+			parallel:      true,
+			windowSize:    20,
+			overlapSize:   10,
+			blockNum:      25,
+			expectCompact: false,
+		},
+		{
+			name:          "cold cache always full",
+			cacheWarm:     false,
+			windowSize:    20,
+			overlapSize:   10,
+			blockNum:      25,
+			expectCompact: false,
+		},
+		{
+			name:          "zero overlap behaves like no overlap",
+			cacheWarm:     true,
+			windowSize:    20,
+			overlapSize:   0,
+			blockNum:      15,
+			expectCompact: true,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("block_%d_warm_%t_%s", tt.blockNum, tt.cacheWarm, tt.reason), func(t *testing.T) {
-			// Calculate expected result using the same logic as shouldRequestCompactWitness
-			windowSize := uint64(testCacheWindowSize)
-			overlapSize := uint64(testCacheOverlapSize)
-			expectedWindowStart := (tt.blockNum / windowSize) * windowSize
-			blocksSinceWindowStart := tt.blockNum - expectedWindowStart
-
-			isWindowStart := tt.blockNum == expectedWindowStart
-			isOverlapStart := blocksSinceWindowStart == overlapSize
-
-			expectedResult := tt.cacheWarm && !isWindowStart && !isOverlapStart
-
-			require.Equal(t, tt.expectedCompact, expectedResult,
-				"Block %d (%s): logic mismatch - expected compact=%v but logic gives %v",
-				tt.blockNum, tt.reason, tt.expectedCompact, expectedResult)
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUseCompactWitness(tt.cacheWarm, tt.parallel, tt.blockNum, tt.windowSize, tt.overlapSize)
+			require.Equal(t, tt.expectCompact, got)
 		})
 	}
 }

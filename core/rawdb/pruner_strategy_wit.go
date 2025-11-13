@@ -44,6 +44,7 @@ func (w *WitnessStrategy) ReadNumberHashes(db ethdb.Iteratee, from, to uint64) [
 }
 func (w *WitnessStrategy) DeletePerHash(batch ethdb.KeyValueWriter, number uint64, hash common.Hash) {
 	DeleteWitness(batch, hash)
+	DeleteCompactWitness(batch, hash)
 }
 func (w *WitnessStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uint64) {
 	// nothing per height for witnesses

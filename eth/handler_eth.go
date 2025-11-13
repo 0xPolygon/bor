@@ -152,36 +152,54 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 // shouldRequestCompactWitness determines if we should request a compact witness based on
 // the sliding window cache state. Returns true if witness should be compact, false for full.
 func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
-	// Compact witness requires sequential block processing
-	// If parallel import is enabled, cache won't be maintained, so always request full witness
-	if h.chain.IsParallelStatelessImportEnabled() {
-		return false
-	}
-
-	// If the compact cache hasn't been primed yet (e.g. node restarted mid-window),
-	// request full witnesses until we process the next window start.
-	if !h.chain.IsCompactCacheWarm() {
-		return false
-	}
-
-	// Calculate the consensus-aligned window start for the requested block
-	// This must match the sender's calculation to ensure cache consistency
 	windowSize := h.chain.GetCacheWindowSize()
 	overlapSize := h.chain.GetCacheOverlapSize()
-	expectedWindowStart := (blockNum / windowSize) * windowSize
+	return shouldUseCompactWitness(
+		h.chain.IsCompactCacheWarm(),
+		h.chain.IsParallelStatelessImportEnabled(),
+		blockNum,
+		windowSize,
+		overlapSize,
+	)
+}
 
-	// Calculate position within the window
-	blocksSinceWindowStart := blockNum - expectedWindowStart
-
-	// Need full witness at:
-	// 1. Window start (block 0, 20, 40...) - new window begins
-	// 2. Overlap start (block 10, 30, 50...) - pre-warming next window
-	// This ensures nextCacheMap has complete state coverage for the next window
-	if blockNum == expectedWindowStart || blocksSinceWindowStart == overlapSize {
+func shouldUseCompactWitness(cacheWarm bool, parallel bool, blockNum, windowSize, overlapSize uint64) bool {
+	// Compact witness requires sequential block processing.
+	if parallel {
+		return false
+	}
+	// If the compact cache hasn't been warmed yet (e.g. node restarted mid-window),
+	// request full witnesses until we process the next window start.
+	if !cacheWarm {
+		return false
+	}
+	// Without a valid window, fall back to full witnesses.
+	if windowSize == 0 {
 		return false
 	}
 
-	// Block is within window (not at window start or overlap start), can use compact witness
+	// Calculate the consensus-aligned window start for the requested block.
+	expectedWindowStart := (blockNum / windowSize) * windowSize
+	if blockNum == expectedWindowStart {
+		return false
+	}
+
+	// Calculate the first block of the overlap region for this window.
+	if overlapSize == 0 {
+		return true
+	}
+	var overlapStartOffset uint64
+	if overlapSize >= windowSize {
+		overlapStartOffset = 0
+	} else {
+		overlapStartOffset = windowSize - overlapSize
+	}
+	blockAtOverlapStart := expectedWindowStart + overlapStartOffset
+	if blockNum == blockAtOverlapStart {
+		return false
+	}
+
+	// Block is within window (not at window start or overlap start), can use compact witness.
 	return true
 }
 

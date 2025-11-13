@@ -152,9 +152,12 @@ var (
 	configPrefix   = []byte("ethereum-config-")  // config prefix for the db
 	genesisPrefix  = []byte("ethereum-genesis-") // genesis state prefix for the db
 
-	WitnessPrefix         = []byte("witness-")
-	WitnessSizePrefix     = []byte("witnessSize-")
-	WitnessPruneCursorKey = []byte("witnessPruneCursorKey")
+	WitnessPrefix            = []byte("witness-")
+	WitnessSizePrefix        = []byte("witnessSize-")
+	CompactWitnessPrefix     = []byte("cwitness-")
+	CompactWitnessSizePrefix = []byte("cwitnessSize-")
+	CompactWitnessMetaPrefix = []byte("cwitnessMeta-")
+	WitnessPruneCursorKey    = []byte("witnessPruneCursorKey")
 
 	// BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
 	BloomBitsIndexPrefix = []byte("iB")
@@ -282,6 +285,21 @@ func witnessKey(hash common.Hash) []byte {
 // witnessSizeKey = WitnessSizePrefix + hash
 func witnessSizeKey(hash common.Hash) []byte {
 	return append(WitnessSizePrefix, hash.Bytes()...)
+}
+
+// compactWitnessKey = CompactWitnessPrefix + hash
+func compactWitnessKey(hash common.Hash) []byte {
+	return append(CompactWitnessPrefix, hash.Bytes()...)
+}
+
+// compactWitnessSizeKey = CompactWitnessSizePrefix + hash
+func compactWitnessSizeKey(hash common.Hash) []byte {
+	return append(CompactWitnessSizePrefix, hash.Bytes()...)
+}
+
+// compactWitnessMetaKey = CompactWitnessMetaPrefix + hash
+func compactWitnessMetaKey(hash common.Hash) []byte {
+	return append(CompactWitnessMetaPrefix, hash.Bytes()...)
 }
 
 func witnessPruneCursorKey() []byte {

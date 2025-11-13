@@ -2263,6 +2263,20 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		// Manage sliding window for full nodes (mirrors witness-receiving nodes)
 		bc.manageSlidingWindow(block.NumberU64())
 
+		// Persist compact witness representation if sequential cache is active.
+		if !bc.parallelStatelessImportEnabled.Load() {
+			filteredWitness, _, _ := bc.FilterWitnessWithSlidingCache(statedb.Witness())
+			if filteredWitness != nil {
+				var compactBuf bytes.Buffer
+				if err := filteredWitness.EncodeRLP(&compactBuf); err != nil {
+					log.Warn("Failed to encode compact witness", "block", block.NumberU64(), "hash", block.Hash(), "err", err)
+				} else {
+					windowStart := bc.CalculateCacheWindowStart(block.NumberU64())
+					rawdb.WriteCompactWitness(blockBatch, block.Hash(), windowStart, compactBuf.Bytes())
+				}
+			}
+		}
+
 		// Update sliding window cache - allows full nodes to send compact witnesses
 		// For full nodes, witness is generated during execution (no merging), so pass witness.State directly
 		var witnessStates map[string]struct{}
@@ -4269,6 +4283,11 @@ func (bc *BlockChain) GetCompactCacheSizes() (int, int) {
 	return len(bc.activeCacheMap), len(bc.nextCacheMap)
 }
 
+// CalculateCacheWindowStart returns the consensus-aligned window start for the provided block number.
+func (bc *BlockChain) CalculateCacheWindowStart(blockNum uint64) uint64 {
+	return calculateCacheWindowStart(blockNum)
+}
+
 // IsCompactCacheWarm reports whether we've already refilled the cache for the
 // current window by processing a full witness (after startup or the latest slide).
 func (bc *BlockChain) IsCompactCacheWarm() bool {
@@ -4340,7 +4359,13 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 
 	// Determine if we're in overlap period (should cache to both maps)
 	blocksSinceWindowStart := blockNum - bc.cacheWindowStart
-	inOverlapPeriod := blocksSinceWindowStart >= compactWitnessCacheOverlapSize
+	var overlapStartOffset uint64
+	if compactWitnessCacheOverlapSize >= compactWitnessCacheWindowSize {
+		overlapStartOffset = 0
+	} else {
+		overlapStartOffset = compactWitnessCacheWindowSize - compactWitnessCacheOverlapSize
+	}
+	inOverlapPeriod := compactWitnessCacheOverlapSize > 0 && blocksSinceWindowStart >= overlapStartOffset
 
 	cachedToActive := 0
 	cachedToNext := 0

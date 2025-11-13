@@ -222,13 +222,14 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 // This reduces bandwidth by omitting state nodes that the receiver should already have cached.
 func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	activeSize, nextSize := h.chain.GetCompactCacheSizes()
+	currentWindowStart := h.chain.GetCacheWindowStart()
 	log.Info("PSP - handleGetCompactWitness processing request",
 		"peer", peer.ID(),
 		"reqID", req.RequestId,
 		"witnessPages", len(req.WitnessPages),
 		"activeCacheSize", activeSize,
 		"nextCacheSize", nextSize,
-		"windowStart", h.chain.GetCacheWindowStart())
+		"windowStart", currentWindowStart)
 
 	// First, get the full witness data (same as regular handleGetWitness)
 	fullResponse, err := h.handleGetWitness(peer, req)
@@ -246,8 +247,43 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		return fullResponse, nil
 	}
 
-	// Get current cache window start for cache key
-	cacheWindowStart := h.chain.GetCacheWindowStart()
+	seen := make(map[common.Hash]struct{}, len(req.WitnessPages))
+	for _, witnessPage := range req.WitnessPages {
+		seen[witnessPage.Hash] = struct{}{}
+	}
+
+	witnessSize := make(map[common.Hash]uint64, len(seen))
+	for witnessBlockHash := range seen {
+		size := rawdb.ReadWitnessSize(h.Chain().DB(), witnessBlockHash)
+		if size == nil {
+			witnessSize[witnessBlockHash] = 0
+		} else {
+			witnessSize[witnessBlockHash] = *size
+		}
+	}
+
+	type compactDiskEntry struct {
+		windowStart uint64
+		data        []byte
+		size        uint64
+	}
+
+	blockNumbers := make(map[common.Hash]uint64, len(seen))
+	compactDisk := make(map[common.Hash]*compactDiskEntry, len(seen))
+	for hash := range seen {
+		if header := h.chain.GetHeaderByHash(hash); header != nil {
+			blockNumbers[hash] = header.Number.Uint64()
+		}
+		if windowStart, data := rawdb.ReadCompactWitness(h.chain.DB(), hash); len(data) > 0 {
+			compactDisk[hash] = &compactDiskEntry{
+				windowStart: windowStart,
+				data:        data,
+				size:        uint64(len(data)),
+			}
+		}
+	}
+
+	totalResponsePayloadDataAmount := 0
 
 	// Now filter each witness page by removing cached states
 	var filteredResponse wit.WitnessPacketResponse
@@ -255,6 +291,12 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 	totalFilteredBytes := 0
 
 	for _, witnessPage := range fullResponse {
+		var witnessPageResponse wit.WitnessPageResponse
+		witnessPageResponse.Page = witnessPage.Page
+		witnessPageResponse.Hash = witnessPage.Hash
+		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize
+		witnessPageResponse.TotalPages = totalPages
+
 		if len(witnessPage.Data) == 0 {
 			// Empty page, just pass through
 			filteredResponse = append(filteredResponse, witnessPage)
@@ -265,9 +307,41 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		totalOriginalBytes += originalSize
 
 		// Check cache first
+		blockNum, haveBlockNum := blockNumbers[witnessPage.Hash]
+		var expectedWindowStart uint64
+		if haveBlockNum {
+			expectedWindowStart = h.chain.CalculateCacheWindowStart(blockNum)
+		}
+
+		if entry, ok := compactDisk[witnessPage.Hash]; ok && haveBlockNum && entry.windowStart == expectedWindowStart {
+			totalPages = (entry.size + PageSize - 1) / PageSize
+			witnessPageResponse.TotalPages = totalPages
+			if witnessPage.Page < totalPages {
+				start := PageSize * witnessPage.Page
+				end := start + PageSize
+				if end > entry.size {
+					end = entry.size
+				}
+				witnessPageResponse.Data = entry.data[start:end]
+				totalResponsePayloadDataAmount += len(witnessPageResponse.Data)
+			}
+			filteredResponse = append(filteredResponse, witnessPageResponse)
+			if totalResponsePayloadDataAmount >= MaximumResponseSize {
+				return nil, errors.New("response exceeds maximum p2p payload size")
+			}
+			continue
+		}
+
+		compactWitnessCacheMissMeter.Mark(1)
+
+		if totalPages == 0 {
+			filteredResponse = append(filteredResponse, witnessPageResponse)
+			continue
+		}
+
 		cacheKey := compactWitnessCacheKey{
 			hash:        witnessPage.Hash,
-			windowStart: cacheWindowStart,
+			windowStart: expectedWindowStart,
 		}
 
 		(*handler)(h).compactWitnessCacheLock.RLock()
@@ -277,11 +351,11 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		if cacheHit {
 			compactWitnessCacheHitMeter.Mark(1)
 
-			filteredPage := wit.WitnessPageResponse{
-				Data:       cachedFiltered,
-				Hash:       witnessPage.Hash,
-				Page:       witnessPage.Page,
-				TotalPages: witnessPage.TotalPages,
+			witnessPageResponse.Data = cachedFiltered
+			filteredResponse = append(filteredResponse, witnessPageResponse)
+			totalResponsePayloadDataAmount += len(cachedFiltered)
+			if totalResponsePayloadDataAmount >= MaximumResponseSize {
+				return nil, errors.New("response exceeds maximum p2p payload size")
 			}
 			filteredSize := len(cachedFiltered)
 			totalFilteredBytes += filteredSize
@@ -296,15 +370,10 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 				"reductionPercent", fmt.Sprintf("%.2f", reduction),
 				"activeCacheSize", activeSize,
 				"nextCacheSize", nextSize,
-				"windowStart", cacheWindowStart)
-
-			filteredResponse = append(filteredResponse, filteredPage)
+				"windowStart", expectedWindowStart)
 			continue
 		}
 
-		compactWitnessCacheMissMeter.Mark(1)
-
-		// Cache miss: decode, filter, and encode
 		witness, err := stateless.GetWitnessFromRlp(witnessPage.Data)
 		if err != nil {
 			log.Warn("PSP - Failed to decode witness for filtering", "hash", witnessPage.Hash, "err", err)
@@ -313,10 +382,8 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			continue
 		}
 
-		// Filter witness using sliding window cache
 		filteredWitness := h.filterWitnessWithCache(witness)
 
-		// Re-encode the filtered witness
 		var filteredBuf []byte
 		if filteredWitness != nil {
 			var buf bytes.Buffer
@@ -330,19 +397,20 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			filteredBuf = buf.Bytes()
 		}
 
-		// Store in cache
 		(*handler)(h).compactWitnessCacheLock.Lock()
 		(*handler)(h).compactWitnessCache.Add(cacheKey, filteredBuf)
 		(*handler)(h).compactWitnessCacheLock.Unlock()
 
-		// Create filtered page response
-		filteredPage := wit.WitnessPageResponse{
-			Data:       filteredBuf,
-			Hash:       witnessPage.Hash,
-			Page:       witnessPage.Page,
-			TotalPages: witnessPage.TotalPages,
+		if haveBlockNum && len(filteredBuf) > 0 {
+			rawdb.WriteCompactWitness(h.chain.DB(), witnessPage.Hash, expectedWindowStart, filteredBuf)
 		}
-		filteredResponse = append(filteredResponse, filteredPage)
+
+		witnessPageResponse.Data = filteredBuf
+		filteredResponse = append(filteredResponse, witnessPageResponse)
+		totalResponsePayloadDataAmount += len(filteredBuf)
+		if totalResponsePayloadDataAmount >= MaximumResponseSize {
+			return nil, errors.New("response exceeds maximum p2p payload size")
+		}
 
 		filteredSize := len(filteredBuf)
 		totalFilteredBytes += filteredSize
@@ -357,7 +425,7 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			"reductionPercent", fmt.Sprintf("%.2f", reduction),
 			"activeCacheSize", activeSize,
 			"nextCacheSize", nextSize,
-			"windowStart", cacheWindowStart)
+			"windowStart", expectedWindowStart)
 	}
 
 	activeSizeEnd, nextSizeEnd := h.chain.GetCompactCacheSizes()
@@ -379,7 +447,7 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		"totalReductionPercent", reductionPercent,
 		"activeCacheSize", activeSizeEnd,
 		"nextCacheSize", nextSizeEnd,
-		"windowStart", h.chain.GetCacheWindowStart())
+		"windowStart", currentWindowStart)
 	return filteredResponse, nil
 }
 
