@@ -355,10 +355,6 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		(*handler)(h).compactWitnessCache.Add(cacheKey, filteredBuf)
 		(*handler)(h).compactWitnessCacheLock.Unlock()
 
-		if haveBlockNum && len(filteredBuf) > 0 {
-			rawdb.WriteCompactWitness(h.chain.DB(), witnessPage.Hash, expectedWindowStart, filteredBuf)
-		}
-
 		witnessPageResponse.Data = filteredBuf
 		filteredResponse = append(filteredResponse, witnessPageResponse)
 		totalResponsePayloadDataAmount += len(filteredBuf)
