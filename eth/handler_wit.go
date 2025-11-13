@@ -275,6 +275,10 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			blockNumbers[hash] = header.Number.Uint64()
 		}
 		if windowStart, data := rawdb.ReadCompactWitness(h.chain.DB(), hash); len(data) > 0 {
+			log.Info("PSP - Loaded compact witness from disk",
+				"hash", hash,
+				"windowStart", windowStart,
+				"bytes", len(data))
 			compactDisk[hash] = &compactDiskEntry{
 				windowStart: windowStart,
 				data:        data,
@@ -403,6 +407,11 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 
 		if haveBlockNum && len(filteredBuf) > 0 {
 			rawdb.WriteCompactWitness(h.chain.DB(), witnessPage.Hash, expectedWindowStart, filteredBuf)
+			log.Info("PSP - Stored compact witness to disk",
+				"hash", witnessPage.Hash,
+				"blockNum", blockNum,
+				"windowStart", expectedWindowStart,
+				"bytes", len(filteredBuf))
 		}
 
 		witnessPageResponse.Data = filteredBuf

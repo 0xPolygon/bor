@@ -2273,6 +2273,11 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 				} else {
 					windowStart := bc.CalculateCacheWindowStart(block.NumberU64())
 					rawdb.WriteCompactWitness(blockBatch, block.Hash(), windowStart, compactBuf.Bytes())
+					log.Info("PSP - Stored compact witness after import",
+						"block", block.NumberU64(),
+						"hash", block.Hash(),
+						"windowStart", windowStart,
+						"bytes", compactBuf.Len())
 				}
 			}
 		}
