@@ -1958,20 +1958,20 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	return SubmitTransaction(ctx, api.b, tx)
 }
 
-func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (bool, error) {
+func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
 	if !api.b.IsPreconfEnabled() {
-		return false, errors.New("preconf service disabled")
+		return common.Hash{}, errors.New("preconf service disabled")
 	}
 
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
-		return false, err
+		return common.Hash{}, err
 	}
 	hash, err := SubmitTransaction(ctx, api.b, tx)
 	if err != nil {
-		return false, err
+		return common.Hash{}, err
 	}
-	log.Info("Submitted transaction for preconfs", "hash", hash.Hex())
+	log.Info("[preconfs] Submitted transaction for preconfs", "hash", hash.Hex())
 
 	// TODO: Do we want to validate against local mempool or not? Good option but
 	// can give wrong result if node is out of sync.
@@ -1981,8 +1981,12 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 
 	start := time.Now()
 	valid := api.b.ValidateTxInclusionForPreconf(tx, from)
-	log.Info("Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
-	return valid, nil
+	if valid {
+		log.Info("[preconfs] ✅ Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
+	} else {
+		log.Info("[preconfs] ❌ Unable to offer preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
+	}
+	return hash, nil
 }
 
 // Sign calculates an ECDSA signature for:
