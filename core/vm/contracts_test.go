@@ -439,7 +439,6 @@ func TestPrecompiledP256Verify(t *testing.T) {
 // BOR: if this test failed, it means you should include PrecompiledP256Verify in the PrecompiledContracts
 // TODO: handle when common.BytesToAddress([]byte{0x01, 0x00}) will colide a new Ethereum's precompile
 func TestPrecompiledP256VerifyAlwaysAvailableInHFs(t *testing.T) {
-
 	chainConfigs := []*params.ChainConfig{params.BorMainnetChainConfig, params.AmoyChainConfig}
 	for _, chainConfig := range chainConfigs {
 		latestHfRules := chainConfig.Rules(big.NewInt(math.MaxInt64), true, 0)
