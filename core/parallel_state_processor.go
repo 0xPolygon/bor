@@ -434,6 +434,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		}
 	}
 
+	if header.Number.Uint64() == 29_020_820 {
+		log.Info("[debug] returning result from parallel state processor", "gasUsed", *usedGas)
+	}
+
 	return &ProcessResult{
 		Receipts: receipts,
 		Requests: requests,

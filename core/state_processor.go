@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -101,6 +102,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 
+	if header.Number.Uint64() == 29_020_820 {
+		log.Info("[debug] about to execute", "txs", len(block.Transactions()))
+	}
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		// Check if execution should be cancelled or not
@@ -123,6 +128,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, usedGas, evm, nil)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+
+		if header.Number.Uint64() == 29_020_820 {
+			log.Info("[debug] done tx execution", "gasUsed", receipt.GasUsed, "cumulativeGasUsed", receipt.CumulativeGasUsed)
 		}
 
 		receipts = append(receipts, receipt)
@@ -159,6 +168,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
 		}
+	}
+
+	if header.Number.Uint64() == 29_020_820 {
+		log.Info("[debug] returning processed result", "gasUsed", *usedGas)
 	}
 
 	return &ProcessResult{
