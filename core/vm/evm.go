@@ -245,6 +245,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 				"from", caller,
 				"type", "CALL",
 				"gas", gas,
+				"input", string(input),
 			)
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 			usedGas := startGas - gas
@@ -253,6 +254,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 				"txIndex", evm.StateDB.Inner().TxIndex(),
 				"usedGas", usedGas,
 				"error", err,
+				"output", string(ret),
 			)
 		} else {
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
@@ -333,6 +335,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 				"from", caller,
 				"type", "CALLCODE",
 				"gas", gas,
+				"input", string(input),
 			)
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 			usedGas := startGas - gas
@@ -341,6 +344,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 				"txIndex", evm.StateDB.Inner().TxIndex(),
 				"usedGas", usedGas,
 				"error", err,
+				"output", string(ret),
 			)
 		} else {
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
@@ -400,6 +404,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 				"from", caller,
 				"type", "DELEGATECALL",
 				"gas", gas,
+				"input", string(input),
 			)
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 			usedGas := startGas - gas
@@ -408,6 +413,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 				"txIndex", evm.StateDB.Inner().TxIndex(),
 				"usedGas", usedGas,
 				"error", err,
+				"output", string(ret),
 			)
 		} else {
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
@@ -476,6 +482,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 				"from", caller,
 				"type", "STATICCALL",
 				"gas", gas,
+				"input", string(input),
 			)
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 			usedGas := startGas - gas
@@ -484,6 +491,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 				"txIndex", evm.StateDB.Inner().TxIndex(),
 				"usedGas", usedGas,
 				"error", err,
+				"output", string(ret),
 			)
 		} else {
 			ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
