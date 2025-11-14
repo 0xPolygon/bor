@@ -102,10 +102,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 
-	if header.Number.Uint64() == 29_020_820 {
-		log.Info("[debug] about to execute", "txs", len(block.Transactions()))
-	}
-
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		// Check if execution should be cancelled or not
@@ -131,7 +127,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 
 		if header.Number.Uint64() == 29_020_820 {
-			log.Info("[debug] done tx execution", "gasUsed", receipt.GasUsed, "cumulativeGasUsed", receipt.CumulativeGasUsed)
+			log.Info("[debug] done tx execution serial", "gasUsed", receipt.GasUsed, "cumulativeGasUsed", receipt.CumulativeGasUsed)
 		}
 
 		receipts = append(receipts, receipt)
@@ -171,7 +167,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	if header.Number.Uint64() == 29_020_820 {
-		log.Info("[debug] returning processed result", "gasUsed", *usedGas)
+		log.Info("[debug] returning processed result serial", "gasUsed", *usedGas)
 	}
 
 	return &ProcessResult{

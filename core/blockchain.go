@@ -800,6 +800,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}()
 	}
 
+	time.Sleep(500 * time.Millisecond)
+
 	result := <-resultChan
 
 	if result.parallel && result.err != nil {
