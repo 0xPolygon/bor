@@ -668,7 +668,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if block.NumberU64() == 29020900 {
+	if block.NumberU64() == 29020819 {
 		return nil, nil, 0, nil, 0, errors.New("intentional error at block 29020900 for testing")
 	}
 
@@ -799,8 +799,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false}
 		}()
 	}
-
-	time.Sleep(500 * time.Millisecond)
 
 	result := <-resultChan
 
