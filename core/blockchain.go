@@ -668,7 +668,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if block.NumberU64() == 29020819 {
+	if block.NumberU64() == 29020819 || block.NumberU64() == 29020900 {
 		return nil, nil, 0, nil, 0, errors.New("intentional error at block 29020900 for testing")
 	}
 
