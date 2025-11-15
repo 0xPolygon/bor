@@ -879,6 +879,7 @@ type BorConfig struct {
 	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -928,6 +929,10 @@ func (c *BorConfig) IsBhilai(number *big.Int) bool {
 
 func (c *BorConfig) IsRio(number *big.Int) bool {
 	return isBlockForked(c.RioBlock, number)
+}
+
+func (c *BorConfig) IsMadhugiri(number *big.Int) bool {
+	return isBlockForked(c.MadhugiriBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
