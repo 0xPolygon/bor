@@ -603,6 +603,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if block.NumberU64() == 29020821 {
+		return nil, nil, 0, nil, 0, fmt.Errorf("intentional failure at block 29020821 for testing")
+	}
+
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 		bc.logger.OnBlockStart(tracing.BlockEvent{
