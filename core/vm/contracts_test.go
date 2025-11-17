@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -439,19 +440,83 @@ func TestPrecompiledP256Verify(t *testing.T) {
 // BOR: if this test failed, it means you should include PrecompiledP256Verify in the PrecompiledContracts
 // TODO: handle when common.BytesToAddress([]byte{0x01, 0x00}) will colide a new Ethereum's precompile
 func TestPrecompiledP256VerifyAlwaysAvailableInHFs(t *testing.T) {
-	latestHfRules := params.BorMainnetChainConfig.Rules(big.NewInt(math.MaxInt64), true, 0)
-	precompiledP256VerifyAddress := common.BytesToAddress([]byte{0x01, 0x00})
+	chainConfigs := []*params.ChainConfig{params.BorMainnetChainConfig, params.AmoyChainConfig}
+	for _, chainConfig := range chainConfigs {
+		latestHfRules := chainConfig.Rules(big.NewInt(math.MaxInt64), true, 0)
+		precompiledP256VerifyAddress := common.BytesToAddress([]byte{0x01, 0x00})
 
-	addresses := ActivePrecompiles(latestHfRules)
-	addressFound := false
-	for _, addr := range addresses {
-		if addr == precompiledP256VerifyAddress {
-			addressFound = true
-			break
+		addresses := ActivePrecompiles(latestHfRules)
+		addressFound := false
+		for _, addr := range addresses {
+			if addr == precompiledP256VerifyAddress {
+				addressFound = true
+				break
+			}
+		}
+		assert.Equal(t, true, addressFound)
+
+		preCompiledContracts := ActivePrecompiledContracts(latestHfRules)
+		assert.Equal(t, &p256Verify{}, preCompiledContracts[precompiledP256VerifyAddress])
+	}
+}
+
+// If this test failed, it likely means a new HF were introduced and is very likely that PreCompiles got changed (by introducing new ones, changing olds ones or removing).
+// Please follow the instructions here to properly handle this new HF
+//
+//  1. Make sure if p256Verify were properly set on this Hardfork, it was introduced by us in PIP-27
+//
+//  2. Double check all the changes on the preCompiles of the current HF and the new one.
+//     You should also pay attention for any params changes like in &bigModExp{eip2565: true, eip7823: true, eip7883: true}
+//     Make sure all changes reflects the Ethereum's new proposals while reflecting the changes we did internally. Currently just PIP-27
+//
+//  3. Check if Erigon reflects the exact same configuration for the PreCompiles, including also the same params for precompiles
+//
+//  4. Runs a e2e test which includes all the preCompiles in a single transaction. If a new preCompile were introduced, please reflect the new one on the tests
+//     The test must run on a multiclient network, including both Erigon and Bor. The test is available in our e2e repository.
+//
+//  5. After all checks done, you can increase insert the NewHF on the expected list to make the test pass
+func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
+	rulesType := reflect.TypeOf(params.Rules{})
+
+	// Extract actual field names
+	actual := make([]string, 0, rulesType.NumField())
+	for i := 0; i < rulesType.NumField(); i++ {
+		actual = append(actual, rulesType.Field(i).Name)
+	}
+
+	// Expected field names (in order)
+	expected := []string{
+		"ChainID",
+		"IsHomestead",
+		"IsEIP150",
+		"IsEIP155",
+		"IsEIP158",
+		"IsEIP2929",
+		"IsEIP4762",
+		"IsByzantium",
+		"IsConstantinople",
+		"IsPetersburg",
+		"IsIstanbul",
+		"IsBerlin",
+		"IsLondon",
+		"IsMerge",
+		"IsShanghai",
+		"IsCancun",
+		"IsPrague",
+		"IsOsaka",
+		"IsVerkle",
+		"IsMadhugiri",
+		"IsMadhugiriPro",
+	}
+
+	if len(actual) != len(expected) {
+		t.Fatalf("A new hardfork were detected. Please read and follow the instruction on the comment section of this test")
+	}
+
+	// Compare names one-by-one for stability
+	for i := range expected {
+		if actual[i] != expected[i] {
+			t.Fatalf("A new hardfork were detected. Please read and follow the instruction on the comment section of this test")
 		}
 	}
-	assert.Equal(t, true, addressFound)
-
-	preCompiledContracts := ActivePrecompiledContracts(latestHfRules)
-	assert.Equal(t, &p256Verify{}, preCompiledContracts[precompiledP256VerifyAddress])
 }
