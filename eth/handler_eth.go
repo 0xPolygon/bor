@@ -182,35 +182,76 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 		currentWindowStart := (currentHeadNum / windowSize) * windowSize
 		nextWindowStart := currentWindowStart + windowSize
 
-		// Only allow compact witnesses if the requested block is in a window that's
-		// at least one full window ahead of the next window start.
-		// This ensures that by the time we process this block, we'll have definitely
-		// processed the next window-start block with a full witness, warming the cache.
-		// We use >= (not >) because we want to be at least one full window ahead.
+		// Calculate the window start for the requested block
 		blockWindowStart := (blockNum / windowSize) * windowSize
-		if blockWindowStart >= nextWindowStart+windowSize {
-			// The requested block is in a window that's at least one full window ahead
-			// of the next window start, so we can use compact witness.
-			// By the time we process this block, we'll have processed the next
-			// window-start block with a full witness, warming the cache.
-			cacheWarm = true
-			log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
+
+		// Never apply optimization to window-start blocks or overlap-start blocks.
+		// These always require full witnesses, regardless of cache state.
+		// Check if this is a window-start block
+		if blockNum == blockWindowStart {
+			log.Info("PSP - Optimization: skipping (window-start block always requires full witness)",
 				"blockNum", blockNum,
-				"blockWindowStart", blockWindowStart,
-				"currentHead", currentHeadNum,
-				"currentWindowStart", currentWindowStart,
-				"nextWindowStart", nextWindowStart,
-				"windowSize", windowSize,
-				"threshold", nextWindowStart+windowSize)
+				"blockWindowStart", blockWindowStart)
+		} else if overlapSize > 0 {
+			// Check if this is an overlap-start block
+			var overlapStartOffset uint64
+			if overlapSize >= windowSize {
+				overlapStartOffset = 0
+			} else {
+				overlapStartOffset = windowSize - overlapSize
+			}
+			blockAtOverlapStart := blockWindowStart + overlapStartOffset
+			if blockNum == blockAtOverlapStart {
+				log.Info("PSP - Optimization: skipping (overlap-start block always requires full witness)",
+					"blockNum", blockNum,
+					"blockWindowStart", blockWindowStart,
+					"blockAtOverlapStart", blockAtOverlapStart)
+			} else if blockWindowStart >= nextWindowStart+windowSize {
+				// The requested block is in a window that's at least one full window ahead
+				// of the next window start, so we can use compact witness.
+				// By the time we process this block, we'll have processed the next
+				// window-start block with a full witness, warming the cache.
+				cacheWarm = true
+				log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
+					"blockNum", blockNum,
+					"blockWindowStart", blockWindowStart,
+					"currentHead", currentHeadNum,
+					"currentWindowStart", currentWindowStart,
+					"nextWindowStart", nextWindowStart,
+					"windowSize", windowSize,
+					"threshold", nextWindowStart+windowSize)
+			} else {
+				log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
+					"blockNum", blockNum,
+					"blockWindowStart", blockWindowStart,
+					"currentHead", currentHeadNum,
+					"currentWindowStart", currentWindowStart,
+					"nextWindowStart", nextWindowStart,
+					"windowSize", windowSize,
+					"threshold", nextWindowStart+windowSize)
+			}
 		} else {
-			log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
-				"blockNum", blockNum,
-				"blockWindowStart", blockWindowStart,
-				"currentHead", currentHeadNum,
-				"currentWindowStart", currentWindowStart,
-				"nextWindowStart", nextWindowStart,
-				"windowSize", windowSize,
-				"threshold", nextWindowStart+windowSize)
+			// No overlap, check if block is far enough ahead
+			if blockWindowStart >= nextWindowStart+windowSize {
+				cacheWarm = true
+				log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
+					"blockNum", blockNum,
+					"blockWindowStart", blockWindowStart,
+					"currentHead", currentHeadNum,
+					"currentWindowStart", currentWindowStart,
+					"nextWindowStart", nextWindowStart,
+					"windowSize", windowSize,
+					"threshold", nextWindowStart+windowSize)
+			} else {
+				log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
+					"blockNum", blockNum,
+					"blockWindowStart", blockWindowStart,
+					"currentHead", currentHeadNum,
+					"currentWindowStart", currentWindowStart,
+					"nextWindowStart", nextWindowStart,
+					"windowSize", windowSize,
+					"threshold", nextWindowStart+windowSize)
+			}
 		}
 	}
 
