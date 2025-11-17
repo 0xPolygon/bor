@@ -178,30 +178,39 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	// Example: If restarting at block 454 (window 440-459), request full witnesses
 	// for blocks 455-460 (next window start), then compact for 461+.
 	if !cacheWarm && windowSize > 0 && currentHead != nil {
-		// If the requested block is more than windowSize blocks ahead of the current head,
-		// we can use compact witnesses. This ensures that by the time we process
-		// this block, we'll have processed at least one window-start block with
-		// a full witness, warming the cache.
-		// We check blockNum > currentHeadNum + windowSize to ensure we're at least
-		// one full window ahead, which guarantees we'll have processed the next
-		// window-start block by the time we get to this block.
-		if blockNum > currentHeadNum+windowSize {
-			// We're more than one window ahead, can use compact witness
-			// This allows us to request compact witnesses for blocks in future windows
-			// even if the cache isn't warm yet, since by the time we process them,
-			// we'll have processed the window-start block with a full witness.
+		// Calculate the next window start from current head
+		currentWindowStart := (currentHeadNum / windowSize) * windowSize
+		nextWindowStart := currentWindowStart + windowSize
+
+		// Only allow compact witnesses if the requested block is in a window that's
+		// at least one full window ahead of the next window start.
+		// This ensures that by the time we process this block, we'll have definitely
+		// processed the next window-start block with a full witness, warming the cache.
+		// We use >= (not >) because we want to be at least one full window ahead.
+		blockWindowStart := (blockNum / windowSize) * windowSize
+		if blockWindowStart >= nextWindowStart+windowSize {
+			// The requested block is in a window that's at least one full window ahead
+			// of the next window start, so we can use compact witness.
+			// By the time we process this block, we'll have processed the next
+			// window-start block with a full witness, warming the cache.
 			cacheWarm = true
-			log.Info("PSP - Optimization: allowing compact witness (block more than windowSize ahead)",
+			log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
 				"blockNum", blockNum,
+				"blockWindowStart", blockWindowStart,
 				"currentHead", currentHeadNum,
+				"currentWindowStart", currentWindowStart,
+				"nextWindowStart", nextWindowStart,
 				"windowSize", windowSize,
-				"threshold", currentHeadNum+windowSize)
+				"threshold", nextWindowStart+windowSize)
 		} else {
-			log.Info("PSP - Optimization: requiring full witness (block within windowSize)",
+			log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
 				"blockNum", blockNum,
+				"blockWindowStart", blockWindowStart,
 				"currentHead", currentHeadNum,
+				"currentWindowStart", currentWindowStart,
+				"nextWindowStart", nextWindowStart,
 				"windowSize", windowSize,
-				"threshold", currentHeadNum+windowSize)
+				"threshold", nextWindowStart+windowSize)
 		}
 	}
 
