@@ -4296,6 +4296,13 @@ func (bc *BlockChain) CalculateCacheWindowStart(blockNum uint64) uint64 {
 // IsCompactCacheWarm reports whether we've already refilled the cache for the
 // current window by processing a full witness (after startup or the latest slide).
 func (bc *BlockChain) IsCompactCacheWarm() bool {
+	bc.cacheLock.RLock()
+	defer bc.cacheLock.RUnlock()
+	// If cacheWindowStart is 0, the cache hasn't been initialized yet (e.g., after restart)
+	// In this case, the cache is definitely not warm
+	if bc.cacheWindowStart == 0 {
+		return false
+	}
 	return bc.compactCacheWarm.Load()
 }
 
