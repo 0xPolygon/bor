@@ -37,7 +37,7 @@ var amoyTestnet = &Chain{
 				BhilaiBlock:       big.NewInt(22765056),
 				RioBlock:          big.NewInt(26272256),
 				MadhugiriBlock:    big.NewInt(28899616),
-				MadhugiriProBlock: big.NewInt(29244175),
+				MadhugiriProBlock: big.NewInt(29287400),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,
 				},

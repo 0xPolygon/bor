@@ -23,14 +23,14 @@
       "ahmedabadBlock": 62278656,
       "bhilaiBlock": 73440256,
       "rioBlock": 77414656,
-      "madhugiriBlock": 79783223,
-      "madhugiriProBlock": 79783223,
+      "madhugiriBlock": 80084800,
+      "madhugiriProBlock": 80084800,
       "stateSyncConfirmationDelay": {
         "44934656": 128
       },
       "period": {
         "0": 2,
-        "79783223": 1
+        "80084800": 1
       },
       "producerDelay": {
         "0": 6,

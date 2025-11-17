@@ -339,7 +339,7 @@ var (
 			BhilaiBlock:       big.NewInt(22765056),
 			RioBlock:          big.NewInt(26272256),
 			MadhugiriBlock:    big.NewInt(28899616),
-			MadhugiriProBlock: big.NewInt(29244175),
+			MadhugiriProBlock: big.NewInt(29287400),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -421,15 +421,15 @@ var (
 			AhmedabadBlock:    big.NewInt(62278656),
 			BhilaiBlock:       big.NewInt(73440256),
 			RioBlock:          big.NewInt(77414656),
-			MadhugiriBlock:    big.NewInt(79783223),
-			MadhugiriProBlock: big.NewInt(79783223),
+			MadhugiriBlock:    big.NewInt(80084800),
+			MadhugiriProBlock: big.NewInt(80084800),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
 
 			Period: map[string]uint64{
 				"0":        2,
-				"79783223": 1,
+				"80084800": 1,
 			},
 			ProducerDelay: map[string]uint64{
 				"0":        6,

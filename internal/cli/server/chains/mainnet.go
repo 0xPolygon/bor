@@ -37,14 +37,14 @@ var mainnetBor = &Chain{
 				AhmedabadBlock:    big.NewInt(62278656),
 				BhilaiBlock:       big.NewInt(73440256),
 				RioBlock:          big.NewInt(77414656),
-				MadhugiriBlock:    big.NewInt(79783223),
-				MadhugiriProBlock: big.NewInt(79783223),
+				MadhugiriBlock:    big.NewInt(80084800),
+				MadhugiriProBlock: big.NewInt(80084800),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},
 				Period: map[string]uint64{
 					"0":        2,
-					"79783223": 1,
+					"80084800": 1,
 				},
 				ProducerDelay: map[string]uint64{
 					"0":        6,
