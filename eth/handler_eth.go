@@ -155,44 +155,70 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	windowSize := h.chain.GetCacheWindowSize()
 	overlapSize := h.chain.GetCacheOverlapSize()
 	cacheWarm := h.chain.IsCompactCacheWarm()
+	cacheWindowStart := h.chain.GetCacheWindowStart()
+
+	// Get current head for optimization check
+	currentHead := h.chain.CurrentBlock()
+	var currentHeadNum uint64
+	if currentHead != nil {
+		currentHeadNum = currentHead.Number.Uint64()
+	}
+
+	log.Info("PSP - shouldRequestCompactWitness decision",
+		"blockNum", blockNum,
+		"currentHead", currentHeadNum,
+		"cacheWarm", cacheWarm,
+		"cacheWindowStart", cacheWindowStart,
+		"windowSize", windowSize,
+		"overlapSize", overlapSize)
 
 	// Optimization: If cache is cold after restart, we only need full witnesses
 	// until the next window start (inclusive). After that, we can use compact witnesses.
 	// This avoids requesting full witnesses for the entire backlog.
 	// Example: If restarting at block 454 (window 440-459), request full witnesses
 	// for blocks 455-460 (next window start), then compact for 461+.
-	if !cacheWarm && windowSize > 0 {
-		// Get current head to determine where we are
-		currentHead := h.chain.CurrentBlock()
-		if currentHead != nil {
-			currentHeadNum := currentHead.Number.Uint64()
-
-			// If the requested block is more than windowSize blocks ahead of the current head,
-			// we can use compact witnesses. This ensures that by the time we process
-			// this block, we'll have processed at least one window-start block with
-			// a full witness, warming the cache.
-			// We check blockNum > currentHeadNum + windowSize to ensure we're at least
-			// one full window ahead, which guarantees we'll have processed the next
-			// window-start block by the time we get to this block.
-			if blockNum > currentHeadNum+windowSize {
-				// We're more than one window ahead, can use compact witness
-				// This allows us to request compact witnesses for blocks in future windows
-				// even if the cache isn't warm yet, since by the time we process them,
-				// we'll have processed the window-start block with a full witness.
-				cacheWarm = true
-			}
-			// Otherwise, if blockNum <= currentHeadNum + windowSize, we need full witness
-			// to ensure we process the window-start block with full witness
+	if !cacheWarm && windowSize > 0 && currentHead != nil {
+		// If the requested block is more than windowSize blocks ahead of the current head,
+		// we can use compact witnesses. This ensures that by the time we process
+		// this block, we'll have processed at least one window-start block with
+		// a full witness, warming the cache.
+		// We check blockNum > currentHeadNum + windowSize to ensure we're at least
+		// one full window ahead, which guarantees we'll have processed the next
+		// window-start block by the time we get to this block.
+		if blockNum > currentHeadNum+windowSize {
+			// We're more than one window ahead, can use compact witness
+			// This allows us to request compact witnesses for blocks in future windows
+			// even if the cache isn't warm yet, since by the time we process them,
+			// we'll have processed the window-start block with a full witness.
+			cacheWarm = true
+			log.Info("PSP - Optimization: allowing compact witness (block more than windowSize ahead)",
+				"blockNum", blockNum,
+				"currentHead", currentHeadNum,
+				"windowSize", windowSize,
+				"threshold", currentHeadNum+windowSize)
+		} else {
+			log.Info("PSP - Optimization: requiring full witness (block within windowSize)",
+				"blockNum", blockNum,
+				"currentHead", currentHeadNum,
+				"windowSize", windowSize,
+				"threshold", currentHeadNum+windowSize)
 		}
 	}
 
-	return shouldUseCompactWitness(
+	result := shouldUseCompactWitness(
 		cacheWarm,
 		h.chain.IsParallelStatelessImportEnabled(),
 		blockNum,
 		windowSize,
 		overlapSize,
 	)
+
+	log.Info("PSP - shouldRequestCompactWitness result",
+		"blockNum", blockNum,
+		"useCompact", result,
+		"cacheWarm", cacheWarm)
+
+	return result
 }
 
 func shouldUseCompactWitness(cacheWarm bool, parallel bool, blockNum, windowSize, overlapSize uint64) bool {
