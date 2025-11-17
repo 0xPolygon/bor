@@ -154,8 +154,24 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	windowSize := h.chain.GetCacheWindowSize()
 	overlapSize := h.chain.GetCacheOverlapSize()
+	cacheWarm := h.chain.IsCompactCacheWarm()
+
+	// Optimization: If cache is cold but we're past the window-start block,
+	// check if the window-start block has already been processed.
+	// This handles the case where blocks are queued before the window-start is processed.
+	if !cacheWarm && windowSize > 0 {
+		expectedWindowStart := (blockNum / windowSize) * windowSize
+		if blockNum > expectedWindowStart {
+			// Check if the window-start block has been processed
+			if header := h.chain.GetHeaderByNumber(expectedWindowStart); header != nil {
+				// Window-start block exists, cache should be warm for this window
+				cacheWarm = true
+			}
+		}
+	}
+
 	return shouldUseCompactWitness(
-		h.chain.IsCompactCacheWarm(),
+		cacheWarm,
 		h.chain.IsParallelStatelessImportEnabled(),
 		blockNum,
 		windowSize,

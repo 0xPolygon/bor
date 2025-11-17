@@ -1,7 +1,6 @@
 package eth
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"time"
@@ -378,54 +377,24 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			continue
 		}
 
-		witness, err := stateless.GetWitnessFromRlp(witnessPage.Data)
-		if err != nil {
-			log.Warn("PSP - Failed to decode witness for filtering", "hash", witnessPage.Hash, "err", err)
-			// If we can't decode, send the full data
-			filteredResponse = append(filteredResponse, witnessPage)
-			continue
-		}
-
-		filteredWitness := h.filterWitnessWithCache(witness)
-
-		var filteredBuf []byte
-		if filteredWitness != nil {
-			var buf bytes.Buffer
-			err = filteredWitness.EncodeRLP(&buf)
-			if err != nil {
-				log.Warn("PSP - Failed to encode filtered witness", "hash", witnessPage.Hash, "err", err)
-				// If encoding fails, send the full data
-				filteredResponse = append(filteredResponse, witnessPage)
-				continue
-			}
-			filteredBuf = buf.Bytes()
-		}
-
-		(*handler)(h).compactWitnessCacheLock.Lock()
-		(*handler)(h).compactWitnessCache.Add(cacheKey, filteredBuf)
-		(*handler)(h).compactWitnessCacheLock.Unlock()
-
-		witnessPageResponse.Data = filteredBuf
-		filteredResponse = append(filteredResponse, witnessPageResponse)
-		totalResponsePayloadDataAmount += len(filteredBuf)
+		// No stored compact witness found (neither on disk nor in memory cache).
+		// Return full witness instead of filtering on-the-fly to avoid inconsistencies.
+		// On-the-fly filtering might produce different results than what was stored during import.
+		filteredSize := originalSize // Full witness, no filtering
+		totalFilteredBytes += filteredSize
+		log.Info("PSP - No stored compact witness found, returning full witness",
+			"hash", witnessPage.Hash,
+			"page", witnessPage.Page,
+			"blockNum", blockNum,
+			"originalSize", originalSize,
+			"windowStart", expectedWindowStart,
+			"activeCacheSize", activeSize,
+			"nextCacheSize", nextSize)
+		filteredResponse = append(filteredResponse, witnessPage)
+		totalResponsePayloadDataAmount += len(witnessPage.Data)
 		if totalResponsePayloadDataAmount >= MaximumResponseSize {
 			return nil, errors.New("response exceeds maximum p2p payload size")
 		}
-
-		filteredSize := len(filteredBuf)
-		totalFilteredBytes += filteredSize
-		reduction := float64(originalSize-filteredSize) * 100.0 / float64(originalSize)
-
-		log.Info("PSP - Filtered witness for compact transmission",
-			"hash", witnessPage.Hash,
-			"page", witnessPage.Page,
-			"originalSize", originalSize,
-			"filteredSize", filteredSize,
-			"reductionBytes", originalSize-filteredSize,
-			"reductionPercent", fmt.Sprintf("%.2f", reduction),
-			"activeCacheSize", activeSize,
-			"nextCacheSize", nextSize,
-			"windowStart", expectedWindowStart)
 	}
 
 	activeSizeEnd, nextSizeEnd := h.chain.GetCompactCacheSizes()
