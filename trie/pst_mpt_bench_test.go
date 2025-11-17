@@ -62,7 +62,7 @@ func BenchmarkParallelTrieBuild(b *testing.B) {
 	}
 }
 
-func BenchmarkTrie_ParallelSparseTrie(b *testing.B) {
+func BenchmarkTrieUpdate_ParallelSparseTrie(b *testing.B) {
 	for _, size := range []int{10000, 50000, 100000} {
 		kvs := genKVsDeterministic(size, 9898)
 		b.Run(fmt.Sprintf("size-%d/pst-insert", size), func(b *testing.B) {
@@ -117,7 +117,6 @@ func BenchmarkTrie_Delete(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				tr := NewEmpty(nil)
-				// Setup: updates outside timed section
 				for j := range kvs {
 					if err := tr.Update(kvs[j].Key, kvs[j].Value); err != nil {
 						b.Fatal(err)
