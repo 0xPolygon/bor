@@ -156,17 +156,29 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	overlapSize := h.chain.GetCacheOverlapSize()
 	cacheWarm := h.chain.IsCompactCacheWarm()
 
-	// Optimization: If cache is cold but we're past the window-start block,
-	// check if the window-start block has already been processed.
-	// This handles the case where blocks are queued before the window-start is processed.
+	// Optimization: If cache is cold after restart, we only need full witnesses
+	// until the next window start (inclusive). After that, we can use compact witnesses.
+	// This avoids requesting full witnesses for the entire backlog.
+	// Example: If restarting at block 454 (window 440-459), request full witnesses
+	// for blocks 455-460 (next window start), then compact for 461+.
 	if !cacheWarm && windowSize > 0 {
-		expectedWindowStart := (blockNum / windowSize) * windowSize
-		if blockNum > expectedWindowStart {
-			// Check if the window-start block has been processed
-			if header := h.chain.GetHeaderByNumber(expectedWindowStart); header != nil {
-				// Window-start block exists, cache should be warm for this window
+		// Get current head to determine where we are
+		currentHead := h.chain.CurrentBlock()
+		if currentHead != nil {
+			currentHeadNum := currentHead.Number.Uint64()
+			// Calculate the next window start from current head
+			currentWindowStart := (currentHeadNum / windowSize) * windowSize
+			nextWindowStart := currentWindowStart + windowSize
+
+			// If we're past the next window start, we can use compact witnesses.
+			// By the time we process this block, we'll have processed the window-start
+			// block (nextWindowStart) with a full witness, warming the cache.
+			if blockNum > nextWindowStart {
+				// We're past the next window start, can use compact witness
 				cacheWarm = true
 			}
+			// Otherwise, if blockNum <= nextWindowStart, we need full witness
+			// to ensure we process the window-start block with full witness
 		}
 	}
 
