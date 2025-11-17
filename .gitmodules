@@ -2,3 +2,6 @@
 	path = tests/evm-benchmarks
 	url = https://github.com/ipsilon/evm-benchmarks
 	shallow = true
+[submodule "triedb-go"]
+	path = triedb-go
+	url = https://github.com/cffls/triedb-go.git

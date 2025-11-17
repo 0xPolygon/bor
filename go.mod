@@ -18,6 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.18
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.40.10
 	github.com/cespare/cp v1.1.1
+	github.com/cffls/triedb-go/triedb-go v0.0.0
 	github.com/cloudflare/cloudflare-go v0.114.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/cometbft/cometbft v0.38.17
@@ -355,6 +356,7 @@ require (
 replace (
 	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 // Same as heimdall-v2.
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
+	github.com/cffls/triedb-go/triedb-go => ./triedb-go/triedb-go
 	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.0-polygon
 	github.com/cosmos/cosmos-sdk => github.com/0xPolygon/cosmos-sdk v0.2.6-polygon
 	github.com/ethereum/go-ethereum => github.com/0xPolygon/bor/v2 v2.2.11

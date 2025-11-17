@@ -24,7 +24,19 @@ TESTALL = $$(go list ./... | grep -v go-ethereum/cmd/)
 TESTE2E = ./tests/...
 GOTEST = GODEBUG=cgocheck=0 go test $(GO_FLAGS) $(GO_LDFLAGS) -p 1
 
-bor:
+#? init-submodules: Initialize git submodules
+.PHONY: init-submodules
+init-submodules:
+	git submodule update --init --recursive
+
+#? build-triedb-ffi: Build the TrieDB FFI library from Rust source
+.PHONY: build-triedb-ffi
+build-triedb-ffi: init-submodules
+	@echo "Building TrieDB FFI library..."
+	cd triedb-go/triedb-ffi && cargo build --release
+	@echo "TrieDB FFI library built successfully."
+
+bor: build-triedb-ffi
 	mkdir -p $(GOPATH)/bin/
 	go build -o $(GOBIN)/bor $(GO_LDFLAGS) ./cmd/cli/main.go
 	cp $(GOBIN)/bor $(GOPATH)/bin/
