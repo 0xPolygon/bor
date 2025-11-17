@@ -178,10 +178,6 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	// Example: If restarting at block 454 (window 440-459), request full witnesses
 	// for blocks 455-460 (next window start), then compact for 461+.
 	if !cacheWarm && windowSize > 0 && currentHead != nil {
-		// Calculate the next window start from current head
-		currentWindowStart := (currentHeadNum / windowSize) * windowSize
-		nextWindowStart := currentWindowStart + windowSize
-
 		// Calculate the window start for the requested block
 		blockWindowStart := (blockNum / windowSize) * windowSize
 
@@ -206,51 +202,33 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 					"blockNum", blockNum,
 					"blockWindowStart", blockWindowStart,
 					"blockAtOverlapStart", blockAtOverlapStart)
-			} else if blockWindowStart >= nextWindowStart+windowSize {
-				// The requested block is in a window that's at least one full window ahead
-				// of the next window start, so we can use compact witness.
-				// By the time we process this block, we'll have processed the next
-				// window-start block with a full witness, warming the cache.
+			} else if currentHeadNum >= blockWindowStart {
+				// The window-start block for the requested block has already been processed.
+				// This means the cache should be warm for this window, so we can use compact witness.
 				cacheWarm = true
-				log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
+				log.Info("PSP - Optimization: allowing compact witness (window-start already processed)",
 					"blockNum", blockNum,
 					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum,
-					"currentWindowStart", currentWindowStart,
-					"nextWindowStart", nextWindowStart,
-					"windowSize", windowSize,
-					"threshold", nextWindowStart+windowSize)
+					"currentHead", currentHeadNum)
 			} else {
-				log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
+				log.Info("PSP - Optimization: requiring full witness (window-start not yet processed)",
 					"blockNum", blockNum,
 					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum,
-					"currentWindowStart", currentWindowStart,
-					"nextWindowStart", nextWindowStart,
-					"windowSize", windowSize,
-					"threshold", nextWindowStart+windowSize)
+					"currentHead", currentHeadNum)
 			}
 		} else {
-			// No overlap, check if block is far enough ahead
-			if blockWindowStart >= nextWindowStart+windowSize {
+			// No overlap, check if window-start has been processed
+			if currentHeadNum >= blockWindowStart {
 				cacheWarm = true
-				log.Info("PSP - Optimization: allowing compact witness (block at least one full window ahead)",
+				log.Info("PSP - Optimization: allowing compact witness (window-start already processed)",
 					"blockNum", blockNum,
 					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum,
-					"currentWindowStart", currentWindowStart,
-					"nextWindowStart", nextWindowStart,
-					"windowSize", windowSize,
-					"threshold", nextWindowStart+windowSize)
+					"currentHead", currentHeadNum)
 			} else {
-				log.Info("PSP - Optimization: requiring full witness (block not far enough ahead)",
+				log.Info("PSP - Optimization: requiring full witness (window-start not yet processed)",
 					"blockNum", blockNum,
 					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum,
-					"currentWindowStart", currentWindowStart,
-					"nextWindowStart", nextWindowStart,
-					"windowSize", windowSize,
-					"threshold", nextWindowStart+windowSize)
+					"currentHead", currentHeadNum)
 			}
 		}
 	}
