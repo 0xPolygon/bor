@@ -215,6 +215,10 @@ func (p *skeletonTestPeer) RequestWitnesses([]common.Hash, chan *eth.Response) (
 	panic("skeleton sync must not request witnesses")
 }
 
+func (p *skeletonTestPeer) RequestWitnessesWithVerification([]common.Hash, chan *eth.Response, func(common.Hash, uint64, string) bool, bool) (*eth.Request, error) {
+	panic("skeleton sync must not request witnesses")
+}
+
 func (p *skeletonTestPeer) SupportsWitness() bool {
 	return false
 }

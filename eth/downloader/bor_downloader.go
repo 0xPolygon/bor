@@ -244,6 +244,13 @@ type BlockChain interface {
 	// TrieDB retrieves the low level trie database used for interacting
 	// with trie nodes.
 	TrieDB() *triedb.Database
+
+	// Compact witness cache methods
+	IsCompactCacheWarm() bool
+	GetCacheWindowStart() uint64
+	GetCacheWindowSize() uint64
+	GetCacheOverlapSize() uint64
+	IsParallelStatelessImportEnabled() bool
 }
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.

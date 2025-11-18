@@ -28,6 +28,102 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// shouldRequestCompactWitnessForBlock determines if we should request a compact witness
+// for a given block number. This replicates the logic from eth/handler_eth.go but
+// works with the downloader's BlockChain interface.
+func shouldRequestCompactWitnessForBlock(d *Downloader, blockNum uint64) bool {
+	windowSize := d.blockchain.GetCacheWindowSize()
+	overlapSize := d.blockchain.GetCacheOverlapSize()
+	cacheWarm := d.blockchain.IsCompactCacheWarm()
+
+	// Get current head for optimization check
+	currentHead := d.blockchain.CurrentBlock()
+	var currentHeadNum uint64
+	if currentHead != nil {
+		currentHeadNum = currentHead.Number.Uint64()
+	}
+
+	// Optimization: If cache is cold after restart, we only need full witnesses
+	// until the next window start (inclusive). After that, we can use compact witnesses.
+	if !cacheWarm && windowSize > 0 && currentHead != nil {
+		// Calculate the window start for the requested block
+		blockWindowStart := (blockNum / windowSize) * windowSize
+
+		// Never apply optimization to window-start blocks or overlap-start blocks.
+		// These always require full witnesses, regardless of cache state.
+		if blockNum == blockWindowStart {
+			return false // Window-start block always requires full witness
+		}
+		if overlapSize > 0 {
+			// Check if this is an overlap-start block
+			var overlapStartOffset uint64
+			if overlapSize >= windowSize {
+				overlapStartOffset = 0
+			} else {
+				overlapStartOffset = windowSize - overlapSize
+			}
+			blockAtOverlapStart := blockWindowStart + overlapStartOffset
+			if blockNum == blockAtOverlapStart {
+				return false // Overlap-start block always requires full witness
+			}
+		}
+		// Check if window-start has been processed
+		if currentHeadNum >= blockWindowStart {
+			cacheWarm = true // Window-start already processed, cache should be warm
+		}
+	}
+
+	// Use the same logic as shouldUseCompactWitness
+	return shouldUseCompactWitnessForDownloader(
+		cacheWarm,
+		d.blockchain.IsParallelStatelessImportEnabled(),
+		blockNum,
+		windowSize,
+		overlapSize,
+	)
+}
+
+// shouldUseCompactWitnessForDownloader replicates the logic from shouldUseCompactWitness
+// in eth/handler_eth.go but is accessible from the downloader package.
+func shouldUseCompactWitnessForDownloader(cacheWarm bool, parallel bool, blockNum, windowSize, overlapSize uint64) bool {
+	// Compact witness requires sequential block processing.
+	if parallel {
+		return false
+	}
+	// If the compact cache hasn't been warmed yet (e.g. node restarted mid-window),
+	// request full witnesses until we process the next window start.
+	if !cacheWarm {
+		return false
+	}
+	// Without a valid window, fall back to full witnesses.
+	if windowSize == 0 {
+		return false
+	}
+
+	// Calculate the consensus-aligned window start for the requested block.
+	expectedWindowStart := (blockNum / windowSize) * windowSize
+	if blockNum == expectedWindowStart {
+		return false
+	}
+
+	// Calculate the first block of the overlap region for this window.
+	if overlapSize == 0 {
+		return true
+	}
+	var overlapStartOffset uint64
+	if overlapSize >= windowSize {
+		overlapStartOffset = 0
+	} else {
+		overlapStartOffset = windowSize - overlapSize
+	}
+	blockAtOverlapStart := expectedWindowStart + overlapStartOffset
+	if blockNum == blockAtOverlapStart {
+		return false
+	}
+
+	return true
+}
+
 // witnessQueue implements typedQueue and is a type adapter between the generic
 // concurrent fetcher and the downloader.
 type witnessQueue Downloader
@@ -104,10 +200,28 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 
 	peer.log.Trace("Requesting new batch of witnesses", "count", len(hashes), "from_hash", hashes[0])
 
-	// The implementation of Peer.RequestWitnesses (e.g., in eth/peer.go) is responsible
-	// for translating these hashes into appropriate wit protocol messages (e.g., GetWitnessRequest).
-	// This might involve grouping hashes or assuming protocol extensions.
-	return peer.peer.RequestWitnesses(hashes, resCh)
+	// Determine if we should request compact witnesses for this batch.
+	// Since RequestWitnessesWithVerification takes a single useCompact flag for all hashes,
+	// we check if ALL blocks should use compact witnesses. If any block needs a full witness,
+	// we request full for all (conservative but safe).
+	useCompact := true
+	for _, header := range req.Headers {
+		blockNum := header.Number.Uint64()
+		if !shouldRequestCompactWitnessForBlock((*Downloader)(q), blockNum) {
+			useCompact = false
+			break
+		}
+	}
+
+	log.Info("PSP - debug: Downloader requesting witnesses",
+		"count", len(hashes),
+		"useCompact", useCompact,
+		"firstBlock", req.Headers[0].Number.Uint64(),
+		"lastBlock", req.Headers[len(req.Headers)-1].Number.Uint64())
+
+	// Use RequestWitnessesWithVerification with the determined useCompact flag
+	// Note: We pass nil for verifyPageCount since the downloader doesn't have access to the handler's verification callback
+	return peer.peer.RequestWitnessesWithVerification(hashes, resCh, nil, useCompact)
 }
 
 // deliver is responsible for taking a generic response packet from the concurrent
