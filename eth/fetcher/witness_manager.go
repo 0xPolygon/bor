@@ -332,6 +332,12 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 
 	m.mu.Unlock()
 
+	log.Info("PSP - debug: Added block to witness pending queue",
+		"blockNum", number,
+		"hash", hash.Hex()[:16],
+		"peer", msg.origin,
+		"prevPending", pendingCount,
+		"newPending", pendingCount+1)
 	log.Debug("[wm] Added injected block to witness pending queue", "peer", msg.origin, "number", number, "hash", hash, "prevPending", pendingCount, "newPending", pendingCount+1)
 
 	// Ensure the timer is armed for the newly-added request.
@@ -501,6 +507,12 @@ func (m *witnessManager) tick() {
 				continue
 			}
 
+			log.Info("PSP - debug: Launching witness fetch from tick",
+				"blockNum", announce.number,
+				"hash", hash.Hex()[:16],
+				"peer", peer,
+				"retries", m.pending[hash].retries)
+
 			// Launch goroutine for fetch
 			go m.fetchWitness(peer, hash, announce)
 		}
@@ -517,6 +529,12 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 	m.mu.Lock()
 	announcedAt := announce.time // Capture the original 'ready-to-fetch' time for logging/timestamping
 	m.mu.Unlock()
+
+	log.Info("PSP - debug: Starting witness fetch",
+		"blockNum", announce.number,
+		"hash", hash.Hex()[:16],
+		"peer", peer,
+		"announcedAt", announcedAt)
 
 	witnessFetchMeter.Mark(1)
 

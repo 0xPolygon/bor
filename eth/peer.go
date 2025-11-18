@@ -611,6 +611,16 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	buildRequestMu.Lock()
 	defer buildRequestMu.Unlock()
 
+	// Build hashes list for logging
+	hashesList := make([]string, 0, len(hashes))
+	for _, h := range hashes {
+		hashesList = append(hashesList, h.Hex()[:16])
+	}
+	log.Info("PSP - debug: Building witness requests",
+		"hashes", len(hashes),
+		"useCompact", useCompact,
+		"hashesList", hashesList)
+
 	//checking requests to be done
 	for _, hash := range hashes {
 		mapsMu.RLock()

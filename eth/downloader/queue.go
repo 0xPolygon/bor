@@ -414,6 +414,10 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			if _, ok := q.witnessTaskPool[hash]; !ok {
 				q.witnessTaskPool[hash] = header
 				q.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
+				log.Info("PSP - debug: Queued witness request in downloader queue",
+					"blockNum", header.Number.Uint64(),
+					"hash", hash.Hex()[:16],
+					"queueSize", q.witnessTaskQueue.Size())
 			} else {
 				log.Warn("Header already scheduled for witness fetch", "number", header.Number, "hash", hash)
 			}

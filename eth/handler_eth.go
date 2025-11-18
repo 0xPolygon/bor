@@ -134,9 +134,22 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				// Determine if we should request compact witness based on sliding window
 				useCompact := h.shouldRequestCompactWitness(number)
 
+				log.Info("PSP - debug: Creating witness requester",
+					"blockNum", number,
+					"hash", hash.Hex()[:16],
+					"useCompact", useCompact,
+					"currentHead", h.chain.CurrentBlock().Number.Uint64(),
+					"cacheWarm", h.chain.IsCompactCacheWarm(),
+					"cacheWindowStart", h.chain.GetCacheWindowStart())
+
 				// Request witnesses (compact or full) using the wit peer with verification
 				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
 			}
+
+			log.Info("PSP - debug: Notifying block fetcher of new block",
+				"blockNum", number,
+				"hash", hash.Hex()[:16],
+				"peer", peer.ID())
 
 			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
 		}

@@ -4481,6 +4481,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		"nextCacheSize", nextCacheSize,
 		"windowStart", bc.GetCacheWindowStart())
 
+	log.Info("PSP - debug: Processing block",
+		"blockNum", blockNum,
+		"hash", block.Hash().Hex()[:16],
+		"hasWitness", hasWitness,
+		"cacheWarm", bc.compactCacheWarm.Load(),
+		"cacheWindowStart", bc.GetCacheWindowStart())
+
 	if !hasWitness {
 		return nil, nil, errors.New("nil witness")
 	}
