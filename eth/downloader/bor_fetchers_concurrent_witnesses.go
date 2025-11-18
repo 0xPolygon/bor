@@ -36,42 +36,13 @@ func shouldRequestCompactWitnessForBlock(d *Downloader, blockNum uint64) bool {
 	overlapSize := d.blockchain.GetCacheOverlapSize()
 	cacheWarm := d.blockchain.IsCompactCacheWarm()
 
-	// Get current head for optimization check
-	currentHead := d.blockchain.CurrentBlock()
-	var currentHeadNum uint64
-	if currentHead != nil {
-		currentHeadNum = currentHead.Number.Uint64()
-	}
-
-	// Optimization: If cache is cold after restart, we only need full witnesses
-	// until the next window start (inclusive). After that, we can use compact witnesses.
-	if !cacheWarm && windowSize > 0 && currentHead != nil {
-		// Calculate the window start for the requested block
-		blockWindowStart := (blockNum / windowSize) * windowSize
-
-		// Never apply optimization to window-start blocks or overlap-start blocks.
-		// These always require full witnesses, regardless of cache state.
-		if blockNum == blockWindowStart {
-			return false // Window-start block always requires full witness
-		}
-		if overlapSize > 0 {
-			// Check if this is an overlap-start block
-			var overlapStartOffset uint64
-			if overlapSize >= windowSize {
-				overlapStartOffset = 0
-			} else {
-				overlapStartOffset = windowSize - overlapSize
-			}
-			blockAtOverlapStart := blockWindowStart + overlapStartOffset
-			if blockNum == blockAtOverlapStart {
-				return false // Overlap-start block always requires full witness
-			}
-		}
-		// Check if window-start has been processed
-		if currentHeadNum >= blockWindowStart {
-			cacheWarm = true // Window-start already processed, cache should be warm
-		}
-	}
+	// If the cache is cold (e.g., after restart), always request full witnesses.
+	// The cache must be warmed by processing a window-start block with a full witness
+	// before we can safely use compact witnesses.
+	// Note: We do NOT optimize by checking if currentHeadNum >= blockWindowStart because
+	// after a restart, the cache is lost even if the head is past the window start.
+	// We must rely solely on IsCompactCacheWarm() which correctly returns false
+	// when cacheWindowStart == 0 (uninitialized after restart).
 
 	// Use the same logic as shouldUseCompactWitness
 	return shouldUseCompactWitnessForDownloader(

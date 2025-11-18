@@ -185,66 +185,13 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 		"windowSize", windowSize,
 		"overlapSize", overlapSize)
 
-	// Optimization: If cache is cold after restart, we only need full witnesses
-	// until the next window start (inclusive). After that, we can use compact witnesses.
-	// This avoids requesting full witnesses for the entire backlog.
-	// Example: If restarting at block 454 (window 440-459), request full witnesses
-	// for blocks 455-460 (next window start), then compact for 461+.
-	if !cacheWarm && windowSize > 0 && currentHead != nil {
-		// Calculate the window start for the requested block
-		blockWindowStart := (blockNum / windowSize) * windowSize
-
-		// Never apply optimization to window-start blocks or overlap-start blocks.
-		// These always require full witnesses, regardless of cache state.
-		// Check if this is a window-start block
-		if blockNum == blockWindowStart {
-			log.Info("PSP - Optimization: skipping (window-start block always requires full witness)",
-				"blockNum", blockNum,
-				"blockWindowStart", blockWindowStart)
-		} else if overlapSize > 0 {
-			// Check if this is an overlap-start block
-			var overlapStartOffset uint64
-			if overlapSize >= windowSize {
-				overlapStartOffset = 0
-			} else {
-				overlapStartOffset = windowSize - overlapSize
-			}
-			blockAtOverlapStart := blockWindowStart + overlapStartOffset
-			if blockNum == blockAtOverlapStart {
-				log.Info("PSP - Optimization: skipping (overlap-start block always requires full witness)",
-					"blockNum", blockNum,
-					"blockWindowStart", blockWindowStart,
-					"blockAtOverlapStart", blockAtOverlapStart)
-			} else if currentHeadNum >= blockWindowStart {
-				// The window-start block for the requested block has already been processed.
-				// This means the cache should be warm for this window, so we can use compact witness.
-				cacheWarm = true
-				log.Info("PSP - Optimization: allowing compact witness (window-start already processed)",
-					"blockNum", blockNum,
-					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum)
-			} else {
-				log.Info("PSP - Optimization: requiring full witness (window-start not yet processed)",
-					"blockNum", blockNum,
-					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum)
-			}
-		} else {
-			// No overlap, check if window-start has been processed
-			if currentHeadNum >= blockWindowStart {
-				cacheWarm = true
-				log.Info("PSP - Optimization: allowing compact witness (window-start already processed)",
-					"blockNum", blockNum,
-					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum)
-			} else {
-				log.Info("PSP - Optimization: requiring full witness (window-start not yet processed)",
-					"blockNum", blockNum,
-					"blockWindowStart", blockWindowStart,
-					"currentHead", currentHeadNum)
-			}
-		}
-	}
+	// If the cache is cold (e.g., after restart), always request full witnesses.
+	// The cache must be warmed by processing a window-start block with a full witness
+	// before we can safely use compact witnesses.
+	// Note: We do NOT optimize by checking if currentHeadNum >= blockWindowStart because
+	// after a restart, the cache is lost even if the head is past the window start.
+	// We must rely solely on IsCompactCacheWarm() which correctly returns false
+	// when cacheWindowStart == 0 (uninitialized after restart).
 
 	result := shouldUseCompactWitness(
 		cacheWarm,
