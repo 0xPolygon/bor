@@ -46,13 +46,14 @@ type Backend interface {
 
 // Config is the configuration parameters of mining.
 type Config struct {
-	Etherbase           common.Address `toml:",omitempty"` // Public address for block mining rewards
-	ExtraData           hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
-	GasCeil             uint64         // Target gas ceiling for mined blocks.
-	GasPrice            *big.Int       // Minimum gas price for mining a transaction
-	Recommit            time.Duration  // The time interval for miner to re-create mining work.
-	CommitInterruptFlag bool           // Interrupt commit when time is up ( default = true)
-	BlockTime           time.Duration  // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	IsActiveBlockProducer bool           // Indicates whether this validator is an active block producer post rio HF (to allow config modifications)
+	Etherbase             common.Address `toml:",omitempty"` // Public address for block mining rewards
+	ExtraData             hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
+	GasCeil               uint64         // Target gas ceiling for mined blocks.
+	GasPrice              *big.Int       // Minimum gas price for mining a transaction
+	Recommit              time.Duration  // The time interval for miner to re-create mining work.
+	CommitInterruptFlag   bool           // Interrupt commit when time is up ( default = true)
+	BlockTime             time.Duration  // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
 	NewPayloadTimeout time.Duration // The maximum time allowance for creating a new payload
 }

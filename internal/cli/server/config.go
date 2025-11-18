@@ -371,6 +371,10 @@ type SealerConfig struct {
 	// Enabled is used to enable validator mode
 	Enabled bool `hcl:"mine,optional" toml:"mine,optional"`
 
+	// IsActiveBlockProducer to denote whether this validator is an active block producer post rio HF
+	// to allow config modifications
+	IsActiveBlockProducer bool `hcl:"is-active-block-producer,optional" toml:"is-active-block-producer,optional"`
+
 	// Etherbase is the address of the validator
 	Etherbase string `hcl:"etherbase,optional" toml:"etherbase,optional"`
 
@@ -775,14 +779,15 @@ func DefaultConfig() *Config {
 			LifeTime:     3 * time.Hour,
 		},
 		Sealer: &SealerConfig{
-			Enabled:             false,
-			Etherbase:           "",
-			GasCeil:             miner.DefaultConfig.GasCeil,
-			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
-			ExtraData:           "",
-			Recommit:            125 * time.Second,
-			CommitInterruptFlag: true,
-			BlockTime:           0,
+			Enabled:               false,
+			IsActiveBlockProducer: false,
+			Etherbase:             "",
+			GasCeil:               miner.DefaultConfig.GasCeil,
+			GasPrice:              big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
+			ExtraData:             "",
+			Recommit:              125 * time.Second,
+			CommitInterruptFlag:   true,
+			BlockTime:             0,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1114,6 +1119,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	// miner options
 	{
+		n.Miner.IsActiveBlockProducer = c.Sealer.IsActiveBlockProducer && c.Sealer.Enabled
 		n.Miner.Recommit = c.Sealer.Recommit
 		n.Miner.GasPrice = c.Sealer.GasPrice
 		n.Miner.GasCeil = c.Sealer.GasCeil

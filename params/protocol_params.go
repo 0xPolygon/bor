@@ -187,7 +187,7 @@ const (
 
 	HistoryServeWindow = 8192 // Number of blocks to serve historical block hashes for, EIP-2935.
 
-	// BorDefaultMinerGasPrice defines the minimum gas price for bor validators to mine a transaction.
+	// BorDefaultMinerGasPrice defines the minimum gas price to mine a transaction.
 	BorDefaultMinerGasPrice = 25 * GWei
 
 	// BorDefaultTxPoolPriceLimit defines the minimum gas price limit for bor to enforce txs acceptance into the pool.
@@ -195,6 +195,12 @@ const (
 
 	// BorDefaultGpoIgnorePrice defines the minimum gas price below which bor gpo will ignore transactions.
 	BorDefaultGpoIgnorePrice = 25 * GWei
+
+	// BorDefaultMinerGasPriceBp defines the minimum gas price for bor block producers to mine a
+	// transaction. The limit is slightly reduced to allow some leeway for transactions which are
+	// priced exactly or slightly more than old gas limit (25 gwei). When basefee drops below 1gwei,
+	// such transactions can be included freeing up the txpool.
+	BorDefaultMinerGasPriceBp = 24 * GWei
 )
 
 // Bls12381G1MultiExpDiscountTable is the gas discount table for BLS12-381 G1 multi exponentiation operation

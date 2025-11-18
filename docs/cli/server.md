@@ -286,6 +286,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```mine```: Enable mining (default: false)
 
+- ```is-active-block-producer```: Indicates whether this validator is an active block producer post rio HF (to allow config modifications) (default: false)
+
 - ```miner.etherbase```: Public address for block mining rewards
 
 - ```miner.extradata```: Block extra data set by the miner (default = client version)

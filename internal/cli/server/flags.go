@@ -322,6 +322,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.Enabled,
 		Group:   "Sealer",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "is-active-block-producer",
+		Usage:   "Indicates whether this validator is an active block producer post rio HF (to allow config modifications)",
+		Value:   &c.cliConfig.Sealer.IsActiveBlockProducer,
+		Default: c.cliConfig.Sealer.IsActiveBlockProducer,
+		Group:   "Sealer",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "miner.etherbase",
 		Usage:   "Public address for block mining rewards",
