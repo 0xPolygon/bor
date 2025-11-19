@@ -238,7 +238,7 @@ func (db *CachingDB) OpenTrie(root common.Hash) (Trie, error) {
 	if db.triedb.IsVerkle() {
 		return trie.NewVerkleTrie(root, db.triedb, db.pointCache)
 	}
-	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.triedb)
+	tr, err := trie.NewParallelStateTrie(trie.StateTrieID(root), db.triedb)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (db *CachingDB) OpenStorageTrie(stateRoot common.Hash, address common.Addre
 	if db.triedb.IsVerkle() {
 		return self, nil
 	}
-	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.triedb)
+	tr, err := trie.NewParallelStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.triedb)
 	if err != nil {
 		return nil, err
 	}

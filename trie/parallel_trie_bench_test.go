@@ -34,7 +34,7 @@ func BenchmarkParallelTrieBuild(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				pst := NewParallelSparseTrie()
+				pst := NewParallelTrie()
 				for j := range kvs {
 					pst.Insert(kvs[j].Key, kvs[j].Value)
 				}
@@ -62,13 +62,13 @@ func BenchmarkParallelTrieBuild(b *testing.B) {
 	}
 }
 
-func BenchmarkTrieUpdate_ParallelSparseTrie(b *testing.B) {
+func BenchmarkTrieUpdate_ParallelTrie(b *testing.B) {
 	for _, size := range []int{10000, 50000, 100000} {
 		kvs := genKVsDeterministic(size, 9898)
 		b.Run(fmt.Sprintf("size-%d/pst-insert", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				pst := NewParallelSparseTrie()
+				pst := NewParallelTrie()
 				b.StartTimer()
 				for j := range kvs {
 					pst.Insert(kvs[j].Key, kvs[j].Value)
@@ -102,7 +102,7 @@ func BenchmarkTrie_Delete(b *testing.B) {
 		b.Run(fmt.Sprintf("size-%d/pst-delete", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				pst := NewParallelSparseTrie()
+				pst := NewParallelTrie()
 				for j := range kvs {
 					pst.Insert(kvs[j].Key, kvs[j].Value)
 				}

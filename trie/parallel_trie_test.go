@@ -66,7 +66,6 @@ func TestParallelBuild_MatchesTrieCommit_AllInserts(t *testing.T) {
 	if haveRoot != wantRoot {
 		t.Fatalf("root mismatch: have %x want %x", haveRoot, wantRoot)
 	}
-
 }
 
 func TestParallelBuild_MatchesTrieCommit_InsertsDeletes(t *testing.T) {
@@ -92,7 +91,7 @@ func TestParallelBuild_MatchesTrieCommit_InsertsDeletes(t *testing.T) {
 	tr.Hash()
 	wantRoot, _ := tr.Commit(false)
 
-	pst := NewParallelSparseTrie()
+	pst := NewParallelTrie()
 	for i := range kvs {
 		pst.Insert(kvs[i].Key, kvs[i].Value)
 	}
@@ -108,5 +107,4 @@ func TestParallelBuild_MatchesTrieCommit_InsertsDeletes(t *testing.T) {
 	if haveRoot != wantRoot {
 		t.Fatalf("root mismatch: have %x want %x", haveRoot, wantRoot)
 	}
-
 }

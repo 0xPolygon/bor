@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -1682,9 +1683,30 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 	// code didn't anticipate for.
 	workers.Go(func() error {
 		// Write the account trie changes, measuring the amount of wasted time
-		newroot, set := s.trie.Commit(true)
+		// Legacy MPT commit:
+		// newroot, set := s.trie.Commit(true)
+		// Iterate account trie to collect KVs and rebuild in parallel.
+		it, err := s.trie.NodeIterator(nil)
+		if err != nil {
+			return err
+		}
+		var kvs []trie.KVPair
+		for it.Next(true) {
+			if !it.Leaf() {
+				continue
+			}
+			k := append([]byte(nil), it.LeafKey()...)
+			v := append([]byte(nil), it.LeafBlob()...)
+			kvs = append(kvs, trie.KVPair{Key: k, Value: v})
+		}
+		if err := it.Error(); err != nil {
+			return err
+		}
+		newroot, set, err := trie.BuildAccountTrieParallel(kvs, runtime.NumCPU())
+		if err != nil {
+			return err
+		}
 		root = newroot
-
 		if err := merge(set); err != nil {
 			return err
 		}
