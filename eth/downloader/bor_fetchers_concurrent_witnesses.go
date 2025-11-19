@@ -131,6 +131,51 @@ func (q *witnessQueue) updateCapacity(peer *peerConnection, items int, span time
 // from the download queue to the specified peer.
 // Note: This assumes a 'ReserveWitnesses' method exists or will be added to downloader.queue.
 func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, bool, bool) {
+	// Optimization: Limit how far ahead we request witnesses when cache is cold.
+	// This ensures that after a window-start block is processed and cache becomes warm,
+	// subsequent blocks can use compact witnesses instead of all being requested with full witnesses.
+	//
+	// Strategy: When cache is cold, limit requests to windowSize blocks at a time.
+	// This ensures we process a window-start block before requesting too many more,
+	// allowing the cache to warm and subsequent blocks to use compact witnesses.
+	d := (*Downloader)(q)
+	windowSize := d.blockchain.GetCacheWindowSize()
+	cacheWarm := d.blockchain.IsCompactCacheWarm()
+
+	// If window size is 0, use the original items limit
+	if windowSize == 0 {
+		return q.queue.ReserveWitnesses(peer, items)
+	}
+
+	// When cache is cold, limit requests to the next window-start block to ensure
+	// we process a window-start block before requesting too many more blocks ahead.
+	// This minimizes wasted full witnesses by switching to compact as soon as cache warms.
+	if !cacheWarm {
+		// Get current head to calculate next window-start
+		currentHead := d.blockchain.CurrentBlock()
+		if currentHead != nil {
+			currentHeadNum := currentHead.Number.Uint64()
+			// Calculate the next window-start block
+			nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
+
+			// We need to peek at the queue to see what block we're about to request
+			// But we can't access the queue directly here. Instead, we'll use a conservative
+			// limit: if items > windowSize, limit to windowSize. This ensures we don't
+			// request too far ahead, and the next batch will be able to use compact witnesses.
+			originalItems := items
+			if uint64(items) > windowSize {
+				items = int(windowSize)
+				log.Info("PSP - Limiting witness requests when cache is cold",
+					"originalItems", originalItems,
+					"limitedItems", items,
+					"windowSize", windowSize,
+					"currentHead", currentHeadNum,
+					"nextWindowStart", nextWindowStart,
+					"reason", "cache cold - limiting to windowSize to allow cache to warm")
+			}
+		}
+	}
+
 	// Assuming ReserveWitnesses returns *fetchRequest, bool, bool like ReserveBodies
 	return q.queue.ReserveWitnesses(peer, items) // Placeholder: Needs implementation in queue struct
 }

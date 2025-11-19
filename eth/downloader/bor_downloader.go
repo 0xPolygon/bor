@@ -2319,10 +2319,66 @@ func (d *Downloader) processFullSyncContentStateless() error {
 			// Otherwise continue waiting for results
 			continue
 		}
-		// Process the retrieved block segments
-		if err := d.importBlockResultsStateless(results); err != nil {
-			log.Warn("Block import failed", "err", err)
-			return err
+
+		// Optimization: When cache is cold, limit import batch size to the next window-start block.
+		// This ensures that after a window-start block is processed and cache becomes warm,
+		// subsequent blocks can use compact witnesses instead of all being imported with full witnesses.
+		windowSize := d.blockchain.GetCacheWindowSize()
+		cacheWarm := d.blockchain.IsCompactCacheWarm()
+		maxBatchSize := maxResultsProcess
+
+		if !cacheWarm && windowSize > 0 && len(results) > 0 {
+			// Get the first block in the batch to calculate how many blocks until next window-start
+			firstBlockNum := results[0].Header.Number.Uint64()
+			currentHead := d.blockchain.CurrentBlock()
+
+			if currentHead != nil {
+				currentHeadNum := currentHead.Number.Uint64()
+				// Calculate the next window-start block
+				nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
+
+				// Limit batch to blocks up to (and including) the next window-start block
+				// This minimizes wasted full witnesses by switching to compact as soon as cache warms
+				blocksUntilWindowStart := nextWindowStart - firstBlockNum + 1 // +1 to include window-start
+
+				if blocksUntilWindowStart > 0 && uint64(blocksUntilWindowStart) < uint64(maxBatchSize) {
+					maxBatchSize = int(blocksUntilWindowStart)
+					log.Info("PSP - Limiting import batch size when cache is cold",
+						"originalBatchSize", len(results),
+						"limitedBatchSize", maxBatchSize,
+						"windowSize", windowSize,
+						"currentHead", currentHeadNum,
+						"firstBlockInBatch", firstBlockNum,
+						"nextWindowStart", nextWindowStart,
+						"blocksUntilWindowStart", blocksUntilWindowStart,
+						"reason", "cache cold - limiting to next window-start to allow cache to warm")
+				} else if uint64(maxBatchSize) > windowSize {
+					// Fallback: if calculation fails, use windowSize as conservative limit
+					maxBatchSize = int(windowSize)
+					log.Info("PSP - Limiting import batch size when cache is cold (fallback)",
+						"originalBatchSize", len(results),
+						"limitedBatchSize", maxBatchSize,
+						"windowSize", windowSize,
+						"reason", "cache cold - limiting to windowSize to allow cache to warm")
+				}
+			}
+		}
+
+		// Split large batches into smaller ones if needed
+		for len(results) > 0 {
+			batchSize := len(results)
+			if batchSize > maxBatchSize {
+				batchSize = maxBatchSize
+			}
+
+			batch := results[:batchSize]
+			results = results[batchSize:]
+
+			// Process the retrieved block segments
+			if err := d.importBlockResultsStateless(batch); err != nil {
+				log.Warn("Block import failed", "err", err)
+				return err
+			}
 		}
 	}
 }
