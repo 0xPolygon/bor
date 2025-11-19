@@ -665,6 +665,7 @@ func (l *pricedList) Removed(count int) {
 	if int(stales) <= (len(l.urgent.list)+len(l.floating.list))/4 {
 		return
 	}
+	reheapDueToStaleCounter.Inc(1)
 	// Seems we've reached a critical number of stale transactions, reheap
 	l.Reheap()
 }

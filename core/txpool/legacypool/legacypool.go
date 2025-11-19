@@ -128,6 +128,10 @@ var (
 	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
 	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
 	urgentHeapPopTimer    = metrics.NewRegisteredTimer("txpool/heappop/urgent", nil)
+
+	reheapDueToStaleCounter   = metrics.NewRegisteredCounter("txpool/reheap/stale", nil)
+	reheapDueToBasefeeCounter = metrics.NewRegisteredCounter("txpool/reheap/basefee", nil)
+
 	// pendingLockWaitTimer measures how long it took to acquire the pending lock. This is useful
 	// to understand delay in block building and the impact of lock acquisition.
 	pendingLockWaitTimer = metrics.NewRegisteredTimer("txpool/pendinglockwait", nil)
@@ -1565,6 +1569,7 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		if reset.newHead != nil {
 			if pool.chainconfig.IsLondon(new(big.Int).Add(reset.newHead.Number, big.NewInt(1))) {
 				pendingBaseFee := eip1559.CalcBaseFee(pool.chainconfig, reset.newHead)
+				reheapDueToBasefeeCounter.Inc(1)
 				pool.priced.SetBaseFee(pendingBaseFee)
 			} else {
 				pool.priced.Reheap()
