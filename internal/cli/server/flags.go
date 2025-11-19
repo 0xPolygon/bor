@@ -323,10 +323,10 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "is-active-block-producer",
-		Usage:   "Indicates whether this validator is an active block producer post rio HF (to allow config modifications)",
-		Value:   &c.cliConfig.Sealer.IsActiveBlockProducer,
-		Default: c.cliConfig.Sealer.IsActiveBlockProducer,
+		Name:    "allow-gas-tip-override",
+		Usage:   "Allows block producers to override the mining gas tip",
+		Value:   &c.cliConfig.Sealer.AllowGasTipOverride,
+		Default: c.cliConfig.Sealer.AllowGasTipOverride,
 		Group:   "Sealer",
 	})
 	f.StringFlag(&flagset.StringFlag{

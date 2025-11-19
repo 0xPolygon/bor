@@ -286,6 +286,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```mine```: Enable mining (default: false)
 
+- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+
 - ```is-active-block-producer```: Indicates whether this validator is an active block producer post rio HF (to allow config modifications) (default: false)
 
 - ```miner.etherbase```: Public address for block mining rewards

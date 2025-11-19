@@ -152,15 +152,19 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		return nil, fmt.Errorf("invalid history mode %d", config.HistoryMode)
 	}
 
-	// PIP-35: Enforce min gas price to 24 gewi for active block producers and 25 gwei for the rest
-	defaultMinerGasPrice := big.NewInt(params.BorDefaultMinerGasPrice)
-	if config.Miner.IsActiveBlockProducer {
-		defaultMinerGasPrice = big.NewInt(params.BorDefaultMinerGasPriceBp)
+	if config.Miner.GasPrice == nil {
+		log.Info("Miner gas price not set, using default", "value", params.BorDefaultMinerGasPrice)
+		config.Miner.GasPrice = big.NewInt(params.BorDefaultMinerGasPrice)
 	}
-	if config.Miner.GasPrice == nil || config.Miner.GasPrice.Cmp(defaultMinerGasPrice) != 0 {
-		log.Warn("Sanitizing invalid miner gas price", "provided", config.Miner.GasPrice, "updated", defaultMinerGasPrice)
-		config.Miner.GasPrice = defaultMinerGasPrice
+	// PIP-35: Enforce min gas price to 25 gwei only if gas tip override is not allowed
+	if !config.Miner.AllowGasTipOverride && config.Miner.GasPrice.Cmp(big.NewInt(params.BorDefaultMinerGasPrice)) != 0 {
+		log.Warn("Sanitizing invalid miner gas price", "provided", config.Miner.GasPrice, "updated", ethconfig.Defaults.Miner.GasPrice)
+		config.Miner.GasPrice = ethconfig.Defaults.Miner.GasPrice
 	}
+	if config.Miner.AllowGasTipOverride {
+		log.Info("Setting miner gas price", "value", config.Miner.GasPrice)
+	}
+
 	if config.NoPruning && config.TrieDirtyCache > 0 && config.StateScheme == rawdb.HashScheme {
 		if config.SnapshotCache > 0 {
 			config.TrieCleanCache += config.TrieDirtyCache * 3 / 5
