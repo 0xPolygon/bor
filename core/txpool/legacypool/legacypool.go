@@ -778,7 +778,7 @@ func reportTxAddMetrics(stage uint8, stage0Duration, stage1Duration, stage2Durat
 		return
 	}
 	// default case in all stages
-	if stage1Duration > 0 {
+	if stage0Duration > 0 {
 		asyncAddStage0Timer.Update(stage0Duration)
 	}
 	switch stage {
