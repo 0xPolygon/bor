@@ -171,28 +171,23 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 
 	peer.log.Trace("Requesting new batch of witnesses", "count", len(hashes), "from_hash", hashes[0])
 
-	// Determine if we should request compact witnesses for this batch.
-	// Since RequestWitnessesWithVerification takes a single useCompact flag for all hashes,
-	// we check if ALL blocks should use compact witnesses. If any block needs a full witness,
-	// we request full for all (conservative but safe).
-	useCompact := true
-	for _, header := range req.Headers {
+	// Determine useCompact for each block in the batch.
+	// This allows per-block determination of compact vs full witnesses within a single batch.
+	useCompact := make([]bool, len(req.Headers))
+	for i, header := range req.Headers {
 		blockNum := header.Number.Uint64()
-		if !shouldRequestCompactWitnessForBlock((*Downloader)(q), blockNum) {
-			useCompact = false
-			break
-		}
+		useCompact[i] = shouldRequestCompactWitnessForBlock((*Downloader)(q), blockNum)
 	}
 
 	log.Info("PSP - debug: Downloader requesting witnesses",
 		"count", len(hashes),
-		"useCompact", useCompact,
 		"firstBlock", req.Headers[0].Number.Uint64(),
 		"lastBlock", req.Headers[len(req.Headers)-1].Number.Uint64())
 
-	// Use RequestWitnessesWithVerification with the determined useCompact flag
-	// Note: We pass nil for verifyPageCount since the downloader doesn't have access to the handler's verification callback
-	return peer.peer.RequestWitnessesWithVerification(hashes, resCh, nil, useCompact)
+	// Use RequestWitnessesWithVerification with per-block useCompact decisions.
+	// Note: We pass nil for verifyPageCount since the downloader doesn't have access to the handler's verification callback.
+	// We pass false as the fallback useCompactDefault (not used when useCompact slice is provided).
+	return peer.peer.RequestWitnessesWithVerification(hashes, resCh, nil, useCompact, false)
 }
 
 // deliver is responsible for taking a generic response packet from the concurrent

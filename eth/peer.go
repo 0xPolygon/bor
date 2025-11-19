@@ -176,7 +176,7 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
-	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, false) // Default to full witness
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil, false) // Default to full witness
 }
 
 // RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
@@ -288,8 +288,10 @@ func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error
 	}
 }
 
-// RequestWitnessesWithVerification requests witnesses with optional page count verification
-func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, useCompact bool) (*eth.Request, error) {
+// RequestWitnessesWithVerification requests witnesses with optional page count verification.
+// useCompact is a slice where useCompact[i] determines whether to request compact witness for hashes[i].
+// If useCompact is nil or shorter than hashes, the fallback useCompactDefault is used for missing entries.
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, useCompact []bool, useCompactDefault bool) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -307,7 +309,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 	var buildRequestMu sync.RWMutex
 
 	// Build all the initial requests synchronously.
-	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, useCompact)
+	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, useCompact, useCompactDefault)
 	if buildWitReqErr != nil {
 		p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 		return nil, buildWitReqErr
@@ -341,7 +343,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, useCompact)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, useCompact, useCompactDefault)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -447,7 +449,8 @@ func (p *ethPeer) receiveWitnessPage(
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
 	downloadPaused map[common.Hash]bool,
 	verifyPageCount func(common.Hash, uint64, string) bool,
-	useCompact bool,
+	useCompact []bool,
+	useCompactDefault bool,
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -467,7 +470,7 @@ func (p *ethPeer) receiveWitnessPage(
 			// non blocking call to avoid race condition because of semaphore
 			witReqsWg.Add(1) // protecting from not finishing before requests are built
 			go func() {
-				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompact)
+				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompact, useCompactDefault)
 				if buildWitReqErr != nil {
 					p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 				}
@@ -567,7 +570,7 @@ func (p *ethPeer) receiveWitnessPage(
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built
 		go func() {
-			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompact)
+			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompact, useCompactDefault)
 			if buildWitReqErr != nil {
 				p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 			}
@@ -606,7 +609,8 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
-	useCompact bool,
+	useCompact []bool,
+	useCompactDefault bool,
 ) error {
 	buildRequestMu.Lock()
 	defer buildRequestMu.Unlock()
@@ -618,8 +622,17 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	}
 	log.Info("PSP - debug: Building witness requests",
 		"hashes", len(hashes),
-		"useCompact", useCompact,
 		"hashesList", hashesList)
+
+	// Build useCompact map from slice, using default for missing entries
+	useCompactMap := make(map[common.Hash]bool, len(hashes))
+	for i, hash := range hashes {
+		if i < len(useCompact) {
+			useCompactMap[hash] = useCompact[i]
+		} else {
+			useCompactMap[hash] = useCompactDefault
+		}
+	}
 
 	//checking requests to be done
 	for _, hash := range hashes {
@@ -631,6 +644,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 			end = DefaultPagesRequestPerWitness
 		}
 
+		hashUseCompact := useCompactMap[hash]
 		for page := start; page < end; page++ {
 			if err := p.doWitnessRequest(
 				hash,
@@ -641,7 +655,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 				witReqSem,
 				mapsMu,
 				witTotalRequest,
-				useCompact,
+				hashUseCompact,
 			); err != nil {
 				return err
 			}
@@ -650,6 +664,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 
 	// checking failed requests to retry
 	for hash, _ := range failedRequests {
+		hashUseCompact := useCompactMap[hash]
 		for page, _ := range failedRequests[hash] {
 			retryCount := failedRequests[hash][page]
 			if retryCount.ShouldRetryAgain {
@@ -662,7 +677,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 					witReqSem,
 					mapsMu,
 					witTotalRequest,
-					useCompact,
+					hashUseCompact,
 				); err != nil {
 					return err
 				}

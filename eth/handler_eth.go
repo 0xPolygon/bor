@@ -143,7 +143,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 					"cacheWindowStart", h.chain.GetCacheWindowStart())
 
 				// Request witnesses (compact or full) using the wit peer with verification
-				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
+				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, []bool{useCompact}, false)
 			}
 
 			log.Info("PSP - debug: Notifying block fetcher of new block",
@@ -314,7 +314,7 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 			}
 
 			// Request witnesses (compact or full) using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, []bool{useCompact}, false)
 		}
 
 		// Call the new fetcher method to inject the block

@@ -373,7 +373,7 @@ func (dlp *downloadTesterPeer) RequestWitnesses(hashes []common.Hash, sink chan 
 }
 
 // RequestWitnessesWithVerification implements Peer
-func (dlp *downloadTesterPeer) RequestWitnessesWithVerification(hashes []common.Hash, sink chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, useCompact bool) (*eth.Request, error) {
+func (dlp *downloadTesterPeer) RequestWitnessesWithVerification(hashes []common.Hash, sink chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, useCompact []bool, useCompactDefault bool) (*eth.Request, error) {
 	return nil, nil
 }
 
