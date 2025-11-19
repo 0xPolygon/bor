@@ -769,7 +769,10 @@ func (l *pricedList) Reheap() {
 		l.urgent.list = append(l.urgent.list, tx)
 		return true
 	})
+
+	urgentHeapInitStart := time.Now()
 	heap.Init(&l.urgent)
+	urgentHeapInitTimer.Update(time.Since(urgentHeapInitStart))
 
 	// balance out the two heaps by moving the worse half of transactions into the
 	// floating heap
@@ -779,10 +782,16 @@ func (l *pricedList) Reheap() {
 	floatingCount := len(l.urgent.list) * floatingRatio / (urgentRatio + floatingRatio)
 	l.floating.list = make([]*types.Transaction, floatingCount)
 
+	heapPopStart := time.Now()
 	for i := 0; i < floatingCount; i++ {
 		l.floating.list[i] = heap.Pop(&l.urgent).(*types.Transaction)
 	}
+	urgentHeapPopTimer.Update(time.Since(heapPopStart))
+
+	floatingHeapInitStart := time.Now()
 	heap.Init(&l.floating)
+	floatingHeapInitTimer.Update(time.Since(floatingHeapInitStart))
+
 	reheapTimer.Update(time.Since(start))
 }
 

@@ -123,8 +123,11 @@ var (
 	queuedGauge  = metrics.NewRegisteredGauge("txpool/queued", nil)
 	slotsGauge   = metrics.NewRegisteredGauge("txpool/slots", nil)
 
-	resetCacheGauge = metrics.NewRegisteredGauge("txpool/resetcache", nil)
-	reheapTimer     = metrics.NewRegisteredTimer("txpool/reheap", nil)
+	resetCacheGauge       = metrics.NewRegisteredGauge("txpool/resetcache", nil)
+	reheapTimer           = metrics.NewRegisteredTimer("txpool/reheap", nil)
+	urgentHeapInitTimer   = metrics.NewRegisteredTimer("txpool/heapinit/urgent", nil)
+	floatingHeapInitTimer = metrics.NewRegisteredTimer("txpool/heapinit/floating", nil)
+	urgentHeapPopTimer    = metrics.NewRegisteredTimer("txpool/heappop/urgent", nil)
 	// pendingLockWaitTimer measures how long it took to acquire the pending lock. This is useful
 	// to understand delay in block building and the impact of lock acquisition.
 	pendingLockWaitTimer = metrics.NewRegisteredTimer("txpool/pendinglockwait", nil)
