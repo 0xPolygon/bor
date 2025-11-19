@@ -139,6 +139,10 @@ var (
 	asyncAddStage2Timer         = metrics.NewRegisteredTimer("txpool/add/stage2", nil)
 	asyncAddStage0LockWaitTimer = metrics.NewRegisteredTimer("txpool/add/stage0lockwait", nil)
 	asyncAddStage2LockWaitTimer = metrics.NewRegisteredTimer("txpool/add/stage2lockwait", nil)
+
+	// misc metrics for functions using global lock
+	reportTimer = metrics.NewRegisteredTimer("txpool/misc/report", nil)
+	evictTimer  = metrics.NewRegisteredTimer("txpool/misc/evict", nil)
 )
 
 // BlockChain defines the minimal set of methods needed to back a tx pool with
@@ -404,7 +408,9 @@ func (pool *LegacyPool) loop() {
 		// Handle stats reporting ticks
 		case <-report.C:
 			pool.mu.RLock()
+			start := time.Now()
 			pending, queued := pool.stats()
+			reportTimer.Update(time.Since(start))
 			pool.mu.RUnlock()
 			stales := int(pool.priced.stales.Load())
 
@@ -416,6 +422,7 @@ func (pool *LegacyPool) loop() {
 		// Handle inactive account transaction eviction
 		case <-evict.C:
 			pool.mu.Lock()
+			start := time.Now()
 			for addr := range pool.queue {
 				// Any old enough should be removed
 				if time.Since(pool.beats[addr]) > pool.config.Lifetime {
@@ -426,6 +433,7 @@ func (pool *LegacyPool) loop() {
 					queuedEvictionMeter.Mark(int64(len(list)))
 				}
 			}
+			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
 		}
 	}
