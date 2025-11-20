@@ -414,10 +414,6 @@ func (q *queue) Schedule(headers []*types.Header, hashes []common.Hash, from uin
 			if _, ok := q.witnessTaskPool[hash]; !ok {
 				q.witnessTaskPool[hash] = header
 				q.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
-				log.Info("PSP - debug: Queued witness request in downloader queue",
-					"blockNum", header.Number.Uint64(),
-					"hash", hash.Hex()[:16],
-					"queueSize", q.witnessTaskQueue.Size())
 			} else {
 				log.Warn("Header already scheduled for witness fetch", "number", header.Number, "hash", hash)
 			}
@@ -1090,8 +1086,8 @@ func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, getReceip
 
 // DeliverWitnesses injects a witness retrieval response into the results cache.
 func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta interface{}) (int, error) {
-	log.Info("PSP - debug: DeliverWitnesses entered", "peer", id, "witnessCount", len(witnesses))
-	defer log.Info("PSP - debug: DeliverWitnesses exiting", "peer", id)
+	log.Debug("DeliverWitnesses entered", "peer", id, "witnessCount", len(witnesses))
+	defer log.Debug("DeliverWitnesses exiting", "peer", id)
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -1099,12 +1095,12 @@ func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta
 	// Ensure the peer has a pending request
 	request := q.witnessPendPool[id]
 	if request == nil {
-		log.Warn("PSP - debug: DeliverWitnesses: No pending request found", "peer", id)
+		log.Warn("DeliverWitnesses: No pending request found", "peer", id)
 		witnessDropMeter.Mark(1) // Assuming 1 witness per response drop
 		return 0, errNoFetchesPending
 	}
 
-	log.Info("PSP - debug: DeliverWitnesses: Found pending request", "peer", id, "witnessCount", len(witnesses), "reqHeaders", len(request.Headers))
+	log.Debug("DeliverWitnesses: Found pending request", "peer", id, "count", len(witnesses), "reqHeaders", len(request.Headers))
 
 	// Mark incoming data and time
 	witnessInMeter.Mark(int64(len(witnesses)))
@@ -1129,12 +1125,12 @@ func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta
 	}
 
 	// Call the generic deliver mechanism
-	log.Info("PSP - debug: DeliverWitnesses: Calling generic deliver", "peer", id, "reqHeaders", len(request.Headers), "witnessCount", len(witnesses))
+	log.Debug("DeliverWitnesses: Calling generic deliver", "peer", id, "reqHeaders", len(request.Headers), "witnessCount", len(witnesses))
 	acceptedCount, err := q.deliver(id, q.witnessTaskPool, q.witnessTaskQueue, q.witnessPendPool,
 		witnessReqTimer, witnessInMeter, witnessDropMeter,
 		len(witnesses), // Pass the count of received RLP items
 		validateWitness, reconstructWitness)
-	log.Info("PSP - debug: DeliverWitnesses: Generic deliver returned", "peer", id, "accepted", acceptedCount, "err", err)
+	log.Debug("DeliverWitnesses: Generic deliver returned", "peer", id, "accepted", acceptedCount, "err", err)
 	return acceptedCount, err
 }
 

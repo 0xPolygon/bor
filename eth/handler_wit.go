@@ -134,7 +134,7 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 // The returned data is [][]byte, as rlp.RawValue is essentially []byte.
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	activeSize, nextSize := h.chain.GetCompactCacheSizes()
-	log.Info("PSP - handleGetWitness processing request",
+	log.Debug("handleGetWitness processing request",
 		"peer", peer.ID(),
 		"reqID", req.RequestId,
 		"witnessPages", len(req.WitnessPages),
@@ -206,7 +206,7 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 
 	// Return the collected RLP data
 	activeSizeEnd, nextSizeEnd := h.chain.GetCompactCacheSizes()
-	log.Info("PSP - handleGetWitness returning witnesses pages",
+	log.Debug("handleGetWitness returning witnesses pages",
 		"peer", peer.ID(),
 		"reqID", req.RequestId,
 		"count", len(response),
@@ -222,7 +222,7 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	activeSize, nextSize := h.chain.GetCompactCacheSizes()
 	currentWindowStart := h.chain.GetCacheWindowStart()
-	log.Info("PSP - handleGetCompactWitness processing request",
+	log.Debug("handleGetCompactWitness processing request",
 		"peer", peer.ID(),
 		"reqID", req.RequestId,
 		"witnessPages", len(req.WitnessPages),
@@ -239,7 +239,7 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 	// If parallel import is enabled on this node, cache isn't maintained
 	// Return full witness instead of trying to filter
 	if h.chain.IsParallelStatelessImportEnabled() {
-		log.Info("PSP - Parallel import enabled, returning full witness instead of compact",
+		log.Debug("Parallel import enabled, returning full witness instead of compact",
 			"peer", peer.ID(),
 			"reqID", req.RequestId,
 			"reason", "parallel-stateless-import")
@@ -274,7 +274,7 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			blockNumbers[hash] = header.Number.Uint64()
 		}
 		if windowStart, data := rawdb.ReadCompactWitness(h.chain.DB(), hash); len(data) > 0 {
-			log.Info("PSP - Loaded compact witness from disk",
+			log.Debug("Loaded compact witness from disk",
 				"hash", hash,
 				"windowStart", windowStart,
 				"bytes", len(data))
@@ -362,18 +362,6 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 			}
 			filteredSize := len(cachedFiltered)
 			totalFilteredBytes += filteredSize
-			reduction := float64(originalSize-filteredSize) * 100.0 / float64(originalSize)
-
-			log.Info("PSP - Compact witness cache hit",
-				"hash", witnessPage.Hash,
-				"page", witnessPage.Page,
-				"originalSize", originalSize,
-				"filteredSize", filteredSize,
-				"reductionBytes", originalSize-filteredSize,
-				"reductionPercent", fmt.Sprintf("%.2f", reduction),
-				"activeCacheSize", activeSize,
-				"nextCacheSize", nextSize,
-				"windowStart", expectedWindowStart)
 			continue
 		}
 
@@ -382,14 +370,10 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		// On-the-fly filtering might produce different results than what was stored during import.
 		filteredSize := originalSize // Full witness, no filtering
 		totalFilteredBytes += filteredSize
-		log.Info("PSP - No stored compact witness found, returning full witness",
+		log.Debug("No stored compact witness found, returning full witness",
 			"hash", witnessPage.Hash,
 			"page", witnessPage.Page,
-			"blockNum", blockNum,
-			"originalSize", originalSize,
-			"windowStart", expectedWindowStart,
-			"activeCacheSize", activeSize,
-			"nextCacheSize", nextSize)
+			"originalSize", originalSize)
 		filteredResponse = append(filteredResponse, witnessPage)
 		totalResponsePayloadDataAmount += len(witnessPage.Data)
 		if totalResponsePayloadDataAmount >= MaximumResponseSize {
@@ -397,26 +381,7 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 		}
 	}
 
-	activeSizeEnd, nextSizeEnd := h.chain.GetCompactCacheSizes()
-	reductionBytes := totalOriginalBytes - totalFilteredBytes
-	var reductionPercent string
-	if totalOriginalBytes > 0 {
-		reductionPercent = fmt.Sprintf("%.2f", float64(reductionBytes)*100.0/float64(totalOriginalBytes))
-	} else {
-		reductionPercent = "0.00"
-	}
-
-	log.Info("PSP - handleGetCompactWitness returning filtered witnesses",
-		"peer", peer.ID(),
-		"reqID", req.RequestId,
-		"count", len(filteredResponse),
-		"totalOriginalBytes", totalOriginalBytes,
-		"totalFilteredBytes", totalFilteredBytes,
-		"totalReductionBytes", reductionBytes,
-		"totalReductionPercent", reductionPercent,
-		"activeCacheSize", activeSizeEnd,
-		"nextCacheSize", nextSizeEnd,
-		"windowStart", currentWindowStart)
+	log.Debug("handleGetCompactWitness returning filtered witnesses", "peer", peer.ID(), "reqID", req.RequestId, "count", len(filteredResponse))
 	return filteredResponse, nil
 }
 
@@ -427,17 +392,7 @@ func (h *witHandler) filterWitnessWithCache(witness *stateless.Witness) *statele
 	}
 
 	// Use BlockChain's exported method to filter
-	filtered, originalStates, removed := h.chain.FilterWitnessWithSlidingCache(witness)
-	activeSize, nextSize := h.chain.GetCompactCacheSizes()
-
-	log.Info("PSP - Filtered witness state using cache",
-		"blockNum", witness.Header().Number,
-		"originalStates", originalStates,
-		"filteredStates", len(filtered.State),
-		"removed", removed,
-		"activeCacheSize", activeSize,
-		"nextCacheSize", nextSize,
-		"windowStart", h.chain.GetCacheWindowStart())
+	filtered, _, _ := h.chain.FilterWitnessWithSlidingCache(witness)
 
 	return filtered
 }

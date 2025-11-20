@@ -148,11 +148,8 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 				firstBlockNum := req.Headers[0].Number.Uint64()
 
 				if firstBlockNum > nextWindowStart {
-					log.Warn("PSP - Requesting witness for block ahead of next window-start when cache is cold",
-						"blockNum", firstBlockNum,
-						"currentHead", currentHeadNum,
-						"nextWindowStart", nextWindowStart,
-						"reason", "cache cold - should have been limited by reserve()")
+					// Requesting witness for block ahead of next window-start when cache is cold
+					// This should have been limited by reserve()
 				}
 			}
 		}
@@ -166,11 +163,6 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 		useCompact[i] = shouldRequestCompactWitnessForBlock((*Downloader)(q), blockNum)
 	}
 
-	log.Info("PSP - debug: Downloader requesting witnesses",
-		"count", len(hashes),
-		"firstBlock", req.Headers[0].Number.Uint64(),
-		"lastBlock", req.Headers[len(req.Headers)-1].Number.Uint64())
-
 	// Use RequestWitnessesWithVerification with per-block useCompact decisions.
 	// Note: We pass nil for verifyPageCount since the downloader doesn't have access to the handler's verification callback.
 	// We pass false as the fallback useCompactDefault (not used when useCompact slice is provided).
@@ -181,7 +173,7 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 // fetcher, unpacking the witness data (using wit protocol definitions) and delivering
 // it to the downloader's queue.
 func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int, error) {
-	log.Info("PSP - debug: Delivering witness response", "peer", peer.id, "responseType", fmt.Sprintf("%T", packet.Res))
+	log.Trace("Delivering witness response", "peer", peer.id, "responseType", fmt.Sprintf("%T", packet.Res))
 	// Check the actual response type. Should be a pointer to WitnessPacketRLPPacket.
 	witPacketData, ok := packet.Res.([]*stateless.Witness) // Expect pointer type
 	if !ok {
@@ -190,7 +182,6 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 	}
 
 	numWitnesses := len(witPacketData) // Number of raw witness blobs received
-	log.Info("PSP - debug: Received witness response", "peer", peer.id, "count", numWitnesses)
 
 	// Placeholder: Needs DeliverWitnesses method definition in queue struct
 	// Adjust DeliverWitnesses to accept the raw RLP data or decoded witnesses.
@@ -201,11 +192,11 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 
 	switch {
 	case err == nil && numWitnesses == 0:
-		log.Info("PSP - debug: Requested witnesses delivered (empty batch)", "peer", peer.id)
+		peer.log.Trace("Requested witnesses delivered (empty batch)", "peer", peer.id)
 	case err == nil:
-		log.Info("PSP - debug: Delivered new batch of witnesses", "peer", peer.id, "count", numWitnesses, "accepted", accepted)
+		peer.log.Trace("Delivered new batch of witnesses", "peer", peer.id, "count", numWitnesses, "accepted", accepted)
 	default:
-		log.Warn("PSP - debug: Failed to deliver retrieved witnesses", "peer", peer.id, "err", err, "count", numWitnesses)
+		peer.log.Trace("Failed to deliver retrieved witnesses", "peer", peer.id, "err", err, "count", numWitnesses)
 	}
 
 	return accepted, err

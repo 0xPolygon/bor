@@ -360,9 +360,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		// - len(receivedWitPages) == 0: No witness pages received at all.
 		// - len(reconstructedWitness) == 0: No witness data reconstructed from the received pages.
 		// - lastWitRes == nil: Same as len(reconstructedWitness) == 0, because if we have even one valid witness, lastWitRes will not be nil.
-		log.Info("PSP - debug: RequestWitnesses finished receiving pages", "peer", p.ID(), "receivedPages", len(receivedWitPages), "reconstructedWitnesses", len(reconstructedWitness), "lastWitRes", lastWitRes != nil)
 		if len(receivedWitPages) == 0 || len(reconstructedWitness) == 0 || lastWitRes == nil {
-			log.Warn("PSP - debug: Empty response received for witnesses", "peer", p.ID(), "requestedHashes", len(hashes), "receivedPages", len(receivedWitPages), "reconstructedWitnesses", len(reconstructedWitness))
 			p.witPeer.Peer.Log().Warn("Empty response received for witnesses requested from peer", "peer", p.ID(), "requestedHashes", hashes)
 
 			doneCh := make(chan error)
@@ -417,13 +415,10 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 
 		// Forward the adapted response to the downloader's channel,
 		// or stop if the request has been cancelled.
-		log.Info("PSP - debug: RequestWitnesses sending response to downloader", "peer", p.ID(), "witnessCount", len(witnesses), "hashes", len(hashes))
 		select {
 		case dlResCh <- ethRes:
-			log.Info("PSP - debug: RequestWitnesses successfully sent response to downloader", "peer", p.ID(), "witnessCount", len(witnesses))
 			p.witPeer.Peer.Log().Trace("RequestWitnesses adapter forwarded eth response", "peer", p.ID())
 		case <-wrapperReq.Request.Cancel:
-			log.Info("PSP - debug: RequestWitnesses cancelled before sending response", "peer", p.ID())
 			p.witPeer.Peer.Log().Trace("RequestWitnesses adapter cancelled before forwarding response", "peer", p.ID())
 			// If cancelled, exit the goroutine. The closing of witResCh
 			// will also eventually terminate the loop, but returning
@@ -625,9 +620,6 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	for _, h := range hashes {
 		hashesList = append(hashesList, h.Hex()[:16])
 	}
-	log.Info("PSP - debug: Building witness requests",
-		"hashes", len(hashes),
-		"hashesList", hashesList)
 
 	// Build useCompact map from slice, using default for missing entries
 	useCompactMap := make(map[common.Hash]bool, len(hashes))

@@ -134,22 +134,9 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				// Determine if we should request compact witness based on sliding window
 				useCompact := h.shouldRequestCompactWitness(number)
 
-				log.Info("PSP - debug: Creating witness requester",
-					"blockNum", number,
-					"hash", hash.Hex()[:16],
-					"useCompact", useCompact,
-					"currentHead", h.chain.CurrentBlock().Number.Uint64(),
-					"cacheWarm", h.chain.IsCompactCacheWarm(),
-					"cacheWindowStart", h.chain.GetCacheWindowStart())
-
 				// Request witnesses (compact or full) using the wit peer with verification
 				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, []bool{useCompact}, false)
 			}
-
-			log.Info("PSP - debug: Notifying block fetcher of new block",
-				"blockNum", number,
-				"hash", hash.Hex()[:16],
-				"peer", peer.ID())
 
 			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
 		}
@@ -168,22 +155,6 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 	windowSize := h.chain.GetCacheWindowSize()
 	overlapSize := h.chain.GetCacheOverlapSize()
 	cacheWarm := h.chain.IsCompactCacheWarm()
-	cacheWindowStart := h.chain.GetCacheWindowStart()
-
-	// Get current head for optimization check
-	currentHead := h.chain.CurrentBlock()
-	var currentHeadNum uint64
-	if currentHead != nil {
-		currentHeadNum = currentHead.Number.Uint64()
-	}
-
-	log.Info("PSP - shouldRequestCompactWitness decision",
-		"blockNum", blockNum,
-		"currentHead", currentHeadNum,
-		"cacheWarm", cacheWarm,
-		"cacheWindowStart", cacheWindowStart,
-		"windowSize", windowSize,
-		"overlapSize", overlapSize)
 
 	// If the cache is cold (e.g., after restart), always request full witnesses.
 	// The cache must be warmed by processing a window-start block with a full witness
@@ -200,11 +171,6 @@ func (h *ethHandler) shouldRequestCompactWitness(blockNum uint64) bool {
 		windowSize,
 		overlapSize,
 	)
-
-	log.Info("PSP - shouldRequestCompactWitness result",
-		"blockNum", blockNum,
-		"useCompact", result,
-		"cacheWarm", cacheWarm)
 
 	return result
 }

@@ -39,16 +39,7 @@ func handleWitness(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	// Forward the response to the dispatcher
-	totalBytes := 0
-	for _, page := range packet.WitnessPacketResponse {
-		totalBytes += len(page.Data)
-	}
-
-	log.Info("PSP - Dispatching witness response packet",
-		"peer", peer.ID(),
-		"reqID", packet.RequestId,
-		"count", len(packet.WitnessPacketResponse),
-		"totalBytes", totalBytes)
+	log.Debug("Dispatching witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
 	return peer.dispatchResponse(res, nil)
 }
 
@@ -150,15 +141,6 @@ func handleCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	// Forward the response to the dispatcher
-	totalBytes := 0
-	for _, page := range packet.WitnessPacketResponse {
-		totalBytes += len(page.Data)
-	}
-
-	log.Info("PSP - Dispatching compact witness response packet",
-		"peer", peer.ID(),
-		"reqID", packet.RequestId,
-		"count", len(packet.WitnessPacketResponse),
-		"totalBytes", totalBytes)
+	log.Debug("Dispatching compact witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.WitnessPacketResponse))
 	return peer.dispatchResponse(res, nil)
 }
