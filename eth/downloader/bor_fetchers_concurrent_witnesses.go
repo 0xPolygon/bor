@@ -131,53 +131,72 @@ func (q *witnessQueue) updateCapacity(peer *peerConnection, items int, span time
 // from the download queue to the specified peer.
 // Note: This assumes a 'ReserveWitnesses' method exists or will be added to downloader.queue.
 func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, bool, bool) {
-	// Optimization: Limit how far ahead we request witnesses when cache is cold.
-	// This ensures that after a window-start block is processed and cache becomes warm,
-	// subsequent blocks can use compact witnesses instead of all being requested with full witnesses.
-	//
-	// Strategy: When cache is cold, limit requests to windowSize blocks at a time.
-	// This ensures we process a window-start block before requesting too many more,
-	// allowing the cache to warm and subsequent blocks to use compact witnesses.
 	d := (*Downloader)(q)
 	windowSize := d.blockchain.GetCacheWindowSize()
 	cacheWarm := d.blockchain.IsCompactCacheWarm()
 
 	// If window size is 0, use the original items limit
 	if windowSize == 0 {
-		return q.queue.ReserveWitnesses(peer, items)
+		req, _, progress, throttle := q.queue.ReserveWitnesses(peer, items)
+		return req, progress, throttle
 	}
 
-	// When cache is cold, limit requests to the next window-start block to ensure
-	// we process a window-start block before requesting too many more blocks ahead.
-	// This minimizes wasted full witnesses by switching to compact as soon as cache warms.
+	// When cache is cold, limit requests to blocks up to the next window-start
+	// This ensures we process a window-start block before requesting too many more blocks ahead,
+	// allowing the cache to warm and subsequent blocks to use compact witnesses.
 	if !cacheWarm {
-		// Get current head to calculate next window-start
 		currentHead := d.blockchain.CurrentBlock()
 		if currentHead != nil {
 			currentHeadNum := currentHead.Number.Uint64()
-			// Calculate the next window-start block
 			nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
 
-			// We need to peek at the queue to see what block we're about to request
-			// But we can't access the queue directly here. Instead, we'll use a conservative
-			// limit: if items > windowSize, limit to windowSize. This ensures we don't
-			// request too far ahead, and the next batch will be able to use compact witnesses.
-			originalItems := items
-			if uint64(items) > windowSize {
-				items = int(windowSize)
+			// Try to reserve a larger batch first to peek at block numbers
+			// Then limit based on actual block numbers, not just item count
+			peekCount := items
+			if peekCount < 100 { // Reasonable upper bound to peek ahead
+				peekCount = 100
+			}
+
+			req, firstBlockNum, progress, throttle := q.queue.ReserveWitnesses(peer, peekCount)
+			if req == nil {
+				return nil, progress, throttle
+			}
+
+			// Find how many blocks we can actually reserve (up to nextWindowStart)
+			validCount := 0
+			for i, header := range req.Headers {
+				blockNum := header.Number.Uint64()
+				if blockNum > nextWindowStart {
+					break
+				}
+				validCount = i + 1
+			}
+
+			if validCount < len(req.Headers) {
+				// Store original count before trimming
+				originalCount := len(req.Headers)
+				// Trim the request to only include valid blocks
+				// Note: The excess blocks remain in the queue and will be requested later
+				// when the cache warms up, at which point they can use compact witnesses
+				req.Headers = req.Headers[:validCount]
 				log.Info("PSP - Limiting witness requests when cache is cold",
-					"originalItems", originalItems,
-					"limitedItems", items,
+					"originalCount", originalCount,
+					"limitedCount", validCount,
 					"windowSize", windowSize,
 					"currentHead", currentHeadNum,
+					"firstBlock", firstBlockNum,
 					"nextWindowStart", nextWindowStart,
-					"reason", "cache cold - limiting to windowSize to allow cache to warm")
+					"lastReservedBlock", req.Headers[validCount-1].Number.Uint64(),
+					"reason", "cache cold - limiting to next window-start to allow cache to warm")
 			}
+
+			return req, progress, throttle
 		}
 	}
 
-	// Assuming ReserveWitnesses returns *fetchRequest, bool, bool like ReserveBodies
-	return q.queue.ReserveWitnesses(peer, items) // Placeholder: Needs implementation in queue struct
+	// Normal path: cache is warm or no optimization needed
+	req, _, progress, throttle := q.queue.ReserveWitnesses(peer, items)
+	return req, progress, throttle
 }
 
 // unreserve is responsible for removing the current witness retrieval allocation
@@ -215,6 +234,29 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 	}
 
 	peer.log.Trace("Requesting new batch of witnesses", "count", len(hashes), "from_hash", hashes[0])
+
+	// Safety check: if cache is cold and block is too far ahead, log warning
+	// This is a fallback in case reserve() didn't catch it
+	d := (*Downloader)(q)
+	if !d.blockchain.IsCompactCacheWarm() && len(req.Headers) > 0 {
+		currentHead := d.blockchain.CurrentBlock()
+		if currentHead != nil {
+			windowSize := d.blockchain.GetCacheWindowSize()
+			if windowSize > 0 {
+				currentHeadNum := currentHead.Number.Uint64()
+				nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
+				firstBlockNum := req.Headers[0].Number.Uint64()
+
+				if firstBlockNum > nextWindowStart {
+					log.Warn("PSP - Requesting witness for block ahead of next window-start when cache is cold",
+						"blockNum", firstBlockNum,
+						"currentHead", currentHeadNum,
+						"nextWindowStart", nextWindowStart,
+						"reason", "cache cold - should have been limited by reserve()")
+				}
+			}
+		}
+	}
 
 	// Determine useCompact for each block in the batch.
 	// This allows per-block determination of compact vs full witnesses within a single batch.

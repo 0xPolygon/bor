@@ -580,12 +580,20 @@ func (q *queue) ReserveReceipts(p *peerConnection, count int) (*fetchRequest, bo
 
 // ReserveWitnesses reserves a set of witness fetches for the given peer, skipping
 // any previously failed downloads. Beside the next batch of needed fetches, it
-// also returns a flag indicating progress and whether the caller should throttle.
-func (q *queue) ReserveWitnesses(p *peerConnection, count int) (*fetchRequest, bool, bool) {
+// also returns the first block number in the reserved batch (if any) for optimization checks,
+// a flag indicating progress and whether the caller should throttle.
+func (q *queue) ReserveWitnesses(p *peerConnection, count int) (*fetchRequest, uint64, bool, bool) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
 
-	return q.reserveHeaders(p, count, q.witnessTaskPool, q.witnessTaskQueue, q.witnessPendPool, witnessType)
+	req, progress, throttle := q.reserveHeaders(p, count, q.witnessTaskPool, q.witnessTaskQueue, q.witnessPendPool, witnessType)
+
+	var firstBlockNum uint64
+	if req != nil && len(req.Headers) > 0 {
+		firstBlockNum = req.Headers[0].Number.Uint64()
+	}
+
+	return req, firstBlockNum, progress, throttle
 }
 
 // reserveHeaders reserves a set of data download operations for a given peer,
