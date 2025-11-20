@@ -2273,11 +2273,6 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 				} else {
 					windowStart := bc.CalculateCacheWindowStart(block.NumberU64())
 					rawdb.WriteCompactWitness(blockBatch, block.Hash(), windowStart, compactBuf.Bytes())
-					log.Info("PSP - Stored compact witness after import",
-						"block", block.NumberU64(),
-						"hash", block.Hash(),
-						"windowStart", windowStart,
-						"bytes", compactBuf.Len())
 				}
 			}
 		}
@@ -2593,7 +2588,7 @@ func (bc *BlockChain) handleHeaderVerificationError(block *types.Block, index in
 
 // parallelStatelessImport processes a batch of blocks in parallel in stateless mode.
 func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats, stopHeaders func()) (int, error) {
-	log.Info("PSP - Performing parallel stateless import", "chain length", len(chain))
+	log.Debug("Performing parallel stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessParallelImportTimer.UpdateSince(start) }()
 	statelessParallelImportBlocksCounter.Inc(int64(len(chain)))
@@ -2824,7 +2819,7 @@ func (bc *BlockChain) InsertChainStateless(chain types.Blocks, witnesses []*stat
 
 // insertChainStatelessSequential imports a small batch of blocks sequentially in stateless mode.
 func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witnesses []*stateless.Witness, errChans []chan error, stats *insertStats) (int, error) {
-	log.Info("PSP - Performing sequential stateless import", "chain length", len(chain))
+	log.Debug("Performing sequential stateless import", "chain length", len(chain))
 	start := time.Now()
 	defer func() { statelessSequentialImportTimer.UpdateSince(start) }()
 	statelessSequentialImportBlocksCounter.Inc(int64(len(chain)))
@@ -4234,6 +4229,58 @@ func calculateCacheWindowStart(blockNum uint64) uint64 {
 	return (blockNum / compactWitnessCacheWindowSize) * compactWitnessCacheWindowSize
 }
 
+// ShouldUseCompactWitness is a pure function that determines if a compact witness should be used
+// for a given block number based on cache state and window configuration.
+// This function is shared between eth and downloader packages to avoid code duplication.
+//
+// Parameters:
+//   - cacheWarm: Whether the cache has been warmed (e.g., window-start block processed)
+//   - parallel: Whether parallel stateless import is enabled (cache not maintained in parallel mode)
+//   - blockNum: The block number to check
+//   - windowSize: Size of the cache window (consensus constant)
+//   - overlapSize: Size of overlap between windows (consensus constant)
+//
+// Returns true if compact witness should be used, false for full witness.
+func ShouldUseCompactWitness(cacheWarm bool, parallel bool, blockNum, windowSize, overlapSize uint64) bool {
+	// Compact witness requires sequential block processing.
+	if parallel {
+		return false
+	}
+	// If the compact cache hasn't been warmed yet (e.g. node restarted mid-window),
+	// request full witnesses until we process the next window start.
+	if !cacheWarm {
+		return false
+	}
+	// Without a valid window, fall back to full witnesses.
+	if windowSize == 0 {
+		return false
+	}
+
+	// Calculate the consensus-aligned window start for the requested block.
+	expectedWindowStart := (blockNum / windowSize) * windowSize
+	if blockNum == expectedWindowStart {
+		return false
+	}
+
+	// Calculate the first block of the overlap region for this window.
+	if overlapSize == 0 {
+		return true
+	}
+	var overlapStartOffset uint64
+	if overlapSize >= windowSize {
+		overlapStartOffset = 0
+	} else {
+		overlapStartOffset = windowSize - overlapSize
+	}
+	blockAtOverlapStart := expectedWindowStart + overlapStartOffset
+	if blockNum == blockAtOverlapStart {
+		return false
+	}
+
+	// Block is within window (not at window start or overlap start), can use compact witness.
+	return true
+}
+
 // manageSlidingWindow handles window sliding logic.
 // Returns true if window was slid, false otherwise.
 func (bc *BlockChain) manageSlidingWindow(blockNum uint64) bool {
@@ -4333,20 +4380,6 @@ func (bc *BlockChain) FilterWitnessWithSlidingCache(witness *stateless.Witness) 
 
 	filtered.State = filteredStates
 
-	blockNum := uint64(0)
-	if header := filtered.Header(); header != nil {
-		blockNum = header.Number.Uint64()
-	}
-
-	log.Info("PSP - Sliding cache filtered witness",
-		"block", blockNum,
-		"originalStates", originalStates,
-		"filteredStates", len(filteredStates),
-		"removedStates", removed,
-		"windowStart", bc.cacheWindowStart,
-		"activeCacheSize", len(bc.activeCacheMap),
-		"nextCacheSize", len(bc.nextCacheMap))
-
 	return filtered, originalStates, removed
 }
 
@@ -4437,7 +4470,7 @@ func (bc *BlockChain) updateSlidingWindowCache(blockNum uint64, originalWitnessS
 		bc.compactCacheWarm.Store(true)
 	}
 
-	log.Info("PSP - Updated sliding window cache",
+	log.Debug("Updated sliding window cache",
 		"block", blockNum,
 		"windowStart", bc.cacheWindowStart,
 		"inOverlap", inOverlapPeriod,
@@ -4465,13 +4498,13 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		if err := witness.EncodeRLP(&buf); err == nil {
 			witnessBytes = buf.Len()
 		} else {
-			log.Warn("PSP - Failed to measure witness payload size", "block", blockNum, "err", err)
+			log.Warn("Failed to measure witness payload size", "block", blockNum, "err", err)
 		}
 	}
 
 	activeCacheSize, nextCacheSize := bc.GetCompactCacheSizes()
 
-	log.Info("PSP - Processing block with witness",
+	log.Debug("Processing block with witness",
 		"block", blockNum,
 		"parallelMode", parallelMode,
 		"hasWitness", hasWitness,
@@ -4480,13 +4513,6 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		"activeCacheSize", activeCacheSize,
 		"nextCacheSize", nextCacheSize,
 		"windowStart", bc.GetCacheWindowStart())
-
-	log.Info("PSP - debug: Processing block",
-		"blockNum", blockNum,
-		"hash", block.Hash().Hex()[:16],
-		"hasWitness", hasWitness,
-		"cacheWarm", bc.compactCacheWarm.Load(),
-		"cacheWindowStart", bc.GetCacheWindowStart())
 
 	if !hasWitness {
 		return nil, nil, errors.New("nil witness")
@@ -4515,7 +4541,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			mergedCount := bc.mergeSpanCacheIntoWitness(witness)
 			if mergedCount > 0 {
 				activeSize, nextSize := bc.GetCompactCacheSizes()
-				log.Info("PSP - Merged cached states into witness",
+				log.Debug("Merged cached states into witness",
 					"block", blockNum,
 					"witnessStatesBefore", witnessStatesBefore,
 					"mergedFromCache", mergedCount,

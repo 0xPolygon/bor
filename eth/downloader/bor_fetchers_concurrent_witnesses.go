@@ -23,6 +23,7 @@ import (
 
 	// Assuming witnesses are related to types
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
@@ -44,55 +45,14 @@ func shouldRequestCompactWitnessForBlock(d *Downloader, blockNum uint64) bool {
 	// We must rely solely on IsCompactCacheWarm() which correctly returns false
 	// when cacheWindowStart == 0 (uninitialized after restart).
 
-	// Use the same logic as shouldUseCompactWitness
-	return shouldUseCompactWitnessForDownloader(
+	// Use the shared logic from core package
+	return core.ShouldUseCompactWitness(
 		cacheWarm,
 		d.blockchain.IsParallelStatelessImportEnabled(),
 		blockNum,
 		windowSize,
 		overlapSize,
 	)
-}
-
-// shouldUseCompactWitnessForDownloader replicates the logic from shouldUseCompactWitness
-// in eth/handler_eth.go but is accessible from the downloader package.
-func shouldUseCompactWitnessForDownloader(cacheWarm bool, parallel bool, blockNum, windowSize, overlapSize uint64) bool {
-	// Compact witness requires sequential block processing.
-	if parallel {
-		return false
-	}
-	// If the compact cache hasn't been warmed yet (e.g. node restarted mid-window),
-	// request full witnesses until we process the next window start.
-	if !cacheWarm {
-		return false
-	}
-	// Without a valid window, fall back to full witnesses.
-	if windowSize == 0 {
-		return false
-	}
-
-	// Calculate the consensus-aligned window start for the requested block.
-	expectedWindowStart := (blockNum / windowSize) * windowSize
-	if blockNum == expectedWindowStart {
-		return false
-	}
-
-	// Calculate the first block of the overlap region for this window.
-	if overlapSize == 0 {
-		return true
-	}
-	var overlapStartOffset uint64
-	if overlapSize >= windowSize {
-		overlapStartOffset = 0
-	} else {
-		overlapStartOffset = windowSize - overlapSize
-	}
-	blockAtOverlapStart := expectedWindowStart + overlapStartOffset
-	if blockNum == blockAtOverlapStart {
-		return false
-	}
-
-	return true
 }
 
 // witnessQueue implements typedQueue and is a type adapter between the generic

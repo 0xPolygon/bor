@@ -785,7 +785,7 @@ func TestShouldUseCompactWitness(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := shouldUseCompactWitness(tt.cacheWarm, tt.parallel, tt.blockNum, tt.windowSize, tt.overlapSize)
+			got := core.ShouldUseCompactWitness(tt.cacheWarm, tt.parallel, tt.blockNum, tt.windowSize, tt.overlapSize)
 			require.Equal(t, tt.expectCompact, got)
 		})
 	}

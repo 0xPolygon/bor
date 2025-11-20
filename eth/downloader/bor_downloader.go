@@ -2343,7 +2343,7 @@ func (d *Downloader) processFullSyncContentStateless() error {
 
 				if blocksUntilWindowStart > 0 && uint64(blocksUntilWindowStart) < uint64(maxBatchSize) {
 					maxBatchSize = int(blocksUntilWindowStart)
-					log.Info("PSP - Limiting import batch size when cache is cold",
+					log.Debug("Limiting import batch size when cache is cold",
 						"originalBatchSize", len(results),
 						"limitedBatchSize", maxBatchSize,
 						"windowSize", windowSize,
@@ -2355,7 +2355,7 @@ func (d *Downloader) processFullSyncContentStateless() error {
 				} else if uint64(maxBatchSize) > windowSize {
 					// Fallback: if calculation fails, use windowSize as conservative limit
 					maxBatchSize = int(windowSize)
-					log.Info("PSP - Limiting import batch size when cache is cold (fallback)",
+					log.Debug("Limiting import batch size when cache is cold (fallback)",
 						"originalBatchSize", len(results),
 						"limitedBatchSize", maxBatchSize,
 						"windowSize", windowSize,
