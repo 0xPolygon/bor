@@ -2079,6 +2079,7 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 							signer,
 							txs[i],
 							int(rs[i].TransactionIndex),
+							false,
 						), nil
 					}
 					return api.GetTransactionReceipt(receiptCtx, hash)
