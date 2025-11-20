@@ -1070,25 +1070,21 @@ func (q *queue) DeliverReceipts(id string, receiptList []rlp.RawValue, getReceip
 
 // DeliverWitnesses injects a witness retrieval response into the results cache.
 func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta interface{}) (int, error) {
-	log.Debug("DeliverWitnesses: Entered", "peer", id)
-	defer log.Debug("DeliverWitnesses: Exiting", "peer", id)
+	log.Info("PSP - debug: DeliverWitnesses entered", "peer", id, "witnessCount", len(witnesses))
+	defer log.Info("PSP - debug: DeliverWitnesses exiting", "peer", id)
 
 	q.lock.Lock()
-	log.Trace("DeliverWitnesses: Acquired lock", "peer", id)
-	defer func() {
-		log.Trace("DeliverWitnesses: Releasing lock", "peer", id)
-		q.lock.Unlock()
-	}()
+	defer q.lock.Unlock()
 
 	// Ensure the peer has a pending request
 	request := q.witnessPendPool[id]
 	if request == nil {
-		log.Warn("DeliverWitnesses: No pending request found", "peer", id)
+		log.Warn("PSP - debug: DeliverWitnesses: No pending request found", "peer", id)
 		witnessDropMeter.Mark(1) // Assuming 1 witness per response drop
 		return 0, errNoFetchesPending
 	}
 
-	log.Debug("DeliverWitnesses: Received witnesses", "peer", id, "count", len(witnesses))
+	log.Info("PSP - debug: DeliverWitnesses: Found pending request", "peer", id, "witnessCount", len(witnesses), "reqHeaders", len(request.Headers))
 
 	// Mark incoming data and time
 	witnessInMeter.Mark(int64(len(witnesses)))
@@ -1113,12 +1109,12 @@ func (q *queue) DeliverWitnesses(id string, witnesses []*stateless.Witness, meta
 	}
 
 	// Call the generic deliver mechanism
-	log.Debug("DeliverWitnesses: Calling generic deliver", "peer", id, "reqHeaders", len(request.Headers))
+	log.Info("PSP - debug: DeliverWitnesses: Calling generic deliver", "peer", id, "reqHeaders", len(request.Headers), "witnessCount", len(witnesses))
 	acceptedCount, err := q.deliver(id, q.witnessTaskPool, q.witnessTaskQueue, q.witnessPendPool,
 		witnessReqTimer, witnessInMeter, witnessDropMeter,
 		len(witnesses), // Pass the count of received RLP items
 		validateWitness, reconstructWitness)
-	log.Debug("DeliverWitnesses: Generic deliver returned", "peer", id, "accepted", acceptedCount, "err", err)
+	log.Info("PSP - debug: DeliverWitnesses: Generic deliver returned", "peer", id, "accepted", acceptedCount, "err", err)
 	return acceptedCount, err
 }
 

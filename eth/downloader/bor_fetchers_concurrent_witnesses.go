@@ -296,7 +296,7 @@ func (q *witnessQueue) request(peer *peerConnection, req *fetchRequest, resCh ch
 // fetcher, unpacking the witness data (using wit protocol definitions) and delivering
 // it to the downloader's queue.
 func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int, error) {
-	log.Trace("Delivering witness response", "peer", peer.id)
+	log.Info("PSP - debug: Delivering witness response", "peer", peer.id, "responseType", fmt.Sprintf("%T", packet.Res))
 	// Check the actual response type. Should be a pointer to WitnessPacketRLPPacket.
 	witPacketData, ok := packet.Res.([]*stateless.Witness) // Expect pointer type
 	if !ok {
@@ -305,6 +305,7 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 	}
 
 	numWitnesses := len(witPacketData) // Number of raw witness blobs received
+	log.Info("PSP - debug: Received witness response", "peer", peer.id, "count", numWitnesses)
 
 	// Placeholder: Needs DeliverWitnesses method definition in queue struct
 	// Adjust DeliverWitnesses to accept the raw RLP data or decoded witnesses.
@@ -315,11 +316,11 @@ func (q *witnessQueue) deliver(peer *peerConnection, packet *eth.Response) (int,
 
 	switch {
 	case err == nil && numWitnesses == 0:
-		peer.log.Trace("Requested witnesses delivered (empty batch)")
+		log.Info("PSP - debug: Requested witnesses delivered (empty batch)", "peer", peer.id)
 	case err == nil:
-		peer.log.Trace("Delivered new batch of witnesses", "count", numWitnesses, "accepted", accepted)
+		log.Info("PSP - debug: Delivered new batch of witnesses", "peer", peer.id, "count", numWitnesses, "accepted", accepted)
 	default:
-		peer.log.Debug("Failed to deliver retrieved witnesses", "err", err)
+		log.Warn("PSP - debug: Failed to deliver retrieved witnesses", "peer", peer.id, "err", err, "count", numWitnesses)
 	}
 
 	return accepted, err
