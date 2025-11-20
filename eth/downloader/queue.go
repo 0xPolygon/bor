@@ -599,14 +599,19 @@ func (q *queue) ReserveWitnesses(p *peerConnection, count int) (*fetchRequest, u
 // ReturnWitnessHeaders returns a slice of headers to the witnessTaskQueue.
 // This is used when a larger batch was reserved for peeking, but only a subset
 // could be processed due to cold cache or window limits.
-func (q *queue) ReturnWitnessHeaders(headers []*types.Header) {
+// If peerID is provided and removeFromPendPool is true, it also removes the request from pendPool.
+// Note: The caller should have already trimmed the request in pendPool before calling this.
+func (q *queue) ReturnWitnessHeaders(headers []*types.Header, peerID string, removeFromPendPool bool) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
 
+	// If requested, remove the entire request from pendPool (used when returning nil from reserve)
+	if removeFromPendPool && peerID != "" {
+		delete(q.witnessPendPool, peerID)
+	}
+
+	// Return headers to the queue
 	for _, header := range headers {
-		// Remove from pendPool if it exists (shouldn't happen, but safety check)
-		// Note: We can't easily check which peer had it, so we'll just return to queue
-		// The pendPool entry will be cleaned up when the request expires or is delivered
 		q.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
 	}
 }

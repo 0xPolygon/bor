@@ -181,9 +181,8 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 					"nextWindowStart", nextWindowStart,
 					"blocksUntilWindowStart", blocksUntilWindowStart,
 					"reason", "cache cold - first block too far ahead, waiting for cache to warm")
-				// Return all headers to queue - they'll be reserved later when cache is warm
-				// Note: The request in pendPool will expire naturally, and headers will be returned
-				q.queue.ReturnWitnessHeaders(req.Headers)
+				// Return all headers to queue and remove request from pendPool
+				q.queue.ReturnWitnessHeaders(req.Headers, peer.id, true)
 				return nil, progress, throttle
 			}
 
@@ -203,14 +202,13 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 
 			if validCount < len(req.Headers) {
 				// Trim the request to only valid blocks
-				// The excess headers will be returned to queue by the deliver function
-				// when the request is processed (or expires)
 				excessHeaders := req.Headers[validCount:]
 				req.Headers = req.Headers[:validCount]
 
-				// Return excess headers to queue now so they can be reserved by other peers
-				// or reserved later when cache is warm
-				q.queue.ReturnWitnessHeaders(excessHeaders)
+				// Return excess headers to queue (they're already removed from req.Headers which is the same object in pendPool)
+				// This allows other peers to reserve them or they can be reserved later when cache is warm
+				// Don't remove from pendPool since we're still using the request (just trimmed)
+				q.queue.ReturnWitnessHeaders(excessHeaders, "", false)
 				log.Info("PSP - Limiting witness requests when cache is cold",
 					"originalCount", peekCount,
 					"validCount", validCount,
