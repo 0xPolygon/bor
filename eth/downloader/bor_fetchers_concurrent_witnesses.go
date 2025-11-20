@@ -175,13 +175,28 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 			if validCount < len(req.Headers) {
 				// Store original count before trimming
 				originalCount := len(req.Headers)
+				// Get excess headers that need to be returned to the queue
+				excessHeaders := req.Headers[validCount:]
 				// Trim the request to only include valid blocks
-				// Note: The excess blocks remain in the queue and will be requested later
-				// when the cache warms up, at which point they can use compact witnesses
 				req.Headers = req.Headers[:validCount]
+				// Update pendPool to only contain the trimmed headers
+				// This ensures the excess headers are not stuck in pendPool
+				d := (*Downloader)(q)
+				if existingReq, ok := d.queue.witnessPendPool[peer.id]; ok && existingReq == req {
+					// The request is already in pendPool, update it to only contain trimmed headers
+					existingReq.Headers = req.Headers
+				}
+				// Return excess headers to the queue so they can be requested later
+				// when the cache warms up, at which point they can use compact witnesses
+				d.queue.lock.Lock()
+				for _, header := range excessHeaders {
+					d.queue.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
+				}
+				d.queue.lock.Unlock()
 				log.Info("PSP - Limiting witness requests when cache is cold",
 					"originalCount", originalCount,
 					"limitedCount", validCount,
+					"excessCount", len(excessHeaders),
 					"windowSize", windowSize,
 					"currentHead", currentHeadNum,
 					"firstBlock", firstBlockNum,
