@@ -141,71 +141,20 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 		return req, progress, throttle
 	}
 
-	// When cache is cold, limit requests to blocks up to the next window-start
+	// When cache is cold, limit requests to a conservative number (windowSize)
 	// This ensures we process a window-start block before requesting too many more blocks ahead,
 	// allowing the cache to warm and subsequent blocks to use compact witnesses.
-	if !cacheWarm {
-		currentHead := d.blockchain.CurrentBlock()
-		if currentHead != nil {
-			currentHeadNum := currentHead.Number.Uint64()
-			nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
-
-			// Try to reserve a larger batch first to peek at block numbers
-			// Then limit based on actual block numbers, not just item count
-			peekCount := items
-			if peekCount < 100 { // Reasonable upper bound to peek ahead
-				peekCount = 100
-			}
-
-			req, firstBlockNum, progress, throttle := q.queue.ReserveWitnesses(peer, peekCount)
-			if req == nil {
-				return nil, progress, throttle
-			}
-
-			// Find how many blocks we can actually reserve (up to nextWindowStart)
-			validCount := 0
-			for i, header := range req.Headers {
-				blockNum := header.Number.Uint64()
-				if blockNum > nextWindowStart {
-					break
-				}
-				validCount = i + 1
-			}
-
-			if validCount < len(req.Headers) {
-				// Store original count before trimming
-				originalCount := len(req.Headers)
-				// Get excess headers that need to be returned to the queue
-				excessHeaders := req.Headers[validCount:]
-				// Trim the request to only include valid blocks
-				req.Headers = req.Headers[:validCount]
-				// Update pendPool to only contain the trimmed headers
-				// This ensures the excess headers are not stuck in pendPool
-				d := (*Downloader)(q)
-				if existingReq, ok := d.queue.witnessPendPool[peer.id]; ok && existingReq == req {
-					// The request is already in pendPool, update it to only contain trimmed headers
-					existingReq.Headers = req.Headers
-				}
-				// Return excess headers to the queue so they can be requested later
-				// when the cache warms up, at which point they can use compact witnesses
-				d.queue.lock.Lock()
-				for _, header := range excessHeaders {
-					d.queue.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
-				}
-				d.queue.lock.Unlock()
-				log.Info("PSP - Limiting witness requests when cache is cold",
-					"originalCount", originalCount,
-					"limitedCount", validCount,
-					"excessCount", len(excessHeaders),
-					"windowSize", windowSize,
-					"currentHead", currentHeadNum,
-					"firstBlock", firstBlockNum,
-					"nextWindowStart", nextWindowStart,
-					"lastReservedBlock", req.Headers[validCount-1].Number.Uint64(),
-					"reason", "cache cold - limiting to next window-start to allow cache to warm")
-			}
-
-			return req, progress, throttle
+	if !cacheWarm && windowSize > 0 {
+		// Limit to windowSize to ensure we process at least one window-start block
+		// This is a conservative approach that avoids complex header trimming logic
+		if items > int(windowSize) {
+			originalItems := items
+			items = int(windowSize)
+			log.Info("PSP - Limiting witness requests when cache is cold",
+				"originalItems", originalItems,
+				"limitedItems", items,
+				"windowSize", windowSize,
+				"reason", "cache cold - limiting to windowSize to allow cache to warm")
 		}
 	}
 
