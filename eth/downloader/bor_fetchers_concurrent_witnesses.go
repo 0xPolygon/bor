@@ -131,103 +131,10 @@ func (q *witnessQueue) updateCapacity(peer *peerConnection, items int, span time
 // from the download queue to the specified peer.
 // Note: This assumes a 'ReserveWitnesses' method exists or will be added to downloader.queue.
 func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, bool, bool) {
-	d := (*Downloader)(q)
-	windowSize := d.blockchain.GetCacheWindowSize()
-	cacheWarm := d.blockchain.IsCompactCacheWarm()
-
-	// If window size is 0, use the original items limit
-	if windowSize == 0 {
-		req, _, progress, throttle := q.queue.ReserveWitnesses(peer, items)
-		return req, progress, throttle
-	}
-
-	// When cache is cold, check actual block numbers to prevent requesting witnesses
-	// for blocks too far ahead. This ensures we process a window-start block before
-	// requesting witnesses for blocks that would benefit from compact witnesses.
-	if !cacheWarm && windowSize > 0 {
-		currentHead := d.blockchain.CurrentBlock()
-		if currentHead != nil {
-			currentHeadNum := currentHead.Number.Uint64()
-			nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
-
-			// Calculate how many blocks we can safely reserve (up to nextWindowStart)
-			blocksUntilWindowStart := nextWindowStart - currentHeadNum
-			if blocksUntilWindowStart == 0 {
-				// We're at a window-start, allow reserving it
-				blocksUntilWindowStart = 1
-			}
-
-			// Reserve a larger batch to peek at block numbers (up to reasonable limit)
-			peekCount := items
-			if peekCount < 100 {
-				peekCount = 100 // Peek at more blocks to see actual block numbers
-			}
-			if peekCount > 200 {
-				peekCount = 200 // Reasonable upper bound
-			}
-
-			req, firstBlockNum, progress, throttle := q.queue.ReserveWitnesses(peer, peekCount)
-			if req == nil {
-				return nil, progress, throttle
-			}
-
-			// Check if the first block is beyond the next window-start
-			if firstBlockNum > nextWindowStart {
-				// First block is too far ahead - return all headers and don't reserve anything
-				// This prevents requesting full witnesses for blocks that should use compact witnesses
-				log.Info("PSP - Limiting witness requests when cache is cold",
-					"firstBlock", firstBlockNum,
-					"currentHead", currentHeadNum,
-					"nextWindowStart", nextWindowStart,
-					"blocksUntilWindowStart", blocksUntilWindowStart,
-					"reason", "cache cold - first block too far ahead, waiting for cache to warm")
-				// Return all headers to queue and remove request from pendPool
-				q.queue.ReturnWitnessHeaders(req.Headers, peer.id, true)
-				return nil, progress, throttle
-			}
-
-			// Find how many blocks we can actually reserve (up to nextWindowStart)
-			validCount := 0
-			for i, header := range req.Headers {
-				if header.Number.Uint64() > nextWindowStart {
-					break
-				}
-				validCount = i + 1
-			}
-
-			// Also limit to windowSize as a conservative bound
-			if validCount > int(windowSize) {
-				validCount = int(windowSize)
-			}
-
-			if validCount < len(req.Headers) {
-				// Trim the request to only valid blocks
-				// Note: We modify req.Headers which is the same object in pendPool
-				// The excess headers will be returned to queue by the deliver function
-				// when the request is processed (they'll be in request.Headers[validCount:])
-				excessHeaders := req.Headers[validCount:]
-				req.Headers = req.Headers[:validCount]
-
-				// Return excess headers to queue now so they can be reserved by other peers
-				// or reserved later when cache is warm
-				q.queue.ReturnWitnessHeaders(excessHeaders, "", false)
-				log.Info("PSP - Limiting witness requests when cache is cold",
-					"originalCount", peekCount,
-					"validCount", validCount,
-					"excessCount", len(excessHeaders),
-					"firstBlock", firstBlockNum,
-					"lastReservedBlock", req.Headers[len(req.Headers)-1].Number.Uint64(),
-					"currentHead", currentHeadNum,
-					"nextWindowStart", nextWindowStart,
-					"blocksUntilWindowStart", blocksUntilWindowStart,
-					"reason", "cache cold - limiting to next window-start to allow cache to warm")
-			}
-
-			return req, progress, throttle
-		}
-	}
-
-	// Normal path: cache is warm or no optimization needed
+	// We don't limit requests here to avoid breaking the delivery mechanism.
+	// Instead, we rely on the import batch limiting in processFullSyncContentStateless to
+	// ensure we process a window-start block before importing too many blocks ahead.
+	// This is simpler and safer than modifying requests after they're reserved.
 	req, _, progress, throttle := q.queue.ReserveWitnesses(peer, items)
 	return req, progress, throttle
 }
