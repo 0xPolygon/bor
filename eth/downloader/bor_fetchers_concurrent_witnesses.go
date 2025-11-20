@@ -24,7 +24,6 @@ import (
 	// Assuming witnesses are related to types
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -202,16 +201,14 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 			}
 
 			if validCount < len(req.Headers) {
-				// Create a new request with only valid blocks
-				// This avoids modifying the request in pendPool which could cause delivery issues
+				// Trim the request to only valid blocks
+				// Note: We modify req.Headers which is the same object in pendPool
+				// The excess headers will be returned to queue by the deliver function
+				// when the request is processed (they'll be in request.Headers[validCount:])
 				excessHeaders := req.Headers[validCount:]
-				validHeaders := make([]*types.Header, validCount)
-				copy(validHeaders, req.Headers[:validCount])
+				req.Headers = req.Headers[:validCount]
 
-				// Update the request in pendPool with only valid headers
-				req.Headers = validHeaders
-
-				// Return excess headers to queue so they can be reserved by other peers
+				// Return excess headers to queue now so they can be reserved by other peers
 				// or reserved later when cache is warm
 				q.queue.ReturnWitnessHeaders(excessHeaders, "", false)
 				log.Info("PSP - Limiting witness requests when cache is cold",
