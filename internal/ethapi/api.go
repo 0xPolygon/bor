@@ -795,7 +795,19 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	// Make sure the context is cancelled when the call has completed
 	// this makes sure resources are cleaned up.
 	defer cancel()
-	gp := new(core.GasPool).AddGas(gomath.MaxUint64)
+
+	// Note: Don't put a cap on gas if it's a system tx (coming from bor consensus). The
+	// easiest way to enforce this is to set globalGasCap for this call to 0 which will
+	// use the max possible limit.
+	if isBorSystemTx(b.ChainConfig().Bor, args.To) {
+		globalGasCap = 0
+	}
+	gp := new(core.GasPool)
+	if globalGasCap == 0 {
+		gp.AddGas(gomath.MaxUint64)
+	} else {
+		gp.AddGas(globalGasCap)
+	}
 	return applyMessage(ctx, b, args, state, header, timeout, globalGasCap, gp, &blockCtx, &vm.Config{NoBaseFee: true}, precompiles)
 }
 

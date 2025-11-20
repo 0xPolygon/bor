@@ -25,20 +25,20 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -57,14 +57,14 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -85,20 +85,20 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -136,14 +136,14 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: |
           git submodule update --init --recursive --force
           git fetch --no-tags --prune --depth=1 origin +refs/heads/master:refs/remotes/origin/master
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
 
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
@@ -175,8 +175,8 @@ jobs:
     needs: [unit-tests, integration-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Download artifacts
-        uses: actions/download-artifact@v4.1.8
+        uses: actions/download-artifact@v6.0.0
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

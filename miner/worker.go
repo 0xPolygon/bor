@@ -1024,7 +1024,7 @@ mainloop:
 		// Check for the flag to interrupt block building on timeout.
 		if w.interruptBlockBuilding.Load() {
 			txCommitInterruptCounter.Inc(1)
-			log.Debug("Block building interrupted due to timeout, aborting new transaction commits", "hash", lastTxHash)
+			log.Info("Block building interrupted due to timeout, aborting new transaction commits", "number", env.header.Number.Uint64(), "hash", lastTxHash)
 			break mainloop
 		}
 
@@ -1660,7 +1660,6 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 		interruptBlockBuilding.Store(true)
 
 		if interruptCtx.Err() != context.Canceled {
-			log.Info("Block building interrupted due to timeout", "block", number)
 			cancel()
 		}
 	}()
