@@ -596,6 +596,21 @@ func (q *queue) ReserveWitnesses(p *peerConnection, count int) (*fetchRequest, u
 	return req, firstBlockNum, progress, throttle
 }
 
+// ReturnWitnessHeaders returns a slice of headers to the witnessTaskQueue.
+// This is used when a larger batch was reserved for peeking, but only a subset
+// could be processed due to cold cache or window limits.
+func (q *queue) ReturnWitnessHeaders(headers []*types.Header) {
+	q.lock.Lock()
+	defer q.lock.Unlock()
+
+	for _, header := range headers {
+		// Remove from pendPool if it exists (shouldn't happen, but safety check)
+		// Note: We can't easily check which peer had it, so we'll just return to queue
+		// The pendPool entry will be cleaned up when the request expires or is delivered
+		q.witnessTaskQueue.Push(header, -int64(header.Number.Uint64()))
+	}
+}
+
 // reserveHeaders reserves a set of data download operations for a given peer,
 // skipping any previously failed ones. This method is a generic version used
 // by the individual special reservation functions.

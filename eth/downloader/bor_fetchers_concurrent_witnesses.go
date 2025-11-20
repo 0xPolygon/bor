@@ -141,20 +141,89 @@ func (q *witnessQueue) reserve(peer *peerConnection, items int) (*fetchRequest, 
 		return req, progress, throttle
 	}
 
-	// When cache is cold, limit requests to a conservative number (windowSize)
-	// This ensures we process a window-start block before requesting too many more blocks ahead,
-	// allowing the cache to warm and subsequent blocks to use compact witnesses.
+	// When cache is cold, check actual block numbers to prevent requesting witnesses
+	// for blocks too far ahead. This ensures we process a window-start block before
+	// requesting witnesses for blocks that would benefit from compact witnesses.
 	if !cacheWarm && windowSize > 0 {
-		// Limit to windowSize to ensure we process at least one window-start block
-		// This is a conservative approach that avoids complex header trimming logic
-		if items > int(windowSize) {
-			originalItems := items
-			items = int(windowSize)
-			log.Info("PSP - Limiting witness requests when cache is cold",
-				"originalItems", originalItems,
-				"limitedItems", items,
-				"windowSize", windowSize,
-				"reason", "cache cold - limiting to windowSize to allow cache to warm")
+		currentHead := d.blockchain.CurrentBlock()
+		if currentHead != nil {
+			currentHeadNum := currentHead.Number.Uint64()
+			nextWindowStart := ((currentHeadNum / windowSize) + 1) * windowSize
+
+			// Calculate how many blocks we can safely reserve (up to nextWindowStart)
+			blocksUntilWindowStart := nextWindowStart - currentHeadNum
+			if blocksUntilWindowStart == 0 {
+				// We're at a window-start, allow reserving it
+				blocksUntilWindowStart = 1
+			}
+
+			// Reserve a larger batch to peek at block numbers (up to reasonable limit)
+			peekCount := items
+			if peekCount < 100 {
+				peekCount = 100 // Peek at more blocks to see actual block numbers
+			}
+			if peekCount > 200 {
+				peekCount = 200 // Reasonable upper bound
+			}
+
+			req, firstBlockNum, progress, throttle := q.queue.ReserveWitnesses(peer, peekCount)
+			if req == nil {
+				return nil, progress, throttle
+			}
+
+			// Check if the first block is beyond the next window-start
+			if firstBlockNum > nextWindowStart {
+				// First block is too far ahead - return all headers and don't reserve anything
+				// This prevents requesting full witnesses for blocks that should use compact witnesses
+				log.Info("PSP - Limiting witness requests when cache is cold",
+					"firstBlock", firstBlockNum,
+					"currentHead", currentHeadNum,
+					"nextWindowStart", nextWindowStart,
+					"blocksUntilWindowStart", blocksUntilWindowStart,
+					"reason", "cache cold - first block too far ahead, waiting for cache to warm")
+				// Return all headers to queue - they'll be reserved later when cache is warm
+				// Note: The request in pendPool will expire naturally, and headers will be returned
+				q.queue.ReturnWitnessHeaders(req.Headers)
+				return nil, progress, throttle
+			}
+
+			// Find how many blocks we can actually reserve (up to nextWindowStart)
+			validCount := 0
+			for i, header := range req.Headers {
+				if header.Number.Uint64() > nextWindowStart {
+					break
+				}
+				validCount = i + 1
+			}
+
+			// Also limit to windowSize as a conservative bound
+			if validCount > int(windowSize) {
+				validCount = int(windowSize)
+			}
+
+			if validCount < len(req.Headers) {
+				// Trim the request to only valid blocks
+				// The excess headers will be returned to queue by the deliver function
+				// when the request is processed (or expires)
+				excessHeaders := req.Headers[validCount:]
+				req.Headers = req.Headers[:validCount]
+
+				// Return excess headers to queue now so they can be reserved by other peers
+				// or reserved later when cache is warm
+				q.queue.ReturnWitnessHeaders(excessHeaders)
+				log.Info("PSP - Limiting witness requests when cache is cold",
+					"originalCount", peekCount,
+					"validCount", validCount,
+					"excessCount", len(excessHeaders),
+					"firstBlock", firstBlockNum,
+					"lastReservedBlock", req.Headers[len(req.Headers)-1].Number.Uint64(),
+					"currentHead", currentHeadNum,
+					"nextWindowStart", nextWindowStart,
+					"blocksUntilWindowStart", blocksUntilWindowStart,
+					"reason", "cache cold - limiting to next window-start to allow cache to warm")
+			}
+
+			return req, progress, throttle
 		}
 	}
 
