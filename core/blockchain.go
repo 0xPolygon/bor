@@ -668,6 +668,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if block.NumberU64() == 29333393 {
+		return nil, nil, 0, nil, 0, fmt.Errorf("intentional failure at block 29333393 for testing")
+	}
+
 	if followupInterrupt == nil {
 		followupInterrupt = &atomic.Bool{}
 	}
