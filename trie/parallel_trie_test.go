@@ -4,7 +4,16 @@ import (
 	"crypto/rand"
 	mathrand "math/rand"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/core/types"
 )
+
+// KVPair represents one hashed-key/value to insert into the trie.
+// Used for testing purposes.
+type KVPair struct {
+	Key   []byte
+	Value []byte
+}
 
 func mustRandBytes(n int) []byte {
 	b := make([]byte, n)
@@ -58,10 +67,18 @@ func TestParallelBuild_MatchesTrieCommit_AllInserts(t *testing.T) {
 	tr.Hash()
 	wantRoot, _ := tr.Commit(false)
 
-	// Build via Parallel
-	haveRoot, _, err := BuildAccountTrieParallel(kvs, 16)
+	pst, err := NewParallelSparseTrie(StateTrieID(types.EmptyRootHash), nil)
 	if err != nil {
-		t.Fatalf("parallel build failed: %v", err)
+		t.Fatalf("failed to create parallel sparse trie: %v", err)
+	}
+	for i := range kvs {
+		if err := pst.Update(kvs[i].Key, kvs[i].Value); err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
+	}
+	haveRoot, _, err := pst.Root(16)
+	if err != nil {
+		t.Fatalf("pst root failed: %v", err)
 	}
 	if haveRoot != wantRoot {
 		t.Fatalf("root mismatch: have %x want %x", haveRoot, wantRoot)
@@ -91,16 +108,25 @@ func TestParallelBuild_MatchesTrieCommit_InsertsDeletes(t *testing.T) {
 	tr.Hash()
 	wantRoot, _ := tr.Commit(false)
 
-	pst := NewParallelTrie()
+	// Use ParallelSparseTrie instead of old ParallelTrie
+	// Use nil database for tests - ParallelSparseTrie can work without a database for pure builds
+	pst, err := NewParallelSparseTrie(StateTrieID(types.EmptyRootHash), nil)
+	if err != nil {
+		t.Fatalf("failed to create parallel sparse trie: %v", err)
+	}
 	for i := range kvs {
-		pst.Insert(kvs[i].Key, kvs[i].Value)
+		if err := pst.Update(kvs[i].Key, kvs[i].Value); err != nil {
+			t.Fatalf("update failed: %v", err)
+		}
 	}
 	for i := range kvs {
 		if i%8 == 0 {
-			pst.Delete(kvs[i].Key)
+			if err := pst.Delete(kvs[i].Key); err != nil {
+				t.Fatalf("delete failed: %v", err)
+			}
 		}
 	}
-	haveRoot, _, err := pst.Build(12)
+	haveRoot, _, err := pst.Root(12)
 	if err != nil {
 		t.Fatalf("pst build failed: %v", err)
 	}

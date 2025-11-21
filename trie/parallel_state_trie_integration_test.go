@@ -67,7 +67,7 @@ func TestParallelStateTrie_AccountsMatchLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parallel, err := trie.NewParallelStateTrie(trie.StateTrieID(types.EmptyRootHash), tdb)
+	parallel, err := trie.NewParallelSparseTrie(trie.StateTrieID(types.EmptyRootHash), tdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestParallelStateTrie_StorageAndAccountsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parallelAcc, err := trie.NewParallelStateTrie(trie.StateTrieID(types.EmptyRootHash), tdb)
+	parallelAcc, err := trie.NewParallelSparseTrie(trie.StateTrieID(types.EmptyRootHash), tdb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestParallelStateTrie_StorageAndAccountsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parallelStor, err := trie.NewParallelStateTrie(trie.StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+	parallelStor, err := trie.NewParallelSparseTrie(trie.StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
 	if err != nil {
 		t.Fatal(err)
 	}

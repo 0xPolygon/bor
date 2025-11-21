@@ -2,133 +2,316 @@ package trie
 
 import (
 	"fmt"
-	mathrand "math/rand"
-	"runtime"
+	"math/rand"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/holiman/uint256"
 )
 
-func genKVsDeterministic(count int, seed int64) []KVPair {
-	r := mathrand.New(mathrand.NewSource(seed))
-	seen := make(map[string]struct{}, count*2)
-	kvs := make([]KVPair, 0, count)
-	for len(kvs) < count {
-		k := make([]byte, 32)
-		_, _ = r.Read(k)
-		if _, ok := seen[string(k)]; ok {
-			continue
-		}
-		seen[string(k)] = struct{}{}
-		sz := 1 + r.Intn(128)
-		val := make([]byte, sz)
-		_, _ = r.Read(val)
-		kvs = append(kvs, KVPair{Key: k, Value: val})
+// generateAccounts creates deterministic addresses and RLP-encoded accounts.
+func generateAccounts(size int, seed int64) (addresses [][20]byte, accounts []*types.StateAccount) {
+	r := rand.New(rand.NewSource(seed))
+	addresses = make([][20]byte, size)
+	for i := 0; i < len(addresses); i++ {
+		var a [20]byte
+		r.Read(a[:])
+		addresses[i] = a
 	}
-	return kvs
+	accounts = make([]*types.StateAccount, len(addresses))
+	for i := 0; i < len(accounts); i++ {
+		nonce := uint64(r.Int63())
+		root := types.EmptyRootHash
+		code := crypto.Keccak256(nil)
+		// random balance up to 32 bytes
+		numBytes := uint32(r.Int31n(33)) // 0..32
+		balanceBytes := make([]byte, numBytes)
+		r.Read(balanceBytes)
+		balance := new(uint256.Int).SetBytes(balanceBytes)
+		accounts[i] = &types.StateAccount{
+			Nonce:    nonce,
+			Balance:  balance,
+			Root:     root,
+			CodeHash: code,
+		}
+	}
+	return
 }
 
-func BenchmarkParallelTrieBuild(b *testing.B) {
-	for _, size := range []int{10000, 50000, 100000} {
-		kvs := genKVsDeterministic(size, 4242)
-		workers := runtime.NumCPU()
-		b.Run(fmt.Sprintf("size-%d/pst-buildonly", size), func(b *testing.B) {
+// BenchmarkAccountTrie_Update benchmarks account trie updates (legacy vs parallel).
+func BenchmarkAccountTrie_Update(b *testing.B) {
+	for _, size := range []int{100, 300, 1000, 3000} {
+		addresses, accounts := generateAccounts(size, 0)
+		b.Run(fmt.Sprintf("size-%d/legacy", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				pst := NewParallelTrie()
-				for j := range kvs {
-					pst.Insert(kvs[j].Key, kvs[j].Value)
-				}
-				b.StartTimer()
-				if _, _, err := pst.Build(workers); err != nil {
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				legacy, err := NewStateTrie(StateTrieID(types.EmptyRootHash), tdb)
+				if err != nil {
 					b.Fatal(err)
 				}
-			}
-		})
-		b.Run(fmt.Sprintf("size-%d/trie-commitonly", size), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				tr := NewEmpty(nil)
-				for j := range kvs {
-					if err := tr.Update(kvs[j].Key, kvs[j].Value); err != nil {
+				b.StartTimer()
+				for j := 0; j < len(addresses); j++ {
+					if err := legacy.UpdateAccount(common.BytesToAddress(addresses[j][:]), accounts[j], 0); err != nil {
 						b.Fatal(err)
 					}
 				}
-				tr.Hash()
+			}
+		})
+		b.Run(fmt.Sprintf("size-%d/parallel", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				parallel, err := NewParallelSparseTrie(StateTrieID(types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
 				b.StartTimer()
-				tr.Commit(false)
+				for j := 0; j < len(addresses); j++ {
+					if err := parallel.UpdateAccount(common.BytesToAddress(addresses[j][:]), accounts[j], 0); err != nil {
+						b.Fatal(err)
+					}
+				}
 			}
 		})
 	}
 }
 
-func BenchmarkTrieUpdate_ParallelTrie(b *testing.B) {
-	for _, size := range []int{10000, 50000, 100000} {
-		kvs := genKVsDeterministic(size, 9898)
-		b.Run(fmt.Sprintf("size-%d/pst-insert", size), func(b *testing.B) {
+// BenchmarkAccountTrie_Commit benchmarks account trie commit (legacy vs parallel).
+func BenchmarkAccountTrie_Commit(b *testing.B) {
+	for _, size := range []int{100, 300, 1000, 3000} {
+		addresses, accounts := generateAccounts(size, 0)
+		b.Run(fmt.Sprintf("size-%d/legacy", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				pst := NewParallelTrie()
-				b.StartTimer()
-				for j := range kvs {
-					pst.Insert(kvs[j].Key, kvs[j].Value)
-				}
 				b.StopTimer()
-			}
-		})
-		b.Run(fmt.Sprintf("size-%d/trie-update", size), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				tr := NewEmpty(nil)
-				b.StartTimer()
-				for j := range kvs {
-					if err := tr.Update(kvs[j].Key, kvs[j].Value); err != nil {
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				legacy, err := NewStateTrie(StateTrieID(types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for j := 0; j < len(addresses); j++ {
+					if err := legacy.UpdateAccount(common.BytesToAddress(addresses[j][:]), accounts[j], 0); err != nil {
 						b.Fatal(err)
 					}
 				}
+				legacy.Hash()
+				b.StartTimer()
+				legacy.Commit(false)
+			}
+		})
+		b.Run(fmt.Sprintf("size-%d/parallel", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
 				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				parallel, err := NewParallelSparseTrie(StateTrieID(types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for j := 0; j < len(addresses); j++ {
+					if err := parallel.UpdateAccount(common.BytesToAddress(addresses[j][:]), accounts[j], 0); err != nil {
+						b.Fatal(err)
+					}
+				}
+				parallel.Hash()
+				b.StartTimer()
+				parallel.Commit(false)
 			}
 		})
 	}
 }
 
-func BenchmarkTrie_Delete(b *testing.B) {
-	for _, size := range []int{10000, 50000, 100000} {
-		kvs := genKVsDeterministic(size, 3434)
-		delIdx := make([]int, 0, len(kvs)/8+1)
-		for i := 0; i < len(kvs); i += 8 {
-			delIdx = append(delIdx, i)
-		}
-		b.Run(fmt.Sprintf("size-%d/pst-delete", size), func(b *testing.B) {
+// BenchmarkStorageTrie_Update benchmarks storage trie updates (legacy vs parallel).
+func BenchmarkStorageTrie_Update(b *testing.B) {
+	for _, size := range []int{50, 200, 500, 1000} {
+		b.Run(fmt.Sprintf("size-%d/legacy", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				pst := NewParallelTrie()
-				for j := range kvs {
-					pst.Insert(kvs[j].Key, kvs[j].Value)
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				legacy, err := NewStateTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
 				}
 				b.StartTimer()
-				for _, idx := range delIdx {
-					pst.Delete(kvs[idx].Key)
+				for j := 0; j < size; j++ {
+					var slot common.Hash
+					var val common.Hash
+					rand.Read(slot[:])
+					rand.Read(val[:])
+					if err := legacy.UpdateStorage(common.BytesToAddress(addr[:]), slot[:], common.TrimLeftZeroes(val[:])); err != nil {
+						b.Fatal(err)
+					}
 				}
-				b.StopTimer()
 			}
 		})
-		b.Run(fmt.Sprintf("size-%d/trie-delete", size), func(b *testing.B) {
+		b.Run(fmt.Sprintf("size-%d/parallel", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				tr := NewEmpty(nil)
-				for j := range kvs {
-					if err := tr.Update(kvs[j].Key, kvs[j].Value); err != nil {
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				parallel, err := NewParallelSparseTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				for j := 0; j < size; j++ {
+					var slot common.Hash
+					var val common.Hash
+					rand.Read(slot[:])
+					rand.Read(val[:])
+					if err := parallel.UpdateStorage(common.BytesToAddress(addr[:]), slot[:], common.TrimLeftZeroes(val[:])); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkStorageTrie_UpdateDelete benchmarks storage trie updates with deletes (legacy vs parallel).
+func BenchmarkStorageTrie_UpdateDelete(b *testing.B) {
+	for _, size := range []int{50, 200, 500, 1000} {
+		b.Run(fmt.Sprintf("size-%d/legacy", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				legacy, err := NewStateTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				slots := make([]common.Hash, size)
+				for j := 0; j < size; j++ {
+					rand.Read(slots[j][:])
+					var val common.Hash
+					rand.Read(val[:])
+					if err := legacy.UpdateStorage(common.BytesToAddress(addr[:]), slots[j][:], common.TrimLeftZeroes(val[:])); err != nil {
 						b.Fatal(err)
 					}
 				}
 				b.StartTimer()
-				for _, idx := range delIdx {
-					if err := tr.Delete(kvs[idx].Key); err != nil {
+				// Delete every 17th slot (matching integration test pattern)
+				for j := 0; j < size; j += 17 {
+					if err := legacy.DeleteStorage(common.BytesToAddress(addr[:]), slots[j][:]); err != nil {
 						b.Fatal(err)
 					}
 				}
+			}
+		})
+		b.Run(fmt.Sprintf("size-%d/parallel", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
 				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				parallel, err := NewParallelSparseTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				slots := make([]common.Hash, size)
+				for j := 0; j < size; j++ {
+					rand.Read(slots[j][:])
+					var val common.Hash
+					rand.Read(val[:])
+					if err := parallel.UpdateStorage(common.BytesToAddress(addr[:]), slots[j][:], common.TrimLeftZeroes(val[:])); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StartTimer()
+				// Delete every 17th slot (matching integration test pattern)
+				for j := 0; j < size; j += 17 {
+					if err := parallel.DeleteStorage(common.BytesToAddress(addr[:]), slots[j][:]); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkStorageTrie_Commit benchmarks storage trie commit (legacy vs parallel).
+func BenchmarkStorageTrie_Commit(b *testing.B) {
+	for _, size := range []int{50, 200, 500, 1000} {
+		b.Run(fmt.Sprintf("size-%d/legacy", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				legacy, err := NewStateTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for j := 0; j < size; j++ {
+					var slot common.Hash
+					var val common.Hash
+					rand.Read(slot[:])
+					rand.Read(val[:])
+					if err := legacy.UpdateStorage(common.BytesToAddress(addr[:]), slot[:], common.TrimLeftZeroes(val[:])); err != nil {
+						b.Fatal(err)
+					}
+					// Occasionally delete (matching integration test pattern)
+					if j%17 == 0 {
+						if err := legacy.DeleteStorage(common.BytesToAddress(addr[:]), slot[:]); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				legacy.Hash()
+				b.StartTimer()
+				legacy.Commit(false)
+			}
+		})
+		b.Run(fmt.Sprintf("size-%d/parallel", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				tdb := newTestDatabase(rawdb.NewMemoryDatabase(), rawdb.HashScheme)
+				var addr [20]byte
+				rand.New(rand.NewSource(int64(i))).Read(addr[:])
+				addrHash := crypto.Keccak256Hash(addr[:])
+				parallel, err := NewParallelSparseTrie(StorageTrieID(types.EmptyRootHash, addrHash, types.EmptyRootHash), tdb)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for j := 0; j < size; j++ {
+					var slot common.Hash
+					var val common.Hash
+					rand.Read(slot[:])
+					rand.Read(val[:])
+					if err := parallel.UpdateStorage(common.BytesToAddress(addr[:]), slot[:], common.TrimLeftZeroes(val[:])); err != nil {
+						b.Fatal(err)
+					}
+					// Occasionally delete (matching integration test pattern)
+					if j%17 == 0 {
+						if err := parallel.DeleteStorage(common.BytesToAddress(addr[:]), slot[:]); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				parallel.Hash()
+				b.StartTimer()
+				parallel.Commit(false)
 			}
 		})
 	}
