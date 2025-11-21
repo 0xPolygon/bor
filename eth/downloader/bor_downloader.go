@@ -2341,7 +2341,7 @@ func (d *Downloader) processFullSyncContentStateless() error {
 				// This minimizes wasted full witnesses by switching to compact as soon as cache warms
 				blocksUntilWindowStart := nextWindowStart - firstBlockNum + 1 // +1 to include window-start
 
-				if blocksUntilWindowStart > 0 && uint64(blocksUntilWindowStart) < uint64(maxBatchSize) {
+				if blocksUntilWindowStart > 0 && blocksUntilWindowStart < uint64(maxBatchSize) {
 					maxBatchSize = int(blocksUntilWindowStart)
 					log.Debug("Limiting import batch size when cache is cold",
 						"originalBatchSize", len(results),

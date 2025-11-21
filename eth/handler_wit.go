@@ -385,18 +385,6 @@ func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetWitness
 	return filteredResponse, nil
 }
 
-// filterWitnessWithCache filters a witness by removing state nodes present in the sliding window cache.
-func (h *witHandler) filterWitnessWithCache(witness *stateless.Witness) *stateless.Witness {
-	if witness == nil {
-		return nil
-	}
-
-	// Use BlockChain's exported method to filter
-	filtered, _, _ := h.chain.FilterWitnessWithSlidingCache(witness)
-
-	return filtered
-}
-
 // ClearStaleCompactWitnessCache removes cache entries that are no longer valid
 // due to sliding window movement. Should be called when cache window slides.
 func (h *witHandler) ClearStaleCompactWitnessCache(currentWindowStart uint64) {
