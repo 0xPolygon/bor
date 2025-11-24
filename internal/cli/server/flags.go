@@ -598,6 +598,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.EnablePersonal,
 		Group:   "JsonRPC",
 	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "rpc.txsync.defaulttimeout",
+		Usage:   "Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncDefaultTimeout,
+		Default: c.cliConfig.JsonRPC.TxSyncDefaultTimeout,
+		Group:   "JsonRPC",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "rpc.txsync.maxtimeout",
+		Usage:   "Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncMaxTimeout,
+		Default: c.cliConfig.JsonRPC.TxSyncMaxTimeout,
+		Group:   "JsonRPC",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "ipcdisable",
 		Usage:   "Disable the IPC-RPC server",

@@ -436,6 +436,14 @@ type JsonRPCConfig struct {
 
 	// EnablePersonal enables the deprecated personal namespace.
 	EnablePersonal bool `hcl:"enabledeprecatedpersonal,optional" toml:"enabledeprecatedpersonal,optional"`
+
+	// Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)
+	TxSyncDefaultTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	TxSyncDefaultTimeoutRaw string        `hcl:"txsync.defaulttimeout,optional" toml:"txsync.defaulttimeout,optional"`
+
+	// Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)
+	TxSyncMaxTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	TxSyncMaxTimeoutRaw string        `hcl:"txsync.maxtimeout,optional" toml:"txsync.maxtimeout,optional"`
 }
 
 type AUTHConfig struct {
@@ -806,13 +814,15 @@ func DefaultConfig() *Config {
 			IgnorePrice:      gasprice.DefaultIgnorePrice, // bor's default
 		},
 		JsonRPC: &JsonRPCConfig{
-			IPCDisable:          false,
-			IPCPath:             "",
-			GasCap:              ethconfig.Defaults.RPCGasCap,
-			TxFeeCap:            ethconfig.Defaults.RPCTxFeeCap,
-			RPCEVMTimeout:       ethconfig.Defaults.RPCEVMTimeout,
-			AllowUnprotectedTxs: false,
-			EnablePersonal:      false,
+			IPCDisable:           false,
+			IPCPath:              "",
+			GasCap:               ethconfig.Defaults.RPCGasCap,
+			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
+			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
+			AllowUnprotectedTxs:  false,
+			EnablePersonal:       false,
+			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
+			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
 			Http: &APIConfig{
 				Enabled:                     false,
 				Port:                        8545,
@@ -1005,6 +1015,8 @@ func (c *Config) fillTimeDurations() error {
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
+		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
+		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
 	}
 
 	for _, x := range tds {
@@ -1350,8 +1362,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.RPCEVMTimeout = c.JsonRPC.RPCEVMTimeout
-
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
+	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
+	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
 
 	// Choose the sync mode. Only "full" or "stateless" sync is supported
 	switch c.SyncMode {
