@@ -242,6 +242,8 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 	)
 	if !db.IsVerkle() {
 		tr, err = trie.NewStateTrie(trie.StateTrieID(root), db)
+	} else if db.IsUsingTDB() {
+		tr, err = trie.NewTrieDB(root, db.Disk().TrieDB())
 	} else {
 		tr, err = trie.NewVerkleTrie(root, db, cache)
 	}
@@ -300,6 +302,8 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 		value common.Hash
 	)
 	if r.db.IsVerkle() {
+		tr = r.mainTrie
+	} else if r.db.IsUsingTDB() {
 		tr = r.mainTrie
 	} else {
 		tr, found = r.subTries[addr]

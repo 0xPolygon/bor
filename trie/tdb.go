@@ -109,7 +109,7 @@ type TrieDB struct {
 }
 
 // NewTrieDB creates a new Trie implementation using triedb-go
-func NewTrieDB(db *Database, root common.Hash) (*TrieDB, error) {
+func NewTrieDB(root common.Hash, db *Database) (*TrieDB, error) {
 	r, err := db.StateRoot()
 	if err != nil {
 		return nil, err

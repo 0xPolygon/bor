@@ -45,6 +45,7 @@ type DatabaseOptions struct {
 	WitnessPruneEnabled bool
 	BlockPruneEnabled   bool
 	Stateless           bool
+	UseTrieDB           bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -78,6 +79,7 @@ func openDatabase(o internalOpenOptions) (ethdb.Database, error) {
 		BlockPruneEnabled:   o.BlockPruneEnabled,
 		Stateless:           o.Stateless,
 		Ephemeral:           o.Ephemeral,
+		UseTrieDB:           o.UseTrieDB,
 	}
 	frdb, err := rawdb.Open(kvdb, opts)
 	if err != nil {

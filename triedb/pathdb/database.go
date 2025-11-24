@@ -124,6 +124,9 @@ type Config struct {
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
 
+	// UseTrieDB indicates whether the database is using trie-db
+	UseTrieDB bool
+
 	// Testing configurations
 	SnapshotNoBuild   bool // Flag Whether the state generation is allowed
 	NoAsyncFlush      bool // Flag whether the background buffer flushing is allowed
@@ -170,6 +173,7 @@ var Defaults = &Config{
 	StateCleanSize:  defaultStateCleanSize,
 	WriteBufferSize: defaultBufferSize,
 	MaxDiffLayers:   uint64(maxDiffLayers),
+	UseTrieDB:       false,
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -430,6 +434,9 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	layers := maxDiffLayers
 	if db.config.MaxDiffLayers > 0 {
 		layers = int(db.config.MaxDiffLayers)
+	}
+	if db.config.UseTrieDB {
+		layers = 0
 	}
 	return db.tree.cap(root, layers)
 }

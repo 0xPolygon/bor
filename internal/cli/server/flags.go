@@ -104,6 +104,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.StateScheme,
 		Default: c.cliConfig.StateScheme,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "triedb.usetriedb",
+		Usage:   "Flag whether the database is using trie-db",
+		Value:   &c.cliConfig.UseTrieDB,
+		Default: c.cliConfig.UseTrieDB,
+	})
 	f.MapStringFlag(&flagset.MapStringFlag{
 		Name:    "eth.requiredblocks",
 		Usage:   "Comma separated block number-to-hash mappings to require for peering (<number>=<hash>)",

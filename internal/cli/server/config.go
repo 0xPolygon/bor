@@ -91,6 +91,9 @@ type Config struct {
 	// state.scheme selects the Scheme to use for storing ethereum state ('hash' or 'path')
 	StateScheme string `hcl:"state.scheme,optional" toml:"state.scheme,optional"`
 
+	// UseTrieDB is a flag whether the db is using trie-db
+	UseTrieDB bool `hcl:"triedb.usetriedb,optional" toml:"triedb.usetriedb,optional"`
+
 	// Snapshot enables the snapshot database mode
 	Snapshot bool `hcl:"snapshot,optional" toml:"snapshot,optional"`
 
@@ -761,6 +764,7 @@ func DefaultConfig() *Config {
 		SyncMode:    "full",
 		GcMode:      "full",
 		StateScheme: "path",
+		UseTrieDB:   false,
 		Snapshot:    true,
 		BorLogs:     false,
 
@@ -1376,6 +1380,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	default:
 		n.StateScheme = "hash"
 	}
+
+	// UseTrieDB flag
+	n.UseTrieDB = c.UseTrieDB
 
 	// snapshot disable check
 	if !c.Snapshot {

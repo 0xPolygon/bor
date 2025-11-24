@@ -22,8 +22,12 @@ import (
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie/trienode"
+
+	"github.com/cffls/triedb-go/triedb-go"
 )
 
 // nodeCacheKey constructs the unique key of clean cache. The assumption is held
@@ -130,4 +134,59 @@ func writeStates(batch ethdb.Batch, genMarker []byte, accountData map[common.Has
 		}
 	}
 	return accounts, slots
+}
+
+func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
+	tdb := db.TrieDB()
+	if tdb == nil {
+		return nil
+	}
+
+	tx, err := tdb.BeginRW()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Write account data
+	for addr, blob := range history.accounts {
+		if len(blob) == 0 {
+			// Empty blob means account deletion
+			if err := tx.SetAccount(triedb.Address(addr), nil); err != nil {
+				return err
+			}
+		} else {
+			// Decode the RLP-encoded account data
+			account := new(types.SlimAccount)
+			if err := rlp.DecodeBytes(blob, account); err != nil {
+				return err
+			}
+
+			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
+				Nonce:    account.Nonce,
+				Balance:  account.Balance,
+				CodeHash: account.CodeHash,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Write storage data
+	for addr, slots := range history.storages {
+		for storageKey, blob := range slots {
+			// Extract the actual storage value from the RLP-encoded blob
+			_, content, _, err := rlp.Split(blob)
+			if err != nil {
+				return err
+			}
+			var value triedb.Hash
+			copy(value[:], content)
+			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
 }

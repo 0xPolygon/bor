@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+
+	tdb "github.com/cffls/triedb-go/triedb-go"
 )
 
 var (
@@ -223,4 +225,8 @@ type ResettableAncientStore interface {
 type Database interface {
 	KeyValueStore
 	AncientStore
+
+	// TrieDB returns the triedb database instance, or nil if not available.
+	// This is only populated when UseTrieDB is enabled in the configuration.
+	TrieDB() *tdb.Database
 }

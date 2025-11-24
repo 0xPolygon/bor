@@ -191,6 +191,7 @@ type BlockChainConfig struct {
 	StateHistory uint64 // Number of blocks from head whose state histories are reserved.
 	StateScheme  string // Scheme used to store ethereum states and merkle tree nodes on top
 	ArchiveMode  bool   // Whether to enable the archive mode
+	UseTrieDB    bool   // Whether the database is using trie-db
 
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes
@@ -287,6 +288,7 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			TrieCleanSize:       cfg.TrieCleanLimit * 1024 * 1024,
 			StateCleanSize:      cfg.SnapshotLimit * 1024 * 1024,
 			MaxDiffLayers:       cfg.GetTriesInMemory(),
+			UseTrieDB:           cfg.UseTrieDB,
 
 			// TODO(rjl493456442): The write buffer represents the memory limit used
 			// for flushing both trie data and state data to disk. The config name

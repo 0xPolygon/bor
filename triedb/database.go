@@ -379,6 +379,10 @@ func (db *Database) IsVerkle() bool {
 	return db.config.IsVerkle
 }
 
+func (db *Database) IsUsingTDB() bool {
+	return db.config.PathDB != nil && db.config.PathDB.UseTrieDB
+}
+
 // Disk returns the underlying disk database.
 func (db *Database) Disk() ethdb.Database {
 	return db.disk

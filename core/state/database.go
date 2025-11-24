@@ -237,6 +237,8 @@ func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithSta
 func (db *CachingDB) OpenTrie(root common.Hash) (Trie, error) {
 	if db.triedb.IsVerkle() {
 		return trie.NewVerkleTrie(root, db.triedb, db.pointCache)
+	} else if db.triedb.IsUsingTDB() {
+		return trie.NewTrieDB(root, db.triedb.Disk().TrieDB())
 	}
 	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.triedb)
 	if err != nil {
@@ -253,6 +255,8 @@ func (db *CachingDB) OpenStorageTrie(stateRoot common.Hash, address common.Addre
 	// case.
 	if db.triedb.IsVerkle() {
 		return self, nil
+	} else if db.triedb.IsUsingTDB() {
+		return trie.NewTrieDB(stateRoot, db.triedb.Disk().TrieDB())
 	}
 	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.triedb)
 	if err != nil {

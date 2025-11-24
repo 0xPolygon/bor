@@ -195,6 +195,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		WitnessPruneEnabled: witnessPruneEnabled,
 		BlockPruneEnabled:   blockPruneEnabled,
 		Stateless:           config.SyncMode == downloader.StatelessSync,
+		UseTrieDB:           config.UseTrieDB,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
@@ -273,6 +274,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		Preimages:         config.Preimages,
 		StateHistory:      config.StateHistory,
 		StateScheme:       scheme,
+		UseTrieDB:         config.UseTrieDB,
 		TriesInMemory:     config.TriesInMemory,
 		ChainHistoryMode:  config.HistoryMode,
 		TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),

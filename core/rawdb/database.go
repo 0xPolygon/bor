@@ -34,6 +34,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/olekukonko/tablewriter"
+
+	tdb "github.com/cffls/triedb-go/triedb-go"
 )
 
 var ErrDeleteRangeInterrupted = errors.New("safe delete range operation interrupted")
@@ -47,6 +49,7 @@ type freezerdb struct {
 	blockPruner *pruner
 	readOnly    bool
 	ancientRoot string
+	triedb      *tdb.Database // triedb instance when UseTrieDB is enabled
 }
 
 // AncientDatadir returns the path of root ancient directory.
@@ -78,6 +81,13 @@ func (frdb *freezerdb) Close() error {
 		}
 	}
 
+	// Close triedb if initialized
+	if frdb.triedb != nil {
+		if err := frdb.triedb.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if len(errs) != 0 {
 		return fmt.Errorf("%v", errs)
 	}
@@ -100,9 +110,48 @@ func (frdb *freezerdb) Freeze() error {
 	return nil
 }
 
+// initTrieDB initializes the Rust triedb database instance.
+func (frdb *freezerdb) initTrieDB(ancientDir string) error {
+	// Derive triedb path from ancient directory
+	// If ancientDir is empty (in-memory mode), skip triedb initialization
+	if ancientDir == "" {
+		log.Warn("Skipping triedb initialization for in-memory database")
+		return nil
+	}
+
+	triedbPath := filepath.Join(ancientDir, "triedb")
+
+	// Try to open existing database, create new if it doesn't exist
+	triedb, err := tdb.Open(triedbPath)
+	if err != nil {
+		// If open fails, try to create new
+		log.Info("Creating new triedb database", "path", triedbPath)
+		triedb, err = tdb.CreateNew(triedbPath)
+		if err != nil {
+			return fmt.Errorf("failed to create triedb at %s: %v", triedbPath, err)
+		}
+	} else {
+		log.Info("Opened existing triedb database", "path", triedbPath)
+	}
+
+	frdb.triedb = triedb
+	return nil
+}
+
+// TrieDB returns the triedb database instance if initialized, nil otherwise.
+// This implements the ethdb.Database interface.
+func (frdb *freezerdb) TrieDB() *tdb.Database {
+	return frdb.triedb
+}
+
 // nofreezedb is a database wrapper that disables freezer data retrievals.
 type nofreezedb struct {
 	ethdb.KeyValueStore
+}
+
+// TrieDB returns nil as nofreezedb doesn't support triedb.
+func (db *nofreezedb) TrieDB() *tdb.Database {
+	return nil
 }
 
 // Ancient returns an error as we don't have a backing chain freezer.
@@ -309,6 +358,7 @@ type OpenOptions struct {
 	WitnessPruneEnabled bool
 	BlockPruneEnabled   bool
 	Stateless           bool
+	UseTrieDB           bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -465,6 +515,15 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		ancientRoot:   opts.Ancient,
 		KeyValueStore: db,
 		chainFreezer:  frdb,
+	}
+
+	// Initialize triedb if enabled
+	if opts.UseTrieDB {
+		if err := ethDb.initTrieDB(opts.Ancient); err != nil {
+			frdb.Close()
+			db.Close()
+			return nil, fmt.Errorf("failed to initialize triedb: %v", err)
+		}
 	}
 
 	if opts.WitnessPruneEnabled || opts.Stateless {

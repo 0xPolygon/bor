@@ -58,6 +58,9 @@ type accountUpdate struct {
 	// storagesOriginByHash uses the **hash** of the storage slot key instead.
 	storagesOriginByKey  map[common.Hash][]byte
 	storagesOriginByHash map[common.Hash][]byte
+
+	// storageKeyMap is a map from the hash of the storage slot key to the raw storage slot key.
+	storageKeyMap map[common.Hash]common.Hash
 }
 
 // stateUpdate represents the difference between two states resulting from state
@@ -79,6 +82,10 @@ type stateUpdate struct {
 	// (b) the value is keyed by account hash and **storage slot key hash** if rawStorageKey is false;
 	storagesOrigin map[common.Address]map[common.Hash][]byte
 	rawStorageKey  bool
+
+	// storageKeyMap is a map from the hash of the storage slot key to the raw storage slot key.
+	storageKeyMap map[common.Hash]common.Hash
+	addressMap    map[common.Hash]common.Address
 
 	codes map[common.Address]contractCode // codes contains the set of dirty codes
 	nodes *trienode.MergedNodeSet         // Aggregated dirty nodes caused by state changes
@@ -102,11 +109,14 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 		storages       = make(map[common.Hash]map[common.Hash][]byte)
 		storagesOrigin = make(map[common.Address]map[common.Hash][]byte)
 		codes          = make(map[common.Address]contractCode)
+		storageKeyMap  = make(map[common.Hash]common.Hash)
+		addressMap     = make(map[common.Hash]common.Address)
 	)
 	// Since some accounts might be destroyed and recreated within the same
 	// block, deletions must be aggregated first.
 	for addrHash, op := range deletes {
 		addr := op.address
+		addressMap[addrHash] = addr
 		accounts[addrHash] = nil
 		accountsOrigin[addr] = op.origin
 
@@ -126,6 +136,7 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 			codes[addr] = *op.code
 		}
 		accounts[addrHash] = op.data
+		addressMap[addrHash] = addr
 
 		// Aggregate the account original value. If the account is already
 		// present in the aggregated accountsOrigin set, skip it.
@@ -160,7 +171,13 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 				}
 			}
 		}
+		for hash, key := range op.storageKeyMap {
+			if _, found := storageKeyMap[hash]; !found {
+				storageKeyMap[hash] = key
+			}
+		}
 	}
+
 	return &stateUpdate{
 		originRoot:     originRoot,
 		root:           root,
@@ -171,6 +188,8 @@ func newStateUpdate(rawStorageKey bool, originRoot common.Hash, root common.Hash
 		rawStorageKey:  rawStorageKey,
 		codes:          codes,
 		nodes:          nodes,
+		storageKeyMap:  storageKeyMap,
+		addressMap:     addressMap,
 	}
 }
 
@@ -185,5 +204,6 @@ func (sc *stateUpdate) stateSet() *triedb.StateSet {
 		Storages:       sc.storages,
 		StoragesOrigin: sc.storagesOrigin,
 		RawStorageKey:  sc.rawStorageKey,
+		StorageKeyMap:  sc.storageKeyMap,
 	}
 }

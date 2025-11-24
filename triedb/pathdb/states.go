@@ -26,10 +26,13 @@ import (
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/cffls/triedb-go/triedb-go"
 )
 
 // counter helps in tracking items and their corresponding sizes.
@@ -67,6 +70,10 @@ type stateSet struct {
 	accountListSorted []common.Hash                 // List of account for iteration. If it exists, it's sorted, otherwise it's nil
 	storageListSorted map[common.Hash][]common.Hash // List of storage slots for iterated retrievals, one per account. Any existing lists are sorted if non-nil
 
+	storageKeyMap map[common.Hash]common.Hash // Map from the hash of the storage slot key to the raw storage slot key
+
+	addressMap map[common.Hash]common.Address
+
 	rawStorageKey bool // indicates whether the storage set uses the raw slot key or the hash
 
 	// Lock for guarding the two lists above. These lists might be accessed
@@ -84,11 +91,13 @@ func newStates(accounts map[common.Hash][]byte, storages map[common.Hash]map[com
 	if storages == nil {
 		storages = make(map[common.Hash]map[common.Hash][]byte)
 	}
+
 	s := &stateSet{
 		accountData:       accounts,
 		storageData:       storages,
 		rawStorageKey:     rawStorageKey,
 		storageListSorted: make(map[common.Hash][]common.Hash),
+		storageKeyMap:     make(map[common.Hash]common.Hash),
 	}
 	s.size = s.check()
 	return s
@@ -270,6 +279,13 @@ func (s *stateSet) merge(other *stateSet) {
 			slots[storageHash] = data
 		}
 	}
+	for accountHash, addr := range other.addressMap {
+		s.addressMap[accountHash] = addr
+	}
+	for storageHash, key := range other.storageKeyMap {
+		s.storageKeyMap[storageHash] = key
+	}
+
 	accountOverwrites.report(gcAccountMeter, gcAccountBytesMeter)
 	storageOverwrites.report(gcStorageMeter, gcStorageBytesMeter)
 	s.clearLists()
@@ -421,6 +437,67 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 // write flushes state mutations into the provided database batch as a whole.
 func (s *stateSet) write(batch ethdb.Batch, genMarker []byte, clean *fastcache.Cache) (int, int) {
 	return writeStates(batch, genMarker, s.accountData, s.storageData, clean)
+}
+
+func (s *stateSet) writeTrieDB(db ethdb.Database) error {
+	tdb := db.TrieDB()
+	if tdb == nil {
+		return nil
+	}
+
+	tx, err := tdb.BeginRW()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for addrHash, blob := range s.accountData {
+		addr, ok := s.addressMap[addrHash]
+		if !ok {
+			return fmt.Errorf("address map not found for account %x", addrHash)
+		}
+
+		if len(blob) == 0 {
+			if err := tx.SetAccount(triedb.Address(addr), nil); err != nil {
+				return err
+			}
+		} else {
+			account := new(types.SlimAccount)
+			if err := rlp.DecodeBytes(blob, account); err != nil {
+				return err
+			}
+
+			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
+				Nonce:    account.Nonce,
+				Balance:  account.Balance,
+				CodeHash: account.CodeHash,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	for addrHash, slots := range s.storageData {
+		addr, ok := s.addressMap[addrHash]
+		if !ok {
+			return fmt.Errorf("address map not found for storage %x", addrHash)
+		}
+		for storageHash, blob := range slots {
+			storageKey, ok := s.storageKeyMap[storageHash]
+			if !ok {
+				return fmt.Errorf("storage key map not found for storage %x", storageHash)
+			}
+
+			_, content, _, err := rlp.Split(blob)
+			if err != nil {
+				return err
+			}
+			var value triedb.Hash
+			copy(value[:], content)
+			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // reset clears all cached state data, including any optional sorted lists that

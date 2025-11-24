@@ -28,6 +28,7 @@ type StateSet struct {
 	Storages       map[common.Hash]map[common.Hash][]byte    // Mutated storage slots in 'prefix-zero-trimmed' RLP format
 	StoragesOrigin map[common.Address]map[common.Hash][]byte // Original values of mutated storage slots in 'prefix-zero-trimmed' RLP format
 	RawStorageKey  bool                                      // Flag whether the storage set uses the raw slot key or the hash
+	StorageKeyMap  map[common.Hash]common.Hash               // Map from the hash of the storage slot key to the raw storage slot key
 }
 
 // NewStateSet initializes an empty state set.
@@ -37,6 +38,7 @@ func NewStateSet() *StateSet {
 		AccountsOrigin: make(map[common.Address][]byte),
 		Storages:       make(map[common.Hash]map[common.Hash][]byte),
 		StoragesOrigin: make(map[common.Address]map[common.Hash][]byte),
+		StorageKeyMap:  make(map[common.Hash]common.Hash),
 	}
 }
 

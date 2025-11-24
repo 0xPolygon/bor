@@ -417,6 +417,10 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		if op.storagesOriginByHash == nil {
 			op.storagesOriginByHash = make(map[common.Hash][]byte)
 		}
+		if op.storageKeyMap == nil {
+			op.storageKeyMap = make(map[common.Hash]common.Hash)
+		}
+		op.storageKeyMap[hash] = key
 		origin := encode(s.originStorage[key])
 		op.storagesOriginByKey[key] = origin
 		op.storagesOriginByHash[hash] = origin

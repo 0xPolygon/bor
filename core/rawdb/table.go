@@ -18,6 +18,8 @@ package rawdb
 
 import (
 	"github.com/ethereum/go-ethereum/ethdb"
+
+	tdb "github.com/cffls/triedb-go/triedb-go"
 )
 
 // table is a wrapper around a database that prefixes each key access with a pre-
@@ -33,6 +35,11 @@ func NewTable(db ethdb.Database, prefix string) ethdb.Database {
 		db:     db,
 		prefix: prefix,
 	}
+}
+
+// TrieDB returns the trie database of the underlying database.
+func (t *table) TrieDB() *tdb.Database {
+	return t.db.TrieDB()
 }
 
 // Close is a noop to implement the Database interface.

@@ -535,6 +535,9 @@ func (dl *diskLayer) revert(h *history) (*diskLayer, error) {
 
 	// Provide the original values of modified accounts and storages for revert
 	writeStates(batch, progress, accounts, storages, dl.states)
+	if err := writeTrieDBWithHistory(dl.db.diskdb, h); err != nil {
+		return nil, err
+	}
 	rawdb.WritePersistentStateID(batch, dl.id-1)
 	rawdb.WriteSnapshotRoot(batch, h.meta.parent)
 	if err := batch.Write(); err != nil {

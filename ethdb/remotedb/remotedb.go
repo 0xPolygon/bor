@@ -25,6 +25,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	tdb "github.com/cffls/triedb-go/triedb-go"
 )
 
 // Database is a key-value lookup for a remote database via debug_dbGet.
@@ -159,4 +161,8 @@ func New(client *rpc.Client) ethdb.Database {
 		return nil
 	}
 	return &Database{remote: client}
+}
+
+func (db *Database) TrieDB() *tdb.Database {
+	return nil
 }
