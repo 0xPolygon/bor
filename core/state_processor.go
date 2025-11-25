@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -198,8 +199,10 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	// resume recording read and write
 	statedb.SetMVHashmap(backupMVHashMap)
 
+	log.Error("ApplyTransactionWithEVM 1", "blockNumber", blockNumber.Int64())
 	result, err = ApplyMessageNoFeeBurnOrTip(evm, *msg, gp, interrupt)
 	if err != nil {
+		log.Error("ApplyTransactionWithEVM returning error", "blockNumber", blockNumber.Int64(), "err", err)
 		return nil, err
 	}
 
@@ -252,6 +255,7 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if statedb.Database().TrieDB().IsVerkle() {
 		statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
+	log.Error("ApplyTransactionWithEVM will make receipt", "blockNumber", blockNumber.Int64())
 	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root), nil
 }
 
