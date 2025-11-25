@@ -839,12 +839,14 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 func EqualStringSet(a, b map[string]struct{}) bool {
 	// If lengths differ, they cannot be equal
 	if len(a) != len(b) {
+		log.Error("[debuglocal] differentSizes", "a", len(a), "b", len(b))
 		return false
 	}
 
 	// Check if every key in A exists in B
 	for k := range a {
 		if _, ok := b[k]; !ok {
+			log.Error("[debuglocal] key on A not belongs to B", "key", k)
 			return false
 		}
 	}
