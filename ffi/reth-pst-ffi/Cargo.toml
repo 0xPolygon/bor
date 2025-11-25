@@ -1,0 +1,26 @@
+[package]
+name = "reth-pst-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/paradigmxyz/reth"
+repository = "https://github.com/paradigmxyz/reth"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Reth dependencies - using path dependencies to the Reth workspace
+reth-trie-sparse-parallel = { path = "../../../reth/crates/trie/sparse-parallel", features = ["std"] }
+reth-trie-common = { path = "../../../reth/crates/trie/common", features = ["std"] }
+reth-trie-sparse = { path = "../../../reth/crates/trie/sparse", features = ["std"] }
+reth-execution-errors = { path = "../../../reth/crates/evm/execution-errors", features = ["std"] }
+
+# Alloy dependencies - from crates.io (matching Reth's versions)
+alloy-primitives = { version = "1.4.1", default-features = false, features = ["map-foldhash"] }
+alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net", "arrayvec"] }
+alloy-trie = { version = "0.9.1", default-features = false, features = ["ethereum"] }
+
+# Hex encoding/decoding
+hex = "0.4"
