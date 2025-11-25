@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"slices"
 	"sync"
@@ -119,10 +120,7 @@ func (w *Witness) AddBlockHash(number uint64) {
 
 // AddCode adds a bytecode blob to the witness.
 func (w *Witness) AddCode(code []byte) {
-	if len(code) == 0 {
-		return
-	}
-	w.Codes[string(code)] = struct{}{}
+	log.Fatal("code should not be used while building a witness")
 }
 
 // AddState inserts a batch of MPT trie nodes into the witness.

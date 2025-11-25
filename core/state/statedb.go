@@ -682,9 +682,6 @@ func (s *StateDB) GetCode(addr common.Address) []byte {
 	return MVRead(s, blockstm.NewSubpathKey(addr, CodePath), nil, func(s *StateDB) []byte {
 		stateObject := s.getStateObject(addr)
 		if stateObject != nil {
-			if s.witness != nil {
-				s.witness.AddCode(stateObject.Code())
-			}
 			return stateObject.Code()
 		}
 
@@ -696,9 +693,6 @@ func (s *StateDB) GetCodeSize(addr common.Address) int {
 	return MVRead(s, blockstm.NewSubpathKey(addr, CodePath), 0, func(s *StateDB) int {
 		stateObject := s.getStateObject(addr)
 		if stateObject != nil {
-			if s.witness != nil {
-				s.witness.AddCode(stateObject.Code())
-			}
 			return stateObject.CodeSize()
 		}
 

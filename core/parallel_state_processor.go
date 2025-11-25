@@ -48,17 +48,19 @@ type ParallelEVMConfig struct {
 //
 // StateProcessor implements Processor.
 type ParallelStateProcessor struct {
-	config *params.ChainConfig // Chain configuration options
-	bc     *BlockChain         // Canonical block chain
-	engine consensus.Engine    // Consensus engine used for block rewards
+	config                       *params.ChainConfig // Chain configuration options
+	hc                           *HeaderChain        // Canonical header chain
+	engine                       consensus.Engine    // Consensus engine used for block rewards
+	parallelSpeculativeProcesses int                 // Number of parallel speculative processes
 }
 
 // NewParallelStateProcessor initialises a new StateProcessor.
-func NewParallelStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *ParallelStateProcessor {
+func NewParallelStateProcessor(config *params.ChainConfig, hc *HeaderChain, engine consensus.Engine, parallelSpeculativeProcesses int) *ParallelStateProcessor {
 	return &ParallelStateProcessor{
-		config: config,
-		bc:     bc,
-		engine: engine,
+		config:                       config,
+		hc:                           hc,
+		engine:                       engine,
+		parallelSpeculativeProcesses: parallelSpeculativeProcesses,
 	}
 }
 
@@ -76,7 +78,6 @@ type ExecutionTask struct {
 	cleanStateDB               *state.StateDB // A clean copy of the initial statedb. It should not be modified.
 	finalStateDB               *state.StateDB // The final statedb.
 	header                     *types.Header
-	blockChain                 *BlockChain
 	evmConfig                  vm.Config
 	result                     *ExecutionResult
 	shouldDelayFeeCal          *bool
@@ -313,10 +314,10 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		metadata = true
 	}
 
-	blockContext := NewEVMBlockContext(header, p.bc, author)
+	blockContext := NewEVMBlockContext(header, p.hc, author)
 	coinbase := blockContext.Coinbase
 
-	context := NewEVMBlockContext(header, p.bc.hc, author)
+	context := NewEVMBlockContext(header, p.hc, author)
 
 	vmenv := vm.NewEVM(context, statedb, p.config, cfg)
 
@@ -355,7 +356,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			index:             i,
 			cleanStateDB:      cleansdb,
 			finalStateDB:      statedb,
-			blockChain:        p.bc,
 			header:            header,
 			evmConfig:         cfg,
 			shouldDelayFeeCal: &shouldDelayFeeCal,
@@ -374,7 +374,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	backupStateDB := statedb.Copy()
 
 	profile := false
-	result, err := blockstm.ExecuteParallel(tasks, profile, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+	result, err := blockstm.ExecuteParallel(tasks, profile, metadata, p.parallelSpeculativeProcesses, interruptCtx)
 
 	if err == nil && profile && result.Deps != nil {
 		_, weight := result.Deps.LongestPath(*result.Stats)
@@ -408,7 +408,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 				t.totalUsedGas = usedGas
 			}
 
-			_, err = blockstm.ExecuteParallel(tasks, false, metadata, p.bc.parallelSpeculativeProcesses, interruptCtx)
+			_, err = blockstm.ExecuteParallel(tasks, false, metadata, p.parallelSpeculativeProcesses, interruptCtx)
 
 			break
 		}
@@ -423,7 +423,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.engine.Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
+	receipts = p.engine.Finalize(p.hc, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
 	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {

@@ -656,14 +656,14 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 		return nil, err
 	}
 
-	bc.parallelProcessor = NewParallelStateProcessor(bc.chainConfig, bc, engine)
 	bc.parallelSpeculativeProcesses = numprocs
+	bc.parallelProcessor = NewParallelStateProcessor(bc.chainConfig, bc.hc, engine, bc.parallelSpeculativeProcesses)
 	bc.enforceParallelProcessor = enforce
 
 	return bc, nil
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, witnessParallel *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -742,11 +742,6 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		parallel bool
 	}
 
-	// temporary disabled block STM because witness not work on parallel.
-	// TODO: how to enable witness on parallel state processing
-	bc.parallelProcessor = nil
-	bc.enforceParallelProcessor = false
-
 	var resultChanLen int = 2
 	if bc.enforceParallelProcessor {
 		log.Debug("Processing block using Block STM only", "number", block.NumberU64())
@@ -756,6 +751,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	processorCount := 0
 
+	var sequentialTime time.Duration
+	var parallelTime time.Duration
+
 	if bc.parallelProcessor != nil {
 		processorCount++
 
@@ -764,6 +762,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			parallelStatedb.StartPrefetcher("chain", witness)
 			res, err := bc.parallelProcessor.Process(block, parallelStatedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
+			parallelTime = time.Since(pstart)
 			if err == nil {
 				vstart := time.Now()
 				err = bc.validator.ValidateState(block, parallelStatedb, res, false)
@@ -781,9 +780,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 		go func() {
 			pstart := time.Now()
-			statedb.StartPrefetcher("chain", witness)
+			statedb.StartPrefetcher("chain", witnessParallel)
 			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
+			sequentialTime = time.Since(pstart)
 			if err == nil {
 				vstart := time.Now()
 				err = bc.validator.ValidateState(block, statedb, res, false)
@@ -813,13 +813,43 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	// Make sure we are not leaking any prefetchers
 	if processorCount == 2 {
-		go func() {
-			second_result := <-resultChan
-			second_result.statedb.StopPrefetcher()
-		}()
+		// TODO: Enable back, rn im reinforcing both to run in order to always compare
+		// go func() {
+		// 	second_result := <-resultChan
+		// 	second_result.statedb.StopPrefetcher()
+		// }()
+		second_result := <-resultChan
+		second_result.statedb.StopPrefetcher()
 	}
 
+	if witness != nil && witnessParallel != nil {
+		if !EqualStringSet(witness.State, witnessParallel.State) {
+			log.Error("[debuglocal] Mismatch on witness")
+		} else {
+			log.Info("[debuglocal] witness match")
+		}
+
+	}
+	timeRatio := (float64(sequentialTime) / float64(parallelTime))
+	log.Info("[debuglocal]  seq/stm ratio", "ratio", timeRatio)
+
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
+}
+
+func EqualStringSet(a, b map[string]struct{}) bool {
+	// If lengths differ, they cannot be equal
+	if len(a) != len(b) {
+		return false
+	}
+
+	// Check if every key in A exists in B
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -3163,14 +3193,16 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			bc.statedb.DisableSnapInReader()
 		}
 
+		var witnessParallel *stateless.Witness
 		if computeWitness {
 			witness, err = stateless.NewWitness(block.Header(), bc)
+			witnessParallel, err = stateless.NewWitness(block.Header(), bc)
 			if err != nil {
 				log.Error("Error in witness generation", "err", err)
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, witnessParallel, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -3401,7 +3433,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
 		// Run the stateless self-cross-validation
-		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, diskdb)
+		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, diskdb, bc.parallelSpeculativeProcesses)
 		if err != nil {
 			return nil, fmt.Errorf("stateless self-validation failed: %v", err)
 		}
@@ -4182,7 +4214,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
-	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk(), bc.parallelSpeculativeProcesses)
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {

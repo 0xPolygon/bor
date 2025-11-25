@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -42,7 +43,7 @@ import (
 //   - It cannot be placed outside of core, because it needs to construct a dud headerchain
 //
 // TODO(karalabe): Would be nice to resolve both issues above somehow and move it.
-func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database) (common.Hash, common.Hash, *state.StateDB, *ProcessResult, error) {
+func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database, numprocs int) (common.Hash, common.Hash, *state.StateDB, *ProcessResult, error) {
 	// Sanity check if the supplied block accidentally contains a set root or
 	// receipt hash. If so, be very loud, but still continue.
 	if block.Root() != (common.Hash{}) {
@@ -53,10 +54,16 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 	}
 	// Create and populate the state database to serve as the stateless backend
 	memdb := witness.MakeHashDB(diskdb)
-	db, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
+	statedb, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
+
+	parallelStatedb, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
+	if err != nil {
+		return common.Hash{}, common.Hash{}, nil, nil, err
+	}
+
 	// Create a blockchain that is idle, but can be used to access headers through
 	headerChain := &HeaderChain{
 		config:      config,
@@ -64,19 +71,50 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		headerCache: lru.NewCache[common.Hash, *types.Header](256),
 		engine:      consensus,
 	}
+	parallelProcessor := NewParallelStateProcessor(config, headerChain, consensus, numprocs)
 	processor := NewStateProcessor(config, headerChain)
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
 
-	res, err := processor.Process(block, db, vmconfig, author, context.Background())
-	if err != nil {
+	resultChan := make(chan StatelessResult, 2)
+
+	var seqTime time.Duration
+	var parTime time.Duration
+
+	go func() {
+		start := time.Now()
+		sequentialRes, err := processor.Process(block, statedb, vmconfig, author, context.Background())
+		seqTime = time.Since(start)
+		resultChan <- StatelessResult{res: sequentialRes, err: err}
+	}()
+
+	go func() {
+		start := time.Now()
+		parallelRes, err := parallelProcessor.Process(block, parallelStatedb, vmconfig, author, context.Background())
+		parTime = time.Since(start)
+		resultChan <- StatelessResult{res: parallelRes, err: err}
+	}()
+
+	processorRes := <-resultChan
+	processorRes2 := <-resultChan
+	if processorRes.err != nil || processorRes2.err != nil {
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
+	res := processorRes.res
 
-	if err = validator.ValidateState(block, db, res, true); err != nil {
+	if err = validator.ValidateState(block, statedb, res, true); err != nil {
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 	// Almost everything validated, but receipt and state root needs to be returned
 	receiptRoot := types.DeriveSha(res.Receipts, trie.NewStackTrie(nil))
-	stateRoot := db.IntermediateRoot(config.IsEIP158(block.Number()))
-	return stateRoot, receiptRoot, db, res, nil
+	stateRoot := statedb.IntermediateRoot(config.IsEIP158(block.Number()))
+
+	timeRatio := float64(seqTime) / float64(parTime)
+	log.Info("[debuglocal] stateless seq/stm ratio", "ratio", timeRatio)
+
+	return stateRoot, receiptRoot, statedb, res, nil
+}
+
+type StatelessResult struct {
+	res *ProcessResult
+	err error
 }
