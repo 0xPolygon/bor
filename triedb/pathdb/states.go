@@ -281,9 +281,15 @@ func (s *stateSet) merge(other *stateSet) {
 		}
 	}
 	for accountHash, addr := range other.addressMap {
+		if s.addressMap == nil {
+			s.addressMap = make(map[common.Hash]common.Address)
+		}
 		s.addressMap[accountHash] = addr
 	}
 	for storageHash, key := range other.storageKeyMap {
+		if s.storageKeyMap == nil {
+			s.storageKeyMap = make(map[common.Hash]common.Hash)
+		}
 		s.storageKeyMap[storageHash] = key
 	}
 

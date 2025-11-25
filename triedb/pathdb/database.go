@@ -415,7 +415,6 @@ func (db *Database) setStateGenerator() error {
 //
 // The supplied parentRoot and root must be a valid trie hash value.
 func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint64, nodes *trienode.MergedNodeSet, states *StateSetWithOrigin) error {
-	log.Info("pathdb.Update called", "block", block, "root", root, "parentRoot", parentRoot)
 
 	// Hold the lock to prevent concurrent mutations.
 	db.lock.Lock()
