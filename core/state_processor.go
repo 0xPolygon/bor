@@ -162,6 +162,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
+	log.Error("Process block result", "block", block.Number().Int64(), "receipts len", len(receipts))
+
 	return &ProcessResult{
 		Receipts: receipts,
 		Requests: requests,
