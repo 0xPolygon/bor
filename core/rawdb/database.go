@@ -112,14 +112,21 @@ func (frdb *freezerdb) Freeze() error {
 
 // initTrieDB initializes the Rust triedb database instance.
 func (frdb *freezerdb) initTrieDB(ancientDir string) error {
-	// Derive triedb path from ancient directory
+	// Derive triedb path from parent directory of ancient
 	// If ancientDir is empty (in-memory mode), skip triedb initialization
 	if ancientDir == "" {
 		log.Warn("Skipping triedb initialization for in-memory database")
 		return nil
 	}
 
-	triedbPath := filepath.Join(ancientDir, "triedb")
+	parentDir := filepath.Dir(ancientDir)
+	triedbDir := filepath.Join(parentDir, "triedb")
+	triedbPath := filepath.Join(triedbDir, "state.db")
+
+	// Ensure the triedb directory exists
+	if err := os.MkdirAll(triedbDir, 0755); err != nil {
+		return fmt.Errorf("failed to create triedb directory at %s: %v", triedbDir, err)
+	}
 
 	// Try to open existing database, create new if it doesn't exist
 	triedb, err := tdb.Open(triedbPath)
