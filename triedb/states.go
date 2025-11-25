@@ -29,6 +29,7 @@ type StateSet struct {
 	StoragesOrigin map[common.Address]map[common.Hash][]byte // Original values of mutated storage slots in 'prefix-zero-trimmed' RLP format
 	RawStorageKey  bool                                      // Flag whether the storage set uses the raw slot key or the hash
 	StorageKeyMap  map[common.Hash]common.Hash               // Map from the hash of the storage slot key to the raw storage slot key
+	AddressMap     map[common.Hash]common.Address            // Map from the hash of the account address to the account address
 }
 
 // NewStateSet initializes an empty state set.
@@ -39,6 +40,7 @@ func NewStateSet() *StateSet {
 		Storages:       make(map[common.Hash]map[common.Hash][]byte),
 		StoragesOrigin: make(map[common.Address]map[common.Hash][]byte),
 		StorageKeyMap:  make(map[common.Hash]common.Hash),
+		AddressMap:     make(map[common.Hash]common.Address),
 	}
 }
 
@@ -48,5 +50,8 @@ func (set *StateSet) internal() *pathdb.StateSetWithOrigin {
 	if set == nil {
 		return nil
 	}
-	return pathdb.NewStateSetWithOrigin(set.Accounts, set.Storages, set.AccountsOrigin, set.StoragesOrigin, set.RawStorageKey)
+	s := pathdb.NewStateSetWithOrigin(set.Accounts, set.Storages, set.AccountsOrigin, set.StoragesOrigin, set.RawStorageKey)
+	s.SetAddressMap(set.AddressMap)
+	s.SetStorageKeyMap(set.StorageKeyMap)
+	return s
 }

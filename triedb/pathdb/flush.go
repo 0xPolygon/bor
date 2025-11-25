@@ -180,8 +180,13 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 			if err != nil {
 				return err
 			}
+
+			var slot common.Hash
+			slot.SetBytes(content)
+
 			var value triedb.Hash
-			copy(value[:], content)
+			copy(value[:], slot[:])
+
 			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {
 				return err
 			}

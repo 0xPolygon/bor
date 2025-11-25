@@ -331,6 +331,7 @@ func (dl *diskLayer) update(root common.Hash, id uint64, block uint64, nodes *no
 // and returns a newly constructed disk layer. Note the current disk
 // layer must be tagged as stale first to prevent re-access.
 func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
+	log.Info("Committing disk layer", "root", bottom.rootHash(), "id", bottom.stateID())
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
 
@@ -391,7 +392,7 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 
 	// Terminate the background state snapshot generation before mutating the
 	// persistent state.
-	if combined.full() || force {
+	if combined.full() || force || dl.db.config.UseTrieDB {
 		// Wait until the previous frozen buffer is fully flushed
 		if dl.frozen != nil {
 			if err := dl.frozen.waitFlush(); err != nil {
@@ -435,8 +436,9 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 			}
 		})
 		// Block until the frozen buffer is fully flushed out if the async flushing
-		// is not allowed, or if the oldest history surpasses the persisted state ID.
-		if dl.db.config.NoAsyncFlush || persistedID < oldest {
+		// is not allowed, or if the oldest history surpasses the persisted state ID,
+		// or if UseTrieDB mode requires synchronous persistence.
+		if dl.db.config.NoAsyncFlush || persistedID < oldest || dl.db.config.UseTrieDB {
 			if err := dl.frozen.waitFlush(); err != nil {
 				return nil, err
 			}

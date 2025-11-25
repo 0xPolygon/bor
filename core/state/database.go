@@ -256,7 +256,9 @@ func (db *CachingDB) OpenStorageTrie(stateRoot common.Hash, address common.Addre
 	if db.triedb.IsVerkle() {
 		return self, nil
 	} else if db.triedb.IsUsingTDB() {
-		return trie.NewTrieDB(stateRoot, db.triedb.Disk().TrieDB())
+		// For TrieDB mode, return the same trie instance (like verkle).
+		// TrieDB uses a single unified trie for both accounts and storage.
+		return self, nil
 	}
 	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.triedb)
 	if err != nil {
@@ -305,6 +307,8 @@ func mustCopyTrie(t Trie) Trie {
 	case *trie.StateTrie:
 		return t.Copy()
 	case *trie.VerkleTrie:
+		return t.Copy()
+	case *trie.TrieDB:
 		return t.Copy()
 	default:
 		panic(fmt.Errorf("unknown trie type %T", t))

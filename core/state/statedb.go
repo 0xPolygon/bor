@@ -494,6 +494,9 @@ func (s *StateDB) SetWitness(witness *stateless.Witness) {
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
 func (s *StateDB) StartPrefetcher(namespace string, witness *stateless.Witness) {
+	if s.db.TrieDB().IsUsingTDB() {
+		return
+	}
 	// Terminate any previously running prefetcher
 	s.StopPrefetcher()
 

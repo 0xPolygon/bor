@@ -173,7 +173,10 @@ func (b *buffer) flush(root common.Hash, db ethdb.Database, freezer ethdb.Ancien
 		}
 		nodes := b.nodes.write(batch, nodesCache)
 		accounts, slots := b.states.write(batch, progress, statesCache)
+
+		log.Info("Writing trieDB", "accounts", accounts, "slots", slots)
 		if err := b.states.writeTrieDB(db); err != nil {
+			log.Error("Failed to write trieDB", "err", err)
 			b.flushErr = err
 			return
 		}

@@ -415,15 +415,19 @@ func (db *Database) setStateGenerator() error {
 //
 // The supplied parentRoot and root must be a valid trie hash value.
 func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint64, nodes *trienode.MergedNodeSet, states *StateSetWithOrigin) error {
+	log.Info("pathdb.Update called", "block", block, "root", root, "parentRoot", parentRoot)
+
 	// Hold the lock to prevent concurrent mutations.
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
 	// Short circuit if the mutation is not allowed.
 	if err := db.modifyAllowed(); err != nil {
+		log.Error("pathdb.Update: mutation not allowed", "block", block, "err", err)
 		return err
 	}
 	if err := db.tree.add(root, parentRoot, block, nodes, states); err != nil {
+		log.Error("pathdb.Update: tree.add failed", "block", block, "root", root, "parentRoot", parentRoot, "err", err)
 		return err
 	}
 	// Keep 128 diff layers in the memory, persistent layer is 129th.

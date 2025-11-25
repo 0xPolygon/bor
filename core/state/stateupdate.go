@@ -205,5 +205,6 @@ func (sc *stateUpdate) stateSet() *triedb.StateSet {
 		StoragesOrigin: sc.storagesOrigin,
 		RawStorageKey:  sc.rawStorageKey,
 		StorageKeyMap:  sc.storageKeyMap,
+		AddressMap:     sc.addressMap,
 	}
 }

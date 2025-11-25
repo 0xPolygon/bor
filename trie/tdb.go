@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/holiman/uint256"
 )
@@ -114,7 +115,7 @@ func NewTrieDB(root common.Hash, db *Database) (*TrieDB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if common.Hash(r) != root {
+	if common.Hash(r) != root && root != types.EmptyRootHash {
 		return nil, fmt.Errorf("root mismatch: expected %s, got %s", root, common.Hash(r))
 	}
 
@@ -124,6 +125,47 @@ func NewTrieDB(root common.Hash, db *Database) (*TrieDB, error) {
 		accounts: make(map[Address]*types.StateAccount),
 		storage:  make(map[Address]map[Hash][]byte),
 	}, nil
+}
+
+// Copy creates a deep copy of the TrieDB with its own accounts and storage maps.
+// The underlying database is shared, but pending changes are isolated.
+func (t *TrieDB) Copy() *TrieDB {
+	// Deep copy accounts
+	accounts := make(map[Address]*types.StateAccount, len(t.accounts))
+	for addr, acc := range t.accounts {
+		if acc != nil {
+			// Deep copy the account
+			accCopy := *acc
+			accounts[addr] = &accCopy
+		} else {
+			accounts[addr] = nil
+		}
+	}
+
+	// Deep copy storage
+	storage := make(map[Address]map[Hash][]byte, len(t.storage))
+	for addr, slots := range t.storage {
+		if slots != nil {
+			slotsCopy := make(map[Hash][]byte, len(slots))
+			for slot, value := range slots {
+				if value != nil {
+					valueCopy := make([]byte, len(value))
+					copy(valueCopy, value)
+					slotsCopy[slot] = valueCopy
+				} else {
+					slotsCopy[slot] = nil
+				}
+			}
+			storage[addr] = slotsCopy
+		}
+	}
+
+	return &TrieDB{
+		db:       t.db,
+		root:     t.root,
+		accounts: accounts,
+		storage:  storage,
+	}
 }
 
 // GetKey returns the sha3 preimage of a hashed key
@@ -339,18 +381,21 @@ func (t *TrieDB) Hash() common.Hash {
 func (t *TrieDB) Commit(collectLeaf bool) (common.Hash, *trienode.NodeSet) {
 	overlay, err := t.buildOverlay()
 	if err != nil {
+		log.Error("Failed to build overlay", "err", err)
 		return t.root, nil
 	}
 	defer overlay.Close()
 
 	tx, err := t.db.BeginRO()
 	if err != nil {
+		log.Error("Failed to begin read-only transaction", "err", err)
 		return t.root, nil
 	}
 	defer tx.Commit()
 
 	root, err := tx.ComputeRootWithOverlay(overlay)
 	if err != nil {
+		log.Error("Failed to compute root with overlay", "err", err)
 		return t.root, nil
 	}
 

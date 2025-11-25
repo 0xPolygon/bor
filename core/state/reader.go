@@ -240,7 +240,7 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 		tr  Trie
 		err error
 	)
-	if !db.IsVerkle() {
+	if !db.IsVerkle() && !db.IsUsingTDB() {
 		tr, err = trie.NewStateTrie(trie.StateTrieID(root), db)
 	} else if db.IsUsingTDB() {
 		tr, err = trie.NewTrieDB(root, db.Disk().TrieDB())

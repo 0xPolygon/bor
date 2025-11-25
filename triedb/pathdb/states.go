@@ -97,6 +97,7 @@ func newStates(accounts map[common.Hash][]byte, storages map[common.Hash]map[com
 		storageData:       storages,
 		rawStorageKey:     rawStorageKey,
 		storageListSorted: make(map[common.Hash][]common.Hash),
+		addressMap:        make(map[common.Hash]common.Address),
 		storageKeyMap:     make(map[common.Hash]common.Hash),
 	}
 	s.size = s.check()
@@ -466,6 +467,10 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 				return err
 			}
 
+			if len(account.CodeHash) == 0 {
+				account.CodeHash = types.EmptyCodeHash.Bytes()
+			}
+
 			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
 				Nonce:    account.Nonce,
 				Balance:  account.Balance,
@@ -490,8 +495,11 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 			if err != nil {
 				return err
 			}
+			var slot common.Hash
+			slot.SetBytes(content)
+
 			var value triedb.Hash
-			copy(value[:], content)
+			copy(value[:], slot[:])
 			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {
 				return err
 			}
@@ -567,6 +575,14 @@ func NewStateSetWithOrigin(accounts map[common.Hash][]byte, storages map[common.
 		storageOrigin: storageOrigin,
 		size:          set.size + uint64(size),
 	}
+}
+
+func (s *StateSetWithOrigin) SetAddressMap(addressMap map[common.Hash]common.Address) {
+	s.stateSet.addressMap = addressMap
+}
+
+func (s *StateSetWithOrigin) SetStorageKeyMap(storageKeyMap map[common.Hash]common.Hash) {
+	s.stateSet.storageKeyMap = storageKeyMap
 }
 
 // encode serializes the content of state set into the provided writer.
