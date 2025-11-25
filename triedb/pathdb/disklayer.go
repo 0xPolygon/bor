@@ -331,7 +331,6 @@ func (dl *diskLayer) update(root common.Hash, id uint64, block uint64, nodes *no
 // and returns a newly constructed disk layer. Note the current disk
 // layer must be tagged as stale first to prevent re-access.
 func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
-	log.Info("Committing disk layer", "root", bottom.rootHash(), "id", bottom.stateID())
 	dl.lock.Lock()
 	defer dl.lock.Unlock()
 
