@@ -831,7 +831,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	}
 	timeRatio := (float64(sequentialTime) / float64(parallelTime))
-	log.Info("[debuglocal]  seq/stm ratio", "ratio", timeRatio)
+	timeDiff := sequentialTime - parallelTime
+	log.Info("[debuglocal]  info", "ratio", timeRatio, "diff", timeDiff.Nanoseconds(), "totalGas", result.usedGas)
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
 }
