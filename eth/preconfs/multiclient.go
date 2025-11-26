@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -24,6 +25,13 @@ var (
 	errNoClients = fmt.Errorf("no rpc clients available")
 	errRpcFailed = fmt.Errorf("transaction inclusion ratio below threshold: unable to query block producers")
 	errMissingTx = fmt.Errorf("transaction inclusion ratio below threshold: transaction missing in mempool")
+)
+
+var (
+	rpcCallsSuccessMeter    = metrics.NewRegisteredMeter("preconfs/rpc/success", nil)
+	rpcCallsFailureMeter    = metrics.NewRegisteredMeter("preconfs/rpc/failure", nil)
+	missingTransactionMeter = metrics.NewRegisteredMeter("preconfs/missingtx", nil)
+	belowThresholdMeter     = metrics.NewRegisteredMeter("preconfs/belowthreshold", nil)
 )
 
 // multiClient holds multiple rpc client instances for each block producer
@@ -127,12 +135,15 @@ func (mc *multiClient) checkTxInclusionInMempool(tx *types.Transaction, sender c
 				cancel()
 				if err != nil {
 					tries++
+					rpcCallsFailureMeter.Mark(1)
 					log.Info("[preconfs] Failed to get txpool content for sender via multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "tries", tries, "err", err)
 					continue
 				}
+				rpcCallsSuccessMeter.Mark(1)
 				isTxPresent = isTxPresentInPending(tx, sender, txsInMempool)
 				if !isTxPresent {
 					tries++
+					missingTransactionMeter.Mark(1)
 					log.Info("[preconfs] Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "tries", tries)
 					time.Sleep(waitBeforeRetry)
 					continue
@@ -147,6 +158,7 @@ func (mc *multiClient) checkTxInclusionInMempool(tx *types.Transaction, sender c
 	log.Info("[preconfs] done with validation, stats", "duration", d, "retries", t)
 
 	if validationCount/len(mc.clients) < threshold {
+		belowThresholdMeter.Mark(1)
 		log.Info("[preconfs] Transaction not present in enough block producers", "sender", sender.Hex(), "validations", validationCount, "total", len(mc.clients), "threshold", threshold)
 		err := errMissingTx
 		if rpcErrCount > txMissingCount {

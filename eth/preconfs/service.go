@@ -3,11 +3,13 @@ package preconfs
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 const (
@@ -15,6 +17,13 @@ const (
 	expiryInterval       = 10 * time.Minute
 	maxQueuedTasks       = 10_000
 	maxConcurrentTasks   = 1024
+)
+
+var (
+	taskProcessingTimer  = metrics.NewRegisteredTimer("preconfs/processing", nil)
+	taskStatusTimer      = metrics.NewRegisteredTimer("preconfs/status", nil)
+	validPreconfsMeter   = metrics.NewRegisteredMeter("preconfs/valid", nil)
+	invalidPreconfsMeter = metrics.NewRegisteredMeter("preconfs/invalid", nil)
 )
 
 type Task struct {
@@ -32,6 +41,11 @@ type Service struct {
 	taskCh    chan Task // channel to queue new tasks
 	close     chan struct{}
 	semaphore chan struct{} // to limit concurrent tasks
+
+	// metric collection
+	totalProcessed atomic.Uint64
+	totalValid     atomic.Uint64
+	totalInvalid   atomic.Uint64
 }
 
 func NewPreconfService(urls []string) *Service {
@@ -44,6 +58,7 @@ func NewPreconfService(urls []string) *Service {
 	}
 	go s.processTasks()
 	go s.cleanup()
+	go s.report()
 	return s
 }
 
@@ -80,7 +95,17 @@ func (s *Service) processTasks() {
 // processTask processes a single preconf task and populates the result. It uses
 // multi-client to check for presence of transaction.
 func (s *Service) processTask(task Task, reprocess bool) {
+	start := time.Now()
 	res, err := s.mc.checkTxInclusionInMempool(task.tx, task.sender)
+	taskProcessingTimer.UpdateSince(start)
+	s.totalProcessed.Add(1)
+	if res {
+		validPreconfsMeter.Mark(1)
+		s.totalValid.Add(1)
+	} else {
+		invalidPreconfsMeter.Mark(1)
+		s.totalInvalid.Add(1)
+	}
 	task.result = res
 	if !reprocess {
 		task.insertedAt = time.Now()
@@ -94,6 +119,11 @@ func (s *Service) processTask(task Task, reprocess bool) {
 // CheckTxPreconfStatus checks the preconfirmation status of a transaction by given hash
 // against the cache.
 func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
+	start := time.Now()
+	defer func() {
+		taskStatusTimer.UpdateSince(start)
+	}()
+
 	s.storeMu.RLock()
 	defer s.storeMu.RUnlock()
 
@@ -147,6 +177,27 @@ func (s *Service) cleanup() {
 				}
 			}
 			s.storeMu.Unlock()
+		case <-s.close:
+			return
+		}
+	}
+}
+
+// report logs periodic stats about the preconf service
+func (s *Service) report() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.storeMu.RLock()
+			storeSize := len(s.store)
+			s.storeMu.RUnlock()
+			log.Info("[preconfs] stats", "cache", storeSize, "queued", len(s.taskCh), "processed", s.totalProcessed.Load(), "valid", s.totalValid.Load(), "invalid", s.totalInvalid.Load())
+			s.totalProcessed.Store(0)
+			s.totalValid.Store(0)
+			s.totalInvalid.Store(0)
 		case <-s.close:
 			return
 		}
