@@ -6,8 +6,27 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+// isBorSystemTx checks if the tx is for bor genesis contract addresses or not
+func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
+	if borCfg == nil {
+		return false
+	}
+	if to == nil {
+		return false
+	}
+
+	validatorContract := common.HexToAddress(borCfg.ValidatorContract)
+	stateReceiverContract := common.HexToAddress(borCfg.StateReceiverContract)
+	if to.Cmp(validatorContract) == 0 || to.Cmp(stateReceiverContract) == 0 {
+		return true
+	}
+
+	return false
+}
 
 // GetRootHash returns root hash for given start and end block
 func (s *BlockChainAPI) GetRootHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64) (string, error) {

@@ -371,6 +371,9 @@ type SealerConfig struct {
 	// Enabled is used to enable validator mode
 	Enabled bool `hcl:"mine,optional" toml:"mine,optional"`
 
+	// AllowGasTipOverride allows a block producer to override the miner gas tip
+	AllowGasTipOverride bool `hcl:"allow-gas-tip-override,optional" toml:"allow-gas-tip-override,optional"`
+
 	// Etherbase is the address of the validator
 	Etherbase string `hcl:"etherbase,optional" toml:"etherbase,optional"`
 
@@ -776,6 +779,7 @@ func DefaultConfig() *Config {
 		},
 		Sealer: &SealerConfig{
 			Enabled:             false,
+			AllowGasTipOverride: false,
 			Etherbase:           "",
 			GasCeil:             miner.DefaultConfig.GasCeil,
 			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
@@ -1114,6 +1118,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	// miner options
 	{
+		// only allow gas tip override if mining is enabled
+		n.Miner.AllowGasTipOverride = c.Sealer.AllowGasTipOverride && c.Sealer.Enabled
 		n.Miner.Recommit = c.Sealer.Recommit
 		n.Miner.GasPrice = c.Sealer.GasPrice
 		n.Miner.GasCeil = c.Sealer.GasCeil

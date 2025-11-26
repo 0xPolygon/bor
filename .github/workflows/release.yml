@@ -14,14 +14,14 @@ jobs:
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@master
+        uses: actions/setup-go@v6
         with:
-          go-version: 1.24.6
+          go-version-file: go.mod
 
       - name: Prepare
         id: prepare

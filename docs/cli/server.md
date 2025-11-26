@@ -286,6 +286,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```mine```: Enable mining (default: false)
 
+- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+
 - ```miner.etherbase```: Public address for block mining rewards
 
 - ```miner.extradata```: Block extra data set by the miner (default = client version)
