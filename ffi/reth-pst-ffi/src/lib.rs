@@ -22,6 +22,7 @@ use alloy_primitives::{Bytes, B256};
 use alloy_rlp::{Decodable, Encodable};
 use alloy_trie::{TrieAccount, EMPTY_ROOT_HASH};
 use std::collections::HashMap;
+use reth_trie_common::{ProofTrieNode, TrieMasks, TrieNode};
 
 /// Callback function type for reading nodes from Bor's database
 /// Returns: (node_data_ptr, node_data_len, error_code)
@@ -69,8 +70,9 @@ impl TrieNodeProvider for BorTrieNodeProvider {
         
         if result != 0 {
             // Error occurred
+            let error_msg = format!("Failed to read node from Bor database: error code {}", result);
             return Err(SparseTrieErrorKind::Other(
-                format!("Failed to read node from Bor database: error code {}", result).into()
+                Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg))
             ).into());
         }
         
@@ -87,13 +89,10 @@ impl TrieNodeProvider for BorTrieNodeProvider {
         
         // Free the memory allocated by Go (using C's free)
         unsafe {
-            let free_fn: extern "C" fn(*mut c_void) = {
-                extern "C" {
-                    fn free(ptr: *mut c_void);
-                }
-                free
-            };
-            free_fn(node_data_ptr as *mut c_void);
+            unsafe extern "C" {
+                fn free(ptr: *mut c_void);
+            }
+            free(node_data_ptr as *mut c_void);
         }
         
         // Return the node (without masks for now - Bor doesn't provide them)
@@ -108,7 +107,6 @@ impl TrieNodeProvider for BorTrieNodeProvider {
 /// Factory for creating Bor TrieNodeProviders
 /// This matches Reth's TrieNodeProviderFactory pattern for production-safe database access
 struct BorTrieNodeProviderFactory {
-    account_owner: B256,
     account_reader: BorNodeReaderCallback,
     handle_ptr: *mut c_void, // Handle pointer for registry lookup in Go callback
 }
@@ -119,17 +117,17 @@ impl TrieNodeProviderFactory for BorTrieNodeProviderFactory {
 
     fn account_node_provider(&self) -> Self::AccountNodeProvider {
         BorTrieNodeProvider {
-            owner: self.account_owner,
+            // Account trie owner is the zero hash in geth/pathdb semantics.
+            owner: B256::ZERO,
             reader: self.account_reader,
             handle_ptr: self.handle_ptr,
         }
     }
 
-    fn storage_node_provider(&self, _account: B256) -> Self::StorageNodeProvider {
-        // For storage, we use the same owner and reader
-        // In a more sophisticated implementation, we might have separate storage readers
+    fn storage_node_provider(&self, account: B256) -> Self::StorageNodeProvider {
+        // Storage trie owner is the hashed account address.
         BorTrieNodeProvider {
-            owner: self.account_owner,
+            owner: account,
             reader: self.account_reader,
             handle_ptr: self.handle_ptr,
         }
@@ -210,7 +208,6 @@ impl SparseStateTrieWrapper {
             storage_tries: HashMap::new(),
             account_rlp_buf: Vec::with_capacity(110),
             provider_factory: ProviderFactory::Bor(BorTrieNodeProviderFactory {
-                account_owner: owner,
                 account_reader: reader,
                 handle_ptr,
             }),
@@ -370,6 +367,29 @@ impl SparseStateTrieWrapper {
     fn root(&mut self) -> B256 {
         self.account_trie.root()
     }
+
+    fn reveal_account_node(&mut self, path: Nibbles, node_bytes: Bytes) -> Result<(), SparseTrieError> {
+        let node = TrieNode::decode(&mut &node_bytes[..]).map_err(|e| {
+            SparseTrieError::from(SparseTrieErrorKind::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("decode: {e}"),
+            ))))
+        })?;
+        let proof_node = ProofTrieNode { path, node, masks: TrieMasks { tree_mask: None, hash_mask: None } };
+        self.account_trie.reveal_nodes(vec![proof_node])
+    }
+
+    fn reveal_storage_node(&mut self, address: B256, path: Nibbles, node_bytes: Bytes) -> Result<(), SparseTrieError> {
+        let node = TrieNode::decode(&mut &node_bytes[..]).map_err(|e| {
+            SparseTrieError::from(SparseTrieErrorKind::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("decode: {e}"),
+            ))))
+        })?;
+        let proof_node = ProofTrieNode { path, node, masks: TrieMasks { tree_mask: None, hash_mask: None } };
+        let storage_trie = self.get_or_create_storage_trie(address);
+        storage_trie.reveal_nodes(vec![proof_node])
+    }
 }
 
 /// Opaque handle to a SparseStateTrieWrapper instance
@@ -403,18 +423,12 @@ pub unsafe extern "C" fn sst_new_with_provider(
     owner_ptr: *const u8,
     reader_callback: *mut c_void,
 ) -> *mut SSTHandle {
-    if owner_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    
     if reader_callback.is_null() {
         return std::ptr::null_mut();
     }
     
-    let owner = B256::from_slice(unsafe { std::slice::from_raw_parts(owner_ptr, 32) });
-    
     // Cast the void* to the callback function pointer type
-    let reader: BorNodeReaderCallback = std::mem::transmute(reader_callback);
+    let reader: BorNodeReaderCallback = unsafe { std::mem::transmute(reader_callback) };
     
     // Create handle first (we'll pass its pointer to the factory)
     let handle = Box::new(SSTHandle {
@@ -423,7 +437,8 @@ pub unsafe extern "C" fn sst_new_with_provider(
     let handle_ptr = Box::into_raw(handle);
     
     // Now create the wrapper with provider, passing the handle pointer
-    let trie = SparseStateTrieWrapper::new_with_provider(owner, reader, handle_ptr as *mut c_void);
+    // Note: account trie owner is always zero; we ignore the provided owner to avoid misuse.
+    let trie = SparseStateTrieWrapper::new_with_provider(B256::ZERO, reader, handle_ptr as *mut c_void);
     unsafe {
         (*handle_ptr).trie = Mutex::new(trie);
     }
@@ -551,6 +566,81 @@ pub unsafe extern "C" fn sst_root(handle: *mut SSTHandle, output: *mut u8) -> c_
         ptr::copy_nonoverlapping(root.as_slice().as_ptr(), output, 32);
     }
     0
+}
+
+/// Reveal an account trie node by path (hex-encoded nibbles without terminator)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sst_reveal_account_node(
+    handle: *mut SSTHandle,
+    path_hex: *const c_char,
+    node_ptr: *const u8,
+    node_len: usize,
+) -> c_int {
+    if handle.is_null() || path_hex.is_null() || node_ptr.is_null() {
+        return -1;
+    }
+    let path_str = match unsafe { CStr::from_ptr(path_hex) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let nibbles = match hex_to_nibbles(path_str) {
+        Ok(n) => n,
+        Err(_) => return -1,
+    };
+    let node_vec = unsafe { std::slice::from_raw_parts(node_ptr, node_len) }.to_vec();
+    // Try decode for better diagnostics
+    if let Err(e) = TrieNode::decode(&mut &node_vec[..]) {
+        let preview = if node_vec.len() > 64 { &node_vec[..64] } else { &node_vec[..] };
+        eprintln!("[reth-pst-ffi] account reveal decode failed at path {}: {} rlp_preview={}", path_str, e, hex::encode(preview));
+        return -1;
+    }
+    let handle = unsafe { &*handle };
+    let mut trie = handle.trie.lock().unwrap();
+    match trie.reveal_account_node(nibbles, Bytes::from(node_vec)) {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("[reth-pst-ffi] account reveal failed at path {}: {:?}", path_str, e);
+            -1
+        },
+    }
+}
+
+/// Reveal a storage trie node by path (hex-encoded nibbles without terminator)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sst_reveal_storage_node(
+    handle: *mut SSTHandle,
+    address_ptr: *const u8,
+    path_hex: *const c_char,
+    node_ptr: *const u8,
+    node_len: usize,
+) -> c_int {
+    if handle.is_null() || address_ptr.is_null() || path_hex.is_null() || node_ptr.is_null() {
+        return -1;
+    }
+    let address = B256::from_slice(unsafe { std::slice::from_raw_parts(address_ptr, 32) });
+    let path_str = match unsafe { CStr::from_ptr(path_hex) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let nibbles = match hex_to_nibbles(path_str) {
+        Ok(n) => n,
+        Err(_) => return -1,
+    };
+    let node_vec = unsafe { std::slice::from_raw_parts(node_ptr, node_len) }.to_vec();
+    if let Err(e) = TrieNode::decode(&mut &node_vec[..]) {
+        let preview = if node_vec.len() > 64 { &node_vec[..64] } else { &node_vec[..] };
+        eprintln!("[reth-pst-ffi] storage reveal decode failed at path {} owner={} : {} rlp_preview={}", path_str, hex::encode(address.as_slice()), e, hex::encode(preview));
+        return -1;
+    }
+    let handle = unsafe { &*handle };
+    let mut trie = handle.trie.lock().unwrap();
+    match trie.reveal_storage_node(address, nibbles, Bytes::from(node_vec)) {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("[reth-pst-ffi] storage reveal failed at path {} owner={}: {:?}", path_str, hex::encode(address.as_slice()), e);
+            -1
+        },
+    }
 }
 
 /// Create a new ParallelSparseTrie instance (kept for backward compatibility)
