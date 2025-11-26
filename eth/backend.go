@@ -229,13 +229,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		closeCh:         make(chan struct{}),
 	}
 
-	// Initialise a multi client based on block producer's rpc endpoints.
-	var multiClient *preconfs.MultiClient
+	// Initialise a new preconf service using rpc endpoint of block producers
+	var preconfService *preconfs.Service
 	if config.EnablePreconfs {
-		multiClient = preconfs.NewMultiClient(config.BpRpcEndpoints)
+		preconfService = preconfs.NewPreconfService(config.BpRpcEndpoints)
 	}
 
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, multiClient}
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, preconfService}
 	if eth.APIBackend.allowUnprotectedTxs {
 		log.Info("Unprotected transactions allowed")
 		config.TxPool.AllowUnprotectedTxs = true

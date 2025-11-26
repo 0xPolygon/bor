@@ -60,7 +60,8 @@ type Backend interface {
 
 	// Preconfs related API
 	IsPreconfEnabled() bool
-	ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool // Validate if a tx is included in by the block producers
+	SubmitTxForPreconf(tx *types.Transaction, sender common.Address)
+	CheckPreconfStatus(hash common.Hash) (bool, error)
 
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration

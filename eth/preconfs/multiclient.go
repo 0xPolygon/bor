@@ -14,18 +14,25 @@ import (
 )
 
 const (
-	rpcTimeout = time.Second
-	maxRetry   = 5
-	threshold  = int(1) // reduce later based on how testing goes
+	rpcTimeout      = time.Second
+	waitBeforeRetry = time.Second
+	maxRetry        = 5
+	threshold       = int(1) // reduce later based on how testing goes
 )
 
-// MultiClient holds multiple rpc client instances for each block producer
-// to perform certain queries across all of them.
-type MultiClient struct {
+var (
+	errNoClients = fmt.Errorf("no rpc clients available")
+	errRpcFailed = fmt.Errorf("transaction inclusion ratio below threshold: unable to query block producers")
+	errMissingTx = fmt.Errorf("transaction inclusion ratio below threshold: transaction missing in mempool")
+)
+
+// multiClient holds multiple rpc client instances for each block producer
+// to perform certain queries across all of them and make a unified decision.
+type multiClient struct {
 	clients []*rpc.Client // rpc client instances dialed to each block producer
 }
 
-func NewMultiClient(urls []string) *MultiClient {
+func newMultiClient(urls []string) *multiClient {
 	if len(urls) == 0 {
 		return nil
 	}
@@ -42,19 +49,19 @@ func NewMultiClient(urls []string) *MultiClient {
 		client, err := rpc.Dial(url)
 		if err != nil {
 			failed++
-			log.Warn("[preconfs] Failed to dial rpc endpoint for preconf multi-client, skipping", "url", url, "err", err)
+			log.Warn("[preconfs] Failed to dial rpc endpoint for multi-client, skipping", "url", url, "err", err)
 			continue
 		}
 		clients = append(clients, client)
 	}
 
 	if failed == len(urls) {
-		log.Info("[preconfs] Failed to dial all rpc endpoints for preconf multi-client, disabling", "count", len(urls))
+		log.Info("[preconfs] Failed to dial all rpc endpoints for multi-client, disabling completely", "count", len(urls))
 		return nil
 	}
 
-	log.Info("[preconfs] Initialised preconf multi-client for each block producer", "count", len(clients), "failed", failed)
-	return &MultiClient{
+	log.Info("[preconfs] Initialised multi-client for each block producer", "count", len(clients), "failed", failed)
+	return &multiClient{
 		clients: clients,
 	}
 }
@@ -69,16 +76,21 @@ type MinimalTransaction struct {
 	Nonce hexutil.Uint64 `json:"nonce"`
 }
 
-// ValidateTxInclusionInMempool checks if the given transaction is included in the
-// pending mempool of all block producers or not. Return true only if the transaction
-// is included in the pending pool of all block producers.
-func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sender common.Address) bool {
+// checkTxInclusionInMempool checks if the given transaction is included in the
+// pending mempool of all block producers or not. Returns true only if the
+// transaction is included in more than `threshold`% of block producers.
+func (mc *multiClient) checkTxInclusionInMempool(tx *types.Transaction, sender common.Address) (bool, error) {
 	if len(mc.clients) == 0 {
-		return false
+		return false, errNoClients
 	}
 
-	var d []time.Duration = make([]time.Duration, len(mc.clients))
-	var t []int = make([]int, len(mc.clients))
+	// Track relevant metrics
+	var (
+		d              []time.Duration = make([]time.Duration, len(mc.clients))
+		t              []int           = make([]int, len(mc.clients))
+		rpcErrCount                    = 0
+		txMissingCount                 = 0
+	)
 
 	// TODO: check if bp's are in sync or not before validating
 
@@ -97,24 +109,32 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 			defer func() {
 				t[index] = tries
 			}()
+			var isTxPresent bool
+			var err error
 			for {
 				if tries >= maxRetry {
+					if !isTxPresent {
+						txMissingCount++
+					}
+					if err != nil {
+						rpcErrCount++
+					}
 					break
 				}
 				var txsInMempool MinimalTxPoolContent
 				ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-				err := client.CallContext(ctx, &txsInMempool, "txpool_contentFrom", sender)
+				err = client.CallContext(ctx, &txsInMempool, "txpool_contentFrom", sender)
 				cancel()
 				if err != nil {
 					tries++
-					log.Info("[preconfs] Failed to get txpool content for sender via preconf multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries, "err", err)
+					log.Info("[preconfs] Failed to get txpool content for sender via multi-client, retrying after 1s", "sender", sender.Hex(), "producer", index, "tries", tries, "err", err)
 					continue
 				}
-				isTxPresent := isTxPresentInPending(tx, sender, txsInMempool)
+				isTxPresent = isTxPresentInPending(tx, sender, txsInMempool)
 				if !isTxPresent {
 					tries++
-					log.Info("[preconfs] Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "try", tries)
-					time.Sleep(time.Second)
+					log.Info("[preconfs] Transaction missing in pending pool, retrying after 1s", "sender", sender.Hex(), "producer", index, "tries", tries)
+					time.Sleep(waitBeforeRetry)
 					continue
 				}
 				validationCount++
@@ -128,11 +148,15 @@ func (mc *MultiClient) ValidateTxInclusionInMempool(tx *types.Transaction, sende
 
 	if validationCount/len(mc.clients) < threshold {
 		log.Info("[preconfs] Transaction not present in enough block producers", "sender", sender.Hex(), "validations", validationCount, "total", len(mc.clients), "threshold", threshold)
-		return false
+		err := errMissingTx
+		if rpcErrCount > txMissingCount {
+			err = errRpcFailed
+		}
+		return false, err
 	}
 
 	log.Info("[preconfs] Tx present in enough block producers", "sender", sender.Hash(), "hash", tx.Hash())
-	return true
+	return true, nil
 }
 
 func isTxPresentInPending(tx *types.Transaction, sender common.Address, txsInMempool MinimalTxPoolContent) bool {
@@ -157,7 +181,7 @@ func isTxPresentInPending(tx *types.Transaction, sender common.Address, txsInMem
 }
 
 // Close closes all rpc client connections
-func (mc *MultiClient) Close() {
+func (mc *multiClient) Close() {
 	for _, client := range mc.clients {
 		client.Close()
 	}

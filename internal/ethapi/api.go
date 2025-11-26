@@ -1872,7 +1872,7 @@ func (api *TransactionAPI) sign(addr common.Address, tx *types.Transaction) (*ty
 }
 
 // SubmitTransaction is a helper function that submits tx to txPool and logs a message.
-func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (common.Hash, error) {
+func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, offerPreconf bool) (common.Hash, error) {
 	// If the transaction fee cap is already specified, ensure the
 	// fee of the given transaction is _reasonable_.
 	if err := checkTxFee(tx.GasPrice(), tx.Gas(), b.RPCTxFeeCap()); err != nil {
@@ -1894,6 +1894,12 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 
 	if err != nil && (!b.UnprotectedAllowed() || (b.UnprotectedAllowed() && err != types.ErrInvalidChainId)) {
 		return common.Hash{}, err
+	}
+
+	// If preconfirmations are requested, send it to the preconf service for additional validation async
+	if b.IsPreconfEnabled() && offerPreconf {
+		log.Info("[preconfs] submitted tx for preconf validation", "hash", tx.Hash())
+		go b.SubmitTxForPreconf(tx, from)
 	}
 
 	if tx.To() == nil {
@@ -1938,7 +1944,7 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 	if err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, signed)
+	return SubmitTransaction(ctx, api.b, signed, false)
 }
 
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
@@ -1968,7 +1974,7 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, tx)
+	return SubmitTransaction(ctx, api.b, tx, true)
 }
 
 func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
@@ -1980,7 +1986,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
-	hash, err := SubmitTransaction(ctx, api.b, tx)
+	hash, err := SubmitTransaction(ctx, api.b, tx, false)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -1991,14 +1997,15 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	head := api.b.CurrentBlock()
 	signer := types.MakeSigner(api.b.ChainConfig(), head.Number, head.Time)
 	from, err := types.Sender(signer, tx)
+	_ = from
 
-	start := time.Now()
-	valid := api.b.ValidateTxInclusionForPreconf(tx, from)
-	if valid {
-		log.Info("[preconfs] ✅ Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
-	} else {
-		log.Info("[preconfs] ❌ Unable to offer preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
-	}
+	// start := time.Now()
+	// valid := api.b.ValidateTxInclusionForPreconf(tx, from)
+	// if valid {
+	// 	log.Info("[preconfs] ✅ Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
+	// } else {
+	// 	log.Info("[preconfs] ❌ Unable to offer preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
+	// }
 	return hash, nil
 }
 
@@ -2015,7 +2022,7 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	subErrCh := sub.Err()
 	defer sub.Unsubscribe()
 
-	hash, err := SubmitTransaction(ctx, api.b, tx)
+	hash, err := SubmitTransaction(ctx, api.b, tx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2087,6 +2094,13 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 			}
 		}
 	}
+}
+
+func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {
+	if !api.b.IsPreconfEnabled() {
+		return false, errors.New("preconf service disabled")
+	}
+	return api.b.CheckPreconfStatus(hash)
 }
 
 // Sign calculates an ECDSA signature for:

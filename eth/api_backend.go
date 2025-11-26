@@ -56,8 +56,8 @@ type EthAPIBackend struct {
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
 
-	// multi-client instance to validate tx inclusion for preconfs
-	multiClient *preconfs.MultiClient
+	// preconfs service for validating tx inclusion for issuing preconfs
+	preconfService *preconfs.Service
 }
 
 // ChainConfig returns the active chain configuration.
@@ -494,14 +494,20 @@ func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.S
 }
 
 func (b *EthAPIBackend) IsPreconfEnabled() bool {
-	return b.multiClient != nil
+	return b.preconfService != nil
 }
 
-func (b *EthAPIBackend) ValidateTxInclusionForPreconf(tx *types.Transaction, sender common.Address) bool {
-	if b.multiClient == nil {
-		return false
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {
+	if b.preconfService != nil {
+		b.preconfService.QueuePreconfTask(tx, sender)
 	}
-	return b.multiClient.ValidateTxInclusionInMempool(tx, sender)
+}
+
+func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	if b.preconfService != nil {
+		return b.preconfService.CheckTxPreconfStatus(hash)
+	}
+	return false, errors.New("preconf service disabled")
 }
 
 func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {

@@ -122,7 +122,7 @@ func (api *BorAPI) SendRawTransactionConditional(ctx context.Context, input hexu
 	// put options data in Tx, to use it later while block building
 	tx.PutOptions(&options)
 
-	return SubmitTransaction(ctx, api.b, tx)
+	return SubmitTransaction(ctx, api.b, tx, false)
 }
 
 func (api *BorAPI) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
