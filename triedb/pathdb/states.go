@@ -470,7 +470,7 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 		} else {
 			account := new(types.SlimAccount)
 			if err := rlp.DecodeBytes(blob, account); err != nil {
-				return err
+				return fmt.Errorf("failed to decode account %x (blob len=%d, blob=%x): %w", addrHash, len(blob), blob, err)
 			}
 
 			if len(account.CodeHash) == 0 {
@@ -497,9 +497,17 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 				return fmt.Errorf("storage key map not found for storage %x", storageHash)
 			}
 
+			// Empty blob means storage slot was deleted
+			if len(blob) == 0 {
+				if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), nil); err != nil {
+					return err
+				}
+				continue
+			}
+
 			_, content, _, err := rlp.Split(blob)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to split storage %x for account %x (blob len=%d, blob=%x): %w", storageHash, addrHash, len(blob), blob, err)
 			}
 			var slot common.Hash
 			slot.SetBytes(content)

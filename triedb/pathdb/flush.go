@@ -175,6 +175,14 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 	// Write storage data
 	for addr, slots := range history.storages {
 		for storageKey, blob := range slots {
+			// Empty blob means storage slot was deleted
+			if len(blob) == 0 {
+				if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), nil); err != nil {
+					return err
+				}
+				continue
+			}
+
 			// Extract the actual storage value from the RLP-encoded blob
 			_, content, _, err := rlp.Split(blob)
 			if err != nil {
