@@ -475,6 +475,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Cache",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.waitforwarm",
+		Usage:   "Wait for prefetch warm-up to finish before executing blocks",
+		Value:   &c.cliConfig.Cache.WaitForWarm,
+		Default: c.cliConfig.Cache.WaitForWarm,
+		Group:   "Cache",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "cache.warminworker",
+		Usage:   "Run prefetch warm-up in miner worker instead of during block import",
+		Value:   &c.cliConfig.Cache.WarmInWorker,
+		Default: c.cliConfig.Cache.WarmInWorker,
+		Group:   "Cache",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "cache.preimages",
 		Usage:   "Enable recording the SHA3/keccak preimages of trie keys",
 		Value:   &c.cliConfig.Cache.Preimages,

@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -926,6 +928,48 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	return env, nil
 }
 
+// selectHeavyAccounts returns a subset of accounts from the provided plain/blob maps,
+// preferring accounts with higher head-tx gas first, until the cumulative head gas
+// reaches the provided gas limit
+func selectHeavyAccounts(plain, blob map[common.Address][]*txpool.LazyTransaction, gasLimit uint64) map[common.Address]struct{} {
+	type accountSet struct {
+		addr common.Address
+		gas  uint64
+	}
+	cands := make([]accountSet, 0, len(plain)+len(blob))
+	for a, txs := range plain {
+		if len(txs) == 0 {
+			continue
+		}
+		cands = append(cands, accountSet{addr: a, gas: txs[0].Gas})
+	}
+	for a, txs := range blob {
+		if len(txs) == 0 {
+			continue
+		}
+		cands = append(cands, accountSet{addr: a, gas: txs[0].Gas})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].gas > cands[j].gas })
+	var sum uint64
+	selected := make(map[common.Address]struct{})
+	for _, c := range cands {
+		if _, ok := selected[c.addr]; ok {
+			continue
+		}
+		if sum >= gasLimit {
+			break
+		}
+		selected[c.addr] = struct{}{}
+		// Cap to block gas limit
+		if gasLimit-sum < c.gas {
+			sum = gasLimit
+		} else {
+			sum += c.gas
+		}
+	}
+	return selected
+}
+
 // updateSnapshot updates pending snapshot block, receipts and state.
 func (w *worker) updateSnapshot(env *environment) {
 	w.snapshotMu.Lock()
@@ -1451,22 +1495,74 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
-	// Fill the block with all available pending transactions.
-	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+	var plainTxsPrio, blobTxsPrio *transactionsByPriceAndNonce
+	var plainTxsNormal, blobTxsNormal *transactionsByPriceAndNonce
+	{
+		if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
+			plainTxsPrio = newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			blobTxsPrio = newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		}
+		if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
+			heapInitTime := time.Now()
+			plainTxsNormal = newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			blobTxsNormal = newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+			txHeapInitTimer.Update(time.Since(heapInitTime))
+		}
+		// Flatten pending txs into a slice (no capping)
+		txs := make([]*types.Transaction, 0)
+		appendMap := func(m map[common.Address][]*txpool.LazyTransaction) {
+			for _, list := range m {
+				for _, ltx := range list {
+					if ltx == nil || ltx.Tx == nil {
+						continue
+					}
+					txs = append(txs, ltx.Tx)
+				}
+			}
+		}
+		appendMap(prioPlainTxs)
+		appendMap(prioBlobTxs)
+		appendMap(normalPlainTxs)
+		appendMap(normalBlobTxs)
 
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+		// Filter txs for warming and start warm reader cache
+		if len(txs) > 0 && w.chain.WarmInWorkerEnabled() {
+			selectedPrio := selectHeavyAccounts(prioPlainTxs, prioBlobTxs, env.header.GasLimit)
+			selectedNormal := selectHeavyAccounts(normalPlainTxs, normalBlobTxs, env.header.GasLimit)
+
+			// Filter txs slice to only include selected accounts
+			filteredTxs := make([]*types.Transaction, 0)
+			for _, tx := range txs {
+				from, _ := types.Sender(env.signer, tx)
+				if _, ok := selectedPrio[from]; ok {
+					filteredTxs = append(filteredTxs, tx)
+				} else if _, ok := selectedNormal[from]; ok {
+					filteredTxs = append(filteredTxs, tx)
+				}
+			}
+			txs = filteredTxs
+
+			// start warm reader cache
+			tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, txs, vm.Config{})
+			numProcs := max(1, 4*runtime.NumCPU()/5)
+			if w.chain.WaitForWarmEnabled() {
+				_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+			} else {
+				go func() {
+					_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+				}()
+			}
+		}
+	}
+
+	// commit transactions
+	if plainTxsPrio != nil || blobTxsPrio != nil {
+		if err := w.commitTransactions(env, plainTxsPrio, blobTxsPrio, interrupt, new(uint256.Int)); err != nil {
 			return err
 		}
 	}
-	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
-		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		txHeapInitTimer.Update(time.Since(heapInitTime))
-
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+	if plainTxsNormal != nil || blobTxsNormal != nil {
+		if err := w.commitTransactions(env, plainTxsNormal, blobTxsNormal, interrupt, new(uint256.Int)); err != nil {
 			return err
 		}
 	}

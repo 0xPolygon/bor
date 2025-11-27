@@ -608,6 +608,12 @@ type CacheConfig struct {
 	// NoPrefetch is used to disable prefetch of tries
 	NoPrefetch bool `hcl:"noprefetch,optional" toml:"noprefetch,optional"`
 
+	// WaitForWarm, if true, waits for warm-up to finish before executing blocks
+	WaitForWarm bool `hcl:"waitforwarm,optional" toml:"waitforwarm,optional"`
+
+	// WarmInWorker, if true, runs warm-up in miner worker (not during import)
+	WarmInWorker bool `hcl:"warminworker,optional" toml:"warminworker,optional"`
+
 	// Preimages is used to enable the track of hash preimages
 	Preimages bool `hcl:"preimages,optional" toml:"preimages,optional"`
 
@@ -1298,6 +1304,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieCleanCache = calcPerc(c.Cache.PercTrie)
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
 		n.NoPrefetch = c.Cache.NoPrefetch
+		n.WaitForWarm = c.Cache.WaitForWarm
+		n.WarmInWorker = c.Cache.WarmInWorker
 		n.Preimages = c.Cache.Preimages
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit

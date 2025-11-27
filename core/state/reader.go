@@ -354,9 +354,7 @@ func newMultiStateReader(readers ...StateReader) (*multiStateReader, error) {
 	if len(readers) == 0 {
 		return nil, errors.New("empty reader set")
 	}
-	return &multiStateReader{
-		readers: readers,
-	}, nil
+	return &multiStateReader{readers: readers}, nil
 }
 
 // Account implementing StateReader interface, retrieving the account associated
@@ -519,7 +517,7 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 	return value, err
 }
 
-type readerWithCacheStats struct {
+type ReaderWithCacheStats struct {
 	*readerWithCache
 	accountHit  atomic.Int64
 	accountMiss atomic.Int64
@@ -528,8 +526,8 @@ type readerWithCacheStats struct {
 }
 
 // newReaderWithCacheStats constructs the reader with additional statistics tracked.
-func newReaderWithCacheStats(reader *readerWithCache) *readerWithCacheStats {
-	return &readerWithCacheStats{
+func newReaderWithCacheStats(reader *readerWithCache) *ReaderWithCacheStats {
+	return &ReaderWithCacheStats{
 		readerWithCache: reader,
 	}
 }
@@ -538,7 +536,7 @@ func newReaderWithCacheStats(reader *readerWithCache) *readerWithCacheStats {
 // The returned account might be nil if it's not existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount, error) {
+func (r *ReaderWithCacheStats) Account(addr common.Address) (*types.StateAccount, error) {
 	account, incache, err := r.readerWithCache.account(addr)
 	if err != nil {
 		return nil, err
@@ -556,7 +554,7 @@ func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount
 // existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+func (r *ReaderWithCacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	value, incache, err := r.readerWithCache.storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, err
@@ -570,11 +568,56 @@ func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (c
 }
 
 // GetStats implements ReaderWithStats, returning the statistics of state reader.
-func (r *readerWithCacheStats) GetStats() ReaderStats {
+func (r *ReaderWithCacheStats) GetStats() ReaderStats {
 	return ReaderStats{
 		AccountHit:  r.accountHit.Load(),
 		AccountMiss: r.accountMiss.Load(),
 		StorageHit:  r.storageHit.Load(),
 		StorageMiss: r.storageMiss.Load(),
+	}
+}
+
+// SeedCaches inserts the supplied accounts and storage slots directly into the
+// local caches.
+func (r *ReaderWithCacheStats) SeedCaches(accounts map[common.Address]*types.StateAccount, storage map[common.Address]map[common.Hash]common.Hash) {
+	if r == nil || r.readerWithCache == nil {
+		return
+	}
+
+	if len(accounts) > 0 {
+		r.accountLock.Lock()
+		for addr, acct := range accounts {
+			// Only add if not already cached
+			if _, exists := r.accounts[addr]; exists {
+				continue
+			}
+			if acct != nil {
+				r.accounts[addr] = acct
+			}
+		}
+		r.accountLock.Unlock()
+	}
+
+	if len(storage) > 0 {
+		for addr, slots := range storage {
+			if len(slots) == 0 {
+				continue
+			}
+			bucket := &r.storageBuckets[addr[0]&0x0f]
+			bucket.lock.Lock()
+			dst, ok := bucket.storages[addr]
+			if !ok {
+				dst = make(map[common.Hash]common.Hash, len(slots))
+				bucket.storages[addr] = dst
+			}
+			for k, v := range slots {
+				// Only add if not already cached
+				if _, exists := dst[k]; exists {
+					continue
+				}
+				dst[k] = v
+			}
+			bucket.lock.Unlock()
+		}
 	}
 }

@@ -86,11 +86,6 @@ var (
 	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
 	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
 
-	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
-	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
-	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
-	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
-
 	accountReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
 	storageReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
@@ -126,6 +121,9 @@ var (
 	blockPrefetchInterruptMeter  = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
 	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
 	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
+
+	// Warm-up timing (seedReaderCache)
+	triewarmTimer = metrics.NewRegisteredTimer("chain/warm", nil)
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
@@ -205,9 +203,11 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch bool            // Whether to disable heuristic state prefetching when processing blocks
-	Overrides  *ChainOverrides // Optional chain config overrides
-	VmConfig   vm.Config       // Config options for the EVM Interpreter
+	NoPrefetch   bool            // Whether to disable heuristic state prefetching when processing blocks
+	WaitForWarm  bool            // If true, block execution waits for the warm-up to finish
+	WarmInWorker bool            // If true, warming is done in miner worker; import-time warming is disabled
+	Overrides    *ChainOverrides // Optional chain config overrides
+	VmConfig     vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -241,6 +241,7 @@ func DefaultConfig() *BlockChainConfig {
 		// This is appropriate for most unit tests.
 		TxLookupLimit: -1,
 		VmConfig:      vm.Config{},
+		WarmInWorker:  false,
 	}
 }
 
@@ -393,6 +394,13 @@ type BlockChain struct {
 	chain2HeadFeed      event.Feed                              // Reorg/NewHead/Fork data feed
 	chainSideFeed       event.Feed                              // Side chain data feed (removed from geth but needed in bor)
 	checker             ethereum.ChainValidator
+
+	// Last reader cache stats from ProcessBlock (read by insertChain for logging)
+	lastProcAccHit   int64
+	lastProcAccMiss  int64
+	lastProcStorHit  int64
+	lastProcStorMiss int64
+	lastWarmSeedDur  time.Duration
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -665,7 +673,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 	return bc, nil
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, warmCh <-chan warmOutcome) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -691,14 +699,32 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	parentRoot := parent.Root
-	prefetch, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
+	_, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
-	if err != nil {
-		return nil, nil, 0, nil, 0, err
+	// If an async warm was started earlier for this root, wait for it to finish.
+	var warmedProc state.ReaderWithStats
+	if warmCh != nil {
+		if res, ok := <-warmCh; ok {
+			warmedProc = res.Reader
+			bc.lastWarmSeedDur = res.Dur
+			if res.Dur > 0 {
+				triewarmTimer.Update(res.Dur)
+			}
+		}
 	}
+	// Prefer an asynchronously warmed reader if available.
+	if warmedProc != nil {
+		process = warmedProc
+	} else {
+		bc.lastWarmSeedDur = 0
+	}
+	// Create a prefetch statedb for background prefetch
+	// throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
+	// if err != nil {
+	// 	return nil, nil, 0, nil, 0, err
+	// }
 	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
@@ -710,29 +736,28 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 
 	// Upload the statistics of reader at the end
 	defer func() {
-		stats := prefetch.GetStats()
-		accountCacheHitPrefetchMeter.Mark(stats.AccountHit)
-		accountCacheMissPrefetchMeter.Mark(stats.AccountMiss)
-		storageCacheHitPrefetchMeter.Mark(stats.StorageHit)
-		storageCacheMissPrefetchMeter.Mark(stats.StorageMiss)
-		stats = process.GetStats()
+		stats := process.GetStats()
 		accountCacheHitMeter.Mark(stats.AccountHit)
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
 		storageCacheMissMeter.Mark(stats.StorageMiss)
+		bc.lastProcAccHit += stats.AccountHit
+		bc.lastProcAccMiss += stats.AccountMiss
+		bc.lastProcStorHit += stats.StorageHit
+		bc.lastProcStorMiss += stats.StorageMiss
 	}()
 
-	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
-		// Disable tracing for prefetcher executions.
-		vmCfg := bc.cfg.VmConfig
-		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+	// go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+	// 	// Disable tracing for prefetcher executions.
+	// 	vmCfg := bc.cfg.VmConfig
+	// 	vmCfg.Tracer = nil
+	// 	bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
 
-		blockPrefetchExecuteTimer.Update(time.Since(start))
-		if followupInterrupt.Load() {
-			blockPrefetchInterruptMeter.Mark(1)
-		}
-	}(time.Now(), throwaway, block)
+	// 	blockPrefetchExecuteTimer.Update(time.Since(start))
+	// 	if followupInterrupt.Load() {
+	// 		blockPrefetchInterruptMeter.Mark(1)
+	// 	}
+	// }(time.Now(), throwaway, block)
 
 	type Result struct {
 		receipts types.Receipts
@@ -822,6 +847,23 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	return result.receipts, result.logs, result.usedGas, result.statedb, vtime, result.err
+}
+
+// warmReaderCache preloads the supplied readerWithCache with accounts/storage and trie nodes.
+func (bc *BlockChain) warmReaderCache(parentRoot common.Hash, reader state.ReaderWithStats, b *types.Block, followupInterrupt *atomic.Bool) (state.ReaderWithStats, time.Duration) {
+	if reader == nil || b == nil || len(b.Transactions()) == 0 {
+		return nil, 0
+	}
+	vmCfg := bc.cfg.VmConfig
+	vmCfg.Tracer = nil
+	warmdb, err := state.NewWithReader(parentRoot, bc.statedb, reader)
+	if err != nil {
+		return nil, 0
+	}
+
+	start := time.Now()
+	bc.prefetcher.Prefetch(b, warmdb, vmCfg, followupInterrupt)
+	return reader, time.Since(start)
 }
 
 func (bc *BlockChain) setupSnapshot() {
@@ -2641,7 +2683,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 				snapDiffItems, snapBufItems = bc.snaps.Size()
 			}
 			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+			stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 			continue
 		}
 
@@ -2718,7 +2760,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 	}
 
 	return int(processed.Load()), nil
@@ -2822,7 +2864,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true)
+		stats.report(chain, i, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, true, true, bc)
 	}
 	// End-of-batch witness validation
 	for i, block := range chain {
@@ -3113,6 +3155,10 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
+
+		// Start reader cache warming
+		warmCh := bc.StartWarmReaderCache(parent.Root, block)
+
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3172,7 +3218,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		var execWarmCh <-chan warmOutcome
+		if bc.cfg.WaitForWarm {
+			execWarmCh = warmCh
+		}
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, execWarmCh)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -3210,6 +3260,15 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		blockExecutionTimer.Update(ptime - trieRead)                    // The time spent on EVM processing
 		blockValidationTimer.Update(vtime - (triehash + trieUpdate))    // The time spent on block validation
 		borConsensusTime.Update(statedb.BorConsensusTime)               // The time spent on bor consensus (span + state sync)
+
+		execOnly := (ptime - trieRead)
+		stateCalc := (triehash + trieUpdate + trieRead)
+		stats.execDur += execOnly
+		stats.stateCalcDur += stateCalc
+		if bc.lastWarmSeedDur > 0 {
+			stats.warmDur += bc.lastWarmSeedDur
+		}
+		stats.valDur += (vtime - (triehash + trieUpdate))
 		// Write the block to the chain and get the status.
 		var (
 			wstart = time.Now()
@@ -3262,7 +3321,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			snapDiffItems, snapBufItems = bc.snaps.Size()
 		}
 		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
+		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false, bc)
 
 		/*
 			// Print confirmation that a future fork is scheduled, but not yet active.
@@ -4298,4 +4357,52 @@ func (bc *BlockChain) verifyPendingHeaders() {
 			lastValidNumber = header.Number.Uint64()
 		}
 	}
+}
+
+type warmOutcome struct {
+	Reader state.ReaderWithStats
+	Dur    time.Duration
+}
+
+// StartWarmReaderCache launches a goroutine to warm up a state reader's cache
+func (bc *BlockChain) StartWarmReaderCache(parentRoot common.Hash, b *types.Block) <-chan warmOutcome {
+	ch := make(chan warmOutcome, 1)
+	if b == nil || len(b.Transactions()) == 0 || bc.prefetcher == nil || (bc.cfg != nil && bc.cfg.WarmInWorker) {
+		close(ch)
+		return ch
+	}
+	go func() {
+		// Build process reader and warm it
+		_, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
+		if err == nil && process != nil {
+			if warmed, dur := bc.warmReaderCache(parentRoot, process, b, nil); warmed != nil {
+				ch <- warmOutcome{Reader: warmed, Dur: dur}
+				close(ch)
+				return
+			}
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+// WaitForWarmEnabled reports whether execution should wait for warm-up to finish.
+func (bc *BlockChain) WaitForWarmEnabled() bool {
+	if bc.cfg == nil {
+		return false
+	}
+	return bc.cfg.WaitForWarm
+}
+
+// WarmInWorkerEnabled reports whether warming should be done in miner worker.
+func (bc *BlockChain) WarmInWorkerEnabled() bool {
+	if bc.cfg == nil {
+		return false
+	}
+	return bc.cfg.WarmInWorker
+}
+
+// NewStateWithReader creates a new StateDB bound to the given reader for the root.
+func (bc *BlockChain) NewStateWithReader(root common.Hash, rdr state.ReaderWithStats) (*state.StateDB, error) {
+	return state.NewWithReader(root, bc.statedb, rdr)
 }

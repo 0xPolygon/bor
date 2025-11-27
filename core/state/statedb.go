@@ -173,6 +173,38 @@ type StateDB struct {
 	BorConsensusTime time.Duration
 }
 
+// OriginalRoot returns the pre-state root the StateDB was constructed with.
+func (s *StateDB) OriginalRoot() common.Hash {
+	return s.originalRoot
+}
+
+// PrefetchTouched returns pre-state accounts and storage values that were
+// touched in this StateDB during execution.
+func (s *StateDB) PrefetchTouched() (map[common.Address]*types.StateAccount, map[common.Address]map[common.Hash]common.Hash) {
+	accounts := make(map[common.Address]*types.StateAccount)
+	storage := make(map[common.Address]map[common.Hash]common.Hash)
+
+	for addr, obj := range s.stateObjects {
+		if obj == nil {
+			continue
+		}
+		if obj.origin != nil {
+			accounts[addr] = obj.origin
+		}
+		if len(obj.originStorage) > 0 {
+			dst := storage[addr]
+			if dst == nil {
+				dst = make(map[common.Hash]common.Hash, len(obj.originStorage))
+				storage[addr] = dst
+			}
+			for k, v := range obj.originStorage {
+				dst[k] = v
+			}
+		}
+	}
+	return accounts, storage
+}
+
 // New creates a new state from a given trie.
 func New(root common.Hash, db Database) (*StateDB, error) {
 	reader, err := db.Reader(root)

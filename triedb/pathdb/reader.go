@@ -57,7 +57,7 @@ type reader struct {
 	db          *Database
 	state       common.Hash
 	noHashCheck bool
-	layer       layer
+	layer       layer // entry layer (may be a diff layer)
 }
 
 // Node implements database.NodeReader interface, retrieving the node with specified
@@ -174,8 +174,8 @@ func (db *Database) NodeReader(root common.Hash) (database.NodeReader, error) {
 	if layer == nil {
 		return nil, fmt.Errorf("state %#x is not available", root)
 	}
-	return &reader{
-		db:          db,
+
+	return &reader{db: db,
 		state:       root,
 		noHashCheck: db.isVerkle,
 		layer:       layer,
