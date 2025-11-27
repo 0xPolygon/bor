@@ -3224,6 +3224,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			return nil, it.index, whitelist.ErrMismatch
 		}
 
+		panic("Wont commit block")
+
 		if !setHead {
 			// Don't set the head, only insert the block
 			_, err = bc.writeBlockWithState(block, receipts, logs, statedb)
