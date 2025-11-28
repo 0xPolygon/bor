@@ -3262,6 +3262,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			bc.logForkReadiness(block)
 		*/
 
+		panic("Wont commit block")
+
 		if !setHead {
 			// After merge we expect few side chains. Simply count
 			// all blocks the CL gives us for GC processing time
