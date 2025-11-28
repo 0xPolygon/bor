@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"slices"
 	"sort"
@@ -881,9 +882,27 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 
 	// Ensure that the difficulty corresponds to the turn-ness of the signer
 	if !c.fakeDiff {
-		difficulty := Difficulty(snap.ValidatorSet, signer)
-		if header.Difficulty.Uint64() != difficulty {
-			return &WrongDifficultyError{number, difficulty, header.Difficulty.Uint64(), signer.Bytes()}
+		expected := Difficulty(snap.ValidatorSet, signer)
+		// range check: difficulty must fit in uint64 (no high bits allowed).
+		if header.Difficulty == nil || !header.Difficulty.IsUint64() {
+			// reject the block.
+			return &WrongDifficultyError{
+				Number:   header.Number.Uint64(),
+				Expected: expected,
+				Actual:   math.MaxUint64, // invalid sentinel
+				Signer:   signer.Bytes(),
+			}
+		}
+
+		// value check, now it's safe to use Uint64().
+		actual := header.Difficulty.Uint64()
+		if actual != expected {
+			return &WrongDifficultyError{
+				Number:   header.Number.Uint64(),
+				Expected: expected,
+				Actual:   actual,
+				Signer:   signer.Bytes(),
+			}
 		}
 	}
 

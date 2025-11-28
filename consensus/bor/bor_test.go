@@ -2,10 +2,13 @@ package bor
 
 import (
 	"context"
+	"errors"
+	"math"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
@@ -731,4 +734,89 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 
 		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
 	})
+}
+
+func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
+	t.Parallel()
+
+	// real key so ecrecover works
+	privKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	sp := &fakeSpanner{
+		vals: []*valset.Validator{
+			{Address: signerAddr, VotingPower: 1},
+		},
+	}
+
+	borCfg := &params.BorConfig{
+		Sprint: map[string]uint64{"0": 64},
+		Period: map[string]uint64{"0": 2},
+	}
+
+	// devFake=false, we need real signatures for the sake of this test
+	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{})
+
+	parent := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, parent)
+
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(1),
+		Time:       parent.Time + borCfg.Period["0"],
+	}
+
+	// Build snapshot so we can compute the expected difficulty
+	snap, err := b.snapshot(chain.HeaderChain(), header, []*types.Header{parent}, true)
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+
+	expected := Difficulty(snap.ValidatorSet, signerAddr)
+
+	// Craft a huge difficulty whose low 64 bits match the expected
+	hugeDiff := new(big.Int).Add(
+		new(big.Int).SetUint64(expected),
+		new(big.Int).Lsh(big.NewInt(1), 64),
+	)
+	header.Difficulty = hugeDiff
+
+	// 32 bytes vanity + 65 bytes for the signature
+	header.Extra = make([]byte, 32+65)
+
+	// Compute the seal hash over the header
+	sigHash := SealHash(header, borCfg)
+
+	// Sign the seal hash
+	sig, err := crypto.Sign(sigHash.Bytes(), privKey)
+	require.NoError(t, err)
+	require.Len(t, sig, 65)
+
+	// Put the signature in the last 65 bytes of Extra
+	copy(header.Extra[len(header.Extra)-65:], sig)
+
+	// verify the seal: we expect the difficulty validation to reject it
+	err = b.verifySeal(chain.HeaderChain(), header, []*types.Header{parent})
+	if err == nil {
+		t.Fatalf("expected verifySeal to reject oversized difficulty, got nil")
+	}
+
+	var diffErr *WrongDifficultyError
+	ok := errors.As(err, &diffErr)
+	if !ok {
+		t.Fatalf("expected WrongDifficultyError, got %T (%v)", err, err)
+	}
+	if diffErr.Number != header.Number.Uint64() {
+		t.Fatalf("unexpected Number in WrongDifficultyError: got %d, want %d",
+			diffErr.Number, header.Number.Uint64())
+	}
+	if diffErr.Expected != expected {
+		t.Fatalf("unexpected Expected in WrongDifficultyError: got %d, want %d",
+			diffErr.Expected, expected)
+	}
+	if diffErr.Actual != math.MaxUint64 {
+		t.Fatalf("unexpected Actual in WrongDifficultyError: got %d, want %d",
+			diffErr.Actual, uint64(math.MaxUint64))
+	}
 }
