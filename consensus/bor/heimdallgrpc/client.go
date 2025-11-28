@@ -49,55 +49,54 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 		// Decide credentials and normalized address based on the provided scheme
 		u, err := url.Parse(grpcAddress)
 		if err != nil {
-				log.Crit("Invalid Heimdall gRPC URL", "url", grpcAddress, "err", err)
+			log.Crit("Invalid Heimdall gRPC URL", "url", grpcAddress, "err", err)
+		}
+
+		switch u.Scheme {
+		case "https":
+			// Remote secure connection
+			addr = u.Host
+			if addr == "" {
+				log.Crit("Invalid Heimdall gRPC https URL", "url", grpcAddress)
 			}
 
-			switch u.Scheme {
-			case "https":
-				// Remote secure connection
-				addr = u.Host
-				if addr == "" {
-					log.Crit("Invalid Heimdall gRPC https URL", "url", grpcAddress)
-				}
-
-				tlsCfg := &tls.Config{
-					ServerName: strings.Split(addr, ":")[0],
-					MinVersion: tls.VersionTLS12,
-				}
-				dialOpts = append(dialOpts,
-					grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-				)
-
-			case "http":
-				// plaintext only allowed for local host
-				addr = u.Host
-				if !isLocalhost(addr) {
-					log.Crit("Refusing insecure non-local Heimdall gRPC over http; use https or localhost only",
-						"addr", addr)
-				}
-				dialOpts = append(dialOpts,
-					grpc.WithTransportCredentials(insecure.NewCredentials()),
-				)
-
-			case "unix":
-				// support unix://path for on-box Heimdall nodes
-				path := u.Path
-				if path == "" {
-					log.Crit("Invalid unix Heimdall gRPC URL", "url", grpcAddress)
-				}
-				addr = "unix://" + path
-				dialOpts = append(dialOpts,
-					grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-						return net.DialTimeout("unix", strings.TrimPrefix(addr, "unix://"), timeout)
-					}),
-					grpc.WithTransportCredentials(insecure.NewCredentials()),
-				)
-
-			default:
-				log.Crit("Unsupported Heimdall gRPC URL scheme", "url", grpcAddress, "scheme", u.Scheme)
+			tlsCfg := &tls.Config{
+				ServerName: strings.Split(addr, ":")[0],
+				MinVersion: tls.VersionTLS12,
 			}
+			dialOpts = append(dialOpts,
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+			)
 
-		} else {
+		case "http":
+			// plaintext only allowed for local host
+			addr = u.Host
+			if !isLocalhost(addr) {
+				log.Crit("Refusing insecure non-local Heimdall gRPC over http; use https or localhost only",
+					"addr", addr)
+			}
+			dialOpts = append(dialOpts,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
+
+		case "unix":
+			// support unix://path for on-box Heimdall nodes
+			path := u.Path
+			if path == "" {
+				log.Crit("Invalid unix Heimdall gRPC URL", "url", grpcAddress)
+			}
+			addr = "unix://" + path
+			dialOpts = append(dialOpts,
+				grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+					return net.DialTimeout("unix", strings.TrimPrefix(addr, "unix://"), timeout)
+				}),
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
+
+		default:
+			log.Crit("Unsupported Heimdall gRPC URL scheme", "url", grpcAddress, "scheme", u.Scheme)
+		}
+	} else {
 		addr = grpcAddress
 		// No scheme provided, treat as host:port, but only allow if local
 		if !isLocalhost(addr) {
@@ -142,14 +141,6 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 func (h *HeimdallGRPCClient) Close() {
 	log.Debug("Shutdown detected, Closing Heimdall gRPC client")
 	h.conn.Close()
-}
-
-// removePrefix removes the http:// or https:// prefix from the address, if present.
-func removePrefix(address string) string {
-	if strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://") {
-		return address[strings.Index(address, "//")+2:]
-	}
-	return address
 }
 
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
