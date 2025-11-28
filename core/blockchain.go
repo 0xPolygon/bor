@@ -723,6 +723,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}()
 
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+		if bc.triedb.IsUsingTDB() {
+			return
+		}
 		// Disable tracing for prefetcher executions.
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil

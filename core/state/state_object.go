@@ -148,7 +148,7 @@ func (s *stateObject) getTrie() (Trie, error) {
 func (s *stateObject) getPrefetchedTrie() Trie {
 	// If there's nothing to meaningfully return, let the user figure it out by
 	// pulling the trie from disk.
-	if (s.data.Root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil {
+	if (s.data.Root == types.EmptyRootHash && !s.db.db.TrieDB().IsVerkle()) || s.db.prefetcher == nil || s.db.db.TrieDB().IsUsingTDB() {
 		return nil
 	}
 	// Attempt to retrieve the trie from the prefetcher
@@ -382,7 +382,9 @@ func (s *stateObject) updateRoot() {
 	if err != nil || tr == nil {
 		return
 	}
-	s.data.Root = tr.Hash()
+	if !s.db.db.TrieDB().IsUsingTDB() {
+		s.data.Root = tr.Hash()
+	}
 }
 
 // commitStorage overwrites the clean storage with the storage changes and
