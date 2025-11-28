@@ -222,6 +222,11 @@ func (task *ExecutionTask) Settle() {
 
 	if task.config.IsByzantium(task.blockNumber) {
 		task.finalStateDB.Finalise(true)
+		dbCopy := task.finalStateDB.Copy()
+		logRoot := dbCopy.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
+		log.Error("Parallel IntermediateRoot", "blockNumber", task.blockNumber.Uint64(),
+			"txIndex", task.index, "txHash", task.tx.Hash(), "logRoot", logRoot,
+			"logRootHex", common.Bytes2Hex(logRoot))
 	} else {
 		root = task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
 	}
