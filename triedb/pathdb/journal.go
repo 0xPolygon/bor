@@ -158,6 +158,12 @@ func (db *Database) loadLayers() layer {
 				log.Crit("Failed to get state root from triedb", "err", rootErr)
 			}
 			root = common.Hash(trieRoot)
+			// The Rust triedb returns all zeros for an empty database, but Ethereum
+			// expects EmptyRootHash for an empty Merkle Patricia Trie. Convert to
+			// maintain compatibility with the pathdb layer system.
+			if root == (common.Hash{}) {
+				root = types.EmptyRootHash
+			}
 			log.Debug("Loaded state root from triedb", "root", root)
 		} else {
 			log.Crit("Failed to get state root from triedb", "err", "TrieDB is nil")
