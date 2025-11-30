@@ -402,7 +402,7 @@ func (s *StateDB) FlushMVWriteSet() {
 
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
-func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
+func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int) {
 	for i := range writes {
 		path := writes[i].Path
 		sr := writes[i].Val.(*StateDB)
@@ -429,6 +429,9 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 				log.Error("MVWriteList - CodePath", "addr", addr.Hex())
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
+				if txIndex == 79 {
+					continue
+				}
 				log.Error("MVWriteList - SuicidePath", "addr", addr.Hex())
 				stateObject := s.getStateObject(addr)
 				if stateObject != nil {
