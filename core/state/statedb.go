@@ -408,6 +408,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 		sr := writes[i].Val.(*StateDB)
 
 		if path.IsState() {
+			log.Error("MVWriteList - StatePath", "addr", path.GetAddress().Hex(), "stateKey", path.GetStateKey())
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
 			state := sr.GetState(addr, stateKey)
@@ -419,12 +420,16 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 
 			switch path.GetSubpath() {
 			case BalancePath:
+				log.Error("MVWriteList - BalancePath", "addr", addr.Hex())
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
+				log.Error("MVWriteList - NoncePath", "addr", addr.Hex())
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
+				log.Error("MVWriteList - CodePath", "addr", addr.Hex())
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
+				log.Error("MVWriteList - SuicidePath", "addr", addr.Hex())
 				stateObject := s.getStateObject(addr)
 				if stateObject != nil {
 					s.SelfDestruct(addr)
