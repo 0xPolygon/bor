@@ -229,14 +229,15 @@ func (s *StateDB) GetMVHashmap() *blockstm.MVHashMap {
 func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
 	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeMap))
 
-	for _, v := range s.revertedKeys {
-		log.Error("MVWriteList - reverted key", "key", v)
+	for key, v := range s.revertedKeys {
+		log.Error("MVWriteList - reverted key", "key", key, "v", v)
 	}
 
 	for _, v := range s.writeMap {
 		if _, ok := s.revertedKeys[v.Path]; !ok {
 			writes = append(writes, v)
 		}
+		log.Error("MVWriteList - write key", "Path", v.Path, "TxnIndex", v.V.TxnIndex)
 	}
 
 	return writes
