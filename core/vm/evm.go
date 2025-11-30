@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
@@ -187,6 +188,7 @@ func isSystemCall(caller common.Address) bool {
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
 func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int, interrupt *atomic.Bool) (ret []byte, leftOverGas uint64, err error) {
+	log.Error("EVM Call", "caller", caller.Hex(), "addr", addr.Hex(), "input", common.Bytes2Hex(input), "gas", gas, "value", value.String())
 	// Capture the tracer start/end events in debug mode
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, CALL, caller, addr, input, gas, value.ToBig())
@@ -218,6 +220,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			// Thus, only pay for the creation of the code hash leaf here.
 			wgas := evm.AccessEvents.CodeHashGas(addr, true, gas, false)
 			if gas < wgas {
+				log.Error("EVM Call - RevertToSnapshot due to OOG on CodeHashGas", "addr", addr.Hex(), "gas", gas, "wgas", wgas)
 				evm.StateDB.RevertToSnapshot(snapshot)
 				return nil, 0, ErrOutOfGas
 			}
@@ -253,6 +256,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 	// above we revert to the snapshot and consume any gas remaining. Additionally,
 	// when we're in homestead this also counts for code storage gas errors.
 	if err != nil {
+		log.Error("EVM Call - RevertToSnapshot due to error", "err", err)
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
@@ -278,6 +282,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 // CallCode differs from Call in the sense that it executes the given address'
 // code with the caller as context.
 func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
+	log.Error("EVM CallCode", "caller", caller.Hex(), "addr", addr.Hex(), "input", common.Bytes2Hex(input), "gas", gas, "value", value.String())
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, CALLCODE, caller, addr, input, gas, value.ToBig())
@@ -312,6 +317,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 	}
 
 	if err != nil {
+		log.Error("EVM CallCode - RevertToSnapshot due to error", "err", err)
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
@@ -331,6 +337,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 // DelegateCall differs from CallCode in the sense that it executes the given address'
 // code with the caller as context and the caller is set to the caller of the caller.
 func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
+	log.Error("EVM DelegateCall", "originCaller", originCaller.Hex(), "caller", caller.Hex(), "addr", addr.Hex(), "input", common.Bytes2Hex(input), "gas", gas, "value", value.String())
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		// DELEGATECALL inherits value from parent call
@@ -359,6 +366,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 	}
 
 	if err != nil {
+		log.Error("EVM DelegateCall - RevertToSnapshot due to error", "err", err)
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
@@ -377,6 +385,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 // Opcodes that attempt to perform such modifications will result in exceptions
 // instead of performing the modifications.
 func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []byte, gas uint64) (ret []byte, leftOverGas uint64, err error) {
+	log.Error("EVM StaticCall", "caller", caller.Hex(), "addr", addr.Hex())
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, STATICCALL, caller, addr, input, gas, nil)
@@ -417,6 +426,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 	}
 
 	if err != nil {
+		log.Error("EVM StaticCall - RevertToSnapshot due to error", "err", err)
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
@@ -433,6 +443,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 
 // create creates a new contract using code as deployment code.
 func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *uint256.Int, address common.Address, typ OpCode) (ret []byte, createAddress common.Address, leftOverGas uint64, err error) {
+	log.Error("EVM create", "caller", caller.Hex(), "code", common.Bytes2Hex(code), "gas", gas, "value", value.String(), "address", address.Hex())
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, typ, caller, address, code, gas, value.ToBig())
 		defer func(startGas uint64) {
@@ -525,6 +536,7 @@ func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *ui
 
 	ret, err = evm.initNewContract(contract, address)
 	if err != nil && (evm.chainRules.IsHomestead || err != ErrCodeStoreOutOfGas) {
+		log.Error("EVM create - RevertToSnapshot due to error", "err", err)
 		evm.StateDB.RevertToSnapshot(snapshot)
 
 		if err != ErrExecutionReverted {
