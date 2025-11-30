@@ -182,7 +182,9 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
+	log.Error("Will apply full list", "tx", task.index)
 	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList())
+	log.Error("Applied full list", "tx", task.index)
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
