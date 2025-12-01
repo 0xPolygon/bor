@@ -237,7 +237,7 @@ func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
 		if _, ok := s.revertedKeys[v.Path]; !ok {
 			writes = append(writes, v)
 		}
-		log.Error("MVWriteList - write key", "Path", v.Path, "TxnIndex", v.V.TxnIndex)
+		log.Error("MVWriteList - write key", "Path", v.Path, "tx", v.V.TxnIndex)
 	}
 
 	return writes
@@ -408,7 +408,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 		sr := writes[i].Val.(*StateDB)
 
 		if path.IsState() {
-			log.Error("MVWriteList - StatePath", "addr", path.GetAddress().Hex(), "stateKey", path.GetStateKey())
+			log.Error("ApplyMVWriteSet - StatePath", "addr", path.GetAddress().Hex(), "stateKey", path.GetStateKey())
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
 			state := sr.GetState(addr, stateKey)
@@ -420,22 +420,22 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 
 			switch path.GetSubpath() {
 			case BalancePath:
-				log.Error("MVWriteList - BalancePath", "addr", addr.Hex())
+				log.Error("ApplyMVWriteSet - BalancePath", "addr", addr.Hex(), "newBalance", sr.GetBalance(addr).String())
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
-				log.Error("MVWriteList - NoncePath", "addr", addr.Hex())
+				log.Error("ApplyMVWriteSet - NoncePath", "addr", addr.Hex(), "newNonce", sr.GetNonce(addr))
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
-				log.Error("MVWriteList - CodePath", "addr", addr.Hex())
+				log.Error("ApplyMVWriteSet - CodePath", "addr", addr.Hex())
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
-				log.Error("MVWriteList - SuicidePath", "addr", addr.Hex())
+				log.Error("ApplyMVWriteSet - SuicidePath", "addr", addr.Hex())
 				if txIndex == 79 {
 					srCodeResult := sr.GetCode(addr)
 					if srCodeResult == nil {
-						log.Error("MVWriteList - SuicidePath - Code is nil at tx 79", "addr", addr.Hex())
+						log.Error("ApplyMVWriteSet - SuicidePath - Code is nil at tx 79", "addr", addr.Hex())
 					} else {
-						log.Error("MVWriteList - SuicidePath - code at tx 79", "addr", addr.Hex(), "code", common.Bytes2Hex(srCodeResult))
+						log.Error("ApplyMVWriteSet - SuicidePath - code at tx 79", "addr", addr.Hex(), "code", common.Bytes2Hex(srCodeResult))
 					}
 					continue
 				}
