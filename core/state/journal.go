@@ -294,7 +294,7 @@ type (
 
 func (ch createObjectChange) revert(s *StateDB) {
 	delete(s.stateObjects, ch.account)
-	// RevertWrite(s, blockstm.NewAddressKey(ch.account))
+	RevertWrite(s, blockstm.NewAddressKey(ch.account))
 }
 
 func (ch createObjectChange) dirtied() *common.Address {
@@ -389,7 +389,7 @@ func (ch nonceChange) copy() journalEntry {
 
 func (ch codeChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setCode(crypto.Keccak256Hash(ch.prevCode), ch.prevCode)
-	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, CodePath))
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, CodePath))
 }
 
 func (ch codeChange) dirtied() *common.Address {
