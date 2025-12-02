@@ -313,3 +313,146 @@ func TestBlockPruner_FindCursor_FirstBlockBeforeCutoff(t *testing.T) {
 		t.Fatalf("unexpected block prune cursor: want %d, got %d", cutoff, *cur)
 	}
 }
+
+func TestWitnessPruner_Reorg_Shallow_CursorBelowNewHead(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	const head uint64 = 20
+	hashes := buildCanonicalChain(t, db, head)
+
+	// Witness for every block.
+	for i := uint64(0); i <= head; i++ {
+		WriteWitness(db, hashes[i], []byte{0xAA, 0xBB})
+	}
+
+	ws := &WitnessStrategy{retention: 5}
+	p := NewPruner(db, ws)
+
+	// First prune: establish cursor and delete old data.
+	p.prune()
+
+	cutoff := head - ws.RetentionBlocks() // 20 - 5 = 15
+
+	// Sanity check: cursor is at cutoff.
+	if cur := ReadWitnessPruneCursor(db); cur == nil || *cur != cutoff {
+		if cur == nil {
+			t.Fatalf("expected witness prune cursor to be written after first prune")
+		}
+		t.Fatalf("unexpected witness prune cursor after first prune: want %d, got %d", cutoff, *cur)
+	}
+
+	// Simulate shallow reorg: move head from 20 -> 18.
+	newHead := uint64(18)
+	WriteHeadHeaderHash(db, hashes[newHead])
+
+	// Run prune again; this should:
+	// - detect reorg (latest < lastHead)
+	// - delete witnesses in (18..20] = [19..20]
+	// - keep cursor at 15 (since 15 <= 18)
+	p.prune()
+
+	// Verify witness presence/absence.
+	var badDeleted, badRetained []uint64
+	for i := uint64(1); i <= head; i++ {
+		exists := HasWitness(db, hashes[i])
+
+		switch {
+		case i < cutoff:
+			// Pruned in first run, must still be absent.
+			if exists {
+				badDeleted = append(badDeleted, i)
+			}
+		case i <= newHead:
+			// These should be kept (15..18).
+			if !exists {
+				badRetained = append(badRetained, i)
+			}
+		default:
+			// i > newHead => reverted by reorg; should be pruned now.
+			if exists {
+				badDeleted = append(badDeleted, i)
+			}
+		}
+	}
+
+	if len(badDeleted) > 0 {
+		t.Fatalf("unexpected witnesses present at heights: %v", badDeleted)
+	}
+	if len(badRetained) > 0 {
+		t.Fatalf("expected witnesses to be retained at heights: %v", badRetained)
+	}
+
+	// Cursor should remain equal to the original cutoff (15), not new head (18).
+	if cur := ReadWitnessPruneCursor(db); cur == nil || *cur != cutoff {
+		if cur == nil {
+			t.Fatalf("expected witness prune cursor to still be present after reorg")
+		}
+		t.Fatalf("unexpected witness prune cursor after reorg: want %d, got %d", cutoff, *cur)
+	}
+}
+
+func TestWitnessPruner_Reorg_Deep_CursorAboveNewHead(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	const head uint64 = 60
+	hashes := buildCanonicalChain(t, db, head)
+
+	// Witness for every block.
+	for i := uint64(0); i <= head; i++ {
+		WriteWitness(db, hashes[i], []byte{0xCA, 0xFE})
+	}
+
+	ws := &WitnessStrategy{retention: 5}
+	p := NewPruner(db, ws)
+
+	// Simulate prior pruning state:
+	// - cursor at 40 (meaning [0..39] are considered already processed)
+	// - lastHead at 60 (previous head height)
+	const simulatedCursor uint64 = 40
+	ws.WriteCursor(db, simulatedCursor)
+	p.lastHead = head
+
+	// Simulate deep reorg: head from 60 -> 20.
+	newHead := uint64(20)
+	WriteHeadHeaderHash(db, hashes[newHead])
+
+	// Now run prune, which should:
+	// - detect reorg (20 < 60)
+	// - delete witnesses in [max(cursor, newHead+1) .. oldHead] = [40..60]
+	// - roll cursor back to newHead (20)
+	p.prune()
+
+	var badDeleted, badRetained []uint64
+	for i := uint64(1); i <= head; i++ {
+		exists := HasWitness(db, hashes[i])
+
+		switch {
+		case i < simulatedCursor:
+			// 0..39: should still exist (we never pruned them in this test).
+			if !exists {
+				badDeleted = append(badDeleted, i)
+			}
+		case i <= head:
+			// 40..60 must be gone after reorg cleanup.
+			if i >= simulatedCursor && i > newHead && exists {
+				badRetained = append(badRetained, i)
+			}
+		}
+	}
+
+	if len(badDeleted) > 0 {
+		t.Fatalf("unexpected witnesses deleted at heights: %v", badDeleted)
+	}
+	if len(badRetained) > 0 {
+		t.Fatalf("expected witnesses to be deleted after reorg at heights: %v", badRetained)
+	}
+
+	// Cursor should have been rolled back to newHead.
+	cur := ReadWitnessPruneCursor(db)
+	if cur == nil {
+		t.Fatalf("expected witness prune cursor to be written after deep reorg")
+	}
+	if *cur != newHead {
+		t.Fatalf("unexpected witness prune cursor after deep reorg: want %d, got %d", newHead, *cur)
+	}
+}
