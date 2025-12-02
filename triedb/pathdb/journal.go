@@ -144,10 +144,38 @@ func loadGenerator(db ethdb.KeyValueReader, hash nodeHasher) (*journalGenerator,
 // loadLayers loads a pre-existing state layer backed by a key-value store.
 func (db *Database) loadLayers() layer {
 	// Retrieve the root node of persistent state.
-	root, err := db.hasher(rawdb.ReadAccountTrieNode(db.diskdb, nil))
-	if err != nil {
-		log.Crit("Failed to compute node hash", "err", err)
+	// In triedb mode, the state root should be read from the Rust triedb,
+	// not from the MPT in diskdb.
+	var root common.Hash
+	var err error
+
+	if db.config.UseTrieDB {
+		// In triedb mode, get the state root from the Rust triedb
+		tdb := db.diskdb.TrieDB()
+		if tdb != nil {
+			trieRoot, rootErr := tdb.StateRoot()
+			if rootErr != nil {
+				log.Crit("Failed to get state root from triedb", "err", rootErr)
+			}
+			root = common.Hash(trieRoot)
+			// The Rust triedb returns all zeros for an empty database, but Ethereum
+			// expects EmptyRootHash for an empty Merkle Patricia Trie. Convert to
+			// maintain compatibility with the pathdb layer system.
+			if root == (common.Hash{}) {
+				root = types.EmptyRootHash
+			}
+			log.Debug("Loaded state root from triedb", "root", root)
+		} else {
+			log.Crit("Failed to get state root from triedb", "err", "TrieDB is nil")
+		}
+	} else {
+		// Normal mode: read from MPT
+		root, err = db.hasher(rawdb.ReadAccountTrieNode(db.diskdb, nil))
+		if err != nil {
+			log.Crit("Failed to compute node hash", "err", err)
+		}
 	}
+
 	// Load the layers by resolving the journal
 	head, err := db.loadJournal(root)
 	if err == nil {

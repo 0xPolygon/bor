@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 )
 
 // diskLayer is a low level persistent layer built on top of a key-value store.
@@ -471,13 +472,23 @@ func (dl *diskLayer) revert(h *history) (*diskLayer, error) {
 	if dl.id == 0 {
 		return nil, fmt.Errorf("%w: zero state id", errStateUnrecoverable)
 	}
+
+	// In triedb mode, we don't maintain MPT nodes - state is stored in the
+	// Rust triedb. Skip apply() and writeNodes(), just update triedb directly.
+	useTrieDB := dl.db.config.UseTrieDB
+
 	// Apply the reverse state changes upon the current state. This must
 	// be done before holding the lock in order to access state in "this"
 	// layer.
-	nodes, err := apply(dl.db, h.meta.parent, h.meta.root, h.meta.version != stateHistoryV0, h.accounts, h.storages)
-	if err != nil {
-		return nil, err
+	var nodes map[common.Hash]map[string]*trienode.Node
+	if !useTrieDB {
+		var err error
+		nodes, err = apply(dl.db, h.meta.parent, h.meta.root, h.meta.version != stateHistoryV0, h.accounts, h.storages)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	// Derive the state modification set from the history, keyed by the hash
 	// of the account address and the storage key.
 	accounts, storages := h.stateSet()
@@ -532,10 +543,16 @@ func (dl *diskLayer) revert(h *history) (*diskLayer, error) {
 		progress = dl.generator.progressMarker()
 	}
 	batch := dl.db.diskdb.NewBatch()
-	writeNodes(batch, nodes, dl.nodes)
+
+	// In triedb mode, skip writing MPT nodes since we don't maintain them
+	if !useTrieDB {
+		writeNodes(batch, nodes, dl.nodes)
+	}
 
 	// Provide the original values of modified accounts and storages for revert
 	writeStates(batch, progress, accounts, storages, dl.states)
+
+	// Write state to triedb (this is the main update in triedb mode)
 	if err := writeTrieDBWithHistory(dl.db.diskdb, h); err != nil {
 		return nil, err
 	}

@@ -162,10 +162,16 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 				return err
 			}
 
+			// Use empty code hash for accounts without code (EOAs)
+			codeHash := account.CodeHash
+			if len(codeHash) == 0 {
+				codeHash = types.EmptyCodeHash.Bytes()
+			}
+
 			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
 				Nonce:    account.Nonce,
 				Balance:  account.Balance,
-				CodeHash: account.CodeHash,
+				CodeHash: codeHash,
 			}); err != nil {
 				return err
 			}

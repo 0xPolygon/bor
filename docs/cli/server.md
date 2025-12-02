@@ -114,6 +114,10 @@ The ```bor server``` command runs the Bor client.
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
 
+- ```witness.parallelstatelessimport```: Enable parallel stateless block import (default: false)
+
+- ```witness.parallelstatelessimportworkers```: Number of workers to use for parallel stateless import (0 = GOMAXPROCS) (default: 0)
+
 - ```witness.producewitnesses```: Produce witnesses while syncing (default: false)
 
 - ```witness.syncwithwitnesses```: Sync blocks with witnesses (default: false)
@@ -134,11 +138,19 @@ The ```bor server``` command runs the Bor client.
 
 - ```cache```: Megabytes of memory allocated to internal caching (default: 1024)
 
+- ```cache.addresscachesizes```: Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)
+
 - ```cache.blocklogs```: Size (in number of blocks) of the log cache for filtering (default: 32)
 
 - ```cache.database```: Percentage of cache memory allowance to use for database io (default: 50)
 
 - ```cache.gc```: Percentage of cache memory allowance to use for trie pruning (default: 25)
+
+- ```cache.godebug```: Set GODEBUG variables for runtime debugging (e.g. 'gctrace=1,gcpacertrace=1')
+
+- ```cache.gogc```: Set GOGC percentage for garbage collection trigger (default: 100) (default: 100)
+
+- ```cache.gomemlimit```: Set GOMEMLIMIT for the runtime (e.g. '34GB', '34359738368'). Empty means no limit
 
 - ```cache.noprefetch```: Disable heuristic state prefetch during block import (less CPU and disk IO, more time waiting for data) (default: false)
 
@@ -284,9 +296,11 @@ The ```bor server``` command runs the Bor client.
 
 ### Sealer Options
 
+- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+
 - ```mine```: Enable mining (default: false)
 
-- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+- ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
 - ```miner.etherbase```: Public address for block mining rewards
 
