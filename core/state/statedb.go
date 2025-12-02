@@ -414,6 +414,8 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
 			state := sr.GetState(addr, stateKey)
+			log.Error("ApplyMVWriteSet - StatePath - before set", "addr", addr.Hex(), "stateKey", stateKey,
+				"state", common.Bytes2Hex(state.Bytes()), "txIndex", txIndex)
 			s.SetState(addr, stateKey, state)
 		} else if path.IsAddress() {
 			continue
@@ -424,14 +426,20 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 			case BalancePath:
 				log.Error("ApplyMVWriteSet - BalancePath", "addr", addr.Hex(), "newBalance", sr.GetBalance(addr).String(),
 					"txIndex", txIndex)
+				log.Error("ApplyMVWriteSet - BalancePath - before set", "addr", addr.Hex(),
+					"balance", s.GetBalance(addr).String(), "txIndex", txIndex)
 				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
 			case NoncePath:
 				log.Error("ApplyMVWriteSet - NoncePath", "addr", addr.Hex(), "newNonce", sr.GetNonce(addr),
 					"txIndex", txIndex)
+				log.Error("ApplyMVWriteSet - NoncePath - before set", "addr", addr.Hex(),
+					"nonce", s.GetNonce(addr), "txIndex", txIndex)
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
 				log.Error("ApplyMVWriteSet - CodePath", "addr", addr.Hex(), "newCodeSize", len(sr.GetCode(addr)),
 					"code", common.Bytes2Hex(sr.GetCode(addr)), "txIndex", txIndex)
+				log.Error("ApplyMVWriteSet - CodePath - before set", "addr", addr.Hex(),
+					"code", common.Bytes2Hex(s.GetCode(addr)), "txIndex", txIndex)
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
 				log.Error("ApplyMVWriteSet - SuicidePath", "addr", addr.Hex(), "txIndex", txIndex)
