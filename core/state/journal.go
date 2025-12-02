@@ -357,7 +357,7 @@ func (ch touchChange) copy() journalEntry {
 
 func (ch balanceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setBalance(ch.prev)
-	RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
+	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
 }
 
 func (ch balanceChange) dirtied() *common.Address {
