@@ -230,14 +230,16 @@ func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
 	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeMap))
 
 	for key, v := range s.revertedKeys {
-		log.Error("MVWriteList - reverted key", "key", key, "v", v)
+		log.Error("MVWriteList - reverted key", "key", key, "v", v, "tx", s.txIndex)
 	}
 
 	for _, v := range s.writeMap {
 		if _, ok := s.revertedKeys[v.Path]; !ok {
 			writes = append(writes, v)
+			log.Error("MVWriteList - write key", "Path", v.Path, "tx", v.V.TxnIndex)
+		} else {
+			log.Error("MVWriteList - skipping reverted key", "Path", v.Path, "tx", v.V.TxnIndex)
 		}
-		log.Error("MVWriteList - write key", "Path", v.Path, "tx", v.V.TxnIndex)
 	}
 
 	return writes
