@@ -410,7 +410,7 @@ func TestWitnessPruner_Reorg_Deep_CursorAboveNewHead(t *testing.T) {
 	// - lastHead at 60 (previous head height)
 	const simulatedCursor uint64 = 40
 	ws.WriteCursor(db, simulatedCursor)
-	p.lastHead = head
+	ws.WritePrunerHead(db, head)
 
 	// Simulate deep reorg: head from 60 -> 20.
 	newHead := uint64(20)
@@ -454,5 +454,121 @@ func TestWitnessPruner_Reorg_Deep_CursorAboveNewHead(t *testing.T) {
 	}
 	if *cur != newHead {
 		t.Fatalf("unexpected witness prune cursor after deep reorg: want %d, got %d", newHead, *cur)
+	}
+}
+
+func TestWitnessPruner_Reorg_Offline(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	const oldHead uint64 = 60
+	hashes := buildCanonicalChain(t, db, oldHead)
+
+	// Witness for every block [0..oldHead].
+	for i := uint64(0); i <= oldHead; i++ {
+		WriteWitness(db, hashes[i], []byte{0xBE, 0xEF})
+	}
+
+	ws := &WitnessStrategy{retention: 5}
+
+	// --- First run: normal pruning at oldHead ---
+	p1 := NewPruner(db, ws)
+	p1.prune()
+
+	// After this:
+	// - cursor should be oldHead - retention = 55
+	// - witnesses for [0..54] should have been pruned
+	// - pruner head should be persisted as oldHead
+
+	wantCursor := oldHead - ws.RetentionBlocks()
+	cur := ReadWitnessPruneCursor(db)
+	if cur == nil || *cur != wantCursor {
+		if cur == nil {
+			t.Fatalf("expected witness prune cursor after first prune")
+		}
+		t.Fatalf("unexpected cursor after first prune: want %d, got %d", wantCursor, *cur)
+	}
+
+	// Optional: assert pruner head if you expose a reader for it
+	if headPtr := ws.ReadPrunerHead(db); headPtr == nil || *headPtr != oldHead {
+		if headPtr == nil {
+			t.Fatalf("expected persisted pruner head after first prune")
+		}
+		t.Fatalf("unexpected persisted pruner head after first prune: want %d, got %d", oldHead, *headPtr)
+	}
+
+	// Sanity: everything < cursor should now be pruned (this enforces the invariant).
+	for i := uint64(1); i < wantCursor; i++ {
+		if HasWitness(db, hashes[i]) {
+			t.Fatalf("expected witnesses below cursor to be pruned after first run; found at height %d", i)
+		}
+	}
+
+	// --- Simulate OFFLINE reorg: canonical head moves from 60 -> 50 while pruner is not running ---
+	const newHead uint64 = 50
+	WriteHeadHeaderHash(db, hashes[newHead])
+
+	// --- Second run: new pruner instance after restart ---
+	p2 := NewPruner(db, ws)
+	p2.prune()
+
+	// After offline reorg handling, we expect:
+	// - witnesses in (newHead..oldHead] = [51..60] deleted as non-canonical
+	// - witnesses <= newHead kept (subject to any retention from second run, but
+	//   since newHead=50 and retention=5, cutoff=45, and cursor is rolled back to 50,
+	//   normal prune will early-exit with cur>=cutoff)
+	// - cursor rolled back to newHead (50)
+	// - pruner head updated to newHead in DB
+
+	cur = ReadWitnessPruneCursor(db)
+	if cur == nil {
+		t.Fatalf("expected witness prune cursor to be written after offline reorg")
+	}
+	if *cur != newHead {
+		t.Fatalf("unexpected witness prune cursor after offline reorg: want %d, got %d", newHead, *cur)
+	}
+
+	if headPtr := ws.ReadPrunerHead(db); headPtr == nil || *headPtr != newHead {
+		if headPtr == nil {
+			t.Fatalf("expected persisted pruner head after offline reorg")
+		}
+		t.Fatalf("unexpected persisted pruner head after offline reorg: want %d, got %d", newHead, *headPtr)
+	}
+
+	// Verify witness presence/absence:
+	// - [0..cutoffFirst] (0..54) were pruned in first run and must still be absent
+	// - (cutoffFirst..newHead] = [55..50] is empty range, so nothing special
+	// - (newHead..oldHead] = [51..60] should be deleted by reorg cleanup
+	//   (51..54 already gone; 55..60 removed during reorg cleanup)
+	// - [<= newHead] should still be present at least for [45..50], depending on retention logic
+	var badDeleted, badRetained []uint64
+
+	for i := uint64(1); i <= oldHead; i++ {
+		exists := HasWitness(db, hashes[i])
+
+		switch {
+		case i < wantCursor:
+			// Pruned in first run; must remain absent.
+			if exists {
+				badRetained = append(badRetained, i)
+			}
+		case i <= newHead:
+			// These should still be present (assuming retention kept them at newHead=50).
+			// If your retention semantics change this, adjust accordingly.
+			if !exists {
+				badDeleted = append(badDeleted, i)
+			}
+		default: // i > newHead
+			// Non-canonical tail; must be gone.
+			if exists {
+				badRetained = append(badRetained, i)
+			}
+		}
+	}
+
+	if len(badDeleted) > 0 {
+		t.Fatalf("unexpected witnesses deleted after offline reorg at heights: %v", badDeleted)
+	}
+	if len(badRetained) > 0 {
+		t.Fatalf("expected witnesses to be pruned (or stay pruned) after offline reorg at heights: %v", badRetained)
 	}
 }

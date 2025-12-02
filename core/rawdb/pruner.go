@@ -19,6 +19,10 @@ type Strategy interface {
 	ReadCursor(db ethdb.KeyValueReader) *uint64
 	WriteCursor(db ethdb.KeyValueWriter, cur uint64)
 
+	// Head Persistency
+	ReadPrunerHead(db ethdb.KeyValueReader) *uint64
+	WritePrunerHead(db ethdb.KeyValueWriter, head uint64)
+
 	// Find earliest height <= cutoff that has data for this domain.
 	FindEarliest(db ethdb.Database, cutoff uint64) (earliest uint64, ok bool)
 
@@ -32,11 +36,11 @@ type Strategy interface {
 	// Called once per height (after DeletePerHash calls for that height).
 	DeletePerHeight(batch ethdb.KeyValueWriter, number uint64)
 }
+
 type pruner struct {
 	db            ethdb.Database
 	quit, stopped chan struct{}
 	strategy      Strategy
-	lastHead      uint64
 }
 
 func NewPruner(db ethdb.Database, s Strategy) *pruner {
@@ -45,7 +49,6 @@ func NewPruner(db ethdb.Database, s Strategy) *pruner {
 		strategy: s,
 		quit:     make(chan struct{}),
 		stopped:  make(chan struct{}),
-		lastHead: 0,
 	}
 }
 
@@ -66,6 +69,7 @@ func (p *pruner) Start() {
 	}()
 	log.Info(p.strategy.Name()+": started", "retentionBlocks", p.strategy.RetentionBlocks(), "interval", p.strategy.Interval().String())
 }
+
 func (p *pruner) Close() error {
 	close(p.quit)
 	<-p.stopped
@@ -80,10 +84,20 @@ func (p *pruner) prune() {
 	}
 	latest := head.Number.Uint64()
 
-	if latest < p.lastHead {
-		p.handleReorg(latest)
+	prevHeadPtr := p.strategy.ReadPrunerHead(p.db)
+	prevHead := latest
+	if prevHeadPtr != nil {
+		prevHead = *prevHeadPtr
 	}
-	p.lastHead = latest
+
+	if latest < prevHead {
+		// Reorg between prevHead and latest (could have happened while offline).
+		if err := p.handleReorg(latest, prevHead); err != nil {
+			log.Error(p.strategy.Name()+": reorg cleanup failed", "newHead", latest, "oldHead", prevHead, "err", err)
+			// Do not update stored head; we want to try again next run.
+			return
+		}
+	}
 
 	var cutoff uint64
 	if rb := p.strategy.RetentionBlocks(); latest > rb {
@@ -91,6 +105,14 @@ func (p *pruner) prune() {
 	}
 
 	cur := p.strategy.ReadCursor(p.db)
+
+	if cur != nil && *cur > latest {
+		log.Warn(p.strategy.Name()+": cursor beyond head; clamping", "cursor", *cur, "head", latest)
+		p.strategy.WriteCursor(p.db, latest)
+		tmp := latest
+		cur = &tmp
+	}
+
 	if cur == nil {
 		if e, ok := p.strategy.FindEarliest(p.db, cutoff); ok {
 			log.Info(p.strategy.Name()+": no cursor stored", "earliestFound", e)
@@ -103,6 +125,7 @@ func (p *pruner) prune() {
 	}
 
 	if *cur >= cutoff {
+		p.strategy.WritePrunerHead(p.db, latest)
 		return
 	}
 
@@ -117,11 +140,10 @@ func (p *pruner) prune() {
 
 	p.strategy.WriteCursor(p.db, cutoff)
 	log.Info(p.strategy.Name()+": successfully pruned", "count", cutoff-from, "from", from, "to", to)
+	p.strategy.WritePrunerHead(p.db, latest)
 }
 
-func (p *pruner) handleReorg(newHead uint64) {
-	oldHead := p.lastHead
-
+func (p *pruner) handleReorg(newHead, oldHead uint64) error {
 	log.Warn(p.strategy.Name()+": reorg detected", "newHead", newHead, "oldHead", oldHead)
 
 	cur := p.strategy.ReadCursor(p.db)
@@ -141,7 +163,7 @@ func (p *pruner) handleReorg(newHead uint64) {
 		if err := p.deleteRange(deleteFrom, deleteTo); err != nil {
 			log.Error(p.strategy.Name()+": reorg cleanup failed; keeping cursor unchanged",
 				"from", deleteFrom, "to", deleteTo, "err", err)
-			return
+			return err
 		}
 	}
 
@@ -149,6 +171,8 @@ func (p *pruner) handleReorg(newHead uint64) {
 		p.strategy.WriteCursor(p.db, newHead)
 		log.Warn(p.strategy.Name()+": cursor rolled back", "oldCursor", *cur, "newCursor", newHead)
 	}
+
+	return nil
 }
 
 func max(a, b uint64) uint64 {
@@ -163,7 +187,7 @@ func (p *pruner) deleteRange(from, to uint64) error {
 		return nil
 	}
 
-	const step = uint64(MaxDeleteRangeSize)
+	const step = MaxDeleteRangeSize
 	start := from
 
 	for start <= to {

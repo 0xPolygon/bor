@@ -121,6 +121,7 @@ var (
 	blockBodyPrefix     = []byte("b") // blockBodyPrefix + num (uint64 big endian) + hash -> block body
 	blockReceiptsPrefix = []byte("r") // blockReceiptsPrefix + num (uint64 big endian) + hash -> block receipts
 	BlockPruneCursorKey = []byte("blockPruneCursorKey")
+	BlockPruneHeadKey   = []byte("blockPruneHeadKey")
 
 	txLookupPrefix        = []byte("l") // txLookupPrefix + hash -> transaction/receipt lookup metadata
 	bloomBitsPrefix       = []byte("B") // bloomBitsPrefix + bit (uint16 big endian) + section (uint64 big endian) + hash -> bloom bits
@@ -155,6 +156,7 @@ var (
 	WitnessPrefix         = []byte("witness-")
 	WitnessSizePrefix     = []byte("witnessSize-")
 	WitnessPruneCursorKey = []byte("witnessPruneCursorKey")
+	WitnessPruneHeadKey   = []byte("witnessPruneHeadKey")
 
 	// BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
 	BloomBitsIndexPrefix = []byte("iB")
@@ -290,6 +292,14 @@ func witnessPruneCursorKey() []byte {
 
 func blockPruneCursorKey() []byte {
 	return BlockPruneCursorKey
+}
+
+func witnessPruneHeadKey() []byte {
+	return WitnessPruneHeadKey
+}
+
+func blockPruneHeadKey() []byte {
+	return BlockPruneHeadKey
 }
 
 // codeKey = CodePrefix + hash
