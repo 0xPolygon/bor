@@ -373,7 +373,7 @@ func (ch balanceChange) copy() journalEntry {
 
 func (ch nonceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setNonce(ch.prev)
-	RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
+	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
 }
 
 func (ch nonceChange) dirtied() *common.Address {
