@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/holiman/uint256"
 )
 
@@ -357,6 +358,7 @@ func (ch touchChange) copy() journalEntry {
 
 func (ch balanceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setBalance(ch.prev)
+	log.Error("RevertWrite - Balance", "account", ch.account.Hex(), "prev", ch.prev.String())
 	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
 }
 
@@ -373,6 +375,7 @@ func (ch balanceChange) copy() journalEntry {
 
 func (ch nonceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setNonce(ch.prev)
+	log.Error("RevertWrite - Nonce", "account", ch.account.Hex(), "prev", ch.prev)
 	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
 }
 
