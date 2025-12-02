@@ -150,6 +150,9 @@ type Config struct {
 	// Witness has the witness related settings
 	Witness *WitnessConfig `hcl:"witness,block" toml:"witness,block"`
 
+	// VM has the external EVMC interpreter settings
+	VM *VMConfig `hcl:"vm,block" toml:"vm,block"`
+
 	// Develop Fake Author mode to produce blocks without authorisation
 	DevFakeAuthor bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 
@@ -161,6 +164,11 @@ type Config struct {
 
 	// HealthConfig has health check related settings
 	Health *HealthConfig `hcl:"health,block" toml:"health,block"`
+}
+
+type VMConfig struct {
+	// EVM is the EVMC loading string for the EVM1 interpreter (e.g. "/path/to/libevmone.so[,key=value]")
+	EVM string `hcl:"evm,optional" toml:"evm,optional"`
 }
 
 type HistoryConfig struct {
@@ -924,6 +932,7 @@ func DefaultConfig() *Config {
 			WitnessAPI:                     false,
 			FastForwardThreshold:           6400,
 		},
+		VM: &VMConfig{},
 		History: &HistoryConfig{
 			TransactionHistory: ethconfig.Defaults.TransactionHistory,
 			LogHistory:         ethconfig.Defaults.LogHistory,
@@ -1094,6 +1103,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
+	if c.VM != nil {
+		n.EVMInterpreter = c.VM.EVM
+	}
 
 	// txpool options
 	{

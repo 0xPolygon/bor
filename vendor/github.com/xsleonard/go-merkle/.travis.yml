@@ -1,0 +1,16 @@
+language: go
+
+go:
+  - "1.12.x"
+  - tip
+
+env:
+  - GO111MODULE=on
+
+sudo: false
+
+install: true
+
+script:
+  - go build .
+  - go test -race .

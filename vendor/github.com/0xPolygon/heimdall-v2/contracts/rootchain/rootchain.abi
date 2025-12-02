@@ -1,0 +1,138 @@
+[
+	{
+		"constant": true,
+		"inputs": [
+			{
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"name": "headerBlocks",
+		"outputs": [
+			{
+				"name": "root",
+				"type": "bytes32"
+			},
+			{
+				"name": "start",
+				"type": "uint256"
+			},
+			{
+				"name": "end",
+				"type": "uint256"
+			},
+			{
+				"name": "createdAt",
+				"type": "uint256"
+			},
+			{
+				"name": "proposer",
+				"type": "address"
+			}
+		],
+		"payable": false,
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{
+				"name": "data",
+				"type": "bytes"
+			},
+			{
+				"name": "sigs",
+				"type": "uint256[3][]"
+			}
+		],
+		"name": "submitCheckpoint",
+		"outputs": [],
+		"payable": false,
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{
+				"name": "data",
+				"type": "bytes"
+			},
+			{
+				"name": "sigs",
+				"type": "bytes"
+			}
+		],
+		"name": "submitHeaderBlock",
+		"outputs": [],
+		"payable": false,
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [],
+		"name": "getLastChildBlock",
+		"outputs": [
+			{
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"payable": false,
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [],
+		"name": "currentHeaderBlock",
+		"outputs": [
+			{
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"payable": false,
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"name": "proposer",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"name": "headerBlockId",
+				"type": "uint256"
+			},
+			{
+				"indexed": true,
+				"name": "reward",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"name": "start",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"name": "end",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"name": "root",
+				"type": "bytes32"
+			}
+		],
+		"name": "NewHeaderBlock",
+		"type": "event"
+	}
+]

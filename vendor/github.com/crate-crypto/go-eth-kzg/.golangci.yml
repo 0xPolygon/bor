@@ -1,0 +1,63 @@
+linters:
+  enable-all: true
+  disable:
+    - cyclop
+    - dogsled
+    - errorlint
+    - exhaustruct
+    - funlen
+    - gochecknoglobals
+    - gocognit
+    - gocritic
+    - godot
+    - gomnd
+    - lll
+    - nlreturn
+    - paralleltest
+    - testpackage
+    - varnamelen
+    - wrapcheck
+    - wsl
+
+    # Fix later
+    - mnd
+    - depguard
+    - testifylint
+    - godox
+    - intrange
+    - copyloopvar
+    #
+    # Maybe fix later:
+    #
+    - err113
+    - stylecheck
+    - tagliatelle
+
+    #
+    # Disabled because of generics:
+    #
+    - contextcheck
+    - rowserrcheck
+    - sqlclosecheck
+    - wastedassign
+
+linters-settings:
+  gofumpt:
+    extra-rules: true
+  gosec:
+    excludes:
+      - G404 # Insecure random number source (rand)
+      - G115 # G115: integer overflow conversion (false positives)
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+  revive:
+    rules:
+      - name: var-naming
+        disabled: true
+
+output:
+  print-issued-lines: true
+  sort-results: true

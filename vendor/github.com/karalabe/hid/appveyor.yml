@@ -1,0 +1,56 @@
+clone_depth: 1
+version: "{branch}.{build}"
+
+image:
+  - Ubuntu2204
+  - Visual Studio 2019
+
+environment:
+  matrix:
+    - GOARCH: amd64
+      MINGW: 'C:\msys64\mingw64'
+    - GOARCH: 386
+      MINGW: 'C:\msys64\mingw32'
+
+install:
+  - git submodule update --init --depth 1 --recursive
+  - go version
+
+for:
+  - matrix:
+      only:
+        - image: Ubuntu2204
+    build_script:
+      - gcc --version
+      - go build ./...
+      - CGO_ENABLED=0 go build ./...
+      - go run ./demo.go
+      - CGO_ENABLED=0 go run ./demo.go
+    test_script:
+      - go test -v ./...
+      - CGO_ENABLED=0 go test -v ./...
+
+  # Windows builds for amd64 + 386.
+  - matrix:
+      only:
+        - image: Visual Studio 2019
+    environment:
+      # We use gcc from MSYS2 because it is the most recent compiler version available on
+      # AppVeyor. Note: gcc.exe only works properly if the corresponding bin/ directory is
+      # contained in PATH.
+      GCC: '%MINGW%\bin\gcc.exe'
+      PATH: '%MINGW%\bin;C:\Program Files (x86)\NSIS\;%PATH%'
+    build_script:
+      - 'echo %GOARCH%'
+      - 'echo %GCC%'
+      - '%GCC% --version'
+      - go build ./...
+      - go run ./demo.go
+      - set CGO_ENABLED=0
+      - go build ./...
+      - go run ./demo.go
+    test_script:
+      - set CGO_ENABLED=1
+      - go test -v ./...
+      - set CGO_ENABLED=0
+      - go test -v ./...

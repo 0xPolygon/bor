@@ -1,0 +1,17 @@
+---
+language: go
+
+go:
+  - 1.11.x
+
+env:
+  - GO111MODULE=on
+
+services:
+  - docker
+
+script:
+  - make test-with-coverage
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)

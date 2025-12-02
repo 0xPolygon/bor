@@ -1,0 +1,12 @@
+# This dockerfile exists in order to verify that building
+# 'hid' within musl-based docker setups is possible. It is 
+# not a 'production' dockerfile, just for to aid QA.
+
+FROM golang:alpine
+
+RUN apk add --no-cache gcc musl-dev linux-headers
+
+ADD . $GOPATH/src/github.com/karalabe/hid
+RUN cd $GOPATH/src/github.com/karalabe/hid && go build demo.go && mv demo /demo
+
+ENTRYPOINT ["/demo"]

@@ -1,0 +1,74 @@
+---
+version: '3'
+
+env:
+  CGO_ENABLED: 0
+
+tasks:
+  test:
+    summary: Run tests
+    cmds:
+      - task: test-deps-up
+      - task: test-run
+      - task: test-run
+        vars:
+          RACE: true
+      - task: test-deps-down
+
+  test-deps-up:
+    summary: Starts test dependencies
+    preconditions:
+      - sh: docker compose version --short | grep '^2'
+        msg: 'docker compose v2 is expected to be installed'
+    cmds:
+      - cmd: docker compose up --detach --wait
+
+  test-deps-down:
+    summary: Stops test dependencies
+    cmds:
+      - cmd: docker compose down -v
+
+  test-run:
+    summary: Runs tests, must have dependencies running in the docker compose
+    cmds:
+      - cmd: go test {{if .RACE}} -race {{end}} -timeout 2m -cover -coverprofile=coverage.txt -covermode=atomic ./...
+    vars:
+      PG_PQ_HOST:
+        sh: docker compose port pg-pq 5432
+      PG_PGX4_HOST:
+        sh: docker compose port pg-pgx4 5432
+      PG_PGX5_HOST:
+        sh: docker compose port pg-pgx5 5432
+      RABBIT_HOST_AMQP:
+        sh: docker compose port rabbit 5672
+      RABBIT_HOST_HTTP:
+        sh: docker compose port rabbit 15672
+      REDIS_HOST:
+        sh: docker compose port redis 6379
+      MONGO_HOST:
+        sh: docker compose port mongo 27017
+      MYSQL_HOST:
+        sh: docker compose port mysql 3306
+      MEMCACHED_HOST:
+        sh: docker compose port memcached 11211
+      INFLUX_HOST:
+        sh: docker compose port influxdb 8086
+      CASSANDRA_HOST:
+        sh: docker compose port cassandra 9042
+      NATS_HOST:
+        sh: docker compose port nats 4222
+
+    env:
+      CGO_ENABLED: '{{if .RACE}}1{{else}}0{{end}}'
+      HEALTH_GO_PG_PQ_DSN: 'postgres://test:test@{{.PG_PQ_HOST}}/test?sslmode=disable'
+      HEALTH_GO_PG_PGX4_DSN: 'postgres://test:test@{{.PG_PGX4_HOST}}/test?sslmode=disable'
+      HEALTH_GO_PG_PGX5_DSN: 'postgres://test:test@{{.PG_PGX5_HOST}}/test?sslmode=disable'
+      HEALTH_GO_MQ_DSN: 'amqp://guest:guest@{{.RABBIT_HOST_AMQP}}/'
+      HEALTH_GO_MQ_URL: 'http://guest:guest@{{.RABBIT_HOST_HTTP}}/'
+      HEALTH_GO_RD_DSN: 'redis://{{.REDIS_HOST}}/'
+      HEALTH_GO_MG_DSN: 'mongodb://{{.MONGO_HOST}}/'
+      HEALTH_GO_MS_DSN: 'test:test@tcp({{.MYSQL_HOST}})/test?charset=utf8'
+      HEALTH_GO_MD_DSN: 'memcached://localhost:{{.MEMCACHED_HOST}}/'
+      HEALTH_GO_INFLUXDB_URL: 'http://{{.INFLUX_HOST}}'
+      HEALTH_GO_CASSANDRA_HOST: '{{.CASSANDRA_HOST}}'
+      HEALTH_GO_NATS_DSN: 'nats://{{.NATS_HOST}}'

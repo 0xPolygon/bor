@@ -50,6 +50,7 @@ Post `v0.3.0` release, bor uses a new command line interface (cli). The new-cli 
 - The official documentation for the Polygon PoS chain can be found [here](https://wiki.polygon.technology/docs/pos/getting-started/). It contains all the conceptual and architectural details of the chain along with an operational guide for users running the nodes.
 - New release announcements and discussions can be found on our [forum page](https://forum.polygon.technology/).
 - Polygon improvement proposals can be found [here](https://github.com/maticnetwork/Polygon-Improvement-Proposals/)
+- Instructions for building and wiring [evmone](docs/evmone.md) as the Bor EVM.
 
 ### Contribution guidelines
 

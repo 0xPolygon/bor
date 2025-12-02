@@ -165,6 +165,9 @@ type Config struct {
 	// Enables tracking of SHA3 preimages in the VM
 	EnablePreimageRecording bool
 
+	// Optional EVMC-based interpreter (see --vm.evm flag)
+	EVMInterpreter string
+
 	// Enables VM tracing
 	VMTrace           string
 	VMTraceJsonConfig string

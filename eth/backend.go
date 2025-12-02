@@ -279,6 +279,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		AddressCacheSizes: config.AddressCacheSizes,
 		VmConfig: vm.Config{
 			EnablePreimageRecording: config.EnablePreimageRecording,
+			EVMInterpreter:          config.EVMInterpreter,
 		},
 		Stateless: config.SyncMode == downloader.StatelessSync,
 	}

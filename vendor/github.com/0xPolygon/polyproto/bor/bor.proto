@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package bor;
+
+import "common/common.proto";
+
+option go_package = "./bor;bor";
+
+service BorApi {
+  rpc GetRootHash(GetRootHashRequest) returns (GetRootHashResponse) {}
+  rpc GetVoteOnHash(GetVoteOnHashRequest) returns (GetVoteOnHashResponse) {}
+  rpc HeaderByNumber(GetHeaderByNumberRequest) returns (GetHeaderByNumberResponse) {}
+  rpc BlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
+  rpc TransactionReceipt(ReceiptRequest) returns (ReceiptResponse) {}
+  rpc BorBlockReceipt(ReceiptRequest) returns (ReceiptResponse) {}
+  rpc GetStartBlockHeimdallSpanID(GetStartBlockHeimdallSpanIDRequest) returns (GetStartBlockHeimdallSpanIDResponse) {}
+}
+
+message Header {
+  uint64 number = 1;
+  common.H256 parentHash = 2;
+  uint64 time = 3;
+}
+
+// ---- ROOT HASH ----
+
+message GetRootHashRequest {
+  uint64 startBlockNumber = 1;
+  uint64 endBlockNumber = 2;
+}
+
+message GetRootHashResponse {
+  string rootHash = 1;
+}
+
+// ---- VOTE ON HASH ----
+
+message GetVoteOnHashRequest {
+  uint64 startBlockNumber = 1;
+  uint64 endBlockNumber = 2;
+  string hash = 3;
+  string milestoneId = 4;
+}
+
+message GetVoteOnHashResponse {
+  bool response = 1;
+}
+
+// ---- HEADER BY NUMBER ----
+
+message GetHeaderByNumberRequest {
+  string number = 1;
+}
+
+message GetHeaderByNumberResponse {
+  Header header = 1;
+}
+
+// ---- BLOCK BY NUMBER ----
+
+message GetBlockByNumberRequest {
+  string number = 1;
+}
+
+message GetBlockByNumberResponse {
+  Block block = 1;
+}
+
+// ---- TRANSACTION RECEIPT ----
+
+message ReceiptRequest {
+  common.H256 hash = 1;
+}
+
+message ReceiptResponse {
+  Receipt receipt = 1;
+}
+
+// ---- BLOCK ----
+message Block {
+  Header header = 1;
+}
+
+// ---- BLOCK RECEIPT ----
+
+message Log {
+  common.H160 address = 1;
+  repeated common.H256 topics = 2;
+  bytes data = 3;
+  uint64 blockNumber = 4;
+  common.H256 txHash = 5;
+  uint64 txIndex = 6;
+  common.H256 blockHash = 7;
+  uint64 index = 8;
+  bool removed = 9;
+}
+
+message Bloom {
+  bytes bloom = 1;
+}
+
+message Receipt {
+  uint64 type = 1;
+  bytes postState = 2;
+  uint64 status = 3;
+  uint64 cumulativeGasUsed = 4;
+  Bloom bloom = 5;
+  repeated Log logs = 6;
+
+  common.H256 txHash = 7;
+  common.H160 contractAddress = 8;
+  uint64 gasUsed = 9;
+  int64 effectiveGasPrice = 10;
+  uint64 blobGasUsed = 11;
+  int64 blobGasPrice = 12;
+
+  common.H256 blockHash = 13;
+  int64 blockNumber = 14;
+  uint64 transactionIndex = 15;
+}
+
+message GetStartBlockHeimdallSpanIDRequest {
+  uint64 StartBlock = 1;
+}
+
+message GetStartBlockHeimdallSpanIDResponse {
+  uint64 StartBlock = 1;
+  uint64 HeimdallSpanID = 2;
+}

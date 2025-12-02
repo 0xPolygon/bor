@@ -1,0 +1,12 @@
+# This dockerfile exists in order to verify that building
+# 'hid' within libc-based docker setups is possible. It is 
+# not a 'production' dockerfile, just for to aid QA.
+
+FROM golang:latest
+
+RUN apt-get install gcc
+
+ADD . $GOPATH/src/github.com/karalabe/hid
+RUN cd $GOPATH/src/github.com/karalabe/hid && go build demo.go && mv demo /demo
+
+ENTRYPOINT ["/demo"]

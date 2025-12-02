@@ -42,6 +42,9 @@ type Config struct {
 	ExtraEips               []int // Additional EIPS that are to be enabled
 
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
+
+	// Optional EVMC-based interpreter loading string: "/path/to/libevmone.so[,key=value...]".
+	EVMInterpreter string
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

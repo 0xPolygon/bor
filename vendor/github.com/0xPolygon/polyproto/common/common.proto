@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "github.com/0xPolygon/polyproto/common";
+
+message H128 {
+    uint64 Hi = 1;
+    uint64 Lo = 2;
+}
+
+message H160 {
+    H128 Hi = 1;
+    uint32 Lo = 2;
+}
+
+message H256 {
+    H128 Hi = 1;
+    H128 Lo = 2;
+}

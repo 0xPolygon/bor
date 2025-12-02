@@ -1,0 +1,4895 @@
+swagger: '2.0'
+info:
+  title: Heimdall v2 - gRPC Gateway docs
+  description: A REST interface for state queries.
+  version: 1.0.0
+paths:
+  /bor/params:
+    get:
+      summary: GetBorParams queries the parameters of x/bor module.
+      operationId: GetBorParams
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              params:
+                type: object
+                properties:
+                  sprint_duration:
+                    type: string
+                    format: uint64
+                  span_duration:
+                    type: string
+                    format: uint64
+                  producer_count:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /bor/producer-votes:
+    get:
+      summary: GetProducerVotes queries producer votes from all validators.
+      operationId: GetProducerVotes
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              all_votes:
+                type: object
+                additionalProperties:
+                  type: object
+                  properties:
+                    votes:
+                      type: array
+                      items:
+                        type: string
+                        format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /bor/producer-votes/{validator_id}:
+    get:
+      summary: |-
+        GetProducerVotesByValidatorId queries the producer votes for a given
+        validator id.
+      operationId: GetProducerVotesByValidatorId
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              votes:
+                type: array
+                items:
+                  type: string
+                  format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: validator_id
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /bor/spans/latest:
+    get:
+      summary: GetLatestSpan queries the latest span.
+      operationId: GetLatestSpan
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              span:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  validator_set:
+                    type: object
+                    properties:
+                      validators:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            val_id:
+                              type: string
+                              format: uint64
+                            start_epoch:
+                              type: string
+                              format: uint64
+                            end_epoch:
+                              type: string
+                              format: uint64
+                            nonce:
+                              type: string
+                              format: uint64
+                            voting_power:
+                              type: string
+                              format: int64
+                            pub_key:
+                              type: string
+                              format: byte
+                            signer:
+                              type: string
+                            last_updated:
+                              type: string
+                            jailed:
+                              type: boolean
+                            proposer_priority:
+                              type: string
+                              format: int64
+                      proposer:
+                        type: object
+                        properties:
+                          val_id:
+                            type: string
+                            format: uint64
+                          start_epoch:
+                            type: string
+                            format: uint64
+                          end_epoch:
+                            type: string
+                            format: uint64
+                          nonce:
+                            type: string
+                            format: uint64
+                          voting_power:
+                            type: string
+                            format: int64
+                          pub_key:
+                            type: string
+                            format: byte
+                          signer:
+                            type: string
+                          last_updated:
+                            type: string
+                          jailed:
+                            type: boolean
+                          proposer_priority:
+                            type: string
+                            format: int64
+                      total_voting_power:
+                        type: string
+                        format: int64
+                  selected_producers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        val_id:
+                          type: string
+                          format: uint64
+                        start_epoch:
+                          type: string
+                          format: uint64
+                        end_epoch:
+                          type: string
+                          format: uint64
+                        nonce:
+                          type: string
+                          format: uint64
+                        voting_power:
+                          type: string
+                          format: int64
+                        pub_key:
+                          type: string
+                          format: byte
+                        signer:
+                          type: string
+                        last_updated:
+                          type: string
+                        jailed:
+                          type: boolean
+                        proposer_priority:
+                          type: string
+                          format: int64
+                  bor_chain_id:
+                    type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /bor/spans/list:
+    get:
+      summary: GetSpanList queries a list of spans.
+      operationId: GetSpanList
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              span_list:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uint64
+                    start_block:
+                      type: string
+                      format: uint64
+                    end_block:
+                      type: string
+                      format: uint64
+                    validator_set:
+                      type: object
+                      properties:
+                        validators:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              val_id:
+                                type: string
+                                format: uint64
+                              start_epoch:
+                                type: string
+                                format: uint64
+                              end_epoch:
+                                type: string
+                                format: uint64
+                              nonce:
+                                type: string
+                                format: uint64
+                              voting_power:
+                                type: string
+                                format: int64
+                              pub_key:
+                                type: string
+                                format: byte
+                              signer:
+                                type: string
+                              last_updated:
+                                type: string
+                              jailed:
+                                type: boolean
+                              proposer_priority:
+                                type: string
+                                format: int64
+                        proposer:
+                          type: object
+                          properties:
+                            val_id:
+                              type: string
+                              format: uint64
+                            start_epoch:
+                              type: string
+                              format: uint64
+                            end_epoch:
+                              type: string
+                              format: uint64
+                            nonce:
+                              type: string
+                              format: uint64
+                            voting_power:
+                              type: string
+                              format: int64
+                            pub_key:
+                              type: string
+                              format: byte
+                            signer:
+                              type: string
+                            last_updated:
+                              type: string
+                            jailed:
+                              type: boolean
+                            proposer_priority:
+                              type: string
+                              format: int64
+                        total_voting_power:
+                          type: string
+                          format: int64
+                    selected_producers:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          val_id:
+                            type: string
+                            format: uint64
+                          start_epoch:
+                            type: string
+                            format: uint64
+                          end_epoch:
+                            type: string
+                            format: uint64
+                          nonce:
+                            type: string
+                            format: uint64
+                          voting_power:
+                            type: string
+                            format: int64
+                          pub_key:
+                            type: string
+                            format: byte
+                          signer:
+                            type: string
+                          last_updated:
+                            type: string
+                          jailed:
+                            type: boolean
+                          proposer_priority:
+                            type: string
+                            format: int64
+                    bor_chain_id:
+                      type: string
+              pagination:
+                type: object
+                properties:
+                  next_key:
+                    type: string
+                    format: byte
+                    description: |-
+                      next_key is the key to be passed to PageRequest.key to
+                      query the next page most efficiently. It will be empty if
+                      there are no more results.
+                  total:
+                    type: string
+                    format: uint64
+                    title: >-
+                      total is total number of results available if
+                      PageRequest.count_total
+
+                      was set, its value is undefined otherwise
+                description: >-
+                  PageResponse is to be embedded in gRPC response messages where
+                  the
+
+                  corresponding request message has used PageRequest.
+
+                   message SomeResponse {
+                           repeated Bar results = 1;
+                           PageResponse page = 2;
+                   }
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: pagination.key
+          description: |-
+            key is a value returned in PageResponse.next_key to begin
+            querying the next page most efficiently. Only one of offset or key
+            should be set.
+          in: query
+          required: false
+          type: string
+          format: byte
+        - name: pagination.offset
+          description: >-
+            offset is a numeric offset that can be used when key is unavailable.
+
+            It is less efficient than using key. Only one of offset or key
+            should
+
+            be set.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.limit
+          description: >-
+            limit is the total number of results to be returned in the result
+            page.
+
+            If left empty it will default to a value to be set by each app.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.count_total
+          description: >-
+            count_total is set to true  to indicate that the result set should
+            include
+
+            a count of the total number of items available for pagination in
+            UIs.
+
+            count_total is only respected when offset is used. It is ignored
+            when key
+
+            is set.
+          in: query
+          required: false
+          type: boolean
+        - name: pagination.reverse
+          description: >-
+            reverse is set to true if results are to be returned in the
+            descending order.
+
+
+            Since: cosmos-sdk 0.43
+          in: query
+          required: false
+          type: boolean
+      tags:
+        - Query
+  /bor/spans/prepare:
+    get:
+      summary: GetNextSpan queries the next span given a QueryNextSpanRequest.
+      operationId: GetNextSpan
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              span:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  validator_set:
+                    type: object
+                    properties:
+                      validators:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            val_id:
+                              type: string
+                              format: uint64
+                            start_epoch:
+                              type: string
+                              format: uint64
+                            end_epoch:
+                              type: string
+                              format: uint64
+                            nonce:
+                              type: string
+                              format: uint64
+                            voting_power:
+                              type: string
+                              format: int64
+                            pub_key:
+                              type: string
+                              format: byte
+                            signer:
+                              type: string
+                            last_updated:
+                              type: string
+                            jailed:
+                              type: boolean
+                            proposer_priority:
+                              type: string
+                              format: int64
+                      proposer:
+                        type: object
+                        properties:
+                          val_id:
+                            type: string
+                            format: uint64
+                          start_epoch:
+                            type: string
+                            format: uint64
+                          end_epoch:
+                            type: string
+                            format: uint64
+                          nonce:
+                            type: string
+                            format: uint64
+                          voting_power:
+                            type: string
+                            format: int64
+                          pub_key:
+                            type: string
+                            format: byte
+                          signer:
+                            type: string
+                          last_updated:
+                            type: string
+                          jailed:
+                            type: boolean
+                          proposer_priority:
+                            type: string
+                            format: int64
+                      total_voting_power:
+                        type: string
+                        format: int64
+                  selected_producers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        val_id:
+                          type: string
+                          format: uint64
+                        start_epoch:
+                          type: string
+                          format: uint64
+                        end_epoch:
+                          type: string
+                          format: uint64
+                        nonce:
+                          type: string
+                          format: uint64
+                        voting_power:
+                          type: string
+                          format: int64
+                        pub_key:
+                          type: string
+                          format: byte
+                        signer:
+                          type: string
+                        last_updated:
+                          type: string
+                        jailed:
+                          type: boolean
+                        proposer_priority:
+                          type: string
+                          format: int64
+                  bor_chain_id:
+                    type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: span_id
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: start_block
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: bor_chain_id
+          in: query
+          required: false
+          type: string
+      tags:
+        - Query
+  /bor/spans/seed/{id}:
+    get:
+      summary: |-
+        GetNextSpanSeed queries the next span seed given a
+        QueryNextSpanSeedRequest.
+      operationId: GetNextSpanSeed
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              seed:
+                type: string
+              seed_author:
+                type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /bor/spans/{id}:
+    get:
+      summary: GetSpanById retrieves a span by its id.
+      operationId: GetSpanById
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              span:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  validator_set:
+                    type: object
+                    properties:
+                      validators:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            val_id:
+                              type: string
+                              format: uint64
+                            start_epoch:
+                              type: string
+                              format: uint64
+                            end_epoch:
+                              type: string
+                              format: uint64
+                            nonce:
+                              type: string
+                              format: uint64
+                            voting_power:
+                              type: string
+                              format: int64
+                            pub_key:
+                              type: string
+                              format: byte
+                            signer:
+                              type: string
+                            last_updated:
+                              type: string
+                            jailed:
+                              type: boolean
+                            proposer_priority:
+                              type: string
+                              format: int64
+                      proposer:
+                        type: object
+                        properties:
+                          val_id:
+                            type: string
+                            format: uint64
+                          start_epoch:
+                            type: string
+                            format: uint64
+                          end_epoch:
+                            type: string
+                            format: uint64
+                          nonce:
+                            type: string
+                            format: uint64
+                          voting_power:
+                            type: string
+                            format: int64
+                          pub_key:
+                            type: string
+                            format: byte
+                          signer:
+                            type: string
+                          last_updated:
+                            type: string
+                          jailed:
+                            type: boolean
+                          proposer_priority:
+                            type: string
+                            format: int64
+                      total_voting_power:
+                        type: string
+                        format: int64
+                  selected_producers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        val_id:
+                          type: string
+                          format: uint64
+                        start_epoch:
+                          type: string
+                          format: uint64
+                        end_epoch:
+                          type: string
+                          format: uint64
+                        nonce:
+                          type: string
+                          format: uint64
+                        voting_power:
+                          type: string
+                          format: int64
+                        pub_key:
+                          type: string
+                          format: byte
+                        signer:
+                          type: string
+                        last_updated:
+                          type: string
+                        jailed:
+                          type: boolean
+                        proposer_priority:
+                          type: string
+                          format: int64
+                  bor_chain_id:
+                    type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: id
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /chainmanager/params:
+    get:
+      summary: GetChainManagerParams queries the parameters of x/chainmanager module
+      operationId: GetChainManagerParams
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              params:
+                type: object
+                properties:
+                  chain_params:
+                    type: object
+                    properties:
+                      bor_chain_id:
+                        type: string
+                      heimdall_chain_id:
+                        type: string
+                      pol_token_address:
+                        type: string
+                      staking_manager_address:
+                        type: string
+                      slash_manager_address:
+                        type: string
+                      root_chain_address:
+                        type: string
+                      staking_info_address:
+                        type: string
+                      state_sender_address:
+                        type: string
+                      state_receiver_address:
+                        type: string
+                      validator_set_address:
+                        type: string
+                  main_chain_tx_confirmations:
+                    type: string
+                    format: uint64
+                  bor_chain_tx_confirmations:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/buffer:
+    get:
+      summary: GetCheckpointBuffer queries for the checkpoint in the buffer
+      operationId: GetCheckpointBuffer
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              checkpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  root_hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/count:
+    get:
+      summary: GetAckCount queries for the ack count
+      operationId: GetAckCount
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              ack_count:
+                type: string
+                format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/last-no-ack:
+    get:
+      summary: GetLastNoAck queries for the last last-no-ack
+      operationId: GetLastNoAck
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              last_no_ack_id:
+                type: string
+                format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/latest:
+    get:
+      summary: GetCheckpointLatest queries for the latest checkpoint
+      operationId: GetCheckpointLatest
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              checkpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  root_hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/list:
+    get:
+      summary: GetCheckpointList queries for the list of checkpoints
+      operationId: GetCheckpointList
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              checkpoint_list:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uint64
+                    proposer:
+                      type: string
+                    start_block:
+                      type: string
+                      format: uint64
+                    end_block:
+                      type: string
+                      format: uint64
+                    root_hash:
+                      type: string
+                      format: byte
+                    bor_chain_id:
+                      type: string
+                    timestamp:
+                      type: string
+                      format: uint64
+              pagination:
+                type: object
+                properties:
+                  next_key:
+                    type: string
+                    format: byte
+                    description: |-
+                      next_key is the key to be passed to PageRequest.key to
+                      query the next page most efficiently. It will be empty if
+                      there are no more results.
+                  total:
+                    type: string
+                    format: uint64
+                    title: >-
+                      total is total number of results available if
+                      PageRequest.count_total
+
+                      was set, its value is undefined otherwise
+                description: >-
+                  PageResponse is to be embedded in gRPC response messages where
+                  the
+
+                  corresponding request message has used PageRequest.
+
+                   message SomeResponse {
+                           repeated Bar results = 1;
+                           PageResponse page = 2;
+                   }
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: pagination.key
+          description: |-
+            key is a value returned in PageResponse.next_key to begin
+            querying the next page most efficiently. Only one of offset or key
+            should be set.
+          in: query
+          required: false
+          type: string
+          format: byte
+        - name: pagination.offset
+          description: >-
+            offset is a numeric offset that can be used when key is unavailable.
+
+            It is less efficient than using key. Only one of offset or key
+            should
+
+            be set.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.limit
+          description: >-
+            limit is the total number of results to be returned in the result
+            page.
+
+            If left empty it will default to a value to be set by each app.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.count_total
+          description: >-
+            count_total is set to true  to indicate that the result set should
+            include
+
+            a count of the total number of items available for pagination in
+            UIs.
+
+            count_total is only respected when offset is used. It is ignored
+            when key
+
+            is set.
+          in: query
+          required: false
+          type: boolean
+        - name: pagination.reverse
+          description: >-
+            reverse is set to true if results are to be returned in the
+            descending order.
+
+
+            Since: cosmos-sdk 0.43
+          in: query
+          required: false
+          type: boolean
+      tags:
+        - Query
+  /checkpoints/overview:
+    get:
+      summary: GetCheckpointOverview queries for the checkpoint overview
+      operationId: GetCheckpointOverview
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              ack_count:
+                type: string
+                format: uint64
+              last_no_ack_id:
+                type: string
+                format: uint64
+              buffer_checkpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  root_hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+              validator_count:
+                type: string
+                format: uint64
+              validator_set:
+                type: object
+                properties:
+                  validators:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        val_id:
+                          type: string
+                          format: uint64
+                        start_epoch:
+                          type: string
+                          format: uint64
+                        end_epoch:
+                          type: string
+                          format: uint64
+                        nonce:
+                          type: string
+                          format: uint64
+                        voting_power:
+                          type: string
+                          format: int64
+                        pub_key:
+                          type: string
+                          format: byte
+                        signer:
+                          type: string
+                        last_updated:
+                          type: string
+                        jailed:
+                          type: boolean
+                        proposer_priority:
+                          type: string
+                          format: int64
+                  proposer:
+                    type: object
+                    properties:
+                      val_id:
+                        type: string
+                        format: uint64
+                      start_epoch:
+                        type: string
+                        format: uint64
+                      end_epoch:
+                        type: string
+                        format: uint64
+                      nonce:
+                        type: string
+                        format: uint64
+                      voting_power:
+                        type: string
+                        format: int64
+                      pub_key:
+                        type: string
+                        format: byte
+                      signer:
+                        type: string
+                      last_updated:
+                        type: string
+                      jailed:
+                        type: boolean
+                      proposer_priority:
+                        type: string
+                        format: int64
+                  total_voting_power:
+                    type: string
+                    format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/params:
+    get:
+      summary: GetCheckpointParams queries for the x/checkpoint params
+      operationId: GetCheckpointParams
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              params:
+                type: object
+                properties:
+                  checkpoint_buffer_time:
+                    type: string
+                  avg_checkpoint_length:
+                    type: string
+                    format: uint64
+                  max_checkpoint_length:
+                    type: string
+                    format: uint64
+                  child_chain_block_interval:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/prepare-next:
+    get:
+      summary: GetNextCheckpoint queries for the next checkpoint
+      operationId: GetNextCheckpoint
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              checkpoint:
+                type: object
+                properties:
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  root_hash:
+                    type: string
+                    format: byte
+                  account_root_hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /checkpoints/signatures/{tx_hash}:
+    get:
+      summary: GetCheckpointSignatures queries signatures for latest checkpoint
+      operationId: GetCheckpointSignatures
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              signatures:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    validator_address:
+                      type: string
+                      format: byte
+                    signature:
+                      type: string
+                      format: byte
+            title: |-
+              QueryCheckpointSignaturesResponse is response type for
+              QueryCheckpointSignatures RPC method
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /checkpoints/{number}:
+    get:
+      summary: GetCheckpoint queries for the checkpoint based on the number
+      operationId: GetCheckpoint
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              checkpoint:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  root_hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: number
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /clerk/event-records/count:
+    get:
+      summary: GetRecordCount queries the total number of event records
+      operationId: GetRecordCount
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              count:
+                type: string
+                format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /clerk/event-records/latest-id:
+    get:
+      summary: GetLatestRecordId queries the latest record id from L1.
+      operationId: GetLatestRecordId
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              latest_record_id:
+                type: string
+                format: uint64
+              is_processed_by_heimdall:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /clerk/event-records/list:
+    get:
+      summary: GetRecordList queries a list of records
+      operationId: GetRecordList
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              event_records:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uint64
+                    contract:
+                      type: string
+                    data:
+                      type: string
+                      format: byte
+                    tx_hash:
+                      type: string
+                    log_index:
+                      type: string
+                      format: uint64
+                    bor_chain_id:
+                      type: string
+                    record_time:
+                      type: string
+                      format: date-time
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: page
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: limit
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /clerk/event-records/{record_id}:
+    get:
+      summary: GetRecordById retrieves a record by its id
+      operationId: GetRecordById
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              record:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uint64
+                  contract:
+                    type: string
+                  data:
+                    type: string
+                    format: byte
+                  tx_hash:
+                    type: string
+                  log_index:
+                    type: string
+                    format: uint64
+                  bor_chain_id:
+                    type: string
+                  record_time:
+                    type: string
+                    format: date-time
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: record_id
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /clerk/is-old-tx:
+    get:
+      summary: |-
+        IsClerkTxOld queries for a specific clerk tx to check its status (old
+        means already submitted)
+      operationId: IsClerkTxOld
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              is_old:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: query
+          required: false
+          type: string
+        - name: log_index
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /clerk/sequence:
+    get:
+      summary: GetRecordSequence queries the sequence of the record
+      operationId: GetRecordSequence
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              sequence:
+                type: string
+                format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: query
+          required: false
+          type: string
+        - name: log_index
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /clerk/time:
+    get:
+      summary: GetRecordListWithTime queries a list of records with time
+      operationId: GetRecordListWithTime
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              event_records:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      format: uint64
+                    contract:
+                      type: string
+                    data:
+                      type: string
+                      format: byte
+                    tx_hash:
+                      type: string
+                    log_index:
+                      type: string
+                      format: uint64
+                    bor_chain_id:
+                      type: string
+                    record_time:
+                      type: string
+                      format: date-time
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: from_id
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: to_time
+          in: query
+          required: false
+          type: string
+          format: date-time
+        - name: pagination.key
+          description: |-
+            key is a value returned in PageResponse.next_key to begin
+            querying the next page most efficiently. Only one of offset or key
+            should be set.
+          in: query
+          required: false
+          type: string
+          format: byte
+        - name: pagination.offset
+          description: >-
+            offset is a numeric offset that can be used when key is unavailable.
+
+            It is less efficient than using key. Only one of offset or key
+            should
+
+            be set.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.limit
+          description: >-
+            limit is the total number of results to be returned in the result
+            page.
+
+            If left empty it will default to a value to be set by each app.
+          in: query
+          required: false
+          type: string
+          format: uint64
+        - name: pagination.count_total
+          description: >-
+            count_total is set to true  to indicate that the result set should
+            include
+
+            a count of the total number of items available for pagination in
+            UIs.
+
+            count_total is only respected when offset is used. It is ignored
+            when key
+
+            is set.
+          in: query
+          required: false
+          type: boolean
+        - name: pagination.reverse
+          description: >-
+            reverse is set to true if results are to be returned in the
+            descending order.
+
+
+            Since: cosmos-sdk 0.43
+          in: query
+          required: false
+          type: boolean
+      tags:
+        - Query
+  /milestones/count:
+    get:
+      summary: GetMilestoneCount queries for the milestone count
+      operationId: GetMilestoneCount
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              count:
+                type: string
+                format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /milestones/latest:
+    get:
+      summary: GetLatestMilestone queries for the latest milestone
+      operationId: GetLatestMilestone
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              milestone:
+                type: object
+                properties:
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  milestone_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+                  total_difficulty:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /milestones/params:
+    get:
+      summary: GetMilestoneParams queries for the x/milestone parameters
+      operationId: GetMilestoneParams
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              params:
+                type: object
+                properties:
+                  max_milestone_proposition_length:
+                    type: string
+                    format: uint64
+                  ff_milestone_threshold:
+                    type: string
+                    format: uint64
+                  ff_milestone_block_interval:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /milestones/{number}:
+    get:
+      summary: GetMilestoneByNumber queries for the milestone based on the number
+      operationId: GetMilestoneByNumber
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              milestone:
+                type: object
+                properties:
+                  proposer:
+                    type: string
+                  start_block:
+                    type: string
+                    format: uint64
+                  end_block:
+                    type: string
+                    format: uint64
+                  hash:
+                    type: string
+                    format: byte
+                  bor_chain_id:
+                    type: string
+                  milestone_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: uint64
+                  total_difficulty:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: number
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /stake/is-old-tx:
+    get:
+      summary: IsStakeTxOld queries for the staking sequence
+      operationId: IsStakeTxOld
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              is_old:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: query
+          required: false
+          type: string
+        - name: log_index
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /stake/proposers/current:
+    get:
+      summary: GetCurrentProposer queries validator info for the current proposer
+      operationId: GetCurrentProposer
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              validator:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /stake/proposers/{times}:
+    get:
+      summary: GetProposersByTimes queries for the proposers by Tendermint iterations
+      operationId: GetProposersByTimes
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              proposers:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    val_id:
+                      type: string
+                      format: uint64
+                    start_epoch:
+                      type: string
+                      format: uint64
+                    end_epoch:
+                      type: string
+                      format: uint64
+                    nonce:
+                      type: string
+                      format: uint64
+                    voting_power:
+                      type: string
+                      format: int64
+                    pub_key:
+                      type: string
+                      format: byte
+                    signer:
+                      type: string
+                    last_updated:
+                      type: string
+                    jailed:
+                      type: boolean
+                    proposer_priority:
+                      type: string
+                      format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: times
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /stake/signer/{val_address}:
+    get:
+      summary: GetSignerByAddress queries validator info for a given validator address
+      operationId: GetSignerByAddress
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              validator:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: val_address
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /stake/total-power:
+    get:
+      summary: GetTotalPower queries the total power of a validator set
+      operationId: GetTotalPower
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              total_power:
+                type: string
+                format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /stake/validator-status/{val_address}:
+    get:
+      summary: |-
+        GetValidatorStatusByAddress queries validator status for given validator
+        val_address
+      operationId: GetValidatorStatusByAddress
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              is_old:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: val_address
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /stake/validator/{id}:
+    get:
+      summary: GetValidatorById queries validator info for a given validator id
+      operationId: GetValidatorById
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              validator:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /stake/validators-set:
+    get:
+      summary: GetCurrentValidatorSet queries for the current validator set
+      operationId: GetCurrentValidatorSet
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              validator_set:
+                type: object
+                properties:
+                  validators:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        val_id:
+                          type: string
+                          format: uint64
+                        start_epoch:
+                          type: string
+                          format: uint64
+                        end_epoch:
+                          type: string
+                          format: uint64
+                        nonce:
+                          type: string
+                          format: uint64
+                        voting_power:
+                          type: string
+                          format: int64
+                        pub_key:
+                          type: string
+                          format: byte
+                        signer:
+                          type: string
+                        last_updated:
+                          type: string
+                        jailed:
+                          type: boolean
+                        proposer_priority:
+                          type: string
+                          format: int64
+                  proposer:
+                    type: object
+                    properties:
+                      val_id:
+                        type: string
+                        format: uint64
+                      start_epoch:
+                        type: string
+                        format: uint64
+                      end_epoch:
+                        type: string
+                        format: uint64
+                      nonce:
+                        type: string
+                        format: uint64
+                      voting_power:
+                        type: string
+                        format: int64
+                      pub_key:
+                        type: string
+                        format: byte
+                      signer:
+                        type: string
+                      last_updated:
+                        type: string
+                      jailed:
+                        type: boolean
+                      proposer_priority:
+                        type: string
+                        format: int64
+                  total_voting_power:
+                    type: string
+                    format: int64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /topup/account-proof/{address}:
+    get:
+      summary: GetAccountProof queries for the account proof of a given address
+      operationId: GetAccountProofByAddress
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              proof:
+                type: object
+                properties:
+                  address:
+                    type: string
+                  account_proof:
+                    type: string
+                    format: byte
+                  index:
+                    type: string
+                    format: uint64
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: address
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /topup/account-proof/{address}/verify:
+    get:
+      summary: VerifyAccountProof queries for the proof of an account given its address
+      operationId: VerifyAccountProofByAddress
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              is_verified:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: address
+          in: path
+          required: true
+          type: string
+        - name: proof
+          in: query
+          required: false
+          type: string
+      tags:
+        - Query
+  /topup/dividend-account-root:
+    get:
+      summary: >-
+        GetDividendAccountRootHash calculates and returns the dividend account
+        root
+
+        hash
+      operationId: GetDividendAccountRootHash
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              account_root_hash:
+                type: string
+                format: byte
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      tags:
+        - Query
+  /topup/dividend-account/{address}:
+    get:
+      summary: >-
+        GetDividendAccountByAddress queries for a specific DividendAccount by
+        its
+
+        address
+      operationId: GetDividendAccountByAddress
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              dividend_account:
+                type: object
+                properties:
+                  user:
+                    type: string
+                  fee_amount:
+                    type: string
+                title: DividendAccount contains the burned fees
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: address
+          in: path
+          required: true
+          type: string
+      tags:
+        - Query
+  /topup/is-old-tx:
+    get:
+      summary: |-
+        IsTopupTxOld queries for a specific topup tx to check its status (old
+        means already submitted)
+      operationId: IsTopupTxOld
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              is_old:
+                type: boolean
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: query
+          required: false
+          type: string
+        - name: log_index
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+  /topup/sequence:
+    get:
+      summary: >-
+        GetTopupTxSequence queries for a specific topup tx and returns its
+        sequence
+      operationId: GetTopupTxSequence
+      responses:
+        '200':
+          description: A successful response.
+          schema:
+            type: object
+            properties:
+              sequence:
+                type: string
+        default:
+          description: An unexpected error response.
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              code:
+                type: integer
+                format: int32
+              message:
+                type: string
+              details:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type_url:
+                      type: string
+                    value:
+                      type: string
+                      format: byte
+      parameters:
+        - name: tx_hash
+          in: query
+          required: false
+          type: string
+        - name: log_index
+          in: query
+          required: false
+          type: string
+          format: uint64
+      tags:
+        - Query
+definitions:
+  cosmos.base.query.v1beta1.PageRequest:
+    type: object
+    properties:
+      key:
+        type: string
+        format: byte
+        description: |-
+          key is a value returned in PageResponse.next_key to begin
+          querying the next page most efficiently. Only one of offset or key
+          should be set.
+      offset:
+        type: string
+        format: uint64
+        description: |-
+          offset is a numeric offset that can be used when key is unavailable.
+          It is less efficient than using key. Only one of offset or key should
+          be set.
+      limit:
+        type: string
+        format: uint64
+        description: >-
+          limit is the total number of results to be returned in the result
+          page.
+
+          If left empty it will default to a value to be set by each app.
+      count_total:
+        type: boolean
+        description: >-
+          count_total is set to true  to indicate that the result set should
+          include
+
+          a count of the total number of items available for pagination in UIs.
+
+          count_total is only respected when offset is used. It is ignored when
+          key
+
+          is set.
+      reverse:
+        type: boolean
+        description: >-
+          reverse is set to true if results are to be returned in the descending
+          order.
+
+
+          Since: cosmos-sdk 0.43
+    description: |-
+      message SomeRequest {
+               Foo some_parameter = 1;
+               PageRequest pagination = 2;
+       }
+    title: |-
+      PageRequest is to be embedded in gRPC request messages for efficient
+      pagination. Ex:
+  cosmos.base.query.v1beta1.PageResponse:
+    type: object
+    properties:
+      next_key:
+        type: string
+        format: byte
+        description: |-
+          next_key is the key to be passed to PageRequest.key to
+          query the next page most efficiently. It will be empty if
+          there are no more results.
+      total:
+        type: string
+        format: uint64
+        title: |-
+          total is total number of results available if PageRequest.count_total
+          was set, its value is undefined otherwise
+    description: |-
+      PageResponse is to be embedded in gRPC response messages where the
+      corresponding request message has used PageRequest.
+
+       message SomeResponse {
+               repeated Bar results = 1;
+               PageResponse page = 2;
+       }
+  google.protobuf.Any:
+    type: object
+    properties:
+      type_url:
+        type: string
+      value:
+        type: string
+        format: byte
+  grpc.gateway.runtime.Error:
+    type: object
+    properties:
+      error:
+        type: string
+      code:
+        type: integer
+        format: int32
+      message:
+        type: string
+      details:
+        type: array
+        items:
+          type: object
+          properties:
+            type_url:
+              type: string
+            value:
+              type: string
+              format: byte
+  heimdallv2.bor.Params:
+    type: object
+    properties:
+      sprint_duration:
+        type: string
+        format: uint64
+      span_duration:
+        type: string
+        format: uint64
+      producer_count:
+        type: string
+        format: uint64
+  heimdallv2.bor.ProducerVotes:
+    type: object
+    properties:
+      votes:
+        type: array
+        items:
+          type: string
+          format: uint64
+  heimdallv2.bor.QueryLatestSpanResponse:
+    type: object
+    properties:
+      span:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          validator_set:
+            type: object
+            properties:
+              validators:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    val_id:
+                      type: string
+                      format: uint64
+                    start_epoch:
+                      type: string
+                      format: uint64
+                    end_epoch:
+                      type: string
+                      format: uint64
+                    nonce:
+                      type: string
+                      format: uint64
+                    voting_power:
+                      type: string
+                      format: int64
+                    pub_key:
+                      type: string
+                      format: byte
+                    signer:
+                      type: string
+                    last_updated:
+                      type: string
+                    jailed:
+                      type: boolean
+                    proposer_priority:
+                      type: string
+                      format: int64
+              proposer:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+              total_voting_power:
+                type: string
+                format: int64
+          selected_producers:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          bor_chain_id:
+            type: string
+  heimdallv2.bor.QueryNextSpanResponse:
+    type: object
+    properties:
+      span:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          validator_set:
+            type: object
+            properties:
+              validators:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    val_id:
+                      type: string
+                      format: uint64
+                    start_epoch:
+                      type: string
+                      format: uint64
+                    end_epoch:
+                      type: string
+                      format: uint64
+                    nonce:
+                      type: string
+                      format: uint64
+                    voting_power:
+                      type: string
+                      format: int64
+                    pub_key:
+                      type: string
+                      format: byte
+                    signer:
+                      type: string
+                    last_updated:
+                      type: string
+                    jailed:
+                      type: boolean
+                    proposer_priority:
+                      type: string
+                      format: int64
+              proposer:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+              total_voting_power:
+                type: string
+                format: int64
+          selected_producers:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          bor_chain_id:
+            type: string
+  heimdallv2.bor.QueryNextSpanSeedResponse:
+    type: object
+    properties:
+      seed:
+        type: string
+      seed_author:
+        type: string
+  heimdallv2.bor.QueryParamsResponse:
+    type: object
+    properties:
+      params:
+        type: object
+        properties:
+          sprint_duration:
+            type: string
+            format: uint64
+          span_duration:
+            type: string
+            format: uint64
+          producer_count:
+            type: string
+            format: uint64
+  heimdallv2.bor.QueryProducerVotesByValidatorIdResponse:
+    type: object
+    properties:
+      votes:
+        type: array
+        items:
+          type: string
+          format: uint64
+  heimdallv2.bor.QueryProducerVotesResponse:
+    type: object
+    properties:
+      all_votes:
+        type: object
+        additionalProperties:
+          type: object
+          properties:
+            votes:
+              type: array
+              items:
+                type: string
+                format: uint64
+  heimdallv2.bor.QuerySpanByIdResponse:
+    type: object
+    properties:
+      span:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          validator_set:
+            type: object
+            properties:
+              validators:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    val_id:
+                      type: string
+                      format: uint64
+                    start_epoch:
+                      type: string
+                      format: uint64
+                    end_epoch:
+                      type: string
+                      format: uint64
+                    nonce:
+                      type: string
+                      format: uint64
+                    voting_power:
+                      type: string
+                      format: int64
+                    pub_key:
+                      type: string
+                      format: byte
+                    signer:
+                      type: string
+                    last_updated:
+                      type: string
+                    jailed:
+                      type: boolean
+                    proposer_priority:
+                      type: string
+                      format: int64
+              proposer:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+              total_voting_power:
+                type: string
+                format: int64
+          selected_producers:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          bor_chain_id:
+            type: string
+  heimdallv2.bor.QuerySpanListResponse:
+    type: object
+    properties:
+      span_list:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uint64
+            start_block:
+              type: string
+              format: uint64
+            end_block:
+              type: string
+              format: uint64
+            validator_set:
+              type: object
+              properties:
+                validators:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      val_id:
+                        type: string
+                        format: uint64
+                      start_epoch:
+                        type: string
+                        format: uint64
+                      end_epoch:
+                        type: string
+                        format: uint64
+                      nonce:
+                        type: string
+                        format: uint64
+                      voting_power:
+                        type: string
+                        format: int64
+                      pub_key:
+                        type: string
+                        format: byte
+                      signer:
+                        type: string
+                      last_updated:
+                        type: string
+                      jailed:
+                        type: boolean
+                      proposer_priority:
+                        type: string
+                        format: int64
+                proposer:
+                  type: object
+                  properties:
+                    val_id:
+                      type: string
+                      format: uint64
+                    start_epoch:
+                      type: string
+                      format: uint64
+                    end_epoch:
+                      type: string
+                      format: uint64
+                    nonce:
+                      type: string
+                      format: uint64
+                    voting_power:
+                      type: string
+                      format: int64
+                    pub_key:
+                      type: string
+                      format: byte
+                    signer:
+                      type: string
+                    last_updated:
+                      type: string
+                    jailed:
+                      type: boolean
+                    proposer_priority:
+                      type: string
+                      format: int64
+                total_voting_power:
+                  type: string
+                  format: int64
+            selected_producers:
+              type: array
+              items:
+                type: object
+                properties:
+                  val_id:
+                    type: string
+                    format: uint64
+                  start_epoch:
+                    type: string
+                    format: uint64
+                  end_epoch:
+                    type: string
+                    format: uint64
+                  nonce:
+                    type: string
+                    format: uint64
+                  voting_power:
+                    type: string
+                    format: int64
+                  pub_key:
+                    type: string
+                    format: byte
+                  signer:
+                    type: string
+                  last_updated:
+                    type: string
+                  jailed:
+                    type: boolean
+                  proposer_priority:
+                    type: string
+                    format: int64
+            bor_chain_id:
+              type: string
+      pagination:
+        type: object
+        properties:
+          next_key:
+            type: string
+            format: byte
+            description: |-
+              next_key is the key to be passed to PageRequest.key to
+              query the next page most efficiently. It will be empty if
+              there are no more results.
+          total:
+            type: string
+            format: uint64
+            title: >-
+              total is total number of results available if
+              PageRequest.count_total
+
+              was set, its value is undefined otherwise
+        description: |-
+          PageResponse is to be embedded in gRPC response messages where the
+          corresponding request message has used PageRequest.
+
+           message SomeResponse {
+                   repeated Bar results = 1;
+                   PageResponse page = 2;
+           }
+  heimdallv2.bor.Span:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uint64
+      start_block:
+        type: string
+        format: uint64
+      end_block:
+        type: string
+        format: uint64
+      validator_set:
+        type: object
+        properties:
+          validators:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          proposer:
+            type: object
+            properties:
+              val_id:
+                type: string
+                format: uint64
+              start_epoch:
+                type: string
+                format: uint64
+              end_epoch:
+                type: string
+                format: uint64
+              nonce:
+                type: string
+                format: uint64
+              voting_power:
+                type: string
+                format: int64
+              pub_key:
+                type: string
+                format: byte
+              signer:
+                type: string
+              last_updated:
+                type: string
+              jailed:
+                type: boolean
+              proposer_priority:
+                type: string
+                format: int64
+          total_voting_power:
+            type: string
+            format: int64
+      selected_producers:
+        type: array
+        items:
+          type: object
+          properties:
+            val_id:
+              type: string
+              format: uint64
+            start_epoch:
+              type: string
+              format: uint64
+            end_epoch:
+              type: string
+              format: uint64
+            nonce:
+              type: string
+              format: uint64
+            voting_power:
+              type: string
+              format: int64
+            pub_key:
+              type: string
+              format: byte
+            signer:
+              type: string
+            last_updated:
+              type: string
+            jailed:
+              type: boolean
+            proposer_priority:
+              type: string
+              format: int64
+      bor_chain_id:
+        type: string
+  heimdallv2.stake.Validator:
+    type: object
+    properties:
+      val_id:
+        type: string
+        format: uint64
+      start_epoch:
+        type: string
+        format: uint64
+      end_epoch:
+        type: string
+        format: uint64
+      nonce:
+        type: string
+        format: uint64
+      voting_power:
+        type: string
+        format: int64
+      pub_key:
+        type: string
+        format: byte
+      signer:
+        type: string
+      last_updated:
+        type: string
+      jailed:
+        type: boolean
+      proposer_priority:
+        type: string
+        format: int64
+  heimdallv2.stake.ValidatorSet:
+    type: object
+    properties:
+      validators:
+        type: array
+        items:
+          type: object
+          properties:
+            val_id:
+              type: string
+              format: uint64
+            start_epoch:
+              type: string
+              format: uint64
+            end_epoch:
+              type: string
+              format: uint64
+            nonce:
+              type: string
+              format: uint64
+            voting_power:
+              type: string
+              format: int64
+            pub_key:
+              type: string
+              format: byte
+            signer:
+              type: string
+            last_updated:
+              type: string
+            jailed:
+              type: boolean
+            proposer_priority:
+              type: string
+              format: int64
+      proposer:
+        type: object
+        properties:
+          val_id:
+            type: string
+            format: uint64
+          start_epoch:
+            type: string
+            format: uint64
+          end_epoch:
+            type: string
+            format: uint64
+          nonce:
+            type: string
+            format: uint64
+          voting_power:
+            type: string
+            format: int64
+          pub_key:
+            type: string
+            format: byte
+          signer:
+            type: string
+          last_updated:
+            type: string
+          jailed:
+            type: boolean
+          proposer_priority:
+            type: string
+            format: int64
+      total_voting_power:
+        type: string
+        format: int64
+  heimdallv2.chainmanager.ChainParams:
+    type: object
+    properties:
+      bor_chain_id:
+        type: string
+      heimdall_chain_id:
+        type: string
+      pol_token_address:
+        type: string
+      staking_manager_address:
+        type: string
+      slash_manager_address:
+        type: string
+      root_chain_address:
+        type: string
+      staking_info_address:
+        type: string
+      state_sender_address:
+        type: string
+      state_receiver_address:
+        type: string
+      validator_set_address:
+        type: string
+  heimdallv2.chainmanager.Params:
+    type: object
+    properties:
+      chain_params:
+        type: object
+        properties:
+          bor_chain_id:
+            type: string
+          heimdall_chain_id:
+            type: string
+          pol_token_address:
+            type: string
+          staking_manager_address:
+            type: string
+          slash_manager_address:
+            type: string
+          root_chain_address:
+            type: string
+          staking_info_address:
+            type: string
+          state_sender_address:
+            type: string
+          state_receiver_address:
+            type: string
+          validator_set_address:
+            type: string
+      main_chain_tx_confirmations:
+        type: string
+        format: uint64
+      bor_chain_tx_confirmations:
+        type: string
+        format: uint64
+  heimdallv2.chainmanager.QueryParamsResponse:
+    type: object
+    properties:
+      params:
+        type: object
+        properties:
+          chain_params:
+            type: object
+            properties:
+              bor_chain_id:
+                type: string
+              heimdall_chain_id:
+                type: string
+              pol_token_address:
+                type: string
+              staking_manager_address:
+                type: string
+              slash_manager_address:
+                type: string
+              root_chain_address:
+                type: string
+              staking_info_address:
+                type: string
+              state_sender_address:
+                type: string
+              state_receiver_address:
+                type: string
+              validator_set_address:
+                type: string
+          main_chain_tx_confirmations:
+            type: string
+            format: uint64
+          bor_chain_tx_confirmations:
+            type: string
+            format: uint64
+  heimdallv2.checkpoint.Checkpoint:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uint64
+      proposer:
+        type: string
+      start_block:
+        type: string
+        format: uint64
+      end_block:
+        type: string
+        format: uint64
+      root_hash:
+        type: string
+        format: byte
+      bor_chain_id:
+        type: string
+      timestamp:
+        type: string
+        format: uint64
+  heimdallv2.checkpoint.CheckpointSignature:
+    type: object
+    properties:
+      validator_address:
+        type: string
+        format: byte
+      signature:
+        type: string
+        format: byte
+  heimdallv2.checkpoint.MsgCheckpoint:
+    type: object
+    properties:
+      proposer:
+        type: string
+      start_block:
+        type: string
+        format: uint64
+      end_block:
+        type: string
+        format: uint64
+      root_hash:
+        type: string
+        format: byte
+      account_root_hash:
+        type: string
+        format: byte
+      bor_chain_id:
+        type: string
+  heimdallv2.checkpoint.Params:
+    type: object
+    properties:
+      checkpoint_buffer_time:
+        type: string
+      avg_checkpoint_length:
+        type: string
+        format: uint64
+      max_checkpoint_length:
+        type: string
+        format: uint64
+      child_chain_block_interval:
+        type: string
+        format: uint64
+  heimdallv2.checkpoint.QueryAckCountResponse:
+    type: object
+    properties:
+      ack_count:
+        type: string
+        format: uint64
+  heimdallv2.checkpoint.QueryCheckpointBufferResponse:
+    type: object
+    properties:
+      checkpoint:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          root_hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+  heimdallv2.checkpoint.QueryCheckpointLatestResponse:
+    type: object
+    properties:
+      checkpoint:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          root_hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+  heimdallv2.checkpoint.QueryCheckpointListResponse:
+    type: object
+    properties:
+      checkpoint_list:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uint64
+            proposer:
+              type: string
+            start_block:
+              type: string
+              format: uint64
+            end_block:
+              type: string
+              format: uint64
+            root_hash:
+              type: string
+              format: byte
+            bor_chain_id:
+              type: string
+            timestamp:
+              type: string
+              format: uint64
+      pagination:
+        type: object
+        properties:
+          next_key:
+            type: string
+            format: byte
+            description: |-
+              next_key is the key to be passed to PageRequest.key to
+              query the next page most efficiently. It will be empty if
+              there are no more results.
+          total:
+            type: string
+            format: uint64
+            title: >-
+              total is total number of results available if
+              PageRequest.count_total
+
+              was set, its value is undefined otherwise
+        description: |-
+          PageResponse is to be embedded in gRPC response messages where the
+          corresponding request message has used PageRequest.
+
+           message SomeResponse {
+                   repeated Bar results = 1;
+                   PageResponse page = 2;
+           }
+  heimdallv2.checkpoint.QueryCheckpointOverviewResponse:
+    type: object
+    properties:
+      ack_count:
+        type: string
+        format: uint64
+      last_no_ack_id:
+        type: string
+        format: uint64
+      buffer_checkpoint:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          root_hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+      validator_count:
+        type: string
+        format: uint64
+      validator_set:
+        type: object
+        properties:
+          validators:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          proposer:
+            type: object
+            properties:
+              val_id:
+                type: string
+                format: uint64
+              start_epoch:
+                type: string
+                format: uint64
+              end_epoch:
+                type: string
+                format: uint64
+              nonce:
+                type: string
+                format: uint64
+              voting_power:
+                type: string
+                format: int64
+              pub_key:
+                type: string
+                format: byte
+              signer:
+                type: string
+              last_updated:
+                type: string
+              jailed:
+                type: boolean
+              proposer_priority:
+                type: string
+                format: int64
+          total_voting_power:
+            type: string
+            format: int64
+  heimdallv2.checkpoint.QueryCheckpointResponse:
+    type: object
+    properties:
+      checkpoint:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          root_hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+  heimdallv2.checkpoint.QueryCheckpointSignaturesResponse:
+    type: object
+    properties:
+      signatures:
+        type: array
+        items:
+          type: object
+          properties:
+            validator_address:
+              type: string
+              format: byte
+            signature:
+              type: string
+              format: byte
+    title: |-
+      QueryCheckpointSignaturesResponse is response type for
+      QueryCheckpointSignatures RPC method
+  heimdallv2.checkpoint.QueryLastNoAckResponse:
+    type: object
+    properties:
+      last_no_ack_id:
+        type: string
+        format: uint64
+  heimdallv2.checkpoint.QueryNextCheckpointResponse:
+    type: object
+    properties:
+      checkpoint:
+        type: object
+        properties:
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          root_hash:
+            type: string
+            format: byte
+          account_root_hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+  heimdallv2.checkpoint.QueryParamsResponse:
+    type: object
+    properties:
+      params:
+        type: object
+        properties:
+          checkpoint_buffer_time:
+            type: string
+          avg_checkpoint_length:
+            type: string
+            format: uint64
+          max_checkpoint_length:
+            type: string
+            format: uint64
+          child_chain_block_interval:
+            type: string
+            format: uint64
+  heimdallv2.clerk.EventRecord:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uint64
+      contract:
+        type: string
+      data:
+        type: string
+        format: byte
+      tx_hash:
+        type: string
+      log_index:
+        type: string
+        format: uint64
+      bor_chain_id:
+        type: string
+      record_time:
+        type: string
+        format: date-time
+  heimdallv2.clerk.IsClerkTxOldResponse:
+    type: object
+    properties:
+      is_old:
+        type: boolean
+  heimdallv2.clerk.LatestRecordIdResponse:
+    type: object
+    properties:
+      latest_record_id:
+        type: string
+        format: uint64
+      is_processed_by_heimdall:
+        type: boolean
+  heimdallv2.clerk.RecordCountResponse:
+    type: object
+    properties:
+      count:
+        type: string
+        format: uint64
+  heimdallv2.clerk.RecordListResponse:
+    type: object
+    properties:
+      event_records:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uint64
+            contract:
+              type: string
+            data:
+              type: string
+              format: byte
+            tx_hash:
+              type: string
+            log_index:
+              type: string
+              format: uint64
+            bor_chain_id:
+              type: string
+            record_time:
+              type: string
+              format: date-time
+  heimdallv2.clerk.RecordListWithTimeResponse:
+    type: object
+    properties:
+      event_records:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uint64
+            contract:
+              type: string
+            data:
+              type: string
+              format: byte
+            tx_hash:
+              type: string
+            log_index:
+              type: string
+              format: uint64
+            bor_chain_id:
+              type: string
+            record_time:
+              type: string
+              format: date-time
+  heimdallv2.clerk.RecordResponse:
+    type: object
+    properties:
+      record:
+        type: object
+        properties:
+          id:
+            type: string
+            format: uint64
+          contract:
+            type: string
+          data:
+            type: string
+            format: byte
+          tx_hash:
+            type: string
+          log_index:
+            type: string
+            format: uint64
+          bor_chain_id:
+            type: string
+          record_time:
+            type: string
+            format: date-time
+  heimdallv2.clerk.RecordSequenceResponse:
+    type: object
+    properties:
+      sequence:
+        type: string
+        format: uint64
+  heimdallv2.milestone.Milestone:
+    type: object
+    properties:
+      proposer:
+        type: string
+      start_block:
+        type: string
+        format: uint64
+      end_block:
+        type: string
+        format: uint64
+      hash:
+        type: string
+        format: byte
+      bor_chain_id:
+        type: string
+      milestone_id:
+        type: string
+      timestamp:
+        type: string
+        format: uint64
+      total_difficulty:
+        type: string
+        format: uint64
+  heimdallv2.milestone.Params:
+    type: object
+    properties:
+      max_milestone_proposition_length:
+        type: string
+        format: uint64
+      ff_milestone_threshold:
+        type: string
+        format: uint64
+      ff_milestone_block_interval:
+        type: string
+        format: uint64
+  heimdallv2.milestone.QueryCountResponse:
+    type: object
+    properties:
+      count:
+        type: string
+        format: uint64
+  heimdallv2.milestone.QueryLatestMilestoneResponse:
+    type: object
+    properties:
+      milestone:
+        type: object
+        properties:
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          milestone_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+          total_difficulty:
+            type: string
+            format: uint64
+  heimdallv2.milestone.QueryMilestoneResponse:
+    type: object
+    properties:
+      milestone:
+        type: object
+        properties:
+          proposer:
+            type: string
+          start_block:
+            type: string
+            format: uint64
+          end_block:
+            type: string
+            format: uint64
+          hash:
+            type: string
+            format: byte
+          bor_chain_id:
+            type: string
+          milestone_id:
+            type: string
+          timestamp:
+            type: string
+            format: uint64
+          total_difficulty:
+            type: string
+            format: uint64
+  heimdallv2.milestone.QueryParamsResponse:
+    type: object
+    properties:
+      params:
+        type: object
+        properties:
+          max_milestone_proposition_length:
+            type: string
+            format: uint64
+          ff_milestone_threshold:
+            type: string
+            format: uint64
+          ff_milestone_block_interval:
+            type: string
+            format: uint64
+  heimdallv2.stake.QueryCurrentProposerResponse:
+    type: object
+    properties:
+      validator:
+        type: object
+        properties:
+          val_id:
+            type: string
+            format: uint64
+          start_epoch:
+            type: string
+            format: uint64
+          end_epoch:
+            type: string
+            format: uint64
+          nonce:
+            type: string
+            format: uint64
+          voting_power:
+            type: string
+            format: int64
+          pub_key:
+            type: string
+            format: byte
+          signer:
+            type: string
+          last_updated:
+            type: string
+          jailed:
+            type: boolean
+          proposer_priority:
+            type: string
+            format: int64
+  heimdallv2.stake.QueryCurrentValidatorSetResponse:
+    type: object
+    properties:
+      validator_set:
+        type: object
+        properties:
+          validators:
+            type: array
+            items:
+              type: object
+              properties:
+                val_id:
+                  type: string
+                  format: uint64
+                start_epoch:
+                  type: string
+                  format: uint64
+                end_epoch:
+                  type: string
+                  format: uint64
+                nonce:
+                  type: string
+                  format: uint64
+                voting_power:
+                  type: string
+                  format: int64
+                pub_key:
+                  type: string
+                  format: byte
+                signer:
+                  type: string
+                last_updated:
+                  type: string
+                jailed:
+                  type: boolean
+                proposer_priority:
+                  type: string
+                  format: int64
+          proposer:
+            type: object
+            properties:
+              val_id:
+                type: string
+                format: uint64
+              start_epoch:
+                type: string
+                format: uint64
+              end_epoch:
+                type: string
+                format: uint64
+              nonce:
+                type: string
+                format: uint64
+              voting_power:
+                type: string
+                format: int64
+              pub_key:
+                type: string
+                format: byte
+              signer:
+                type: string
+              last_updated:
+                type: string
+              jailed:
+                type: boolean
+              proposer_priority:
+                type: string
+                format: int64
+          total_voting_power:
+            type: string
+            format: int64
+  heimdallv2.stake.QueryProposersResponse:
+    type: object
+    properties:
+      proposers:
+        type: array
+        items:
+          type: object
+          properties:
+            val_id:
+              type: string
+              format: uint64
+            start_epoch:
+              type: string
+              format: uint64
+            end_epoch:
+              type: string
+              format: uint64
+            nonce:
+              type: string
+              format: uint64
+            voting_power:
+              type: string
+              format: int64
+            pub_key:
+              type: string
+              format: byte
+            signer:
+              type: string
+            last_updated:
+              type: string
+            jailed:
+              type: boolean
+            proposer_priority:
+              type: string
+              format: int64
+  heimdallv2.stake.QuerySignerResponse:
+    type: object
+    properties:
+      validator:
+        type: object
+        properties:
+          val_id:
+            type: string
+            format: uint64
+          start_epoch:
+            type: string
+            format: uint64
+          end_epoch:
+            type: string
+            format: uint64
+          nonce:
+            type: string
+            format: uint64
+          voting_power:
+            type: string
+            format: int64
+          pub_key:
+            type: string
+            format: byte
+          signer:
+            type: string
+          last_updated:
+            type: string
+          jailed:
+            type: boolean
+          proposer_priority:
+            type: string
+            format: int64
+  heimdallv2.stake.QueryStakeIsOldTxResponse:
+    type: object
+    properties:
+      is_old:
+        type: boolean
+  heimdallv2.stake.QueryTotalPowerResponse:
+    type: object
+    properties:
+      total_power:
+        type: string
+        format: int64
+  heimdallv2.stake.QueryValidatorResponse:
+    type: object
+    properties:
+      validator:
+        type: object
+        properties:
+          val_id:
+            type: string
+            format: uint64
+          start_epoch:
+            type: string
+            format: uint64
+          end_epoch:
+            type: string
+            format: uint64
+          nonce:
+            type: string
+            format: uint64
+          voting_power:
+            type: string
+            format: int64
+          pub_key:
+            type: string
+            format: byte
+          signer:
+            type: string
+          last_updated:
+            type: string
+          jailed:
+            type: boolean
+          proposer_priority:
+            type: string
+            format: int64
+  heimdallv2.stake.QueryValidatorStatusResponse:
+    type: object
+    properties:
+      is_old:
+        type: boolean
+  heimdallv2.topup.AccountProof:
+    type: object
+    properties:
+      address:
+        type: string
+      account_proof:
+        type: string
+        format: byte
+      index:
+        type: string
+        format: uint64
+  heimdallv2.topup.QueryAccountProofResponse:
+    type: object
+    properties:
+      proof:
+        type: object
+        properties:
+          address:
+            type: string
+          account_proof:
+            type: string
+            format: byte
+          index:
+            type: string
+            format: uint64
+  heimdallv2.topup.QueryDividendAccountResponse:
+    type: object
+    properties:
+      dividend_account:
+        type: object
+        properties:
+          user:
+            type: string
+          fee_amount:
+            type: string
+        title: DividendAccount contains the burned fees
+  heimdallv2.topup.QueryDividendAccountRootHashResponse:
+    type: object
+    properties:
+      account_root_hash:
+        type: string
+        format: byte
+  heimdallv2.topup.QueryIsTopupTxOldResponse:
+    type: object
+    properties:
+      is_old:
+        type: boolean
+  heimdallv2.topup.QueryTopupSequenceResponse:
+    type: object
+    properties:
+      sequence:
+        type: string
+  heimdallv2.topup.QueryVerifyAccountProofResponse:
+    type: object
+    properties:
+      is_verified:
+        type: boolean
+  heimdallv2.types.DividendAccount:
+    type: object
+    properties:
+      user:
+        type: string
+      fee_amount:
+        type: string
+    title: DividendAccount contains the burned fees

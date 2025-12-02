@@ -10,6 +10,9 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	} else {
 		c.cliConfig = DefaultConfig()
 	}
+	if c.cliConfig.VM == nil {
+		c.cliConfig.VM = &VMConfig{}
+	}
 
 	f := flagset.NewFlagSet("server")
 
@@ -50,6 +53,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Record information useful for VM and contract debugging",
 		Value:   &c.cliConfig.EnablePreimageRecording,
 		Default: c.cliConfig.EnablePreimageRecording,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vm.evm",
+		Usage:   "EVMC loading string for the EVM1 interpreter (e.g. /path/to/libevmone.so[,key=value])",
+		Value:   &c.cliConfig.VM.EVM,
+		Default: c.cliConfig.VM.EVM,
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "datadir.ancient",

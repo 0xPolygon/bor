@@ -1,0 +1,31 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Heimdall v2 - gRPC Gateway docs",
+    "description": "A REST interface for state queries.",
+    "version": "1.0.0"
+  },
+  "apis": [
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/bor/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/chainmanager/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/checkpoint/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/clerk/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/milestone/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/stake/query.swagger.json"
+    },
+    {
+      "url": "./tmp-swagger-gen/heimdallv2/topup/query.swagger.json"
+    }
+  ]
+}
