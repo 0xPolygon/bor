@@ -443,15 +443,15 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 				s.SetCode(addr, sr.GetCode(addr))
 			case SuicidePath:
 				log.Error("ApplyMVWriteSet - SuicidePath", "addr", addr.Hex(), "txIndex", txIndex)
-				if txIndex == 79 {
-					srCodeResult := sr.GetCode(addr)
-					if srCodeResult == nil {
-						log.Error("ApplyMVWriteSet - SuicidePath - Code is nil at tx 79", "addr", addr.Hex())
-					} else {
-						log.Error("ApplyMVWriteSet - SuicidePath - code at tx 79", "addr", addr.Hex(), "code", common.Bytes2Hex(srCodeResult))
-					}
-					continue
-				}
+				// if txIndex == 79 {
+				// 	srCodeResult := sr.GetCode(addr)
+				// 	if srCodeResult == nil {
+				// 		log.Error("ApplyMVWriteSet - SuicidePath - Code is nil at tx 79", "addr", addr.Hex())
+				// 	} else {
+				// 		log.Error("ApplyMVWriteSet - SuicidePath - code at tx 79", "addr", addr.Hex(), "code", common.Bytes2Hex(srCodeResult))
+				// 	}
+				// 	continue
+				// }
 				stateObject := s.getStateObject(addr)
 				if stateObject != nil {
 					s.SelfDestruct(addr)
