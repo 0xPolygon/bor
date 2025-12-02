@@ -357,6 +357,7 @@ func (ch touchChange) copy() journalEntry {
 }
 
 func (ch balanceChange) revert(s *StateDB) {
+	log.Error("RevertWrite - Balance", "account", ch.account.Hex(), "current", s.getStateObject(ch.account).Balance().String())
 	s.getStateObject(ch.account).setBalance(ch.prev)
 	log.Error("RevertWrite - Balance", "account", ch.account.Hex(), "prev", ch.prev.String())
 	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
