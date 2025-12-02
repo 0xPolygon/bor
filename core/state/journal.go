@@ -294,6 +294,7 @@ type (
 
 func (ch createObjectChange) revert(s *StateDB) {
 	delete(s.stateObjects, ch.account)
+	RevertWrite(s, blockstm.NewAddressKey(ch.account))
 }
 
 func (ch createObjectChange) dirtied() *common.Address {
@@ -356,6 +357,7 @@ func (ch touchChange) copy() journalEntry {
 
 func (ch balanceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setBalance(ch.prev)
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
 }
 
 func (ch balanceChange) dirtied() *common.Address {
@@ -371,6 +373,7 @@ func (ch balanceChange) copy() journalEntry {
 
 func (ch nonceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setNonce(ch.prev)
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
 }
 
 func (ch nonceChange) dirtied() *common.Address {
@@ -386,6 +389,7 @@ func (ch nonceChange) copy() journalEntry {
 
 func (ch codeChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setCode(crypto.Keccak256Hash(ch.prevCode), ch.prevCode)
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, CodePath))
 }
 
 func (ch codeChange) dirtied() *common.Address {
@@ -401,6 +405,7 @@ func (ch codeChange) copy() journalEntry {
 
 func (ch storageChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setState(ch.key, ch.prevvalue, ch.origvalue)
+	RevertWrite(s, blockstm.NewStateKey(ch.account, ch.key))
 }
 
 func (ch storageChange) dirtied() *common.Address {
