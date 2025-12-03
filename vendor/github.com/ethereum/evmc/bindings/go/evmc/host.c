@@ -26,6 +26,10 @@ const struct evmc_host_interface evmc_go_host = {
     (evmc_get_tx_context_fn)getTxContext,
     (evmc_get_block_hash_fn)getBlockHash,
     (evmc_emit_log_fn)emitLog,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
 };
 
 

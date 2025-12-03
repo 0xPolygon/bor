@@ -93,7 +93,6 @@ var tomlSettings = toml.Config{
 
 var deprecatedConfigFields = map[string]bool{
 	"ethconfig.Config.EVMInterpreter":          true,
-	"ethconfig.Config.EWASMInterpreter":        true,
 	"ethconfig.Config.TrieCleanCacheJournal":   true,
 	"ethconfig.Config.TrieCleanCacheRejournal": true,
 	"ethconfig.Config.LightServ":               true,

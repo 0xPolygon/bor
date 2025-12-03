@@ -1,25 +1,18 @@
 // EVMC: Ethereum Client-VM Connector API.
-// Copyright 2018-2019 The EVMC Authors.
+// Copyright 2018 The EVMC Authors.
 // Licensed under the Apache License, Version 2.0.
 
 package evmc
 
 /*
-#cgo CFLAGS:  -I${SRCDIR}/.. -I${SRCDIR}/../../../../include -Wall -Wextra -Wno-unused-parameter
+#cgo CFLAGS: -I${SRCDIR}/.. -I${SRCDIR}/../../../../include -Wall -Wextra -Wno-unused-parameter
 
 #include <evmc/evmc.h>
 #include <evmc/helpers.h>
 
-#ifndef EVMC_STORAGE_UNCHANGED
-#define EVMC_STORAGE_UNCHANGED EVMC_STORAGE_ASSIGNED
-#endif
-
-#ifndef EVMC_STORAGE_MODIFIED_AGAIN
-#define EVMC_STORAGE_MODIFIED_AGAIN EVMC_STORAGE_ASSIGNED
-#endif
-
 */
 import "C"
+
 import (
 	"math/big"
 	"unsafe"
@@ -40,15 +33,15 @@ const (
 type StorageStatus int
 
 const (
-	StorageUnchanged     StorageStatus = C.EVMC_STORAGE_UNCHANGED
+	StorageUnchanged     StorageStatus = C.EVMC_STORAGE_ASSIGNED
 	StorageModified      StorageStatus = C.EVMC_STORAGE_MODIFIED
-	StorageModifiedAgain StorageStatus = C.EVMC_STORAGE_MODIFIED_AGAIN
+	StorageModifiedAgain StorageStatus = C.EVMC_STORAGE_MODIFIED_RESTORED
 	StorageAdded         StorageStatus = C.EVMC_STORAGE_ADDED
 	StorageDeleted       StorageStatus = C.EVMC_STORAGE_DELETED
 )
 
 func goAddress(in C.evmc_address) common.Address {
-	out := common.Address{}
+	var out common.Address
 	for i := 0; i < len(out); i++ {
 		out[i] = byte(in.bytes[i])
 	}
@@ -56,7 +49,7 @@ func goAddress(in C.evmc_address) common.Address {
 }
 
 func goHash(in C.evmc_bytes32) common.Hash {
-	out := common.Hash{}
+	var out common.Hash
 	for i := 0; i < len(out); i++ {
 		out[i] = byte(in.bytes[i])
 	}
@@ -65,21 +58,27 @@ func goHash(in C.evmc_bytes32) common.Hash {
 
 func goByteSlice(data *C.uint8_t, size C.size_t) []byte {
 	if size == 0 {
-		return []byte{}
+		return nil
 	}
 	return (*[1 << 30]byte)(unsafe.Pointer(data))[:size:size]
 }
 
+func evmcBytesToBigInt(in C.evmc_bytes32) *big.Int {
+	return new(big.Int).SetBytes(goHash(in).Bytes())
+}
+
 // TxContext contains information about current transaction and block.
 type TxContext struct {
-	GasPrice   common.Hash
-	Origin     common.Address
-	Coinbase   common.Address
-	Number     int64
-	Timestamp  int64
-	GasLimit   int64
-	Difficulty common.Hash
-	ChainID    common.Hash
+	GasPrice    common.Hash
+	Origin      common.Address
+	Coinbase    common.Address
+	Number      int64
+	Timestamp   int64
+	GasLimit    int64
+	PrevRandao  common.Hash
+	ChainID     common.Hash
+	BaseFee     common.Hash
+	BlobBaseFee common.Hash
 }
 
 type HostContext interface {
@@ -136,23 +135,15 @@ func getCodeHash(pCtx unsafe.Pointer, pAddr *C.evmc_address) C.evmc_bytes32 {
 }
 
 //export copyCode
-func copyCode(pCtx unsafe.Pointer, pAddr *C.evmc_address, offset C.size_t, p *C.uint8_t, size C.size_t) C.size_t {
+func copyCode(pCtx unsafe.Pointer, pAddr *C.struct_evmc_address, offset C.size_t, pData *C.uint8_t, dataSize C.size_t) C.size_t {
 	ctx := getHostContext(uintptr(pCtx))
 	code := ctx.GetCode(goAddress(*pAddr))
-	length := C.size_t(len(code))
-
-	if offset >= length {
+	if len(code) == 0 || int(offset) >= len(code) {
 		return 0
 	}
-
-	toCopy := length - offset
-	if toCopy > size {
-		toCopy = size
-	}
-
-	out := goByteSlice(p, size)
-	copy(out, code[offset:])
-	return toCopy
+	code = code[int(offset):]
+	size := copy(goByteSlice(pData, dataSize), code)
+	return C.size_t(size)
 }
 
 //export selfdestruct
@@ -164,63 +155,74 @@ func selfdestruct(pCtx unsafe.Pointer, pAddr *C.evmc_address, pBeneficiary *C.ev
 //export getTxContext
 func getTxContext(pCtx unsafe.Pointer) C.struct_evmc_tx_context {
 	ctx := getHostContext(uintptr(pCtx))
-
-	txContext := ctx.GetTxContext()
-
+	tx := ctx.GetTxContext()
 	return C.struct_evmc_tx_context{
-		evmcBytes32(txContext.GasPrice),
-		evmcAddress(txContext.Origin),
-		evmcAddress(txContext.Coinbase),
-		C.int64_t(txContext.Number),
-		C.int64_t(txContext.Timestamp),
-		C.int64_t(txContext.GasLimit),
-		evmcBytes32(txContext.Difficulty),
-		evmcBytes32(txContext.ChainID),
+		evmcBytes32(tx.GasPrice),
+		evmcAddress(tx.Origin),
+		evmcAddress(tx.Coinbase),
+		C.int64_t(tx.Number),
+		C.int64_t(tx.Timestamp),
+		C.int64_t(tx.GasLimit),
+		evmcBytes32(tx.PrevRandao),
+		evmcBytes32(tx.ChainID),
+		evmcBytes32(tx.BaseFee),
+		evmcBytes32(tx.BlobBaseFee),
+		nil,
+		0,
+		nil,
+		0,
 	}
 }
 
 //export getBlockHash
-func getBlockHash(pCtx unsafe.Pointer, number int64) C.evmc_bytes32 {
+func getBlockHash(pCtx unsafe.Pointer, number C.int64_t) C.evmc_bytes32 {
 	ctx := getHostContext(uintptr(pCtx))
-	return evmcBytes32(ctx.GetBlockHash(number))
+	return evmcBytes32(ctx.GetBlockHash(int64(number)))
 }
 
 //export emitLog
 func emitLog(pCtx unsafe.Pointer, pAddr *C.evmc_address, pData unsafe.Pointer, dataSize C.size_t, pTopics unsafe.Pointer, topicsCount C.size_t) {
 	ctx := getHostContext(uintptr(pCtx))
-
-	// FIXME: Optimize memory copy
-	data := C.GoBytes(pData, C.int(dataSize))
-	tData := C.GoBytes(pTopics, C.int(topicsCount*32))
-
-	nTopics := int(topicsCount)
-	topics := make([]common.Hash, nTopics)
-	for i := 0; i < nTopics; i++ {
-		copy(topics[i][:], tData[i*32:(i+1)*32])
+	topics := (*[1 << 20]C.evmc_bytes32)(pTopics)[:topicsCount:topicsCount]
+	topicsGo := make([]common.Hash, topicsCount)
+	for i := 0; i < len(topicsGo); i++ {
+		topicsGo[i] = goHash(topics[i])
 	}
-
-	ctx.EmitLog(goAddress(*pAddr), topics, data)
+	ctx.EmitLog(goAddress(*pAddr), topicsGo, C.GoBytes(pData, C.int(dataSize)))
 }
 
 //export call
 func call(pCtx unsafe.Pointer, msg *C.struct_evmc_message) C.struct_evmc_result {
 	ctx := getHostContext(uintptr(pCtx))
 
+	var depth int
+	if msg.depth >= 0 {
+		depth = int(msg.depth) + 1
+	}
+
 	kind := CallKind(msg.kind)
-	output, gasLeft, createAddr, err := ctx.Call(kind, goAddress(msg.destination), goAddress(msg.sender), goHash(msg.value).Big(),
-		goByteSlice(msg.input_data, msg.input_size), int64(msg.gas), int(msg.depth), msg.flags != 0, goHash(msg.create2_salt).Big())
+	input := C.GoBytes(unsafe.Pointer(msg.input_data), C.int(msg.input_size))
+	output, gasLeft, createAddr, err := ctx.Call(kind,
+		goAddress(msg.recipient),
+		goAddress(msg.sender),
+		evmcBytesToBigInt(msg.value),
+		input,
+		int64(msg.gas),
+		depth,
+		(msg.flags&C.EVMC_STATIC) != 0,
+		evmcBytesToBigInt(msg.create2_salt))
 
 	statusCode := C.enum_evmc_status_code(0)
 	if err != nil {
 		statusCode = C.enum_evmc_status_code(err.(Error))
 	}
 
-	outputData := (*C.uint8_t)(nil)
+	var outputPtr *C.uint8_t
 	if len(output) > 0 {
-		outputData = (*C.uint8_t)(&output[0])
+		outputPtr = (*C.uint8_t)(&output[0])
 	}
 
-	result := C.evmc_make_result(statusCode, C.int64_t(gasLeft), outputData, C.size_t(len(output)))
+	result := C.evmc_make_result(statusCode, C.int64_t(gasLeft), C.int64_t(0), outputPtr, C.size_t(len(output)))
 	result.create_address = evmcAddress(createAddr)
 	return result
 }

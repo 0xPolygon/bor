@@ -22,12 +22,15 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/evmc/bindings/go/evmc"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 type EVMC struct {
@@ -91,8 +94,22 @@ func NewEVMC(options string, env *EVM) *EVMC {
 
 // Implements evmc.HostContext interface.
 type HostContext struct {
-	env      *EVM
-	contract *Contract
+	env         *EVM
+	contract    *Contract
+	interrupt   *atomic.Bool
+	interrupted atomic.Bool
+}
+
+func (host *HostContext) shouldInterrupt() bool {
+	return host.interrupt != nil && host.interrupt.Load()
+}
+
+func (host *HostContext) markInterrupted() {
+	host.interrupted.Store(true)
+}
+
+func (host *HostContext) wasInterrupted() bool {
+	return host.interrupted.Load()
 }
 
 func (host *HostContext) AccountExists(addr common.Address) bool {
@@ -168,9 +185,11 @@ func (host *HostContext) SetStorage(addr common.Address, key common.Hash, value 
 }
 
 func (host *HostContext) GetBalance(addr common.Address) common.Hash {
-	env := host.env
-	balance := env.StateDB.GetBalance(addr)
-	return common.BigToHash(balance)
+	balance := host.env.StateDB.GetBalance(addr)
+	if balance == nil {
+		return common.Hash{}
+	}
+	return common.BigToHash(balance.ToBig())
 }
 
 func (host *HostContext) GetCodeSize(addr common.Address) int {
@@ -194,34 +213,60 @@ func (host *HostContext) GetCode(addr common.Address) []byte {
 func (host *HostContext) Selfdestruct(addr common.Address, beneficiary common.Address) {
 	env := host.env
 	db := env.StateDB
-	if !db.HasSuicided(addr) {
-		db.AddRefund(params.SuicideRefundGas)
+	if !db.HasSelfDestructed(addr) {
+		db.AddRefund(params.SelfdestructRefundGas)
 	}
 	balance := db.GetBalance(addr)
-	db.AddBalance(beneficiary, balance)
-	db.Suicide(addr)
+	if balance != nil {
+		db.AddBalance(beneficiary, balance, tracing.BalanceIncreaseSelfdestruct)
+	}
+	db.SelfDestruct(addr)
 }
 
-func (host *HostContext) GetTxContext() (gasPrice common.Hash, origin common.Address, coinbase common.Address,
-	number int64, timestamp int64, gasLimit int64, difficulty common.Hash) {
-
+func (host *HostContext) GetTxContext() evmc.TxContext {
 	env := host.env
-	gasPrice = common.BigToHash(env.GasPrice)
-	origin = env.Origin
-	coinbase = env.Coinbase
-	number = env.BlockNumber.Int64()
-	timestamp = env.Time.Int64()
-	gasLimit = int64(env.GasLimit)
-	difficulty = common.BigToHash(env.Difficulty)
 
-	return gasPrice, origin, coinbase, number, timestamp, gasLimit, difficulty
+	var gasPriceHash common.Hash
+	if env.TxContext.GasPrice != nil {
+		gasPriceHash = common.BigToHash(env.TxContext.GasPrice)
+	}
+	var chainIDHash common.Hash
+	if cfg := env.ChainConfig(); cfg != nil && cfg.ChainID != nil {
+		chainIDHash = common.BigToHash(cfg.ChainID)
+	}
+	var prevRandao common.Hash
+	if env.Context.Random != nil {
+		prevRandao = *env.Context.Random
+	} else if env.Context.Difficulty != nil {
+		prevRandao = common.BigToHash(env.Context.Difficulty)
+	}
+	var baseFeeHash common.Hash
+	if env.Context.BaseFee != nil {
+		baseFeeHash = common.BigToHash(env.Context.BaseFee)
+	}
+	var blobBaseFeeHash common.Hash
+	if env.Context.BlobBaseFee != nil {
+		blobBaseFeeHash = common.BigToHash(env.Context.BlobBaseFee)
+	}
+
+	return evmc.TxContext{
+		GasPrice:    gasPriceHash,
+		Origin:      env.TxContext.Origin,
+		Coinbase:    env.Context.Coinbase,
+		Number:      env.Context.BlockNumber.Int64(),
+		Timestamp:   int64(env.Context.Time),
+		GasLimit:    int64(env.Context.GasLimit),
+		PrevRandao:  prevRandao,
+		ChainID:     chainIDHash,
+		BaseFee:     baseFeeHash,
+		BlobBaseFee: blobBaseFeeHash,
+	}
 }
 
 func (host *HostContext) GetBlockHash(number int64) common.Hash {
 	env := host.env
-	b := env.BlockNumber.Int64()
-	if number >= (b-256) && number < b {
-		return env.GetHash(uint64(number))
+	if number >= 0 && env.Context.GetHash != nil {
+		return env.Context.GetHash(uint64(number))
 	}
 	return common.Hash{}
 }
@@ -232,7 +277,7 @@ func (host *HostContext) EmitLog(addr common.Address, topics []common.Hash, data
 		Address:     addr,
 		Topics:      topics,
 		Data:        data,
-		BlockNumber: env.BlockNumber.Uint64(),
+		BlockNumber: env.Context.BlockNumber.Uint64(),
 	})
 }
 
@@ -240,30 +285,43 @@ func (host *HostContext) Call(kind evmc.CallKind,
 	destination common.Address, sender common.Address, value *big.Int, input []byte, gas int64, depth int,
 	static bool, salt *big.Int) (output []byte, gasLeft int64, createAddr common.Address, err error) {
 
+	if host.shouldInterrupt() {
+		host.markInterrupted()
+		return nil, 0, common.Address{}, evmc.Failure
+	}
+
 	env := host.env
 
 	gasU := uint64(gas)
 	var gasLeftU uint64
+	var amount *uint256.Int
+	if value == nil {
+		amount = new(uint256.Int)
+	} else {
+		amount = uint256.MustFromBig(value)
+	}
+	callerAddr := host.contract.Address()
+	originAddr := host.contract.Caller()
 
 	switch kind {
 	case evmc.Call:
 		if static {
-			output, gasLeftU, err = env.StaticCall(host.contract, destination, input, gasU)
+			output, gasLeftU, err = env.StaticCall(callerAddr, destination, input, gasU)
 		} else {
-			output, gasLeftU, err = env.Call(host.contract, destination, input, gasU, value)
+			output, gasLeftU, err = env.Call(callerAddr, destination, input, gasU, amount, host.interrupt)
 		}
 	case evmc.DelegateCall:
-		output, gasLeftU, err = env.DelegateCall(host.contract, destination, input, gasU)
+		output, gasLeftU, err = env.DelegateCall(originAddr, callerAddr, destination, input, gasU, amount)
 	case evmc.CallCode:
-		output, gasLeftU, err = env.CallCode(host.contract, destination, input, gasU, value)
+		output, gasLeftU, err = env.CallCode(callerAddr, destination, input, gasU, amount)
 	case evmc.Create:
 		var createOutput []byte
-		createOutput, createAddr, gasLeftU, err = env.Create(host.contract, input, gasU, value)
-		isHomestead := env.ChainConfig().IsHomestead(env.BlockNumber)
+		createOutput, createAddr, gasLeftU, err = env.Create(callerAddr, input, gasU, amount)
+		isHomestead := env.ChainConfig().IsHomestead(env.Context.BlockNumber)
 		if !isHomestead && err == ErrCodeStoreOutOfGas {
 			err = nil
 		}
-		if err == errExecutionReverted {
+		if err == ErrExecutionReverted {
 			// Assign return buffer from REVERT.
 			// TODO: Bad API design: return data buffer and the code is returned in the same place. In worst case
 			//       the code is returned also when there is not enough funds to deploy the code.
@@ -271,8 +329,14 @@ func (host *HostContext) Call(kind evmc.CallKind,
 		}
 	case evmc.Create2:
 		var createOutput []byte
-		createOutput, createAddr, gasLeftU, err = env.Create2(host.contract, input, gasU, value, salt)
-		if err == errExecutionReverted {
+		var saltInt *uint256.Int
+		if salt != nil {
+			saltInt = uint256.MustFromBig(salt)
+		} else {
+			saltInt = new(uint256.Int)
+		}
+		createOutput, createAddr, gasLeftU, err = env.Create2(callerAddr, input, gasU, amount, saltInt)
+		if err == ErrExecutionReverted {
 			// Assign return buffer from REVERT.
 			// TODO: Bad API design: return data buffer and the code is returned in the same place. In worst case
 			//       the code is returned also when there is not enough funds to deploy the code.
@@ -283,7 +347,7 @@ func (host *HostContext) Call(kind evmc.CallKind,
 	}
 
 	// Map errors.
-	if err == errExecutionReverted {
+	if err == ErrExecutionReverted {
 		err = evmc.Revert
 	} else if err != nil {
 		err = evmc.Failure
@@ -294,7 +358,7 @@ func (host *HostContext) Call(kind evmc.CallKind,
 }
 
 func getRevision(env *EVM) evmc.Revision {
-	n := env.BlockNumber
+	n := env.Context.BlockNumber
 	conf := env.ChainConfig()
 	if conf.IsConstantinople(n) {
 		return evmc.Constantinople
@@ -314,7 +378,14 @@ func getRevision(env *EVM) evmc.Revision {
 	return evmc.Frontier
 }
 
-func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool) (ret []byte, err error) {
+func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt *atomic.Bool) (ret []byte, err error) {
+	if interrupt == nil {
+		interrupt = new(atomic.Bool)
+	}
+	if interrupt.Load() {
+		return nil, ErrInterrupt
+	}
+
 	evm.env.depth++
 	defer func() { evm.env.depth-- }()
 
@@ -336,8 +407,19 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool) (ret []byt
 		defer func() { evm.readOnly = false }()
 	}
 
+	hostCtx := &HostContext{
+		env:       evm.env,
+		contract:  contract,
+		interrupt: interrupt,
+	}
+
+	var valueHash common.Hash
+	if contract.value != nil {
+		valueHash = common.BigToHash(contract.value.ToBig())
+	}
+
 	output, gasLeft, err := evm.instance.Execute(
-		&HostContext{evm.env, contract},
+		hostCtx,
 		getRevision(evm.env),
 		kind,
 		evm.readOnly,
@@ -346,14 +428,18 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool) (ret []byt
 		contract.Address(),
 		contract.Caller(),
 		input,
-		common.BigToHash(contract.value),
+		valueHash,
 		contract.Code,
 		common.Hash{})
 
 	contract.Gas = uint64(gasLeft)
 
+	if interrupt.Load() || hostCtx.wasInterrupted() {
+		return nil, ErrInterrupt
+	}
+
 	if err == evmc.Revert {
-		err = errExecutionReverted
+		err = ErrExecutionReverted
 	} else if evmcError, ok := err.(evmc.Error); ok && evmcError.IsInternalError() {
 		panic(fmt.Sprintf("EVMC VM internal error: %s", evmcError.Error()))
 	}
