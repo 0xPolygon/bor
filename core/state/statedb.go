@@ -226,7 +226,7 @@ func (s *StateDB) GetMVHashmap() *blockstm.MVHashMap {
 	return s.mvHashmap
 }
 
-func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
+func (s *StateDB) MVWriteList(sender *common.Address) []blockstm.WriteDescriptor {
 	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeMap))
 
 	for key, v := range s.revertedKeys {
@@ -234,7 +234,9 @@ func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
 	}
 
 	for _, v := range s.writeMap {
-		if _, ok := s.revertedKeys[v.Path]; !ok {
+		_, shouldSkip := s.revertedKeys[v.Path]
+
+		if !shouldSkip || (sender != nil && v.Path.GetAddress() == *sender) {
 			writes = append(writes, v)
 			log.Error("MVWriteList - write key", "Path", v.Path, "tx", v.V.TxnIndex)
 		} else {
@@ -404,7 +406,7 @@ func (s *StateDB) FlushMVWriteSet() {
 
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
-func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, sender common.Address, txIndex int) {
+func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int) {
 	for i := range writes {
 		path := writes[i].Path
 		sr := writes[i].Val.(*StateDB)
@@ -426,9 +428,6 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, sender comm
 
 			switch path.GetSubpath() {
 			case BalancePath:
-				if addr == sender {
-					continue
-				}
 				log.Error("ApplyMVWriteSet - BalancePath", "addr", addr.Hex(), "newBalance", sr.GetBalance(addr).String(),
 					"txIndex", txIndex)
 				log.Error("ApplyMVWriteSet - BalancePath - before set", "addr", addr.Hex(),
