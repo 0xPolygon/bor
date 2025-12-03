@@ -360,7 +360,7 @@ func (ch balanceChange) revert(s *StateDB) {
 	log.Error("RevertWrite - Balance", "account", ch.account.Hex(), "current", s.getStateObject(ch.account).Balance().String())
 	s.getStateObject(ch.account).setBalance(ch.prev)
 	log.Error("RevertWrite - Balance", "account", ch.account.Hex(), "prev", ch.prev.String())
-	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, BalancePath))
 }
 
 func (ch balanceChange) dirtied() *common.Address {
@@ -377,7 +377,7 @@ func (ch balanceChange) copy() journalEntry {
 func (ch nonceChange) revert(s *StateDB) {
 	s.getStateObject(ch.account).setNonce(ch.prev)
 	log.Error("RevertWrite - Nonce", "account", ch.account.Hex(), "prev", ch.prev)
-	// RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
+	RevertWrite(s, blockstm.NewSubpathKey(ch.account, NoncePath))
 }
 
 func (ch nonceChange) dirtied() *common.Address {

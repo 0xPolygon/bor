@@ -404,7 +404,7 @@ func (s *StateDB) FlushMVWriteSet() {
 
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
-func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int) {
+func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, sender common.Address, txIndex int) {
 	for i := range writes {
 		path := writes[i].Path
 		sr := writes[i].Val.(*StateDB)
@@ -426,6 +426,9 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor, txIndex int
 
 			switch path.GetSubpath() {
 			case BalancePath:
+				if addr == sender {
+					continue
+				}
 				log.Error("ApplyMVWriteSet - BalancePath", "addr", addr.Hex(), "newBalance", sr.GetBalance(addr).String(),
 					"txIndex", txIndex)
 				log.Error("ApplyMVWriteSet - BalancePath - before set", "addr", addr.Hex(),
