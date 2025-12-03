@@ -158,7 +158,7 @@ func (task *ExecutionTask) MVReadList() []blockstm.ReadDescriptor {
 }
 
 func (task *ExecutionTask) MVWriteList() []blockstm.WriteDescriptor {
-	return task.statedb.MVWriteList()
+	return task.statedb.MVWriteList(nil)
 }
 
 func (task *ExecutionTask) MVFullWriteList() []blockstm.WriteDescriptor {
@@ -182,7 +182,7 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList(&task.sender))
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
