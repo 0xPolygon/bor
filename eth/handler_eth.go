@@ -155,9 +155,10 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 	getRandomPeers := func() []string {
 		allPeers := h.peers.getAllPeers()
 		randomPeers := make([]string, 0, len(allPeers))
-		for _, peer := range allPeers {
-			if peer.SupportsWitness() {
-				randomPeers = append(randomPeers, peer.ID())
+		for _, p := range allPeers {
+			// Exclude the reporting peer to avoid double-counting their vote
+			if p.SupportsWitness() && p.ID() != peer {
+				randomPeers = append(randomPeers, p.ID())
 			}
 		}
 		// Shuffle the peers to get random selection
