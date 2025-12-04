@@ -26,9 +26,11 @@ RUN --mount=type=ssh \
 
 # Build evmone shared library to ship with the runtime image.
 WORKDIR /tmp
-RUN git clone --depth 1 --branch ${EVMONE_REF} ${EVMONE_REPO} && \
-    cmake -S evmone -B evmone/build -G Ninja -DEVMONE_BUILD_SHARED=ON && \
-    cmake --build evmone/build --target evmone
+RUN git clone --branch ${EVMONE_REF} ${EVMONE_REPO} && \
+    cd evmone && \
+    git submodule update --init --recursive && \
+    cmake -S . -B build -G Ninja -DEVMONE_BUILD_SHARED=ON && \
+    cmake --build build --target evmone
 
 # ─── RUNTIME STAGE ────────────────────────────────────────────────────────────────
 FROM alpine:latest
