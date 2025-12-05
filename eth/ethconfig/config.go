@@ -272,6 +272,9 @@ type Config struct {
 	EnablePreconfs bool
 	BpRpcEndpoints []string // rpc endpoints of block producers
 
+	// PrivateTxRelay enables relaying transactions privately to specific peers
+	PrivateTxRelay bool
+
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`

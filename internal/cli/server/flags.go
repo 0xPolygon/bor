@@ -907,6 +907,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.P2P.Discovery.DNS,
 		Group:   "P2P",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "no-tx-propagation",
+		Usage:   "Disable transaction broadcast and announcements to all peers",
+		Value:   &c.cliConfig.P2P.NoTxPropagation,
+		Default: c.cliConfig.P2P.NoTxPropagation,
+		Group:   "P2P",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "enable-private-tx-relay",
+		Usage:   "Enable private transaction relay to subset of peers (specified via --bp-p2p-identifiers flag)",
+		Value:   &c.cliConfig.P2P.EnablePrivateTxRelay,
+		Default: c.cliConfig.P2P.EnablePrivateTxRelay,
+		Group:   "P2P",
+	})
+	f.SliceStringFlag(&flagset.SliceStringFlag{
+		Name:    "bp-p2p-identifiers",
+		Usage:   "Comma separated list of p2p identifiers of active block producers",
+		Value:   &c.cliConfig.P2P.BpP2PIdentifiers,
+		Default: c.cliConfig.P2P.BpP2PIdentifiers,
+		Group:   "P2P",
+	})
 
 	// metrics
 	f.BoolFlag(&flagset.BoolFlag{

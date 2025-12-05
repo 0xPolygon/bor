@@ -58,6 +58,9 @@ type EthAPIBackend struct {
 
 	// preconfs service for validating tx inclusion for issuing preconfs
 	preconfService *preconfs.Service
+
+	// privateTxStore to cache transactions which are to be relayed privately
+	privateTxStore *preconfs.PrivateTxStore
 }
 
 // ChainConfig returns the active chain configuration.

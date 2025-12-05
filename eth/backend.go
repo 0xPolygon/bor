@@ -235,7 +235,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		preconfService = preconfs.NewPreconfService(config.BpRpcEndpoints)
 	}
 
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, preconfService}
+	var privateTxStore *preconfs.PrivateTxStore
+	if config.PrivateTxRelay {
+		privateTxStore = preconfs.NewPrivateTxStore()
+	}
+
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, preconfService, privateTxStore}
 	if eth.APIBackend.allowUnprotectedTxs {
 		log.Info("Unprotected transactions allowed")
 		config.TxPool.AllowUnprotectedTxs = true
@@ -318,6 +323,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewParallelBlockChain(chainDb, config.Genesis, eth.engine, options, config.ParallelEVM.SpeculativeProcesses, config.ParallelEVM.Enforce)
 	} else {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
+	}
+
+	// Set the chain head event subscription function for private tx store
+	if privateTxStore != nil {
+		privateTxStore.SetchainEventSubFn(eth.blockchain.SubscribeChainEvent)
 	}
 
 	// Set parallel stateless import toggle on blockchain
@@ -406,10 +416,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
+		noTxPropagation:         eth.p2pServer.NoTxPropagation,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		privatePeerIds:          eth.p2pServer.PrivatePeerIds,
+		privateTxStoreGetter:    privateTxStore,
 	}); err != nil {
 		return nil, err
 	}

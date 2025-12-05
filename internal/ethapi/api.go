@@ -1872,7 +1872,7 @@ func (api *TransactionAPI) sign(addr common.Address, tx *types.Transaction) (*ty
 }
 
 // SubmitTransaction is a helper function that submits tx to txPool and logs a message.
-func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, offerPreconf bool) (common.Hash, error) {
+func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, offerPreconf bool, isPrivate bool) (common.Hash, error) {
 	// If the transaction fee cap is already specified, ensure the
 	// fee of the given transaction is _reasonable_.
 	if err := checkTxFee(tx.GasPrice(), tx.Gas(), b.RPCTxFeeCap()); err != nil {
@@ -1944,7 +1944,7 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 	if err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, signed, false)
+	return SubmitTransaction(ctx, api.b, signed, false, false)
 }
 
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)
@@ -1974,7 +1974,20 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
-	return SubmitTransaction(ctx, api.b, tx, true)
+	return SubmitTransaction(ctx, api.b, tx, true, false)
+}
+
+// SendRawTransactionPrivate will add the signed transaction to the transaction pool privately
+// by avoiding public announcement or broadcast to rest of the peers. Although it will ensure
+// that the transaction is seen by block producers. This endpoint should ideally be used by
+// a trusted relay which is connected with the active block producers.
+// The sender is responsible for signing the transaction and using the correct nonce.
+func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return common.Hash{}, err
+	}
+	return SubmitTransaction(ctx, api.b, tx, true, true)
 }
 
 // SendRawTransactionSync will add the signed transaction to the transaction pool
@@ -1990,7 +2003,7 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	subErrCh := sub.Err()
 	defer sub.Unsubscribe()
 
-	hash, err := SubmitTransaction(ctx, api.b, tx, false)
+	hash, err := SubmitTransaction(ctx, api.b, tx, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2073,7 +2086,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
 	}
-	hash, err := SubmitTransaction(ctx, api.b, tx, false)
+	hash, err := SubmitTransaction(ctx, api.b, tx, false, false)
 	if err != nil {
 		return common.Hash{}, err
 	}

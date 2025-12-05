@@ -276,6 +276,15 @@ type P2PConfig struct {
 
 	// TxAnnouncementOnly is used to only announce transactions to peers
 	TxAnnouncementOnly bool `hcl:"txannouncementonly,optional" toml:"txannouncementonly,optional"`
+
+	// NoTxPropagation disables transaction broadcast and announcement completely to its peers
+	NoTxPropagation bool `hcl:"no-tx-propagation,optional" toml:"no-tx-propagation,optional"`
+
+	// EnablePrivateTxRelay enables relaying transactions privately to specific peers
+	EnablePrivateTxRelay bool `hcl:"private-tx-relay,optional" toml:"private-tx-relay,optional"`
+
+	// BpP2PIdentifiers is list of p2p identifiers (id's) of active block producers
+	BpP2PIdentifiers []string `hcl:"bp-p2p-identifiers,optional" toml:"bp-p2p-identifiers,optional"`
 }
 
 type P2PDiscovery struct {
@@ -767,6 +776,9 @@ func DefaultConfig() *Config {
 				TrustedNodes: []string{},
 				DNS:          []string{},
 			},
+			NoTxPropagation:      false,
+			EnablePrivateTxRelay: false,
+			BpP2PIdentifiers:     []string{},
 		},
 		Heimdall: &HeimdallConfig{
 			URL:         "http://localhost:1317",
@@ -1450,6 +1462,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	// Preconf related configs
 	n.EnablePreconfs = c.Preconf.Enable
 	n.BpRpcEndpoints = c.Preconf.BpRpcEndpoints
+	n.PrivateTxRelay = c.P2P.EnablePrivateTxRelay
 
 	return &n, nil
 }
@@ -1631,6 +1644,8 @@ func (c *Config) buildNode() (*node.Config, error) {
 			DiscoveryV5:        c.P2P.Discovery.DiscoveryV5,
 			TxArrivalWait:      c.P2P.TxArrivalWait,
 			TxAnnouncementOnly: c.P2P.TxAnnouncementOnly,
+			NoTxPropagation:    c.P2P.NoTxPropagation,
+			PrivatePeerIds:     c.P2P.BpP2PIdentifiers,
 		},
 		HTTPModules:         c.JsonRPC.Http.API,
 		HTTPCors:            c.JsonRPC.Http.Cors,
