@@ -553,6 +553,8 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 			return
 		}
 
+		recordFetcherPerItemDownloadDuration(blockWitnessItemDownloadTimer, res.Time, 1)
+
 		// Process successful fetch
 		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 

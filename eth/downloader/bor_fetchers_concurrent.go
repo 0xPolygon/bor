@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // timeoutGracePeriod is the amount of time to allow for a peer to deliver a
@@ -72,6 +73,35 @@ type typedQueue interface {
 	// concurrent fetcher, unpacking the type specific data and delivering
 	// it to the downloader's queue.
 	deliver(peer *peerConnection, packet *eth.Response) (int, error)
+}
+
+var (
+	headerItemDownloadTimer  = metrics.NewRegisteredTimer("sync/headers/item_download_duration", nil)
+	bodyItemDownloadTimer    = metrics.NewRegisteredTimer("sync/bodies/item_download_duration", nil)
+	receiptItemDownloadTimer = metrics.NewRegisteredTimer("sync/receipts/item_download_duration", nil)
+	witnessItemDownloadTimer = metrics.NewRegisteredTimer("sync/stateless/witness_item_download_duration", nil)
+)
+
+// recordPerItemDownloadDuration attributes a batched download duration to single
+// items to make the resulting timer easier to interpret when comparing queues.
+func recordPerItemDownloadDuration(queue typedQueue, duration time.Duration, items int) {
+	if duration <= 0 || items <= 0 {
+		return
+	}
+	perItem := time.Duration(int64(duration) / int64(items))
+	if perItem <= 0 {
+		perItem = time.Nanosecond
+	}
+	switch queue.(type) {
+	case *headerQueue:
+		headerItemDownloadTimer.Update(perItem)
+	case *bodyQueue:
+		bodyItemDownloadTimer.Update(perItem)
+	case *receiptQueue:
+		receiptItemDownloadTimer.Update(perItem)
+	case *witnessQueue:
+		witnessItemDownloadTimer.Update(perItem)
+	}
 }
 
 // concurrentFetch iteratively downloads scheduled block parts, taking available
@@ -413,6 +443,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			if peer := d.peers.Peer(res.Req.Peer); peer != nil {
 				// Deliver the received chunk of data and check chain validity
 				accepted, err := queue.deliver(peer, res)
+				if err == nil && accepted > 0 {
+					recordPerItemDownloadDuration(queue, res.Time, accepted)
+				}
 				if errors.Is(err, errInvalidChain) {
 					return err
 				}

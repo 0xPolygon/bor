@@ -68,6 +68,10 @@ var (
 	bodyFetchMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/bodies", nil)
 	witnessFetchMeter = metrics.NewRegisteredMeter("eth/fetcher/block/witnesses", nil)
 
+	blockHeaderItemDownloadTimer  = metrics.NewRegisteredTimer("eth/fetcher/block/headers/item_download_duration", nil)
+	blockBodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/fetcher/block/bodies/item_download_duration", nil)
+	blockWitnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/fetcher/block/witnesses/item_download_duration", nil)
+
 	headerFilterInMeter  = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/in", nil)
 	headerFilterOutMeter = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/out", nil)
 	bodyFilterInMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/filter/bodies/in", nil)
@@ -75,6 +79,19 @@ var (
 )
 
 var errTerminated = errors.New("terminated")
+
+// recordFetcherPerItemDownloadDuration attributes a batched download duration to
+// individual items so timers remain comparable even if response sizes differ.
+func recordFetcherPerItemDownloadDuration(timer *metrics.Timer, total time.Duration, items int) {
+	if timer == nil || total <= 0 || items <= 0 {
+		return
+	}
+	perItem := time.Duration(int64(total) / int64(items))
+	if perItem <= 0 {
+		perItem = time.Nanosecond
+	}
+	timer.Update(perItem)
+}
 
 // HeaderRetrievalFn is a callback type for retrieving a header from the local chain.
 type HeaderRetrievalFn func(common.Hash) *types.Header
@@ -684,10 +701,12 @@ func (f *BlockFetcher) loop() {
 								} // Channel closed
 								res.Done <- nil
 								headersResponse, ok := res.Res.(*eth.BlockHeadersRequest)
-								if !ok {
+								if !ok || headersResponse == nil {
 									return
 								} // Invalid response type
-								f.FilterHeaders(p, *headersResponse, time.Now(), announcedAt)
+								headers := *headersResponse
+								recordFetcherPerItemDownloadDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
+								f.FilterHeaders(p, headers, time.Now(), announcedAt)
 
 							case <-timeout.C:
 								log.Debug("Header fetch timed out", "peer", p, "hash", h)
@@ -756,11 +775,12 @@ func (f *BlockFetcher) loop() {
 						} // Channel closed
 						res.Done <- nil
 						bodyResponse, ok := res.Res.(*eth.BlockBodiesResponse)
-						if !ok {
+						if !ok || bodyResponse == nil {
 							return
 						} // Invalid response type
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
+						recordFetcherPerItemDownloadDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
 					case <-timeout.C:
