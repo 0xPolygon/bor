@@ -5,7 +5,7 @@ ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR
 
 ARG EVMONE_REPO=https://github.com/ethereum/evmone.git
-ARG EVMONE_REF=master
+ARG EVMONE_REF=v0.18.0
 
 RUN apk add --no-cache build-base git linux-headers cmake ninja
 

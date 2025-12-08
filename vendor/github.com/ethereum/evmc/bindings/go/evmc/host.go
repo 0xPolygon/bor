@@ -5,19 +5,15 @@
 package evmc
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/.. -I${SRCDIR}/../../../../include -Wall -Wextra -Wno-unused-parameter
+#cgo CFLAGS: -I${SRCDIR}/../../../include -Wall -Wextra -Wno-unused-parameter
 
 #include <evmc/evmc.h>
 #include <evmc/helpers.h>
 
 */
 import "C"
-
 import (
-	"math/big"
 	"unsafe"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 type CallKind int
@@ -28,28 +24,40 @@ const (
 	CallCode     CallKind = C.EVMC_CALLCODE
 	Create       CallKind = C.EVMC_CREATE
 	Create2      CallKind = C.EVMC_CREATE2
+	EofCreate    CallKind = C.EVMC_EOFCREATE
+)
+
+type AccessStatus int
+
+const (
+	ColdAccess AccessStatus = C.EVMC_ACCESS_COLD
+	WarmAccess AccessStatus = C.EVMC_ACCESS_WARM
 )
 
 type StorageStatus int
 
 const (
-	StorageUnchanged     StorageStatus = C.EVMC_STORAGE_ASSIGNED
-	StorageModified      StorageStatus = C.EVMC_STORAGE_MODIFIED
-	StorageModifiedAgain StorageStatus = C.EVMC_STORAGE_MODIFIED_RESTORED
-	StorageAdded         StorageStatus = C.EVMC_STORAGE_ADDED
-	StorageDeleted       StorageStatus = C.EVMC_STORAGE_DELETED
+	StorageAssigned         StorageStatus = C.EVMC_STORAGE_ASSIGNED
+	StorageAdded            StorageStatus = C.EVMC_STORAGE_ADDED
+	StorageDeleted          StorageStatus = C.EVMC_STORAGE_DELETED
+	StorageModified         StorageStatus = C.EVMC_STORAGE_MODIFIED
+	StorageDeletedAdded     StorageStatus = C.EVMC_STORAGE_DELETED_ADDED
+	StorageModifiedDeleted  StorageStatus = C.EVMC_STORAGE_MODIFIED_DELETED
+	StorageDeletedRestored  StorageStatus = C.EVMC_STORAGE_DELETED_RESTORED
+	StorageAddedDeleted     StorageStatus = C.EVMC_STORAGE_ADDED_DELETED
+	StorageModifiedRestored StorageStatus = C.EVMC_STORAGE_MODIFIED_RESTORED
 )
 
-func goAddress(in C.evmc_address) common.Address {
-	var out common.Address
+func goAddress(in C.evmc_address) Address {
+	out := Address{}
 	for i := 0; i < len(out); i++ {
 		out[i] = byte(in.bytes[i])
 	}
 	return out
 }
 
-func goHash(in C.evmc_bytes32) common.Hash {
-	var out common.Hash
+func goHash(in C.evmc_bytes32) Hash {
+	out := Hash{}
 	for i := 0; i < len(out); i++ {
 		out[i] = byte(in.bytes[i])
 	}
@@ -58,44 +66,45 @@ func goHash(in C.evmc_bytes32) common.Hash {
 
 func goByteSlice(data *C.uint8_t, size C.size_t) []byte {
 	if size == 0 {
-		return nil
+		return []byte{}
 	}
 	return (*[1 << 30]byte)(unsafe.Pointer(data))[:size:size]
 }
 
-func evmcBytesToBigInt(in C.evmc_bytes32) *big.Int {
-	return new(big.Int).SetBytes(goHash(in).Bytes())
-}
-
 // TxContext contains information about current transaction and block.
 type TxContext struct {
-	GasPrice    common.Hash
-	Origin      common.Address
-	Coinbase    common.Address
+	GasPrice    Hash
+	Origin      Address
+	Coinbase    Address
 	Number      int64
 	Timestamp   int64
 	GasLimit    int64
-	PrevRandao  common.Hash
-	ChainID     common.Hash
-	BaseFee     common.Hash
-	BlobBaseFee common.Hash
+	PrevRandao  Hash
+	ChainID     Hash
+	BaseFee     Hash
+	BlobBaseFee Hash
 }
 
 type HostContext interface {
-	AccountExists(addr common.Address) bool
-	GetStorage(addr common.Address, key common.Hash) common.Hash
-	SetStorage(addr common.Address, key common.Hash, value common.Hash) StorageStatus
-	GetBalance(addr common.Address) common.Hash
-	GetCodeSize(addr common.Address) int
-	GetCodeHash(addr common.Address) common.Hash
-	GetCode(addr common.Address) []byte
-	Selfdestruct(addr common.Address, beneficiary common.Address)
+	AccountExists(addr Address) bool
+	GetStorage(addr Address, key Hash) Hash
+	SetStorage(addr Address, key Hash, value Hash) StorageStatus
+	GetBalance(addr Address) Hash
+	GetCodeSize(addr Address) int
+	GetCodeHash(addr Address) Hash
+	GetCode(addr Address) []byte
+	Selfdestruct(addr Address, beneficiary Address) bool
 	GetTxContext() TxContext
-	GetBlockHash(number int64) common.Hash
-	EmitLog(addr common.Address, topics []common.Hash, data []byte)
+	GetBlockHash(number int64) Hash
+	EmitLog(addr Address, topics []Hash, data []byte)
 	Call(kind CallKind,
-		destination common.Address, sender common.Address, value *big.Int, input []byte, gas int64, depth int,
-		static bool, salt *big.Int) (output []byte, gasLeft int64, createAddr common.Address, err error)
+		recipient Address, sender Address, value Hash, input []byte, gas int64, depth int,
+		static bool, salt Hash, codeAddress Address) (output []byte, gasLeft int64, gasRefund int64,
+		createAddr Address, err error)
+	AccessAccount(addr Address) AccessStatus
+	AccessStorage(addr Address, key Hash) AccessStatus
+	GetTransientStorage(addr Address, key Hash) Hash
+	SetTransientStorage(addr Address, key Hash, value Hash)
 }
 
 //export accountExists
@@ -135,94 +144,122 @@ func getCodeHash(pCtx unsafe.Pointer, pAddr *C.evmc_address) C.evmc_bytes32 {
 }
 
 //export copyCode
-func copyCode(pCtx unsafe.Pointer, pAddr *C.struct_evmc_address, offset C.size_t, pData *C.uint8_t, dataSize C.size_t) C.size_t {
+func copyCode(pCtx unsafe.Pointer, pAddr *C.evmc_address, offset C.size_t, p *C.uint8_t, size C.size_t) C.size_t {
 	ctx := getHostContext(uintptr(pCtx))
 	code := ctx.GetCode(goAddress(*pAddr))
-	if len(code) == 0 || int(offset) >= len(code) {
+	length := C.size_t(len(code))
+
+	if offset >= length {
 		return 0
 	}
-	code = code[int(offset):]
-	size := copy(goByteSlice(pData, dataSize), code)
-	return C.size_t(size)
+
+	toCopy := length - offset
+	if toCopy > size {
+		toCopy = size
+	}
+
+	out := goByteSlice(p, size)
+	copy(out, code[offset:])
+	return toCopy
 }
 
 //export selfdestruct
-func selfdestruct(pCtx unsafe.Pointer, pAddr *C.evmc_address, pBeneficiary *C.evmc_address) {
+func selfdestruct(pCtx unsafe.Pointer, pAddr *C.evmc_address, pBeneficiary *C.evmc_address) C.bool {
 	ctx := getHostContext(uintptr(pCtx))
-	ctx.Selfdestruct(goAddress(*pAddr), goAddress(*pBeneficiary))
+	return C.bool(ctx.Selfdestruct(goAddress(*pAddr), goAddress(*pBeneficiary)))
 }
 
 //export getTxContext
 func getTxContext(pCtx unsafe.Pointer) C.struct_evmc_tx_context {
 	ctx := getHostContext(uintptr(pCtx))
-	tx := ctx.GetTxContext()
+
+	txContext := ctx.GetTxContext()
+
 	return C.struct_evmc_tx_context{
-		evmcBytes32(tx.GasPrice),
-		evmcAddress(tx.Origin),
-		evmcAddress(tx.Coinbase),
-		C.int64_t(tx.Number),
-		C.int64_t(tx.Timestamp),
-		C.int64_t(tx.GasLimit),
-		evmcBytes32(tx.PrevRandao),
-		evmcBytes32(tx.ChainID),
-		evmcBytes32(tx.BaseFee),
-		evmcBytes32(tx.BlobBaseFee),
-		nil,
+		evmcBytes32(txContext.GasPrice),
+		evmcAddress(txContext.Origin),
+		evmcAddress(txContext.Coinbase),
+		C.int64_t(txContext.Number),
+		C.int64_t(txContext.Timestamp),
+		C.int64_t(txContext.GasLimit),
+		evmcBytes32(txContext.PrevRandao),
+		evmcBytes32(txContext.ChainID),
+		evmcBytes32(txContext.BaseFee),
+		evmcBytes32(txContext.BlobBaseFee),
+		nil, // TODO: Add support for blob hashes.
 		0,
-		nil,
+		nil, // TODO: Add support for transaction initcodes.
 		0,
 	}
 }
 
 //export getBlockHash
-func getBlockHash(pCtx unsafe.Pointer, number C.int64_t) C.evmc_bytes32 {
+func getBlockHash(pCtx unsafe.Pointer, number int64) C.evmc_bytes32 {
 	ctx := getHostContext(uintptr(pCtx))
-	return evmcBytes32(ctx.GetBlockHash(int64(number)))
+	return evmcBytes32(ctx.GetBlockHash(number))
 }
 
 //export emitLog
 func emitLog(pCtx unsafe.Pointer, pAddr *C.evmc_address, pData unsafe.Pointer, dataSize C.size_t, pTopics unsafe.Pointer, topicsCount C.size_t) {
 	ctx := getHostContext(uintptr(pCtx))
-	topics := (*[1 << 20]C.evmc_bytes32)(pTopics)[:topicsCount:topicsCount]
-	topicsGo := make([]common.Hash, topicsCount)
-	for i := 0; i < len(topicsGo); i++ {
-		topicsGo[i] = goHash(topics[i])
+
+	// FIXME: Optimize memory copy
+	data := C.GoBytes(pData, C.int(dataSize))
+	tData := C.GoBytes(pTopics, C.int(topicsCount*32))
+
+	nTopics := int(topicsCount)
+	topics := make([]Hash, nTopics)
+	for i := 0; i < nTopics; i++ {
+		copy(topics[i][:], tData[i*32:(i+1)*32])
 	}
-	ctx.EmitLog(goAddress(*pAddr), topicsGo, C.GoBytes(pData, C.int(dataSize)))
+
+	ctx.EmitLog(goAddress(*pAddr), topics, data)
 }
 
 //export call
 func call(pCtx unsafe.Pointer, msg *C.struct_evmc_message) C.struct_evmc_result {
 	ctx := getHostContext(uintptr(pCtx))
 
-	var depth int
-	if msg.depth >= 0 {
-		depth = int(msg.depth) + 1
-	}
-
 	kind := CallKind(msg.kind)
-	input := C.GoBytes(unsafe.Pointer(msg.input_data), C.int(msg.input_size))
-	output, gasLeft, createAddr, err := ctx.Call(kind,
-		goAddress(msg.recipient),
-		goAddress(msg.sender),
-		evmcBytesToBigInt(msg.value),
-		input,
-		int64(msg.gas),
-		depth,
-		(msg.flags&C.EVMC_STATIC) != 0,
-		evmcBytesToBigInt(msg.create2_salt))
+	output, gasLeft, gasRefund, createAddr, err := ctx.Call(kind, goAddress(msg.recipient), goAddress(msg.sender), goHash(msg.value),
+		goByteSlice(msg.input_data, msg.input_size), int64(msg.gas), int(msg.depth), msg.flags != 0, goHash(msg.create2_salt),
+		goAddress(msg.code_address))
 
 	statusCode := C.enum_evmc_status_code(0)
 	if err != nil {
 		statusCode = C.enum_evmc_status_code(err.(Error))
 	}
 
-	var outputPtr *C.uint8_t
+	outputData := (*C.uint8_t)(nil)
 	if len(output) > 0 {
-		outputPtr = (*C.uint8_t)(&output[0])
+		outputData = (*C.uint8_t)(&output[0])
 	}
 
-	result := C.evmc_make_result(statusCode, C.int64_t(gasLeft), C.int64_t(0), outputPtr, C.size_t(len(output)))
+	result := C.evmc_make_result(statusCode, C.int64_t(gasLeft), C.int64_t(gasRefund), outputData, C.size_t(len(output)))
 	result.create_address = evmcAddress(createAddr)
 	return result
+}
+
+//export accessAccount
+func accessAccount(pCtx unsafe.Pointer, pAddr *C.evmc_address) C.enum_evmc_access_status {
+	ctx := getHostContext(uintptr(pCtx))
+	return C.enum_evmc_access_status(ctx.AccessAccount(goAddress(*pAddr)))
+}
+
+//export accessStorage
+func accessStorage(pCtx unsafe.Pointer, pAddr *C.evmc_address, pKey *C.evmc_bytes32) C.enum_evmc_access_status {
+	ctx := getHostContext(uintptr(pCtx))
+	return C.enum_evmc_access_status(ctx.AccessStorage(goAddress(*pAddr), goHash(*pKey)))
+}
+
+//export getTransientStorage
+func getTransientStorage(pCtx unsafe.Pointer, pAddr *C.struct_evmc_address, pKey *C.evmc_bytes32) C.evmc_bytes32 {
+	ctx := getHostContext(uintptr(pCtx))
+	return evmcBytes32(ctx.GetTransientStorage(goAddress(*pAddr), goHash(*pKey)))
+}
+
+//export setTransientStorage
+func setTransientStorage(pCtx unsafe.Pointer, pAddr *C.evmc_address, pKey *C.evmc_bytes32, pVal *C.evmc_bytes32) {
+	ctx := getHostContext(uintptr(pCtx))
+	ctx.SetTransientStorage(goAddress(*pAddr), goHash(*pKey), goHash(*pVal))
 }

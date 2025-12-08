@@ -1,7 +1,6 @@
-/* EVMC: Ethereum Client-VM Connector API.
- * Copyright 2018-2019 The EVMC Authors.
- * Licensed under the Apache License, Version 2.0.
- */
+// EVMC: Ethereum Client-VM Connector API.
+// Copyright 2018 The EVMC Authors.
+// Licensed under the Apache License, Version 2.0.
 
 #include "_cgo_export.h"
 
@@ -26,10 +25,10 @@ const struct evmc_host_interface evmc_go_host = {
     (evmc_get_tx_context_fn)getTxContext,
     (evmc_get_block_hash_fn)getBlockHash,
     (evmc_emit_log_fn)emitLog,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
+    (evmc_access_account_fn)accessAccount,
+    (evmc_access_storage_fn)accessStorage,
+    (evmc_get_transient_storage_fn)getTransientStorage,
+    (evmc_set_transient_storage_fn)setTransientStorage,
 };
 
 
@@ -50,6 +49,8 @@ static inline void go_exported_functions_type_checks()
     (void)tx_context;
     struct evmc_result result;
     (void)result;
+    enum evmc_access_status access_status;
+    (void)access_status;
     enum evmc_storage_status storage_status;
     (void)storage_status;
     bool bool_flag;
@@ -84,8 +85,8 @@ static inline void go_exported_functions_type_checks()
     size = copyCode(context, address, size, data, size);
 
     evmc_selfdestruct_fn selfdestruct_fn = NULL;
-    selfdestruct_fn(context, address, address);
-    selfdestruct(context, address, address);
+    bool_flag = selfdestruct_fn(context, address, address);
+    bool_flag = selfdestruct(context, address, address);
 
     evmc_call_fn call_fn = NULL;
     result = call_fn(context, message);
@@ -102,4 +103,12 @@ static inline void go_exported_functions_type_checks()
     evmc_emit_log_fn emit_log_fn = NULL;
     emit_log_fn(context, address, data, size, &bytes32, size);
     emitLog(context, address, data, size, &bytes32, size);
+
+    evmc_access_account_fn access_account_fn = NULL;
+    access_status = access_account_fn(context, address);
+    access_status = accessAccount(context, address);
+
+    evmc_access_storage_fn access_storage_fn = NULL;
+    access_status = access_storage_fn(context, address, &bytes32);
+    access_status = accessStorage(context, address, &bytes32);
 }

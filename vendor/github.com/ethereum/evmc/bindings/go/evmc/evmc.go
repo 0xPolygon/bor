@@ -12,6 +12,7 @@ package evmc
 #include <evmc/helpers.h>
 #include <evmc/loader.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,28 +29,40 @@ extern const struct evmc_host_interface evmc_go_host;
 static struct evmc_result execute_wrapper(struct evmc_vm* vm,
 	uintptr_t context_index, enum evmc_revision rev,
 	enum evmc_call_kind kind, uint32_t flags, int32_t depth, int64_t gas,
-	const evmc_address* destination, const evmc_address* sender,
+	const evmc_address* recipient, const evmc_address* sender,
 	const uint8_t* input_data, size_t input_size, const evmc_uint256be* value,
-	const uint8_t* code, size_t code_size, const evmc_bytes32* create2_salt)
+	const uint8_t* code, size_t code_size)
 {
+	fprintf(stderr,
+		"[evmc][execute_wrapper] ctx=%p rev=%d kind=%d depth=%d gas=%lld input=%p input_size=%zu code=%p code_size=%zu\n",
+		(void*)context_index, (int)rev, (int)kind, depth, (long long)gas,
+		input_data, input_size, code, code_size);
+
 	struct evmc_message msg = {
 		kind,
 		flags,
 		depth,
 		gas,
-		*destination,
+		*recipient,
 		*sender,
 		input_data,
 		input_size,
 		*value,
-		*create2_salt,
+		{{0}}, // create2_salt: not required for execution
 		{{0}}, // code_address: not required for execution
 		0,     // code
 		0,     // code_size
 	};
 
 	struct evmc_host_context* context = (struct evmc_host_context*)context_index;
-	return evmc_execute(vm, &evmc_go_host, context, rev, &msg, code, code_size);
+	struct evmc_result result = evmc_execute(vm, &evmc_go_host, context, rev, &msg, code, code_size);
+
+	fprintf(stderr,
+		"[evmc][execute_wrapper] result ctx=%p status=%d gas_left=%lld gas_refund=%lld output_size=%zu release=%p\n",
+		(void*)context_index, (int)result.status_code, (long long)result.gas_left,
+		(long long)result.gas_refund, (size_t)result.output_size, result.release);
+
+	return result;
 }
 */
 import "C"
@@ -58,19 +71,25 @@ import (
 	"fmt"
 	"sync"
 	"unsafe"
-
-	"github.com/ethereum/go-ethereum/common"
 )
+
+// Hash represents the 32 bytes of arbitrary data (e.g. the result of Keccak256
+// hash). It occasionally is used to represent 256-bit unsigned integer values
+// stored in big-endian byte order.
+type Hash [32]byte
+
+// Address represents the 160-bit (20 bytes) address of an Ethereum account.
+type Address [20]byte
 
 // Static asserts.
 const (
 	// The size of evmc_bytes32 equals the size of Hash.
-	_ = uint(common.HashLength - C.sizeof_evmc_bytes32)
-	_ = uint(C.sizeof_evmc_bytes32 - common.HashLength)
+	_ = uint(len(Hash{}) - C.sizeof_evmc_bytes32)
+	_ = uint(C.sizeof_evmc_bytes32 - len(Hash{}))
 
 	// The size of evmc_address equals the size of Address.
-	_ = uint(common.AddressLength - C.sizeof_evmc_address)
-	_ = uint(C.sizeof_evmc_address - common.AddressLength)
+	_ = uint(len(Address{}) - C.sizeof_evmc_address)
+	_ = uint(C.sizeof_evmc_address - len(Address{}))
 )
 
 type Error int32
@@ -113,9 +132,6 @@ const (
 type VM struct {
 	handle *C.struct_evmc_vm
 }
-
-// Instance aliases VM to keep go-ethereum code working.
-type Instance = VM
 
 func Load(filename string) (vm *VM, err error) {
 	cfilename := C.CString(filename)
@@ -195,10 +211,16 @@ func (vm *VM) SetOption(name string, value string) (err error) {
 	return err
 }
 
+type Result struct {
+	Output    []byte
+	GasLeft   int64
+	GasRefund int64
+}
+
 func (vm *VM) Execute(ctx HostContext, rev Revision,
 	kind CallKind, static bool, depth int, gas int64,
-	destination common.Address, sender common.Address, input []byte, value common.Hash,
-	code []byte, create2Salt common.Hash) (output []byte, gasLeft int64, err error) {
+	recipient Address, sender Address, input []byte, value Hash,
+	code []byte) (res Result, err error) {
 
 	flags := C.uint32_t(0)
 	if static {
@@ -207,18 +229,18 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 
 	ctxId := addHostContext(ctx)
 	// FIXME: Clarify passing by pointer vs passing by value.
-	evmcDestination := evmcAddress(destination)
+	evmcRecipient := evmcAddress(recipient)
 	evmcSender := evmcAddress(sender)
 	evmcValue := evmcBytes32(value)
-	evmcCreate2Salt := evmcBytes32(create2Salt)
 	result := C.execute_wrapper(vm.handle, C.uintptr_t(ctxId), uint32(rev),
 		C.enum_evmc_call_kind(kind), flags, C.int32_t(depth), C.int64_t(gas),
-		&evmcDestination, &evmcSender, bytesPtr(input), C.size_t(len(input)), &evmcValue,
-		bytesPtr(code), C.size_t(len(code)), &evmcCreate2Salt)
+		&evmcRecipient, &evmcSender, bytesPtr(input), C.size_t(len(input)), &evmcValue,
+		bytesPtr(code), C.size_t(len(code)))
 	removeHostContext(ctxId)
 
-	output = C.GoBytes(unsafe.Pointer(result.output_data), C.int(result.output_size))
-	gasLeft = int64(result.gas_left)
+	res.Output = C.GoBytes(unsafe.Pointer(result.output_data), C.int(result.output_size))
+	res.GasLeft = int64(result.gas_left)
+	res.GasRefund = int64(result.gas_refund)
 	if result.status_code != C.EVMC_SUCCESS {
 		err = Error(result.status_code)
 	}
@@ -227,7 +249,7 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 		C.evmc_release_result(&result)
 	}
 
-	return output, gasLeft, err
+	return res, err
 }
 
 var (
@@ -258,7 +280,7 @@ func getHostContext(idx uintptr) HostContext {
 	return ctx
 }
 
-func evmcBytes32(in common.Hash) C.evmc_bytes32 {
+func evmcBytes32(in Hash) C.evmc_bytes32 {
 	out := C.evmc_bytes32{}
 	for i := 0; i < len(in); i++ {
 		out.bytes[i] = C.uint8_t(in[i])
@@ -266,7 +288,7 @@ func evmcBytes32(in common.Hash) C.evmc_bytes32 {
 	return out
 }
 
-func evmcAddress(address common.Address) C.evmc_address {
+func evmcAddress(address Address) C.evmc_address {
 	r := C.evmc_address{}
 	for i := 0; i < len(address); i++ {
 		r.bytes[i] = C.uint8_t(address[i])
