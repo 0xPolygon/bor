@@ -40,6 +40,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
 
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
       - name: Checkout bor
         uses: actions/checkout@v5
         with:
