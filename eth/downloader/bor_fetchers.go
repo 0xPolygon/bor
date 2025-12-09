@@ -24,6 +24,19 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
+// recordHeaderFetchPerItemDuration attributes an aggregated download duration to
+// individual headers so downstream dashboards can compare per-item latencies.
+func recordHeaderFetchPerItemDuration(duration time.Duration, items int) {
+	if duration <= 0 || items <= 0 {
+		return
+	}
+	perItem := time.Duration(int64(duration) / int64(items))
+	if perItem <= 0 {
+		perItem = time.Nanosecond
+	}
+	headerItemDownloadTimer.Update(perItem)
+}
+
 // fetchHeadersByHash is a blocking version of Peer.RequestHeadersByHash which
 // handles all the cancellation, interruption and timeout mechanisms of a data
 // retrieval to allow blocking API calls.
@@ -57,15 +70,17 @@ func (d *Downloader) fetchHeadersByHash(p *peerConnection, hash common.Hash, amo
 
 	case res := <-resCh:
 		// Headers successfully retrieved, update the metrics
+		headers := *res.Res.(*eth.BlockHeadersRequest)
 		headerReqTimer.Update(time.Since(start))
-		headerInMeter.Mark(int64(len(*res.Res.(*eth.BlockHeadersRequest))))
+		headerInMeter.Mark(int64(len(headers)))
+		recordHeaderFetchPerItemDuration(res.Time, len(headers))
 
 		// Don't reject the packet even if it turns out to be bad, downloader will
 		// disconnect the peer on its own terms. Simply delivery the headers to
 		// be processed by the caller
 		res.Done <- nil
 
-		return *res.Res.(*eth.BlockHeadersRequest), res.Meta.([]common.Hash), nil
+		return headers, res.Meta.([]common.Hash), nil
 	}
 }
 
@@ -102,14 +117,16 @@ func (d *Downloader) fetchHeadersByNumber(p *peerConnection, number uint64, amou
 
 	case res := <-resCh:
 		// Headers successfully retrieved, update the metrics
+		headers := *res.Res.(*eth.BlockHeadersRequest)
 		headerReqTimer.Update(time.Since(start))
-		headerInMeter.Mark(int64(len(*res.Res.(*eth.BlockHeadersRequest))))
+		headerInMeter.Mark(int64(len(headers)))
+		recordHeaderFetchPerItemDuration(res.Time, len(headers))
 
 		// Don't reject the packet even if it turns out to be bad, downloader will
 		// disconnect the peer on its own terms. Simply delivery the headers to
 		// be processed by the caller
 		res.Done <- nil
 
-		return *res.Res.(*eth.BlockHeadersRequest), res.Meta.([]common.Hash), nil
+		return headers, res.Meta.([]common.Hash), nil
 	}
 }
