@@ -419,6 +419,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		p2pServer:               eth.p2pServer,
 	}); err != nil {
 		return nil, err
 	}

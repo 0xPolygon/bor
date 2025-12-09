@@ -62,6 +62,7 @@ type witnessManager struct {
 	// Parent fetcher fields/methods required
 	parentQuit        <-chan struct{}        // Parent fetcher's quit channel
 	parentDropPeer    peerDropFn             // Function to drop a misbehaving peer
+	parentJailPeer    peerJailFn             // Function to jail a peer to prevent reconnection (optional)
 	parentEnqueueCh   chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
 	parentGetBlock    blockRetrievalFn       // Function to check if block is known locally
 	parentGetHeader   HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
@@ -99,6 +100,7 @@ type witnessManager struct {
 func newWitnessManager(
 	parentQuit <-chan struct{},
 	parentDropPeer peerDropFn,
+	parentJailPeer peerJailFn,
 	parentEnqueueCh chan<- *enqueueRequest,
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
@@ -114,6 +116,7 @@ func newWitnessManager(
 	m := &witnessManager{
 		parentQuit:          parentQuit,
 		parentDropPeer:      parentDropPeer,
+		parentJailPeer:      parentJailPeer,
 		parentEnqueueCh:     parentEnqueueCh,
 		parentGetBlock:      parentGetBlock,
 		parentGetHeader:     parentGetHeader,
@@ -998,13 +1001,18 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 
 	// Determine if original peer is honest based on majority consensus
 	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
-		// Peer is dishonest - drop immediately
+		// Peer is dishonest - drop and jail immediately
 		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
 		m.parentDropPeer(reportingPeer)
+		// Also jail the peer to prevent reconnection
+		if m.parentJailPeer != nil {
+			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
+			m.parentJailPeer(reportingPeer)
+		}
 		return false
 	}
 
-	// Peer is honest
-	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount)
+	// Peer is honest or no consensus (assume honest to avoid false positives)
+	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
 	return true
 }

@@ -71,7 +71,7 @@ func newTestWitnessManager() *testWitnessManager {
 	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
 	chainHeight := chainHeightFn(func() uint64 { return 100 })
 
-	tw.manager = newWitnessManager(quit, dropPeer, enqueueCh, getBlock, getHeader, chainHeight, 0)
+	tw.manager = newWitnessManager(quit, dropPeer, nil, enqueueCh, getBlock, getHeader, chainHeight, 0)
 	return tw
 }
 
@@ -183,6 +183,7 @@ func TestHandleNeedDuplicates(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -238,6 +239,7 @@ func TestHandleNeedKnownBlock(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -285,6 +287,7 @@ func TestHandleBroadcast(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -356,6 +359,7 @@ func TestWitnessUnavailable(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -416,6 +420,7 @@ func TestForget(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -465,6 +470,7 @@ func TestHandleFilterResult(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -502,6 +508,7 @@ func TestCheckCompleting(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -543,6 +550,7 @@ func TestWitnessFetchFailure(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -654,6 +662,7 @@ func TestCleanupUnavailableCache(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -708,6 +717,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -819,6 +829,7 @@ func TestTick(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -903,6 +914,7 @@ func TestTickMaxRetries(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -960,6 +972,7 @@ func TestTickWithWitnessAlreadyPresent(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1041,6 +1054,7 @@ func TestHandleWitnessFetchSuccess(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1107,6 +1121,7 @@ func TestHandleWitnessFetchSuccessNoPending(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1138,6 +1153,7 @@ func TestHandleWitnessFetchSuccessWitnessAlreadyPresent(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1186,6 +1202,7 @@ func TestRescheduleWitness(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1240,6 +1257,7 @@ func TestSafeEnqueueWithNilWitness(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1282,6 +1300,7 @@ func TestSafeEnqueueChannelClosed(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1317,6 +1336,7 @@ func TestHandleNeedDistanceCheck(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1359,6 +1379,7 @@ func TestHandleNeedMissingFetchWitness(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1397,6 +1418,7 @@ func TestLoop(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1469,6 +1491,7 @@ func TestHandleFilterResultWithoutWitness(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1508,6 +1531,7 @@ func TestCheckCompletingWithoutWitness(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1547,6 +1571,7 @@ func TestFetchWitnessError(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1588,6 +1613,7 @@ func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1629,6 +1655,7 @@ func TestHandleFilterResultDuplicate(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1673,6 +1700,7 @@ func TestCheckCompletingWitnessUnavailable(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1714,6 +1742,7 @@ func TestCheckCompletingDuplicate(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1765,6 +1794,7 @@ func TestCheckCompletingKnownBlock(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1801,6 +1831,7 @@ func TestTickInvalidPendingState(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1842,6 +1873,7 @@ func TestTickNotReadyYet(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1903,6 +1935,7 @@ func TestSafeEnqueueSuccess(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,
@@ -1964,6 +1997,7 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 	manager := newWitnessManager(
 		quit,
 		dropPeer,
+		nil,
 		enqueueCh,
 		getBlock,
 		getHeader,

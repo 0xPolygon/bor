@@ -166,6 +166,7 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 			j := rand.Intn(i + 1)
 			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
 		}
+		log.Info("[wm] Random peers (excluding original)", "randomPeers", randomPeers, "excluded", peer)
 		return randomPeers
 	}
 
@@ -174,10 +175,12 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
 		peer := h.peers.peer(peerID)
 		if peer == nil || !peer.SupportsWitness() {
+			log.Info("[wm] Peer not available or doesn't support witness", "peer", peerID)
 			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
 		}
 
 		// Use the new efficient method that only downloads page 0
+		log.Info("[wm] Getting witness page count from peer", "peer", peerID, "hash", hash)
 		return peer.RequestWitnessPageCount(hash)
 	}
 
