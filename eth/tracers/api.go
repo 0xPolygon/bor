@@ -176,10 +176,20 @@ func (api *API) blockByNumberAndHash(ctx context.Context, number rpc.BlockNumber
 // getAllBlockTransactions returns all blocks transactions including state-sync transaction if present
 // along with a flag and it's hash (which is calculated differently than regular transactions)
 func (api *API) getAllBlockTransactions(ctx context.Context, block *types.Block) (types.Transactions, bool, common.Hash) {
-	txs := block.Transactions()
+	var (
+		txs              types.Transactions = block.Transactions()
+		stateSyncPresent bool
+		stateSyncHash    common.Hash
+	)
 
-	stateSyncPresent := false
-	stateSyncHash := common.Hash{}
+	isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
+	if isMadhugiri {
+		if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
+			stateSyncPresent = true
+			stateSyncHash = txs[len(txs)-1].Hash()
+		}
+		return txs, stateSyncPresent, stateSyncHash
+	}
 
 	borReceipt := rawdb.ReadBorReceipt(api.backend.ChainDb(), block.Hash(), block.NumberU64(), api.backend.ChainConfig())
 	if borReceipt != nil {
