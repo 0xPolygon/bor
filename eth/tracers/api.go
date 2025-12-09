@@ -1098,7 +1098,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 	if chainConfig.IsPrague(block.Number()) {
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
-	for i, tx := range block.Transactions() {
+	for i, tx := range txs {
 		// Prepare the transaction for un-traced execution
 		var (
 			msg, _ = core.TransactionToMessage(tx, signer, block.BaseFee())
