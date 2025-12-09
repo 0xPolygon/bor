@@ -145,26 +145,26 @@ func (pj *peerJail) JailPeer(id enode.ID) {
 
 // IsJailed checks if a peer is currently jailed
 func (pj *peerJail) IsJailed(id enode.ID) bool {
+	now := pj.clock.Now()
+
 	pj.mu.RLock()
-	defer pj.mu.RUnlock()
 	unbanTime, exists := pj.jailed[id]
+	pj.mu.RUnlock()
 	if !exists {
 		return false
 	}
-	now := pj.clock.Now()
-	if now > unbanTime {
-		// Expired, clean up (need to upgrade to write lock)
-		pj.mu.RUnlock()
-		pj.mu.Lock()
-		// Double-check after acquiring write lock
-		if unbanTime, exists := pj.jailed[id]; exists && now > unbanTime {
-			delete(pj.jailed, id)
-		}
-		pj.mu.Unlock()
-		pj.mu.RLock()
-		return false
+	if now <= unbanTime {
+		return true
 	}
-	return true
+
+	// expired: clean up under write lock
+	pj.mu.Lock()
+	// re-check because map may have changed
+	if unbanTime, exists := pj.jailed[id]; exists && now > unbanTime {
+		delete(pj.jailed, id)
+	}
+	pj.mu.Unlock()
+	return false
 }
 
 type peerDrop struct {
@@ -344,7 +344,7 @@ func (srv *Server) JailPeer(nodeID enode.ID) {
 		// If peer is currently connected, disconnect it
 		srv.doPeerOp(func(peers map[enode.ID]*Peer) {
 			if peer, ok := peers[nodeID]; ok {
-				peer.Disconnect(DiscBanned)
+				peer.Disconnect(DiscJailed)
 			}
 		})
 	}
@@ -901,7 +901,7 @@ running:
 func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount int, c *conn) error {
 	// Check if peer is jailed (blocks both inbound and outbound connections)
 	if srv.peerJail != nil && srv.peerJail.IsJailed(c.node.ID()) {
-		return DiscBanned
+		return DiscJailed
 	}
 
 	switch {
