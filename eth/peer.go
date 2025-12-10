@@ -174,7 +174,7 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
-	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil)
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil)
 }
 
 // RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
@@ -287,7 +287,7 @@ func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error
 }
 
 // RequestWitnessesWithVerification requests witnesses with optional page count verification
-func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool) (*eth.Request, error) {
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, jailPeer func(string)) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -339,7 +339,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -445,6 +445,7 @@ func (p *ethPeer) receiveWitnessPage(
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
 	downloadPaused map[common.Hash]bool,
 	verifyPageCount func(common.Hash, uint64, string) bool,
+	jailPeer func(string), // Function to jail a peer for malicious behavior (optional)
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -494,6 +495,10 @@ func (p *ethPeer) receiveWitnessPage(
 		// Validate that current page number is within bounds
 		if page.Page >= page.TotalPages {
 			p.witPeer.Peer.Log().Warn("Peer sent invalid page number, dropping peer", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
+			if jailPeer != nil {
+				p.witPeer.Peer.Log().Warn("Jailing peer for invalid page number", "peer", p.ID())
+				jailPeer(p.ID())
+			}
 			return fmt.Errorf("peer sent invalid page number: page=%d >= totalPages=%d", page.Page, page.TotalPages)
 		}
 
@@ -514,6 +519,10 @@ func (p *ethPeer) receiveWitnessPage(
 			if existingTotalPages != page.TotalPages {
 				mapsMu.Unlock()
 				p.witPeer.Peer.Log().Warn("Peer sent inconsistent TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "existing", existingTotalPages, "new", page.TotalPages)
+				if jailPeer != nil {
+					p.witPeer.Peer.Log().Warn("Jailing peer for inconsistent TotalPages", "peer", p.ID())
+					jailPeer(p.ID())
+				}
 				downloadPaused[page.Hash] = true
 				return fmt.Errorf("peer sent inconsistent TotalPages: existing=%d, new=%d", existingTotalPages, page.TotalPages)
 			}
@@ -545,6 +554,10 @@ func (p *ethPeer) receiveWitnessPage(
 
 		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
 			p.witPeer.Peer.Log().Warn("Peer sent more pages than TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "received", len(receivedWitPages[page.Hash]), "total", currentTotalPages)
+			if jailPeer != nil {
+				p.witPeer.Peer.Log().Warn("Jailing peer for sending more pages than claimed", "peer", p.ID())
+				jailPeer(p.ID())
+			}
 			mapsMu.Lock()
 			downloadPaused[page.Hash] = true
 			mapsMu.Unlock()
