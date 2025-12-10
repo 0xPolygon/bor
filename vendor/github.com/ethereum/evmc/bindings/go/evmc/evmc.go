@@ -33,10 +33,6 @@ static struct evmc_result execute_wrapper(struct evmc_vm* vm,
 	const uint8_t* input_data, size_t input_size, const evmc_uint256be* value,
 	const uint8_t* code, size_t code_size)
 {
-	fprintf(stderr,
-		"[evmc][execute_wrapper] ctx=%p rev=%d kind=%d depth=%d gas=%lld input=%p input_size=%zu code=%p code_size=%zu\n",
-		(void*)context_index, (int)rev, (int)kind, depth, (long long)gas,
-		input_data, input_size, code, code_size);
 
 	struct evmc_message msg = {
 		kind,
@@ -56,11 +52,6 @@ static struct evmc_result execute_wrapper(struct evmc_vm* vm,
 
 	struct evmc_host_context* context = (struct evmc_host_context*)context_index;
 	struct evmc_result result = evmc_execute(vm, &evmc_go_host, context, rev, &msg, code, code_size);
-
-	fprintf(stderr,
-		"[evmc][execute_wrapper] result ctx=%p status=%d gas_left=%lld gas_refund=%lld output_size=%zu release=%p\n",
-		(void*)context_index, (int)result.status_code, (long long)result.gas_left,
-		(long long)result.gas_refund, (size_t)result.output_size, result.release);
 
 	return result;
 }

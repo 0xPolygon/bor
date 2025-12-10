@@ -95,6 +95,7 @@ func NewEVMC(options string, env *EVM) *EVMC {
 type HostContext struct {
 	env         *EVM
 	contract    *Contract
+	readOnly    bool
 	interrupt   *atomic.Bool
 	interrupted atomic.Bool
 }
@@ -134,6 +135,12 @@ func (host *HostContext) GetStorage(addr evmc.Address, key evmc.Hash) evmc.Hash 
 }
 
 func (host *HostContext) SetStorage(addr evmc.Address, key evmc.Hash, value evmc.Hash) (status evmc.StorageStatus) {
+	// Disallow writes when the EVM is executing in read-only/static mode (e.g. prefetch).
+	if host.readOnly {
+		// No-op but report a harmless status (same as "assigned") to the VM.
+		return evmc.StorageAssigned
+	}
+
 	commonAddr := common.Address(addr)
 	commonKey := common.Hash(key)
 	commonValue := common.Hash(value)
@@ -287,6 +294,7 @@ func (host *HostContext) GetBlockHash(number int64) evmc.Hash {
 }
 
 func (host *HostContext) EmitLog(addr evmc.Address, topics []evmc.Hash, data []byte) {
+	fmt.Println("ARE WE IN EMITLOG ?!!: ", addr, topics, data)
 	commonAddr := common.Address(addr)
 	env := host.env
 	// Convert []evmc.Hash to []common.Hash
@@ -467,6 +475,7 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 	hostCtx := &HostContext{
 		env:      evm.env,
 		contract: contract,
+		readOnly: evm.readOnly,
 		// interrupt: interrupt,
 	}
 
