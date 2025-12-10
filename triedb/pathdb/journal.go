@@ -152,24 +152,24 @@ func (db *Database) loadLayers() layer {
 	if db.config.UseTrieDB {
 		// In triedb mode, get the state root from the Rust triedb
 		tdb := db.diskdb.TrieDB()
-		if tdb != nil {
-			trieRoot, rootErr := tdb.StateRoot()
-			if rootErr != nil {
-				log.Crit("Failed to get state root from triedb", "err", rootErr)
-			}
-			root = common.Hash(trieRoot)
-			// The Rust triedb returns all zeros for an empty database, but Ethereum
-			// expects EmptyRootHash for an empty Merkle Patricia Trie. Convert to
-			// maintain compatibility with the pathdb layer system.
-			if root == (common.Hash{}) {
-				root = types.EmptyRootHash
-			}
-			log.Debug("Loaded state root from triedb", "root", root)
-		} else {
+		// TODO marcello handled the nil triedb case better (early return)
+		if tdb == nil {
 			log.Crit("Failed to get state root from triedb", "err", "TrieDB is nil")
+			// Return empty disk layer to avoid further errors
 		}
+		trieRoot, rootErr := tdb.StateRoot()
+		if rootErr != nil {
+			log.Crit("Failed to get state root from triedb", "err", rootErr)
+		}
+		root = common.Hash(trieRoot)
+		// The Rust triedb returns all zeros for an empty database, but Ethereum
+		// expects EmptyRootHash for an empty Merkle Patricia Trie. Convert to
+		// maintain compatibility with the pathdb layer system.
+		if root == (common.Hash{}) {
+			root = types.EmptyRootHash
+		}
+		log.Debug("Loaded state root from triedb", "root", root)
 	} else {
-		// Normal mode: read from MPT
 		root, err = db.hasher(rawdb.ReadAccountTrieNode(db.diskdb, nil))
 		if err != nil {
 			log.Crit("Failed to compute node hash", "err", err)

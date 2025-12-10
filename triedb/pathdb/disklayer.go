@@ -552,9 +552,12 @@ func (dl *diskLayer) revert(h *history) (*diskLayer, error) {
 	// Provide the original values of modified accounts and storages for revert
 	writeStates(batch, progress, accounts, storages, dl.states)
 
-	// Write state to triedb (this is the main update in triedb mode)
-	if err := writeTrieDBWithHistory(dl.db.diskdb, h); err != nil {
-		return nil, err
+	// In triedb mode, write the state to triedb (this is the main update in triedb mode)
+	// TODO marcello the flag check is not really needed as writeTrieDBWithHistory is no-op if not in triedb mode (returns early). Leaving it for clarity for now.
+	if useTrieDB {
+		if err := writeTrieDBWithHistory(dl.db.diskdb, h); err != nil {
+			return nil, err
+		}
 	}
 	rawdb.WritePersistentStateID(batch, dl.id-1)
 	rawdb.WriteSnapshotRoot(batch, h.meta.parent)

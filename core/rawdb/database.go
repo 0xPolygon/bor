@@ -119,8 +119,7 @@ func (frdb *freezerdb) initTrieDB(ancientDir string) error {
 		return nil
 	}
 
-	parentDir := filepath.Dir(ancientDir)
-	triedbDir := filepath.Join(parentDir, "triedb")
+	triedbDir := filepath.Join(filepath.Dir(ancientDir), "triedb")
 	triedbPath := filepath.Join(triedbDir, "state.db")
 
 	// Ensure the triedb directory exists

@@ -148,6 +148,14 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 	}
 	defer tx.Rollback()
 
+	// TODO marcello changes to optimize a few things:
+	//   1. Reduce allocations: Reuse variables where possible, especially for hashes and buffers.
+	//   2. Error handling: Collect errors and rollback only once, instead of returning immediately on the first error.
+	//	 3. Batch writes: If the underlying tx supports batching, group writes before committing.
+	//   4. Avoid unnecessary conversions: Directly use slices and hashes without extra copying.
+	var slot common.Hash
+	var value triedb.Hash
+
 	// Write account data
 	for addr, blob := range history.accounts {
 		if len(blob) == 0 {
@@ -155,26 +163,24 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 			if err := tx.SetAccount(triedb.Address(addr), nil); err != nil {
 				return err
 			}
-		} else {
-			// Decode the RLP-encoded account data
-			account := new(types.SlimAccount)
-			if err := rlp.DecodeBytes(blob, account); err != nil {
-				return err
-			}
-
-			// Use empty code hash for accounts without code (EOAs)
-			codeHash := account.CodeHash
-			if len(codeHash) == 0 {
-				codeHash = types.EmptyCodeHash.Bytes()
-			}
-
-			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
-				Nonce:    account.Nonce,
-				Balance:  account.Balance,
-				CodeHash: codeHash,
-			}); err != nil {
-				return err
-			}
+			continue
+		}
+		account := new(types.SlimAccount)
+		// Decode the RLP-encoded account data
+		if err := rlp.DecodeBytes(blob, account); err != nil {
+			return err
+		}
+		// Use empty code hash for accounts without code (EOAs)
+		codeHash := account.CodeHash
+		if len(codeHash) == 0 {
+			codeHash = types.EmptyCodeHash.Bytes()
+		}
+		if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
+			Nonce:    account.Nonce,
+			Balance:  account.Balance,
+			CodeHash: codeHash,
+		}); err != nil {
+			return err
 		}
 	}
 
@@ -194,11 +200,7 @@ func writeTrieDBWithHistory(db ethdb.Database, history *history) error {
 			if err != nil {
 				return err
 			}
-
-			var slot common.Hash
 			slot.SetBytes(content)
-
-			var value triedb.Hash
 			copy(value[:], slot[:])
 
 			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {

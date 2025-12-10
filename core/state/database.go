@@ -311,6 +311,7 @@ func mustCopyTrie(t Trie) Trie {
 	case *trie.VerkleTrie:
 		return t.Copy()
 	case *trie.TrieDB:
+		// TODO marcello we don't share triedb between copies of statedb
 		return nil
 	default:
 		panic(fmt.Errorf("unknown trie type %T", t))

@@ -155,19 +155,20 @@ func (t *TrieDB) Copy() *TrieDB {
 	// Deep copy storage
 	storage := make(map[Address]map[Hash][]byte, len(t.storage))
 	for addr, slots := range t.storage {
-		if slots != nil {
-			slotsCopy := make(map[Hash][]byte, len(slots))
-			for slot, value := range slots {
-				if value != nil {
-					valueCopy := make([]byte, len(value))
-					copy(valueCopy, value)
-					slotsCopy[slot] = valueCopy
-				} else {
-					slotsCopy[slot] = nil
-				}
-			}
-			storage[addr] = slotsCopy
+		if slots == nil {
+			continue
 		}
+		slotsCopy := make(map[Hash][]byte, len(slots))
+		for slot, value := range slots {
+			if value != nil {
+				valueCopy := make([]byte, len(value))
+				copy(valueCopy, value)
+				slotsCopy[slot] = valueCopy
+			} else {
+				slotsCopy[slot] = nil
+			}
+		}
+		storage[addr] = slotsCopy
 	}
 
 	// Deep copy committedAccounts
@@ -184,19 +185,20 @@ func (t *TrieDB) Copy() *TrieDB {
 	// Deep copy committedStorage
 	committedStorage := make(map[Address]map[Hash][]byte, len(t.committedStorage))
 	for addr, slots := range t.committedStorage {
-		if slots != nil {
-			slotsCopy := make(map[Hash][]byte, len(slots))
-			for slot, value := range slots {
-				if value != nil {
-					valueCopy := make([]byte, len(value))
-					copy(valueCopy, value)
-					slotsCopy[slot] = valueCopy
-				} else {
-					slotsCopy[slot] = nil
-				}
-			}
-			committedStorage[addr] = slotsCopy
+		if slots == nil {
+			continue
 		}
+		slotsCopy := make(map[Hash][]byte, len(slots))
+		for slot, value := range slots {
+			if value != nil {
+				valueCopy := make([]byte, len(value))
+				copy(valueCopy, value)
+				slotsCopy[slot] = valueCopy
+			} else {
+				slotsCopy[slot] = nil
+			}
+		}
+		committedStorage[addr] = slotsCopy
 	}
 
 	return &TrieDB{

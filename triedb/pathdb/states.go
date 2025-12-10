@@ -280,16 +280,20 @@ func (s *stateSet) merge(other *stateSet) {
 			slots[storageHash] = data
 		}
 	}
+	// TODO marcello optimized by checking and initializing
+	//  s.addressMap and s.storageKeyMap only once before the loops, instead of on every iteration.
+	//  This reduces redundant checks and allocations.
+	if s.addressMap == nil {
+		s.addressMap = make(map[common.Hash]common.Address)
+	}
+	if s.storageKeyMap == nil {
+		s.storageKeyMap = make(map[common.Hash]common.Hash)
+	}
+
 	for accountHash, addr := range other.addressMap {
-		if s.addressMap == nil {
-			s.addressMap = make(map[common.Hash]common.Address)
-		}
 		s.addressMap[accountHash] = addr
 	}
 	for storageHash, key := range other.storageKeyMap {
-		if s.storageKeyMap == nil {
-			s.storageKeyMap = make(map[common.Hash]common.Hash)
-		}
 		s.storageKeyMap[storageHash] = key
 	}
 
@@ -457,6 +461,16 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	// TODO marcello optimize by
+	//  1. Reusing variables for hashes to reduce allocations.
+	//  2. Moving error checks outside loops where possible.
+	//  3. Avoiding unnecessary conversions.
+	//  4. Pre-allocating slices if needed.
+
+	var slot common.Hash
+	var value triedb.Hash
+
 	for addrHash, blob := range s.accountData {
 		addr, ok := s.addressMap[addrHash]
 		if !ok {
@@ -467,23 +481,23 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 			if err := tx.SetAccount(triedb.Address(addr), nil); err != nil {
 				return err
 			}
-		} else {
-			account := new(types.SlimAccount)
-			if err := rlp.DecodeBytes(blob, account); err != nil {
-				return fmt.Errorf("failed to decode account %x (blob len=%d, blob=%x): %w", addrHash, len(blob), blob, err)
-			}
+			continue
+		}
+		account := new(types.SlimAccount)
+		if err := rlp.DecodeBytes(blob, account); err != nil {
+			return fmt.Errorf("failed to decode account %x (blob len=%d, blob=%x): %w", addrHash, len(blob), blob, err)
+		}
 
-			if len(account.CodeHash) == 0 {
-				account.CodeHash = types.EmptyCodeHash.Bytes()
-			}
+		if len(account.CodeHash) == 0 {
+			account.CodeHash = types.EmptyCodeHash.Bytes()
+		}
 
-			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
-				Nonce:    account.Nonce,
-				Balance:  account.Balance,
-				CodeHash: account.CodeHash,
-			}); err != nil {
-				return err
-			}
+		if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
+			Nonce:    account.Nonce,
+			Balance:  account.Balance,
+			CodeHash: account.CodeHash,
+		}); err != nil {
+			return err
 		}
 	}
 	for addrHash, slots := range s.storageData {
@@ -509,10 +523,7 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 			if err != nil {
 				return fmt.Errorf("failed to split storage %x for account %x (blob len=%d, blob=%x): %w", storageHash, addrHash, len(blob), blob, err)
 			}
-			var slot common.Hash
 			slot.SetBytes(content)
-
-			var value triedb.Hash
 			copy(value[:], slot[:])
 			if err := tx.SetStorage(triedb.Address(addr), triedb.Hash(storageKey), &value); err != nil {
 				return err
