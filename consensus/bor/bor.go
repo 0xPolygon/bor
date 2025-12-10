@@ -114,6 +114,13 @@ var (
 
 	errUncleDetected     = errors.New("uncles not allowed")
 	errUnknownValidators = errors.New("unknown validators")
+
+	// errReorgDuringRootComputation indicates a reorganization occurred while calculating the checkpoint root.
+	errReorgDuringRootComputation = errors.New("reorg occurred while computing checkpoint root")
+
+	// errNonContiguousHeaderRange is returned when the header range [start,end]
+	// is not contiguous in terms of parent-child relationships.
+	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
