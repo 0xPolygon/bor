@@ -3,7 +3,6 @@ package fetcher
 import (
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -671,7 +670,6 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 
 // safeEnqueue attempts to enqueue a completed operation (block+witness) via the parent's channel.
 func (m *witnessManager) safeEnqueue(op *blockOrHeaderInject) {
-	log.Error("safeEnqueue", "block.header", op.block.Header().Number.Uint64(), "callstack", string(debug.Stack()))
 	hash := op.hash()
 
 	m.mu.Lock()

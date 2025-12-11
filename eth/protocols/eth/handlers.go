@@ -500,12 +500,6 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 		return nil // TODO(karalabe): return error eventually, but wait a few releases
 	}
 
-	if ann.Block.AnnouncedAt != nil {
-		log.Error("handleNewBlock", "AnnouncedAt", ann.Block.AnnouncedAt.Unix())
-	}
-
-	log.Error("handleNewBlock", "ReceivedAt", ann.Block.ReceivedAt.Unix())
-
 	msgTime := msg.Time()
 	if prev := lastNewBlockPushUnix.Load(); prev > 0 {
 		if delta := msgTime.Sub(time.Unix(0, prev)); delta > 0 {
