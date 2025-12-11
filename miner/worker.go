@@ -884,6 +884,10 @@ func (w *worker) resultLoop() {
 				sealedEmptyBlocksCounter.Inc(1)
 			}
 
+			w.pendingMu.Lock()
+			delete(w.pendingTasks, sealhash)
+			w.pendingMu.Unlock()
+
 		case <-w.exitCh:
 			return
 		}
