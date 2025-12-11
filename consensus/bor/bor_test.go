@@ -1,14 +1,18 @@
 package bor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/triedb"
 	lru "github.com/hashicorp/golang-lru"
-	ttlcache "github.com/jellydator/ttlcache/v3"
+	"github.com/jellydator/ttlcache/v3"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -819,4 +823,105 @@ func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
 		t.Fatalf("unexpected Actual in WrongDifficultyError: got %d, want %d",
 			diffErr.Actual, uint64(math.MaxUint64))
 	}
+}
+
+func TestStateSyncZeroGasOversizedIsRejected(t *testing.T) {
+	const payloadSize = 4 * 1024 * 1024 // 4 MiB > MaxStateSyncTxSizeBytes (2 MiB)
+
+	db := rawdb.NewMemoryDatabase()
+	genesis := &core.Genesis{
+		Config:     params.BorUnittestChainConfig,
+		GasLimit:   10_000_000,
+		Difficulty: big.NewInt(1),
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Alloc:      types.GenesisAlloc{},
+	}
+
+	engine := ethash.NewFaker()
+	bc, err := core.NewBlockChain(db, genesis, engine, core.DefaultConfig())
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer bc.Stop()
+
+	chainCfg := bc.Config()
+	if chainCfg.Bor == nil {
+		t.Fatalf("expected Bor config on chain, got nil")
+	}
+
+	parent := bc.CurrentBlock()
+	t.Logf("[setup] chainID=%s parentNumber=%d parentGasLimit=%d",
+		chainCfg.ChainID.String(), parent.Number.Uint64(), parent.GasLimit)
+
+	largeData := bytes.Repeat([]byte{0xab}, payloadSize)
+	stateSyncData := &types.StateSyncData{
+		ID:       1,
+		Contract: common.Address{},
+		Data:     largeData,
+	}
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: []*types.StateSyncData{stateSyncData},
+	})
+
+	// Encoding should already reject this
+	txBytes, err := stateSyncTx.MarshalBinary()
+	if err != nil {
+		t.Logf("[info] encoding StateSyncTx failed as expected: %v", err)
+		if !errors.Is(err, types.ErrStateSyncTxTooLarge) &&
+			!errors.Is(err, types.ErrStateSyncDataTooLarge) &&
+			!strings.Contains(err.Error(), "state sync tx too large") &&
+			!strings.Contains(err.Error(), "state sync data payload too large") {
+			t.Fatalf("unexpected error from MarshalBinary: %v", err)
+		}
+		return
+	}
+	t.Logf("[attack] constructed StateSyncTx: payloadBytes=%d encodedTxSize=%d type=0x%x",
+		len(largeData), len(txBytes), stateSyncTx.Type())
+
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		GasLimit:   parent.GasLimit,
+		GasUsed:    0,
+		Time:       parent.Time + 10,
+		Difficulty: big.NewInt(0),
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Extra:      []byte{},
+	}
+	body := &types.Body{
+		Transactions: []*types.Transaction{stateSyncTx},
+		Uncles:       nil,
+		Withdrawals:  nil,
+	}
+	block := types.NewBlock(header, body, nil, trie.NewStackTrie(nil))
+
+	t.Logf("[attack] provisional block: txs=%d, headerNumber=%d",
+		len(block.Transactions()), block.NumberU64())
+
+	statedb, err := bc.State()
+	if err != nil {
+		t.Fatalf("failed to get state at head: %v", err)
+	}
+	if _, ok := interface{}(statedb).(*state.StateDB); !ok {
+		t.Fatalf("unexpected state db implementation")
+	}
+
+	processor, ok := bc.Processor().(*core.StateProcessor)
+	if !ok {
+		t.Fatalf("unexpected processor type %T", bc.Processor())
+	}
+
+	// If encoding didn't already fail, Process must reject the block due to SSTx limits.
+	res, err := processor.Process(block, statedb, vm.Config{}, nil, context.Background())
+	if err == nil {
+		t.Fatalf("expected Process to fail for block with oversized StateSyncTx, got success: GasUsed=%d receipts=%d logs=%d",
+			res.GasUsed, len(res.Receipts), len(res.Logs))
+	}
+	if !errors.Is(err, types.ErrStateSyncTxTooLarge) &&
+		!errors.Is(err, types.ErrStateSyncDataTooLarge) &&
+		!strings.Contains(err.Error(), "state sync tx too large") &&
+		!strings.Contains(err.Error(), "state sync data payload too large") {
+		t.Fatalf("unexpected error from Process: %v", err)
+	}
+	t.Logf("[ok] Process rejected oversized StateSyncTx block: %v", err)
 }

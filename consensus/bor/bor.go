@@ -44,7 +44,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
-	ttlcache "github.com/jellydator/ttlcache/v3"
+	"github.com/jellydator/ttlcache/v3"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -1242,7 +1242,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
 		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: stateSyncData,
+			StateSyncData: stateSyncData, // already capped and committed by CommitStates
 		})
 		body.Transactions = append(body.Transactions, stateSyncTx)
 		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, state, receipts)
@@ -1659,28 +1659,68 @@ func (c *Bor) CommitStates(
 	processStart := time.Now()
 	totalGas := 0 /// limit on gas for state sync per block
 	chainID := c.chainConfig.ChainID.String()
-	stateSyncs := make([]*types.StateSyncData, 0, len(eventRecords))
 
-	var gasUsed uint64
+	// Build the candidate StateSyncData slice, but don't commit anything yet
+	stateSyncCandidates := make([]*types.StateSyncData, 0, len(eventRecords))
+	eventByID := make(map[uint64]*clerk.EventRecordWithTime, len(eventRecords))
+
+	// simulate the lastStateID progression for validation, but do not
+	// advance the real contract state until we actually commit.
+	simLastStateID := lastStateID
 
 	for _, eventRecord := range eventRecords {
 		if eventRecord.ID <= lastStateID {
 			continue
 		}
 
-		if err = validateEventRecord(eventRecord, number, to, lastStateID, chainID); err != nil {
-			log.Error("while validating event record", "block", number, "to", to, "stateID", lastStateID+1, "error", err.Error())
+		if err = validateEventRecord(eventRecord, number, to, simLastStateID, chainID); err != nil {
+			log.Error(
+				"while validating event record",
+				"block", number,
+				"to", to,
+				"stateID", simLastStateID+1,
+				"error", err.Error(),
+			)
 			break
 		}
 
-		stateData := types.StateSyncData{
+		stateData := &types.StateSyncData{
 			ID:       eventRecord.ID,
 			Contract: eventRecord.Contract,
 			Data:     eventRecord.Data,
 			TxHash:   eventRecord.TxHash,
 		}
 
-		stateSyncs = append(stateSyncs, &stateData)
+		stateSyncCandidates = append(stateSyncCandidates, stateData)
+		eventByID[stateData.ID] = eventRecord
+		simLastStateID++
+	}
+
+	// Apply state sync limits to determine which subset we will actually include.
+	bounded := capStateSyncDataForTx(stateSyncCandidates)
+	if len(bounded) == 0 {
+		// No events selected after applying caps: we commit nothing and do not advance the lastStateID.
+		// Heimdall will re-serve these events on the next sprint since LastStateId on contracts hasn't changed.
+		log.Info(
+			"No state sync events selected for inclusion after applying size limits",
+			"number", number,
+			"fetchedRecords", len(eventRecords),
+		)
+		return nil, nil
+	}
+
+	// Only commit the bounded events and build the slice of StateSyncData to return
+	stateSyncs := make([]*types.StateSyncData, 0, len(bounded))
+
+	var gasUsed uint64
+	committedCount := 0
+
+	for _, ssd := range bounded {
+		eventRecord, ok := eventByID[ssd.ID]
+		if !ok {
+			log.Warn("missing eventRecord for StateSyncData ID", "id", ssd.ID)
+			continue
+		}
 
 		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
 		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
@@ -1691,13 +1731,26 @@ func (c *Bor) CommitStates(
 		}
 
 		totalGas += int(gasUsed)
+		committedCount++
 
+		// Track the last committed ID for logging purposes.
+		// The source of truth remains the contract via LastStateId on next call.
 		lastStateID++
+		stateSyncs = append(stateSyncs, ssd)
 	}
 
 	processTime := time.Since(processStart)
 
-	log.Info("StateSyncData", "gas", totalGas, "number", number, "lastStateID", lastStateID, "total records", len(eventRecords), "fetch time", int(fetchTime.Milliseconds()), "process time", int(processTime.Milliseconds()))
+	log.Info(
+		"StateSyncData",
+		"gas", totalGas,
+		"number", number,
+		"lastStateID", lastStateID,
+		"total records", len(eventRecords),
+		"committed records", committedCount,
+		"fetch time", int(fetchTime.Milliseconds()),
+		"process time", int(processTime.Milliseconds()),
+	)
 
 	return stateSyncs, nil
 }
@@ -1818,4 +1871,53 @@ func countLogsFromReceipts(receipts []*types.Receipt) int {
 		}
 	}
 	return total
+}
+
+// capStateSyncDataForTx caps the number of state sync data entries to fit within
+// the maximum allowed size for a state sync transaction.
+func capStateSyncDataForTx(events []*types.StateSyncData) []*types.StateSyncData {
+	if len(events) == 0 {
+		return nil
+	}
+
+	capped := make([]*types.StateSyncData, 0, len(events))
+	// build up a temporary slice and encode it to check its size.
+	tmp := make([]types.StateSyncData, 0, len(events))
+
+	var tmpBuf bytes.Buffer
+	for _, e := range events {
+		if e == nil {
+			continue
+		}
+		if len(capped) >= types.MaxStateSyncEntries {
+			break
+		}
+		if len(e.Data) > types.MaxStateSyncDataSizeBytes {
+			// Stop instead of skipping this ID.
+			log.Warn("state sync data payload too large, stopping selection",
+				"id", e.ID,
+				"size", len(e.Data),
+				"max", types.MaxStateSyncDataSizeBytes,
+			)
+			break
+		}
+
+		candidate := append(tmp, *e)
+
+		tmpBuf.Reset()
+		if err := rlp.Encode(&tmpBuf, candidate); err != nil {
+			// Encoding failure is unexpected here
+			log.Error("failed to RLP-encode state sync candidate", "err", err)
+			break
+		}
+		if tmpBuf.Len() > types.MaxStateSyncTxSizeBytes {
+			// Adding this entry would exceed the tx size limit
+			break
+		}
+
+		tmp = candidate
+		capped = append(capped, e)
+	}
+
+	return capped
 }
