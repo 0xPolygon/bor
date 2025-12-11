@@ -869,6 +869,10 @@ func (w *worker) resultLoop() {
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
+				// Error writing block to chain, delete the pending task.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
 				continue
 			}
 
@@ -884,8 +888,14 @@ func (w *worker) resultLoop() {
 				sealedEmptyBlocksCounter.Inc(1)
 			}
 
+			// Clear all pending tasks for blocks at or below the sealed block number.
+			// These tasks are now obsolete since the chain has progressed past them.
 			w.pendingMu.Lock()
-			delete(w.pendingTasks, sealhash)
+			for hash, task := range w.pendingTasks {
+				if task.block.NumberU64() <= block.NumberU64() {
+					delete(w.pendingTasks, hash)
+				}
+			}
 			w.pendingMu.Unlock()
 
 		case <-w.exitCh:
