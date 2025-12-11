@@ -20,8 +20,8 @@ import (
 	"bytes"
 	"fmt"
 	"math/big"
+	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/evmc/bindings/go/evmc"
@@ -39,56 +39,53 @@ type EVMC struct {
 	readOnly bool // TODO: The readOnly flag should not be here.
 }
 
-var (
-	createMu     sync.Mutex
-	evmcConfig   string // The configuration the instance was created with.
-	evmcInstance *evmc.VM
-)
-
 func createVM(config string) *evmc.VM {
-	createMu.Lock()
-	defer createMu.Unlock()
+	options := strings.Split(config, ",")
+	path := strings.TrimSpace(options[0])
 
-	if evmcInstance == nil {
-		options := strings.Split(config, ",")
-		path := options[0]
+	if path == "" {
+		panic("EVMC VM path not provided, set --vm.(evm|ewasm)=/path/to/vm")
+	}
 
-		if path == "" {
-			panic("EVMC VM path not provided, set --vm.(evm|ewasm)=/path/to/vm")
+	vm, err := evmc.Load(path)
+	if err != nil {
+		panic(err.Error())
+	}
+	log.Info("EVMC VM loaded", "name", vm.Name(), "version", vm.Version(), "path", path)
+
+	for _, option := range options[1:] {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
 		}
-
-		var err error
-		evmcInstance, err = evmc.Load(path)
-		if err != nil {
-			panic(err.Error())
-		}
-		log.Info("EVMC VM loaded", "name", evmcInstance.Name(), "version", evmcInstance.Version(), "path", path)
-
-		for _, option := range options[1:] {
-			if idx := strings.Index(option, "="); idx >= 0 {
-				name := option[:idx]
-				value := option[idx+1:]
-				err := evmcInstance.SetOption(name, value)
-				if err == nil {
-					log.Info("EVMC VM option set", "name", name, "value", value)
-				} else {
-					log.Warn("EVMC VM option setting failed", "name", name, "error", err)
-				}
+		if idx := strings.Index(option, "="); idx >= 0 {
+			name := option[:idx]
+			value := option[idx+1:]
+			if err := vm.SetOption(name, value); err == nil {
+				log.Info("EVMC VM option set", "name", name, "value", value)
+			} else {
+				log.Warn("EVMC VM option setting failed", "name", name, "error", err)
 			}
 		}
-
-		evm1Cap := evmcInstance.HasCapability(evmc.CapabilityEVM1)
-		log.Info("EVMC VM capabilities", "evm1", evm1Cap)
-
-		evmcConfig = config // Remember the config.
-	} else if evmcConfig != config {
-		log.Error("New EVMC VM requested", "newconfig", config, "oldconfig", evmcConfig)
 	}
-	return evmcInstance
+
+	evm1Cap := vm.HasCapability(evmc.CapabilityEVM1)
+	ewasmCap := vm.HasCapability(evmc.CapabilityEWASM)
+	log.Info("EVMC VM capabilities", "evm1", evm1Cap, "ewasm", ewasmCap)
+
+	return vm
 }
 
 func NewEVMC(options string, env *EVM) *EVMC {
-	return &EVMC{createVM(options), env, false}
+	instance := createVM(options)
+	ev := &EVMC{instance: instance, env: env, readOnly: false}
+	runtime.SetFinalizer(ev, func(evmcInterpreter *EVMC) {
+		if evmcInterpreter.instance != nil {
+			evmcInterpreter.instance.Destroy()
+			evmcInterpreter.instance = nil
+		}
+	})
+	return ev
 }
 
 // Implements evmc.HostContext interface.
@@ -294,7 +291,6 @@ func (host *HostContext) GetBlockHash(number int64) evmc.Hash {
 }
 
 func (host *HostContext) EmitLog(addr evmc.Address, topics []evmc.Hash, data []byte) {
-	fmt.Println("ARE WE IN EMITLOG ?!!: ", addr, topics, data)
 	commonAddr := common.Address(addr)
 	env := host.env
 	// Convert []evmc.Hash to []common.Hash

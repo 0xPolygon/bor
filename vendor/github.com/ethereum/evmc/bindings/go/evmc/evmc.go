@@ -60,7 +60,7 @@ import "C"
 
 import (
 	"fmt"
-	"sync"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -218,16 +218,16 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 		flags |= C.EVMC_STATIC
 	}
 
-	ctxId := addHostContext(ctx)
+	ctxHandle := addHostContext(ctx)
+	defer removeHostContext(ctxHandle)
 	// FIXME: Clarify passing by pointer vs passing by value.
 	evmcRecipient := evmcAddress(recipient)
 	evmcSender := evmcAddress(sender)
 	evmcValue := evmcBytes32(value)
-	result := C.execute_wrapper(vm.handle, C.uintptr_t(ctxId), uint32(rev),
+	result := C.execute_wrapper(vm.handle, C.uintptr_t(ctxHandle), uint32(rev),
 		C.enum_evmc_call_kind(kind), flags, C.int32_t(depth), C.int64_t(gas),
 		&evmcRecipient, &evmcSender, bytesPtr(input), C.size_t(len(input)), &evmcValue,
 		bytesPtr(code), C.size_t(len(code)))
-	removeHostContext(ctxId)
 
 	res.Output = C.GoBytes(unsafe.Pointer(result.output_data), C.int(result.output_size))
 	res.GasLeft = int64(result.gas_left)
@@ -243,32 +243,17 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 	return res, err
 }
 
-var (
-	hostContextCounter uintptr
-	hostContextMap     = map[uintptr]HostContext{}
-	hostContextMapMu   sync.Mutex
-)
-
 func addHostContext(ctx HostContext) uintptr {
-	hostContextMapMu.Lock()
-	id := hostContextCounter
-	hostContextCounter++
-	hostContextMap[id] = ctx
-	hostContextMapMu.Unlock()
-	return id
+	handle := cgo.NewHandle(ctx)
+	return uintptr(handle)
 }
 
 func removeHostContext(id uintptr) {
-	hostContextMapMu.Lock()
-	delete(hostContextMap, id)
-	hostContextMapMu.Unlock()
+	cgo.Handle(id).Delete()
 }
 
 func getHostContext(idx uintptr) HostContext {
-	hostContextMapMu.Lock()
-	ctx := hostContextMap[idx]
-	hostContextMapMu.Unlock()
-	return ctx
+	return cgo.Handle(idx).Value().(HostContext)
 }
 
 func evmcBytes32(in Hash) C.evmc_bytes32 {
