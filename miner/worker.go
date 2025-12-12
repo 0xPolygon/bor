@@ -77,7 +77,12 @@ const (
 	intervalAdjustBias = 200 * 1000.0 * 1000.0
 
 	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
+	// In PoW chains (like pre-merge Ethereum), this is set to 7 because orphaned blocks
+	// can still be included as "uncle blocks" up to 6-7 blocks deep, earning partial rewards.
+	// In Bor's PoS consensus, validators take turns producing blocks deterministically,
+	// so there are no competing miners and no uncle block concept. Any non-canonical block
+	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
+	staleThreshold = 0
 )
 
 var (
@@ -522,27 +527,17 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
 	}
-	// clearPending cleans the stale pending tasks.
-	clearPending := func(number uint64) {
-		w.pendingMu.Lock()
-		for h, t := range w.pendingTasks {
-			if t.block.NumberU64()+staleThreshold <= number {
-				delete(w.pendingTasks, h)
-			}
-		}
-		w.pendingMu.Unlock()
-	}
 
 	for {
 		select {
 		case <-w.startCh:
-			clearPending(w.chain.CurrentBlock().Number.Uint64())
+			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
-			clearPending(head.Header.Number.Uint64())
+			w.clearPending(head.Header.Number.Uint64())
 
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
@@ -869,6 +864,10 @@ func (w *worker) resultLoop() {
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
+				// Error writing block to chain, delete the pending task.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
 				continue
 			}
 
@@ -883,6 +882,10 @@ func (w *worker) resultLoop() {
 			if block.Transactions().Len() == 0 {
 				sealedEmptyBlocksCounter.Inc(1)
 			}
+
+			// Clear all pending tasks for blocks at or below the sealed block number.
+			// These tasks are now obsolete since the chain has progressed past them.
+			w.clearPending(block.NumberU64())
 
 		case <-w.exitCh:
 			return
@@ -1730,6 +1733,17 @@ func (w *worker) adjustResubmitInterval(message *intervalAdjust) {
 	default:
 		log.Warn("the resubmitAdjustCh is full, discard the message")
 	}
+}
+
+// clearPending cleans the stale pending tasks.
+func (w *worker) clearPending(number uint64) {
+	w.pendingMu.Lock()
+	for h, t := range w.pendingTasks {
+		if t.block.NumberU64()+staleThreshold <= number {
+			delete(w.pendingTasks, h)
+		}
+	}
+	w.pendingMu.Unlock()
 }
 
 // copyReceipts makes a deep copy of the given receipts.
