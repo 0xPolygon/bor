@@ -79,7 +79,7 @@ const (
 	// staleThreshold is the maximum depth of the acceptable stale block.
 	// In PoW chains (like pre-merge Ethereum), this is set to 7 because orphaned blocks
 	// can still be included as "uncle blocks" up to 6-7 blocks deep, earning partial rewards.
-	// In Bor's PoA consensus, validators take turns producing blocks deterministically,
+	// In Bor's PoS consensus, validators take turns producing blocks deterministically,
 	// so there are no competing miners and no uncle block concept. Any non-canonical block
 	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
 	staleThreshold = 0
