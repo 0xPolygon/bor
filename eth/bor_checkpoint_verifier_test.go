@@ -1,11 +1,31 @@
 package eth
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"encoding/json"
+	"math/big"
+	"os"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/eth/downloader"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/miner"
+	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // Test helper functions for the findCommonAncestorWithFutureMilestones logic
@@ -326,4 +346,220 @@ func getBorVerifyRewindBlock_Simulation(hasExistingMilestone bool, existingBlock
 		// Simulate a simple result for testing
 		return start - 3 // Example fallback calculation
 	}
+}
+
+func TestCheckpointMismatch_DoesNotRewind(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	genesis := loadBorTestGenesis(t)
+	privKey := generateTestKey(t)
+
+	stack, ethBackend := startBorNode(t, genesis, privKey)
+	defer stack.Close()
+
+	require.NoError(t, ethBackend.StartMining(), "failed to start mining")
+
+	targetHead := uint64(20)
+	waitForHeadAtLeast(t, ethBackend, targetHead, 30*time.Second)
+
+	headBefore := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+
+	start := headBefore - 10
+	end := headBefore - 5
+	require.Greater(t, start, uint64(0))
+	require.Greater(t, end, start)
+
+	ethHandler := (*ethHandler)(ethBackend.handler)
+	require.NotNil(t, ethHandler)
+	require.NotNil(t, ethHandler.ethAPI)
+
+	localRoot, err := ethHandler.ethAPI.GetRootHash(ctx, start, end)
+	require.NoError(t, err)
+	require.NotEmpty(t, localRoot)
+
+	wrongRoot := mutateHexString(localRoot)
+	require.NotEqual(t, localRoot, wrongRoot)
+
+	cp := &checkpoint.Checkpoint{
+		Proposer:   common.Address{},
+		StartBlock: start,
+		EndBlock:   end,
+		RootHash:   common.HexToHash("0x" + wrongRoot),
+		BorChainID: "15001",
+		Timestamp:  0,
+	}
+
+	verifier := newBorVerifier()
+
+	_, err = ethHandler.handleWhitelistCheckpoint(ctx, cp, ethBackend, verifier, false)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	headAfter := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+
+	// Don't rewind on checkpoint mismatch.
+	require.Equal(t, headBefore, headAfter, "head must not rewind on checkpoint mismatch")
+
+	// Chain should still contain canonical blocks at `end`.
+	blockAtEnd := ethBackend.BlockChain().GetBlockByNumber(end)
+	require.NotNil(t, blockAtEnd, "canonical block at end=%d must remain present", end)
+}
+
+func TestMilestoneMismatch_UnknownHash_DoesNotRewind(t *testing.T) {
+	t.Parallel()
+
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	genesis := loadBorTestGenesis(t)
+	privKey := generateTestKey(t)
+
+	stack, ethBackend := startBorNode(t, genesis, privKey)
+	defer stack.Close()
+
+	require.NoError(t, ethBackend.StartMining(), "failed to start mining")
+
+	targetHead := uint64(20)
+	waitForHeadAtLeast(t, ethBackend, targetHead, 30*time.Second)
+
+	headBefore := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+
+	// Pick an end inside our chain.
+	end := headBefore - 5
+	start := end - 2
+
+	// Provide a milestone "hash" that is not a real block hash.
+	unknownHash := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+
+	verifier := newBorVerifier()
+	ethHandler := (*ethHandler)(ethBackend.handler)
+
+	_, err := verifier.verify(ctx, ethBackend, ethHandler, start, end, unknownHash, false)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errHashMismatch)
+
+	headAfter := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+	require.Equal(t, headBefore, headAfter, "head must not rewind if canonical chain cannot be built")
+}
+
+func loadBorTestGenesis(t *testing.T) *core.Genesis {
+	t.Helper()
+
+	path := "../tests/bor/testdata/genesis_2val.json"
+	data, err := os.ReadFile(path)
+	require.NoErrorf(t, err, "failed to read genesis file at %s", path)
+
+	var genesis core.Genesis
+	require.NoError(t, json.Unmarshal(data, &genesis), "failed to unmarshal genesis")
+
+	if genesis.Config.ChainID == nil {
+		genesis.Config.ChainID = big.NewInt(15001)
+	}
+
+	return &genesis
+}
+
+func startBorNode(t *testing.T, genesis *core.Genesis, privKey *ecdsa.PrivateKey) (*node.Node, *Ethereum) {
+	t.Helper()
+
+	datadir := t.TempDir()
+
+	cfg := &node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    0,
+		},
+		UseLightweightKDF: true,
+	}
+
+	stack, err := node.New(cfg)
+	require.NoError(t, err)
+
+	ethCfg := &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   128,
+		DatabaseHandles: 128,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase: crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:   genesis.GasLimit * 11 / 10,
+			GasPrice:  big.NewInt(1),
+			Recommit:  time.Second,
+		},
+		WithoutHeimdall: true,
+		DevFakeAuthor:   true,
+	}
+
+	ethBackend, err := New(stack, ethCfg)
+	require.NoError(t, err)
+
+	keydir := stack.KeyStoreDir()
+	ks := keystore.NewKeyStore(keydir, keystore.StandardScryptN, keystore.StandardScryptP)
+
+	_, err = ks.ImportECDSA(privKey, "")
+	require.NoError(t, err)
+
+	accounts := ks.Accounts()
+	require.Len(t, accounts, 1)
+
+	require.NoError(t, ks.Unlock(accounts[0], ""))
+
+	ethBackend.AccountManager().AddBackend(ks)
+
+	require.NoError(t, stack.Start())
+
+	return stack, ethBackend
+}
+
+func waitForHeadAtLeast(t *testing.T, ethBackend *Ethereum, target uint64, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		head := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+		if head >= target {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for head >= %d, last=%d", target, head)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func generateTestKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	return key
+}
+
+func mutateHexString(in string) string {
+	if in == "" {
+		return "1"
+	}
+	out := []rune(in)
+	switch out[0] {
+	case '0':
+		out[0] = '1'
+	case 'f', 'F':
+		out[0] = 'e'
+	default:
+		out[0] = '0'
+	}
+	return string(out)
 }
