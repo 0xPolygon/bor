@@ -8,6 +8,7 @@ package evmc
 #cgo CFLAGS: -I${SRCDIR}/../../../include -Wall -Wextra
 #cgo !windows LDFLAGS: -ldl
 
+#include <evmc/bor_trace.h>
 #include <evmc/evmc.h>
 #include <evmc/helpers.h>
 #include <evmc/loader.h>
@@ -55,11 +56,20 @@ static struct evmc_result execute_wrapper(struct evmc_vm* vm,
 
 	return result;
 }
+
+static inline const struct evmone_trace_result* bor_get_trace(const struct evmc_result* result)
+{
+	const union evmc_result_optional_storage* storage = evmc_get_const_optional_storage(result);
+	if (!storage)
+		return NULL;
+	return (const struct evmone_trace_result*)storage->pointer;
+}
 */
 import "C"
 
 import (
 	"fmt"
+	"log"
 	"runtime/cgo"
 	"unsafe"
 )
@@ -203,9 +213,18 @@ func (vm *VM) SetOption(name string, value string) (err error) {
 }
 
 type Result struct {
-	Output    []byte
-	GasLeft   int64
-	GasRefund int64
+	Output     []byte
+	GasLeft    int64
+	GasRefund  int64
+	TraceSteps []TraceStep
+}
+
+// TraceStep describes a single opcode execution recorded by evmone.
+type TraceStep struct {
+	PC     uint32
+	Opcode byte
+	Gas    int64
+	Depth  int32
 }
 
 func (vm *VM) Execute(ctx HostContext, rev Revision,
@@ -232,6 +251,27 @@ func (vm *VM) Execute(ctx HostContext, rev Revision,
 	res.Output = C.GoBytes(unsafe.Pointer(result.output_data), C.int(result.output_size))
 	res.GasLeft = int64(result.gas_left)
 	res.GasRefund = int64(result.gas_refund)
+
+	trace := C.bor_get_trace(&result)
+	if trace == nil {
+		log.Printf("evmc: evmone trace payload missing (status=%d)", result.status_code)
+	} else {
+		count := int(trace.count)
+		if count == 0 {
+			log.Printf("evmc: evmone trace payload empty")
+		} else {
+			cSteps := (*[1 << 30]C.struct_evmone_trace_step)(unsafe.Pointer(&trace.steps[0]))[:count:count]
+			res.TraceSteps = make([]TraceStep, count)
+			for i := 0; i < count; i++ {
+				res.TraceSteps[i] = TraceStep{
+					PC:     uint32(cSteps[i].pc),
+					Opcode: byte(cSteps[i].opcode),
+					Gas:    int64(cSteps[i].gas),
+					Depth:  int32(cSteps[i].depth),
+				}
+			}
+		}
+	}
 	if result.status_code != C.EVMC_SUCCESS {
 		err = Error(result.status_code)
 	}

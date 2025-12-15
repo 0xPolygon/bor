@@ -189,10 +189,10 @@ func (evm *EVM) Interpreter() *EVMInterpreter {
 func (evm *EVM) runInterpreter(contract *Contract, input []byte, readOnly bool, interrupt *atomic.Bool) ([]byte, error) {
 	if evm.evmcInterpreter != nil {
 		if evm.evmcInterpreter.CanRun(contract.Code) {
-			log.Info("EVMC handling code blob", "addr", contract.Address(), "len", len(contract.Code))
+			log.Debug("EVMC handling code blob", "addr", contract.Address(), "len", len(contract.Code))
 			return evm.evmcInterpreter.Run(contract, input, readOnly, interrupt)
 		}
-		log.Info("EVMC cannot handle code blob; falling back to native", "addr", contract.Address(), "len", len(contract.Code))
+		log.Debug("EVMC cannot handle code blob; falling back to native", "addr", contract.Address(), "len", len(contract.Code))
 	}
 	return evm.interpreter.Run(contract, input, readOnly, interrupt)
 }

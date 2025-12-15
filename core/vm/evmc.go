@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/evmc/bindings/go/evmc"
@@ -480,6 +481,21 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 		valueHash = common.BigToHash(contract.value.ToBig())
 	}
 
+	initialGas := contract.Gas
+
+	traceEnabled := evmcTraceFlag.Load()
+	if traceEnabled {
+		if err := evm.instance.SetOption("bor.trace_steps", "on"); err != nil {
+			log.Warn("Failed to enable evmone step tracing", "err", err)
+			traceEnabled = false
+		} else {
+			defer func() {
+				if err := evm.instance.SetOption("bor.trace_steps", "off"); err != nil {
+					log.Warn("Failed to disable evmone step tracing", "err", err)
+				}
+			}()
+		}
+	}
 	result, err := evm.instance.Execute(
 		hostCtx,
 		getRevision(evm.env),
@@ -494,11 +510,19 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 		contract.Code,
 	)
 
-	contract.Gas = uint64(result.GasLeft)
+	evmcGasLeft := uint64(0)
+	if result.GasLeft > 0 {
+		evmcGasLeft = uint64(result.GasLeft)
+	}
+	contract.Gas = evmcGasLeft
 
 	// if interrupt.Load() || hostCtx.wasInterrupted() {
 	// 	return nil, ErrInterrupt
 	// }
+
+	if traceEnabled {
+		evm.traceEVMC(contract, input, initialGas, evmcGasLeft, err, result.TraceSteps)
+	}
 
 	if err == evmc.Revert {
 		err = ErrExecutionReverted
@@ -517,4 +541,265 @@ func (evm *EVMC) CanRun(code []byte) bool {
 	}
 	// FIXME: Optimize. Access capabilities once.
 	return evm.instance.HasCapability(cap)
+}
+
+func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, evmcGasLeft uint64, evmcErr error, evmoneSteps []evmc.TraceStep) {
+	if !evmcTraceFlag.Load() {
+		return
+	}
+
+	txHash, txIndex := extractTxInfo(evm.env.StateDB)
+	if !shouldTraceTx(txHash, txIndex) {
+		return
+	}
+
+	steps, goGasLeft, goErr := evm.runGoInterpreterTrace(contract, input, initialGas)
+	if goErr != nil {
+		log.Debug("EVMC shadow trace failed", "addr", contract.Address(), "err", goErr)
+		return
+	}
+
+	evmcUsed := initialGas - evmcGasLeft
+	goUsed := initialGas - goGasLeft
+	if goUsed == evmcUsed && evmcErr == nil {
+		return
+	}
+
+	delta := int64(goUsed) - int64(evmcUsed)
+
+	fields := []interface{}{
+		"txHash", txHash,
+		"txIndex", txIndex,
+		"addr", contract.Address(),
+		"evmoneGas", evmcUsed,
+		"borGas", goUsed,
+		"delta", delta,
+		"evmcErr", errToString(evmcErr),
+		"borErr", errToString(goErr),
+	}
+
+	if len(evmoneSteps) == 0 {
+		fields = append(fields, "reason", "evmone trace missing")
+		log.Warn("EVMC gas mismatch", fields...)
+		return
+	}
+
+	goIdx, evmoneIdx := findTraceMismatch(steps, evmoneSteps)
+	if goIdx < 0 && evmoneIdx < 0 {
+		fields = append(fields, "reason", "no opcode mismatch")
+		log.Warn("EVMC gas mismatch", fields...)
+		return
+	}
+
+	var (
+		goStep     *evmcTraceStep
+		evmoneStep *evmc.TraceStep
+	)
+
+	if goIdx >= 0 && goIdx < len(steps) {
+		goStep = &steps[goIdx]
+	}
+	if evmoneIdx >= 0 && evmoneIdx < len(evmoneSteps) {
+		evmoneStep = &evmoneSteps[evmoneIdx]
+	}
+
+	if goStep != nil {
+		fields = append(fields,
+			"borPC", goStep.pc,
+			"borOp", OpCode(goStep.op),
+			"borGas", int64(goStep.gas),
+			"borDepth", goStep.depth,
+			"borFault", goStep.fault,
+		)
+	}
+	if evmoneStep != nil {
+		fields = append(fields,
+			"evmonePC", evmoneStep.PC,
+			"evmoneOp", OpCode(evmoneStep.Opcode),
+			"evmoneGas", evmoneStep.Gas,
+			"evmoneDepth", evmoneStep.Depth,
+		)
+	}
+
+	log.Warn("EVMC gas mismatch", fields...)
+}
+
+func (evm *EVMC) runGoInterpreterTrace(contract *Contract, input []byte, initialGas uint64) ([]evmcTraceStep, uint64, error) {
+	snapshot := evm.env.StateDB.Snapshot()
+	defer evm.env.StateDB.RevertToSnapshot(snapshot)
+
+	contractCopy := cloneContractForTrace(contract, initialGas)
+	tracer := &evmcTraceLogger{}
+	hooks := tracing.Hooks{OnOpcode: tracer.onOpcode}
+	prevTracer := evm.env.Config.Tracer
+	evm.env.Config.Tracer = &hooks
+	_, err := evm.env.interpreter.Run(contractCopy, append([]byte(nil), input...), evm.readOnly, nil)
+	evm.env.Config.Tracer = prevTracer
+
+	return tracer.steps, contractCopy.Gas, err
+}
+
+type txHashProvider interface {
+	TxHash() common.Hash
+}
+
+type txIndexProvider interface {
+	TxIndex() int
+}
+
+func extractTxInfo(db StateDB) (common.Hash, int) {
+	var hash common.Hash
+	index := -1
+
+	if provider, ok := db.(txHashProvider); ok {
+		hash = provider.TxHash()
+	} else if inner := db.Inner(); inner != nil {
+		if provider, ok := interface{}(inner).(txHashProvider); ok {
+			hash = provider.TxHash()
+		}
+	}
+
+	if provider, ok := db.(txIndexProvider); ok {
+		index = provider.TxIndex()
+	} else if inner := db.Inner(); inner != nil {
+		if provider, ok := interface{}(inner).(txIndexProvider); ok {
+			index = provider.TxIndex()
+		}
+	}
+
+	return hash, index
+}
+
+func shouldTraceTx(hash common.Hash, index int) bool {
+	traceTargetMu.RLock()
+	defer traceTargetMu.RUnlock()
+	if !traceTargetSet {
+		return true
+	}
+	if traceTargetHash != (common.Hash{}) && hash == traceTargetHash {
+		return true
+	}
+	if traceTargetIndex >= 0 && index == traceTargetIndex {
+		return true
+	}
+	return false
+}
+
+func setEVMCMismatchTraceTarget(hash common.Hash, index int) {
+	traceTargetMu.Lock()
+	defer traceTargetMu.Unlock()
+	traceTargetHash = hash
+	traceTargetIndex = index
+	traceTargetSet = true
+}
+
+func clearEVMCMismatchTraceTarget() {
+	traceTargetMu.Lock()
+	defer traceTargetMu.Unlock()
+	traceTargetHash = common.Hash{}
+	traceTargetIndex = -1
+	traceTargetSet = false
+}
+
+func findTraceMismatch(goSteps []evmcTraceStep, evmoneSteps []evmc.TraceStep) (int, int) {
+	limit := len(goSteps)
+	if len(evmoneSteps) < limit {
+		limit = len(evmoneSteps)
+	}
+	for i := 0; i < limit; i++ {
+		goGas := int64(goSteps[i].gas)
+		evmoneGas := evmoneSteps[i].Gas
+		if goGas != evmoneGas || goSteps[i].op != evmoneSteps[i].Opcode {
+			return i, i
+		}
+	}
+	if len(goSteps) > len(evmoneSteps) {
+		return limit, -1
+	}
+	if len(evmoneSteps) > len(goSteps) {
+		return -1, limit
+	}
+	return -1, -1
+}
+
+func cloneContractForTrace(original *Contract, gas uint64) *Contract {
+	var valueCopy *uint256.Int
+	if original.value != nil {
+		valueCopy = new(uint256.Int)
+		valueCopy.Set(original.value)
+	}
+
+	clone := NewContract(original.caller, original.address, valueCopy, gas, original.jumpdests)
+	if len(original.Code) > 0 {
+		clone.Code = append([]byte(nil), original.Code...)
+	}
+	clone.CodeHash = original.CodeHash
+	if len(original.Input) > 0 {
+		clone.Input = append([]byte(nil), original.Input...)
+	}
+	clone.IsDeployment = original.IsDeployment
+	clone.IsSystemCall = original.IsSystemCall
+	return clone
+}
+
+type evmcTraceStep struct {
+	pc       uint64
+	op       byte
+	gas      uint64
+	cost     uint64
+	gasAfter uint64
+	depth    int
+	fault    string
+}
+
+type evmcTraceLogger struct {
+	steps []evmcTraceStep
+}
+
+func (l *evmcTraceLogger) onOpcode(pc uint64, op byte, gas, cost uint64, scope tracing.OpContext, rData []byte, depth int, fault error) {
+	gasAfter := uint64(0)
+	if gas > cost {
+		gasAfter = gas - cost
+	}
+	step := evmcTraceStep{pc: pc, op: op, gas: gas, cost: cost, gasAfter: gasAfter, depth: depth}
+	if fault != nil {
+		step.fault = fault.Error()
+	}
+	l.steps = append(l.steps, step)
+}
+
+func errToString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+var (
+	evmcTraceFlag atomic.Bool
+
+	traceTargetMu    sync.RWMutex
+	traceTargetSet   bool
+	traceTargetHash  common.Hash
+	traceTargetIndex int = -1
+)
+
+// EnableEVMCMismatchTrace enables EVMC shadow tracing for the next block replay.
+
+// SetEVMCMismatchTraceTarget restricts tracing to a specific transaction.
+func SetEVMCMismatchTraceTarget(hash common.Hash, index int) {
+	setEVMCMismatchTraceTarget(hash, index)
+}
+
+// ClearEVMCMismatchTraceTarget removes any transaction-specific trace filter.
+func ClearEVMCMismatchTraceTarget() {
+	clearEVMCMismatchTraceTarget()
+}
+
+func EnableEVMCMismatchTrace() func() {
+	evmcTraceFlag.Store(true)
+	return func() {
+		evmcTraceFlag.Store(false)
+		clearEVMCMismatchTraceTarget()
+	}
 }

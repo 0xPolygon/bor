@@ -671,6 +671,11 @@ func (s *StateDB) TxIndex() int {
 	return s.txIndex
 }
 
+// TxHash returns the current transaction hash set by SetTxContext.
+func (s *StateDB) TxHash() common.Hash {
+	return s.thash
+}
+
 func (s *StateDB) Version() blockstm.Version {
 	return blockstm.Version{
 		TxnIndex:    s.txIndex,

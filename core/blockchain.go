@@ -4033,6 +4033,37 @@ func (bc *BlockChain) reportBlock(block *types.Block, res *ProcessResult, err er
 	}
 	rawdb.WriteBadBlock(bc.db, block)
 	log.Error(summarizeBadBlock(block, receipts, bc.Config(), err))
+
+	if errors.Is(err, ErrGasUsedMismatch) {
+		go bc.traceEVMCMismatch(block)
+	}
+}
+
+func (bc *BlockChain) traceEVMCMismatch(block *types.Block) {
+	parent := bc.GetBlock(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		log.Warn("EVMC shadow trace skipped; missing parent", "number", block.Number(), "hash", block.Hash())
+		return
+	}
+
+	statedb, err := state.New(parent.Root(), bc.statedb)
+	if err != nil {
+		log.Warn("EVMC shadow trace failed to open state", "number", block.Number(), "hash", block.Hash(), "err", err)
+		return
+	}
+
+	if len(block.Transactions()) > 0 {
+		vm.SetEVMCMismatchTraceTarget(block.Transactions()[0].Hash(), 0)
+	} else {
+		vm.ClearEVMCMismatchTraceTarget()
+	}
+	cancel := vm.EnableEVMCMismatchTrace()
+	defer cancel()
+
+	cfg := bc.cfg.VmConfig
+	if _, err := bc.processor.Process(block, statedb, cfg, nil, context.Background()); err != nil {
+		log.Warn("EVMC shadow trace replay failed", "number", block.Number(), "hash", block.Hash(), "err", err)
+	}
 }
 
 /*
