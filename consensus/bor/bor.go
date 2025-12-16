@@ -252,7 +252,7 @@ type Bor struct {
 	// The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	blockTime time.Duration
 
-	lastMinedBlockTime time.Time
+	parentActualTimeCache *lru.Cache
 
 	quit      chan struct{}
 	closeOnce sync.Once
@@ -325,6 +325,8 @@ func New(
 			return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
 		},
 	})
+
+	c.parentActualTimeCache, _ = lru.New(100)
 
 	// make sure we can decode all the GenesisAlloc in the BorConfig.
 	for key, genesisAlloc := range c.config.BlockAlloc {
@@ -1017,12 +1019,19 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
-		parentActualTime := c.lastMinedBlockTime
-		if parentActualTime.IsZero() || parentActualTime.Before(time.Unix(int64(parent.Time), 0)) {
-			parentActualTime = time.Unix(int64(parent.Time), 0)
+
+		parentChainTime := time.Unix(int64(parent.Time), 0)
+		// Default to parent chain timestamp
+		parentActualTime := parentChainTime
+		// If we have the parent's ActualTime locally (by parent hash), prefer it
+		if c.parentActualTimeCache != nil {
+			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
+				if at, ok := v.(time.Time); ok && at.After(parentChainTime) {
+					parentActualTime = at
+				}
+			}
 		}
 		actualNewBlockTime := parentActualTime.Add(c.blockTime)
-		c.lastMinedBlockTime = actualNewBlockTime
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
 	} else {
@@ -1237,6 +1246,10 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// Assemble block
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
+
+	if c.parentActualTimeCache != nil && !block.Header().ActualTime.IsZero() {
+		c.parentActualTimeCache.Add(block.Hash(), block.Header().ActualTime)
+	}
 
 	// return the final block for sealing
 	return block, receipts, nil
