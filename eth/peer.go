@@ -184,15 +184,15 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 		return 0, errors.New("witness peer not found")
 	}
 
-	// Check if peer supports WIT2 protocol with metadata message
-	if p.witPeer.Peer.Version() < wit.WIT2 {
-		// Fallback to old method for WIT1 peers: request page 0
+	// Check if peer supports WIT1 protocol with metadata message
+	if p.witPeer.Peer.Version() < wit.WIT1 {
+		// Fallback to old method for WIT0 peers: request page 0
 		return p.requestWitnessPageCountLegacy(hash)
 	}
 
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
 
-	// Use the new efficient metadata request (WIT2)
+	// Use the new efficient metadata request (WIT1)
 	witResCh := make(chan *wit.Response, 1)
 
 	witReq, err := p.witPeer.Peer.RequestWitnessMetadata([]common.Hash{hash}, witResCh)
@@ -242,7 +242,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 	}
 }
 
-// requestWitnessPageCountLegacy is the fallback method for WIT1 peers that don't support metadata requests.
+// requestWitnessPageCountLegacy is the fallback method for WIT0 peers that don't support metadata requests.
 // It requests page 0 to get the TotalPages field.
 func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error) {
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)

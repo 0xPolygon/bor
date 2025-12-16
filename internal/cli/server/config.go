@@ -685,7 +685,7 @@ type ParallelEVMConfig struct {
 }
 
 type WitnessConfig struct {
-	// Enable enables the wit/1 protocol
+	// Enable enables the wit protocol
 	Enable bool `hcl:"enable,optional" toml:"enable,optional"`
 
 	// SyncWithWitnesses enables syncing blocks with witnesses
