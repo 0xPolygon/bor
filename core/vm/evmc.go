@@ -19,6 +19,7 @@ package vm
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"math/big"
 	"runtime"
 	"strings"
@@ -319,11 +320,13 @@ func (host *HostContext) AccessAccount(addr evmc.Address) evmc.AccessStatus {
 func (host *HostContext) AccessStorage(addr evmc.Address, key evmc.Hash) evmc.AccessStatus {
 	commonAddr := common.Address(addr)
 	commonKey := common.Hash(key)
-	if _, slotPresent := host.env.StateDB.SlotInAccessList(commonAddr, commonKey); slotPresent {
-		return evmc.WarmAccess
+	status := evmc.WarmAccess
+	if _, slotPresent := host.env.StateDB.SlotInAccessList(commonAddr, commonKey); !slotPresent {
+		host.env.StateDB.AddSlotToAccessList(commonAddr, commonKey)
+		status = evmc.ColdAccess
 	}
-	host.env.StateDB.AddSlotToAccessList(commonAddr, commonKey)
-	return evmc.ColdAccess
+	logHostAccessStorage(host.env, commonAddr, commonKey, status)
+	return status
 }
 
 func (host *HostContext) GetTransientStorage(addr evmc.Address, key evmc.Hash) evmc.Hash {
@@ -422,22 +425,38 @@ func (host *HostContext) Call(kind evmc.CallKind,
 func getRevision(env *EVM) evmc.Revision {
 	n := env.Context.BlockNumber
 	conf := env.ChainConfig()
-	if conf.IsConstantinople(n) {
+	switch {
+	case conf.IsOsaka(n):
+		return evmc.Osaka
+	case conf.IsPrague(n):
+		return evmc.Prague
+	case conf.IsCancun(n):
+		return evmc.Cancun
+	case conf.IsShanghai(n):
+		return evmc.Shanghai
+	case env.chainRules.IsMerge:
+		return evmc.Paris
+	case conf.IsLondon(n):
+		return evmc.London
+	case conf.IsBerlin(n):
+		return evmc.Berlin
+	case conf.IsIstanbul(n):
+		return evmc.Istanbul
+	case conf.IsPetersburg(n):
+		return evmc.Petersburg
+	case conf.IsConstantinople(n):
 		return evmc.Constantinople
-	}
-	if conf.IsByzantium(n) {
+	case conf.IsByzantium(n):
 		return evmc.Byzantium
-	}
-	if conf.IsEIP158(n) {
+	case conf.IsEIP158(n):
 		return evmc.SpuriousDragon
-	}
-	if conf.IsEIP150(n) {
+	case conf.IsEIP150(n):
 		return evmc.TangerineWhistle
-	}
-	if conf.IsHomestead(n) {
+	case conf.IsHomestead(n):
 		return evmc.Homestead
+	default:
+		return evmc.Frontier
 	}
-	return evmc.Frontier
 }
 
 func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt *atomic.Bool) (ret []byte, err error) {
@@ -448,6 +467,7 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 	// 	return nil, ErrInterrupt
 	// }
 
+	baseDepth := evm.env.depth
 	evm.env.depth++
 	defer func() { evm.env.depth-- }()
 
@@ -484,6 +504,7 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 	initialGas := contract.Gas
 
 	traceEnabled := evmcTraceFlag.Load()
+	revision := getRevision(evm.env)
 	if traceEnabled {
 		if err := evm.instance.SetOption("bor.trace_steps", "on"); err != nil {
 			log.Warn("Failed to enable evmone step tracing", "err", err)
@@ -494,14 +515,15 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 					log.Warn("Failed to disable evmone step tracing", "err", err)
 				}
 			}()
+			log.Info("EVMC revision context", "addr", contract.Address(), "rev", revisionName(revision), "block", evm.env.Context.BlockNumber, "chainRules", chainRulesSummary(evm.env.chainRules))
 		}
 	}
 	result, err := evm.instance.Execute(
 		hostCtx,
-		getRevision(evm.env),
+		revision,
 		kind,
 		evm.readOnly,
-		evm.env.depth-1,
+		baseDepth,
 		int64(contract.Gas),
 		evmc.Address(contract.Address()),
 		evmc.Address(contract.Caller()),
@@ -515,6 +537,13 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 		evmcGasLeft = uint64(result.GasLeft)
 	}
 	contract.Gas = evmcGasLeft
+
+	if len(result.TraceSteps) > 0 {
+		frameDepth := int32(baseDepth + 1)
+		for i := range result.TraceSteps {
+			result.TraceSteps[i].Depth = frameDepth
+		}
+	}
 
 	// if interrupt.Load() || hostCtx.wasInterrupted() {
 	// 	return nil, ErrInterrupt
@@ -571,6 +600,8 @@ func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, 
 		"txHash", txHash,
 		"txIndex", txIndex,
 		"addr", contract.Address(),
+		"evmcRevision", revisionName(getRevision(evm.env)),
+		"chainRules", chainRulesSummary(evm.env.chainRules),
 		"evmoneGas", evmcUsed,
 		"borGas", goUsed,
 		"delta", delta,
@@ -621,6 +652,13 @@ func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, 
 		)
 	}
 
+	if ctx := summarizeGoTraceContext(steps, goIdx, 4); ctx != "" {
+		fields = append(fields, "borTrace", ctx)
+	}
+	if ctx := summarizeEvmoneTraceContext(evmoneSteps, evmoneIdx, 4, evmcGasLeft); ctx != "" {
+		fields = append(fields, "evmoneTrace", ctx)
+	}
+
 	log.Warn("EVMC gas mismatch", fields...)
 }
 
@@ -633,6 +671,16 @@ func (evm *EVMC) runGoInterpreterTrace(contract *Contract, input []byte, initial
 	hooks := tracing.Hooks{OnOpcode: tracer.onOpcode}
 	prevTracer := evm.env.Config.Tracer
 	evm.env.Config.Tracer = &hooks
+	adjustDepth := false
+	if evm.env.depth > 0 {
+		evm.env.depth--
+		adjustDepth = true
+	}
+	if adjustDepth {
+		defer func() {
+			evm.env.depth++
+		}()
+	}
 	_, err := evm.env.interpreter.Run(contractCopy, append([]byte(nil), input...), evm.readOnly, nil)
 	evm.env.Config.Tracer = prevTracer
 
@@ -722,6 +770,65 @@ func findTraceMismatch(goSteps []evmcTraceStep, evmoneSteps []evmc.TraceStep) (i
 	return -1, -1
 }
 
+func summarizeGoTraceContext(steps []evmcTraceStep, idx int, history int) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	if idx < 0 || idx >= len(steps) {
+		idx = len(steps) - 1
+	}
+	start := idx - history
+	if start < 0 {
+		start = 0
+	}
+	var b strings.Builder
+	for i := start; i <= idx; i++ {
+		if b.Len() > 0 {
+			b.WriteString(" | ")
+		}
+		step := steps[i]
+		fmt.Fprintf(&b, "#%d pc=%d op=%s gas=%d cost=%d depth=%d", i, step.pc, OpCode(step.op), step.gas, step.cost, step.depth)
+		if step.fault != "" {
+			fmt.Fprintf(&b, " fault=%s", step.fault)
+		}
+	}
+	return b.String()
+}
+
+func summarizeEvmoneTraceContext(steps []evmc.TraceStep, idx int, history int, finalGas uint64) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	if idx < 0 || idx >= len(steps) {
+		idx = len(steps) - 1
+	}
+	start := idx - history
+	if start < 0 {
+		start = 0
+	}
+	var b strings.Builder
+	var finalGasAfter int64
+	if finalGas > math.MaxInt64 {
+		finalGasAfter = math.MaxInt64
+	} else {
+		finalGasAfter = int64(finalGas)
+	}
+	for i := start; i <= idx && i < len(steps); i++ {
+		if b.Len() > 0 {
+			b.WriteString(" | ")
+		}
+		step := steps[i]
+		nextGas := finalGasAfter
+		if i+1 < len(steps) {
+			nextGas = steps[i+1].Gas
+		}
+		cost := step.Gas - nextGas
+		fmt.Fprintf(&b, "#%d pc=%d op=%s gas=%d cost=%d depth=%d gasAfter=%d",
+			i, step.PC, OpCode(step.Opcode), step.Gas, cost, step.Depth, nextGas)
+	}
+	return b.String()
+}
+
 func cloneContractForTrace(original *Contract, gas uint64) *Contract {
 	var valueCopy *uint256.Int
 	if original.value != nil {
@@ -775,6 +882,103 @@ func errToString(err error) string {
 	return err.Error()
 }
 
+func revisionName(rev evmc.Revision) string {
+	switch rev {
+	case evmc.Frontier:
+		return "Frontier"
+	case evmc.Homestead:
+		return "Homestead"
+	case evmc.TangerineWhistle:
+		return "TangerineWhistle"
+	case evmc.SpuriousDragon:
+		return "SpuriousDragon"
+	case evmc.Byzantium:
+		return "Byzantium"
+	case evmc.Constantinople:
+		return "Constantinople"
+	case evmc.Petersburg:
+		return "Petersburg"
+	case evmc.Istanbul:
+		return "Istanbul"
+	case evmc.Berlin:
+		return "Berlin"
+	case evmc.London:
+		return "London"
+	case evmc.Paris:
+		return "Paris"
+	case evmc.Shanghai:
+		return "Shanghai"
+	case evmc.Cancun:
+		return "Cancun"
+	case evmc.Prague:
+		return "Prague"
+	case evmc.Osaka:
+		return "Osaka"
+	default:
+		return fmt.Sprintf("rev(%d)", int32(rev))
+	}
+}
+
+func chainRulesSummary(r params.Rules) string {
+	return fmt.Sprintf("Homestead=%t EIP150=%t EIP158=%t Byzantium=%t Constantinople=%t Petersburg=%t Istanbul=%t Berlin=%t London=%t Merge=%t Shanghai=%t Cancun=%t Prague=%t Osaka=%t",
+		r.IsHomestead, r.IsEIP150, r.IsEIP158, r.IsByzantium, r.IsConstantinople, r.IsPetersburg, r.IsIstanbul, r.IsBerlin, r.IsLondon, r.IsMerge, r.IsShanghai, r.IsCancun, r.IsPrague, r.IsOsaka)
+}
+
+func traceLoggingContext(env *EVM) (common.Hash, int, bool) {
+	if env == nil {
+		return common.Hash{}, -1, false
+	}
+	if !evmcTraceFlag.Load() {
+		return common.Hash{}, -1, false
+	}
+	txHash, txIndex := extractTxInfo(env.StateDB)
+	if !shouldTraceTx(txHash, txIndex) {
+		return common.Hash{}, -1, false
+	}
+	return txHash, txIndex, true
+}
+
+func logBorGasDecision(env *EVM, op OpCode, addr common.Address, slot *common.Hash, warm bool, cost uint64) {
+	txHash, txIndex, ok := traceLoggingContext(env)
+	if !ok {
+		return
+	}
+	fields := []interface{}{
+		"txHash", txHash,
+		"txIndex", txIndex,
+		"addr", addr,
+		"op", op,
+		"warm", warm,
+		"cost", cost,
+		"depth", env.depth,
+		"borRevision", revisionName(getRevision(env)),
+		"chainRules", chainRulesSummary(env.chainRules),
+	}
+	if slot != nil {
+		fields = append(fields, "slot", *slot)
+	}
+	log.Debug("EVMC bor gas cost decision", fields...)
+}
+
+func logHostAccessStorage(env *EVM, addr common.Address, slot common.Hash, status evmc.AccessStatus) {
+	txHash, txIndex, ok := traceLoggingContext(env)
+	if !ok {
+		return
+	}
+	fields := []interface{}{
+		"txHash", txHash,
+		"txIndex", txIndex,
+		"addr", addr,
+		"slot", slot,
+		"status", accessStatusName(status),
+		"warm", status == evmc.WarmAccess,
+		"depth", env.depth,
+		"borRevision", revisionName(getRevision(env)),
+		"chainRules", chainRulesSummary(env.chainRules),
+	}
+	log.Debug("EVMC host access storage", fields...)
+}
+
 var (
 	evmcTraceFlag atomic.Bool
 
@@ -801,5 +1005,16 @@ func EnableEVMCMismatchTrace() func() {
 	return func() {
 		evmcTraceFlag.Store(false)
 		clearEVMCMismatchTraceTarget()
+	}
+}
+
+func accessStatusName(status evmc.AccessStatus) string {
+	switch status {
+	case evmc.WarmAccess:
+		return "warm"
+	case evmc.ColdAccess:
+		return "cold"
+	default:
+		return fmt.Sprintf("status(%d)", int(status))
 	}
 }
