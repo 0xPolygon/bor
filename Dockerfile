@@ -1,5 +1,5 @@
 # ─── BUILDER STAGE ───────────────────────────────────────────────────────────────
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR

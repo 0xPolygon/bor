@@ -1,6 +1,7 @@
 # This file configures github.com/golangci/golangci-lint.
 version: '2'
 run:
+  go: 1.25.5
   tests: true
 linters:
   default: none
@@ -34,6 +35,9 @@ linters:
     # - makezero # false positives
     # - nilerr # several intentional
   settings:
+    govet:
+      disable:
+        - buildtag
     staticcheck:
       checks:
         # disable Quickfixes

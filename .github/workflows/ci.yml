@@ -72,7 +72,7 @@ jobs:
 
       - name: Golang-ci install
         if: runner.os == 'Linux'
-        run: make lintci-deps
+        run: make lint-deps
 
       - name: Lint
         if: runner.os == 'Linux'

@@ -9,7 +9,7 @@ jobs:
       os: linux
       arch: amd64
       dist: focal
-      go: 1.24.x
+      go: 1.25.x
       env:
         - docker
       services:
@@ -51,7 +51,7 @@ jobs:
       os: linux
       dist: focal
       sudo: required
-      go: 1.24.x
+      go: 1.25.x
       env:
         - azure-linux
       git:
@@ -141,7 +141,7 @@ jobs:
       os: linux
       arch: amd64
       dist: focal
-      go: 1.24.x
+      go: 1.25.x
       script:
         - travis_wait 45 go run build/ci.go test $TEST_PACKAGES
 
@@ -166,7 +166,7 @@ jobs:
       if: type = cron || (type = push && tag ~= /^v[0-9]/)
       os: linux
       dist: focal
-      go: 1.24.x
+      go: 1.25.x
       env:
         - ubuntu-ppa
       git:
@@ -182,7 +182,7 @@ jobs:
       if: type = cron
       os: linux
       dist: focal
-      go: 1.24.x
+      go: 1.25.x
       env:
         - azure-purge
       git:
@@ -195,7 +195,7 @@ jobs:
       if: type = cron
       os: linux
       dist: focal
-      go: 1.24.x
+      go: 1.25.x
       env:
         - racetests
       script:
