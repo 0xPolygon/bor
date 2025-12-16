@@ -400,6 +400,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		stack.RegisterLifecycle(eth.localTxTracker)
 	}
 
+	var privateTxStoreGetter preconfs.PrivateTxGetter
+	if privateTxStore != nil {
+		privateTxStoreGetter = privateTxStore
+	}
+
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := options.TrieCleanLimit + options.TrieDirtyLimit + options.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{
@@ -422,7 +427,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
 		privatePeerIds:          eth.p2pServer.PrivatePeerIds,
-		privateTxStoreGetter:    privateTxStore,
+		privateTxStoreGetter:    privateTxStoreGetter,
 	}); err != nil {
 		return nil, err
 	}
