@@ -1252,10 +1252,6 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	// Assemble block
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
-	if c.parentActualTimeCache != nil && !block.Header().ActualTime.IsZero() {
-		c.parentActualTimeCache.Add(block.Hash(), block.Header().ActualTime)
-	}
-
 	// return the final block for sealing
 	return block, receipts, nil
 }
@@ -1325,6 +1321,10 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	err = Sign(currentSigner.signFn, currentSigner.signer, header, c.config)
 	if err != nil {
 		return err
+	}
+
+	if c.parentActualTimeCache != nil && !header.ActualTime.IsZero() {
+		c.parentActualTimeCache.Add(header.Hash(), header.ActualTime)
 	}
 
 	// Wait until sealing is terminated or delay timeout.
