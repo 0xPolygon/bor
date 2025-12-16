@@ -9,7 +9,7 @@ import (
 
 // Constants to match up protocol versions and messages
 const (
-	WIT1 = 1
+	WIT0 = 1
 )
 
 // ProtocolName is the official short name of the `wit` protocol used during
@@ -18,11 +18,11 @@ const ProtocolName = "wit"
 
 // ProtocolVersions are the supported versions of the `wit` protocol (first
 // is primary).
-var ProtocolVersions = []uint{WIT1}
+var ProtocolVersions = []uint{WIT0}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
-var protocolLengths = map[uint]uint64{WIT1: 4}
+var protocolLengths = map[uint]uint64{WIT0: 4}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 16 * 1024 * 1024
