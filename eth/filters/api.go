@@ -42,7 +42,6 @@ var (
 	errPendingLogsUnsupported = errors.New("pending logs are not supported")
 	errExceedMaxTopics        = errors.New("exceed max topics")
 	errExceedMaxAddresses     = errors.New("exceed max addresses")
-	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
 )
 

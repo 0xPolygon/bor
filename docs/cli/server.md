@@ -302,9 +302,11 @@ The ```bor server``` command runs the Bor client.
 
 ### Sealer Options
 
+- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+
 - ```mine```: Enable mining (default: false)
 
-- ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
+- ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
 - ```miner.etherbase```: Public address for block mining rewards
 

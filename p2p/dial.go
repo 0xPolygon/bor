@@ -74,6 +74,7 @@ func (t tcpDialer) Dial(ctx context.Context, dest *enode.Node) (net.Conn, error)
 // checkDial errors:
 var (
 	errSelf             = errors.New("is self")
+	errJailed           = errors.New("peer is jailed")
 	errAlreadyDialing   = errors.New("already dialing")
 	errAlreadyConnected = errors.New("already connected")
 	errRecentlyDialed   = errors.New("recently dialed")
@@ -139,6 +140,7 @@ type dialConfig struct {
 	log            log.Logger
 	clock          mclock.Clock
 	rand           *mrand.Rand
+	jailChecker    func(enode.ID) bool // function to check if peer is jailed
 }
 
 func (cfg dialConfig) withDefaults() dialConfig {
@@ -392,6 +394,12 @@ func (d *dialScheduler) checkDial(n *enode.Node) error {
 	if n.ID() == d.self {
 		return errSelf
 	}
+
+	// Check if peer is jailed (blocks outbound connections)
+	if d.jailChecker != nil && d.jailChecker(n.ID()) {
+		return errJailed
+	}
+
 	if n.IPAddr().IsValid() && n.TCP() == 0 {
 		// This check can trigger if a non-TCP node is found
 		// by discovery. If there is no IP, the node is a static
