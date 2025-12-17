@@ -60,6 +60,18 @@ func newMultiClient(urls []string) *multiClient {
 			log.Warn("[preconfs] Failed to dial rpc endpoint for multi-client, skipping", "url", url, "err", err)
 			continue
 		}
+
+		// Ensure a simple call works without any error
+		var blockNumber string
+		err = client.CallContext(context.Background(), &blockNumber, "eth_blockNumber")
+		if err != nil {
+			failed++
+			log.Warn("[preconfs] Failed to fetch latest block number for multi-client, skipping", "url", url, "err", err)
+			continue
+		}
+		number, _ := hexutil.DecodeUint64(blockNumber)
+		log.Info("[preconfs] Dial successfull", "number", number)
+
 		clients = append(clients, client)
 	}
 
