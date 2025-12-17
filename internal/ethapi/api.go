@@ -2093,9 +2093,6 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 }
 
 func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {
-	if !api.b.IsPreconfEnabled() {
-		return false, errors.New("preconf service disabled")
-	}
 	return api.b.CheckPreconfStatus(hash)
 }
 
