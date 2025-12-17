@@ -560,8 +560,8 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			w.pendingMu.RUnlock()
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
-			if pendingWorkBlock == currentBlock.Number.Uint64() {
-				// We are already working on this block, so we don't need to work on it again.
+			if pendingWorkBlock == currentBlock.Number.Uint64()+1 {
+				// Next block is already being worked on, reset the timer.
 				veblopTimer.Reset(veblopTimeout)
 				continue
 			}
