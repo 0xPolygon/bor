@@ -59,8 +59,8 @@ type EthAPIBackend struct {
 	// preconfs service for validating tx inclusion for issuing preconfs
 	preconfService *preconfs.Service
 
-	// privateTxStore to cache transactions which are to be relayed privately
-	privateTxStore *preconfs.PrivateTxStore
+	// privateTxStoreSetter to cache transactions which are to be relayed privately
+	privateTxStoreSetter preconfs.PrivateTxSetter
 }
 
 // ChainConfig returns the active chain configuration.
@@ -514,18 +514,18 @@ func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 }
 
 func (b *EthAPIBackend) IsPrivateTxEnabled() bool {
-	return b.privateTxStore != nil
+	return b.privateTxStoreSetter != nil
 }
 
 func (b *EthAPIBackend) SubmitPrivateTx(hash common.Hash) {
-	if b.privateTxStore != nil {
-		b.privateTxStore.Add(hash)
+	if b.privateTxStoreSetter != nil {
+		b.privateTxStoreSetter.Add(hash)
 	}
 }
 
 func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {
-	if b.privateTxStore != nil {
-		b.privateTxStore.Purge(hash)
+	if b.privateTxStoreSetter != nil {
+		b.privateTxStoreSetter.Purge(hash)
 	}
 }
 

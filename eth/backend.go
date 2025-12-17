@@ -240,7 +240,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		privateTxStore = preconfs.NewPrivateTxStore()
 	}
 
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, preconfService, privateTxStore}
+	var privateTxStoreSetter preconfs.PrivateTxSetter
+	if privateTxStore != nil {
+		privateTxStoreSetter = privateTxStore
+	}
+
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, preconfService, privateTxStoreSetter}
 	if eth.APIBackend.allowUnprotectedTxs {
 		log.Info("Unprotected transactions allowed")
 		config.TxPool.AllowUnprotectedTxs = true

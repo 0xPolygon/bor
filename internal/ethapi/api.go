@@ -1886,17 +1886,18 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, of
 
 	// If private tx relaying is enabled, record the tx hash. Do it early to ensure
 	// it's always recorded before the tx announcement/broadcasting happens.
-	recordPrivateTx := b.IsPrivateTxEnabled() && isPrivate
-	if recordPrivateTx {
+	if isPrivate {
 		log.Info("[private-tx-relay] recorded tx for private relay", "hash", tx.Hash())
 		b.SubmitPrivateTx(tx.Hash())
 	}
 	if err := b.SendTx(ctx, tx); err != nil {
-		if recordPrivateTx {
+		// Purge incase of any errors in inclusion
+		if isPrivate {
 			b.PurgePrivateTx(tx.Hash())
 		}
 		return common.Hash{}, err
 	}
+
 	// Print a log with full tx details for manual investigations and interventions
 	head := b.CurrentBlock()
 	signer := types.MakeSigner(b.ChainConfig(), head.Number, head.Time)
@@ -1907,7 +1908,7 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, of
 	}
 
 	// If preconfirmations are requested, send it to the preconf service for additional validation async
-	if b.IsPreconfEnabled() && offerPreconf {
+	if offerPreconf {
 		log.Info("[preconfs] submitted tx for preconf validation", "hash", tx.Hash())
 		go b.SubmitTxForPreconf(tx, from)
 	}
@@ -1993,6 +1994,10 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 // a trusted relay which is connected with the active block producers.
 // The sender is responsible for signing the transaction and using the correct nonce.
 func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	if !api.b.IsPrivateTxEnabled() {
+		return common.Hash{}, errors.New("private transaction relay service disabled")
+	}
+
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
 		return common.Hash{}, err
@@ -2085,38 +2090,6 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 			}
 		}
 	}
-}
-
-func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
-	if !api.b.IsPreconfEnabled() {
-		return common.Hash{}, errors.New("preconf service disabled")
-	}
-
-	tx := new(types.Transaction)
-	if err := tx.UnmarshalBinary(input); err != nil {
-		return common.Hash{}, err
-	}
-	hash, err := SubmitTransaction(ctx, api.b, tx, false, false)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	log.Info("[preconfs] Submitted transaction for preconfs", "hash", hash.Hex())
-
-	// TODO: Do we want to validate against local mempool or not? Good option but
-	// can give wrong result if node is out of sync.
-	head := api.b.CurrentBlock()
-	signer := types.MakeSigner(api.b.ChainConfig(), head.Number, head.Time)
-	from, err := types.Sender(signer, tx)
-	_ = from
-
-	// start := time.Now()
-	// valid := api.b.ValidateTxInclusionForPreconf(tx, from)
-	// if valid {
-	// 	log.Info("[preconfs] ✅ Offering preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
-	// } else {
-	// 	log.Info("[preconfs] ❌ Unable to offer preconf", "hash", hash.Hex(), "valid", valid, "duration", time.Since(start))
-	// }
-	return hash, nil
 }
 
 func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {

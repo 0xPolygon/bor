@@ -15,6 +15,11 @@ type PrivateTxGetter interface {
 	IsTxPrivate(hash common.Hash) bool
 }
 
+type PrivateTxSetter interface {
+	Add(hash common.Hash)
+	Purge(hash common.Hash)
+}
+
 type PrivateTxStore struct {
 	txs map[common.Hash]bool
 	mu  sync.RWMutex
