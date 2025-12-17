@@ -1554,7 +1554,6 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	start := time.Now()
 
 	// Clear the pending work block number when commitWork completes (success or failure).
-	// This is important to prevent duplicate work.
 	defer func() {
 		w.pendingWorkBlock.Store(0)
 	}()
