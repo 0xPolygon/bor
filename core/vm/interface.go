@@ -55,6 +55,11 @@ type StateDB interface {
 	GetState(common.Address, common.Hash) common.Hash
 	SetState(common.Address, common.Hash, common.Hash) common.Hash
 	GetStorageRoot(addr common.Address) common.Hash
+	// StorageTrieSize returns an implementation-defined metric for the storage trie
+	// size of an account. When available, it should be based on stored trie node
+	// blobs (sum of NodeBlob sizes) to reflect database footprint rather than
+	// leaf payload size.
+	StorageTrieSize(addr common.Address) (uint64, bool)
 
 	GetTransientState(addr common.Address, key common.Hash) common.Hash
 	SetTransientState(addr common.Address, key, value common.Hash)

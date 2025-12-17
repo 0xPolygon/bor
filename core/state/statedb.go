@@ -742,6 +742,18 @@ func (s *StateDB) GetCommittedState(addr common.Address, hash common.Hash) commo
 	})
 }
 
+// StorageTrieSize walks the storage trie of the provided account and returns an
+// approximate size metric based on the sum of standalone trie node blobs
+// (NodeBlob sizes). If the trie cannot be accessed (e.g. missing nodes), the
+// size is reported as unavailable (false).
+func (s *StateDB) StorageTrieSize(addr common.Address) (uint64, bool) {
+	stateObject := s.getStateObject(addr)
+	if stateObject == nil {
+		return 0, false
+	}
+	return stateObject.storageTrieSize()
+}
+
 // Database retrieves the low level database supporting the lower level trie ops.
 func (s *StateDB) Database() Database {
 	return s.db

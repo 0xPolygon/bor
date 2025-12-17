@@ -303,12 +303,17 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
 		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	} else {
-		// Initialise a new contract and set the code that is to be used by the EVM.
-		// The contract is a scoped environment for this execution context only.
-		contract := NewContract(caller, caller, value, gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
-		ret, err = evm.interpreter.Run(contract, input, false, nil)
-		gas = contract.Gas
+		code := evm.resolveCode(addr)
+		if len(code) == 0 {
+			ret, err = nil, nil
+		} else {
+			// Initialise a new contract and set the code that is to be used by the EVM.
+			// The contract is a scoped environment for this execution context only.
+			contract := NewContract(caller, caller, value, gas, evm.jumpDests)
+			contract.SetCallCode(evm.resolveCodeHash(addr), code)
+			ret, err = evm.interpreter.Run(contract, input, false, nil)
+			gas = contract.Gas
+		}
 	}
 
 	if err != nil {
@@ -349,13 +354,18 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
 		ret, gas, err = RunPrecompiledContract(p, input, gas, evm.Config.Tracer)
 	} else {
-		// Initialise a new contract and make initialise the delegate values
-		//
-		// Note: The value refers to the original value from the parent call.
-		contract := NewContract(originCaller, caller, value, gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
-		ret, err = evm.interpreter.Run(contract, input, false, nil)
-		gas = contract.Gas
+		code := evm.resolveCode(addr)
+		if len(code) == 0 {
+			ret, err = nil, nil
+		} else {
+			// Initialise a new contract and make initialise the delegate values
+			//
+			// Note: The value refers to the original value from the parent call.
+			contract := NewContract(originCaller, caller, value, gas, evm.jumpDests)
+			contract.SetCallCode(evm.resolveCodeHash(addr), code)
+			ret, err = evm.interpreter.Run(contract, input, false, nil)
+			gas = contract.Gas
+		}
 	}
 
 	if err != nil {
@@ -406,14 +416,19 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.
-		contract := NewContract(caller, addr, new(uint256.Int), gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
+		code := evm.resolveCode(addr)
+		if len(code) == 0 {
+			ret, err = nil, nil
+		} else {
+			contract := NewContract(caller, addr, new(uint256.Int), gas, evm.jumpDests)
+			contract.SetCallCode(evm.resolveCodeHash(addr), code)
 
-		// When an error was returned by the EVM or when setting the creation code
-		// above we revert to the snapshot and consume any gas remaining. Additionally
-		// when we're in Homestead this also counts for code storage gas errors.
-		ret, err = evm.interpreter.Run(contract, input, true, nil)
-		gas = contract.Gas
+			// When an error was returned by the EVM or when setting the creation code
+			// above we revert to the snapshot and consume any gas remaining. Additionally
+			// when we're in Homestead this also counts for code storage gas errors.
+			ret, err = evm.interpreter.Run(contract, input, true, nil)
+			gas = contract.Gas
+		}
 	}
 
 	if err != nil {
