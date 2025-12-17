@@ -251,6 +251,10 @@ type worker struct {
 	pendingMu    sync.RWMutex
 	pendingTasks map[common.Hash]*task
 
+	// Block number which is currently being worked on (0 = none).
+	// Used to prevent duplicate work.
+	pendingWorkBlock atomic.Uint64
+
 	snapshotMu       sync.RWMutex // The lock used to protect the snapshots below
 	snapshotBlock    *types.Block
 	snapshotReceipts types.Receipts
@@ -534,12 +538,14 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
+			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
 
 			timestamp = time.Now().Unix()
+			w.pendingWorkBlock.Store(head.Header.Number.Uint64() + 1)
 			commit(false, commitInterruptNewHead)
 
 		case <-veblopTimer.C:
@@ -553,13 +559,22 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			hasPendingTasks := len(w.pendingTasks) > 0
 			w.pendingMu.RUnlock()
 
-			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
-				timestamp = time.Now().Unix()
-				commit(false, commitInterruptNewHead)
+			pendingWorkBlock := w.pendingWorkBlock.Load()
+			if pendingWorkBlock == currentBlock.Number.Uint64() {
+				// We are already working on this block, so we don't need to work on it again.
+				veblopTimer.Reset(veblopTimeout)
+				continue
 			}
 
-			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
-			veblopTimer.Reset(veblopTimeout)
+			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
+				timestamp = time.Now().Unix()
+				w.pendingWorkBlock.Store(currentBlock.Number.Uint64() + 1)
+				commit(false, commitInterruptNewHead)
+				// veblopTimer is already reset by commit() so we don't need to reset it here.
+			} else {
+				veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+				veblopTimer.Reset(veblopTimeout)
+			}
 
 		case <-timer.C:
 			// Recommit disabled due to the current low block period (no need to capture more txs on the block already built)
@@ -1537,6 +1552,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 	start := time.Now()
+
+	// Clear the pending work block number when commitWork completes (success or failure).
+	// This is important to prevent duplicate work.
+	defer func() {
+		w.pendingWorkBlock.Store(0)
+	}()
 
 	var (
 		work *environment
