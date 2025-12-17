@@ -513,6 +513,22 @@ func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
 	return false, errors.New("preconf service disabled")
 }
 
+func (b *EthAPIBackend) IsPrivateTxEnabled() bool {
+	return b.privateTxStore != nil
+}
+
+func (b *EthAPIBackend) SubmitPrivateTx(hash common.Hash) {
+	if b.privateTxStore != nil {
+		b.privateTxStore.Add(hash)
+	}
+}
+
+func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {
+	if b.privateTxStore != nil {
+		b.privateTxStore.Purge(hash)
+	}
+}
+
 func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 	prog := b.eth.Downloader().Progress()
 	if txProg, err := b.eth.blockchain.TxIndexProgress(); err == nil {

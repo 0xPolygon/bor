@@ -36,6 +36,13 @@ func (s *PrivateTxStore) Add(hash common.Hash) {
 	s.txs[hash] = true
 }
 
+func (s *PrivateTxStore) Purge(hash common.Hash) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.txs, hash)
+}
+
 func (s *PrivateTxStore) IsTxPrivate(hash common.Hash) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

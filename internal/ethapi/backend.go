@@ -63,6 +63,10 @@ type Backend interface {
 	SubmitTxForPreconf(tx *types.Transaction, sender common.Address)
 	CheckPreconfStatus(hash common.Hash) (bool, error)
 
+	IsPrivateTxEnabled() bool
+	SubmitPrivateTx(hash common.Hash)
+	PurgePrivateTx(hash common.Hash)
+
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
 

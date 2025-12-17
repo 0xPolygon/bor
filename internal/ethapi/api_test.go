@@ -507,7 +507,10 @@ func (b testBackend) UnprotectedAllowed() bool                                  
 func (b testBackend) IsPreconfEnabled() bool                                          { return false }
 func (b testBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {}
 func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error)
-func (b testBackend) SetHead(number uint64) {}
+func (b testBackend) IsPrivateTxEnabled() bool         { return false }
+func (b testBackend) SubmitPrivateTx(hash common.Hash) {}
+func (b testBackend) PurgePrivateTx(hash common.Hash)  {}
+func (b testBackend) SetHead(number uint64)            {}
 func (b testBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	if number == rpc.LatestBlockNumber {
 		return b.chain.CurrentBlock(), nil

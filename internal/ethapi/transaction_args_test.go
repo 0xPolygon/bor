@@ -343,7 +343,10 @@ func (b *backendMock) UnprotectedAllowed() bool                                 
 func (b *backendMock) IsPreconfEnabled() bool                                          { return false }
 func (b *backendMock) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {}
 func (b *backendMock) CheckPreconfStatus(hash common.Hash) (bool, error)
-func (b *backendMock) SetHead(number uint64) {}
+func (b *backendMock) IsPrivateTxEnabled() bool         { return false }
+func (b *backendMock) SubmitPrivateTx(hash common.Hash) {}
+func (b *backendMock) PurgePrivateTx(hash common.Hash)  {}
+func (b *backendMock) SetHead(number uint64)            {}
 func (b *backendMock) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	//nolint:nilnil
 	return nil, nil

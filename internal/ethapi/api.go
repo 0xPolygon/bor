@@ -1884,7 +1884,17 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, of
 		return common.Hash{}, errors.New("only replay-protected (EIP-155) transactions allowed over RPC")
 	}
 
+	// If private tx relaying is enabled, record the tx hash. Do it early to ensure
+	// it's always recorded before the tx announcement/broadcasting happens.
+	recordPrivateTx := b.IsPrivateTxEnabled() && isPrivate
+	if recordPrivateTx {
+		log.Info("[private-tx-relay] recorded tx for private relay", "hash", tx.Hash())
+		b.SubmitPrivateTx(tx.Hash())
+	}
 	if err := b.SendTx(ctx, tx); err != nil {
+		if recordPrivateTx {
+			b.PurgePrivateTx(tx.Hash())
+		}
 		return common.Hash{}, err
 	}
 	// Print a log with full tx details for manual investigations and interventions
