@@ -511,7 +511,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	<-timer.C // discard the initial tick
 
 	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
-
+	if veblopTimeout < w.blockTime {
+		veblopTimeout = w.blockTime
+	}
 	veblopTimer := time.NewTimer(veblopTimeout)
 	defer veblopTimer.Stop()
 
@@ -544,6 +546,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		case head := <-w.chainHeadCh:
 			w.clearPending(head.Header.Number.Uint64())
 
+			pendingWorkBlock := w.pendingWorkBlock.Load()
+			if pendingWorkBlock == head.Header.Number.Uint64()+1 {
+				// Next block is already being worked on, skip the commit.
+				continue
+			}
+
 			timestamp = time.Now().Unix()
 			w.pendingWorkBlock.Store(head.Header.Number.Uint64() + 1)
 			commit(false, commitInterruptNewHead)
@@ -573,6 +581,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				// veblopTimer is already reset by commit() so we don't need to reset it here.
 			} else {
 				veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+				if veblopTimeout < w.blockTime {
+					veblopTimeout = w.blockTime
+				}
 				veblopTimer.Reset(veblopTimeout)
 			}
 
