@@ -19,25 +19,10 @@ package types
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/rlp"
-)
-
-// Consensus-level limits for StateSyncTx.
-// TODO marcello: tune these values
-const (
-	MaxStateSyncTxSizeBytes   = 2 * 1024 * 1024 // 2 MiB
-	MaxStateSyncEntries       = 2048
-	MaxStateSyncDataSizeBytes = 256 * 1024 // 256 KiB
-)
-
-var (
-	ErrStateSyncTxTooLarge     = errors.New("state sync tx too large")
-	ErrStateSyncTooManyEntries = errors.New("too many state sync data entries")
-	ErrStateSyncDataTooLarge   = errors.New("state sync data payload too large")
 )
 
 // StateSyncTx is the system transaction of Bor to introduce fetched state sync events from Heimdall
@@ -93,60 +78,26 @@ func (tx *StateSyncTx) encode(buf *bytes.Buffer) error {
 	if tx == nil {
 		return errors.New("nil StateSyncTx")
 	}
-
-	if len(tx.StateSyncData) > MaxStateSyncEntries {
-		return fmt.Errorf("%w: entries=%d max=%d", ErrStateSyncTooManyEntries, len(tx.StateSyncData), MaxStateSyncEntries)
-	}
-
 	enc := make([]StateSyncData, 0, len(tx.StateSyncData))
-	for i, d := range tx.StateSyncData {
+	for _, d := range tx.StateSyncData {
 		if d == nil {
 			continue
 		}
-		if len(d.Data) > MaxStateSyncDataSizeBytes {
-			return fmt.Errorf("%w: index=%d size=%d max=%d",
-				ErrStateSyncDataTooLarge, i, len(d.Data), MaxStateSyncDataSizeBytes)
-		}
 		enc = append(enc, *d)
 	}
-
-	// Encode into a temporary buffer to check final size.
-	var tmp bytes.Buffer
-	if err := rlp.Encode(&tmp, enc); err != nil {
-		return err
-	}
-	if tmp.Len() > MaxStateSyncTxSizeBytes {
-		return fmt.Errorf("%w: size=%d max=%d", ErrStateSyncTxTooLarge, tmp.Len(), MaxStateSyncTxSizeBytes)
-	}
-
-	_, err := buf.Write(tmp.Bytes())
-	return err
+	return rlp.Encode(buf, enc)
 }
 
 func (tx *StateSyncTx) decode(b []byte) error {
 	if tx == nil {
 		return errors.New("nil StateSyncTx")
 	}
-
-	if len(b) > MaxStateSyncTxSizeBytes {
-		return fmt.Errorf("%w: size=%d max=%d", ErrStateSyncTxTooLarge, len(b), MaxStateSyncTxSizeBytes)
-	}
-
 	var dec []StateSyncData
 	if err := rlp.DecodeBytes(b, &dec); err != nil {
 		return err
 	}
-
-	if len(dec) > MaxStateSyncEntries {
-		return fmt.Errorf("%w: entries=%d max=%d", ErrStateSyncTooManyEntries, len(dec), MaxStateSyncEntries)
-	}
-
 	tx.StateSyncData = make([]*StateSyncData, len(dec))
 	for i, e := range dec {
-		if len(e.Data) > MaxStateSyncDataSizeBytes {
-			return fmt.Errorf("%w: index=%d size=%d max=%d",
-				ErrStateSyncDataTooLarge, i, len(e.Data), MaxStateSyncDataSizeBytes)
-		}
 		tx.StateSyncData[i] = &StateSyncData{
 			ID:       e.ID,
 			Contract: e.Contract,
@@ -157,6 +108,6 @@ func (tx *StateSyncTx) decode(b []byte) error {
 	return nil
 }
 
-func (tx *StateSyncTx) sigHash(_ *big.Int) common.Hash {
+func (tx *StateSyncTx) sigHash(chainID *big.Int) common.Hash {
 	panic("StateSyncTx has no sigHash")
 }

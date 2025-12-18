@@ -2,13 +2,10 @@ package types
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func TestStateSyncHashing_Sensitivity_UsingTxDataCopy(t *testing.T) {
@@ -252,126 +249,5 @@ func TestStateSyncTx_Encode_DeterministicAcrossCopies(t *testing.T) {
 	}
 	if !bytes.Equal(b1.Bytes(), b2.Bytes()) {
 		t.Fatalf("determinism failed across copies: enc1=%x enc2=%x", b1.Bytes(), b2.Bytes())
-	}
-}
-
-func TestStateSyncTxDecode_TooManyEntries(t *testing.T) {
-	// Build an RLP payload with MaxStateSyncEntries+1 entries.
-	entries := make([]StateSyncData, MaxStateSyncEntries+1)
-	for i := range entries {
-		entries[i] = StateSyncData{
-			ID:       uint64(i + 1),
-			Contract: common.Address{},
-			Data:     []byte{0x01},
-		}
-	}
-
-	payload, err := rlp.EncodeToBytes(entries)
-	if err != nil {
-		t.Fatalf("failed to encode state sync entries: %v", err)
-	}
-
-	var tx StateSyncTx
-	err = tx.decode(payload)
-	if err == nil {
-		t.Fatalf("expected error when decoding too many StateSyncData entries")
-	}
-	if !errors.Is(err, ErrStateSyncTooManyEntries) && !strings.Contains(err.Error(), "too many state sync data entries") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestStateSyncTxDecode_DataTooLarge(t *testing.T) {
-	large := make([]byte, MaxStateSyncDataSizeBytes+1)
-	entries := []StateSyncData{
-		{
-			ID:       1,
-			Contract: common.Address{},
-			Data:     large,
-		},
-	}
-
-	payload, err := rlp.EncodeToBytes(entries)
-	if err != nil {
-		t.Fatalf("failed to encode state sync entries: %v", err)
-	}
-
-	var tx StateSyncTx
-	err = tx.decode(payload)
-	if err == nil {
-		t.Fatalf("expected error when decoding StateSyncTx with oversized Data field")
-	}
-	if !errors.Is(err, ErrStateSyncDataTooLarge) && !strings.Contains(err.Error(), "state sync data payload too large") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestStateSyncTxDecode_TxTooLarge(t *testing.T) {
-	// Create entries whose total encoded size exceeds MaxStateSyncTxSizeBytes.
-	entries := []StateSyncData{
-		{
-			ID:       1,
-			Contract: common.Address{},
-			Data:     bytes.Repeat([]byte{0xaa}, MaxStateSyncTxSizeBytes),
-		},
-	}
-	payload, err := rlp.EncodeToBytes(entries)
-	if err != nil {
-		t.Fatalf("failed to encode state sync entries: %v", err)
-	}
-	if len(payload) <= MaxStateSyncTxSizeBytes {
-		t.Skipf("constructed payload (%d) did not exceed MaxStateSyncTxSizeBytes (%d); adjust test", len(payload), MaxStateSyncTxSizeBytes)
-	}
-
-	var tx StateSyncTx
-	err = tx.decode(payload)
-	if err == nil {
-		t.Fatalf("expected error when decoding StateSyncTx with oversized payload")
-	}
-	if !errors.Is(err, ErrStateSyncTxTooLarge) && !strings.Contains(err.Error(), "state sync tx too large") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestStateSyncTxEncode_TooManyEntries(t *testing.T) {
-	entries := make([]*StateSyncData, MaxStateSyncEntries+1)
-	for i := range entries {
-		entries[i] = &StateSyncData{
-			ID:       uint64(i + 1),
-			Contract: common.Address{},
-			Data:     []byte{0x01},
-		}
-	}
-
-	tx := &StateSyncTx{StateSyncData: entries}
-	var buf bytes.Buffer
-	err := tx.encode(&buf)
-	if err == nil {
-		t.Fatalf("expected error when encoding StateSyncTx with too many entries")
-	}
-	if !errors.Is(err, ErrStateSyncTooManyEntries) && !strings.Contains(err.Error(), "too many state sync data entries") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestStateSyncTxEncode_DataTooLarge(t *testing.T) {
-	large := make([]byte, MaxStateSyncDataSizeBytes+1)
-	tx := &StateSyncTx{
-		StateSyncData: []*StateSyncData{
-			{
-				ID:       1,
-				Contract: common.Address{},
-				Data:     large,
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	err := tx.encode(&buf)
-	if err == nil {
-		t.Fatalf("expected error when encoding StateSyncTx with oversized Data field")
-	}
-	if !errors.Is(err, ErrStateSyncDataTooLarge) && !strings.Contains(err.Error(), "state sync data payload too large") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
