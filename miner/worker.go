@@ -530,6 +530,10 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			return
 		}
 		timer.Reset(recommit)
+		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+		if veblopTimeout < w.blockTime {
+			veblopTimeout = w.blockTime
+		}
 		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
 	}
@@ -558,6 +562,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 		case <-veblopTimer.C:
 			currentBlock := w.chain.CurrentBlock()
+
+			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			if veblopTimeout < w.blockTime {
+				veblopTimeout = w.blockTime
+			}
+
 			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsRio(currentBlock.Number) {
 				veblopTimer.Reset(veblopTimeout)
 				continue
@@ -580,10 +590,6 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				commit(false, commitInterruptNewHead)
 				// veblopTimer is already reset by commit() so we don't need to reset it here.
 			} else {
-				veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
-				if veblopTimeout < w.blockTime {
-					veblopTimeout = w.blockTime
-				}
 				veblopTimer.Reset(veblopTimeout)
 			}
 
