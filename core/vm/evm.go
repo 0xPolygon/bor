@@ -18,7 +18,10 @@ package vm
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -129,6 +132,17 @@ type EVM struct {
 	// jumpDests is the aggregated result of JUMPDEST analysis made through
 	// the life cycle of EVM.
 	jumpDests map[common.Hash]bitvec
+
+	opcodeTraceMu     sync.Mutex
+	opcodeTraceBuffer []opcodeTraceRecord
+}
+
+type opcodeTraceRecord struct {
+	engine  string
+	txHash  common.Hash
+	txIndex int
+	addr    common.Address
+	trace   string
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -194,7 +208,76 @@ func (evm *EVM) runInterpreter(contract *Contract, input []byte, readOnly bool, 
 		}
 		log.Debug("EVMC cannot handle code blob; falling back to native", "addr", contract.Address(), "len", len(contract.Code))
 	}
-	return evm.interpreter.Run(contract, input, readOnly, interrupt)
+	var (
+		txHash, txIndex, logExecution = opcodeLoggingContext(evm)
+		opTracer                      *evmcTraceLogger
+		prevTracer                    *tracing.Hooks
+	)
+	if logExecution {
+		opTracer = &evmcTraceLogger{}
+		prevTracer = evm.Config.Tracer
+		extraHooks := &tracing.Hooks{OnOpcode: opTracer.onOpcode}
+		evm.Config.Tracer = chainTracers(prevTracer, extraHooks)
+	}
+	ret, err := evm.interpreter.Run(contract, input, readOnly, interrupt)
+	if logExecution {
+		evm.Config.Tracer = prevTracer
+	}
+	if logExecution && opTracer != nil && len(opTracer.steps) > 0 {
+		traceSummary := summarizeGoTraceContext(opTracer.steps, len(opTracer.steps)-1, 8)
+		evm.appendOpcodeTrace("bor", txHash, txIndex, contract.Address(), traceSummary)
+	}
+	return ret, err
+}
+
+func (evm *EVM) appendOpcodeTrace(engine string, txHash common.Hash, txIndex int, addr common.Address, trace string) {
+	if evm == nil || trace == "" {
+		return
+	}
+	evm.opcodeTraceMu.Lock()
+	evm.opcodeTraceBuffer = append(evm.opcodeTraceBuffer, opcodeTraceRecord{
+		engine:  engine,
+		txHash:  txHash,
+		txIndex: txIndex,
+		addr:    addr,
+		trace:   trace,
+	})
+	evm.opcodeTraceMu.Unlock()
+}
+
+func (evm *EVM) FlushOpcodeTraces() {
+	if evm == nil {
+		return
+	}
+	evm.opcodeTraceMu.Lock()
+	buffer := evm.opcodeTraceBuffer
+	evm.opcodeTraceBuffer = nil
+	evm.opcodeTraceMu.Unlock()
+
+	if len(buffer) == 0 {
+		return
+	}
+
+	grouped := make(map[string][]opcodeTraceRecord)
+	for _, rec := range buffer {
+		grouped[rec.engine] = append(grouped[rec.engine], rec)
+	}
+
+	for engine, records := range grouped {
+		var b strings.Builder
+		for i, rec := range records {
+			if i > 0 {
+				b.WriteString(" || ")
+			}
+			fmt.Fprintf(&b, "tx=%s idx=%d addr=%s trace=%s", rec.txHash.Hex(), rec.txIndex, rec.addr.Hex(), rec.trace)
+		}
+		log.Info("EVMC opcode trace block",
+			"engine", engine,
+			"block", evm.Context.BlockNumber,
+			"records", len(records),
+			"traces", b.String(),
+		)
+	}
 }
 
 func isSystemCall(caller common.Address) bool {

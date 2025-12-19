@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/evmc/bindings/go/evmc"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -35,10 +36,18 @@ import (
 	"github.com/holiman/uint256"
 )
 
+const enableEVMCShadowTrace = false
+
+const opcodeLogAll = true
+
 type EVMC struct {
 	instance *evmc.VM
 	env      *EVM
 	readOnly bool // TODO: The readOnly flag should not be here.
+}
+
+type stateDBCopier interface {
+	Copy() *state.StateDB
 }
 
 func createVM(config string) *evmc.VM {
@@ -503,19 +512,31 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 
 	initialGas := contract.Gas
 
-	traceEnabled := evmcTraceFlag.Load()
+	traceEnabled := enableEVMCShadowTrace && evmcTraceFlag.Load()
+	txHash, txIndex, logExecution := opcodeLoggingContext(evm.env)
+	collectTraceSteps := traceEnabled || logExecution
 	revision := getRevision(evm.env)
-	if traceEnabled {
+	if collectTraceSteps {
 		if err := evm.instance.SetOption("bor.trace_steps", "on"); err != nil {
 			log.Warn("Failed to enable evmone step tracing", "err", err)
-			traceEnabled = false
+			collectTraceSteps = false
 		} else {
 			defer func() {
 				if err := evm.instance.SetOption("bor.trace_steps", "off"); err != nil {
 					log.Warn("Failed to disable evmone step tracing", "err", err)
 				}
 			}()
-			log.Info("EVMC revision context", "addr", contract.Address(), "rev", revisionName(revision), "block", evm.env.Context.BlockNumber, "chainRules", chainRulesSummary(evm.env.chainRules))
+			if logExecution {
+				log.Info("EVMC revision context", "addr", contract.Address(), "rev", revisionName(revision), "block", evm.env.Context.BlockNumber, "chainRules", chainRulesSummary(evm.env.chainRules))
+			}
+		}
+	}
+	var traceStateCopy *state.StateDB
+	if traceEnabled && collectTraceSteps {
+		if copier, ok := evm.env.StateDB.(stateDBCopier); ok {
+			traceStateCopy = copier.Copy()
+		} else {
+			log.Warn("EVMC tracing enabled but StateDB copy unsupported")
 		}
 	}
 	result, err := evm.instance.Execute(
@@ -538,7 +559,7 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 	}
 	contract.Gas = evmcGasLeft
 
-	if len(result.TraceSteps) > 0 {
+	if collectTraceSteps && len(result.TraceSteps) > 0 {
 		frameDepth := int32(baseDepth + 1)
 		for i := range result.TraceSteps {
 			result.TraceSteps[i].Depth = frameDepth
@@ -549,8 +570,15 @@ func (evm *EVMC) Run(contract *Contract, input []byte, readOnly bool, interrupt 
 	// 	return nil, ErrInterrupt
 	// }
 
-	if traceEnabled {
-		evm.traceEVMC(contract, input, initialGas, evmcGasLeft, err, result.TraceSteps)
+	if logExecution && collectTraceSteps && len(result.TraceSteps) > 0 {
+		traceSummary := summarizeEvmoneTraceContext(result.TraceSteps, len(result.TraceSteps)-1, 8, evmcGasLeft)
+		if traceSummary != "" && evm.env != nil {
+			evm.env.appendOpcodeTrace("evmone", txHash, txIndex, contract.Address(), traceSummary)
+		}
+	}
+
+	if traceEnabled && collectTraceSteps {
+		evm.traceEVMC(contract, input, initialGas, evmcGasLeft, err, result.TraceSteps, traceStateCopy)
 	}
 
 	if err == evmc.Revert {
@@ -572,7 +600,7 @@ func (evm *EVMC) CanRun(code []byte) bool {
 	return evm.instance.HasCapability(cap)
 }
 
-func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, evmcGasLeft uint64, evmcErr error, evmoneSteps []evmc.TraceStep) {
+func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, evmcGasLeft uint64, evmcErr error, evmoneSteps []evmc.TraceStep, traceState *state.StateDB) {
 	if !evmcTraceFlag.Load() {
 		return
 	}
@@ -582,7 +610,7 @@ func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, 
 		return
 	}
 
-	steps, goGasLeft, goErr := evm.runGoInterpreterTrace(contract, input, initialGas)
+	steps, goGasLeft, goErr := evm.runGoInterpreterTrace(contract, input, initialGas, traceState)
 	if goErr != nil {
 		log.Debug("EVMC shadow trace failed", "addr", contract.Address(), "err", goErr)
 		return
@@ -662,9 +690,19 @@ func (evm *EVMC) traceEVMC(contract *Contract, input []byte, initialGas uint64, 
 	log.Warn("EVMC gas mismatch", fields...)
 }
 
-func (evm *EVMC) runGoInterpreterTrace(contract *Contract, input []byte, initialGas uint64) ([]evmcTraceStep, uint64, error) {
-	snapshot := evm.env.StateDB.Snapshot()
-	defer evm.env.StateDB.RevertToSnapshot(snapshot)
+func (evm *EVMC) runGoInterpreterTrace(contract *Contract, input []byte, initialGas uint64, traceState *state.StateDB) ([]evmcTraceStep, uint64, error) {
+	var (
+		restoreState func()
+		currentState = evm.env.StateDB
+	)
+	if traceState != nil {
+		evm.env.StateDB = traceState
+		restoreState = func() { evm.env.StateDB = currentState }
+	} else {
+		snapshot := evm.env.StateDB.Snapshot()
+		restoreState = func() { evm.env.StateDB.RevertToSnapshot(snapshot) }
+	}
+	defer restoreState()
 
 	contractCopy := cloneContractForTrace(contract, initialGas)
 	tracer := &evmcTraceLogger{}
@@ -807,24 +845,25 @@ func summarizeEvmoneTraceContext(steps []evmc.TraceStep, idx int, history int, f
 		start = 0
 	}
 	var b strings.Builder
-	var finalGasAfter int64
+	var nextGas int64
 	if finalGas > math.MaxInt64 {
-		finalGasAfter = math.MaxInt64
+		nextGas = math.MaxInt64
 	} else {
-		finalGasAfter = int64(finalGas)
+		nextGas = int64(finalGas)
 	}
 	for i := start; i <= idx && i < len(steps); i++ {
 		if b.Len() > 0 {
 			b.WriteString(" | ")
 		}
 		step := steps[i]
-		nextGas := finalGasAfter
+		next := nextGas
 		if i+1 < len(steps) {
-			nextGas = steps[i+1].Gas
+			next = steps[i+1].Gas
 		}
-		cost := step.Gas - nextGas
-		fmt.Fprintf(&b, "#%d pc=%d op=%s gas=%d cost=%d depth=%d gasAfter=%d",
-			i, step.PC, OpCode(step.Opcode), step.Gas, cost, step.Depth, nextGas)
+		cost := step.Gas - next
+		fmt.Fprintf(&b, "#%d pc=%d op=%s gas=%d cost=%d depth=%d",
+			i, step.PC, OpCode(step.Opcode), step.Gas, cost, step.Depth)
+		nextGas = next
 	}
 	return b.String()
 }
@@ -931,6 +970,9 @@ func traceLoggingContext(env *EVM) (common.Hash, int, bool) {
 	if !evmcTraceFlag.Load() {
 		return common.Hash{}, -1, false
 	}
+	if !isTraceTargetConfigured() {
+		return common.Hash{}, -1, false
+	}
 	txHash, txIndex := extractTxInfo(env.StateDB)
 	if !shouldTraceTx(txHash, txIndex) {
 		return common.Hash{}, -1, false
@@ -938,8 +980,44 @@ func traceLoggingContext(env *EVM) (common.Hash, int, bool) {
 	return txHash, txIndex, true
 }
 
+func isTraceTargetConfigured() bool {
+	traceTargetMu.RLock()
+	defer traceTargetMu.RUnlock()
+	return traceTargetSet
+}
+
+func opcodeLoggingContext(env *EVM) (common.Hash, int, bool) {
+	if opcodeLogAll {
+		hash, index := extractTxInfo(env.StateDB)
+		return hash, index, true
+	}
+	return traceLoggingContext(env)
+}
+
+func chainTracers(base *tracing.Hooks, extra *tracing.Hooks) *tracing.Hooks {
+	if extra == nil {
+		return base
+	}
+	if base == nil {
+		return extra
+	}
+	combined := *base
+	if extra.OnOpcode != nil {
+		prev := combined.OnOpcode
+		if prev != nil {
+			combined.OnOpcode = func(pc uint64, op byte, gas, cost uint64, scope tracing.OpContext, rData []byte, depth int, fault error) {
+				prev(pc, op, gas, cost, scope, rData, depth, fault)
+				extra.OnOpcode(pc, op, gas, cost, scope, rData, depth, fault)
+			}
+		} else {
+			combined.OnOpcode = extra.OnOpcode
+		}
+	}
+	return &combined
+}
+
 func logBorGasDecision(env *EVM, op OpCode, addr common.Address, slot *common.Hash, warm bool, cost uint64) {
-	txHash, txIndex, ok := traceLoggingContext(env)
+	txHash, txIndex, ok := opcodeLoggingContext(env)
 	if !ok {
 		return
 	}
@@ -957,12 +1035,15 @@ func logBorGasDecision(env *EVM, op OpCode, addr common.Address, slot *common.Ha
 	if slot != nil {
 		fields = append(fields, "slot", *slot)
 	}
-	log.Debug("EVMC bor gas cost decision", fields...)
+	log.Info("EVMC bor gas cost decision", fields...)
 }
 
 func logHostAccessStorage(env *EVM, addr common.Address, slot common.Hash, status evmc.AccessStatus) {
-	txHash, txIndex, ok := traceLoggingContext(env)
+	txHash, txIndex, ok := opcodeLoggingContext(env)
 	if !ok {
+		return
+	}
+	if status == evmc.WarmAccess {
 		return
 	}
 	fields := []interface{}{
@@ -976,7 +1057,7 @@ func logHostAccessStorage(env *EVM, addr common.Address, slot common.Hash, statu
 		"borRevision", revisionName(getRevision(env)),
 		"chainRules", chainRulesSummary(env.chainRules),
 	}
-	log.Debug("EVMC host access storage", fields...)
+	log.Info("EVMC host access storage", fields...)
 }
 
 var (
