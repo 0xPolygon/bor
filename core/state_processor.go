@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"os"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -101,6 +102,33 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 
+	// Check if PEVM is enabled (via environment variable for now)
+	usePEVM := os.Getenv("USE_PEVM") == "true"
+
+	if usePEVM {
+		// Use PEVM for block-level execution (sequential)
+		// Note: We need BlockChain for engine.Finalize, but StateProcessor only has HeaderChain
+		// For now, pass nil for chain - engine.Finalize will be called later in the same flow
+		result, err := ExecuteBlockWithPEVM(
+			header,
+			block,
+			statedb,
+			nil, // chain - will be nil for now
+			p.chain.engine,
+			p.config,
+			false, // sequential execution
+		)
+		if err != nil {
+			return nil, fmt.Errorf("pevm execution failed: %w", err)
+		}
+
+		// Use the same finalization logic as the original path (below)
+		receipts = result.Receipts
+		allLogs = result.Logs
+		usedGasVal := result.GasUsed
+		*usedGas = usedGasVal
+		// Fall through to requests processing and finalization logic below
+	} else {
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		// Check if execution should be cancelled or not
@@ -108,9 +136,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		case <-interruptCtx.Done():
 			return nil, interruptCtx.Err()
 		default:
-		}
-		if tx.Type() == types.StateSyncTxType {
-			continue
 		}
 
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -127,6 +152,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+		}
 	}
 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported

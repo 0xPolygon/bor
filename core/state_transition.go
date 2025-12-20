@@ -506,10 +506,10 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 	st.gasRemaining -= gas
 
 	if rules.IsEIP4762 {
-		st.evm.AccessEvents.AddTxOrigin(msg.From)
+		st.evm.TxContext.AccessEvents.AddTxOrigin(msg.From)
 
 		if targetAddr := msg.To; targetAddr != nil {
-			st.evm.AccessEvents.AddTxDestination(*targetAddr, msg.Value.Sign() != 0, !st.state.Exist(*targetAddr))
+			st.evm.TxContext.AccessEvents.AddTxDestination(*targetAddr, msg.Value.Sign() != 0, !st.state.Exist(*targetAddr))
 		}
 	}
 
@@ -622,7 +622,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 
 		// add the coinbase to the witness iff the fee is greater than 0
 		if rules.IsEIP4762 && amount.Sign() != 0 {
-			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true, math.MaxUint64)
+			st.evm.TxContext.AccessEvents.AddAccount(st.evm.Context.Coinbase, true, math.MaxUint64)
 		}
 
 		output1 := new(big.Int).SetBytes(input1.Bytes())
