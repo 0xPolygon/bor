@@ -352,7 +352,12 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		reqHash := types.CalcRequestsHash(requests)
 		header.RequestsHash = &reqHash
 	}
-	blockBody := &types.Body{Transactions: txes, Withdrawals: *block.BlockOverrides.Withdrawals}
+	// For Bor chains, Withdrawals will be nil, so we need to handle that
+	var withdrawals types.Withdrawals
+	if block.BlockOverrides.Withdrawals != nil {
+		withdrawals = *block.BlockOverrides.Withdrawals
+	}
+	blockBody := &types.Body{Transactions: txes, Withdrawals: withdrawals}
 	chainHeadReader := &simChainHeadReader{ctx, sim.b}
 	b, receipts, err := sim.b.Engine().FinalizeAndAssemble(chainHeadReader, header, sim.state, blockBody, receipts)
 	_ = receipts // mark unused
@@ -420,7 +425,9 @@ func (sim *simulator) sanitizeChain(blocks []simBlock) ([]simBlock, error) {
 			n := new(big.Int).Add(prevNumber, big.NewInt(1))
 			block.BlockOverrides.Number = (*hexutil.Big)(n)
 		}
-		if block.BlockOverrides.Withdrawals == nil {
+		// Only set withdrawals for non-Bor chains (Ethereum mainnet and testnets)
+		// Bor/Polygon doesn't support withdrawals even post-Shanghai
+		if block.BlockOverrides.Withdrawals == nil && sim.chainConfig.Bor == nil {
 			block.BlockOverrides.Withdrawals = &types.Withdrawals{}
 		}
 		diff := new(big.Int).Sub(block.BlockOverrides.Number.ToInt(), prevNumber)
@@ -437,12 +444,16 @@ func (sim *simulator) sanitizeChain(blocks []simBlock) ([]simBlock, error) {
 			for i := uint64(0); i < gap.Uint64(); i++ {
 				n := new(big.Int).Add(prevNumber, big.NewInt(int64(i+1)))
 				t := prevTimestamp + timestampIncrement
+				overrides := &override.BlockOverrides{
+					Number: (*hexutil.Big)(n),
+					Time:   (*hexutil.Uint64)(&t),
+				}
+				// Only set withdrawals for non-Bor chains
+				if sim.chainConfig.Bor == nil {
+					overrides.Withdrawals = &types.Withdrawals{}
+				}
 				b := simBlock{
-					BlockOverrides: &override.BlockOverrides{
-						Number:      (*hexutil.Big)(n),
-						Time:        (*hexutil.Uint64)(&t),
-						Withdrawals: &types.Withdrawals{},
-					},
+					BlockOverrides: overrides,
 				}
 				prevTimestamp = t
 				res = append(res, b)
@@ -482,7 +493,8 @@ func (sim *simulator) makeHeaders(blocks []simBlock) ([]*types.Header, error) {
 		overrides := block.BlockOverrides
 
 		var withdrawalsHash *common.Hash
-		if sim.chainConfig.IsShanghai(overrides.Number.ToInt()) {
+		// Only set withdrawals hash for non-Bor chains that have Shanghai fork
+		if sim.chainConfig.IsShanghai(overrides.Number.ToInt()) && sim.chainConfig.Bor == nil {
 			withdrawalsHash = &types.EmptyWithdrawalsHash
 		}
 		var parentBeaconRoot *common.Hash
