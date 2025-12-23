@@ -266,7 +266,7 @@ func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 		return nil, fmt.Errorf("block header is not found, %d, %x", blockNumber, blockHash)
 	}
 	var blobGasPrice *big.Int
-	if header.ExcessBlobGas != nil {
+	if header.ExcessBlobGas != nil && bc.chainConfig.BlobScheduleConfig != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, header)
 	}
 	receipt, ctx, err := rawdb.ReadCanonicalRawReceipt(bc.db, blockHash, blockNumber, txIndex)
