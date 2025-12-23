@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -135,6 +136,21 @@ func (m *simChainHeadReader) GetHeader(hash common.Hash, number uint64) *types.H
 		return nil
 	}
 	return header
+}
+
+// SetStateSync implements core.BorStateSyncer for Bor consensus compatibility.
+// Since this is a simulation, we don't need to actually store state sync data.
+func (m *simChainHeadReader) SetStateSync(stateData []*types.StateSyncData) {
+	// No-op for simulation
+}
+
+// SubscribeStateSyncEvent implements core.BorStateSyncer for Bor consensus compatibility.
+// Returns a no-op subscription since we don't need state sync events in simulation.
+func (m *simChainHeadReader) SubscribeStateSyncEvent(ch chan<- core.StateSyncEvent) event.Subscription {
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
 }
 
 func (m *simChainHeadReader) GetHeaderByNumber(number uint64) *types.Header {
