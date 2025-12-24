@@ -1544,9 +1544,9 @@ func ambiguousAddrRecovery(ks *keystore.KeyStore, err *keystore.AmbiguousAddrErr
 	return *match
 }
 
-// setNodeKey creates a node key from set command line flags, either loading it
+// getNodeKey creates a node key from set command line flags, either loading it
 // from a file or as a specified hex value. If neither flags were provided, this
-// method returns nil and an emphemeral key is to be generated.
+// method returns nil and an ephemeral key is to be generated.
 func getNodeKey(hex string, file string) *ecdsa.PrivateKey {
 	var (
 		key *ecdsa.PrivateKey
