@@ -899,6 +899,15 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	evm := vm.NewEVM(blockCtx, statedb, api.backend.ChainConfig(), vm.Config{})
 
+	// Process beacon block root (EIP-4788) and parent block hash (EIP-2935)
+	// before executing transactions, matching stateAtTransaction behavior.
+	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
+		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
+	}
+	if api.backend.ChainConfig().IsPrague(block.Number()) {
+		core.ProcessParentBlockHash(block.ParentHash(), evm)
+	}
+
 txloop:
 	for i, tx := range txs {
 		if ioflag {
