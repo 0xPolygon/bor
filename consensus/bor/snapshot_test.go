@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	unique "github.com/ethereum/go-ethereum/common/set"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -130,6 +131,99 @@ func TestGetSignerSuccessionNumber_SignerNotFound(t *testing.T) {
 	require.Equal(t, dummySignerAddress.Bytes(), e.Signer)
 }
 
+func TestIsAllowedByValidatorSetOverride_NoConfig(t *testing.T) {
+	snap := &Snapshot{
+		Number: 100,
+	}
+
+	ok := snap.isAllowedByValidatorSetOverride(addr("0x1"), snap.Number)
+	require.False(t, ok)
+}
+
+func TestIsAllowedByValidatorSetOverride_EmptyOverrides(t *testing.T) {
+	snap := newSnapshotWithOverrides(nil, 100)
+
+	ok := snap.isAllowedByValidatorSetOverride(addr("0x1"), snap.Number)
+	require.False(t, ok)
+}
+
+func TestIsAllowedByValidatorSetOverride_BlockOutsideRange(t *testing.T) {
+	overrideAddr := addr("0x41018795fA95783117242244303fd7e26e964eE8")
+
+	snap := newSnapshotWithOverrides(
+		[]params.BlockRangeOverrideValidatorSet{
+			{
+				StartBlock: 10,
+				EndBlock:   20,
+				Validators: []common.Address{overrideAddr},
+			},
+		},
+		25, // outside range
+	)
+
+	ok := snap.isAllowedByValidatorSetOverride(overrideAddr, snap.Number)
+	require.False(t, ok)
+}
+
+func TestIsAllowedByValidatorSetOverride_AllowedSignerInRange(t *testing.T) {
+	overrideAddr := addr("0x41018795fA95783117242244303fd7e26e964eE8")
+
+	snap := newSnapshotWithOverrides(
+		[]params.BlockRangeOverrideValidatorSet{
+			{
+				StartBlock: 10,
+				EndBlock:   20,
+				Validators: []common.Address{overrideAddr},
+			},
+		},
+		15,
+	)
+
+	ok := snap.isAllowedByValidatorSetOverride(overrideAddr, snap.Number)
+	require.True(t, ok)
+}
+
+func TestIsAllowedByValidatorSetOverride_SignerNotInOverrideSet(t *testing.T) {
+	overrideAddr := addr("0x41018795fA95783117242244303fd7e26e964eE8")
+	otherAddr := addr("0x000000000000000000000000000000000000dead")
+
+	snap := newSnapshotWithOverrides(
+		[]params.BlockRangeOverrideValidatorSet{
+			{
+				StartBlock: 10,
+				EndBlock:   20,
+				Validators: []common.Address{overrideAddr},
+			},
+		},
+		15,
+	)
+
+	ok := snap.isAllowedByValidatorSetOverride(otherAddr, snap.Number)
+	require.False(t, ok)
+}
+
+func TestIsAllowedByValidatorSetOverride_InclusiveRange(t *testing.T) {
+	overrideAddr := addr("0x41018795fA95783117242244303fd7e26e964eE8")
+
+	tests := []uint64{10, 20}
+
+	for _, block := range tests {
+		snap := newSnapshotWithOverrides(
+			[]params.BlockRangeOverrideValidatorSet{
+				{
+					StartBlock: 10,
+					EndBlock:   20,
+					Validators: []common.Address{overrideAddr},
+				},
+			},
+			block,
+		)
+
+		ok := snap.isAllowedByValidatorSetOverride(overrideAddr, snap.Number)
+		require.True(t, ok, "expected allowed at block %d", block)
+	}
+}
+
 // nolint:unparam
 func buildRandomValidatorSet(numVals int) []*valset.Validator {
 	validators := make([]*valset.Validator, numVals)
@@ -222,4 +316,19 @@ func toAddresses(vals []*valset.Validator) []common.Address {
 	}
 
 	return addrs
+}
+
+func addr(hex string) common.Address {
+	return common.HexToAddress(hex)
+}
+
+func newSnapshotWithOverrides(overrides []params.BlockRangeOverrideValidatorSet, block uint64) *Snapshot {
+	return &Snapshot{
+		Number: block,
+		chainConfig: &params.ChainConfig{
+			Bor: &params.BorConfig{
+				OverrideValidatorSetInRange: overrides,
+			},
+		},
+	}
 }

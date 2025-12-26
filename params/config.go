@@ -867,30 +867,37 @@ type BlockRangeOverride struct {
 	Value      int    `json:"value"`
 }
 
+type BlockRangeOverrideValidatorSet struct {
+	StartBlock uint64           `json:"startBlock"`
+	EndBlock   uint64           `json:"endBlock"`
+	Validators []common.Address `json:"validators"`
+}
+
 // BorConfig is the consensus engine configs for Matic bor based sealing.
 type BorConfig struct {
-	Period                          map[string]uint64      `json:"period"`                          // Number of seconds between blocks to enforce
-	ProducerDelay                   map[string]uint64      `json:"producerDelay"`                   // Number of seconds delay between two producer interval
-	Sprint                          map[string]uint64      `json:"sprint"`                          // Epoch length to proposer
-	BackupMultiplier                map[string]uint64      `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
-	ValidatorContract               string                 `json:"validatorContract"`               // Validator set contract
-	StateReceiverContract           string                 `json:"stateReceiverContract"`           // State receiver contract
-	OverrideStateSyncRecords        map[string]int         `json:"overrideStateSyncRecords"`        // override state records count
-	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
-	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
-	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
-	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
-	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	DandeliBlock                    *big.Int               `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	Period                          map[string]uint64                `json:"period"`                          // Number of seconds between blocks to enforce
+	ProducerDelay                   map[string]uint64                `json:"producerDelay"`                   // Number of seconds delay between two producer interval
+	Sprint                          map[string]uint64                `json:"sprint"`                          // Epoch length to proposer
+	BackupMultiplier                map[string]uint64                `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
+	ValidatorContract               string                           `json:"validatorContract"`               // Validator set contract
+	StateReceiverContract           string                           `json:"stateReceiverContract"`           // State receiver contract
+	OverrideStateSyncRecords        map[string]int                   `json:"overrideStateSyncRecords"`        // override state records count
+	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
+	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range
+	BlockAlloc                      map[string]interface{}           `json:"blockAlloc"`
+	BurntContract                   map[string]string                `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string                `json:"coinbase"`                   // coinbase address
+	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"`     // skip validator byte check
+	JaipurBlock                     *big.Int                         `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                      *big.Int                         `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                     *big.Int                         `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay      map[string]uint64                `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock                  *big.Int                         `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                     *big.Int                         `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                        *big.Int                         `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock                  *big.Int                         `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock               *big.Int                         `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock                    *big.Int                         `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
