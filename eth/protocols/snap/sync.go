@@ -623,10 +623,15 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	// any peers and initialize the syncer if it was not yet run
 	s.lock.Lock()
 	s.root = root
-	s.healer = &healTask{
-		scheduler: state.NewStateSync(root, s.db, s.onHealState, s.scheme, s.bytecodeOnlyMode),
-		trieTasks: make(map[string]common.Hash),
-		codeTasks: make(map[common.Hash]struct{}),
+	if s.bytecodeOnlyMode {
+		// No healing in bytecode-only mode: we only care about bytecodes from snapshots.
+		s.healer = nil
+	} else {
+		s.healer = &healTask{
+			scheduler: state.NewStateSync(root, s.db, s.onHealState, s.scheme, s.bytecodeOnlyMode),
+			trieTasks: make(map[string]common.Hash),
+			codeTasks: make(map[common.Hash]struct{}),
+		}
 	}
 	s.statelessPeers = make(map[string]struct{})
 	s.lock.Unlock()
@@ -637,9 +642,21 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	// Retrieve the previous sync status from LevelDB and abort if already synced
 	s.loadSyncStatus()
 
-	if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
-		log.Debug("Snapshot sync already completed")
-		return nil
+	if len(s.tasks) == 0 {
+		// Bytecode-only mode: if there are no tasks and no in-flight bytecode requests, we're done.
+		if s.bytecodeOnlyMode {
+			if len(s.bytecodeReqs) != 0 {
+				log.Crit("Bytecode-only sync finished but outstanding bytecode requests remain",
+					"pending", len(s.bytecodeReqs))
+			}
+			log.Debug("Snapshot sync already completed (bytecode-only mode)")
+			return nil
+		}
+		// Normal mode: heal scheduler must also be empty.
+		if s.healer != nil && s.healer.scheduler.Pending() == 0 {
+			log.Debug("Snapshot sync already completed")
+			return nil
+		}
 	}
 
 	defer func() { // Persist any progress, independent of failure
@@ -707,8 +724,15 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.cleanStorageTasks()
 		s.cleanAccountTasks()
 
-		if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
-			return nil
+		if len(s.tasks) == 0 {
+			// If we have no healer (bytecode-only mode), we’re done as soon as snap phase finishes.
+			if s.healer == nil {
+				return nil
+			}
+			// Normal mode: still require heal scheduler to be empty.
+			if s.healer.scheduler.Pending() == 0 {
+				return nil
+			}
 		}
 
 		// Assign all the data retrieval tasks to any free peers
@@ -716,8 +740,8 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.assignBytecodeTasks(bytecodeResps, bytecodeReqFails, cancel)
 		s.assignStorageTasks(storageResps, storageReqFails, cancel)
 
-		if len(s.tasks) == 0 {
-			// Sync phase done, run heal phase
+		if len(s.tasks) == 0 && s.healer != nil {
+			// Sync phase done, run heal phase (only in non-bytecode-only mode)
 			s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
 			s.assignBytecodeHealTasks(bytecodeHealResps, bytecodeHealReqFails, cancel)
 		}
@@ -796,33 +820,35 @@ func (s *Syncer) loadSyncStatus() {
 				}
 				task.StorageCompleted = nil
 
-				// Allocate batch for account trie generation
-				task.genBatch = ethdb.HookedBatch{
-					Batch: s.db.NewBatch(),
-					OnPut: func(key []byte, value []byte) {
-						s.accountBytes += common.StorageSize(len(key) + len(value))
-					},
-				}
-				if s.scheme == rawdb.HashScheme {
-					task.genTrie = newHashTrie(task.genBatch)
-				}
-				if s.scheme == rawdb.PathScheme {
-					task.genTrie = newPathTrie(common.Hash{}, task.Next != common.Hash{}, s.db, task.genBatch)
-				}
-				// Restore leftover storage tasks
-				for accountHash, subtasks := range task.SubTasks {
-					for _, subtask := range subtasks {
-						subtask.genBatch = ethdb.HookedBatch{
-							Batch: s.db.NewBatch(),
-							OnPut: func(key []byte, value []byte) {
-								s.storageBytes += common.StorageSize(len(key) + len(value))
-							},
-						}
-						if s.scheme == rawdb.HashScheme {
-							subtask.genTrie = newHashTrie(subtask.genBatch)
-						}
-						if s.scheme == rawdb.PathScheme {
-							subtask.genTrie = newPathTrie(accountHash, subtask.Next != common.Hash{}, s.db, subtask.genBatch)
+				if !s.bytecodeOnlyMode {
+					// Allocate batch for account trie generation
+					task.genBatch = ethdb.HookedBatch{
+						Batch: s.db.NewBatch(),
+						OnPut: func(key []byte, value []byte) {
+							s.accountBytes += common.StorageSize(len(key) + len(value))
+						},
+					}
+					if s.scheme == rawdb.HashScheme {
+						task.genTrie = newHashTrie(task.genBatch)
+					}
+					if s.scheme == rawdb.PathScheme {
+						task.genTrie = newPathTrie(common.Hash{}, task.Next != common.Hash{}, s.db, task.genBatch)
+					}
+					// Restore leftover storage tasks
+					for accountHash, subtasks := range task.SubTasks {
+						for _, subtask := range subtasks {
+							subtask.genBatch = ethdb.HookedBatch{
+								Batch: s.db.NewBatch(),
+								OnPut: func(key []byte, value []byte) {
+									s.storageBytes += common.StorageSize(len(key) + len(value))
+								},
+							}
+							if s.scheme == rawdb.HashScheme {
+								subtask.genTrie = newHashTrie(subtask.genBatch)
+							}
+							if s.scheme == rawdb.PathScheme {
+								subtask.genTrie = newPathTrie(accountHash, subtask.Next != common.Hash{}, s.db, subtask.genBatch)
+							}
 						}
 					}
 				}
@@ -886,14 +912,20 @@ func (s *Syncer) loadSyncStatus() {
 		if s.scheme == rawdb.PathScheme {
 			tr = newPathTrie(common.Hash{}, next != common.Hash{}, s.db, batch)
 		}
-		s.tasks = append(s.tasks, &accountTask{
+
+		newTask := &accountTask{
 			Next:           next,
 			Last:           last,
 			SubTasks:       make(map[common.Hash][]*storageTask),
-			genBatch:       batch,
 			stateCompleted: make(map[common.Hash]struct{}),
-			genTrie:        tr,
-		})
+		}
+
+		if !s.bytecodeOnlyMode {
+			newTask.genBatch = batch
+			newTask.genTrie = tr
+		}
+
+		s.tasks = append(s.tasks, newTask)
 
 		next = common.BigToHash(new(big.Int).Add(last.Big(), common.Big1))
 	}
@@ -903,31 +935,33 @@ func (s *Syncer) loadSyncStatus() {
 func (s *Syncer) saveSyncStatus() {
 	// Serialize any partial progress to disk before spinning down
 	for _, task := range s.tasks {
-		// Claim the right boundary as incomplete before flushing the
-		// accumulated nodes in batch, the nodes on right boundary
-		// will be discarded and cleaned up by this call.
-		task.genTrie.commit(false)
-		if err := task.genBatch.Write(); err != nil {
-			log.Error("Failed to persist account slots", "err", err)
-		}
+		if !s.bytecodeOnlyMode {
+			// Claim the right boundary as incomplete before flushing the
+			// accumulated nodes in batch, the nodes on right boundary
+			// will be discarded and cleaned up by this call.
+			task.genTrie.commit(false)
+			if err := task.genBatch.Write(); err != nil {
+				log.Error("Failed to persist account slots", "err", err)
+			}
 
-		for _, subtasks := range task.SubTasks {
-			for _, subtask := range subtasks {
-				// Same for account trie, discard and cleanup the
-				// incomplete right boundary.
-				subtask.genTrie.commit(false)
-				if err := subtask.genBatch.Write(); err != nil {
-					log.Error("Failed to persist storage slots", "err", err)
+			for _, subtasks := range task.SubTasks {
+				for _, subtask := range subtasks {
+					// Same for account trie, discard and cleanup the
+					// incomplete right boundary.
+					subtask.genTrie.commit(false)
+					if err := subtask.genBatch.Write(); err != nil {
+						log.Error("Failed to persist storage slots", "err", err)
+					}
 				}
 			}
-		}
-		// Save the account hashes of completed storage.
-		task.StorageCompleted = make([]common.Hash, 0, len(task.stateCompleted))
-		for hash := range task.stateCompleted {
-			task.StorageCompleted = append(task.StorageCompleted, hash)
-		}
-		if len(task.StorageCompleted) > 0 {
-			log.Debug("Leftover completed storages", "number", len(task.StorageCompleted), "next", task.Next, "last", task.Last)
+			// Save the account hashes of completed storage.
+			task.StorageCompleted = make([]common.Hash, 0, len(task.stateCompleted))
+			for hash := range task.stateCompleted {
+				task.StorageCompleted = append(task.StorageCompleted, hash)
+			}
+			if len(task.StorageCompleted) > 0 {
+				log.Debug("Leftover completed storages", "number", len(task.StorageCompleted), "next", task.Next, "last", task.Last)
+			}
 		}
 	}
 	// Store the actual progress markers
@@ -2510,6 +2544,9 @@ func (s *Syncer) processTrienodeHealResponse(res *trienodeHealResponse) {
 }
 
 func (s *Syncer) commitHealer(force bool) {
+	if s.healer == nil {
+		return
+	}
 	if !force && s.healer.scheduler.MemSize() < ethdb.IdealBatchSize {
 		return
 	}
@@ -2638,22 +2675,33 @@ func (s *Syncer) forwardAccountTask(task *accountTask) {
 	// All accounts marked as complete, track if the entire task is done
 	task.done = !res.cont
 
-	// Error out if there is any leftover completion flag.
-	if task.done && len(task.stateCompleted) != 0 {
-		panic(fmt.Errorf("storage completion flags should be emptied, %d left", len(task.stateCompleted)))
-	}
-	// Stack trie could have generated trie nodes, push them to disk (we need to
-	// flush after finalizing task.done. It's fine even if we crash and lose this
-	// write as it will only cause more data to be downloaded during heal.
-	if task.done {
-		task.genTrie.commit(false)
-	}
-	if task.genBatch.ValueSize() > ethdb.IdealBatchSize || task.done {
-		if err := task.genBatch.Write(); err != nil {
-			log.Error("Failed to persist stack account", "err", err)
+	if !s.bytecodeOnlyMode {
+		// In full mode, it is a bug if we finish the task but still have
+		// storage completion flags hanging around.
+		if task.done && len(task.stateCompleted) != 0 {
+			panic(fmt.Errorf("storage completion flags should be emptied, %d left", len(task.stateCompleted)))
 		}
+	} else if task.done {
+		// In bytecode-only mode we ignore storage completely. If we resumed
+		// from an old progress file, stateCompleted can contain leftover
+		// entries from a previous full sync; just drop them.
+		task.stateCompleted = nil
+		task.SubTasks = nil
+	}
 
-		task.genBatch.Reset()
+	if !s.bytecodeOnlyMode {
+		// Stack trie could have generated trie nodes, push them to disk (we need to
+		// flush after finalizing task.done. It's fine even if we crash and lose this
+		// write as it will only cause more data to be downloaded during heal.
+		if task.done {
+			task.genTrie.commit(false)
+		}
+		if task.genBatch.ValueSize() > ethdb.IdealBatchSize || task.done {
+			if err := task.genBatch.Write(); err != nil {
+				log.Error("Failed to persist stack account", "err", err)
+			}
+			task.genBatch.Reset()
+		}
 	}
 
 	log.Debug("Persisted range of accounts", "accounts", len(res.accounts), "bytes", s.accountBytes-oldAccountBytes)
@@ -3183,6 +3231,10 @@ func (s *Syncer) OnTrieNodes(peer SyncPeer, id uint64, trienodes [][]byte) error
 // onHealByteCodes is a callback method to invoke when a batch of contract
 // bytes codes are received from a remote peer in the healing phase.
 func (s *Syncer) onHealByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) error {
+	if s.bytecodeOnlyMode {
+		peer.Log().Debug("Ignoring heal response in bytecode-only mode", "reqid", id)
+		return nil
+	}
 	var size common.StorageSize
 	for _, code := range bytecodes {
 		size += common.StorageSize(len(code))
@@ -3387,6 +3439,9 @@ func (s *Syncer) reportSyncProgress(force bool) {
 
 // reportHealProgress calculates various status reports and provides it to the user.
 func (s *Syncer) reportHealProgress(force bool) {
+	if s.healer == nil {
+		return
+	}
 	// Don't report all the events, just occasionally
 	if !force && time.Since(s.logTime) < 8*time.Second {
 		return

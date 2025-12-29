@@ -2276,3 +2276,83 @@ func TestBytecodeOnlyModeFiltering(t *testing.T) {
 		t.Log("Note: No account requests seen (sync may have terminated early)")
 	}
 }
+
+// TestBytecodeOnlyModeSkipsHealing verifies that when bytecode-only mode is
+// enabled, the syncer does not schedule any trie-heal requests, even in a
+// scenario where storage layout would normally trigger healing.
+func TestBytecodeOnlyModeSkipsHealing(t *testing.T) {
+	t.Parallel()
+
+	testBytecodeOnlyModeSkipsHealing(t, rawdb.HashScheme)
+	testBytecodeOnlyModeSkipsHealing(t, rawdb.PathScheme)
+}
+
+func testBytecodeOnlyModeSkipsHealing(t *testing.T, scheme string) {
+	var (
+		once   sync.Once
+		cancel = make(chan struct{})
+		term   = func() {
+			once.Do(func() {
+				close(cancel)
+			})
+		}
+	)
+
+	// Use an uneven storage distribution: this is the same helper that
+	// TestSyncWithUnevenStorage uses to exercise the tricky storage / boundary
+	// logic where healing would normally be relevant.
+	accountTrie, accounts, storageTries, storageElems := makeAccountTrieWithStorage(
+		scheme,
+		3,     // number of accounts
+		256,   // number of storage slots
+		false, // no code
+		false, // no boundary mode
+		true,  // uneven storage distribution
+	)
+
+	mkSource := func(name string) *testPeer {
+		source := newTestPeer(name, t, term)
+		source.accountTrie = accountTrie.Copy()
+		source.accountValues = accounts
+		source.setStorageTries(storageTries)
+		source.storageValues = storageElems
+
+		// Same pattern as TestSyncWithUnevenStorage: force "large mode"
+		// storage range retrieval, which is one of the situations where
+		// healing logic historically needed to kick in.
+		source.storageRequestHandler = func(
+			p *testPeer,
+			reqID uint64,
+			root common.Hash,
+			accs []common.Hash,
+			origin, limit []byte,
+			max uint64,
+		) error {
+			return defaultStorageRequestHandler(p, reqID, root, accs, origin, limit, 128)
+		}
+
+		return source
+	}
+
+	peer := mkSource("source")
+
+	// Set up syncer and enable bytecode-only mode.
+	syncer := setupSyncer(scheme, peer)
+	syncer.SetBytecodeOnlyMode(true)
+
+	done := checkStall(t, term)
+
+	// We only care that sync completes and that no heal requests were sent.
+	if err := syncer.Sync(accountTrie.Hash(), cancel); err != nil {
+		t.Fatalf("bytecode-only sync failed: %v", err)
+	}
+
+	close(done)
+
+	// In bytecode-only mode, we should *not* be running the healing pipeline.
+	// Trie node requests (RequestTrieNodes) are only used by the heal logic,
+	// so seeing any here would mean healing is still active.
+	if peer.nTrienodeRequests != 0 {
+		t.Errorf("expected no trie-heal requests in bytecode-only mode, got %d", peer.nTrienodeRequests)
+	}
+}
