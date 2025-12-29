@@ -125,6 +125,8 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		instanceLock: lock,
 	}
 
+	freezer.offset.Store(offset)
+
 	// Create the tables.
 	for name, config := range tables {
 		table, err := newTable(datadir, name, readMeter, writeMeter, sizeGauge, maxTableSize, config, readonly)
@@ -153,6 +155,10 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		lock.Unlock()
 		return nil, err
 	}
+
+	// Some blocks in ancientDB may have already been frozen and been pruned, so adding the offset to
+	// represent the absolute number of blocks already frozen.
+	freezer.frozen.Add(offset)
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
