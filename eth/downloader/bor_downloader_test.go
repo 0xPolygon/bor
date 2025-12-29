@@ -2369,3 +2369,193 @@ func TestFindAncestorStatelessSearch(t *testing.T) {
 		}
 	})
 }
+
+// TestBytecodeSyncRetryAfterFailedRun ensures that if the first bytecode sync
+// attempt fails (so metadata is not updated), a subsequent run will *still*
+// decide that a bytecode sync is required as long as the gap is large and
+// the last synced block has not advanced.
+//
+// This protects against the scenario where:
+//   - fastForwardBlock is far ahead of the current head
+//   - first run fails before properly writing bytecode sync metadata
+//   - second run would incorrectly "think" everything is fine and skip,
+//     leaving a gap with missing bytecodes at the end.
+func TestBytecodeSyncRetryAfterFailedRun(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	// Use stateless mode since that's where bytecode prefetch is relevant.
+	tester.downloader.mode.Store(uint32(StatelessSync))
+	tester.downloader.FastForwardThreshold = 1000
+
+	// Build some local chain so we have a meaningful "current head".
+	// This mirrors the pattern from TestNeedsBytecodeSyncLogic.
+	const currentBlocks = 1000
+	if currentBlocks > 0 {
+		parentHeader := tester.downloader.blockchain.CurrentBlock()
+		parent := tester.downloader.blockchain.GetBlockByHash(parentHeader.Hash())
+
+		chain, _ := core.GenerateChain(
+			params.TestChainConfig,
+			parent,
+			ethash.NewFaker(),
+			tester.downloader.stateDB,
+			currentBlocks,
+			nil,
+		)
+		if _, err := tester.downloader.blockchain.InsertChain(chain, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+	}
+
+	currentHead := tester.downloader.blockchain.CurrentBlock().Number.Uint64()
+
+	// Put the fast-forward block well ahead of the current head so the
+	// gap is larger than FastForwardThreshold and would normally trigger
+	// a bytecode sync.
+	fastForwardBlock := currentHead + 5000
+	tester.downloader.setFastForwardBlock(fastForwardBlock)
+
+	// Simulate a fresh node with no previous bytecode sync metadata.
+	rawdb.DeleteBytecodeSyncMetadata(tester.downloader.stateDB)
+
+	// --- First "run": should require bytecode sync ---
+
+	if !tester.downloader.needsBytecodeSync(fastForwardBlock) {
+		t.Fatalf(
+			"expected initial bytecode sync to be required (gap=%d, threshold=%d)",
+			fastForwardBlock-currentHead,
+			tester.downloader.FastForwardThreshold,
+		)
+	}
+
+	// Now imagine the first bytecode sync attempt *fails* for some reason
+	// (network error, crash, etc.). The crucial invariant is that we must
+	// *not* advance the lastSyncedBlock metadata on a failed run.
+	//
+	// We don't actually run the sync here; we just assert the metadata
+	// stays at its pre-run value (0).
+	if last := rawdb.ReadBytecodeSyncLastBlock(tester.downloader.stateDB); last != 0 {
+		t.Fatalf("expected last synced block to remain 0 after failed sync attempt, got %d", last)
+	}
+
+	// --- Second "run": must still require bytecode sync ---
+
+	// On the second attempt, with the same fastForwardBlock and unchanged
+	// metadata, we must *still* decide to run bytecode sync again, otherwise
+	// we'd reproduce the original bug where a failed first run causes the
+	// second run to skip and leave a gap.
+	if !tester.downloader.needsBytecodeSync(fastForwardBlock) {
+		t.Fatalf("expected bytecode sync to be reattempted after failed run while metadata is unchanged")
+	}
+}
+
+// TestBytecodeSyncRetryAndCompletion ensures that:
+//   - If the first bytecode sync attempt "fails" (no metadata written),
+//     a second run will still decide that a bytecode sync is required.
+//   - Once a run successfully "completes" and writes metadata,
+//     subsequent runs behave correctly depending on the new fast forward
+//     position relative to lastSyncedBlock.
+func TestBytecodeSyncRetryAndCompletion(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	dl := tester.downloader
+	db := dl.stateDB
+
+	dl.mode.Store(uint32(StatelessSync))
+	dl.FastForwardThreshold = 1000
+
+	// --- Build a local chain so we have a non-trivial current head ---
+	const targetCurrent = uint64(1000)
+
+	// Grow the local chain up to targetCurrent
+	head := dl.blockchain.CurrentBlock()
+	headNum := head.Number.Uint64()
+	if headNum < targetCurrent {
+		parent := dl.blockchain.GetBlockByHash(head.Hash())
+		chain, _ := core.GenerateChain(
+			params.TestChainConfig,
+			parent,
+			ethash.NewFaker(),
+			db,
+			int(targetCurrent-headNum),
+			nil,
+		)
+		if _, err := dl.blockchain.InsertChain(chain, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+	}
+
+	currentHead := dl.blockchain.CurrentBlock().Number.Uint64()
+	if currentHead != targetCurrent {
+		t.Fatalf("expected current head %d, got %d", targetCurrent, currentHead)
+	}
+
+	// Put fastForwardBlock well ahead so the gap exceeds the threshold and
+	// would normally require a bytecode sync.
+	fastForwardBlock := currentHead + 3000 // gap = 3000 > 1000
+	dl.setFastForwardBlock(fastForwardBlock)
+
+	// Start with a "fresh" node in terms of bytecode metadata.
+	rawdb.DeleteBytecodeSyncMetadata(db)
+
+	// --- First attempted run: should require bytecode sync ---
+	if !dl.needsBytecodeSync(fastForwardBlock) {
+		t.Fatalf(
+			"expected initial bytecode sync to be required (gap=%d, threshold=%d)",
+			fastForwardBlock-currentHead,
+			dl.FastForwardThreshold,
+		)
+	}
+
+	// Simulate a FAILED bytecode sync attempt:
+	// - No metadata is written.
+	if last := rawdb.ReadBytecodeSyncLastBlock(db); last != 0 {
+		t.Fatalf("expected last synced block to remain 0 after failed sync attempt, got %d", last)
+	}
+
+	// --- Second run after failure: must still require bytecode sync ---
+	if !dl.needsBytecodeSync(fastForwardBlock) {
+		t.Fatalf("expected bytecode sync to be reattempted after failed run while metadata is unchanged")
+	}
+
+	// --- Simulate a successful completion of bytecode sync ---
+	// In the real synchronise() path, this would be done via a batch write
+	// when the bytecode sync has finished.
+	batch := db.NewBatch()
+	rawdb.WriteBytecodeSyncLastBlock(batch, fastForwardBlock)
+	if err := batch.Write(); err != nil {
+		t.Fatalf("failed to write bytecode sync metadata: %v", err)
+	}
+
+	// Verify metadata reflects completion.
+	if last := rawdb.ReadBytecodeSyncLastBlock(db); last != fastForwardBlock {
+		t.Fatalf("expected last synced block to be %d after completion, got %d", fastForwardBlock, last)
+	}
+
+	// --- Third run: same fastForwardBlock, no more bytecode sync needed ---
+	if dl.needsBytecodeSync(fastForwardBlock) {
+		t.Fatalf("did not expect bytecode sync after completion at %d", fastForwardBlock)
+	}
+
+	// --- Fast forward moves PAST lastSyncedBlock -> should sync again ---
+	newFastForward := fastForwardBlock + 500
+	dl.setFastForwardBlock(newFastForward)
+	if !dl.needsBytecodeSync(newFastForward) {
+		t.Fatalf(
+			"expected bytecode sync when fast-forward moved beyond last synced block (newFastForward=%d, lastSynced=%d)",
+			newFastForward, fastForwardBlock,
+		)
+	}
+
+	// --- Fast forward moves BEHIND lastSyncedBlock -> no sync needed ---
+	smallerFastForward := fastForwardBlock - 500
+	dl.setFastForwardBlock(smallerFastForward)
+	if dl.needsBytecodeSync(smallerFastForward) {
+		t.Fatalf(
+			"did not expect bytecode sync when fast-forward (%d) is behind last synced block (%d)",
+			smallerFastForward, fastForwardBlock,
+		)
+	}
+}

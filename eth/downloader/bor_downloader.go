@@ -803,9 +803,22 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		// Ensure snap syncer is fully terminated before proceeding
 		d.Cancel()
 
-		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, origin)
+		// Determine the height we actually synced to: use the final pivot.
+		var syncedTo uint64
 
-		log.Info("Bytecode sync completed", "block", origin)
+		d.pivotLock.RLock()
+		if d.pivotHeader != nil {
+			syncedTo = d.pivotHeader.Number.Uint64()
+		}
+		d.pivotLock.RUnlock()
+
+		if syncedTo == 0 || syncedTo > origin {
+			syncedTo = origin
+		}
+
+		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, syncedTo)
+		log.Info("Bytecode sync completed", "block", syncedTo)
+
 		return nil
 	} else {
 		fetchers = append(fetchers, func() error { return d.processFullSyncContentStateless() })
@@ -2506,27 +2519,22 @@ func (d *Downloader) needsBytecodeSync(fastForwardBlock uint64) bool {
 		return false
 	}
 
-	// Read the last synced block from the database
-	lastSyncedByteCodeBlock := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
-
-	// If we haven't synced any bytecodes yet and gap is significant, we need to sync
-	if lastSyncedByteCodeBlock == 0 {
+	lastSynced := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
+	if lastSynced == 0 {
 		log.Info("Bytecode sync needed: no previous sync found",
-			"fastForwardBlock", fastForwardBlock, "currentBlock", currentBlock,
-			"gap", gap, "threshold", d.FastForwardThreshold)
+			"fastForwardBlock", fastForwardBlock, "currentBlock", currentBlock, "gap", gap)
 		return true
 	}
 
-	// If the fast forward block has moved beyond our last sync, we need to sync
-	gap = int64(fastForwardBlock) - int64(lastSyncedByteCodeBlock)
-	if gap > int64(d.FastForwardThreshold) {
+	// If fastForwardBlock is *ahead* of what we've recorded, force another bytecode-only sync
+	if fastForwardBlock > lastSynced {
 		log.Info("Bytecode sync needed: fast forward block moved",
-			"lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock,
-			"currentBlock", currentBlock, "gap", gap)
+			"lastSyncedByteCodeBlock", lastSynced, "fastForwardBlock", fastForwardBlock,
+			"currentBlock", currentBlock, "gap", fastForwardBlock-lastSynced)
 		return true
 	}
 
-	// Bytecode sync is already complete up to or beyond the fast forward block
-	log.Info("Bytecode sync not needed", "lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock)
+	log.Info("Bytecode sync not needed",
+		"lastSyncedByteCodeBlock", lastSynced, "fastForwardBlock", fastForwardBlock)
 	return false
 }
