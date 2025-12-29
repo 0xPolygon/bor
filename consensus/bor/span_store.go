@@ -359,6 +359,20 @@ func (s *SpanStore) setHeimdallClient(client IHeimdallClient) {
 	s.heimdallClient = client
 }
 
+// PurgeCache clears all cached spans and resets state. This is useful in tests
+// when the mock heimdall client is changed and old cached data needs to be invalidated.
+func (s *SpanStore) PurgeCache() {
+	// Create a new cache to replace the old one
+	newCache, _ := lru.NewARC(10)
+	s.store = newCache
+	// Clear the latest span cache
+	s.latestSpanCache.Store(nil)
+	// Clear the last used span
+	s.lastUsedSpan.Store(nil)
+	// Reset the latest known span ID
+	s.latestKnownSpanId.Store(0)
+}
+
 // getMockSpan0 constructs a mock span 0 by fetching validator set from genesis state. This should
 // only be used in tests where heimdall client is not available.
 func getMockSpan0(ctx context.Context, spanner Spanner, chainId string) (*borTypes.Span, error) {

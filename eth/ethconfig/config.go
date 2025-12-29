@@ -209,6 +209,10 @@ type Config struct {
 	// Use child heimdall process to fetch data, Only works when RunHeimdall is true
 	UseHeimdallApp bool
 
+	// OverrideHeimdallClient allows injecting a mock HeimdallClient for testing.
+	// When set, this client is used instead of creating one from HeimdallURL/HeimdallgRPCAddress.
+	OverrideHeimdallClient bor.IHeimdallClient `toml:"-"`
+
 	// Bor logs flag
 	BorLogs bool
 
@@ -285,7 +289,10 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 			}
 
 			var heimdallClient bor.IHeimdallClient
-			if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
+			// Use override client if provided (for testing)
+			if ethConfig.OverrideHeimdallClient != nil {
+				heimdallClient = ethConfig.OverrideHeimdallClient
+			} else if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
 				// TODO: Running heimdall from bor is not tested yet.
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
 				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
