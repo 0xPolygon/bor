@@ -74,7 +74,7 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 	// Only calculate blob fee if the fork actually supports blob transactions (Cancun or later)
 	// and the chain has a BlobScheduleConfig configured
 	if header.ExcessBlobGas != nil && chain.Config().BlobScheduleConfig != nil {
-		if chain.Config().IsCancun(header.Number){
+		if chain.Config().IsCancun(header.Number) {
 			blobBaseFee = eip4844.CalcBlobFee(chain.Config(), header)
 		}
 	}
