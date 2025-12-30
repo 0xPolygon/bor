@@ -808,9 +808,14 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		// Ensure snap syncer is fully terminated before proceeding
 		d.Cancel()
 
-		log.Info("[debuglocal] Finished call spawnSyncDominant", "firstPivot", firstPivot, "origin (previous variable used to set)", origin)
-		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, firstPivot)
-		log.Info("Bytecode sync completed", "block", firstPivot)
+		syncedTo := firstPivot
+		if syncedTo == 0 || syncedTo > origin {
+			syncedTo = origin
+		}
+
+		log.Info("[debuglocal] Finished call spawnSyncDominant", "syncedTo", syncedTo, "origin (previous variable used to set)", origin)
+		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, syncedTo)
+		log.Info("Bytecode sync completed", "block", syncedTo)
 
 		return nil
 	} else {
