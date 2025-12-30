@@ -86,7 +86,6 @@ type Backend interface {
 
 // MakeProtocols constructs the P2P protocol definitions for `snap`.
 func MakeProtocols(backend Backend) []p2p.Protocol {
-	log.Info("[debuglocal] Enabling snap protocol")
 	protocols := make([]p2p.Protocol, len(ProtocolVersions))
 
 	for i, version := range ProtocolVersions {
