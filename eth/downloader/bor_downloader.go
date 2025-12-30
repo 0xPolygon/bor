@@ -661,6 +661,8 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		}
 	}
 
+	log.Info("[debuglocal] Chosen origin", "origin", origin)
+
 	d.syncStatsLock.Lock()
 	if d.syncStatsChainHeight <= origin || d.syncStatsChainOrigin > origin {
 		d.syncStatsChainOrigin = origin
@@ -795,8 +797,10 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		d.pivotHeader = pivot
 		d.pivotLock.Unlock()
 
+		log.Info("[debuglocal] Start call spawnSyncDominant", "pivot", pivot.Number.Uint64())
 		err := d.spawnSyncDominant(fetchers, func() error { return d.processSnapSyncContent(false) })
 		if err != nil {
+			log.Info("[debuglocal] Error caught in spawnSyncDominant", "errorCaught", err)
 			return err
 		}
 
@@ -816,6 +820,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 			syncedTo = origin
 		}
 
+		log.Info("[debuglocal] Finished call spawnSyncDominant", "syncedTo", syncedTo, "origin (previous variable used to set)", origin)
 		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, syncedTo)
 		log.Info("Bytecode sync completed", "block", syncedTo)
 
@@ -1920,6 +1925,8 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 // processSnapSyncContent takes fetch results from the queue and writes them to the
 // database. It also controls the synchronisation of state nodes of the pivot block.
 func (d *Downloader) processSnapSyncContent(processResults bool) error {
+	log.Info("[debuglocal] Called processSnapSyncContent", "processResults", processResults)
+
 	// Start syncing state of the reported head block. This should get us most of
 	// the state of the pivot block.
 	d.pivotLock.RLock()
@@ -2519,22 +2526,27 @@ func (d *Downloader) needsBytecodeSync(fastForwardBlock uint64) bool {
 		return false
 	}
 
-	lastSynced := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
-	if lastSynced == 0 {
+	// Read the last synced block from the database
+	lastSyncedByteCodeBlock := rawdb.ReadBytecodeSyncLastBlock(d.stateDB)
+
+	// If we haven't synced any bytecodes yet and gap is significant, we need to sync
+	if lastSyncedByteCodeBlock == 0 {
 		log.Info("Bytecode sync needed: no previous sync found",
-			"fastForwardBlock", fastForwardBlock, "currentBlock", currentBlock, "gap", gap)
+			"fastForwardBlock", fastForwardBlock, "currentBlock", currentBlock,
+			"gap", gap, "threshold", d.FastForwardThreshold)
 		return true
 	}
 
-	// If fastForwardBlock is *ahead* of what we've recorded, force another bytecode-only sync
-	if fastForwardBlock > lastSynced {
+	// If the fast forward block has moved beyond our last sync, we need to sync
+	gap = int64(fastForwardBlock) - int64(lastSyncedByteCodeBlock)
+	if gap > int64(d.FastForwardThreshold) {
 		log.Info("Bytecode sync needed: fast forward block moved",
-			"lastSyncedByteCodeBlock", lastSynced, "fastForwardBlock", fastForwardBlock,
-			"currentBlock", currentBlock, "gap", fastForwardBlock-lastSynced)
+			"lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock,
+			"currentBlock", currentBlock, "gap", gap)
 		return true
 	}
 
-	log.Info("Bytecode sync not needed",
-		"lastSyncedByteCodeBlock", lastSynced, "fastForwardBlock", fastForwardBlock)
+	// Bytecode sync is already complete up to or beyond the fast forward block
+	log.Info("Bytecode sync not needed", "lastSyncedByteCodeBlock", lastSyncedByteCodeBlock, "fastForwardBlock", fastForwardBlock)
 	return false
 }
