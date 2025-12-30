@@ -252,7 +252,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// Set the canonical tx getter for preconf service
-	preconfService.SetCanonicalTxGetter(eth.APIBackend.GetCanonicalTransaction)
+	if preconfService != nil {
+		preconfService.SetCanonicalTxGetter(eth.APIBackend.GetCanonicalTransaction)
+	}
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
