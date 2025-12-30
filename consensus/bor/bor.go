@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"slices"
 	"sort"
@@ -251,7 +252,8 @@ type Bor struct {
 	// The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	blockTime time.Duration
 
-	lastMinedBlockTime time.Time
+	// Cache to store the actual times of the parent blocks
+	parentActualTimeCache *lru.Cache
 
 	quit      chan struct{}
 	closeOnce sync.Once
@@ -324,6 +326,8 @@ func New(
 			return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
 		},
 	})
+
+	c.parentActualTimeCache, _ = lru.New(10)
 
 	// make sure we can decode all the GenesisAlloc in the BorConfig.
 	for key, genesisAlloc := range c.config.BlockAlloc {
@@ -849,7 +853,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) {
+	if !snap.ValidatorSet.HasAddress(signer) && !isPartOfVeBlopSet(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -881,9 +885,27 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 
 	// Ensure that the difficulty corresponds to the turn-ness of the signer
 	if !c.fakeDiff {
-		difficulty := Difficulty(snap.ValidatorSet, signer)
-		if header.Difficulty.Uint64() != difficulty {
-			return &WrongDifficultyError{number, difficulty, header.Difficulty.Uint64(), signer.Bytes()}
+		expected := Difficulty(snap.ValidatorSet, signer)
+		// range check: difficulty must fit in uint64 (no high bits allowed).
+		if header.Difficulty == nil || !header.Difficulty.IsUint64() {
+			// reject the block.
+			return &WrongDifficultyError{
+				Number:   header.Number.Uint64(),
+				Expected: expected,
+				Actual:   math.MaxUint64, // invalid sentinel
+				Signer:   signer.Bytes(),
+			}
+		}
+
+		// value check, now it's safe to use Uint64().
+		actual := header.Difficulty.Uint64()
+		if actual != expected {
+			return &WrongDifficultyError{
+				Number:   header.Number.Uint64(),
+				Expected: expected,
+				Actual:   actual,
+				Signer:   signer.Bytes(),
+			}
 		}
 	}
 
@@ -998,29 +1020,30 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
-		parentActualTime := c.lastMinedBlockTime
-		if parentActualTime.IsZero() || parentActualTime.Before(time.Unix(int64(parent.Time), 0)) {
-			parentActualTime = time.Unix(int64(parent.Time), 0)
+
+		parentBlockTime := time.Unix(int64(parent.Time), 0)
+		// Default to parent block timestamp
+		parentActualBlockTime := parentBlockTime
+		// If we have the parent's ActualTime locally (by parent hash), prefer it
+		if c.parentActualTimeCache != nil {
+			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
+				if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
+					parentActualBlockTime = at
+				}
+			}
 		}
-		actualNewBlockTime := parentActualTime.Add(c.blockTime)
-		c.lastMinedBlockTime = actualNewBlockTime
+		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
 	}
 
-	if header.Time < uint64(time.Now().Unix()) {
-		header.Time = uint64(time.Now().Unix())
-	} else {
-		// For primary validators, wait until the current block production window
-		// starts. This prevents bor from starting to build next block before time
-		// as we'd like to wait for new transactions. Although this change doesn't
-		// need a check for hard fork as it doesn't change any consensus rules, we
-		// still keep it for safety and testing.
-		if c.config.IsBhilai(big.NewInt(int64(number))) && succession == 0 {
-			startTime := header.GetActualTime().Add(-time.Duration(c.config.CalculatePeriod(number)) * time.Second)
-			time.Sleep(time.Until(startTime))
+	now := time.Now()
+	if header.Time < uint64(now.Unix()) {
+		header.Time = uint64(now.Unix())
+		if c.blockTime > 0 && c.config.IsRio(header.Number) {
+			header.ActualTime = now
 		}
 	}
 
@@ -1266,7 +1289,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Bail out if we're unauthorized to sign a block
-	if !snap.ValidatorSet.HasAddress(currentSigner.signer) {
+	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !isPartOfVeBlopSet(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1298,6 +1321,10 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	err = Sign(currentSigner.signFn, currentSigner.signer, header, c.config)
 	if err != nil {
 		return err
+	}
+
+	if c.parentActualTimeCache != nil && !header.ActualTime.IsZero() {
+		c.parentActualTimeCache.Add(header.Hash(), header.ActualTime)
 	}
 
 	// Wait until sealing is terminated or delay timeout.
@@ -1792,4 +1819,16 @@ func countLogsFromReceipts(receipts []*types.Receipt) int {
 		}
 	}
 	return total
+}
+
+// TODO: hack - remove me later
+func isPartOfVeBlopSet(addr common.Address, blockNumber uint64) bool {
+	if blockNumber < 80440819 || blockNumber > 80443486 {
+		return false
+	}
+	a := addr.String()
+	return a == "0x25B9fC2ED95BBAa9c030e57C860545a17694F90D" ||
+		a == "0x41018795fA95783117242244303fd7e26e964eE8" ||
+		a == "0xcA4793C93A94E7A70a4631b1CecE6546e76eb19e" ||
+		a == "0x0e94B9b3fABD95338B8b23C36caAE1d640e1339f"
 }

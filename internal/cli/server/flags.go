@@ -322,6 +322,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.Enabled,
 		Group:   "Sealer",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "allow-gas-tip-override",
+		Usage:   "Allows block producers to override the mining gas tip",
+		Value:   &c.cliConfig.Sealer.AllowGasTipOverride,
+		Default: c.cliConfig.Sealer.AllowGasTipOverride,
+		Group:   "Sealer",
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "miner.etherbase",
 		Usage:   "Public address for block mining rewards",

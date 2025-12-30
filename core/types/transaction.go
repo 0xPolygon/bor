@@ -374,6 +374,10 @@ func (tx *Transaction) GasTipCapIntCmp(other *big.Int) int {
 // the actual negative value, _and_ ErrGasFeeCapTooLow
 func (tx *Transaction) EffectiveGasTip(baseFee *big.Int) (*big.Int, error) {
 	dst := new(big.Int)
+	if tx.Type() == StateSyncTxType {
+		dst = big.NewInt(0)
+		return dst, nil
+	}
 	err := tx.calcEffectiveGasTip(dst, baseFee)
 	return dst, err
 }

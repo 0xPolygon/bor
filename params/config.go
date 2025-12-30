@@ -332,17 +332,20 @@ var (
 		CancunBlock:         big.NewInt(5423600),
 		PragueBlock:         big.NewInt(22765056),
 		Bor: &BorConfig{
-			JaipurBlock:    big.NewInt(73100),
-			DelhiBlock:     big.NewInt(73100),
-			IndoreBlock:    big.NewInt(73100),
-			AhmedabadBlock: big.NewInt(11865856),
-			BhilaiBlock:    big.NewInt(22765056),
-			RioBlock:       big.NewInt(26272256),
+			JaipurBlock:       big.NewInt(73100),
+			DelhiBlock:        big.NewInt(73100),
+			IndoreBlock:       big.NewInt(73100),
+			AhmedabadBlock:    big.NewInt(11865856),
+			BhilaiBlock:       big.NewInt(22765056),
+			RioBlock:          big.NewInt(26272256),
+			MadhugiriBlock:    big.NewInt(28899616),
+			MadhugiriProBlock: big.NewInt(29287400),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
 			Period: map[string]uint64{
-				"0": 2,
+				"0":        2,
+				"28899616": 1,
 			},
 			ProducerDelay: map[string]uint64{
 				"0": 4,
@@ -412,18 +415,21 @@ var (
 		CancunBlock:         big.NewInt(54876000),
 		PragueBlock:         big.NewInt(73440256),
 		Bor: &BorConfig{
-			JaipurBlock:    big.NewInt(23850000),
-			DelhiBlock:     big.NewInt(38189056),
-			IndoreBlock:    big.NewInt(44934656),
-			AhmedabadBlock: big.NewInt(62278656),
-			BhilaiBlock:    big.NewInt(73440256),
-			RioBlock:       big.NewInt(77414656),
+			JaipurBlock:       big.NewInt(23850000),
+			DelhiBlock:        big.NewInt(38189056),
+			IndoreBlock:       big.NewInt(44934656),
+			AhmedabadBlock:    big.NewInt(62278656),
+			BhilaiBlock:       big.NewInt(73440256),
+			RioBlock:          big.NewInt(77414656),
+			MadhugiriBlock:    big.NewInt(80084800),
+			MadhugiriProBlock: big.NewInt(80084800),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
 
 			Period: map[string]uint64{
-				"0": 2,
+				"0":        2,
+				"80084800": 1,
 			},
 			ProducerDelay: map[string]uint64{
 				"0":        6,
@@ -881,6 +887,7 @@ type BorConfig struct {
 	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -934,6 +941,10 @@ func (c *BorConfig) IsRio(number *big.Int) bool {
 
 func (c *BorConfig) IsMadhugiri(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriBlock, number)
+}
+
+func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
+	return isBlockForked(c.MadhugiriProBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
@@ -1636,6 +1647,7 @@ type Rules struct {
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
+	IsMadhugiriPro                                          bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1668,5 +1680,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsOsaka:          c.IsOsaka(num),
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
+		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
 	}
 }
