@@ -2034,9 +2034,11 @@ func (d *Downloader) processSnapSyncContent(processResults bool) error {
 					newPivotNum = len(results) - 1
 				}
 
-				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", newPivotNum)
+				newPivot := results[newPivotNum].Header
 
-				pivot = results[newPivotNum].Header // must exist as lower old pivot is uncommitted
+				log.Warn("Pivot became stale, moving", "old", pivot.Number.Uint64(), "new", newPivot.Number.Uint64())
+
+				pivot = newPivot // must exist as lower old pivot is uncommitted
 
 				d.pivotLock.Lock()
 				d.pivotHeader = pivot
