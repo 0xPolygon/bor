@@ -1579,12 +1579,12 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 	// commit transactions
 	if plainTxsPrio != nil || blobTxsPrio != nil {
-		if err := w.commitTransactions(env, plainTxsPrio, blobTxsPrio, interrupt, new(uint256.Int)); err != nil {
+		if err := w.commitTransactions(env, plainTxsPrio, blobTxsPrio, interrupt); err != nil {
 			return err
 		}
 	}
 	if plainTxsNormal != nil || blobTxsNormal != nil {
-		if err := w.commitTransactions(env, plainTxsNormal, blobTxsNormal, interrupt, new(uint256.Int)); err != nil {
+		if err := w.commitTransactions(env, plainTxsNormal, blobTxsNormal, interrupt); err != nil {
 			return err
 		}
 	}
