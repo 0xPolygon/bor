@@ -864,45 +864,52 @@ func (d *Downloader) spawnSync(fetchers []func() error) error {
 	return err
 }
 
-// spawnSyncDominant runs d.process and all given fetcher functions to completion in
+// spawnSyncDominant runs dominantFetcher and all given fetcher functions to completion in
 // separate goroutines, but cancels all fetchers as soon as the dominantFetcher completes,
 // regardless of whether it returns an error or not.
+//
+// If this function returns a non-nil error, it is guaranteed to be from the dominantFetcher.
+// Errors from the other fetchers are ignored (you can log them if desired).
 func (d *Downloader) spawnSyncDominant(fetchers []func() error, dominantFetcher func() error) error {
-	totalFetchers := len(fetchers) + 1
-	errc := make(chan error, totalFetchers)
-	d.cancelWg.Add(totalFetchers)
+	type fetchResult struct {
+		err      error
+		dominant bool
+	}
 
-	dominantFetcherDone := make(chan struct{})
+	totalFetchers := len(fetchers) + 1
+	errc := make(chan fetchResult, totalFetchers)
+
+	d.cancelWg.Add(totalFetchers)
 
 	// Start the dominant fetcher
 	go func() {
 		defer d.cancelWg.Done()
-		defer close(dominantFetcherDone)
-		errc <- dominantFetcher()
+		err := dominantFetcher()
+		errc <- fetchResult{err: err, dominant: true}
 	}()
 
 	// Start all regular fetchers
 	for _, fn := range fetchers {
+		fn := fn // avoid loop variable capture
 		go func() {
 			defer d.cancelWg.Done()
-			errc <- fn()
+			errc <- fetchResult{err: fn(), dominant: false}
 		}()
 	}
 
-	var err error
+	var dominantErr error
 	completed := 0
 
-	// Wait for either dominant fetcher completion or any error
 	for completed < totalFetchers {
-		select {
-		case <-dominantFetcherDone:
-			// Dominant fetcher completed, cancel all others immediately
+		res := <-errc
+		completed++
+
+		if res.dominant {
+			// Dominant fetcher completed: cancel all others immediately
 			d.Cancel()
-			// Continue to collect remaining errors/completions
-		case got := <-errc:
-			completed++
-			if got != nil && err == nil && got != errCanceled {
-				err = got
+
+			if res.err != nil && res.err != errCanceled {
+				dominantErr = res.err
 			}
 		}
 	}
@@ -910,7 +917,7 @@ func (d *Downloader) spawnSyncDominant(fetchers []func() error, dominantFetcher 
 	d.queue.Close()
 	d.Cancel()
 
-	return err
+	return dominantErr
 }
 
 // cancel aborts all of the operations and resets the queue. However, cancel does
