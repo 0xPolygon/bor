@@ -20,10 +20,13 @@ const (
 )
 
 var (
-	taskProcessingTimer  = metrics.NewRegisteredTimer("preconfs/processing", nil)
-	taskStatusTimer      = metrics.NewRegisteredTimer("preconfs/status", nil)
-	validPreconfsMeter   = metrics.NewRegisteredMeter("preconfs/valid", nil)
-	invalidPreconfsMeter = metrics.NewRegisteredMeter("preconfs/invalid", nil)
+	taskProcessingTimer = metrics.NewRegisteredTimer("preconfs/processing", nil)
+	taskStatusTimer     = metrics.NewRegisteredTimer("preconfs/status", nil)
+	taskReadTimer       = metrics.NewRegisteredTimer("preconfs/dbread", nil)
+
+	uniquePreconfsTaskMeter = metrics.NewRegisteredMeter("preconfs/tasks", nil)
+	validPreconfsMeter      = metrics.NewRegisteredMeter("preconfs/valid", nil)
+	invalidPreconfsMeter    = metrics.NewRegisteredMeter("preconfs/invalid", nil)
 )
 
 type Task struct {
@@ -42,6 +45,9 @@ type Service struct {
 	close     chan struct{}
 	semaphore chan struct{} // to limit concurrent tasks
 
+	waitForCanonicalTxGetter chan struct{}
+	canonicalTxGetter        func(common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64)
+
 	// metric collection
 	totalProcessed atomic.Uint64
 	totalValid     atomic.Uint64
@@ -50,16 +56,27 @@ type Service struct {
 
 func NewPreconfService(urls []string) *Service {
 	s := &Service{
-		mc:        newMultiClient(urls),
-		store:     make(map[common.Hash]Task, 1024),
-		taskCh:    make(chan Task, maxQueuedTasks),
-		close:     make(chan struct{}),
-		semaphore: make(chan struct{}, maxConcurrentTasks),
+		mc:                       newMultiClient(urls),
+		store:                    make(map[common.Hash]Task, 1024),
+		taskCh:                   make(chan Task, maxQueuedTasks),
+		close:                    make(chan struct{}),
+		semaphore:                make(chan struct{}, maxConcurrentTasks),
+		waitForCanonicalTxGetter: make(chan struct{}),
 	}
-	go s.processTasks()
-	go s.cleanup()
-	go s.report()
+	go func() {
+		<-s.waitForCanonicalTxGetter
+		go s.processTasks()
+		go s.cleanup()
+		go s.report()
+	}()
 	return s
+}
+
+// SetCanonicalTxGetter sets the function to get canonical transaction by hash which is needed
+// for processing preconf tasks. It can only be called once.
+func (s *Service) SetCanonicalTxGetter(f func(common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64)) {
+	s.waitForCanonicalTxGetter <- struct{}{}
+	s.canonicalTxGetter = f
 }
 
 // QueuePreconfTask creates and adds a new preconf task to the processing queue. Returns
@@ -84,6 +101,7 @@ func (s *Service) processTasks() {
 			s.semaphore <- struct{}{}
 			go func(task Task) {
 				defer func() { <-s.semaphore }()
+				uniquePreconfsTaskMeter.Mark(1)
 				s.processTask(task, false)
 			}(task)
 		case <-s.close:
@@ -95,7 +113,23 @@ func (s *Service) processTasks() {
 // processTask processes a single preconf task and populates the result. It uses
 // multi-client to check for presence of transaction.
 func (s *Service) processTask(task Task, reprocess bool) {
+	// Ensure the tx is not already included in canonical chain
 	start := time.Now()
+	found, _, _, _, _ := s.canonicalTxGetter(task.tx.Hash())
+	taskReadTimer.UpdateSince(start)
+	if found {
+		task.result = true
+		if !reprocess {
+			task.insertedAt = time.Now()
+		}
+		s.storeMu.Lock()
+		s.store[task.tx.Hash()] = task
+		s.storeMu.Unlock()
+		return
+	}
+
+	// Tx still not included, check against block producers mempool
+	start = time.Now()
 	res, err := s.mc.checkTxInclusionInMempool(task.tx, task.sender)
 	taskProcessingTimer.UpdateSince(start)
 	s.totalProcessed.Add(1)
@@ -128,10 +162,9 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	defer s.storeMu.RUnlock()
 
 	if task, ok := s.store[hash]; ok {
-		if task.result && task.err == nil {
+		if task.result {
 			return true, nil
-		}
-		if !task.result || task.err != nil {
+		} else {
 			log.Info("[preconfs] re-processing preconf task", "hash", hash, "err", task.err)
 			s.storeMu.RUnlock()
 			s.processTask(task, true)
@@ -140,13 +173,12 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 				if task.result {
 					return true, nil
 				}
-				return task.result, errors.New("failed to validate transaction inclusion status for issuing preconf")
+				return false, errors.New("failed to validate transaction inclusion status for issuing preconf")
 			} else {
-				return false, errors.New("preconf result pruned")
+				// result pruned
+				return false, errors.New("unable to find preconf task associated with transaction hash")
 			}
 		}
-
-		return task.result, task.err
 	}
 
 	// either such task for given transaction hash doesn't exist, or task is not processed

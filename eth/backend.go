@@ -251,6 +251,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		config.TxPool.AllowUnprotectedTxs = true
 	}
 
+	// Set the canonical tx getter for preconf service
+	preconfService.SetCanonicalTxGetter(eth.APIBackend.GetCanonicalTransaction)
+
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
 	eth.engine = engine
