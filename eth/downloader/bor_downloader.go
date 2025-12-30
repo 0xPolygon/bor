@@ -795,6 +795,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 	if needsBytecodeSync {
 		d.pivotLock.Lock()
 		d.pivotHeader = pivot
+		firstPivot := pivot.Number.Uint64()
 		d.pivotLock.Unlock()
 
 		log.Info("[debuglocal] Start call spawnSyncDominant", "pivot", pivot.Number.Uint64())
@@ -807,22 +808,9 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 		// Ensure snap syncer is fully terminated before proceeding
 		d.Cancel()
 
-		// Determine the height we actually synced to: use the final pivot.
-		var syncedTo uint64
-
-		d.pivotLock.RLock()
-		if d.pivotHeader != nil {
-			syncedTo = d.pivotHeader.Number.Uint64()
-		}
-		d.pivotLock.RUnlock()
-
-		if syncedTo == 0 || syncedTo > origin {
-			syncedTo = origin
-		}
-
-		log.Info("[debuglocal] Finished call spawnSyncDominant", "syncedTo", syncedTo, "origin (previous variable used to set)", origin)
-		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, syncedTo)
-		log.Info("Bytecode sync completed", "block", syncedTo)
+		log.Info("[debuglocal] Finished call spawnSyncDominant", "firstPivot", firstPivot, "origin (previous variable used to set)", origin)
+		rawdb.WriteBytecodeSyncLastBlock(d.stateDB, firstPivot)
+		log.Info("Bytecode sync completed", "block", firstPivot)
 
 		return nil
 	} else {
