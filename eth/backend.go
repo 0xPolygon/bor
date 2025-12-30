@@ -307,6 +307,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	options.Overrides = &overrides
+	options.Checker = checker
 
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor

@@ -4209,6 +4209,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 // invalid headers are detected.
 func (bc *BlockChain) startHeaderVerificationLoop() {
 	if bc.checker == nil {
+		log.Warn("chain validator service is not set, skipping header verification loop")
 		return // No checker available
 	}
 
