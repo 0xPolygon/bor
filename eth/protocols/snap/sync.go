@@ -723,12 +723,17 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 
 	for {
 		// Remove all completed tasks and terminate sync if everything's done
+		log.Info("[debuglocal] Calling clean tasks", "len(s.tasks)", len(s.tasks))
+
 		s.cleanStorageTasks()
 		s.cleanAccountTasks()
 
+		log.Info("[debuglocal] Sync loop: ", "len(s.tasks)", len(s.tasks), "s.healer==nil", s.healer == nil)
 		if len(s.tasks) == 0 {
 			// If we have no healer (bytecode-only mode), we’re done as soon as snap phase finishes.
 			if s.healer == nil {
+				log.Info("[debuglocal] Reached the end of sync loop!!!")
+
 				return nil
 			}
 			// Normal mode: still require heal scheduler to be empty.
@@ -1019,6 +1024,8 @@ func (s *Syncer) cleanAccountTasks() {
 	}
 	// If everything was just finalized just, generate the account trie and start heal
 	if len(s.tasks) == 0 {
+		log.Info("[debuglocal] Flagging snap phase is done!")
+
 		s.lock.Lock()
 		s.snapped = true
 		s.lock.Unlock()

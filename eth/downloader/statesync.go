@@ -106,6 +106,7 @@ func newStateSync(d *Downloader, root common.Hash) *stateSync {
 func (s *stateSync) run() {
 	close(s.started)
 	s.err = s.d.SnapSyncer.Sync(s.root, s.cancel)
+	log.Info("[debuglocal] Finished Sync", "s.err", s.err)
 	close(s.done)
 }
 
