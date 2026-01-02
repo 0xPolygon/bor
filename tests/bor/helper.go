@@ -607,11 +607,12 @@ func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, wi
 		TxPool:          legacypool.DefaultConfig,
 		GPO:             ethconfig.Defaults.GPO,
 		Miner: miner.Config{
-			Etherbase: crypto.PubkeyToAddress(privKey.PublicKey),
-			GasCeil:   genesis.GasLimit * 11 / 10,
-			GasPrice:  big.NewInt(1),
-			Recommit:  time.Second,
-			BlockTime: blockTime,
+			Etherbase:           crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:             genesis.GasLimit * 11 / 10,
+			GasPrice:            big.NewInt(1),
+			Recommit:            time.Second,
+			BlockTime:           blockTime,
+			CommitInterruptFlag: true,
 		},
 		WithoutHeimdall: withoutHeimdall,
 	})

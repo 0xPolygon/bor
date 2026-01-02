@@ -2065,3 +2065,185 @@ func TestCustomBlockTimeMining(t *testing.T) {
 	require.LessOrEqual(t, blocksMinedCount, maxExpectedBlocks,
 		fmt.Sprintf("Too many blocks mined. Expected at most %d, got %d", maxExpectedBlocks, blocksMinedCount))
 }
+
+// TestLateBlockNotEmpty tests that when a parent block is sealed late,
+// blocks still have sufficient time to include transactions.
+// This verifies the fix for empty blocks caused by late parent blocks.
+func TestLateBlockNotEmpty(t *testing.T) {
+	t.Parallel()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
+	genesis.Config.Bor.Period = map[string]uint64{"0": 2}
+	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
+	genesis.Config.Bor.RioBlock = big.NewInt(0)
+
+	// Start a single miner node
+	stack, ethBackend, err := InitMiner(genesis, keys[0], true)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for initial blocks
+	log.Info("Waiting for initial blocks...")
+	for {
+		time.Sleep(500 * time.Millisecond)
+		if ethBackend.BlockChain().CurrentBlock().Number.Uint64() >= 3 {
+			break
+		}
+	}
+
+	// Stop mining and wait for it to fully stop
+	ethBackend.StopMining()
+	time.Sleep(500 * time.Millisecond)
+
+	// Capture parent block
+	parentBlock := ethBackend.BlockChain().CurrentBlock()
+	parentNumber := parentBlock.Number.Uint64()
+	parentTime := parentBlock.Time
+
+	log.Info("Parent block", "number", parentNumber, "time", parentTime)
+
+	// Add transactions BEFORE waiting (they should be in pool when we resume)
+	txpool := ethBackend.TxPool()
+	senderKey := pkey1
+	senderAddr := crypto.PubkeyToAddress(senderKey.PublicKey)
+	recipientAddr := crypto.PubkeyToAddress(pkey2.PublicKey)
+	nonce := txpool.Nonce(senderAddr)
+	signer := types.LatestSignerForChainID(genesis.Config.ChainID)
+
+	// Start goroutine to continuously add transactions
+	stopTxs := make(chan struct{})
+	txNonce := nonce
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTxs:
+				return
+			case <-ticker.C:
+				// Add 5 transactions every 100ms
+				for i := 0; i < 5; i++ {
+					tx := types.NewTransaction(
+						txNonce,
+						recipientAddr,
+						big.NewInt(1000),
+						21000,
+						big.NewInt(30000000000),
+						nil,
+					)
+					signedTx, _ := types.SignTx(tx, signer, senderKey)
+					if txpool.Add([]*types.Transaction{signedTx}, true)[0] == nil {
+						txNonce++
+					}
+				}
+			}
+		}
+	}()
+	defer close(stopTxs)
+
+	// Wait a bit for initial transactions to be added
+	time.Sleep(300 * time.Millisecond)
+
+	pending, queued := txpool.Stats()
+	log.Info("Txpool after initial txs", "pending", pending, "queued", queued)
+	require.Greater(t, pending, 0, "Expected transactions in pending")
+
+	// Wait for parent to become older than block period (simulates late parent)
+	blockPeriod := time.Duration(genesis.Config.Bor.Period["0"]) * time.Second
+
+	// Wait until parent age > blockPeriod (not just equal)
+	var parentAge int64
+	for {
+		parentBlock = ethBackend.BlockChain().CurrentBlock()
+		parentNumber = parentBlock.Number.Uint64()
+		parentTime = parentBlock.Time
+		parentAge = time.Now().Unix() - int64(parentTime)
+
+		if parentAge > int64(blockPeriod.Seconds()) {
+			log.Info("Parent is now late", "number", parentNumber, "age", parentAge, "blockPeriod", blockPeriod.Seconds())
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Resume mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for blocks to be mined and check that they ALL contain transactions
+	log.Info("Waiting for blocks after resume...")
+	blocksToCheck := uint64(3)
+	maxWait := 10 * time.Second
+	deadline := time.Now().Add(maxWait)
+	allBlocksChecked := false
+
+	var currentNumber uint64
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		currentNumber = ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+
+		if currentNumber >= parentNumber+blocksToCheck {
+			allBlocksChecked = true
+			break
+		}
+	}
+
+	require.True(t, allBlocksChecked, "Expected %d blocks to be mined", blocksToCheck)
+
+	// Verify ALL blocks after parent contain transactions
+	totalTxsInBlocks := 0
+	actualNow := time.Now().Unix()
+	parentAge = actualNow - int64(parentTime) // Update parent age for error messages
+
+	for i := uint64(1); i <= blocksToCheck; i++ {
+		block := ethBackend.BlockChain().GetBlockByNumber(parentNumber + i)
+		require.NotNil(t, block)
+		txCount := len(block.Transactions())
+		totalTxsInBlocks += txCount
+
+		// Calculate expected build time
+		expectedMinTime := int64(parentTime) + int64(blockPeriod.Seconds())
+		actualBuildTime := int64(block.Time()) - actualNow
+		timeFromParent := int64(block.Time()) - int64(parentTime)
+
+		log.Info("Block check",
+			"number", block.Number().Uint64(),
+			"txCount", txCount,
+			"blockTime", block.Time(),
+			"actualNow", actualNow,
+			"buildTime", actualBuildTime,
+			"timeFromParent", timeFromParent,
+			"expectedMin", expectedMinTime)
+
+		// KEY ASSERTION: With the fix, ALL blocks should contain transactions
+		// when there are pending transactions in the pool
+		require.Greater(t, txCount, 0,
+			"Block %d is empty! With late block fix, all blocks should include "+
+				"transactions when txpool has pending txs. Parent age was %d seconds. "+
+				"Block time: %d, Now: %d, Build time available: %d seconds.",
+			block.Number().Uint64(), parentAge, block.Time(), actualNow, actualBuildTime)
+	}
+
+	log.Info("SUCCESS: All blocks after late parent contain transactions",
+		"blocksChecked", blocksToCheck,
+		"totalTxs", totalTxsInBlocks,
+		"parentAge", parentAge)
+
+	ethBackend.StopMining()
+}
