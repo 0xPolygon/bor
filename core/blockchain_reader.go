@@ -158,6 +158,23 @@ func (bc *BlockChain) GetBodyRLP(hash common.Hash) rlp.RawValue {
 	return body
 }
 
+// GetWitness retrieves a witness in RLP encoding from the database by hash,
+// caching it if found.
+func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
+	// Short circuit if the witness is already in the cache, retrieve otherwise
+	if cached, ok := bc.witnessCache.Get(hash); ok {
+		return cached
+	}
+
+	witness := rawdb.ReadWitness(bc.db, hash)
+	if len(witness) == 0 {
+		return nil
+	}
+	// Cache the found witness for next time and return
+	bc.witnessCache.Add(hash, witness)
+	return witness
+}
+
 // HasWitness checks if a witness is present in the database or not.
 func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 	return rawdb.HasWitness(bc.db, hash)
