@@ -32,7 +32,7 @@ func TestMemoryFreezer(t *testing.T) {
 				prunable: true,
 			}
 		}
-		return NewMemoryFreezer(false, tables)
+		return NewMemoryFreezer(false, 0, tables)
 	})
 	ancienttest.TestResettableAncientSuite(t, func(kinds []string) ethdb.ResettableAncientStore {
 		tables := make(map[string]freezerTableConfig)
@@ -42,6 +42,6 @@ func TestMemoryFreezer(t *testing.T) {
 				prunable: true,
 			}
 		}
-		return NewMemoryFreezer(false, tables)
+		return NewMemoryFreezer(false, 0, tables)
 	})
 }

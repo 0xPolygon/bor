@@ -149,7 +149,7 @@ func (b *memoryBatch) reset(freezer *MemoryFreezer) {
 	b.size = make(map[string]int64)
 
 	for name, table := range freezer.tables {
-		b.next[name] = table.items
+		b.next[name] = table.items + freezer.offset.Load()
 	}
 }
 
@@ -215,16 +215,24 @@ type MemoryFreezer struct {
 }
 
 // NewMemoryFreezer initializes an in-memory freezer instance.
-func NewMemoryFreezer(readonly bool, tableName map[string]freezerTableConfig) *MemoryFreezer {
+func NewMemoryFreezer(readonly bool, offset uint64, tableName map[string]freezerTableConfig) *MemoryFreezer {
 	tables := make(map[string]*memoryTable)
 	for name, cfg := range tableName {
 		tables[name] = newMemoryTable(name, cfg)
 	}
-	return &MemoryFreezer{
+	freezer := &MemoryFreezer{
 		writeBatch: newMemoryBatch(),
 		readonly:   readonly,
 		tables:     tables,
 	}
+
+	freezer.offset.Store(offset)
+
+	// Some blocks in ancientDB may have already been frozen and been pruned, so adding the offset to
+	// represent the absolute number of blocks already frozen.
+	freezer.items += offset
+
+	return freezer
 }
 
 // todo: @anshalshukla || @manav2401 - Check if implementation is required
@@ -252,7 +260,7 @@ func (f *MemoryFreezer) Ancient(kind string, number uint64) ([]byte, error) {
 	if t == nil {
 		return nil, errUnknownTable
 	}
-	data, err := t.retrieve(number, 1, 0)
+	data, err := t.retrieve(number-f.offset.Load(), 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +370,7 @@ func (f *MemoryFreezer) TruncateHead(items uint64) (uint64, error) {
 		return old, nil
 	}
 	for _, table := range f.tables {
-		if err := table.truncateHead(items); err != nil {
+		if err := table.truncateHead(items - f.offset.Load()); err != nil {
 			return 0, err
 		}
 	}
@@ -386,7 +394,7 @@ func (f *MemoryFreezer) TruncateTail(tail uint64) (uint64, error) {
 	}
 	for _, table := range f.tables {
 		if table.config.prunable {
-			if err := table.truncateTail(tail); err != nil {
+			if err := table.truncateTail(tail - f.offset.Load()); err != nil {
 				return 0, err
 			}
 		}
