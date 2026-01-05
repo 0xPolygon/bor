@@ -20,7 +20,6 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 const (
@@ -246,7 +245,6 @@ func BaseFeeChangeDenominator(borConfig *BorConfig, number *big.Int) uint64 {
 		return DefaultBaseFeeChangeDenominator
 	}
 	if borConfig.IsFee(number) {
-		log.Info("[debuglocal] Fee block, BaseFeeChangeDenominator from borConfig", "denominator", borConfig.BaseFeeChangeDenominator)
 		return borConfig.BaseFeeChangeDenominator
 	} else if borConfig.IsBhilai(number) {
 		return BaseFeeChangeDenominatorPostBhilai

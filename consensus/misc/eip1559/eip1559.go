@@ -24,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -52,8 +51,6 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 			return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
 				header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
 		}
-	} else {
-		log.Info("[debuglocal] Fee block, skipping check")
 	}
 
 	return nil
@@ -117,6 +114,5 @@ func CalcParentGasTarget(
 	if pct > 100 {
 		panic("invalid Bor TargetGasPercentage")
 	}
-	log.Info("[debuglocal] Fee block, calculating gas target", "parentGasLimit", parent.GasLimit, "targetGasPercentage", pct, "result", parent.GasLimit*pct/100)
 	return parent.GasLimit * pct / 100
 }
