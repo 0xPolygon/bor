@@ -997,6 +997,12 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	}(time.Now())
 
 	gasLimit := env.header.GasLimit
+
+	// Internal cap the gas limit
+	if w.config.GasCeilInternalCap > 0 && gasLimit > w.config.GasCeilInternalCap {
+		gasLimit = w.config.GasCeilInternalCap
+	}
+
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}

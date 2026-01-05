@@ -350,6 +350,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.GasCeil,
 		Group:   "Sealer",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.gaslimitinternalcap",
+		Usage:   "Target gas ceiling (gas limit) for mined blocks work as an internal cap, not impacting on the header limit",
+		Value:   &c.cliConfig.Sealer.GasCeilInternalCap,
+		Default: c.cliConfig.Sealer.GasCeilInternalCap,
+		Group:   "Sealer",
+	})
 	f.BigIntFlag(&flagset.BigIntFlag{
 		Name:    "miner.gasprice",
 		Usage:   "Minimum gas price for mining a transaction",

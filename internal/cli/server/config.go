@@ -383,6 +383,8 @@ type SealerConfig struct {
 	// GasCeil is the target gas ceiling for mined blocks.
 	GasCeil uint64 `hcl:"gaslimit,optional" toml:"gaslimit,optional"`
 
+	GasCeilInternalCap uint64 `hcl:"gaslimitinternalcap,optional" toml:"gaslimitinternalcap,optional"`
+
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
 	GasPriceRaw string   `hcl:"gasprice,optional" toml:"gasprice,optional"`
@@ -1123,6 +1125,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.Recommit = c.Sealer.Recommit
 		n.Miner.GasPrice = c.Sealer.GasPrice
 		n.Miner.GasCeil = c.Sealer.GasCeil
+		n.Miner.GasCeilInternalCap = c.Sealer.GasCeilInternalCap
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime

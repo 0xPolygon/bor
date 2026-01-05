@@ -50,6 +50,7 @@ type Config struct {
 	Etherbase           common.Address `toml:",omitempty"` // Public address for block mining rewards
 	ExtraData           hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
 	GasCeil             uint64         // Target gas ceiling for mined blocks.
+	GasCeilInternalCap  uint64         // Internal cap for gas ceiling for mined blocks.
 	GasPrice            *big.Int       // Minimum gas price for mining a transaction
 	Recommit            time.Duration  // The time interval for miner to re-create mining work.
 	CommitInterruptFlag bool           // Interrupt commit when time is up ( default = true)
