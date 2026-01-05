@@ -94,6 +94,8 @@ var (
 	sealedBlocksCounter      = metrics.NewRegisteredCounter("worker/sealedBlocks", nil)
 	sealedEmptyBlocksCounter = metrics.NewRegisteredCounter("worker/sealedEmptyBlocks", nil)
 	txCommitInterruptCounter = metrics.NewRegisteredCounter("worker/txCommitInterrupt", nil)
+	// minedBlockGasUsagePctGauge tracks the gas usage percentage of the mined block
+	minedBlockGasUsagePctGauge = metrics.NewRegisteredGaugeFloat64("worker/minedBlockGasUsagePct", nil)
 
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
@@ -897,6 +899,11 @@ func (w *worker) resultLoop() {
 
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
+
+			if gl := block.GasLimit(); gl > 0 {
+				usage := float64(block.GasUsed()) * 100 / float64(gl)
+				minedBlockGasUsagePctGauge.Update(usage)
+			}
 
 			// Broadcast the block and announce chain insertion event
 			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness})
