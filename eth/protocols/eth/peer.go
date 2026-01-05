@@ -43,10 +43,13 @@ const (
 	maxQueuedTxs = 4096
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
-	// before dropping older announcements.
-	maxQueuedTxAnns = 4096
+	// before dropping older announcements. 5x multipler used for better transaction
+	// dissemination during initial announcement (after a p2p handshake happens).
+	maxQueuedTxAnns = 5 * 4096
 
-	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up before dropping older announcements for trusted and static peers. Specific to Bor.
+	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to
+	// queue up before dropping older announcements for trusted and static peers.
+	// Specific to Bor.
 	maxQueuedTxAnnsTrusted = 40960
 
 	// maxQueuedBlocks is the maximum number of block propagations to queue up before
