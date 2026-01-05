@@ -879,6 +879,8 @@ type BorConfig struct {
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
 	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
 	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
+	TargetGasPercentage             uint64                 `json:"targetGasPercentage"`        // Target gas percentage for gas limit calculation (sets the percentage of Gas Limit to be the Gas Target)
+	BaseFeeChangeDenominator        uint64                 `json:"baseFeeChangeDenominator"`   // Base fee change denominator for EIP-1559
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -888,6 +890,7 @@ type BorConfig struct {
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	FeeBlock                        *big.Int               `json:"feeBlock"`                   // Fee switch block (nil = no fork, 0 = already on fee)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -945,6 +948,10 @@ func (c *BorConfig) IsMadhugiri(number *big.Int) bool {
 
 func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
+}
+
+func (c *BorConfig) IsFee(number *big.Int) bool {
+	return isBlockForked(c.FeeBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized

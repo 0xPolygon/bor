@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -44,10 +45,15 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 		return errors.New("header is missing baseFee")
 	}
 	// Verify the baseFee is correct based on the parent header.
-	expectedBaseFee := CalcBaseFee(config, parent)
-	if header.BaseFee.Cmp(expectedBaseFee) != 0 {
-		return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
-			header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
+
+	if !config.Bor.IsFee(parent.Number) {
+		expectedBaseFee := CalcBaseFee(config, parent)
+		if header.BaseFee.Cmp(expectedBaseFee) != 0 {
+			return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
+				header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
+		}
+	} else {
+		log.Info("[debuglocal] Fee block, skipping check")
 	}
 
 	return nil
@@ -60,7 +66,7 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		return new(big.Int).SetUint64(params.InitialBaseFee)
 	}
 
-	parentGasTarget := parent.GasLimit / config.ElasticityMultiplier()
+	parentGasTarget := CalcParentGasTarget(config, parent)
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
 	if parent.GasUsed == parentGasTarget {
 		return new(big.Int).Set(parent.BaseFee)
@@ -97,4 +103,20 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		}
 		return baseFee
 	}
+}
+
+func CalcParentGasTarget(
+	config *params.ChainConfig,
+	parent *types.Header,
+) uint64 {
+	if !config.Bor.IsFee(parent.Number) || config.Bor.TargetGasPercentage == 0 {
+		return parent.GasLimit / config.ElasticityMultiplier()
+	}
+
+	pct := uint64(config.Bor.TargetGasPercentage)
+	if pct > 100 {
+		panic("invalid Bor TargetGasPercentage")
+	}
+	log.Info("[debuglocal] Fee block, calculating gas target", "parentGasLimit", parent.GasLimit, "targetGasPercentage", pct, "result", parent.GasLimit*pct/100)
+	return parent.GasLimit * pct / 100
 }
