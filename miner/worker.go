@@ -85,6 +85,9 @@ const (
 	// so there are no competing miners and no uncle block concept. Any non-canonical block
 	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
 	staleThreshold = 0
+
+	// contractGasWindowDefault is the default number of historic blocks to average contract gas usage over.
+	contractGasWindowDefault = 10
 )
 
 var (
@@ -955,48 +958,6 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	return env, nil
 }
 
-// selectHeavyAccounts returns a subset of accounts from the provided plain/blob maps,
-// preferring accounts with higher head-tx gas first, until the cumulative head gas
-// reaches the provided gas limit
-func selectHeavyAccounts(plain, blob map[common.Address][]*txpool.LazyTransaction, gasLimit uint64) map[common.Address]struct{} {
-	type accountSet struct {
-		addr common.Address
-		gas  uint64
-	}
-	cands := make([]accountSet, 0, len(plain)+len(blob))
-	for a, txs := range plain {
-		if len(txs) == 0 {
-			continue
-		}
-		cands = append(cands, accountSet{addr: a, gas: txs[0].Gas})
-	}
-	for a, txs := range blob {
-		if len(txs) == 0 {
-			continue
-		}
-		cands = append(cands, accountSet{addr: a, gas: txs[0].Gas})
-	}
-	sort.Slice(cands, func(i, j int) bool { return cands[i].gas > cands[j].gas })
-	var sum uint64
-	selected := make(map[common.Address]struct{})
-	for _, c := range cands {
-		if _, ok := selected[c.addr]; ok {
-			continue
-		}
-		if sum >= gasLimit {
-			break
-		}
-		selected[c.addr] = struct{}{}
-		// Cap to block gas limit
-		if gasLimit-sum < c.gas {
-			sum = gasLimit
-		} else {
-			sum += c.gas
-		}
-	}
-	return selected
-}
-
 // updateSnapshot updates pending snapshot block, receipts and state.
 func (w *worker) updateSnapshot(env *environment) {
 	w.snapshotMu.Lock()
@@ -1013,6 +974,44 @@ func (w *worker) updateSnapshot(env *environment) {
 
 	w.snapshotReceipts = copyReceipts(env.receipts)
 	w.snapshotState = env.state.Copy()
+}
+
+type contractStat struct {
+	addr      common.Address
+	totalUsed uint64
+	count     uint64
+}
+
+// lookupContractStats returns contract stats over the last `window` canonical blocks ending at headNum.
+func (w *worker) lookupContractStats(headNum uint64, window uint64) map[common.Address]contractStat {
+	hot := make(map[common.Address]contractStat)
+	if window == 0 {
+		window = contractGasWindowDefault
+	}
+	for i := uint64(0); i < window; i++ {
+		if headNum < i {
+			break
+		}
+		block := w.chain.GetBlockByNumber(headNum - i)
+		if block == nil {
+			continue
+		}
+		receipts := w.chain.GetReceiptsByHash(block.Hash())
+		if receipts == nil {
+			continue
+		}
+		for idx, tx := range block.Transactions() {
+			to := tx.To()
+			if to == nil {
+				continue
+			}
+			st := hot[*to]
+			st.totalUsed += receipts[idx].GasUsed
+			st.count++
+			hot[*to] = st
+		}
+	}
+	return hot
 }
 
 func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
@@ -1549,30 +1548,100 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 		// Filter txs for warming and start warm reader cache
 		if len(txs) > 0 && w.chain.WarmInWorkerEnabled() {
-			selectedPrio := selectHeavyAccounts(prioPlainTxs, prioBlobTxs, env.header.GasLimit)
-			selectedNormal := selectHeavyAccounts(normalPlainTxs, normalBlobTxs, env.header.GasLimit)
+			hotMap := w.lookupContractStats(env.header.Number.Uint64()-1, contractGasWindowDefault)
 
-			// Filter txs slice to only include selected accounts
-			filteredTxs := make([]*types.Transaction, 0)
-			for _, tx := range txs {
-				from, _ := types.Sender(env.signer, tx)
-				if _, ok := selectedPrio[from]; ok {
-					filteredTxs = append(filteredTxs, tx)
-				} else if _, ok := selectedNormal[from]; ok {
-					filteredTxs = append(filteredTxs, tx)
+			type warmCand struct {
+				tx       *types.Transaction
+				priority int
+				gas      uint64
+			}
+
+			buildCands := func(m map[common.Address][]*txpool.LazyTransaction) []warmCand {
+				cs := make([]warmCand, 0, len(m))
+				for _, list := range m {
+					for _, ltx := range list {
+						if ltx == nil || ltx.Tx == nil {
+							continue
+						}
+						tx := ltx.Tx
+						if tx.To() == nil {
+							continue // only contract txs
+						}
+						stat, hot := hotMap[*tx.To()]
+						var gas uint64
+						var prio int
+						if hot && stat.count > 0 {
+							avg := stat.totalUsed / stat.count
+							if avg == 0 {
+								avg = tx.Gas()
+							}
+							gas = avg
+							prio = 2
+						} else {
+							gas = tx.Gas()
+							prio = 1
+						}
+						if gas == 0 {
+							gas = tx.Gas()
+						}
+						cs = append(cs, warmCand{tx: tx, priority: prio, gas: gas})
+					}
+				}
+				return cs
+			}
+
+			selectCands := func(cands []warmCand, remaining uint64) ([]*types.Transaction, uint64) {
+				sort.Slice(cands, func(i, j int) bool {
+					if cands[i].priority == cands[j].priority {
+						return cands[i].gas > cands[j].gas
+					}
+					return cands[i].priority > cands[j].priority
+				})
+				var out []*types.Transaction
+				for _, c := range cands {
+					if remaining == 0 {
+						break
+					}
+					use := c.gas
+					if use > remaining {
+						use = remaining
+					}
+					out = append(out, c.tx)
+					remaining -= use
+				}
+				return out, remaining
+			}
+
+			remaining := env.header.GasLimit
+			var selected []*types.Transaction
+
+			prioCands := append(buildCands(prioPlainTxs), buildCands(prioBlobTxs)...)
+			if len(prioCands) > 0 {
+				var add []*types.Transaction
+				add, remaining = selectCands(prioCands, remaining)
+				selected = append(selected, add...)
+			}
+
+			if remaining > 0 {
+				normalCands := append(buildCands(normalPlainTxs), buildCands(normalBlobTxs)...)
+				if len(normalCands) > 0 {
+					var add []*types.Transaction
+					add, remaining = selectCands(normalCands, remaining)
+					selected = append(selected, add...)
 				}
 			}
-			txs = filteredTxs
 
 			// start warm reader cache
-			tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, txs, vm.Config{})
-			numProcs := max(1, 4*runtime.NumCPU()/5)
-			if w.chain.WaitForWarmEnabled() {
-				_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
-			} else {
-				go func() {
+			if len(selected) > 0 {
+				tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, selected, vm.Config{})
+				numProcs := max(1, 4*runtime.NumCPU()/5)
+				if w.chain.WaitForWarmEnabled() {
 					_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
-				}()
+				} else {
+					go func() {
+						_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+					}()
+				}
 			}
 		}
 	}
