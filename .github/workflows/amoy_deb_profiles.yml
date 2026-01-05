@@ -2,8 +2,6 @@ name: amoy_deb_profiles
 
 on:
   push:
-    branches:
-      - 'master'
     paths:
       - '**'
     tags:
@@ -18,7 +16,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
       # Variables

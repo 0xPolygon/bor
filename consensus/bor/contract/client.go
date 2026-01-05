@@ -22,6 +22,10 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// SystemTxGas is gas limit for system txs/calls (which happen within consensus)
+// and should not be limited to the local rpc gas cap or tx gas cap.
+var SystemTxGas = (hexutil.Uint64)(math.MaxUint64 / 2)
+
 var (
 	vABI, _ = abi.JSON(strings.NewReader(validatorsetABI))
 	sABI, _ = abi.JSON(strings.NewReader(stateReceiverABI))
@@ -118,20 +122,11 @@ func (gc *GenesisContractsClient) LastStateId(state *state.StateDB, number uint6
 
 	msgData := (hexutil.Bytes)(data)
 	toAddress := common.HexToAddress(gc.StateReceiverContract)
-	var gas hexutil.Uint64
-
-	// Bor: EIP-7825 at Madhugiri HF block
-	IsMadhugiri := gc.chainConfig.Bor != nil && gc.chainConfig.Bor.IsMadhugiri(big.NewInt(int64(number)))
-	if IsMadhugiri {
-		gas = (hexutil.Uint64)(params.MaxTxGas)
-	} else {
-		gas = (hexutil.Uint64)(math.MaxUint64 / 2)
-	}
 
 	// BOR: Do a 'CallWithState' so that we can fetch the last state ID from a given (incoming)
 	// state instead of local(canonical) chain's state.
 	result, err := gc.ethAPI.CallWithState(context.Background(), ethapi.TransactionArgs{
-		Gas:  &gas,
+		Gas:  &SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &rpc.BlockNumberOrHash{BlockNumber: &blockNr, BlockHash: &hash}, state, nil, nil)

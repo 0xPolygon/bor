@@ -77,7 +77,12 @@ const (
 	intervalAdjustBias = 200 * 1000.0 * 1000.0
 
 	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
+	// In PoW chains (like pre-merge Ethereum), this is set to 7 because orphaned blocks
+	// can still be included as "uncle blocks" up to 6-7 blocks deep, earning partial rewards.
+	// In Bor's PoS consensus, validators take turns producing blocks deterministically,
+	// so there are no competing miners and no uncle block concept. Any non-canonical block
+	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
+	staleThreshold = 0
 )
 
 var (
@@ -522,27 +527,17 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
 	}
-	// clearPending cleans the stale pending tasks.
-	clearPending := func(number uint64) {
-		w.pendingMu.Lock()
-		for h, t := range w.pendingTasks {
-			if t.block.NumberU64()+staleThreshold <= number {
-				delete(w.pendingTasks, h)
-			}
-		}
-		w.pendingMu.Unlock()
-	}
 
 	for {
 		select {
 		case <-w.startCh:
-			clearPending(w.chain.CurrentBlock().Number.Uint64())
+			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
-			clearPending(head.Header.Number.Uint64())
+			w.clearPending(head.Header.Number.Uint64())
 
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
@@ -567,16 +562,8 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			veblopTimer.Reset(veblopTimeout)
 
 		case <-timer.C:
-			// If sealing is running resubmit a new work cycle periodically to pull in
-			// higher priced transactions. Disable this overhead for pending blocks.
-			if w.IsRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
-				// Short circuit if no new transaction arrives.
-				if w.newTxs.Load() == 0 {
-					timer.Reset(recommit)
-					continue
-				}
-				commit(true, commitInterruptResubmit)
-			}
+			// Recommit disabled due to the current low block period (no need to capture more txs on the block already built)
+			continue
 
 		case interval := <-w.resubmitIntervalCh:
 			// Adjust resubmit interval explicitly by user.
@@ -689,7 +676,7 @@ func (w *worker) mainLoop() {
 
 				tcount := w.current.tcount
 
-				w.commitTransactions(w.current, plainTxs, blobTxs, nil, new(uint256.Int))
+				w.commitTransactions(w.current, plainTxs, blobTxs, nil)
 				stopFn()
 
 				// Only update the snapshot if any new transactons were added
@@ -869,6 +856,10 @@ func (w *worker) resultLoop() {
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
+				// Error writing block to chain, delete the pending task.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
 				continue
 			}
 
@@ -883,6 +874,10 @@ func (w *worker) resultLoop() {
 			if block.Transactions().Len() == 0 {
 				sealedEmptyBlocksCounter.Inc(1)
 			}
+
+			// Clear all pending tasks for blocks at or below the sealed block number.
+			// These tasks are now obsolete since the chain has progressed past them.
+			w.clearPending(block.NumberU64())
 
 		case <-w.exitCh:
 			return
@@ -959,11 +954,12 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	}
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
+	env.tcount++
 
 	return receipt.Logs, nil
 }
 
-func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, minTip *uint256.Int) error {
+func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
 	}(time.Now())
@@ -1024,7 +1020,7 @@ mainloop:
 		// Check for the flag to interrupt block building on timeout.
 		if w.interruptBlockBuilding.Load() {
 			txCommitInterruptCounter.Inc(1)
-			log.Debug("Block building interrupted due to timeout, aborting new transaction commits", "hash", lastTxHash)
+			log.Info("Block building interrupted due to timeout, aborting new transaction commits", "number", env.header.Number.Uint64(), "hash", lastTxHash)
 			break mainloop
 		}
 
@@ -1072,11 +1068,6 @@ mainloop:
 			continue
 		}
 
-		// If we don't receive enough tip for the next transaction, skip the account
-		if ptip.Cmp(minTip) < 0 {
-			log.Trace("Not enough tip for transaction", "hash", ltx.Hash, "tip", ptip, "needed", minTip)
-			break // If the next-best is too low, surely no better will be available
-		}
 		// Transaction seems to fit, pull it up from the pool
 		tx := ltx.Resolve()
 		if tx == nil {
@@ -1155,7 +1146,6 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
-			env.tcount++
 
 			if EnableMVHashMap && w.IsRunning() {
 				env.depsMVFullWriteList = append(env.depsMVFullWriteList, env.state.MVFullWriteList())
@@ -1455,8 +1445,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 			return err
 		}
 	}
@@ -1466,7 +1455,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
 
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, new(uint256.Int)); err != nil {
+		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 			return err
 		}
 	}
@@ -1660,7 +1649,6 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 		interruptBlockBuilding.Store(true)
 
 		if interruptCtx.Err() != context.Canceled {
-			log.Info("Block building interrupted due to timeout", "block", number)
 			cancel()
 		}
 	}()
@@ -1737,6 +1725,17 @@ func (w *worker) adjustResubmitInterval(message *intervalAdjust) {
 	default:
 		log.Warn("the resubmitAdjustCh is full, discard the message")
 	}
+}
+
+// clearPending cleans the stale pending tasks.
+func (w *worker) clearPending(number uint64) {
+	w.pendingMu.Lock()
+	for h, t := range w.pendingTasks {
+		if t.block.NumberU64()+staleThreshold <= number {
+			delete(w.pendingTasks, h)
+		}
+	}
+	w.pendingMu.Unlock()
 }
 
 // copyReceipts makes a deep copy of the given receipts.

@@ -46,6 +46,7 @@ type Backend interface {
 
 // Config is the configuration parameters of mining.
 type Config struct {
+	AllowGasTipOverride bool           // Won't enforce the default min gas tip (25 gwei) if true and will use user provided value
 	Etherbase           common.Address `toml:",omitempty"` // Public address for block mining rewards
 	ExtraData           hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
 	GasCeil             uint64         // Target gas ceiling for mined blocks.

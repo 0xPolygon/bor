@@ -32,9 +32,8 @@ const (
 	witnessCacheTTL  = 2 * time.Minute
 
 	// Witness verification constants
-	witnessVerificationPeers    = 2                // Number of random peers to query for verification
-	witnessVerificationTimeout  = 5 * time.Second  // Timeout for verification queries
-	witnessVerificationCacheTTL = 10 * time.Minute // Cache verification results for 10 minutes
+	witnessVerificationPeers   = 2               // Number of random peers to query for verification
+	witnessVerificationTimeout = 5 * time.Second // Timeout for verification queries
 
 	// Witness size estimation constants
 	// Assuming 1M gas results in 1MB witness, and max page size is 15MB
@@ -57,19 +56,13 @@ type cachedWitness struct {
 	timestamp time.Time
 }
 
-// witnessVerificationResult represents the result of verifying a witness page count
-type witnessVerificationResult struct {
-	pageCount uint64
-	verified  bool
-	timestamp time.Time
-}
-
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
 	parentQuit        <-chan struct{}        // Parent fetcher's quit channel
 	parentDropPeer    peerDropFn             // Function to drop a misbehaving peer
+	parentJailPeer    peerJailFn             // Function to jail a peer to prevent reconnection (optional)
 	parentEnqueueCh   chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
 	parentGetBlock    blockRetrievalFn       // Function to check if block is known locally
 	parentGetHeader   HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
@@ -81,8 +74,7 @@ type witnessManager struct {
 	witnessCache       *ttlcache.Cache[common.Hash, *cachedWitness] // TTL cache of witnesses that arrived before their blocks
 
 	// Witness verification state
-	witnessVerificationCache *ttlcache.Cache[common.Hash, *witnessVerificationResult] // Cache of verified page counts
-	gasCeil                  uint64                                                   // Gas ceiling for calculating dynamic page threshold
+	gasCeil uint64 // Gas ceiling for calculating dynamic page threshold
 
 	// Communication channels (owned by witnessManager)
 	injectNeedWitnessCh chan *injectBlockNeedWitnessMsg // Injected blocks needing witness fetch
@@ -108,6 +100,7 @@ type witnessManager struct {
 func newWitnessManager(
 	parentQuit <-chan struct{},
 	parentDropPeer peerDropFn,
+	parentJailPeer peerJailFn,
 	parentEnqueueCh chan<- *enqueueRequest,
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
@@ -120,28 +113,22 @@ func newWitnessManager(
 		ttlcache.WithCapacity[common.Hash, *cachedWitness](witnessCacheSize),
 	)
 
-	// Create TTL cache for witness verification results
-	witnessVerificationCache := ttlcache.New[common.Hash, *witnessVerificationResult](
-		ttlcache.WithTTL[common.Hash, *witnessVerificationResult](witnessVerificationCacheTTL),
-		ttlcache.WithCapacity[common.Hash, *witnessVerificationResult](100), // Cache up to 100 verification results
-	)
-
 	m := &witnessManager{
-		parentQuit:               parentQuit,
-		parentDropPeer:           parentDropPeer,
-		parentEnqueueCh:          parentEnqueueCh,
-		parentGetBlock:           parentGetBlock,
-		parentGetHeader:          parentGetHeader,
-		parentChainHeight:        parentChainHeight,
-		pending:                  make(map[common.Hash]*witnessRequestState),
-		witnessUnavailable:       make(map[common.Hash]time.Time),
-		witnessCache:             witnessCache,
-		witnessVerificationCache: witnessVerificationCache,
-		gasCeil:                  gasCeil,
-		injectNeedWitnessCh:      make(chan *injectBlockNeedWitnessMsg, 10),
-		injectWitnessCh:          make(chan *injectedWitnessMsg, 10),
-		witnessTimer:             time.NewTimer(0),
-		pokeCh:                   make(chan struct{}, 1),
+		parentQuit:          parentQuit,
+		parentDropPeer:      parentDropPeer,
+		parentJailPeer:      parentJailPeer,
+		parentEnqueueCh:     parentEnqueueCh,
+		parentGetBlock:      parentGetBlock,
+		parentGetHeader:     parentGetHeader,
+		parentChainHeight:   parentChainHeight,
+		pending:             make(map[common.Hash]*witnessRequestState),
+		witnessUnavailable:  make(map[common.Hash]time.Time),
+		witnessCache:        witnessCache,
+		gasCeil:             gasCeil,
+		injectNeedWitnessCh: make(chan *injectBlockNeedWitnessMsg, 10),
+		injectWitnessCh:     make(chan *injectedWitnessMsg, 10),
+		witnessTimer:        time.NewTimer(0),
+		pokeCh:              make(chan struct{}, 1),
 	}
 	// Clear the timer channel initially
 	if !m.witnessTimer.Stop() {
@@ -978,23 +965,8 @@ func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash 
 	return 0
 }
 
-// cacheVerificationResult caches a successful verification result
-func (m *witnessManager) cacheVerificationResult(hash common.Hash, pageCount uint64) {
-	m.witnessVerificationCache.Set(hash, &witnessVerificationResult{
-		pageCount: pageCount,
-		verified:  true,
-		timestamp: time.Now(),
-	}, witnessVerificationCacheTTL)
-}
-
 // CheckWitnessPageCount checks if a witness page count should trigger verification
 // Returns true if peer is honest (or under threshold), false if peer should be dropped
-//
-// Optimization: This function receives getRandomPeers and getWitnessPageCount as function
-// references (not called yet). They are only executed if:
-// 1. pageCount > threshold (line below)
-// 2. Cache miss (in verifyWitnessPageCountSync)
-// This avoids unnecessary peer queries in most cases (cache hits or small witnesses).
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
@@ -1007,41 +979,17 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	}
 
 	// Page count exceeds threshold - verify synchronously
-	// Note: Peer queries only happen after cache check in verifyWitnessPageCountSync
 	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
 	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
 // verifyWitnessPageCountSync verifies a witness page count synchronously and returns result
-//
-// Optimization flow:
-// 1. Check cache first (below) - no peer queries if cache hit
-// 2. Get random peers only if cache miss
-// 3. Query peers for consensus only if we have enough peers
-// This minimizes network overhead by avoiding redundant verifications.
 func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPageCount uint64, reportingPeer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
-	// OPTIMIZATION: Check cache first before making any peer queries
-	// This avoids unnecessary network requests for recently verified witnesses
-	if cached := m.witnessVerificationCache.Get(hash); cached != nil {
-		if cached.Value().pageCount == reportedPageCount {
-			// Page count matches cached result, peer is honest
-			log.Debug("[wm] Cached verification result matches", "peer", reportingPeer, "pageCount", reportedPageCount)
-			return true
-		} else {
-			// Page count doesn't match cached result, peer is dishonest - drop immediately
-			log.Warn("Dropping dishonest peer - cached verification mismatch", "peer", reportingPeer, "reported", reportedPageCount, "cached", cached.Value().pageCount)
-			m.parentDropPeer(reportingPeer)
-			return false
-		}
-	}
-
-	// Cache miss - need to verify with other peers
-	// Now we call getRandomPeers() for the first time
+	// Get random peers for verification
 	randomPeers := getRandomPeers()
 	if len(randomPeers) < witnessVerificationPeers {
 		// Not enough peers for verification, assume honest (conservative approach)
 		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
-		m.cacheVerificationResult(hash, reportedPageCount)
 		return true
 	}
 
@@ -1053,14 +1001,18 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 
 	// Determine if original peer is honest based on majority consensus
 	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
-		// Peer is dishonest - drop immediately
+		// Peer is dishonest - drop and jail immediately
 		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
 		m.parentDropPeer(reportingPeer)
+		// Also jail the peer to prevent reconnection
+		if m.parentJailPeer != nil {
+			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
+			m.parentJailPeer(reportingPeer)
+		}
 		return false
 	}
 
-	// Peer is honest - cache result
-	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount)
-	m.cacheVerificationResult(hash, reportedPageCount)
+	// Peer is honest or no consensus (assume honest to avoid false positives)
+	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
 	return true
 }

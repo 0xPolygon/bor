@@ -30,17 +30,20 @@ var amoyTestnet = &Chain{
 			CancunBlock:         big.NewInt(5423600),
 			PragueBlock:         big.NewInt(22765056),
 			Bor: &params.BorConfig{
-				JaipurBlock:    big.NewInt(73100),
-				DelhiBlock:     big.NewInt(73100),
-				IndoreBlock:    big.NewInt(73100),
-				AhmedabadBlock: big.NewInt(11865856),
-				BhilaiBlock:    big.NewInt(22765056),
-				RioBlock:       big.NewInt(26272256),
+				JaipurBlock:       big.NewInt(73100),
+				DelhiBlock:        big.NewInt(73100),
+				IndoreBlock:       big.NewInt(73100),
+				AhmedabadBlock:    big.NewInt(11865856),
+				BhilaiBlock:       big.NewInt(22765056),
+				RioBlock:          big.NewInt(26272256),
+				MadhugiriBlock:    big.NewInt(28899616),
+				MadhugiriProBlock: big.NewInt(29287400),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,
 				},
 				Period: map[string]uint64{
-					"0": 2,
+					"0":        2,
+					"28899616": 1,
 				},
 				ProducerDelay: map[string]uint64{
 					"0": 4,

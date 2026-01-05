@@ -135,7 +135,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 				useCompact := h.shouldRequestCompactWitness(number)
 
 				// Request witnesses (compact or full) using the wit peer with verification
-				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
+				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompact)
 			}
 
 			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
@@ -234,9 +234,10 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 	getRandomPeers := func() []string {
 		allPeers := h.peers.getAllPeers()
 		randomPeers := make([]string, 0, len(allPeers))
-		for _, peer := range allPeers {
-			if peer.SupportsWitness() {
-				randomPeers = append(randomPeers, peer.ID())
+		for _, p := range allPeers {
+			// Exclude the reporting peer to avoid double-counting their vote
+			if p.SupportsWitness() && p.ID() != peer {
+				randomPeers = append(randomPeers, p.ID())
 			}
 		}
 		// Shuffle the peers to get random selection
@@ -244,6 +245,7 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 			j := rand.Intn(i + 1)
 			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
 		}
+		log.Info("[wm] Random peers (excluding original)", "randomPeers", randomPeers, "excluded", peer)
 		return randomPeers
 	}
 
@@ -252,10 +254,12 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
 		peer := h.peers.peer(peerID)
 		if peer == nil || !peer.SupportsWitness() {
+			log.Info("[wm] Peer not available or doesn't support witness", "peer", peerID)
 			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
 		}
 
 		// Use the new efficient method that only downloads page 0
+		log.Info("[wm] Getting witness page count from peer", "peer", peerID, "hash", hash)
 		return peer.RequestWitnessPageCount(hash)
 	}
 
@@ -284,7 +288,7 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 			}
 
 			// Request witnesses (compact or full) using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, useCompact)
+			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompact)
 		}
 
 		// Call the new fetcher method to inject the block

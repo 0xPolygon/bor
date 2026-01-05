@@ -120,6 +120,7 @@ type handlerConfig struct {
 	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
 	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
 	gasCeil                 uint64                 // Gas ceiling for dynamic witness page threshold calculation
+	p2pServer               *p2p.Server            // P2P server for jailing peers
 }
 
 type handler struct {
@@ -153,6 +154,7 @@ type handler struct {
 
 	enableBlockTracking bool
 	txAnnouncementOnly  bool
+	p2pServer           *p2p.Server // P2P server for jailing peers
 
 	// Witness protocol related fields
 	syncWithWitnesses       bool
@@ -200,6 +202,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		requiredBlocks:          config.RequiredBlocks,
 		enableBlockTracking:     config.enableBlockTracking,
 		txAnnouncementOnly:      config.txAnnouncementOnly,
+		p2pServer:               config.p2pServer,
 		quitSync:                make(chan struct{}),
 		handlerDoneCh:           make(chan struct{}),
 		handlerStartCh:          make(chan struct{}),
@@ -298,7 +301,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -520,6 +523,20 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 	}
 
 	return handler(peer)
+}
+
+// jailPeer jails a peer to prevent reconnection for a period of time
+func (h *handler) jailPeer(id string) {
+	if h.p2pServer == nil {
+		return
+	}
+	// Convert peer ID (string) to enode.ID
+	nodeID, err := enode.ParseID(id)
+	if err != nil {
+		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+		return
+	}
+	h.p2pServer.JailPeer(nodeID)
 }
 
 // removePeer requests disconnection of a peer.

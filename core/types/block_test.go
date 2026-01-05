@@ -669,3 +669,12 @@ func TestHeaderGetActualTime(t *testing.T) {
 		}
 	})
 }
+
+func TestHeaderSanityRejectsBitlenOver64(t *testing.T) {
+	h := &Header{
+		Difficulty: new(big.Int).Lsh(big.NewInt(1), 64), // bitlen=65
+	}
+	if err := h.SanityCheck(); err == nil {
+		t.Fatalf("expected sanity check to reject difficulty bitlen > 64")
+	}
+}

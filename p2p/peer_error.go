@@ -71,6 +71,7 @@ const (
 	DiscUnexpectedIdentity
 	DiscSelf
 	DiscReadTimeout
+	DiscJailed // Peer is temporarily banned/jailed
 	// nolint : errname
 	DiscSubprotocolError = DiscReason(0x10)
 
@@ -90,6 +91,7 @@ var discReasonToString = [...]string{
 	DiscUnexpectedIdentity:  "unexpected identity",
 	DiscSelf:                "connected to self",
 	DiscReadTimeout:         "read timeout",
+	DiscJailed:              "peer is temporarily jailed",
 	DiscSubprotocolError:    "subprotocol error",
 	DiscInvalid:             "invalid disconnect reason",
 }

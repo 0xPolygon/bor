@@ -176,7 +176,7 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
-	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, false) // Default to full witness
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil, false)
 }
 
 // RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
@@ -186,15 +186,15 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 		return 0, errors.New("witness peer not found")
 	}
 
-	// Check if peer supports WIT2 protocol with metadata message
-	if p.witPeer.Peer.Version() < wit.WIT2 {
-		// Fallback to old method for WIT1 peers: request page 0
+	// Check if peer supports WIT1 protocol with metadata message
+	if p.witPeer.Peer.Version() < wit.WIT1 {
+		// Fallback to old method for WIT0 peers: request page 0
 		return p.requestWitnessPageCountLegacy(hash)
 	}
 
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
 
-	// Use the new efficient metadata request (WIT2)
+	// Use the new efficient metadata request (WIT1)
 	witResCh := make(chan *wit.Response, 1)
 
 	witReq, err := p.witPeer.Peer.RequestWitnessMetadata([]common.Hash{hash}, witResCh)
@@ -244,7 +244,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 	}
 }
 
-// requestWitnessPageCountLegacy is the fallback method for WIT1 peers that don't support metadata requests.
+// requestWitnessPageCountLegacy is the fallback method for WIT0 peers that don't support metadata requests.
 // It requests page 0 to get the TotalPages field.
 func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error) {
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)
@@ -289,7 +289,7 @@ func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error
 }
 
 // RequestWitnessesWithVerification requests witnesses with optional page count verification
-func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, useCompact bool) (*eth.Request, error) {
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, jailPeer func(string), useCompact bool) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -341,7 +341,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, useCompact)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer, useCompact)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -447,6 +447,7 @@ func (p *ethPeer) receiveWitnessPage(
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
 	downloadPaused map[common.Hash]bool,
 	verifyPageCount func(common.Hash, uint64, string) bool,
+	jailPeer func(string), // Function to jail a peer for malicious behavior (optional)
 	useCompact bool,
 ) (retrievedError error) {
 	defer func() {
@@ -497,6 +498,10 @@ func (p *ethPeer) receiveWitnessPage(
 		// Validate that current page number is within bounds
 		if page.Page >= page.TotalPages {
 			p.witPeer.Peer.Log().Warn("Peer sent invalid page number, dropping peer", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
+			if jailPeer != nil {
+				p.witPeer.Peer.Log().Warn("Jailing peer for invalid page number", "peer", p.ID())
+				jailPeer(p.ID())
+			}
 			return fmt.Errorf("peer sent invalid page number: page=%d >= totalPages=%d", page.Page, page.TotalPages)
 		}
 
@@ -517,6 +522,10 @@ func (p *ethPeer) receiveWitnessPage(
 			if existingTotalPages != page.TotalPages {
 				mapsMu.Unlock()
 				p.witPeer.Peer.Log().Warn("Peer sent inconsistent TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "existing", existingTotalPages, "new", page.TotalPages)
+				if jailPeer != nil {
+					p.witPeer.Peer.Log().Warn("Jailing peer for inconsistent TotalPages", "peer", p.ID())
+					jailPeer(p.ID())
+				}
 				downloadPaused[page.Hash] = true
 				return fmt.Errorf("peer sent inconsistent TotalPages: existing=%d, new=%d", existingTotalPages, page.TotalPages)
 			}
@@ -548,6 +557,10 @@ func (p *ethPeer) receiveWitnessPage(
 
 		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
 			p.witPeer.Peer.Log().Warn("Peer sent more pages than TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "received", len(receivedWitPages[page.Hash]), "total", currentTotalPages)
+			if jailPeer != nil {
+				p.witPeer.Peer.Log().Warn("Jailing peer for sending more pages than claimed", "peer", p.ID())
+				jailPeer(p.ID())
+			}
 			mapsMu.Lock()
 			downloadPaused[page.Hash] = true
 			mapsMu.Unlock()
@@ -676,10 +689,10 @@ func (p *ethPeer) doWitnessRequest(
 	witTotalRequest map[common.Hash]uint64,
 	useCompact bool,
 ) error {
-	// Compact witness requires WIT2 protocol support
-	// Fallback to full witness for WIT1 peers for backward compatibility
-	if useCompact && p.witPeer.Peer.Version() < wit.WIT2 {
-		p.witPeer.Peer.Log().Info("Peer doesn't support WIT2, falling back to full witness", "peer", p.ID(), "version", p.witPeer.Peer.Version())
+	// Compact witness requires WIT1 protocol support
+	// Fallback to full witness for WIT0 peers for backward compatibility
+	if useCompact && p.witPeer.Peer.Version() < wit.WIT1 {
+		p.witPeer.Peer.Log().Info("Peer doesn't support WIT1, falling back to full witness", "peer", p.ID(), "version", p.witPeer.Peer.Version())
 		useCompact = false
 	}
 
