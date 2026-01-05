@@ -176,7 +176,7 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
-	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil, false)
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil, false) // Default to full witness
 }
 
 // RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
