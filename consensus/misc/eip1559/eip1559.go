@@ -60,6 +60,7 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		return new(big.Int).SetUint64(params.InitialBaseFee)
 	}
 
+	// Modified for bor to derive gas target by percentage instead of using elasticity multiplier post dandeli HF
 	parentGasTarget := calcParentGasTarget(config, parent)
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
 	if parent.GasUsed == parentGasTarget {
