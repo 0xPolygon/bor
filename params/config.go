@@ -879,8 +879,6 @@ type BorConfig struct {
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
 	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
 	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
-	TargetGasPercentage             uint64                 `json:"targetGasPercentage"`        // Target gas percentage for gas limit calculation (sets the percentage of Gas Limit to be the Gas Target)
-	BaseFeeChangeDenominator        uint64                 `json:"baseFeeChangeDenominator"`   // Base fee change denominator for EIP-1559
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
