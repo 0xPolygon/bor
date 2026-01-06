@@ -231,7 +231,7 @@ func TestCalcParentGasTarget(t *testing.T) {
 }
 
 // simpleBaseFeeCalculator contains an overly simplified logic of base fee calculations useful for generating
-// expected values in test cases. It assumes all blocks are pre-bhilai HF.
+// expected values in test cases. It assumes all blocks are post-bhilai HF.
 func simpleBaseFeeCalculator(initialBaseFee int64, gasLimit, gasUsed uint64, targetGasPercentage uint64) uint64 {
 	initial := big.NewInt(initialBaseFee)
 	val := big.NewInt(1)
