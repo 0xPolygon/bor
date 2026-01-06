@@ -101,9 +101,9 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 
 // calcParentGasTarget calculates the target gas based on parent block gas limit. Earlier
 // it was derived by `ElasticityMultiplier` as it had an integer multiplier value. Post
-// untitled HF, a percentage value will be used to calculate the gas target.
+// dandeli HF, a percentage value will be used to calculate the gas target.
 func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
-	if config.Bor == nil || !config.Bor.IsUntitled(parent.Number) {
+	if config.Bor == nil || !config.Bor.IsDandeli(parent.Number) {
 		return parent.GasLimit / config.ElasticityMultiplier()
 	}
 

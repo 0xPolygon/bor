@@ -178,11 +178,11 @@ func TestCalcParentGasTarget(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
-	testConfig.Bor.UntitledBlock = big.NewInt(20)
+	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	defaultGasLimit := uint64(60_000_000)
 
-	t.Run("gas target calculation pre untitled HF", func(t *testing.T) {
+	t.Run("gas target calculation pre dandeli HF", func(t *testing.T) {
 		block := &types.Header{
 			Number:   big.NewInt(9),
 			GasLimit: defaultGasLimit,
@@ -194,7 +194,7 @@ func TestCalcParentGasTarget(t *testing.T) {
 		require.Equal(t, expected, gasTarget, "expected gas target = gaslimit/2")
 	})
 
-	t.Run("gas target calculation post untitled HF", func(t *testing.T) {
+	t.Run("gas target calculation post dandeli HF", func(t *testing.T) {
 		block := &types.Header{
 			Number:   big.NewInt(20),
 			GasLimit: defaultGasLimit,
@@ -267,14 +267,14 @@ func simpleBaseFeeCalculator(initialBaseFee int64, gasLimit, gasUsed uint64, tar
 	}
 }
 
-func TestCalcBaseFeeUntitled(t *testing.T) {
+func TestCalcBaseFeeDandeli(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
-	testConfig.Bor.UntitledBlock = big.NewInt(20)
+	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
-	// Case 1: Create pre-untitled cases where HF is defined in future. Validate
+	// Case 1: Create pre-dandeli cases where HF is defined in future. Validate
 	// base fee calculations before HF kicks in. Base fee should be calculated
 	// based on default elasticity multiplier.
 	tests := []struct {
@@ -305,18 +305,18 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("pre-untitled base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("pre-dandeli base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 		// Also check with manually calculated base fee
 		require.Equal(
 			t,
 			test.expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("pre-untitled base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("pre-dandeli base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 	}
 
-	// Case 2: Create post-untitled cases where HF has kicked in. Validate base fee changes
+	// Case 2: Create post-dandeli cases where HF has kicked in. Validate base fee changes
 	// based on the newly introduced protocol param: TargetGasPrecentage. Target gas limit
 	// should be calculated based on this percentage value out of total gas limit. Base
 	// fee should be changed accordingly.
@@ -336,7 +336,7 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 		{"usage 0", params.InitialBaseFee, 60_000_000, 0, 984375000},
 	}
 	for _, test := range tests {
-		// Post-untitled block #1
+		// Post-dandeli block #1
 		block := &types.Header{
 			Number:   big.NewInt(20),
 			GasLimit: test.parentGasLimit,
@@ -349,17 +349,17 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("post-untitled #1: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-dandeli #1: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 		// Also check with manually calculated base fee
 		require.Equal(
 			t,
 			test.expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("post-untitled #1: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-dandeli #1: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 
-		// Post-untitled block #2
+		// Post-dandeli block #2
 		block = &types.Header{
 			Number:   big.NewInt(21),
 			GasLimit: test.parentGasLimit,
@@ -372,14 +372,14 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("post-untitled #2: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-dandeli #2: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 		// Also check with manually calculated base fee
 		require.Equal(
 			t,
 			test.expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("post-untitled #2: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-dandeli #2: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 	}
 }

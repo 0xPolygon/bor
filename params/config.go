@@ -888,7 +888,7 @@ type BorConfig struct {
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	UntitledBlock                   *big.Int               `json:"untitledBlock"`              // Untitled switch block (nil = no fork, 0 = already on untitled)
+	DandeliBlock                    *big.Int               `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -948,8 +948,8 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
 }
 
-func (c *BorConfig) IsUntitled(number *big.Int) bool {
-	return isBlockForked(c.UntitledBlock, number)
+func (c *BorConfig) IsDandeli(number *big.Int) bool {
+	return isBlockForked(c.DandeliBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
@@ -1495,8 +1495,8 @@ func (c *ChainConfig) TargetGasPercentage(number *big.Int) uint64 {
 		return DefaultTargetGasPercentage
 	}
 
-	if c.Bor.IsUntitled(number) {
-		return TargetGasPercentagePostUntitled
+	if c.Bor.IsDandeli(number) {
+		return TargetGasPercentagePostDandeli
 	}
 
 	return DefaultTargetGasPercentage
