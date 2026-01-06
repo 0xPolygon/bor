@@ -300,7 +300,7 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 			BaseFee:  big.NewInt(test.parentBaseFee),
 		}
 		baseFee := CalcBaseFee(testConfig, block).Uint64()
-		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, 50)
+		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.DefaultTargetGasPercentage)
 		require.Equal(
 			t,
 			expectedBaseFee,
@@ -327,12 +327,12 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 		parentGasUsed   uint64
 		expectedBaseFee uint64
 	}{
-		{"usage == target (60%)", params.InitialBaseFee, 60_000_000, 36_000_000, params.InitialBaseFee},
-		{"usage below target #1", params.InitialBaseFee, 60_000_000, 30_000_000, 997395834},
-		{"usage below target #2", params.InitialBaseFee, 60_000_000, 10_000_000, 988715278},
-		{"usage above target #1", params.InitialBaseFee, 60_000_000, 40_000_000, 1001736111},
-		{"usage above target #2", params.InitialBaseFee, 60_000_000, 50_000_000, 1006076388},
-		{"usage full", params.InitialBaseFee, 60_000_000, 60_000_000, 1010416666},
+		{"usage == target (65%)", params.InitialBaseFee, 60_000_000, 39_000_000, params.InitialBaseFee},
+		{"usage below target #1", params.InitialBaseFee, 60_000_000, 30_000_000, 996394231},
+		{"usage below target #2", params.InitialBaseFee, 60_000_000, 10_000_000, 988381411},
+		{"usage above target #1", params.InitialBaseFee, 60_000_000, 40_000_000, 1000400641},
+		{"usage above target #2", params.InitialBaseFee, 60_000_000, 50_000_000, 1004407051},
+		{"usage full", params.InitialBaseFee, 60_000_000, 60_000_000, 1008413461},
 		{"usage 0", params.InitialBaseFee, 60_000_000, 0, 984375000},
 	}
 	for _, test := range tests {
@@ -344,7 +344,7 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 			BaseFee:  big.NewInt(test.parentBaseFee),
 		}
 		baseFee := CalcBaseFee(testConfig, block).Uint64()
-		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, 60)
+		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.TargetGasPercentagePostDandeli)
 		require.Equal(
 			t,
 			expectedBaseFee,
@@ -367,7 +367,7 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 			BaseFee:  big.NewInt(test.parentBaseFee),
 		}
 		baseFee = CalcBaseFee(testConfig, block).Uint64()
-		expectedBaseFee = simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, 60)
+		expectedBaseFee = simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.TargetGasPercentagePostDandeli)
 		require.Equal(
 			t,
 			expectedBaseFee,
