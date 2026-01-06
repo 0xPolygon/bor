@@ -890,7 +890,7 @@ type BorConfig struct {
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	FeeBlock                        *big.Int               `json:"feeBlock"`                   // Fee switch block (nil = no fork, 0 = already on fee)
+	UntitledBlock                   *big.Int               `json:"untitledBlock"`              // Untitled switch block (nil = no fork, 0 = already on untitled)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -950,8 +950,8 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
 }
 
-func (c *BorConfig) IsFee(number *big.Int) bool {
-	return isBlockForked(c.FeeBlock, number)
+func (c *BorConfig) IsUntitled(number *big.Int) bool {
+	return isBlockForked(c.UntitledBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized
@@ -1489,6 +1489,18 @@ func (c *ChainConfig) BaseFeeChangeDenominator() uint64 {
 // ElasticityMultiplier bounds the maximum gas limit an EIP-1559 block may have.
 func (c *ChainConfig) ElasticityMultiplier() uint64 {
 	return DefaultElasticityMultiplier
+}
+
+func (c *ChainConfig) TargetGasPercentage(number *big.Int) uint64 {
+	if c.Bor == nil {
+		return DefaultTargetGasPercentage
+	}
+
+	if c.Bor.IsUntitled(number) {
+		return TargetGasPercentagePostUntitled
+	}
+
+	return DefaultTargetGasPercentage
 }
 
 // LatestFork returns the latest time-based fork that would be active for the given time.

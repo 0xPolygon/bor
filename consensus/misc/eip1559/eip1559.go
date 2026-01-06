@@ -45,12 +45,10 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 	}
 	// Verify the baseFee is correct based on the parent header.
 
-	if !config.Bor.IsFee(parent.Number) {
-		expectedBaseFee := CalcBaseFee(config, parent)
-		if header.BaseFee.Cmp(expectedBaseFee) != 0 {
-			return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
-				header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
-		}
+	expectedBaseFee := CalcBaseFee(config, parent)
+	if header.BaseFee.Cmp(expectedBaseFee) != 0 {
+		return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
+			header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
 	}
 
 	return nil
@@ -63,7 +61,7 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		return new(big.Int).SetUint64(params.InitialBaseFee)
 	}
 
-	parentGasTarget := CalcParentGasTarget(config, parent)
+	parentGasTarget := calcParentGasTarget(config, parent)
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
 	if parent.GasUsed == parentGasTarget {
 		return new(big.Int).Set(parent.BaseFee)
@@ -102,17 +100,10 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	}
 }
 
-func CalcParentGasTarget(
-	config *params.ChainConfig,
-	parent *types.Header,
-) uint64 {
-	if !config.Bor.IsFee(parent.Number) || config.Bor.TargetGasPercentage == 0 {
+func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
+	if config.Bor == nil || !config.Bor.IsUntitled(parent.Number) {
 		return parent.GasLimit / config.ElasticityMultiplier()
 	}
 
-	pct := uint64(config.Bor.TargetGasPercentage)
-	if pct > 100 {
-		panic("invalid Bor TargetGasPercentage")
-	}
-	return parent.GasLimit * pct / 100
+	return parent.GasLimit * config.TargetGasPercentage(parent.Number) / 100
 }
