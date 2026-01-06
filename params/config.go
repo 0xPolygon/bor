@@ -1489,6 +1489,7 @@ func (c *ChainConfig) ElasticityMultiplier() uint64 {
 	return DefaultElasticityMultiplier
 }
 
+// TargetGasPercentage is the target block gas as percentage of block gas limit for EIP-1559
 func (c *ChainConfig) TargetGasPercentage(number *big.Int) uint64 {
 	if c.Bor == nil {
 		return DefaultTargetGasPercentage
