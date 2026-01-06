@@ -340,6 +340,7 @@ var (
 			RioBlock:          big.NewInt(26272256),
 			MadhugiriBlock:    big.NewInt(28899616),
 			MadhugiriProBlock: big.NewInt(29287400),
+			DandeliBlock:      big.NewInt(31890000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
