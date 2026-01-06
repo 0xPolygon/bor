@@ -1489,19 +1489,6 @@ func (c *ChainConfig) ElasticityMultiplier() uint64 {
 	return DefaultElasticityMultiplier
 }
 
-// TargetGasPercentage is the target block gas as percentage of block gas limit for EIP-1559
-func (c *ChainConfig) TargetGasPercentage(number *big.Int) uint64 {
-	if c.Bor == nil {
-		return DefaultTargetGasPercentage
-	}
-
-	if c.Bor.IsDandeli(number) {
-		return TargetGasPercentagePostDandeli
-	}
-
-	return DefaultTargetGasPercentage
-}
-
 // LatestFork returns the latest time-based fork that would be active for the given time.
 func (c *ChainConfig) LatestFork(time uint64) forks.Fork {
 	// Assume last non-time-based fork has passed.
