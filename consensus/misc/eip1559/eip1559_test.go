@@ -257,7 +257,7 @@ func simpleBaseFeeCalculator(initialBaseFee int64, gasLimit, gasUsed uint64, tar
 	}
 
 	val.Mul(val, big.NewInt(delta))
-	val.Div(val, big.NewInt(int64(bfd)))
+	val.Div(val, big.NewInt(bfd))
 	val.Div(val, big.NewInt(int64(target)))
 
 	if gasUsed > target {
