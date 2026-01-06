@@ -282,7 +282,7 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 		parentBaseFee   int64
 		parentGasLimit  uint64
 		parentGasUsed   uint64
-		expectedBaseFee int64
+		expectedBaseFee uint64
 	}{
 		{"usage == target", params.InitialBaseFee, 60_000_000, 30_000_000, params.InitialBaseFee},
 		{"usage below target #1", params.InitialBaseFee, 60_000_000, 20_000_000, 994791667},
@@ -305,7 +305,14 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("invalid base fee pre-untitled, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("pre-untitled base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("pre-untitled base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 	}
 
@@ -318,7 +325,7 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 		parentBaseFee   int64
 		parentGasLimit  uint64
 		parentGasUsed   uint64
-		expectedBaseFee int64
+		expectedBaseFee uint64
 	}{
 		{"usage == target (60%)", params.InitialBaseFee, 60_000_000, 36_000_000, params.InitialBaseFee},
 		{"usage below target #1", params.InitialBaseFee, 60_000_000, 30_000_000, 997395834},
@@ -342,7 +349,14 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("invalid base fee post-untitled #1, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-untitled #1: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-untitled #1: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 
 		// Post-untitled block #2
@@ -358,7 +372,14 @@ func TestCalcBaseFeeUntitled(t *testing.T) {
 			t,
 			expectedBaseFee,
 			baseFee,
-			fmt.Sprintf("invalid base fee post-untitled #2, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+			fmt.Sprintf("post-untitled #2: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-untitled #2: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
 		)
 	}
 }
