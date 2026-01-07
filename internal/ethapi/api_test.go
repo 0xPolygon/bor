@@ -462,13 +462,13 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	accman, acc := newTestAccountManager(t)
 	// gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
 	// Generate blocks for testing
-	db, blocks, receipts := core.GenerateChainWithGenesis(gspec, engine, n, generator)
+	db, blocks, receipts := core.GenerateChainWithGenesis(gspec, engine, n+1, generator)
 
 	chain, err := core.NewBlockChain(db, gspec, engine, options)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks, false); err != nil {
+	if n, err := chain.InsertChain(blocks[:n], false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 	backend := &testBackend{
