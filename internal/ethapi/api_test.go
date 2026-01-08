@@ -673,6 +673,10 @@ func (b *testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 func (b testBackend) TxIndexDone() bool {
 	return true
 }
+func (b testBackend) GetPoolTransactions() (types.Transactions, error) { return nil, nil }
+func (b testBackend) GetPoolTransaction(txHash common.Hash) *types.Transaction {
+	return nil
+}
 func (b testBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
 	return 0, nil
 }
@@ -2177,22 +2181,22 @@ func TestSimulateV1(t *testing.T) {
 							},
 							Data:        hexutil.Bytes(common.BigToHash(big.NewInt(50)).Bytes()),
 							BlockNumber: hexutil.Uint64(11),
-						},
-						Data:           hexutil.Bytes(common.BigToHash(big.NewInt(50)).Bytes()),
-						BlockNumber:    hexutil.Uint64(11),
-						BlockTimestamp: hexutil.Uint64(0x70),
-					}, {
-						Address: transferAddress,
-						Topics: []common.Hash{
-							transferTopic,
-							addressToHash(randomAccounts[0].addr),
-							addressToHash(fixedAccount.addr),
-						},
-						Data:           hexutil.Bytes(common.BigToHash(big.NewInt(100)).Bytes()),
-						BlockNumber:    hexutil.Uint64(11),
-						BlockTimestamp: hexutil.Uint64(0x70),
-						Index:          hexutil.Uint(1),
-					}},
+						}, {
+							Data:           hexutil.Bytes(common.BigToHash(big.NewInt(50)).Bytes()),
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+						}, {
+							Address: transferAddress,
+							Topics: []common.Hash{
+								transferTopic,
+								addressToHash(randomAccounts[0].addr),
+								addressToHash(fixedAccount.addr),
+							},
+							Data:           hexutil.Bytes(common.BigToHash(big.NewInt(100)).Bytes()),
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							Index:          hexutil.Uint(1),
+						}},
 					Status: "0x1",
 				}},
 			}},

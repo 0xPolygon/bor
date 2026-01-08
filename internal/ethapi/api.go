@@ -799,6 +799,11 @@ func (context *ChainContext) GetHeaderByHash(hash common.Hash) *types.Header {
 	return header
 }
 
+// TODO: Implement GetTd
+func (context *ChainContext) GetTd(hash common.Hash, number uint64) *big.Int {
+	return nil
+}
+
 func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, overrides *override.StateOverride, blockOverrides *override.BlockOverrides, timeout time.Duration, globalGasCap uint64) (*core.ExecutionResult, error) {
 	blockCtx := core.NewEVMBlockContext(header, NewChainContext(ctx, b), nil)
 	if blockOverrides != nil {
@@ -2070,7 +2075,7 @@ func (api *TransactionAPI) FillTransaction(ctx context.Context, args Transaction
 
 func (api *TransactionAPI) currentBlobSidecarVersion() byte {
 	h := api.b.CurrentHeader()
-	if api.b.ChainConfig().IsOsaka(h.Number, h.Time) {
+	if api.b.ChainConfig().IsOsaka(h.Number) {
 		return types.BlobSidecarVersion1
 	}
 	return types.BlobSidecarVersion0
@@ -2573,6 +2578,48 @@ func (api *NetAPI) PeerCount() hexutil.Uint {
 // Version returns the current ethereum protocol version.
 func (api *NetAPI) Version() string {
 	return fmt.Sprintf("%d", api.networkVersion)
+}
+
+// MarshalReceipt marshals a transaction receipt into a JSON object.
+func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber uint64, signer types.Signer, tx *types.Transaction, txIndex int) map[string]interface{} {
+	from, _ := types.Sender(signer, tx)
+
+	fields := map[string]interface{}{
+		"blockHash":         blockHash,
+		"blockNumber":       hexutil.Uint64(blockNumber),
+		"transactionHash":   tx.Hash(),
+		"transactionIndex":  hexutil.Uint64(txIndex),
+		"from":              from,
+		"to":                tx.To(),
+		"gasUsed":           hexutil.Uint64(receipt.GasUsed),
+		"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
+		"contractAddress":   nil,
+		"logs":              receipt.Logs,
+		"logsBloom":         receipt.Bloom,
+		"type":              hexutil.Uint(tx.Type()),
+		"effectiveGasPrice": (*hexutil.Big)(receipt.EffectiveGasPrice),
+	}
+
+	// Assign receipt status or post state.
+	if len(receipt.PostState) > 0 {
+		fields["root"] = hexutil.Bytes(receipt.PostState)
+	} else {
+		fields["status"] = hexutil.Uint(receipt.Status)
+	}
+	if receipt.Logs == nil {
+		fields["logs"] = []*types.Log{}
+	}
+
+	if tx.Type() == types.BlobTxType {
+		fields["blobGasUsed"] = hexutil.Uint64(receipt.BlobGasUsed)
+		fields["blobGasPrice"] = (*hexutil.Big)(receipt.BlobGasPrice)
+	}
+
+	// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
+	if receipt.ContractAddress != (common.Address{}) {
+		fields["contractAddress"] = receipt.ContractAddress
+	}
+	return fields
 }
 
 // checkTxFee is an internal function used to check whether the fee of

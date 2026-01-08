@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -35,7 +36,7 @@ const (
 
 // Handshake executes the eth protocol handshake, negotiating version number,
 // network IDs, difficulties, head and genesis blocks.
-func (p *Peer) Handshake(networkID uint64, chain forkid.Blockchain, rangeMsg BlockRangeUpdatePacket) error {
+func (p *Peer) Handshake(networkID uint64, chain *core.BlockChain, rangeMsg BlockRangeUpdatePacket) error {
 	switch p.version {
 	case ETH69:
 		return p.handshake69(networkID, chain, rangeMsg)
@@ -46,7 +47,7 @@ func (p *Peer) Handshake(networkID uint64, chain forkid.Blockchain, rangeMsg Blo
 	}
 }
 
-func (p *Peer) handshake68(networkID uint64, chain forkid.Blockchain) error {
+func (p *Peer) handshake68(networkID uint64, chain *core.BlockChain) error {
 	var (
 		genesis    = chain.Genesis()
 		latest     = chain.CurrentHeader()
@@ -100,7 +101,7 @@ func (p *Peer) readStatus68(networkID uint64, status *StatusPacket68, genesis co
 	return nil
 }
 
-func (p *Peer) handshake69(networkID uint64, chain forkid.Blockchain, rangeMsg BlockRangeUpdatePacket) error {
+func (p *Peer) handshake69(networkID uint64, chain *core.BlockChain, rangeMsg BlockRangeUpdatePacket) error {
 	var (
 		genesis    = chain.Genesis()
 		latest     = chain.CurrentHeader()

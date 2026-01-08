@@ -132,7 +132,7 @@ func (t *prestateTracer) OnOpcode(pc uint64, opcode byte, gas, cost uint64, scop
 		t.lookupAccount(addr)
 
 		if op == vm.SELFDESTRUCT {
-			if t.chainConfig.IsCancun(t.env.BlockNumber, t.env.Time) {
+			if t.chainConfig.IsCancun(t.env.BlockNumber) {
 				// EIP-6780: only delete if created in same transaction
 				if t.created[caller] {
 					t.deleted[caller] = true

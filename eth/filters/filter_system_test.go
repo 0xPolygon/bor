@@ -867,7 +867,7 @@ func TestTransactionReceiptsSubscription(t *testing.T) {
 	var (
 		db           = rawdb.NewMemoryDatabase()
 		backend, sys = newTestFilterSystem(db, Config{})
-		api          = NewFilterAPI(sys)
+		api          = NewFilterAPI(sys, true)
 		key1, _      = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 		addr1        = crypto.PubkeyToAddress(key1.PublicKey)
 		signer       = types.NewLondonSigner(big.NewInt(1))
@@ -898,7 +898,7 @@ func TestTransactionReceiptsSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := blockchain.InsertChain(chain); err != nil {
+	if n, err := blockchain.InsertChain(chain, false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
 

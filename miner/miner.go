@@ -55,7 +55,8 @@ type Config struct {
 	CommitInterruptFlag bool           // Interrupt commit when time is up ( default = true)
 	BlockTime           time.Duration  // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
-	NewPayloadTimeout time.Duration // The maximum time allowance for creating a new payload
+	NewPayloadTimeout   time.Duration  // The maximum time allowance for creating a new payload
+	PendingFeeRecipient common.Address `toml:"-"` // Address for pending block rewards.
 }
 
 // DefaultConfig contains default settings for miner.

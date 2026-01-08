@@ -429,15 +429,11 @@ func (pool *LegacyPool) loop() {
 		case <-evict.C:
 			pool.mu.Lock()
 			start := time.Now()
-			for addr := range pool.queue {
+			for _, hash := range pool.queue.evictList() {
 				// Any old enough should be removed
-				if time.Since(pool.beats[addr]) > pool.config.Lifetime {
-					list := pool.queue[addr].Flatten()
-					for _, tx := range list {
-						pool.removeTx(tx.Hash(), true, true)
-					}
-					queuedEvictionMeter.Mark(int64(len(list)))
-				}
+				pool.removeTx(hash, true, true)
+				queuedEvictionMeter.Mark(int64(len(pool.queue.evictList())))
+
 			}
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()
@@ -1009,7 +1005,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		log.Trace("Pooled new executable transaction", "hash", hash, "from", from, "to", tx.To())
 
 		// Successful promotion, bump the heartbeat
-		pool.beats[from] = time.Now()
+		pool.queue.bump(from)
 		stage2Duration = time.Since(stage2Time)
 		return old != nil, nil
 	}
@@ -1196,8 +1192,11 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 // addTxs attempts to queue a batch of transactions if they are valid.
 // The transaction pool lock must not be held.
 func (pool *LegacyPool) addTxs(txs []*types.Transaction, async bool) ([]error, *accountSet) {
-	dirty := newAccountSet(pool.signer)
-	errs := make([]error, len(txs))
+	var (
+		dirty = newAccountSet(pool.signer)
+		errs  = make([]error, len(txs))
+		valid int64
+	)
 	for i, tx := range txs {
 		replaced, err := pool.add(tx, async)
 		errs[i] = err
