@@ -853,7 +853,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) {
+	if !snap.ValidatorSet.HasAddress(signer) && !isPartOfVeBlopSet(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1289,7 +1289,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Bail out if we're unauthorized to sign a block
-	if !snap.ValidatorSet.HasAddress(currentSigner.signer) {
+	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !isPartOfVeBlopSet(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1819,4 +1819,16 @@ func countLogsFromReceipts(receipts []*types.Receipt) int {
 		}
 	}
 	return total
+}
+
+// TODO: hack - remove me later
+func isPartOfVeBlopSet(addr common.Address, blockNumber uint64) bool {
+	if blockNumber < 80440819 || blockNumber > 80443486 {
+		return false
+	}
+	a := addr.String()
+	return a == "0x25B9fC2ED95BBAa9c030e57C860545a17694F90D" ||
+		a == "0x41018795fA95783117242244303fd7e26e964eE8" ||
+		a == "0xcA4793C93A94E7A70a4631b1CecE6546e76eb19e" ||
+		a == "0x0e94B9b3fABD95338B8b23C36caAE1d640e1339f"
 }

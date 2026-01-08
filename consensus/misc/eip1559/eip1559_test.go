@@ -17,11 +17,13 @@
 package eip1559
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/stretchr/testify/require"
 )
 
 // copyConfig does a _shallow_ copy of a given config. Safe to set new values, but
@@ -169,5 +171,215 @@ func TestCalcBaseFeeDelhi(t *testing.T) {
 		if have, want := CalcBaseFee(testConfig, parent), big.NewInt(test.expectedBaseFee); have.Cmp(want) != 0 {
 			t.Errorf("test %d: have %d  want %d, ", i, have, want)
 		}
+	}
+}
+
+func TestCalcParentGasTarget(t *testing.T) {
+	t.Parallel()
+
+	testConfig := copyConfig(config())
+	testConfig.Bor.DandeliBlock = big.NewInt(20)
+
+	defaultGasLimit := uint64(60_000_000)
+
+	t.Run("gas target calculation pre dandeli HF", func(t *testing.T) {
+		block := &types.Header{
+			Number:   big.NewInt(9),
+			GasLimit: defaultGasLimit,
+			GasUsed:  defaultGasLimit / 2,
+			BaseFee:  big.NewInt(params.InitialBaseFee),
+		}
+		gasTarget := calcParentGasTarget(testConfig, block)
+		expected := block.GasLimit / 2 // because elasticity multiplier is set to 2 by default
+		require.Equal(t, expected, gasTarget, "expected gas target = gaslimit/2")
+	})
+
+	t.Run("gas target calculation post dandeli HF", func(t *testing.T) {
+		block := &types.Header{
+			Number:   big.NewInt(20),
+			GasLimit: defaultGasLimit,
+			GasUsed:  defaultGasLimit / 2,
+			BaseFee:  big.NewInt(params.InitialBaseFee),
+		}
+		gasTarget := calcParentGasTarget(testConfig, block)
+		expected := block.GasLimit * params.TargetGasPercentagePostDandeli / 100 // because gas target is derived by this protocol parameter
+		require.Equal(t, expected, gasTarget, "case #1: expected gas target = 60 percent of gas limit")
+
+		block = &types.Header{
+			Number:   big.NewInt(21),
+			GasLimit: defaultGasLimit,
+			GasUsed:  defaultGasLimit / 2,
+			BaseFee:  big.NewInt(params.InitialBaseFee),
+		}
+		gasTarget = calcParentGasTarget(testConfig, block)
+		expected = block.GasLimit * params.TargetGasPercentagePostDandeli / 100 // because gas target is derived by this protocol parameter
+		require.Equal(t, expected, gasTarget, "case #2: expected gas target = 60 percent of gas limit")
+	})
+
+	t.Run("nil bor config", func(t *testing.T) {
+		testConfig.Bor = nil
+		block := &types.Header{
+			Number:   big.NewInt(21),
+			GasLimit: defaultGasLimit,
+			GasUsed:  defaultGasLimit / 2,
+			BaseFee:  big.NewInt(params.InitialBaseFee),
+		}
+		gasTarget := calcParentGasTarget(testConfig, block)
+		expected := block.GasLimit / 2 // because elasticity multiplier is set to 2 by default
+		require.Equal(t, expected, gasTarget, "expected gas target = gaslimit/2 when bor config is nil")
+	})
+}
+
+// simpleBaseFeeCalculator contains an overly simplified logic of base fee calculations useful for generating
+// expected values in test cases. It assumes all blocks are post-bhilai HF.
+func simpleBaseFeeCalculator(initialBaseFee int64, gasLimit, gasUsed uint64, targetGasPercentage uint64) uint64 {
+	initial := big.NewInt(initialBaseFee)
+	val := big.NewInt(1)
+	val.Mul(val, initial)
+
+	// Assuming tests are running post bhilai
+	bfd := int64(params.BaseFeeChangeDenominatorPostBhilai)
+
+	// Define a target gas based on given percentage
+	target := gasLimit * targetGasPercentage / 100
+	if gasUsed == target {
+		return initial.Uint64()
+	}
+
+	// follow the simple formula to get the new base fee:
+	// base fee = initialBaseFee +/- (initialBaseFee * gasUsedDelta / gasTarget / baseFeeChangeDenominator)
+
+	var delta int64
+	if gasUsed > target {
+		delta = int64(gasUsed - target)
+	} else {
+		delta = int64(target - gasUsed)
+	}
+
+	val.Mul(val, big.NewInt(delta))
+	val.Div(val, big.NewInt(bfd))
+	val.Div(val, big.NewInt(int64(target)))
+
+	if gasUsed > target {
+		return initial.Add(initial, val).Uint64()
+	} else {
+		return initial.Sub(initial, val).Uint64()
+	}
+}
+
+func TestCalcBaseFeeDandeli(t *testing.T) {
+	t.Parallel()
+
+	testConfig := copyConfig(config())
+	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.DandeliBlock = big.NewInt(20)
+
+	// Case 1: Create pre-dandeli cases where HF is defined in future. Validate
+	// base fee calculations before HF kicks in. Base fee should be calculated
+	// based on default elasticity multiplier.
+	tests := []struct {
+		name            string
+		parentBaseFee   int64
+		parentGasLimit  uint64
+		parentGasUsed   uint64
+		expectedBaseFee uint64
+	}{
+		{"usage == target", params.InitialBaseFee, 60_000_000, 30_000_000, params.InitialBaseFee},
+		{"usage below target #1", params.InitialBaseFee, 60_000_000, 20_000_000, 994791667},
+		{"usage below target #2", params.InitialBaseFee, 60_000_000, 10_000_000, 989583334},
+		{"usage above target #1", params.InitialBaseFee, 60_000_000, 40_000_000, 1005208333},
+		{"usage above target #2", params.InitialBaseFee, 60_000_000, 50_000_000, 1010416666},
+		{"usage full", params.InitialBaseFee, 60_000_000, 60_000_000, 1015625000},
+		{"usage 0", params.InitialBaseFee, 60_000_000, 0, 984375000},
+	}
+	for _, test := range tests {
+		block := &types.Header{
+			Number:   big.NewInt(8),
+			GasLimit: test.parentGasLimit,
+			GasUsed:  test.parentGasUsed,
+			BaseFee:  big.NewInt(test.parentBaseFee),
+		}
+		baseFee := CalcBaseFee(testConfig, block).Uint64()
+		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.DefaultTargetGasPercentage)
+		require.Equal(
+			t,
+			expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("pre-dandeli base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("pre-dandeli base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+	}
+
+	// Case 2: Create post-dandeli cases where HF has kicked in. Validate base fee changes
+	// based on the newly introduced protocol param: TargetGasPrecentage. Target gas limit
+	// should be calculated based on this percentage value out of total gas limit. Base
+	// fee should be changed accordingly.
+	tests = []struct {
+		name            string
+		parentBaseFee   int64
+		parentGasLimit  uint64
+		parentGasUsed   uint64
+		expectedBaseFee uint64
+	}{
+		{"usage == target (65%)", params.InitialBaseFee, 60_000_000, 39_000_000, params.InitialBaseFee},
+		{"usage below target #1", params.InitialBaseFee, 60_000_000, 30_000_000, 996394231},
+		{"usage below target #2", params.InitialBaseFee, 60_000_000, 10_000_000, 988381411},
+		{"usage above target #1", params.InitialBaseFee, 60_000_000, 40_000_000, 1000400641},
+		{"usage above target #2", params.InitialBaseFee, 60_000_000, 50_000_000, 1004407051},
+		{"usage full", params.InitialBaseFee, 60_000_000, 60_000_000, 1008413461},
+		{"usage 0", params.InitialBaseFee, 60_000_000, 0, 984375000},
+	}
+	for _, test := range tests {
+		// Post-dandeli block #1
+		block := &types.Header{
+			Number:   big.NewInt(20),
+			GasLimit: test.parentGasLimit,
+			GasUsed:  test.parentGasUsed,
+			BaseFee:  big.NewInt(test.parentBaseFee),
+		}
+		baseFee := CalcBaseFee(testConfig, block).Uint64()
+		expectedBaseFee := simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.TargetGasPercentagePostDandeli)
+		require.Equal(
+			t,
+			expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-dandeli #1: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-dandeli #1: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+
+		// Post-dandeli block #2
+		block = &types.Header{
+			Number:   big.NewInt(21),
+			GasLimit: test.parentGasLimit,
+			GasUsed:  test.parentGasUsed,
+			BaseFee:  big.NewInt(test.parentBaseFee),
+		}
+		baseFee = CalcBaseFee(testConfig, block).Uint64()
+		expectedBaseFee = simpleBaseFeeCalculator(block.BaseFee.Int64(), block.GasLimit, block.GasUsed, params.TargetGasPercentagePostDandeli)
+		require.Equal(
+			t,
+			expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-dandeli #2: base fee mismatch with expected value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
+		// Also check with manually calculated base fee
+		require.Equal(
+			t,
+			test.expectedBaseFee,
+			baseFee,
+			fmt.Sprintf("post-dandeli #2: base fee mismatch with manually calculated value, test: %s, got: %d, want: %d", test.name, baseFee, expectedBaseFee),
+		)
 	}
 }
