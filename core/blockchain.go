@@ -2242,9 +2242,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 
 		witnessBytes := witBuf.Bytes()
-		rawdb.WriteWitness(blockBatch, block.Hash(), witnessBytes)
-		// Cache the witness for faster retrieval during block import
-		bc.witnessCache.Add(block.Hash(), witnessBytes)
+		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}

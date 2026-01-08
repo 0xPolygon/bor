@@ -180,6 +180,13 @@ func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 	return rawdb.HasWitness(bc.db, hash)
 }
 
+// WriteWitness writes the witness to the database and updates the cache.
+// This wrapper ensures consistency between the database and the in-memory cache.
+func (bc *BlockChain) WriteWitness(db ethdb.KeyValueWriter, hash common.Hash, witness []byte) {
+	rawdb.WriteWitness(db, hash, witness)
+	bc.witnessCache.Add(hash, witness)
+}
+
 // HasBlock checks if a block is fully present in the database or not.
 func (bc *BlockChain) HasBlock(hash common.Hash, number uint64) bool {
 	if bc.blockCache.Contains(hash) {

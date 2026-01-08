@@ -637,7 +637,7 @@ func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash,
 		log.Error("Failed to encode witness", "error", err)
 	}
 
-	rawdb.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
+	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
 
 	return nil
 }
