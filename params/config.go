@@ -561,6 +561,7 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
+			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
@@ -1046,36 +1047,34 @@ func (c *ChainConfig) Description() string {
 	// makes sense for mainnet should be optional at printing to avoid bloating
 	// the output for testnets and private networks.
 	banner += "Pre-Merge hard forks (block based):\n"
-	banner += fmt.Sprintf(" - Homestead:                   #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/homestead/__init__.py.html)\n", c.HomesteadBlock)
+	banner += fmt.Sprintf(" - Homestead:                   #%-8v\n", c.HomesteadBlock)
 	if c.DAOForkBlock != nil {
-		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/dao_fork/__init__.py.html)\n", c.DAOForkBlock)
+		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v\n", c.DAOForkBlock)
 	}
-	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/tangerine_whistle/__init__.py.html)\n", c.EIP150Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/spurious_dragon/__init__.py.html)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/spurious_dragon/__init__.py.html)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Byzantium:                   #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/byzantium/__init__.py.html)\n", c.ByzantiumBlock)
-	banner += fmt.Sprintf(" - Constantinople:              #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/constantinople/__init__.py.html)\n", c.ConstantinopleBlock)
-	banner += fmt.Sprintf(" - Petersburg:                  #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/constantinople/__init__.py.html)\n", c.PetersburgBlock)
-	banner += fmt.Sprintf(" - Istanbul:                    #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/istanbul/__init__.py.html)\n", c.IstanbulBlock)
+	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v\n", c.EIP150Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v\n", c.EIP155Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v\n", c.EIP158Block)
+	banner += fmt.Sprintf(" - Byzantium:                   #%-8v\n", c.ByzantiumBlock)
+	banner += fmt.Sprintf(" - Constantinople:              #%-8v\n", c.ConstantinopleBlock)
+	banner += fmt.Sprintf(" - Petersburg:                  #%-8v\n", c.PetersburgBlock)
+	banner += fmt.Sprintf(" - Istanbul:                    #%-8v\n", c.IstanbulBlock)
 	if c.MuirGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/muir_glacier/__init__.py.html)\n", c.MuirGlacierBlock)
+		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v\n", c.MuirGlacierBlock)
 	}
-	banner += fmt.Sprintf(" - Berlin:                      #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/berlin/__init__.py.html)\n", c.BerlinBlock)
-	banner += fmt.Sprintf(" - London:                      #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/london/__init__.py.html)\n", c.LondonBlock)
+	banner += fmt.Sprintf(" - Berlin:                      #%-8v\n", c.BerlinBlock)
+	banner += fmt.Sprintf(" - London:                      #%-8v\n", c.LondonBlock)
 	if c.ArrowGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/arrow_glacier/__init__.py.html)\n", c.ArrowGlacierBlock)
+		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v\n", c.ArrowGlacierBlock)
 	}
 
 	if c.GrayGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v (https://ethereum.github.io/execution-specs/src/ethereum/forks/gray_glacier/__init__.py.html)\n", c.GrayGlacierBlock)
+		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v\n", c.GrayGlacierBlock)
 	}
 
 	banner += "\n"
 
 	// Add a special section for the merge as it's non-obvious
 	banner += "Merge configured:\n"
-	banner += " - Hard-fork specification:    https://ethereum.github.io/execution-specs/src/ethereum/forks/paris/__init__.py.html\n"
-	banner += " - Network known to be merged\n"
 	banner += fmt.Sprintf(" - Total terminal difficulty:  %v\n", c.TerminalTotalDifficulty)
 	if c.MergeNetsplitBlock != nil {
 		banner += fmt.Sprintf(" - Merge netsplit block:       #%-8v\n", c.MergeNetsplitBlock)
@@ -1101,6 +1100,7 @@ func (c *ChainConfig) Description() string {
 	if c.OsakaBlock != nil {
 		banner += fmt.Sprintf(" - Osaka:                      #%-8v\n", *c.OsakaBlock)
 	}
+	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
 	return banner
 }
 
@@ -1109,6 +1109,14 @@ type BlobConfig struct {
 	Target         int    `json:"target"`
 	Max            int    `json:"max"`
 	UpdateFraction uint64 `json:"baseFeeUpdateFraction"`
+}
+
+// String implement fmt.Stringer, returning string format blob config.
+func (bc *BlobConfig) String() string {
+	if bc == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("target: %d, max: %d, fraction: %d", bc.Target, bc.Max, bc.UpdateFraction)
 }
 
 // BlobScheduleConfig determines target and max number of blobs allow per fork.
@@ -1484,7 +1492,6 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.OsakaBlock, newcfg.OsakaBlock, headNumber) {
 		return newBlockCompatError("Osaka fork block", c.OsakaBlock, newcfg.OsakaBlock)
 	}
-
 	return nil
 }
 

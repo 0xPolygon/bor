@@ -385,6 +385,8 @@ func readStateIndex(ident stateIdent, db ethdb.KeyValueReader) []byte {
 		return rawdb.ReadAccountHistoryIndex(db, ident.addressHash)
 	case typeStorage:
 		return rawdb.ReadStorageHistoryIndex(db, ident.addressHash, ident.storageHash)
+	case typeTrienode:
+		return rawdb.ReadTrienodeHistoryIndex(db, ident.addressHash, []byte(ident.path))
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}
@@ -398,6 +400,8 @@ func writeStateIndex(ident stateIdent, db ethdb.KeyValueWriter, data []byte) {
 		rawdb.WriteAccountHistoryIndex(db, ident.addressHash, data)
 	case typeStorage:
 		rawdb.WriteStorageHistoryIndex(db, ident.addressHash, ident.storageHash, data)
+	case typeTrienode:
+		rawdb.WriteTrienodeHistoryIndex(db, ident.addressHash, []byte(ident.path), data)
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}
@@ -411,6 +415,8 @@ func deleteStateIndex(ident stateIdent, db ethdb.KeyValueWriter) {
 		rawdb.DeleteAccountHistoryIndex(db, ident.addressHash)
 	case typeStorage:
 		rawdb.DeleteStorageHistoryIndex(db, ident.addressHash, ident.storageHash)
+	case typeTrienode:
+		rawdb.DeleteTrienodeHistoryIndex(db, ident.addressHash, []byte(ident.path))
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}
@@ -424,6 +430,8 @@ func readStateIndexBlock(ident stateIdent, db ethdb.KeyValueReader, id uint32) [
 		return rawdb.ReadAccountHistoryIndexBlock(db, ident.addressHash, id)
 	case typeStorage:
 		return rawdb.ReadStorageHistoryIndexBlock(db, ident.addressHash, ident.storageHash, id)
+	case typeTrienode:
+		return rawdb.ReadTrienodeHistoryIndexBlock(db, ident.addressHash, []byte(ident.path), id)
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}
@@ -437,6 +445,8 @@ func writeStateIndexBlock(ident stateIdent, db ethdb.KeyValueWriter, id uint32, 
 		rawdb.WriteAccountHistoryIndexBlock(db, ident.addressHash, id, data)
 	case typeStorage:
 		rawdb.WriteStorageHistoryIndexBlock(db, ident.addressHash, ident.storageHash, id, data)
+	case typeTrienode:
+		rawdb.WriteTrienodeHistoryIndexBlock(db, ident.addressHash, []byte(ident.path), id, data)
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}
@@ -450,6 +460,8 @@ func deleteStateIndexBlock(ident stateIdent, db ethdb.KeyValueWriter, id uint32)
 		rawdb.DeleteAccountHistoryIndexBlock(db, ident.addressHash, id)
 	case typeStorage:
 		rawdb.DeleteStorageHistoryIndexBlock(db, ident.addressHash, ident.storageHash, id)
+	case typeTrienode:
+		rawdb.DeleteTrienodeHistoryIndexBlock(db, ident.addressHash, []byte(ident.path), id)
 	default:
 		panic(fmt.Errorf("unknown type: %v", ident.typ))
 	}

@@ -82,6 +82,8 @@ var Defaults = Config{
 	WitnessPruneThreshold: 64000,
 	WitnessPruneInterval:  120 * time.Second,
 	WitnessAPIEnabled:     false,
+	TxSyncDefaultTimeout:  20 * time.Second,
+	TxSyncMaxTimeout:      1 * time.Minute,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -273,6 +275,10 @@ type Config struct {
 
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
+
+	// EIP-7966: eth_sendRawTransactionSync timeouts
+	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
+	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

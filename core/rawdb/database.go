@@ -121,6 +121,12 @@ func (db *nofreezedb) AncientRange(kind string, start, max, maxByteSize uint64) 
 	return nil, errNotSupported
 }
 
+// AncientBytes retrieves the value segment of the element specified by the id
+// and value offsets.
+func (db *nofreezedb) AncientBytes(kind string, id, offset, length uint64) ([]byte, error) {
+	return nil, errNotSupported
+}
+
 // Ancients returns an error as we don't have a backing chain freezer.
 func (db *nofreezedb) Ancients() (uint64, error) {
 	return 0, errNotSupported
@@ -247,7 +253,7 @@ func resolveChainFreezerDir(ancient string) string {
 	// - chain freezer exists in legacy location (root ancient folder)
 	freezer := filepath.Join(ancient, ChainFreezerName)
 	if !common.FileExist(freezer) {
-		if !common.FileExist(ancient) {
+		if !common.FileExist(ancient) || !common.IsNonEmptyDir(ancient) {
 			// The entire ancient store is not initialized, still use the sub
 			// folder for initialization.
 		} else {

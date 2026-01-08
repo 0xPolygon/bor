@@ -20,7 +20,6 @@ import (
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -58,13 +57,8 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}
 	// Create a blockchain that is idle, but can be used to access headers through
-	headerChain := &HeaderChain{
-		config:      config,
-		chainDb:     memdb,
-		headerCache: lru.NewCache[common.Hash, *types.Header](256),
-		engine:      consensus,
-	}
-	processor := NewStateProcessor(config, headerChain)
+
+	processor := NewStateProcessor(config)
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
 
 	res, err := processor.Process(block, db, vmconfig, author, context.Background())

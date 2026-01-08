@@ -216,9 +216,8 @@ func expandVerkle(ctx *cli.Context) error {
 	}
 
 	for i, key := range keylist {
-		log.Info("Reading key", "index", i, "key", keylist[0])
-
-		_, _ = root.Get(key, chaindb.Get)
+		log.Info("Reading key", "index", i, "key", key)
+		root.Get(key, chaindb.Get)
 	}
 
 	if err := os.WriteFile("dump.dot", []byte(verkle.ToDot(root)), 0600); err != nil {

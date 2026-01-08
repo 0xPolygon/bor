@@ -161,10 +161,12 @@ func TestValidation(t *testing.T) {
 	// Config that has not timestamp enabled
 	// TODO(lightclient): this always needs to be updated when a mainnet timestamp is set.
 	legacyConfig := *params.MainnetChainConfig
-	legacyConfig.ShanghaiBlock = nil
-	legacyConfig.CancunBlock = nil
-	legacyConfig.PragueBlock = nil
-	legacyConfig.VerkleBlock = nil
+	legacyConfig.ShanghaiTime = nil
+	legacyConfig.CancunTime = nil
+	legacyConfig.PragueTime = nil
+	legacyConfig.OsakaTime = nil
+	legacyConfig.BPO1Time = nil
+	legacyConfig.BPO2Time = nil
 
 	tests := []struct {
 		config *params.ChainConfig
@@ -345,7 +347,7 @@ func TestValidation(t *testing.T) {
 		// Local is mainnet Shanghai, remote is random Shanghai.
 		// {params.MainnetChainConfig, 20000000, 1681338455, ID{Hash: checksumToBytes(0x12345678), Next: 0}, ErrLocalIncompatibleOrStale},
 
-		// Local is mainnet Prague, far in the future. Remote announces Gopherium (non existing fork)
+		// Local is mainnet BPO2, far in the future. Remote announces Gopherium (non existing fork)
 		// at some future timestamp 8888888888, for itself, but past block for local. Local is incompatible.
 		//
 		// This case detects non-upgraded nodes with majority hash power (typical Ropsten mess).

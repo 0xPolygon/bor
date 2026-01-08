@@ -50,6 +50,7 @@ func init() {
 		filterGenerateCommand,
 		traceGenerateCommand,
 		filterPerfCommand,
+		filterFuzzCommand,
 	}
 }
 

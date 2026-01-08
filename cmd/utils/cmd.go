@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -338,7 +340,7 @@ func ImportHistory(chain *core.BlockChain, db ethdb.Database, dir string, networ
 					return fmt.Errorf("error inserting header %d, not canon: %v", it.Number(), status)
 				}
 				encReceipts := types.EncodeBlockReceiptLists([]types.Receipts{receipts})
-				if _, err := chain.InsertReceiptChain([]*types.Block{block}, encReceipts, 2^64-1); err != nil {
+				if _, err := chain.InsertReceiptChain([]*types.Block{block}, encReceipts, math.MaxUint64); err != nil {
 					return fmt.Errorf("error inserting body %d: %w", it.Number(), err)
 				}
 				imported += 1

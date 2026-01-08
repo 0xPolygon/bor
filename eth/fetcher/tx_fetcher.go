@@ -110,6 +110,8 @@ var (
 	txFetcherFetchingHashes = metrics.NewRegisteredGauge("eth/fetcher/transaction/fetching/hashes", nil)
 )
 
+var errTerminated = errors.New("terminated")
+
 // txAnnounce is the notification of the availability of a batch
 // of new transactions in the network.
 type txAnnounce struct {
@@ -599,6 +601,7 @@ func (f *TxFetcher) loop() {
 					}
 					// Keep track of the request as dangling, but never expire
 					f.requests[peer].hashes = nil
+					txFetcherSlowPeers.Inc(1)
 				}
 			}
 			// Schedule a new transaction retrieval
@@ -698,7 +701,10 @@ func (f *TxFetcher) loop() {
 					log.Warn("Unexpected transaction delivery", "peer", delivery.origin)
 					break
 				}
-
+				if req.hashes == nil {
+					txFetcherSlowPeers.Dec(1)
+					txFetcherSlowWait.Update(time.Duration(f.clock.Now() - req.time).Nanoseconds())
+				}
 				delete(f.requests, delivery.origin)
 
 				// Anything not delivered should be re-scheduled (with or without
@@ -790,7 +796,10 @@ func (f *TxFetcher) loop() {
 
 					delete(f.fetching, hash)
 				}
-
+				if request.hashes == nil {
+					txFetcherSlowPeers.Dec(1)
+					txFetcherSlowWait.Update(time.Duration(f.clock.Now() - request.time).Nanoseconds())
+				}
 				delete(f.requests, drop.peer)
 			}
 			// Clean up general announcement tracking
@@ -800,6 +809,10 @@ func (f *TxFetcher) loop() {
 
 					if len(f.announced[hash]) == 0 {
 						delete(f.announced, hash)
+					}
+					delete(f.alternates[hash], drop.peer)
+					if len(f.alternates[hash]) == 0 {
+						delete(f.alternates, hash)
 					}
 				}
 
@@ -867,7 +880,7 @@ func (f *TxFetcher) rescheduleWait(timer *mclock.Timer, trigger chan struct{}) {
 // This method is a bit "flaky" "by design". In theory the timeout timer only ever
 // should be rescheduled if some request is pending. In practice, a timeout will
 // cause the timer to be rescheduled every 5 secs (until the peer comes through or
-// disconnects). This is a limitation of the fetcher code because we don't trac
+// disconnects). This is a limitation of the fetcher code because we don't track
 // pending requests and timed out requests separately. Without double tracking, if
 // we simply didn't reschedule the timer on all-timeout then the timer would never
 // be set again since len(request) > 0 => something's running.

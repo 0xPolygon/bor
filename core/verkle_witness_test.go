@@ -460,7 +460,7 @@ func TestProcessVerkleContractWithEmptyCode(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 	gspec := verkleTestGenesis(&config)
 
 	genesisH, _, _, _, _, statediffs := GenerateVerkleChainWithGenesis(gspec, beacon.New(ethash.NewFaker()), 1, func(i int, gen *BlockGen) {
@@ -517,7 +517,7 @@ func TestProcessVerkleExtCodeHashOpcode(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -622,7 +622,7 @@ func TestProcessVerkleBalanceOpcode(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -680,7 +680,7 @@ func TestProcessVerkleSelfDestructInSeparateTx(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -801,7 +801,7 @@ func TestProcessVerkleSelfDestructInSameTx(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -898,7 +898,7 @@ func TestProcessVerkleSelfDestructInSeparateTxWithSelfBeneficiary(t *testing.T) 
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -989,7 +989,7 @@ func TestProcessVerkleSelfDestructInSameTxWithSelfBeneficiary(t *testing.T) {
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)
@@ -1054,7 +1054,7 @@ func TestProcessVerkleSelfDestructInSameTxWithSelfBeneficiaryAndPrefundedAccount
 	t.Skip("verkle trie is not yet supported in bor")
 	// The test txs were taken from a secondary testnet with chain id 69421
 	config := *testKaustinenLikeChainConfig
-	config.ChainID.SetUint64(69421)
+	config.ChainID = new(big.Int).SetUint64(69421)
 
 	var (
 		signer     = types.LatestSigner(&config)

@@ -3,35 +3,29 @@ module github.com/ethereum/go-ethereum/cmd/keeper
 go 1.25.5
 
 require (
+	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6
 	github.com/ethereum/go-ethereum v0.0.0-00010101000000-000000000000
-	github.com/zkMIPS/zkMIPS/crates/go-runtime/zkm_runtime v0.0.0-20250915074013-fbc07aa2c6f5
 )
 
 require (
-	github.com/0xPolygon/crand v1.0.3 // indirect
-	github.com/JekaMas/workerpool v1.1.8 // indirect
-	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/VictoriaMetrics/fastcache v1.12.2 // indirect
-	github.com/bits-and-blooms/bitset v1.24.4 // indirect
+	github.com/StackExchange/wmi v1.2.1 // indirect
+	github.com/VictoriaMetrics/fastcache v1.13.0 // indirect
+	github.com/bits-and-blooms/bitset v1.20.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/consensys/gnark-crypto v0.19.2 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/emicklei/dot v1.9.2 // indirect
-	github.com/emirpasic/gods v1.18.1 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
+	github.com/emicklei/dot v1.6.2 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.5 // indirect
 	github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab // indirect
 	github.com/ethereum/go-verkle v0.2.2 // indirect
 	github.com/ferranbt/fastssz v0.1.4 // indirect
 	github.com/gammazero/deque v0.2.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/gofrs/flock v0.13.0 // indirect
+	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/heimdalr/dag v1.4.0 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -54,7 +48,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace (
-	github.com/ethereum/go-ethereum => ../../
-	github.com/zkMIPS/zkMIPS/crates/go-runtime/zkm_runtime => github.com/weilzkm/zkMIPS/crates/go-runtime/zkvm_runtime v0.0.0-20250915074013-fbc07aa2c6f5
-)
+replace github.com/ethereum/go-ethereum => ../../
