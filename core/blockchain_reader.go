@@ -175,8 +175,11 @@ func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
 	return witness
 }
 
-// HasWitness checks if a witness is present in the database or not.
+// HasWitness checks if a witness is present in the cache or database.
 func (bc *BlockChain) HasWitness(hash common.Hash) bool {
+	if bc.witnessCache.Contains(hash) {
+		return true
+	}
 	return rawdb.HasWitness(bc.db, hash)
 }
 
