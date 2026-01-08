@@ -433,7 +433,6 @@ func (pool *LegacyPool) loop() {
 				// Any old enough should be removed
 				pool.removeTx(hash, true, true)
 				queuedEvictionMeter.Mark(int64(len(pool.queue.evictList())))
-
 			}
 			evictTimer.Update(time.Since(start))
 			pool.mu.Unlock()

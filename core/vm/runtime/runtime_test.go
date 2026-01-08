@@ -363,6 +363,10 @@ func (d *dummyChain) GetHeaderByHash(h common.Hash) *types.Header {
 	return nil
 }
 
+func (d *dummyChain) GetTd(h common.Hash, n uint64) *big.Int {
+	return nil
+}
+
 // TestBlockhash tests the blockhash operation. It's a bit special, since it internally
 // requires access to a chain reader.
 func TestBlockhash(t *testing.T) {

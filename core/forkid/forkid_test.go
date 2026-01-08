@@ -161,12 +161,12 @@ func TestValidation(t *testing.T) {
 	// Config that has not timestamp enabled
 	// TODO(lightclient): this always needs to be updated when a mainnet timestamp is set.
 	legacyConfig := *params.MainnetChainConfig
-	legacyConfig.ShanghaiTime = nil
-	legacyConfig.CancunTime = nil
-	legacyConfig.PragueTime = nil
-	legacyConfig.OsakaTime = nil
-	legacyConfig.BPO1Time = nil
-	legacyConfig.BPO2Time = nil
+	// legacyConfig.ShanghaiTime = nil
+	// legacyConfig.CancunTime = nil
+	// legacyConfig.PragueTime = nil
+	// legacyConfig.OsakaTime = nil
+	// legacyConfig.BPO1Time = nil
+	// legacyConfig.BPO2Time = nil
 
 	tests := []struct {
 		config *params.ChainConfig

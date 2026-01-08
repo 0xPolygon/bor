@@ -1685,7 +1685,7 @@ func TestFreezerAncientBytes(t *testing.T) {
 
 			for i := 0; i < 10; i++ {
 				data := getChunk(100, i)
-				batch := f.newBatch()
+				batch := f.newBatch(0)
 				require.NoError(t, batch.AppendRaw(uint64(i), data))
 				require.NoError(t, batch.commit())
 			}

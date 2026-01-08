@@ -627,7 +627,7 @@ func (evm *EVM) initNewContract(contract *Contract, address common.Address) ([]b
 	if len(ret) > 0 {
 		evm.StateDB.SetCode(address, ret, tracing.CodeChangeContractCreation)
 	}
-	return ret, nil
+	return ret, err
 }
 
 // Create creates a new contract using code as deployment code.
