@@ -18,6 +18,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -47,4 +48,33 @@ func IsNonEmptyDir(dir string) bool {
 	defer f.Close()
 	names, _ := f.Readdirnames(1)
 	return len(names) > 0
+}
+
+// VerifyPath sanitizes the path to avoid Path Traversal vulnerability
+func VerifyPath(path string) (string, error) {
+	c := filepath.Clean(path)
+
+	r, err := filepath.EvalSymlinks(c)
+	if err != nil {
+		return c, fmt.Errorf("unsafe or invalid path specified: %s", path)
+	} else {
+		return r, nil
+	}
+}
+
+// VerifyCrasher sanitizes the path to avoid Path Traversal vulnerability and reads the file from that path, returning its content
+func VerifyCrasher(crasher string) []byte {
+	canonicalPath, err := VerifyPath(crasher)
+	if err != nil {
+		fmt.Println("path not verified: " + err.Error())
+		return nil
+	}
+
+	data, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading crasher %v: %v", canonicalPath, err)
+		os.Exit(1)
+	}
+
+	return data
 }
