@@ -25,7 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-// StateSyncTx is the system transaction of Bor to introduce fetched state sync events from Heimdall
+// StateSyncTx is a system transaction in Bor that introduces state sync events.
 type StateSyncTx struct {
 	StateSyncData []*StateSyncData
 }
@@ -109,5 +109,5 @@ func (tx *StateSyncTx) decode(b []byte) error {
 }
 
 func (tx *StateSyncTx) sigHash(chainID *big.Int) common.Hash {
-	panic("StateSyncTx has no sigHash")
+	panic("sigHash called on StateSyncTx")
 }
