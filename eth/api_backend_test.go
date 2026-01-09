@@ -153,3 +153,62 @@ func testSendTx(t *testing.T, withLocal bool) {
 		}
 	}
 }
+
+func TestWitnessCacheUsageInAPIBackend(t *testing.T) {
+	b := initBackend(false)
+	defer b.eth.blockchain.Stop()
+
+	// Get genesis block to use for testing
+	genesisBlock := b.eth.blockchain.CurrentBlock()
+	blockHash := genesisBlock.Hash()
+	blockNumber := genesisBlock.Number.Uint64()
+
+	// Create test witness data directly
+	testWitnessBytes := []byte("test witness RLP data")
+
+	// Directly write witness using blockchain.WriteWitness() to test cache
+	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockHash, testWitnessBytes)
+
+	// Verify witness was stored and cached
+	if !b.eth.blockchain.HasWitness(blockHash) {
+		t.Fatal("Witness was not stored")
+	}
+
+	// Test that GetWitness is used (which checks cache first)
+	retrievedBytes := b.eth.blockchain.GetWitness(blockHash)
+	if retrievedBytes == nil {
+		t.Fatal("GetWitness returned nil")
+	}
+	if string(retrievedBytes) != string(testWitnessBytes) {
+		t.Fatal("Retrieved witness data does not match")
+	}
+
+	// Test with non-existent block hash
+	nonExistentHash := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000")
+	witnessNil := b.eth.blockchain.GetWitness(nonExistentHash)
+	if witnessNil != nil {
+		t.Fatal("GetWitness should return nil for non-existent block")
+	}
+
+	// Test HasWitness with cached witness (cache hit)
+	if !b.eth.blockchain.HasWitness(blockHash) {
+		t.Fatal("HasWitness should return true for cached witness")
+	}
+
+	// Clear cache and test cache miss path
+	b.eth.blockchain.SetHead(blockNumber)  // This triggers cache purge
+
+	// After purge, HasWitness should still return true (from DB)
+	if !b.eth.blockchain.HasWitness(blockHash) {
+		t.Fatal("HasWitness should still return true from DB after cache purge")
+	}
+
+	// GetWitness should still work (reads from DB and re-caches)
+	retrievedBytes2 := b.eth.blockchain.GetWitness(blockHash)
+	if retrievedBytes2 == nil {
+		t.Fatal("GetWitness should work after cache purge")
+	}
+	if string(retrievedBytes2) != string(testWitnessBytes) {
+		t.Fatal("Retrieved witness after cache purge does not match")
+	}
+}
