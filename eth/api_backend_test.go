@@ -196,7 +196,7 @@ func TestWitnessCacheUsageInAPIBackend(t *testing.T) {
 	}
 
 	// Clear cache and test cache miss path
-	b.eth.blockchain.SetHead(blockNumber)  // This triggers cache purge
+	b.eth.blockchain.SetHead(blockNumber) // This triggers cache purge
 
 	// After purge, HasWitness should still return true (from DB)
 	if !b.eth.blockchain.HasWitness(blockHash) {
