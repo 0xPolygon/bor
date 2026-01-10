@@ -1663,12 +1663,16 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 			remaining := env.header.GasLimit
 			var selected []*types.Transaction
+			selectedSet := make(map[common.Hash]struct{})
 
 			prioCands := append(buildCands(prioPlainTxs), buildCands(prioBlobTxs)...)
 			if len(prioCands) > 0 {
 				var add []*types.Transaction
 				add, remaining = selectCands(prioCands, remaining)
 				selected = append(selected, add...)
+				for _, tx := range add {
+					selectedSet[tx.Hash()] = struct{}{}
+				}
 			}
 
 			if remaining > 0 {
@@ -1677,6 +1681,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 					var add []*types.Transaction
 					add, remaining = selectCands(normalCands, remaining)
 					selected = append(selected, add...)
+					for _, tx := range add {
+						selectedSet[tx.Hash()] = struct{}{}
+					}
 				}
 			}
 
@@ -1687,6 +1694,30 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 				if w.chain.WaitForWarmEnabled() {
 					_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
 				} else {
+					go func() {
+						_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+					}()
+				}
+			}
+
+			// warming for remaining cold contract txs
+			if len(selectedSet) > 0 && len(txs) > 0 {
+				cold := make([]*types.Transaction, 0)
+				for _, tx := range txs {
+					if tx == nil || tx.To() == nil {
+						continue
+					}
+					if _, hot := hotMap[*tx.To()]; hot {
+						continue
+					}
+					if _, chosen := selectedSet[tx.Hash()]; chosen {
+						continue
+					}
+					cold = append(cold, tx)
+				}
+				if len(cold) > 0 {
+					tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, cold, vm.Config{})
+					numProcs := max(1, 4*runtime.NumCPU()/5)
 					go func() {
 						_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
 					}()
