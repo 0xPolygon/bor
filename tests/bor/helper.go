@@ -574,6 +574,93 @@ func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall
 	return InitMinerWithBlockTime(genesis, privKey, withoutHeimdall, 0)
 }
 
+// DynamicGasLimitConfig holds configuration for dynamic gas limit testing
+type DynamicGasLimitConfig struct {
+	EnableDynamicGasLimit bool
+	GasLimitMin           uint64
+	GasLimitMax           uint64
+	TargetBaseFee         uint64
+	BaseFeeBuffer         uint64
+}
+
+// InitMinerWithDynamicGasLimit creates a miner with dynamic gas limit configuration
+func InitMinerWithDynamicGasLimit(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, dynamicConfig DynamicGasLimitConfig) (*node.Node, *eth.Ethereum, error) {
+	// Define the basic configurations for the Ethereum node
+	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	config := &node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    25,
+		},
+		UseLightweightKDF: true,
+	}
+	// Create the node and configure a full Ethereum node on it
+	stack, err := node.New(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend, err := eth.New(stack, &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   256,
+		DatabaseHandles: 256,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase:             crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:               genesis.GasLimit * 11 / 10,
+			GasPrice:              big.NewInt(1),
+			Recommit:              time.Second,
+			EnableDynamicGasLimit: dynamicConfig.EnableDynamicGasLimit,
+			GasLimitMin:           dynamicConfig.GasLimitMin,
+			GasLimitMax:           dynamicConfig.GasLimitMax,
+			TargetBaseFee:         dynamicConfig.TargetBaseFee,
+			BaseFeeBuffer:         dynamicConfig.BaseFeeBuffer,
+		},
+		WithoutHeimdall: withoutHeimdall,
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// register backend to account manager with keystore for signing
+	keydir := stack.KeyStoreDir()
+
+	n, p := keystore.StandardScryptN, keystore.StandardScryptP
+	kStore := keystore.NewKeyStore(keydir, n, p)
+
+	_, err = kStore.ImportECDSA(privKey, "")
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	acc := kStore.Accounts()[0]
+	err = kStore.Unlock(acc, "")
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// proceed to authorize the local account manager in any case
+	ethBackend.AccountManager().AddBackend(kStore)
+
+	err = stack.Start()
+
+	return stack, ethBackend, err
+}
+
 func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
