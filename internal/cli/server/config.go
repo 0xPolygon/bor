@@ -383,6 +383,13 @@ type SealerConfig struct {
 	// GasCeil is the target gas ceiling for mined blocks.
 	GasCeil uint64 `hcl:"gaslimit,optional" toml:"gaslimit,optional"`
 
+	// Dynamic gas limit configuration
+	EnableDynamicGasLimit bool   `hcl:"enableDynamicGasLimit,optional" toml:"enableDynamicGasLimit,optional"`
+	GasLimitMin           uint64 `hcl:"gasLimitMin,optional" toml:"gasLimitMin,optional"`
+	GasLimitMax           uint64 `hcl:"gasLimitMax,optional" toml:"gasLimitMax,optional"`
+	TargetBaseFee         uint64 `hcl:"targetBaseFee,optional" toml:"targetBaseFee,optional"`
+	BaseFeeBuffer         uint64 `hcl:"baseFeeBuffer,optional" toml:"baseFeeBuffer,optional"`
+
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
 	GasPriceRaw string   `hcl:"gasprice,optional" toml:"gasprice,optional"`
@@ -778,15 +785,20 @@ func DefaultConfig() *Config {
 			LifeTime:     3 * time.Hour,
 		},
 		Sealer: &SealerConfig{
-			Enabled:             false,
-			AllowGasTipOverride: false,
-			Etherbase:           "",
-			GasCeil:             miner.DefaultConfig.GasCeil,
-			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
-			ExtraData:           "",
-			Recommit:            125 * time.Second,
-			CommitInterruptFlag: true,
-			BlockTime:           0,
+			Enabled:               false,
+			AllowGasTipOverride:   false,
+			Etherbase:             "",
+			GasCeil:               miner.DefaultConfig.GasCeil,
+			EnableDynamicGasLimit: miner.DefaultConfig.EnableDynamicGasLimit,
+			GasLimitMin:           miner.DefaultConfig.GasLimitMin,
+			GasLimitMax:           miner.DefaultConfig.GasLimitMax,
+			TargetBaseFee:         miner.DefaultConfig.TargetBaseFee,
+			BaseFeeBuffer:         miner.DefaultConfig.BaseFeeBuffer,
+			GasPrice:              big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
+			ExtraData:             "",
+			Recommit:              125 * time.Second,
+			CommitInterruptFlag:   true,
+			BlockTime:             0,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1126,6 +1138,26 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+
+		// Dynamic gas limit configuration
+		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
+		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
+		n.Miner.GasLimitMax = c.Sealer.GasLimitMax
+		n.Miner.TargetBaseFee = c.Sealer.TargetBaseFee
+		n.Miner.BaseFeeBuffer = c.Sealer.BaseFeeBuffer
+
+		// Validate dynamic gas limit configuration
+		if c.Sealer.EnableDynamicGasLimit {
+			if c.Sealer.GasLimitMin >= c.Sealer.GasLimitMax {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be less than miner.gasLimitMax (%d)", c.Sealer.GasLimitMin, c.Sealer.GasLimitMax)
+			}
+			if c.Sealer.GasLimitMin < params.MinGasLimit {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be at least %d (protocol minimum)", c.Sealer.GasLimitMin, params.MinGasLimit)
+			}
+			if c.Sealer.TargetBaseFee == 0 {
+				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic gas limit is enabled")
+			}
+		}
 
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {

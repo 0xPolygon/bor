@@ -378,6 +378,41 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.BlockTime,
 		Group:   "Sealer",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.enableDynamicGasLimit",
+		Usage:   "Enable dynamic gas limit adjustment based on base fee",
+		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,
+		Default: c.cliConfig.Sealer.EnableDynamicGasLimit,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.gasLimitMin",
+		Usage:   "Minimum gas limit when dynamic gas limit is enabled",
+		Value:   &c.cliConfig.Sealer.GasLimitMin,
+		Default: c.cliConfig.Sealer.GasLimitMin,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.gasLimitMax",
+		Usage:   "Maximum gas limit when dynamic gas limit is enabled",
+		Value:   &c.cliConfig.Sealer.GasLimitMax,
+		Default: c.cliConfig.Sealer.GasLimitMax,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetBaseFee",
+		Usage:   "Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei)",
+		Value:   &c.cliConfig.Sealer.TargetBaseFee,
+		Default: c.cliConfig.Sealer.TargetBaseFee,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.baseFeeBuffer",
+		Usage:   "Buffer around target base fee in wei (no adjustment when within buffer)",
+		Value:   &c.cliConfig.Sealer.BaseFeeBuffer,
+		Default: c.cliConfig.Sealer.BaseFeeBuffer,
+		Group:   "Sealer",
+	})
 
 	// ethstats
 	f.StringFlag(&flagset.StringFlag{
