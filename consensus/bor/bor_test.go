@@ -903,6 +903,9 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		// Should give full 2s build time from now, not from parent
 		expectedMin := before.Add(2 * time.Second).Unix()
 		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
+		// Add upper bound check to ensure timestamp is within reasonable range (allow 100ms execution time)
+		expectedMax := before.Add(2*time.Second + 100*time.Millisecond).Unix()
+		require.LessOrEqual(t, int64(header.Time), expectedMax)
 	})
 
 	t.Run("on-time parent uses normal calculation", func(t *testing.T) {
