@@ -5892,3 +5892,197 @@ func TestSplitReceiptsAndDeriveFields(t *testing.T) {
 		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
 	}
 }
+
+// TestWitnessCache tests the witness caching functionality to ensure witnesses
+// are properly cached during writes and retrieved from cache during reads.
+func TestWitnessCache(t *testing.T) {
+	// Setup: Create a test blockchain
+	engine := ethash.NewFaker()
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+	}
+	cfg := DefaultConfig()
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Create test witness data
+	testHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+	testWitness1 := []byte("test witness data 1")
+	testWitness2 := []byte("test witness data 2 - different")
+
+	// Test 1: Write witness and verify it's cached
+	rawdb.WriteWitness(chain.db, testHash, testWitness1)
+	// Manually add to cache to simulate what happens during block import
+	chain.witnessCache.Add(testHash, testWitness1)
+
+	// Verify witness can be retrieved from cache
+	retrieved := chain.GetWitness(testHash)
+	require.NotNil(t, retrieved, "witness should be retrieved")
+	require.Equal(t, testWitness1, retrieved, "retrieved witness should match written witness")
+
+	// Test 2: Verify cache hit (witness should be in cache, not read from DB)
+	// We can verify this by checking the cache directly
+	cached, ok := chain.witnessCache.Get(testHash)
+	require.True(t, ok, "witness should be in cache")
+	require.Equal(t, testWitness1, cached, "cached witness should match")
+
+	// Test 3: Update witness in cache and verify GetWitness returns cached version
+	chain.witnessCache.Add(testHash, testWitness2)
+	retrieved = chain.GetWitness(testHash)
+	require.Equal(t, testWitness2, retrieved, "GetWitness should return cached version")
+
+	// Test 4: Test cache miss - witness not in cache but in DB
+	testHash2 := common.HexToHash("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+	testWitness3 := []byte("test witness data 3")
+	rawdb.WriteWitness(chain.db, testHash2, testWitness3)
+	// Don't add to cache - simulate cache miss
+
+	// GetWitness should read from DB and cache it
+	retrieved = chain.GetWitness(testHash2)
+	require.NotNil(t, retrieved, "witness should be retrieved from DB")
+	require.Equal(t, testWitness3, retrieved, "retrieved witness should match DB witness")
+
+	// Verify it's now in cache
+	cached, ok = chain.witnessCache.Get(testHash2)
+	require.True(t, ok, "witness should be cached after GetWitness")
+	require.Equal(t, testWitness3, cached, "cached witness should match")
+
+	// Test 5: Test non-existent witness
+	nonExistentHash := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000")
+	retrieved = chain.GetWitness(nonExistentHash)
+	require.Nil(t, retrieved, "non-existent witness should return nil")
+
+	// Test 6: Test cache purge
+	chain.witnessCache.Purge()
+	_, ok = chain.witnessCache.Get(testHash)
+	require.False(t, ok, "witness should not be in cache after purge")
+	_, ok = chain.witnessCache.Get(testHash2)
+	require.False(t, ok, "witness should not be in cache after purge")
+
+	// After purge, GetWitness should still work by reading from DB
+	retrieved = chain.GetWitness(testHash2)
+	require.NotNil(t, retrieved, "witness should still be retrievable from DB after cache purge")
+	require.Equal(t, testWitness3, retrieved, "retrieved witness should match DB witness")
+
+	// Test 7: Test that witness is cached during block import
+	// Create a block and witness, then import it
+	testChain, testBlock, testWitness := createTestBlockAndWitness(t)
+	defer testChain.Stop()
+
+	// Import the block with witness - this should cache the witness
+	blockHash := testBlock.Hash()
+	_, err = testChain.InsertChainStateless(types.Blocks{testBlock}, []*stateless.Witness{testWitness})
+	require.NoError(t, err, "block import should succeed")
+
+	// Verify witness is in cache after import
+	cached, ok = testChain.witnessCache.Get(blockHash)
+	require.True(t, ok, "witness should be cached after block import")
+	require.NotNil(t, cached, "cached witness should not be nil")
+
+	// Verify GetWitness retrieves from cache
+	retrieved = testChain.GetWitness(blockHash)
+	require.NotNil(t, retrieved, "witness should be retrievable after import")
+	require.Equal(t, cached, retrieved, "GetWitness should return cached witness")
+
+	// Test 8: Test HasWitness with cache hit
+	testHash3 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	testWitness4 := []byte("test witness data 4")
+	chain.WriteWitness(chain.db, testHash3, testWitness4)
+
+	// HasWitness should return true (from cache)
+	require.True(t, chain.HasWitness(testHash3), "HasWitness should return true for cached witness")
+
+	// Test 9: Test HasWitness with cache miss but DB hit
+	testHash4 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	testWitness5 := []byte("test witness data 5")
+	rawdb.WriteWitness(chain.db, testHash4, testWitness5)
+	// Don't add to cache
+
+	// HasWitness should return true (from DB)
+	require.True(t, chain.HasWitness(testHash4), "HasWitness should return true for witness in DB")
+
+	// Test 10: Test HasWitness with complete miss
+	testHash5 := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	require.False(t, chain.HasWitness(testHash5), "HasWitness should return false for non-existent witness")
+
+	// Test 11: Test WriteWitness wrapper ensures cache consistency
+	testHash6 := common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
+	testWitness6 := []byte("test witness data 6")
+
+	// Use WriteWitness wrapper
+	chain.WriteWitness(chain.db, testHash6, testWitness6)
+
+	// Verify it's in both DB and cache
+	require.True(t, chain.HasWitness(testHash6), "HasWitness should return true after WriteWitness")
+	retrieved = chain.GetWitness(testHash6)
+	require.Equal(t, testWitness6, retrieved, "GetWitness should return the written witness")
+	cached, ok = chain.witnessCache.Get(testHash6)
+	require.True(t, ok, "witness should be in cache after WriteWitness")
+	require.Equal(t, testWitness6, cached, "cached witness should match written witness")
+}
+
+// TestWitnessCachePurgeOnReorg tests that the witness cache is properly purged during chain reorganization
+func TestWitnessCachePurgeOnReorg(t *testing.T) {
+	// Create a test blockchain
+	engine := ethash.NewFaker()
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+	cfg := DefaultConfig()
+
+	db := rawdb.NewMemoryDatabase()
+	chain, err := NewBlockChain(db, gspec, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Generate some blocks
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 5, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		tx, _ := types.SignTx(types.NewTransaction(uint64(i), common.HexToAddress("0x1234"), big.NewInt(1000), 21000, big.NewInt(2000000000), nil), types.HomesteadSigner{}, key)
+		b.AddTx(tx)
+	})
+
+	// Import blocks
+	_, err = chain.InsertChain(blocks, true)
+	require.NoError(t, err, "block import should succeed")
+
+	// Manually add witnesses to cache and DB for these blocks
+	for i, block := range blocks {
+		witnessData := []byte(fmt.Sprintf("witness data for block %d", i))
+		chain.WriteWitness(db, block.Hash(), witnessData)
+	}
+
+	// Verify witnesses are in cache
+	for i, block := range blocks {
+		cached, ok := chain.witnessCache.Get(block.Hash())
+		require.True(t, ok, "witness for block %d should be in cache", i)
+		require.NotNil(t, cached, "cached witness for block %d should not be nil", i)
+	}
+
+	// Trigger a reorg by setting head to block 2 (this calls setHeadBeyondRoot which purges cache)
+	chain.SetHead(2)
+
+	// Verify cache was purged (witnesses should no longer be in cache)
+	for i, block := range blocks {
+		_, ok := chain.witnessCache.Get(block.Hash())
+		require.False(t, ok, "witness for block %d should not be in cache after reorg", i)
+	}
+
+	// Verify witnesses are still in DB (GetWitness should work by reading from DB)
+	for i, block := range blocks {
+		witness := chain.GetWitness(block.Hash())
+		require.NotNil(t, witness, "witness for block %d should still be in DB after reorg", i)
+
+		// After GetWitness, it should be back in cache
+		_, ok := chain.witnessCache.Get(block.Hash())
+		require.True(t, ok, "witness for block %d should be re-cached after GetWitness", i)
+	}
+}

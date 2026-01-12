@@ -142,7 +142,8 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 			if cachedRLPBytes, exists := witnessCache[witnessPage.Hash]; exists {
 				witnessBytes = cachedRLPBytes
 			} else {
-				queriedBytes := rawdb.ReadWitness(h.Chain().DB(), witnessPage.Hash)
+				// Use GetWitness to benefit from the blockchain's witness cache
+				queriedBytes := h.Chain().GetWitness(witnessPage.Hash)
 				witnessCache[witnessPage.Hash] = queriedBytes
 				witnessBytes = queriedBytes
 				totalCached += len(queriedBytes)

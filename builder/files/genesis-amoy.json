@@ -24,6 +24,8 @@
       "bhilaiBlock": 22765056,
       "rioBlock": 26272256,
       "madhugiriBlock": 28899616,
+      "madhugiriProBlock": 29287400,
+      "dandeliBlock": 31890000,
       "skipValidatorByteCheck": [26160367, 26161087, 26171567, 26173743, 26175647],
       "stateSyncConfirmationDelay": {
         "0": 128
