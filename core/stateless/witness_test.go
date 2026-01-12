@@ -808,15 +808,15 @@ func TestTotalPagesValidation(t *testing.T) {
 	t.Run("CurrentPageExceedsTotalPages", func(t *testing.T) {
 		// Page number >= TotalPages is invalid
 		testCases := []struct {
-			currentPage uint64
-			totalPages  uint64
+			currentPage   uint64
+			totalPages    uint64
 			shouldBeValid bool
 		}{
-			{0, 1, true},   // Page 0 of 1 total pages
-			{0, 10, true},  // Page 0 of 10 total pages
-			{9, 10, true},  // Page 9 of 10 total pages (last valid page)
-			{10, 10, false}, // Page 10 of 10 total pages (invalid - 0-indexed)
-			{11, 10, false}, // Page 11 of 10 total pages (invalid)
+			{0, 1, true},     // Page 0 of 1 total pages
+			{0, 10, true},    // Page 0 of 10 total pages
+			{9, 10, true},    // Page 9 of 10 total pages (last valid page)
+			{10, 10, false},  // Page 10 of 10 total pages (invalid - 0-indexed)
+			{11, 10, false},  // Page 11 of 10 total pages (invalid)
 			{100, 10, false}, // Way beyond total pages
 		}
 
@@ -990,7 +990,7 @@ func TestCalculatePageThreshold(t *testing.T) {
 		gasPerMB := uint64(1_000_000)
 		maxPageSizeMB := uint64(15)
 
-		estimatedMB := gasCeil / gasPerMB // 30MB
+		estimatedMB := gasCeil / gasPerMB                              // 30MB
 		threshold := (estimatedMB + maxPageSizeMB - 1) / maxPageSizeMB // ceil(30/15) = 2
 
 		expectedThreshold := uint64(2)
@@ -1005,7 +1005,7 @@ func TestCalculatePageThreshold(t *testing.T) {
 		gasPerMB := uint64(1_000_000)
 		maxPageSizeMB := uint64(15)
 
-		estimatedMB := gasCeil / gasPerMB // 150MB
+		estimatedMB := gasCeil / gasPerMB                              // 150MB
 		threshold := (estimatedMB + maxPageSizeMB - 1) / maxPageSizeMB // ceil(150/15) = 10
 
 		expectedThreshold := uint64(10)

@@ -121,16 +121,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	var witnessRequester func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error)
 	if h.statelessSync.Load() || h.syncWithWitnesses {
 		// Create a witness requester that uses the wit.Peer's RequestWitness method
-		witnessRequester = func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-			}
-
-			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer)
-		}
+		witnessRequester = h.createWitnessRequester()
 	}
 
 	for i := 0; i < len(unknownHashes); i++ {
@@ -138,6 +129,21 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	}
 
 	return nil
+}
+
+// createWitnessRequester creates a witness requester closure that can be used
+// by the block fetcher to request witnesses with verification.
+func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+	return func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		// Get the ethPeer from the peerSet
+		ethPeer := h.peers.getOnePeerWithWitness(hash)
+		if ethPeer == nil {
+			return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+		}
+
+		// Request witnesses using the wit peer with verification
+		return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer)
+	}
 }
 
 // verifyPageCount verifies the witness page count for a given block hash by
@@ -197,16 +203,7 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 
 		// Create a witness requester closure *only if* the peer supports the protocol.
-		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-			}
-
-			// Request witnesses using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer)
-		}
+		witnessRequester := h.createWitnessRequester()
 
 		// Call the new fetcher method to inject the block
 		if err := h.blockFetcher.InjectBlockWithWitnessRequirement(peer.ID(), block, witnessRequester); err != nil {

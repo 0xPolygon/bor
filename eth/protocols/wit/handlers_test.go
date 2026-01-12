@@ -29,7 +29,7 @@ func TestWitnessMetadataResponse(t *testing.T) {
 func TestWitnessMetadataPacket(t *testing.T) {
 	hash1 := common.Hash{0x01}
 	hash2 := common.Hash{0x02}
-	
+
 	packet := &WitnessMetadataPacket{
 		RequestId: 123,
 		Metadata: []WitnessMetadataResponse{
@@ -49,7 +49,7 @@ func TestWitnessMetadataPacket(t *testing.T) {
 func TestGetWitnessMetadataPacket(t *testing.T) {
 	hash1 := common.Hash{0x01}
 	hash2 := common.Hash{0x02}
-	
+
 	packet := &GetWitnessMetadataPacket{
 		RequestId: 456,
 		GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
@@ -80,7 +80,7 @@ func TestWitnessPageRequest(t *testing.T) {
 func TestWitnessPageResponse(t *testing.T) {
 	hash := common.Hash{0xab, 0xcd}
 	data := []byte{0x01, 0x02, 0x03}
-	
+
 	resp := WitnessPageResponse{
 		Page:       3,
 		TotalPages: 10,
@@ -171,7 +171,7 @@ func TestNewWitnessPacket(t *testing.T) {
 func TestNewWitnessHashesPacket(t *testing.T) {
 	hash1 := common.Hash{0x01}
 	hash2 := common.Hash{0x02}
-	
+
 	packet := &NewWitnessHashesPacket{
 		Hashes:  []common.Hash{hash1, hash2},
 		Numbers: []uint64{100, 101},
@@ -189,7 +189,7 @@ func TestNewWitnessHashesPacket(t *testing.T) {
 func TestWitnessPacketRLPPacket(t *testing.T) {
 	hash := common.Hash{0xab}
 	data := []byte{0x01, 0x02}
-	
+
 	packet := &WitnessPacketRLPPacket{
 		RequestId: 999,
 		WitnessPacketResponse: WitnessPacketResponse{
@@ -208,7 +208,7 @@ func TestWitnessPacketRLPPacket(t *testing.T) {
 func TestGetWitnessRequest(t *testing.T) {
 	hash1 := common.Hash{0x01}
 	hash2 := common.Hash{0x02}
-	
+
 	req := &GetWitnessRequest{
 		WitnessPages: []WitnessPageRequest{
 			{Hash: hash1, Page: 0},
@@ -227,7 +227,7 @@ func TestGetWitnessMetadataRequest(t *testing.T) {
 	hash1 := common.Hash{0x01}
 	hash2 := common.Hash{0x02}
 	hash3 := common.Hash{0x03}
-	
+
 	req := &GetWitnessMetadataRequest{
 		Hashes: []common.Hash{hash1, hash2, hash3},
 	}

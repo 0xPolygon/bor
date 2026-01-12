@@ -2430,7 +2430,7 @@ func TestConcurrentWitnessVerification(t *testing.T) {
 
 			hash := common.HexToHash(fmt.Sprintf("0x%d", index))
 			peer := fmt.Sprintf("peer-%d", index)
-			reportedPageCount := uint64(50 + uint64(index%10))
+			reportedPageCount := uint64(50 + index%10)
 
 			getRandomPeers := func() []string {
 				return []string{fmt.Sprintf("random-peer-1-%d", index), fmt.Sprintf("random-peer-2-%d", index)}
