@@ -1687,17 +1687,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 				}
 			}
 
-			// start warm reader cache
+			// start warm reader cache (group txs to avoid duplicate contract per group)
 			if len(selected) > 0 {
-				tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, selected, vm.Config{})
-				numProcs := max(1, 4*runtime.NumCPU()/5)
-				if w.chain.WaitForWarmEnabled() {
-					_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
-				} else {
-					go func() {
-						_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
-					}()
-				}
+				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
 			}
 
 			// warming for remaining cold contract txs
@@ -1716,11 +1708,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 					cold = append(cold, tx)
 				}
 				if len(cold) > 0 {
-					tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, cold, vm.Config{})
-					numProcs := max(1, 4*runtime.NumCPU()/5)
-					go func() {
-						_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
-					}()
+					w.groupAndWarm(cold, env, false)
 				}
 			}
 		}
@@ -1739,6 +1727,58 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	}
 
 	return nil
+}
+
+func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait bool) {
+	// build groups where each group has unique contract addresses
+	var groups [][]*types.Transaction
+	used := make(map[common.Address]struct{})
+	current := make([]*types.Transaction, 0)
+	for _, tx := range txs {
+		if tx == nil || tx.To() == nil {
+			continue
+		}
+		addr := *tx.To()
+		if _, seen := used[addr]; seen {
+			if len(current) > 0 {
+				groups = append(groups, current)
+			}
+			current = []*types.Transaction{tx}
+			used = map[common.Address]struct{}{addr: {}}
+			continue
+		}
+		current = append(current, tx)
+		used[addr] = struct{}{}
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+	if len(groups) == 0 {
+		return
+	}
+
+	numProcs := max(1, 4*runtime.NumCPU()/5)
+	sem := make(chan struct{}, numProcs)
+	var wg sync.WaitGroup
+
+	for _, group := range groups {
+		tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, group, vm.Config{})
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(tasks []blockstm.ExecTask) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+		}(tasks)
+	}
+
+	if wait {
+		wg.Wait()
+	} else {
+		go func() {
+			wg.Wait()
+		}()
+	}
 }
 
 // generateWork generates a sealing block based on the given parameters.
