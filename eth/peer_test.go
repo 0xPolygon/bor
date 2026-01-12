@@ -2,6 +2,7 @@ package eth // replace with the actual package name
 
 import (
 	"bytes"
+	"math/big"
 	"math/rand"
 	"sync"
 	"testing"
@@ -355,5 +356,430 @@ func TestRequestWitnesses_PartialFailureNoPanic(t *testing.T) {
 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for response")
+	}
+}
+
+// TestRequestWitnessPageCount_WIT1Protocol tests the new metadata request method
+func TestRequestWitnessPageCount_WIT1Protocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+	expectedPageCount := uint64(15)
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to return page count
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Eq([]common.Hash{hash}), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessMetadataPacket{
+						Metadata: []wit.WitnessMetadataResponse{{
+							Hash:        hash,
+							TotalPages:  expectedPageCount,
+							WitnessSize: 225 * 1024 * 1024,
+							BlockNumber: 100,
+							Available:   true,
+						}},
+					},
+				}
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedPageCount, pageCount)
+}
+
+// TestRequestWitnessPageCount_WIT0FallbackToLegacy tests fallback to legacy method
+func TestRequestWitnessPageCount_WIT0FallbackToLegacy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+	expectedPageCount := uint64(10)
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT0)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitness (legacy) to return first page with TotalPages
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Eq([]wit.WitnessPageRequest{{Hash: hash, Page: 0}}), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{
+						WitnessPacketResponse: []wit.WitnessPageResponse{{
+							Page:       0,
+							TotalPages: expectedPageCount,
+							Hash:       hash,
+							Data:       []byte{0x01, 0x02},
+						}},
+					},
+				}
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedPageCount, pageCount)
+}
+
+// TestRequestWitnessPageCount_NoWitPeer tests error when witness peer not available
+func TestRequestWitnessPageCount_NoWitPeer(t *testing.T) {
+	p := &ethPeer{} // no witPeer set
+
+	pageCount, err := p.RequestWitnessPageCount(common.Hash{0x01})
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "witness peer not found")
+}
+
+// TestRequestWitnessPageCount_MetadataNotAvailable tests unavailable witness
+func TestRequestWitnessPageCount_MetadataNotAvailable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to return unavailable witness
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessMetadataPacket{
+						Metadata: []wit.WitnessMetadataResponse{{
+							Hash:      hash,
+							Available: false, // Not available
+						}},
+					},
+				}
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "witness not available")
+}
+
+// TestRequestWitnessPageCount_EmptyMetadataResponse tests empty metadata response
+func TestRequestWitnessPageCount_EmptyMetadataResponse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to return empty metadata
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessMetadataPacket{
+						Metadata: []wit.WitnessMetadataResponse{}, // Empty
+					},
+				}
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "empty witness metadata response")
+}
+
+// TestRequestWitnessPageCount_WrongResponseType tests wrong response type handling
+func TestRequestWitnessPageCount_WrongResponseType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to return wrong type
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: "wrong_type", // Wrong type
+				}
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "unexpected witness metadata response type")
+}
+
+// TestRequestWitnessPageCount_Timeout tests timeout handling
+func TestRequestWitnessPageCount_Timeout(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to never respond (timeout scenario)
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			// Don't send any response - will trigger timeout
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "timeout")
+}
+
+// TestRequestWitnessPageCount_NilResponse tests nil response handling
+func TestRequestWitnessPageCount_NilResponse(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Version().Return(uint(wit.WIT1)).AnyTimes()
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitnessMetadata to return nil response
+	mockWitPeer.EXPECT().
+		RequestWitnessMetadata(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(hashes []common.Hash, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- nil // Nil response
+			}()
+			return &wit.Request{}, nil
+		})
+
+	pageCount, err := p.RequestWitnessPageCount(hash)
+
+	assert.Error(t, err)
+	assert.Equal(t, uint64(0), pageCount)
+	assert.Contains(t, err.Error(), "nil witness metadata response")
+}
+
+// TestSupportsWitness tests the SupportsWitness method
+func TestSupportsWitness(t *testing.T) {
+	t.Run("WithWitPeer", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockWitPeer := NewMockWitnessPeer(ctrl)
+		p := &ethPeer{
+			Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+			witPeer: &witPeer{Peer: mockWitPeer},
+		}
+
+		assert.True(t, p.SupportsWitness())
+	})
+
+	t.Run("WithoutWitPeer", func(t *testing.T) {
+		p := &ethPeer{
+			Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+		}
+
+		assert.False(t, p.SupportsWitness())
+	})
+}
+
+// TestReconstructWitness tests witness reconstruction from pages
+func TestReconstructWitness(t *testing.T) {
+	t.Run("SuccessfulReconstruction", func(t *testing.T) {
+		// Create a test witness and encode it
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		FillWitnessWithDeterministicRandomState(witness, 5*1024)
+		var buf bytes.Buffer
+		witness.EncodeRLP(&buf)
+		witnessBytes := buf.Bytes()
+
+		// Split into pages
+		pageSize := 1024
+		var pages []wit.WitnessPageResponse
+		for i := 0; i < len(witnessBytes); i += pageSize {
+			end := i + pageSize
+			if end > len(witnessBytes) {
+				end = len(witnessBytes)
+			}
+			pages = append(pages, wit.WitnessPageResponse{
+				Page:       uint64(len(pages)),
+				TotalPages: uint64((len(witnessBytes) + pageSize - 1) / pageSize),
+				Hash:       common.Hash{0x01},
+				Data:       witnessBytes[i:end],
+			})
+		}
+
+		// Reconstruct
+		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil)}
+		reconstructed, err := p.reconstructWitness(pages)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, reconstructed)
+		assert.Equal(t, witness.Header().Number.Uint64(), reconstructed.Header().Number.Uint64())
+	})
+
+	t.Run("OutOfOrderPages", func(t *testing.T) {
+		// Create pages out of order
+		witness, _ := stateless.NewWitness(&types.Header{Number: big.NewInt(100)}, nil)
+		FillWitnessWithDeterministicRandomState(witness, 3*1024)
+		var buf bytes.Buffer
+		witness.EncodeRLP(&buf)
+		witnessBytes := buf.Bytes()
+
+		pageSize := 1024
+		var pages []wit.WitnessPageResponse
+		for i := 0; i < len(witnessBytes); i += pageSize {
+			end := i + pageSize
+			if end > len(witnessBytes) {
+				end = len(witnessBytes)
+			}
+			pages = append(pages, wit.WitnessPageResponse{
+				Page:       uint64(len(pages)),
+				TotalPages: uint64((len(witnessBytes) + pageSize - 1) / pageSize),
+				Hash:       common.Hash{0x01},
+				Data:       witnessBytes[i:end],
+			})
+		}
+
+		// Shuffle pages
+		pages[0], pages[2] = pages[2], pages[0]
+
+		// Reconstruct - should still work due to sorting
+		p := &ethPeer{Peer: eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil)}
+		reconstructed, err := p.reconstructWitness(pages)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, reconstructed)
+	})
+
+	t.Run("InvalidRLPData", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		// Create pages with invalid RLP data
+		pages := []wit.WitnessPageResponse{
+			{
+				Page:       0,
+				TotalPages: 1,
+				Hash:       common.Hash{0x01},
+				Data:       []byte{0xFF, 0xFF, 0xFF}, // Invalid RLP
+			},
+		}
+
+		mockWitPeer := NewMockWitnessPeer(ctrl)
+		mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+		p := &ethPeer{
+			Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test", []p2p.Cap{}), nil, nil),
+			witPeer: &witPeer{Peer: mockWitPeer},
+		}
+		reconstructed, err := p.reconstructWitness(pages)
+
+		assert.Error(t, err)
+		assert.Nil(t, reconstructed)
+	})
+}
+
+// TestEthWitRequestClose tests the Close method of ethWitRequest
+func TestEthWitRequestClose(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Create mock wit requests
+	mockWitReq1 := &wit.Request{}
+	mockWitReq2 := &wit.Request{}
+
+	ethReq := &eth.Request{
+		Peer:   "test-peer",
+		Cancel: make(chan struct{}),
+	}
+
+	witReq := &ethWitRequest{
+		Request: ethReq,
+		witReqs: []*wit.Request{mockWitReq1, mockWitReq2},
+	}
+
+	// Close should not error
+	err := witReq.Close()
+	assert.NoError(t, err)
+
+	// Verify cancel channel was closed
+	select {
+	case <-ethReq.Cancel:
+		// Expected - channel was closed
+	default:
+		t.Error("Cancel channel was not closed")
 	}
 }
