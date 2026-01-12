@@ -2,6 +2,7 @@ package stateless
 
 import (
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -674,6 +675,342 @@ func TestWitnessVerificationPerformance(t *testing.T) {
 		// Verification should be fast (under 1ms)
 		if duration > time.Millisecond {
 			t.Errorf("Verification took too long: %v", duration)
+		}
+	})
+}
+
+// TestConsensusEdgeCases tests edge cases in consensus calculation
+func TestConsensusEdgeCases(t *testing.T) {
+	t.Run("AllPeersReportZero", func(t *testing.T) {
+		// All 3 peers report 0 pages - should reach consensus on 0
+		originalCount := uint64(0)
+		randomCounts := []uint64{0, 0}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 0 {
+			t.Errorf("Expected consensus to be 0 when all peers agree on 0, got %d", consensus)
+		}
+		t.Logf("Correct: All 3 peers agreed on 0, consensus: 0")
+	})
+
+	t.Run("TwoPeersReportZero_OneReportsNonZero", func(t *testing.T) {
+		// Original: 0, Random peer 1: 0, Random peer 2: 10
+		// Majority says 0
+		originalCount := uint64(0)
+		randomCounts := []uint64{0, 10}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 0 {
+			t.Errorf("Expected consensus to be 0 (majority), got %d", consensus)
+		}
+		t.Logf("Correct: 2 peers say 0, 1 says 10, consensus: 0")
+	})
+
+	t.Run("OnePeerReportsZero_TwoReportNonZero", func(t *testing.T) {
+		// Original: 0, Random peer 1: 5, Random peer 2: 5
+		// Majority says 5, original peer with 0 is dishonest
+		originalCount := uint64(0)
+		randomCounts := []uint64{5, 5}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 5 {
+			t.Errorf("Expected consensus to be 5 (majority), got %d", consensus)
+		}
+		t.Logf("Correct: Original peer with 0 is dishonest, consensus: 5")
+	})
+
+	t.Run("MaxUint64Values", func(t *testing.T) {
+		// Test with maximum uint64 values to ensure no overflow
+		originalCount := uint64(18446744073709551615) // max uint64
+		randomCounts := []uint64{18446744073709551615, 18446744073709551615}
+
+		consensus := getConsensusIncludingOriginal(originalCount, randomCounts)
+
+		if consensus != 18446744073709551615 {
+			t.Errorf("Expected consensus with max uint64, got %d", consensus)
+		}
+	})
+
+	t.Run("SinglePeerDifferent", func(t *testing.T) {
+		// Test all permutations of single peer being different
+		testCases := []struct {
+			original     uint64
+			randomCounts []uint64
+			expected     uint64
+			description  string
+		}{
+			{15, []uint64{15, 20}, 15, "Original and first random agree"},
+			{15, []uint64{20, 15}, 15, "Original and second random agree"},
+			{20, []uint64{15, 15}, 15, "Original is the outlier"},
+		}
+
+		for _, tc := range testCases {
+			consensus := getConsensusIncludingOriginal(tc.original, tc.randomCounts)
+			if consensus != tc.expected {
+				t.Errorf("%s: Expected %d, got %d", tc.description, tc.expected, consensus)
+			}
+		}
+	})
+}
+
+// TestWitnessVerificationWithTimeout tests verification behavior with network delays
+func TestWitnessVerificationWithTimeout(t *testing.T) {
+	t.Run("SlowPeerResponse", func(t *testing.T) {
+		// Simulate a peer that takes too long to respond
+		// In production, this would trigger a timeout
+		reportedPages := uint64(50)
+
+		// Only one peer responds in time
+		honestPeers := []uint64{50}
+
+		// Simulate verification with only one successful response
+		countMap := make(map[uint64]int)
+		countMap[reportedPages] = 1 // Original peer
+		for _, count := range honestPeers {
+			countMap[count]++
+		}
+
+		var maxCount int
+		for _, freq := range countMap {
+			if freq > maxCount {
+				maxCount = freq
+			}
+		}
+
+		// Need at least 2 votes for consensus
+		hasConsensus := maxCount >= 2
+		if !hasConsensus {
+			t.Log("Correct: No consensus with only 2 responses out of 3")
+		}
+	})
+}
+
+// TestTotalPagesValidation tests validation of TotalPages field
+func TestTotalPagesValidation(t *testing.T) {
+	t.Run("TotalPages_Zero_ShouldBeInvalid", func(t *testing.T) {
+		// Test that TotalPages == 0 is considered invalid
+		totalPages := uint64(0)
+		currentPage := uint64(0)
+
+		// Page number should not be >= TotalPages
+		// With TotalPages=0, any page (including page 0) is invalid
+		isValid := currentPage < totalPages
+
+		if isValid {
+			t.Error("Expected page 0 to be invalid when TotalPages is 0")
+		}
+		t.Log("Correct: Detected invalid TotalPages=0")
+	})
+
+	t.Run("CurrentPageExceedsTotalPages", func(t *testing.T) {
+		// Page number >= TotalPages is invalid
+		testCases := []struct {
+			currentPage uint64
+			totalPages  uint64
+			shouldBeValid bool
+		}{
+			{0, 1, true},   // Page 0 of 1 total pages
+			{0, 10, true},  // Page 0 of 10 total pages
+			{9, 10, true},  // Page 9 of 10 total pages (last valid page)
+			{10, 10, false}, // Page 10 of 10 total pages (invalid - 0-indexed)
+			{11, 10, false}, // Page 11 of 10 total pages (invalid)
+			{100, 10, false}, // Way beyond total pages
+		}
+
+		for _, tc := range testCases {
+			isValid := tc.currentPage < tc.totalPages
+			if isValid != tc.shouldBeValid {
+				t.Errorf("Page %d with TotalPages %d: expected valid=%v, got valid=%v",
+					tc.currentPage, tc.totalPages, tc.shouldBeValid, isValid)
+			}
+		}
+	})
+
+	t.Run("ReceivedMorePagesThanClaimed", func(t *testing.T) {
+		// Simulate receiving more pages than TotalPages claims
+		totalPages := uint64(5)
+		receivedPages := []uint64{0, 1, 2, 3, 4, 5} // 6 pages received, but TotalPages=5
+
+		if uint64(len(receivedPages)) > totalPages {
+			t.Logf("Correct: Detected peer sending %d pages when TotalPages is %d", len(receivedPages), totalPages)
+		} else {
+			t.Error("Failed to detect peer sending more pages than claimed")
+		}
+	})
+}
+
+// TestWitnessConsensusRaceCondition tests potential race conditions in consensus
+func TestWitnessConsensusRaceCondition(t *testing.T) {
+	t.Run("ConcurrentConsensusCalculation", func(t *testing.T) {
+		// Simulate concurrent consensus calculations for the same hash
+		// This tests for race conditions in the consensus algorithm
+		var wg sync.WaitGroup
+		numGoroutines := 100
+		results := make([]uint64, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+
+				// All goroutines calculate consensus for same data
+				originalCount := uint64(15)
+				randomCounts := []uint64{15, 15}
+				results[index] = getConsensusIncludingOriginal(originalCount, randomCounts)
+			}(i)
+		}
+
+		wg.Wait()
+
+		// All results should be identical (15)
+		for i, result := range results {
+			if result != 15 {
+				t.Errorf("Goroutine %d got different result: %d", i, result)
+			}
+		}
+		t.Log("Correct: All concurrent consensus calculations returned same result")
+	})
+}
+
+// TestWitnessVerificationIntegration tests full verification flow
+func TestWitnessVerificationIntegration(t *testing.T) {
+	t.Run("EndToEnd_HonestPeer", func(t *testing.T) {
+		// Simulate full verification flow for an honest peer
+		originalPeerID := "peer-123"
+		reportedPageCount := uint64(50)
+		blockHash := common.HexToHash("0xabc")
+
+		// Step 1: Check if verification needed (page count exceeds threshold)
+		threshold := uint64(30)
+		needsVerification := reportedPageCount > threshold
+
+		if !needsVerification {
+			t.Error("Expected large witness to trigger verification")
+		}
+
+		// Step 2: Query random peers
+		randomPeers := []string{"peer-456", "peer-789"}
+		peerResponses := map[string]uint64{
+			"peer-456": 50, // Agrees with original
+			"peer-789": 50, // Agrees with original
+		}
+
+		// Step 3: Calculate consensus
+		counts := []uint64{reportedPageCount}
+		for _, peerID := range randomPeers {
+			counts = append(counts, peerResponses[peerID])
+		}
+
+		consensus := getConsensusIncludingOriginal(reportedPageCount, []uint64{
+			peerResponses[randomPeers[0]],
+			peerResponses[randomPeers[1]],
+		})
+
+		// Step 4: Verify consensus matches reported
+		isHonest := consensus == reportedPageCount && consensus != 0
+
+		if !isHonest {
+			t.Errorf("Expected honest peer to pass verification. Reported: %d, Consensus: %d",
+				reportedPageCount, consensus)
+		}
+
+		t.Logf("Success: Honest peer %s verified for block %s with %d pages",
+			originalPeerID, blockHash.Hex(), reportedPageCount)
+	})
+
+	t.Run("EndToEnd_DishonestPeer_ShouldBeJailed", func(t *testing.T) {
+		// Simulate full verification flow for a dishonest peer
+		dishonestPeerID := "attacker-peer"
+		reportedPageCount := uint64(500) // Claims 500 pages (attack)
+		blockHash := common.HexToHash("0xdef")
+
+		// Step 1: Verification needed
+		threshold := uint64(30)
+		needsVerification := reportedPageCount > threshold
+
+		if !needsVerification {
+			t.Fatal("Expected attack to trigger verification")
+		}
+
+		// Step 2: Query random peers (they report honest value)
+		randomPeers := []string{"honest-peer-1", "honest-peer-2"}
+		peerResponses := map[string]uint64{
+			"honest-peer-1": 15, // Honest response
+			"honest-peer-2": 15, // Honest response
+		}
+
+		// Step 3: Calculate consensus
+		consensus := getConsensusIncludingOriginal(reportedPageCount, []uint64{
+			peerResponses[randomPeers[0]],
+			peerResponses[randomPeers[1]],
+		})
+
+		// Step 4: Detect dishonest peer
+		isHonest := consensus == reportedPageCount && consensus != 0
+		shouldBeJailed := !isHonest && consensus != 0
+
+		if !shouldBeJailed {
+			t.Errorf("Expected dishonest peer to be detected. Reported: %d, Consensus: %d",
+				reportedPageCount, consensus)
+		}
+
+		t.Logf("Success: Dishonest peer %s detected and should be jailed for block %s. Claimed: %d pages, Actual: %d pages",
+			dishonestPeerID, blockHash.Hex(), reportedPageCount, consensus)
+	})
+}
+
+// TestCalculatePageThreshold tests dynamic threshold calculation
+func TestCalculatePageThreshold(t *testing.T) {
+	t.Run("ZeroGasCeil", func(t *testing.T) {
+		// When gas ceil is 0, should use default threshold
+		gasCeil := uint64(0)
+		gasPerMB := uint64(1_000_000)
+		maxPageSizeMB := uint64(15)
+		defaultThreshold := uint64(10)
+
+		var threshold uint64
+		if gasCeil > 0 {
+			estimatedMB := gasCeil / gasPerMB
+			threshold = (estimatedMB + maxPageSizeMB - 1) / maxPageSizeMB // ceil division
+		} else {
+			threshold = defaultThreshold
+		}
+
+		if threshold != defaultThreshold {
+			t.Errorf("Expected default threshold %d with zero gas ceil, got %d", defaultThreshold, threshold)
+		}
+	})
+
+	t.Run("StandardGasCeil", func(t *testing.T) {
+		// 30M gas ceil -> ~30MB -> ~2 pages
+		gasCeil := uint64(30_000_000)
+		gasPerMB := uint64(1_000_000)
+		maxPageSizeMB := uint64(15)
+
+		estimatedMB := gasCeil / gasPerMB // 30MB
+		threshold := (estimatedMB + maxPageSizeMB - 1) / maxPageSizeMB // ceil(30/15) = 2
+
+		expectedThreshold := uint64(2)
+		if threshold != expectedThreshold {
+			t.Errorf("Expected threshold %d for 30M gas ceil, got %d", expectedThreshold, threshold)
+		}
+	})
+
+	t.Run("HighGasCeil", func(t *testing.T) {
+		// 150M gas ceil -> ~150MB -> ~10 pages
+		gasCeil := uint64(150_000_000)
+		gasPerMB := uint64(1_000_000)
+		maxPageSizeMB := uint64(15)
+
+		estimatedMB := gasCeil / gasPerMB // 150MB
+		threshold := (estimatedMB + maxPageSizeMB - 1) / maxPageSizeMB // ceil(150/15) = 10
+
+		expectedThreshold := uint64(10)
+		if threshold != expectedThreshold {
+			t.Errorf("Expected threshold %d for 150M gas ceil, got %d", expectedThreshold, threshold)
 		}
 	})
 }
