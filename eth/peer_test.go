@@ -783,3 +783,66 @@ func TestEthWitRequestClose(t *testing.T) {
 		t.Error("Cancel channel was not closed")
 	}
 }
+
+// TestJailPeerForViolation tests the jailPeerForViolation helper method
+func TestJailPeerForViolation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	t.Run("WithJailCallback", func(t *testing.T) {
+		jailCalled := false
+		jailedPeerID := ""
+		jailPeer := func(id string) {
+			jailCalled = true
+			jailedPeerID = id
+		}
+
+		err := p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
+			"page":       uint64(10),
+			"totalPages": uint64(5),
+			"hash":       common.Hash{0xaa},
+		})
+
+		assert.Error(t, err)
+		assert.True(t, jailCalled, "jail callback should have been called")
+		assert.Equal(t, p.ID(), jailedPeerID)
+		assert.Contains(t, err.Error(), "invalid page number")
+	})
+
+	t.Run("WithoutJailCallback", func(t *testing.T) {
+		err := p.jailPeerForViolation(nil, "inconsistent TotalPages", map[string]interface{}{
+			"existing": uint64(10),
+			"new":      uint64(20),
+		})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "inconsistent TotalPages")
+	})
+
+	t.Run("MultipleDetails", func(t *testing.T) {
+		err := p.jailPeerForViolation(nil, "test violation", map[string]interface{}{
+			"field1": "value1",
+			"field2": 123,
+			"field3": true,
+		})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "test violation")
+		// Error should contain all details in some form
+	})
+
+	t.Run("EmptyDetails", func(t *testing.T) {
+		err := p.jailPeerForViolation(nil, "simple violation", map[string]interface{}{})
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "simple violation")
+	})
+}

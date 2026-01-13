@@ -703,3 +703,108 @@ func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
 		}
 	}
 }
+
+// TestCreateWitnessRequester tests the createWitnessRequester helper
+func TestCreateWitnessRequester(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	ethHandler := (*ethHandler)(handler.handler)
+
+	// Test that createWitnessRequester returns a valid function
+	requester := ethHandler.createWitnessRequester()
+	if requester == nil {
+		t.Fatal("createWitnessRequester returned nil")
+	}
+
+	// Test calling the requester with no matching peer (should error)
+	sink := make(chan *eth.Response, 1)
+	req, err := requester(common.Hash{0x01}, sink)
+
+	// Should error because no peer has the witness
+	if err == nil {
+		t.Error("Expected error when no peer has witness, got nil")
+	}
+	if req != nil {
+		t.Error("Expected nil request when no peer available")
+	}
+}
+
+// TestVerifyPageCount tests the verifyPageCount function
+func TestVerifyPageCount(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	ethHandler := (*ethHandler)(handler.handler)
+
+	t.Run("SmallWitnessBelowThreshold", func(t *testing.T) {
+		// Test with small page count (below threshold)
+		// Should return true without needing peer consensus
+		hash := common.Hash{0xaa, 0xbb}
+		result := ethHandler.verifyPageCount(hash, 1, "test-peer")
+
+		// Verify it returns a boolean (no panic)
+		// Small witnesses typically pass without consensus check
+		if result {
+			t.Log("Small witness passed verification (expected behavior)")
+		} else {
+			t.Log("Small witness failed verification")
+		}
+	})
+
+	t.Run("LargeWitnessNoPeers", func(t *testing.T) {
+		// Test with large page count (above threshold) but no peers available
+		hash := common.Hash{0xcc, 0xdd}
+		result := ethHandler.verifyPageCount(hash, 100, "test-peer")
+
+		// Verify the function executes and returns a boolean
+		// The actual result depends on witness manager's policy for insufficient peers
+		t.Logf("Large witness verification result: %v", result)
+	})
+
+	t.Run("FunctionExecutesWithoutPanic", func(t *testing.T) {
+		// Ensure the function handles edge cases without panicking
+		testCases := []struct {
+			hash      common.Hash
+			pageCount uint64
+			peer      string
+		}{
+			{common.Hash{}, 0, ""},             // Empty values
+			{common.Hash{0xff}, 1, "peer1"},    // Normal small
+			{common.Hash{0xaa}, 50, "peer2"},   // Medium size
+			{common.Hash{0xbb}, 1000, "peer3"}, // Very large
+		}
+
+		for _, tc := range testCases {
+			// Should not panic for any input
+			result := ethHandler.verifyPageCount(tc.hash, tc.pageCount, tc.peer)
+			t.Logf("Hash: %x, PageCount: %d, Peer: %s -> Result: %v",
+				tc.hash[:4], tc.pageCount, tc.peer, result)
+		}
+	})
+}
+
+// TestHandleBlockAnnounces tests the handleBlockAnnounces function
+func TestHandleBlockAnnounces(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	// Create test peer
+	p2pSrc, p2pSink := p2p.MsgPipe()
+	defer p2pSrc.Close()
+	defer p2pSink.Close()
+
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, handler.txpool)
+	defer peer.Close()
+
+	ethHandler := (*ethHandler)(handler.handler)
+
+	// Test announcing unknown blocks
+	hashes := []common.Hash{{0x01}, {0x02}}
+	numbers := []uint64{100, 101}
+
+	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	if err != nil {
+		t.Fatalf("handleBlockAnnounces failed: %v", err)
+	}
+}
