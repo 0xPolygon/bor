@@ -66,6 +66,11 @@
           "startBlock": 73812433,
           "endBlock": 73826700,
           "value": 0
+        },
+        {
+          "startBlock": 81556977,
+          "endBlock": 81558799,
+          "value": 0
         }
       ],
       "blockAlloc": {
