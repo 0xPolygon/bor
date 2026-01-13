@@ -1081,6 +1081,14 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 }
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
+	// Interrupt any ongoing warming since we're now executing transactions
+	// Only interrupt when actively mining
+	var resetWarmInterrupt func()
+	if w.IsRunning() {
+		resetWarmInterrupt = w.chain.InterruptWarm()
+		defer resetWarmInterrupt()
+	}
+
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
 	}(time.Now())
@@ -1688,9 +1696,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 			}
 
 			// start warm reader cache (group txs to avoid duplicate contract per group)
-			// if len(selected) > 0 {
-			// 	w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
-			// }
+			if len(selected) > 0 {
+				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
+			}
 
 			// warming for remaining cold contract txs
 			if len(selectedSet) > 0 && len(txs) > 0 {
@@ -1702,9 +1710,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 					if _, hot := hotMap[*tx.To()]; hot {
 						continue
 					}
-					// if _, chosen := selectedSet[tx.Hash()]; chosen {
-					// 	continue
-					// }
+					if _, chosen := selectedSet[tx.Hash()]; chosen {
+						continue
+					}
 					cold = append(cold, tx)
 				}
 				if len(cold) > 0 {
@@ -1757,6 +1765,25 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 		return
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if w.chain.WarmInterrupted() {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
 	numProcs := max(1, 4*runtime.NumCPU()/5)
 	sem := make(chan struct{}, numProcs)
 	var wg sync.WaitGroup
@@ -1768,7 +1795,8 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 		go func(tasks []blockstm.ExecTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, context.Background())
+			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx)
+
 		}(tasks)
 	}
 

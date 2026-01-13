@@ -370,6 +370,7 @@ type BlockChain struct {
 	quit          chan struct{} // shutdown signal, closed in Stop.
 	stopping      atomic.Bool   // false if chain is running, true when stopped
 	procInterrupt atomic.Bool   // interrupt signaler for block processing
+	warmInterrupt atomic.Bool   // interrupt signaler for worker warming/import warming
 
 	engine                         consensus.Engine
 	validator                      Validator // Block and state validator interface
@@ -780,6 +781,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		resultChanLen = 1
 	}
 	resultChan := make(chan Result, resultChanLen)
+
+	// interrupt cache warming in worker before processing block
+	resetWarmInterrupt := bc.InterruptWarm()
+	defer resetWarmInterrupt()
 
 	processorCount := 0
 
@@ -4401,6 +4406,18 @@ func (bc *BlockChain) WarmInWorkerEnabled() bool {
 		return false
 	}
 	return bc.cfg.WarmInWorker
+}
+
+// InterruptWarm sets the warm interrupt flag and returns a function to clear it.
+// Used to notify worker-side warming to stop while import/mining is executing.
+func (bc *BlockChain) InterruptWarm() func() {
+	bc.warmInterrupt.Store(true)
+	return func() { bc.warmInterrupt.Store(false) }
+}
+
+// WarmInterrupted reports whether warming should be interrupted.
+func (bc *BlockChain) WarmInterrupted() bool {
+	return bc.warmInterrupt.Load()
 }
 
 // NewStateWithReader creates a new StateDB bound to the given reader for the root.
