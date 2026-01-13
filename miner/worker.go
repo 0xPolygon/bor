@@ -1688,9 +1688,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 			}
 
 			// start warm reader cache (group txs to avoid duplicate contract per group)
-			if len(selected) > 0 {
-				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
-			}
+			// if len(selected) > 0 {
+			// 	w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
+			// }
 
 			// warming for remaining cold contract txs
 			if len(selectedSet) > 0 && len(txs) > 0 {
@@ -1702,9 +1702,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 					if _, hot := hotMap[*tx.To()]; hot {
 						continue
 					}
-					if _, chosen := selectedSet[tx.Hash()]; chosen {
-						continue
-					}
+					// if _, chosen := selectedSet[tx.Hash()]; chosen {
+					// 	continue
+					// }
 					cold = append(cold, tx)
 				}
 				if len(cold) > 0 {
