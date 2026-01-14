@@ -25,6 +25,7 @@ import (
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
 
@@ -881,6 +882,8 @@ type BorConfig struct {
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
 	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
 	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
+	TargetGasPercentage             *uint64                `json:"targetGasPercentage"`        // Post-Dandeli: target gas as % of gas limit (1-100, default 65). All validators must use same value.
+	BaseFeeChangeDenominator        *uint64                `json:"baseFeeChangeDenominator"`   // Post-Dandeli: base fee change rate (must be >0, default 64). All validators must use same value.
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -952,6 +955,58 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 
 func (c *BorConfig) IsDandeli(number *big.Int) bool {
 	return isBlockForked(c.DandeliBlock, number)
+}
+
+// GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
+// After Dandeli hard fork, this value can be dynamically configured. It validates the
+// configured value and falls back to defaults if invalid or nil.
+// Valid range: 1-100 (percentage).
+func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
+	// Only applies after Dandeli
+	if !c.IsDandeli(number) {
+		return 0 // Caller should use ElasticityMultiplier for pre-Dandeli
+	}
+
+	// If custom value is set, validate it
+	if c.TargetGasPercentage != nil {
+		val := *c.TargetGasPercentage
+		// Validate: must be between 1 and 100
+		if val > 0 && val <= 100 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid TargetGasPercentage in BorConfig, falling back to default",
+			"configured", val,
+			"validRange", "1-100")
+	}
+
+	// Default for post-Dandeli
+	return TargetGasPercentagePostDandeli
+}
+
+// GetBaseFeeChangeDenominator returns the base fee change denominator.
+// After Dandeli hard fork, this value can be dynamically configured. It validates the
+// configured value and falls back to hard fork based defaults if invalid or nil.
+func (c *BorConfig) GetBaseFeeChangeDenominator(number *big.Int) uint64 {
+	// If Dandeli is active and custom value is set, validate and use it
+	if c.IsDandeli(number) && c.BaseFeeChangeDenominator != nil {
+		val := *c.BaseFeeChangeDenominator
+		// Validate: must be non-zero to prevent division by zero
+		if val > 0 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid BaseFeeChangeDenominator in BorConfig (must be > 0), falling back to default",
+			"configured", val)
+	}
+
+	// Fall back to hard fork based values
+	if c.IsBhilai(number) {
+		return BaseFeeChangeDenominatorPostBhilai
+	} else if c.IsDelhi(number) {
+		return BaseFeeChangeDenominatorPostDelhi
+	}
+	return BaseFeeChangeDenominatorPreDelhi
 }
 
 // // TODO: modify this function once the block number is finalized

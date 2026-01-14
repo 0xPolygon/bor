@@ -29,7 +29,7 @@ import (
 
 // VerifyEIP1559Header verifies some header attributes which were changed in EIP-1559,
 // - gas limit check
-// - basefee check
+// - basefee check (pre-Dandeli only; after Dandeli HF base fee validation is removed to allow dynamic setting)
 func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Header) error {
 	// Verify that the gas limit remains within allowed bounds
 	parentGasLimit := parent.GasLimit
@@ -43,7 +43,17 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 	if header.BaseFee == nil {
 		return errors.New("header is missing baseFee")
 	}
-	// Verify the baseFee is correct based on the parent header.
+
+	// After Dandeli hard fork, base fee validation is removed to allow dynamic configuration.
+	// This enables validators to set base fees according to new consensus rules without
+	// strict protocol enforcement, supporting more flexible fee markets.
+	// Pre-Dandeli blocks still require strict base fee validation for consensus safety.
+	if config.Bor != nil && config.Bor.IsDandeli(header.Number) {
+		// Post-Dandeli: Skip base fee validation
+		return nil
+	}
+
+	// Pre-Dandeli: Verify the baseFee is correct based on the parent header
 	expectedBaseFee := CalcBaseFee(config, parent)
 	if header.BaseFee.Cmp(expectedBaseFee) != 0 {
 		return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
@@ -102,10 +112,12 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 
 // calcParentGasTarget calculates the target gas based on parent block gas limit. Earlier
 // it was derived by `ElasticityMultiplier` as it had an integer multiplier value. Post
-// dandeli HF, a percentage value will be used to calculate the gas target.
+// Dandeli HF, a percentage value is used to calculate the gas target (validated with fallback to default).
 func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
 	if config.Bor != nil && config.Bor.IsDandeli(parent.Number) {
-		return parent.GasLimit * params.TargetGasPercentagePostDandeli / 100
+		// Use helper function which validates and provides defaults
+		targetPercentage := config.Bor.GetTargetGasPercentage(parent.Number)
+		return parent.GasLimit * targetPercentage / 100
 	}
 	return parent.GasLimit / config.ElasticityMultiplier()
 }

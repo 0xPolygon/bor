@@ -241,17 +241,13 @@ var (
 // - Pre-Delhi: 8 (default)
 // - Post-Delhi: 16
 // - Post-Bhilai: 64
+// - Post-Dandeli: Configurable via BorConfig.BaseFeeChangeDenominator (validated, falls back to Bhilai default if invalid)
 // If borConfig is nil, returns the default value of 8.
 func BaseFeeChangeDenominator(borConfig *BorConfig, number *big.Int) uint64 {
 	// Handle cases where bor consensus isn't available to avoid panic
 	if borConfig == nil {
 		return DefaultBaseFeeChangeDenominator
 	}
-	if borConfig.IsBhilai(number) {
-		return BaseFeeChangeDenominatorPostBhilai
-	} else if borConfig.IsDelhi(number) {
-		return BaseFeeChangeDenominatorPostDelhi
-	} else {
-		return BaseFeeChangeDenominatorPreDelhi
-	}
+	// Use the helper function which includes validation
+	return borConfig.GetBaseFeeChangeDenominator(number)
 }
