@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -25,8 +26,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk" //nolint:typecheck
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -468,8 +467,10 @@ func createMockHeimdall(ctrl *gomock.Controller, span0, span1 *borTypes.Span) *m
 	h.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(span0, nil).AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(span1, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(span1, nil).AnyTimes()
-	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(&checkpoint.Checkpoint{}, nil).AnyTimes()
-	h.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
+	// Return errors for checkpoint and milestone to prevent background verification from
+	// comparing empty hashes against the chain and triggering unwanted chain rewinds
+	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(nil, errors.New("no checkpoint")).AnyTimes()
+	h.EXPECT().FetchMilestone(gomock.Any()).Return(nil, errors.New("no milestone")).AnyTimes()
 	h.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 
 	return h
