@@ -56,7 +56,7 @@ const (
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
-	veblopBlockTimeout = time.Second * 6 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
 )
 
 // Bor protocol constants.
