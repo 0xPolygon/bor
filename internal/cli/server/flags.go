@@ -378,6 +378,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.BlockTime,
 		Group:   "Sealer",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.target-gas-percentage",
+		Usage:   "Target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks",
+		Value:   c.cliConfig.Sealer.TargetGasPercentage,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.base-fee-change-denominator",
+		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Dandeli blocks",
+		Value:   c.cliConfig.Sealer.BaseFeeChangeDenominator,
+		Group:   "Sealer",
+	})
 
 	// ethstats
 	f.StringFlag(&flagset.StringFlag{

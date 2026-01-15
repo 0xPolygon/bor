@@ -882,8 +882,12 @@ type BorConfig struct {
 	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
 	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
 	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
-	TargetGasPercentage             *uint64                `json:"targetGasPercentage"`        // Post-Dandeli: target gas as % of gas limit (1-100, default 65). All validators must use same value.
-	BaseFeeChangeDenominator        *uint64                `json:"baseFeeChangeDenominator"`   // Post-Dandeli: base fee change rate (must be >0, default 64). All validators must use same value.
+
+	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
+	// These affect consensus gas pricing but are configurable per-node for operational flexibility
+	TargetGasPercentage             *uint64                `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator        *uint64                `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
+
 	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -958,8 +962,8 @@ func (c *BorConfig) IsDandeli(number *big.Int) bool {
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
-// After Dandeli hard fork, this value can be dynamically configured. It validates the
-// configured value and falls back to defaults if invalid or nil.
+// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// It validates the configured value and falls back to defaults if invalid or nil.
 // Valid range: 1-100 (percentage).
 func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
 	// Only applies after Dandeli
@@ -985,8 +989,8 @@ func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
 }
 
 // GetBaseFeeChangeDenominator returns the base fee change denominator.
-// After Dandeli hard fork, this value can be dynamically configured. It validates the
-// configured value and falls back to hard fork based defaults if invalid or nil.
+// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// It validates the configured value and falls back to hard fork based defaults if invalid or nil.
 func (c *BorConfig) GetBaseFeeChangeDenominator(number *big.Int) uint64 {
 	// If Dandeli is active and custom value is set, validate and use it
 	if c.IsDandeli(number) && c.BaseFeeChangeDenominator != nil {

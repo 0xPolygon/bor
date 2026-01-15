@@ -396,6 +396,12 @@ type SealerConfig struct {
 	// BlockTime is the block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
+
+	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks
+	TargetGasPercentage *uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
+
+	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Dandeli blocks
+	BaseFeeChangeDenominator *uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -1136,6 +1142,16 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 	}
 
+	// Set runtime miner gas parameters in BorConfig (if not in developer mode and Bor chain)
+	if !c.Developer.Enabled && n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
+		if c.Sealer.TargetGasPercentage != nil {
+			n.Genesis.Config.Bor.TargetGasPercentage = c.Sealer.TargetGasPercentage
+		}
+		if c.Sealer.BaseFeeChangeDenominator != nil {
+			n.Genesis.Config.Bor.BaseFeeChangeDenominator = c.Sealer.BaseFeeChangeDenominator
+		}
+	}
+
 	// unlock accounts
 	if len(c.Accounts.Unlock) > 0 {
 		if !stack.Config().InsecureUnlockAllowed && stack.Config().ExtRPCEnabled() {
@@ -1201,6 +1217,16 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		// update the parameters
 		n.NetworkId = c.chain.NetworkId
 		n.Genesis = c.chain.Genesis
+
+		// Set runtime miner gas parameters in BorConfig for developer mode
+		if n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
+			if c.Sealer.TargetGasPercentage != nil {
+				n.Genesis.Config.Bor.TargetGasPercentage = c.Sealer.TargetGasPercentage
+			}
+			if c.Sealer.BaseFeeChangeDenominator != nil {
+				n.Genesis.Config.Bor.BaseFeeChangeDenominator = c.Sealer.BaseFeeChangeDenominator
+			}
+		}
 
 		// Update cache
 		c.Cache.Cache = 1024
