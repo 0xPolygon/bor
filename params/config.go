@@ -880,25 +880,25 @@ type BorConfig struct {
 	OverrideStateSyncRecords        map[string]int         `json:"overrideStateSyncRecords"`        // override state records count
 	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
 	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
-	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
-	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
+	BurntContract                   map[string]string      `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string      `json:"coinbase"`               // coinbase address
+	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"` // skip validator byte check
 
 	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
 	// These affect consensus gas pricing but are configurable per-node for operational flexibility
-	TargetGasPercentage             *uint64                `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
-	BaseFeeChangeDenominator        *uint64                `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
+	TargetGasPercentage      *uint64 `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
 
-	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	DandeliBlock                    *big.Int               `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay map[string]uint64 `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock             *big.Int          `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                *big.Int          `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                   *big.Int          `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
