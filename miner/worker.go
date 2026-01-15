@@ -1698,9 +1698,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 			}
 
 			// start warm reader cache (group txs to avoid duplicate contract per group)
-			if len(selected) > 0 {
-				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled(), warmedAttempted, warmedCompleted)
-			}
+			// if len(selected) > 0 {
+			// 	w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled(), warmedAttempted, warmedCompleted)
+			// }
 
 			// warming for remaining cold contract txs
 			if len(selectedSet) > 0 && len(txs) > 0 {
@@ -1820,6 +1820,7 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 	numProcs := runtime.GOMAXPROCS(8)
 	sem := make(chan struct{}, numProcs)
 	var wg sync.WaitGroup
+	var completedMu sync.Mutex
 
 	for _, group := range groups {
 		if w.warmInterrupted() {
@@ -1833,9 +1834,11 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 			defer wg.Done()
 			defer func() { <-sem }()
 			if _, err := blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx); err == nil || ctx.Err() == nil {
+				completedMu.Lock()
 				for _, tx := range groupTxs {
 					warmedCompleted[tx.Hash()] = struct{}{}
 				}
+				completedMu.Unlock()
 
 			}
 		}(group, tasks)
