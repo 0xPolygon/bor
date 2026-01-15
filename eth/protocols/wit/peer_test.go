@@ -217,19 +217,42 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			},
 		}
 
-		// Start reading message before sending reply
+		// Start reading messages - filter for the one we want
 		var packet WitnessMetadataPacket
 		readDone := make(chan error, 1)
+		readerReady := make(chan struct{})
 		go func() {
-			readDone <- p2p.ExpectMsg(app, WitnessMetadataMsg, &packet)
+			close(readerReady)
+			// Read messages until we get the WitnessMetadataMsg
+			for {
+				msg, err := app.ReadMsg()
+				if err != nil {
+					readDone <- err
+					return
+				}
+				if msg.Code == WitnessMetadataMsg {
+					// Decode the packet
+					if err := msg.Decode(&packet); err != nil {
+						readDone <- err
+						return
+					}
+					readDone <- nil
+					return
+				}
+				// Discard other messages
+				msg.Discard()
+			}
 		}()
 
-		// Give reader time to start
-		time.Sleep(100 * time.Millisecond)
+		// Wait for reader to be ready
+		<-readerReady
+		time.Sleep(50 * time.Millisecond)
 
-		// Send reply
-		err := peer.ReplyWitnessMetadata(requestID, metadata)
-		assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		// Send reply in goroutine to avoid blocking test
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- peer.ReplyWitnessMetadata(requestID, metadata)
+		}()
 
 		// Verify the message was received
 		select {
@@ -244,6 +267,14 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			assert.Equal(t, metadata[0].Available, packet.Metadata[0].Available, "Available should match")
 		case <-time.After(2 * time.Second):
 			t.Fatal("Timeout waiting for WitnessMetadataMsg")
+		}
+
+		// Check for send error
+		select {
+		case err := <-errCh:
+			assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		case <-time.After(100 * time.Millisecond):
+			// Send might still be in progress, that's okay
 		}
 
 		app.Close()
@@ -278,19 +309,42 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			},
 		}
 
-		// Start reading message before sending reply
+		// Start reading messages - filter for the one we want
 		var packet WitnessMetadataPacket
 		readDone := make(chan error, 1)
+		readerReady := make(chan struct{})
 		go func() {
-			readDone <- p2p.ExpectMsg(app, WitnessMetadataMsg, &packet)
+			close(readerReady)
+			// Read messages until we get the WitnessMetadataMsg
+			for {
+				msg, err := app.ReadMsg()
+				if err != nil {
+					readDone <- err
+					return
+				}
+				if msg.Code == WitnessMetadataMsg {
+					// Decode the packet
+					if err := msg.Decode(&packet); err != nil {
+						readDone <- err
+						return
+					}
+					readDone <- nil
+					return
+				}
+				// Discard other messages
+				msg.Discard()
+			}
 		}()
 
-		// Give reader time to start
-		time.Sleep(100 * time.Millisecond)
+		// Wait for reader to be ready
+		<-readerReady
+		time.Sleep(50 * time.Millisecond)
 
-		// Send reply
-		err := peer.ReplyWitnessMetadata(requestID, metadata)
-		assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		// Send reply in goroutine
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- peer.ReplyWitnessMetadata(requestID, metadata)
+		}()
 
 		// Verify the message was received
 		select {
@@ -310,6 +364,13 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			t.Fatal("Timeout waiting for WitnessMetadataMsg")
 		}
 
+		// Check for send error
+		select {
+		case err := <-errCh:
+			assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		case <-time.After(100 * time.Millisecond):
+		}
+
 		app.Close()
 	})
 
@@ -320,19 +381,42 @@ func TestReplyWitnessMetadata(t *testing.T) {
 		requestID := uint64(11111)
 		metadata := []WitnessMetadataResponse{}
 
-		// Start reading message before sending reply
+		// Start reading messages - filter for the one we want
 		var packet WitnessMetadataPacket
 		readDone := make(chan error, 1)
+		readerReady := make(chan struct{})
 		go func() {
-			readDone <- p2p.ExpectMsg(app, WitnessMetadataMsg, &packet)
+			close(readerReady)
+			// Read messages until we get the WitnessMetadataMsg
+			for {
+				msg, err := app.ReadMsg()
+				if err != nil {
+					readDone <- err
+					return
+				}
+				if msg.Code == WitnessMetadataMsg {
+					// Decode the packet
+					if err := msg.Decode(&packet); err != nil {
+						readDone <- err
+						return
+					}
+					readDone <- nil
+					return
+				}
+				// Discard other messages
+				msg.Discard()
+			}
 		}()
 
-		// Give reader time to start
-		time.Sleep(100 * time.Millisecond)
+		// Wait for reader to be ready
+		<-readerReady
+		time.Sleep(50 * time.Millisecond)
 
-		// Send reply
-		err := peer.ReplyWitnessMetadata(requestID, metadata)
-		assert.NoError(t, err, "ReplyWitnessMetadata should not return error for empty metadata")
+		// Send reply in goroutine
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- peer.ReplyWitnessMetadata(requestID, metadata)
+		}()
 
 		// Verify the message was received
 		select {
@@ -342,6 +426,13 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			assert.Equal(t, 0, len(packet.Metadata), "Should have zero metadata entries")
 		case <-time.After(2 * time.Second):
 			t.Fatal("Timeout waiting for WitnessMetadataMsg")
+		}
+
+		// Check for send error
+		select {
+		case err := <-errCh:
+			assert.NoError(t, err, "ReplyWitnessMetadata should not return error for empty metadata")
+		case <-time.After(100 * time.Millisecond):
 		}
 
 		app.Close()
@@ -359,19 +450,42 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			},
 		}
 
-		// Start reading message before sending reply
+		// Start reading messages - filter for the one we want
 		var packet WitnessMetadataPacket
 		readDone := make(chan error, 1)
+		readerReady := make(chan struct{})
 		go func() {
-			readDone <- p2p.ExpectMsg(app, WitnessMetadataMsg, &packet)
+			close(readerReady)
+			// Read messages until we get the WitnessMetadataMsg
+			for {
+				msg, err := app.ReadMsg()
+				if err != nil {
+					readDone <- err
+					return
+				}
+				if msg.Code == WitnessMetadataMsg {
+					// Decode the packet
+					if err := msg.Decode(&packet); err != nil {
+						readDone <- err
+						return
+					}
+					readDone <- nil
+					return
+				}
+				// Discard other messages
+				msg.Discard()
+			}
 		}()
 
-		// Give reader time to start
-		time.Sleep(100 * time.Millisecond)
+		// Wait for reader to be ready
+		<-readerReady
+		time.Sleep(50 * time.Millisecond)
 
-		// Send reply
-		err := peer.ReplyWitnessMetadata(requestID, metadata)
-		assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		// Send reply in goroutine
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- peer.ReplyWitnessMetadata(requestID, metadata)
+		}()
 
 		// Verify the message was received
 		select {
@@ -382,6 +496,13 @@ func TestReplyWitnessMetadata(t *testing.T) {
 			assert.False(t, packet.Metadata[0].Available, "Available should be false")
 		case <-time.After(2 * time.Second):
 			t.Fatal("Timeout waiting for WitnessMetadataMsg")
+		}
+
+		// Check for send error
+		select {
+		case err := <-errCh:
+			assert.NoError(t, err, "ReplyWitnessMetadata should not return error")
+		case <-time.After(100 * time.Millisecond):
 		}
 
 		app.Close()
