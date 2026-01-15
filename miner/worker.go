@@ -1832,12 +1832,11 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 		go func(groupTxs []*types.Transaction, tasks []blockstm.ExecTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if _, err := blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx); err == nil && ctx.Err() == nil {
-				if warmedCompleted != nil {
-					for _, tx := range groupTxs {
-						warmedCompleted[tx.Hash()] = struct{}{}
-					}
+			if _, err := blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx); err == nil || ctx.Err() == nil {
+				for _, tx := range groupTxs {
+					warmedCompleted[tx.Hash()] = struct{}{}
 				}
+
 			}
 		}(group, tasks)
 	}
