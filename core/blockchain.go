@@ -400,6 +400,11 @@ type BlockChain struct {
 	lastProcStorHit  int64
 	lastProcStorMiss int64
 	lastWarmSeedDur  time.Duration
+
+	// Warm transaction tracking
+	warmTxMu      sync.RWMutex
+	warmedTxs     map[common.Hash]uint64 // Maps tx hash to gas, tracks recently warmed txs
+	warmedTxBlock uint64                 // Block number for which txs were warmed
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -455,6 +460,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
 		logger:              cfg.VmConfig.Tracer,
 		checker:             cfg.Checker,
+		warmedTxs:           make(map[common.Hash]uint64),
 	}
 
 	bc.hc, err = NewHeaderChain(db, chainConfig, engine, bc.insertStopped)
@@ -783,6 +789,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	resultChan := make(chan Result, resultChanLen)
 
 	// interrupt cache warming in worker before processing block
+	log.Info("Interrupting worker warming for block import", "number", block.NumberU64(), "hash", block.Hash())
 	resetWarmInterrupt := bc.InterruptWarm()
 	defer resetWarmInterrupt()
 
@@ -4418,6 +4425,38 @@ func (bc *BlockChain) InterruptWarm() func() {
 // WarmInterrupted reports whether warming should be interrupted.
 func (bc *BlockChain) WarmInterrupted() bool {
 	return bc.warmInterrupt.Load()
+}
+
+// SetWarmedTxs records the set of transactions that were attempted to be warmed for a specific block number.
+func (bc *BlockChain) SetWarmedTxs(blockNum uint64, txs map[common.Hash]uint64) {
+	bc.warmTxMu.Lock()
+	defer bc.warmTxMu.Unlock()
+	bc.warmedTxs = txs
+	bc.warmedTxBlock = blockNum
+}
+
+// GetWarmedTxsMatch checks how many transactions in the given set were previously attempted to be warmed
+// for the specified block number. Returns count and total gas of matched transactions.
+func (bc *BlockChain) GetWarmedTxsMatch(blockNum uint64, blockTxs []*types.Transaction) (matchCount int, matchGas uint64) {
+	bc.warmTxMu.RLock()
+	defer bc.warmTxMu.RUnlock()
+
+	// Only check if we have warmed txs for this exact block number
+	if bc.warmedTxBlock != blockNum || bc.warmedTxs == nil {
+		log.Info("warmedTxBlock and blockNum do not match", "warmedTxBlock", bc.warmedTxBlock, "blockNum", blockNum)
+		return 0, 0
+	}
+
+	for _, tx := range blockTxs {
+		if tx == nil || tx.To() == nil {
+			continue
+		}
+		if gas, ok := bc.warmedTxs[tx.Hash()]; ok {
+			matchCount++
+			matchGas += gas
+		}
+	}
+	return matchCount, matchGas
 }
 
 // NewStateWithReader creates a new StateDB bound to the given reader for the root.

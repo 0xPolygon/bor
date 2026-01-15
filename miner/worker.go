@@ -1575,6 +1575,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 	var plainTxsPrio, blobTxsPrio *transactionsByPriceAndNonce
 	var plainTxsNormal, blobTxsNormal *transactionsByPriceAndNonce
+	warmedAttempted := make(map[common.Hash]uint64) // Maps tx hash to gas
+	warmedCompleted := make(map[common.Hash]struct{})
 	{
 		if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
 			plainTxsPrio = newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
@@ -1697,7 +1699,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 			// start warm reader cache (group txs to avoid duplicate contract per group)
 			if len(selected) > 0 {
-				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled())
+				w.groupAndWarm(selected, env, w.chain.WaitForWarmEnabled(), warmedAttempted, warmedCompleted)
 			}
 
 			// warming for remaining cold contract txs
@@ -1716,7 +1718,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 					cold = append(cold, tx)
 				}
 				if len(cold) > 0 {
-					w.groupAndWarm(cold, env, false)
+					w.groupAndWarm(cold, env, false, warmedAttempted, warmedCompleted)
 				}
 			}
 		}
@@ -1734,10 +1736,44 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
+	if len(warmedAttempted) > 0 {
+		var warmedIncluded int
+		for _, tx := range env.txs {
+			if _, ok := warmedCompleted[tx.Hash()]; ok {
+				warmedIncluded++
+			}
+		}
+		warmedTotal := len(warmedCompleted)
+		warmedAttemptedTotal := len(warmedAttempted)
+		warmedMissed := warmedTotal - warmedIncluded
+		var pct float64
+		if warmedTotal > 0 {
+			pct = float64(warmedIncluded) * 100 / float64(warmedTotal)
+		}
+		log.Info(
+			"Worker warm coverage",
+			"number", env.header.Number.Uint64(),
+			"attempted", warmedAttemptedTotal,
+			"warmed", warmedTotal,
+			"included", warmedIncluded,
+			"missed", warmedMissed,
+			"pct", pct,
+		)
+
+		// Record warmed txs with gas amounts for later comparison during block import
+		// warmedAttempted already contains hash->gas mapping
+		w.chain.SetWarmedTxs(env.header.Number.Uint64(), warmedAttempted)
+	}
+
 	return nil
 }
 
-func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait bool) {
+func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait bool, warmedAttempted map[common.Hash]uint64, warmedCompleted map[common.Hash]struct{}) {
+	// Short-circuit if warming is interrupted before we start.
+	if w.warmInterrupted() {
+		log.Info("Worker warming interrupted before start", "number", env.header.Number.Uint64())
+		return
+	}
 	// build groups where each group has unique contract addresses
 	var groups [][]*types.Transaction
 	used := make(map[common.Address]struct{})
@@ -1745,6 +1781,13 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 	for _, tx := range txs {
 		if tx == nil || tx.To() == nil {
 			continue
+		}
+		if w.warmInterrupted() {
+			log.Info("Worker warming interrupted during grouping", "number", env.header.Number.Uint64())
+			return
+		}
+		if warmedAttempted != nil {
+			warmedAttempted[tx.Hash()] = tx.Gas()
 		}
 		addr := *tx.To()
 		if _, seen := used[addr]; seen {
@@ -1776,7 +1819,8 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if w.chain.WarmInterrupted() {
+				if w.warmInterrupted() {
+					log.Info("Worker warming interrupted during execution", "number", env.header.Number.Uint64())
 					cancel()
 					return
 				}
@@ -1784,20 +1828,29 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 		}
 	}()
 
-	numProcs := max(1, 4*runtime.NumCPU()/5)
+	numProcs := runtime.GOMAXPROCS(8)
 	sem := make(chan struct{}, numProcs)
 	var wg sync.WaitGroup
 
 	for _, group := range groups {
+		if w.warmInterrupted() {
+			log.Info("Worker warming interrupted before group execution", "number", env.header.Number.Uint64())
+			break
+		}
 		tasks, _ := core.NewWarmExecTasks(w.chain, w.chainConfig, env.header, env.state, env.coinbase, group, vm.Config{})
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(tasks []blockstm.ExecTask) {
+		go func(groupTxs []*types.Transaction, tasks []blockstm.ExecTask) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, _ = blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx)
-
-		}(tasks)
+			if _, err := blockstm.ExecuteParallel(tasks, false, false, numProcs, ctx); err == nil && ctx.Err() == nil {
+				if warmedCompleted != nil {
+					for _, tx := range groupTxs {
+						warmedCompleted[tx.Hash()] = struct{}{}
+					}
+				}
+			}
+		}(group, tasks)
 	}
 
 	if wait {
@@ -1807,6 +1860,10 @@ func (w *worker) groupAndWarm(txs []*types.Transaction, env *environment, wait b
 			wg.Wait()
 		}()
 	}
+}
+
+func (w *worker) warmInterrupted() bool {
+	return w.chain != nil && w.chain.WarmInterrupted()
 }
 
 // generateWork generates a sealing block based on the given parameters.

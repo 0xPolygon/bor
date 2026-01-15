@@ -136,6 +136,14 @@ func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, sn
 			context = append(context, []interface{}{"ignored", st.ignored}...)
 		}
 
+		// Check how many warmed transactions were included in this block
+		if bc != nil {
+			matchCount, matchGas := bc.GetWarmedTxsMatch(end.NumberU64(), end.Transactions())
+			if matchCount > 0 {
+				context = append(context, []interface{}{"warmed_txs", matchCount, "warmed_mgas", float64(matchGas) / 1000000}...)
+			}
+		}
+
 		if setHead {
 			if stateless {
 				log.Info("Imported new stateless chain segment", context...)
