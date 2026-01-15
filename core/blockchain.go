@@ -3512,19 +3512,25 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 			}
 
 			if canonical != nil && canonical.Root() == block.Root() {
-				// This is most likely a shadow-state attack. When a fork is imported into the
-				// database, and it eventually reaches a block height which is not pruned, we
-				// just found that the state already exist! This means that the sidechain block
-				// refers to a state which already exists in our canon chain.
-				//
-				// If left unchecked, we would now proceed importing the blocks, without actually
-				// having verified the state of the previous blocks.
-				log.Warn("Sidechain ghost-state attack detected", "number", block.NumberU64(), "sideroot", block.Root(), "canonroot", canonical.Root())
+				// In TrieDB mode, skip the ghost-state attack detection as state roots
+				// can legitimately match due to how triedb-go computes roots.
+				if bc.triedb.IsUsingTDB() {
+					log.Debug("Skipping ghost-state attack check in TrieDB mode", "number", block.NumberU64(), "root", block.Root())
+				} else {
+					// This is most likely a shadow-state attack. When a fork is imported into the
+					// database, and it eventually reaches a block height which is not pruned, we
+					// just found that the state already exist! This means that the sidechain block
+					// refers to a state which already exists in our canon chain.
+					//
+					// If left unchecked, we would now proceed importing the blocks, without actually
+					// having verified the state of the previous blocks.
+					log.Warn("Sidechain ghost-state attack detected", "number", block.NumberU64(), "sideroot", block.Root(), "canonroot", canonical.Root())
 
-				// If someone legitimately side-mines blocks, they would still be imported as usual. However,
-				// we cannot risk writing unverified blocks to disk when they obviously target the pruning
-				// mechanism.
-				return nil, it.index, errors.New("sidechain ghost-state attack")
+					// If someone legitimately side-mines blocks, they would still be imported as usual. However,
+					// we cannot risk writing unverified blocks to disk when they obviously target the pruning
+					// mechanism.
+					return nil, it.index, errors.New("sidechain ghost-state attack")
+				}
 			}
 		}
 		if externTd == nil {

@@ -477,10 +477,19 @@ func (s *stateSet) writeTrieDB(db ethdb.Database) error {
 				account.CodeHash = types.EmptyCodeHash.Bytes()
 			}
 
+			// Set storage root - use EmptyRootHash if not present
+			var storageRoot triedb.Hash
+			if len(account.Root) == 0 {
+				copy(storageRoot[:], types.EmptyRootHash.Bytes())
+			} else {
+				copy(storageRoot[:], account.Root)
+			}
+
 			if err := tx.SetAccount(triedb.Address(addr), &triedb.Account{
-				Nonce:    account.Nonce,
-				Balance:  account.Balance,
-				CodeHash: account.CodeHash,
+				Nonce:       account.Nonce,
+				Balance:     account.Balance,
+				StorageRoot: storageRoot,
+				CodeHash:    account.CodeHash,
 			}); err != nil {
 				return err
 			}
