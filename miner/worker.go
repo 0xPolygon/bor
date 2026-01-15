@@ -1737,32 +1737,21 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	}
 
 	if len(warmedAttempted) > 0 {
-		var warmedIncluded int
-		for _, tx := range env.txs {
-			if _, ok := warmedCompleted[tx.Hash()]; ok {
-				warmedIncluded++
-			}
-		}
-		warmedTotal := len(warmedCompleted)
 		warmedAttemptedTotal := len(warmedAttempted)
-		warmedMissed := warmedTotal - warmedIncluded
-		var pct float64
-		if warmedTotal > 0 {
-			pct = float64(warmedIncluded) * 100 / float64(warmedTotal)
-		}
+		warmedCompleteTotal := len(warmedCompleted)
+		pct := float64(warmedCompleteTotal) * 100 / float64(warmedAttemptedTotal)
+
 		log.Info(
 			"Worker warm coverage",
 			"number", env.header.Number.Uint64(),
 			"attempted", warmedAttemptedTotal,
-			"warmed", warmedTotal,
-			"included", warmedIncluded,
-			"missed", warmedMissed,
+			"warmed", warmedCompleteTotal,
 			"pct", pct,
 		)
 
 		// Record warmed txs with gas amounts for later comparison during block import
 		// warmedAttempted already contains hash->gas mapping
-		w.chain.SetWarmedTxs(env.header.Number.Uint64(), warmedAttempted)
+		w.chain.SetWarmedTxs(env.header.Number.Uint64()+1, warmedAttempted)
 	}
 
 	return nil
