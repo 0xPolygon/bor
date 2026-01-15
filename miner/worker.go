@@ -1751,7 +1751,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 		// Record warmed txs with gas amounts for later comparison during block import
 		// warmedAttempted already contains hash->gas mapping
-		w.chain.SetWarmedTxs(env.header.Number.Uint64()+1, warmedAttempted)
+		w.chain.SetWarmedTxs(env.header.Number.Uint64(), warmedAttempted)
 	}
 
 	return nil
