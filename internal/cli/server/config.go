@@ -405,10 +405,10 @@ type SealerConfig struct {
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
 
 	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks
-	TargetGasPercentage *uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
+	TargetGasPercentage uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
 
 	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Dandeli blocks
-	BaseFeeChangeDenominator *uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
+	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -791,20 +791,22 @@ func DefaultConfig() *Config {
 			LifeTime:     3 * time.Hour,
 		},
 		Sealer: &SealerConfig{
-			Enabled:               false,
-			AllowGasTipOverride:   false,
-			Etherbase:             "",
-			GasCeil:               miner.DefaultConfig.GasCeil,
-			EnableDynamicGasLimit: miner.DefaultConfig.EnableDynamicGasLimit,
-			GasLimitMin:           miner.DefaultConfig.GasLimitMin,
-			GasLimitMax:           miner.DefaultConfig.GasLimitMax,
-			TargetBaseFee:         miner.DefaultConfig.TargetBaseFee,
-			BaseFeeBuffer:         miner.DefaultConfig.BaseFeeBuffer,
-			GasPrice:              big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
-			ExtraData:             "",
-			Recommit:              125 * time.Second,
-			CommitInterruptFlag:   true,
-			BlockTime:             0,
+			Enabled:                  false,
+			AllowGasTipOverride:      false,
+			Etherbase:                "",
+			GasCeil:                  miner.DefaultConfig.GasCeil,
+			EnableDynamicGasLimit:    miner.DefaultConfig.EnableDynamicGasLimit,
+			GasLimitMin:              miner.DefaultConfig.GasLimitMin,
+			GasLimitMax:              miner.DefaultConfig.GasLimitMax,
+			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
+			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
+			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
+			ExtraData:                "",
+			Recommit:                 125 * time.Second,
+			CommitInterruptFlag:      true,
+			BlockTime:                0,
+			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
+			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1176,11 +1178,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	// Set runtime miner gas parameters in BorConfig (if not in developer mode and Bor chain)
 	if !c.Developer.Enabled && n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
-		if c.Sealer.TargetGasPercentage != nil {
-			n.Genesis.Config.Bor.TargetGasPercentage = c.Sealer.TargetGasPercentage
+		// Only set if non-zero (0 means not set via CLI, use defaults from consensus)
+		if c.Sealer.TargetGasPercentage > 0 {
+			n.Genesis.Config.Bor.TargetGasPercentage = &c.Sealer.TargetGasPercentage
 		}
-		if c.Sealer.BaseFeeChangeDenominator != nil {
-			n.Genesis.Config.Bor.BaseFeeChangeDenominator = c.Sealer.BaseFeeChangeDenominator
+		if c.Sealer.BaseFeeChangeDenominator > 0 {
+			n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
 		}
 	}
 
@@ -1252,11 +1255,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 		// Set runtime miner gas parameters in BorConfig for developer mode
 		if n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
-			if c.Sealer.TargetGasPercentage != nil {
-				n.Genesis.Config.Bor.TargetGasPercentage = c.Sealer.TargetGasPercentage
+			// Only set if non-zero (0 means not set via CLI, use defaults from consensus)
+			if c.Sealer.TargetGasPercentage > 0 {
+				n.Genesis.Config.Bor.TargetGasPercentage = &c.Sealer.TargetGasPercentage
 			}
-			if c.Sealer.BaseFeeChangeDenominator != nil {
-				n.Genesis.Config.Bor.BaseFeeChangeDenominator = c.Sealer.BaseFeeChangeDenominator
+			if c.Sealer.BaseFeeChangeDenominator > 0 {
+				n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
 			}
 		}
 
