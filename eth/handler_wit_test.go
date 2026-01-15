@@ -63,11 +63,6 @@ func TestHandleGetWitnessMetadata(t *testing.T) {
 	peer := newTestWitPeer()
 	defer peer.Close()
 
-	// Create test block hashes
-	hash1 := common.Hash{0xAA, 0xBB, 0xCC}
-	hash2 := common.Hash{0xDD, 0xEE, 0xFF}
-	hash3 := common.Hash{0x11, 0x22, 0x33} // Will not have witness
-
 	// Create test blocks and add headers to chain
 	blockNum1 := uint64(1000)
 	blockNum2 := uint64(2000)
@@ -84,9 +79,9 @@ func TestHandleGetWitnessMetadata(t *testing.T) {
 	}
 
 	// Compute hashes from headers
-	hash1 = header1.Hash()
-	hash2 = header2.Hash()
-	hash3 = header3.Hash()
+	hash1 := header1.Hash()
+	hash2 := header2.Hash()
+	hash3 := header3.Hash()
 
 	// Insert headers into chain database
 	db := handler.chain.DB()
