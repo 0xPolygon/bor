@@ -2065,3 +2065,511 @@ func TestCustomBlockTimeMining(t *testing.T) {
 	require.LessOrEqual(t, blocksMinedCount, maxExpectedBlocks,
 		fmt.Sprintf("Too many blocks mined. Expected at most %d, got %d", maxExpectedBlocks, blocksMinedCount))
 }
+
+// TestDynamicGasLimit_LowBaseFee tests that when base fee is below the target-buffer,
+// the gas limit decreases toward the minimum.
+func TestDynamicGasLimit_LowBaseFee(t *testing.T) {
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	// Generate a batch of accounts to seal and fund with
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	// Initialize genesis with a gas limit
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
+
+	// Note: When transitioning from pre-London to London fork, gas limit is multiplied
+	// by ElasticityMultiplier (2x). So post-London gas limit starts at ~2x genesis.
+	// We set min/max relative to this expected post-London gas limit.
+	postLondonGasLimit := genesis.GasLimit * 2 // After elasticity multiplier
+
+	// Configure dynamic gas limit with a high target base fee
+	// Since initial base fee is typically 1 gwei (params.InitialBaseFee = 1000000000),
+	// setting target to 100 gwei means base fee will be below target-buffer,
+	// so gas limit should decrease toward min.
+	dynamicConfig := DynamicGasLimitConfig{
+		EnableDynamicGasLimit: true,
+		GasLimitMin:           postLondonGasLimit / 2, // Min = half of post-London
+		GasLimitMax:           postLondonGasLimit * 2, // Max = double post-London
+		TargetBaseFee:         100_000_000_000,        // 100 gwei (high target)
+		BaseFeeBuffer:         10_000_000_000,         // 10 gwei buffer
+	}
+
+	// Start the miner with dynamic gas limit enabled
+	stack, ethBackend, err := InitMinerWithDynamicGasLimit(genesis, keys[0], true, dynamicConfig)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	// Wait for the node to be ready
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for several blocks to be mined
+	targetBlockNum := uint64(30)
+	timeout := time.After(90 * time.Second)
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for blocks to be mined")
+		default:
+			currentBlock := ethBackend.BlockChain().CurrentHeader()
+			if currentBlock.Number.Uint64() >= targetBlockNum {
+				goto checkResults
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+checkResults:
+	// Get the gas limits from mined blocks
+	chain := ethBackend.BlockChain()
+
+	// Get first London block's gas limit as baseline (after elasticity adjustment)
+	firstLondonHeader := chain.GetHeaderByNumber(1)
+	require.NotNil(t, firstLondonHeader)
+	firstLondonGasLimit := firstLondonHeader.GasLimit
+
+	t.Logf("Genesis gas limit: %d", genesis.GasLimit)
+	t.Logf("First London block gas limit: %d", firstLondonGasLimit)
+	t.Logf("Dynamic config - Min: %d, Max: %d, TargetBaseFee: %d, Buffer: %d",
+		dynamicConfig.GasLimitMin, dynamicConfig.GasLimitMax,
+		dynamicConfig.TargetBaseFee, dynamicConfig.BaseFeeBuffer)
+
+	// Track gas limit changes - after initial blocks, should be decreasing
+	var gasLimitDecreasing bool
+	var lastGasLimit uint64
+
+	for i := uint64(1); i <= targetBlockNum; i++ {
+		header := chain.GetHeaderByNumber(i)
+		if header == nil {
+			continue
+		}
+
+		if i == 1 {
+			lastGasLimit = header.GasLimit
+		} else if header.GasLimit < lastGasLimit {
+			gasLimitDecreasing = true
+		}
+
+		t.Logf("Block %d: GasLimit=%d, BaseFee=%s",
+			i, header.GasLimit, header.BaseFee.String())
+
+		lastGasLimit = header.GasLimit
+	}
+
+	// Verify that gas limit has been decreasing (since base fee is below target-buffer)
+	// The base fee starts at InitialBaseFee (1 gwei) which is below target-buffer (90 gwei)
+	assert.True(t, gasLimitDecreasing, "Gas limit should be decreasing when base fee is below target-buffer")
+
+	// Verify the final gas limit is less than the first London block's gas limit
+	finalHeader := chain.GetHeaderByNumber(targetBlockNum)
+	assert.Less(t, finalHeader.GasLimit, firstLondonGasLimit,
+		"Final gas limit should be less than first London block gas limit when decreasing")
+}
+
+// TestDynamicGasLimit_HighBaseFee tests that when base fee is above the target+buffer,
+// the gas limit increases toward the maximum.
+func TestDynamicGasLimit_HighBaseFee(t *testing.T) {
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	// Generate a batch of accounts to seal and fund with
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	// Initialize genesis
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
+
+	// Note: When transitioning from pre-London to London fork, gas limit is multiplied
+	// by ElasticityMultiplier (2x). So post-London gas limit starts at ~2x genesis.
+	postLondonGasLimit := genesis.GasLimit * 2 // After elasticity multiplier
+
+	// Configure dynamic gas limit with a very low target base fee
+	// This ensures the base fee (even at initial 1 gwei) will be above target+buffer,
+	// so gas limit should increase toward max.
+	dynamicConfig := DynamicGasLimitConfig{
+		EnableDynamicGasLimit: true,
+		GasLimitMin:           postLondonGasLimit / 2, // Min = half of post-London
+		GasLimitMax:           postLondonGasLimit * 2, // Max = double post-London
+		TargetBaseFee:         100_000_000,            // 0.1 gwei (very low target)
+		BaseFeeBuffer:         50_000_000,             // 0.05 gwei buffer
+	}
+
+	// Start the miner with dynamic gas limit enabled
+	stack, ethBackend, err := InitMinerWithDynamicGasLimit(genesis, keys[0], true, dynamicConfig)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	// Wait for the node to be ready
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for several blocks to be mined
+	targetBlockNum := uint64(30)
+	timeout := time.After(90 * time.Second)
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for blocks to be mined")
+		default:
+			currentBlock := ethBackend.BlockChain().CurrentHeader()
+			if currentBlock.Number.Uint64() >= targetBlockNum {
+				goto checkResults
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+checkResults:
+	// Get the gas limits from mined blocks
+	chain := ethBackend.BlockChain()
+
+	// Get first London block's gas limit as baseline (after elasticity adjustment)
+	firstLondonHeader := chain.GetHeaderByNumber(1)
+	require.NotNil(t, firstLondonHeader)
+	firstLondonGasLimit := firstLondonHeader.GasLimit
+
+	t.Logf("Genesis gas limit: %d", genesis.GasLimit)
+	t.Logf("First London block gas limit: %d", firstLondonGasLimit)
+	t.Logf("Dynamic config - Min: %d, Max: %d, TargetBaseFee: %d, Buffer: %d",
+		dynamicConfig.GasLimitMin, dynamicConfig.GasLimitMax,
+		dynamicConfig.TargetBaseFee, dynamicConfig.BaseFeeBuffer)
+
+	// Track gas limit changes
+	var gasLimitIncreasing bool
+	var lastGasLimit uint64
+
+	for i := uint64(1); i <= targetBlockNum; i++ {
+		header := chain.GetHeaderByNumber(i)
+		if header == nil {
+			continue
+		}
+
+		if i == 1 {
+			lastGasLimit = header.GasLimit
+		} else if header.GasLimit > lastGasLimit {
+			gasLimitIncreasing = true
+		}
+
+		t.Logf("Block %d: GasLimit=%d, BaseFee=%s",
+			i, header.GasLimit, header.BaseFee.String())
+
+		lastGasLimit = header.GasLimit
+	}
+
+	// Verify that gas limit has been increasing (since base fee is above target+buffer)
+	// The base fee starts at InitialBaseFee (1 gwei = 1000000000) which is above target+buffer (0.15 gwei)
+	assert.True(t, gasLimitIncreasing, "Gas limit should be increasing when base fee is above target+buffer")
+
+	// Verify the final gas limit is greater than first London block
+	finalHeader := chain.GetHeaderByNumber(targetBlockNum)
+	assert.Greater(t, finalHeader.GasLimit, firstLondonGasLimit,
+		"Final gas limit should be greater than first London gas limit when increasing")
+}
+
+// TestDynamicGasLimit_WithinBuffer tests that when base fee is within the buffer range,
+// the gas limit remains stable (follows the parent's gas limit).
+func TestDynamicGasLimit_WithinBuffer(t *testing.T) {
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	// Generate a batch of accounts to seal and fund with
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	// Initialize genesis
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
+
+	// Note: London fork activates at block 0, so the first London block (block 1)
+	// will have gas limit = genesis.GasLimit * elasticity_multiplier (2x)
+	postLondonGasLimit := genesis.GasLimit * 2
+
+	// Configure dynamic gas limit with target matching initial base fee
+	// InitialBaseFee is 1 gwei (1000000000 wei)
+	// Set target to 1 gwei with a large buffer so base fee stays within range
+	dynamicConfig := DynamicGasLimitConfig{
+		EnableDynamicGasLimit: true,
+		GasLimitMin:           postLondonGasLimit / 2, // Min = half of post-London limit
+		GasLimitMax:           postLondonGasLimit * 2, // Max = double post-London limit
+		TargetBaseFee:         1_000_000_000,          // 1 gwei (matches InitialBaseFee)
+		BaseFeeBuffer:         500_000_000,            // 0.5 gwei buffer (so range is 0.5-1.5 gwei)
+	}
+
+	// Start the miner with dynamic gas limit enabled
+	stack, ethBackend, err := InitMinerWithDynamicGasLimit(genesis, keys[0], true, dynamicConfig)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	// Wait for the node to be ready
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for several blocks to be mined
+	targetBlockNum := uint64(15)
+	timeout := time.After(60 * time.Second)
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for blocks to be mined")
+		default:
+			currentBlock := ethBackend.BlockChain().CurrentHeader()
+			if currentBlock.Number.Uint64() >= targetBlockNum {
+				goto checkResults
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+checkResults:
+	// Get the gas limits from mined blocks
+	chain := ethBackend.BlockChain()
+
+	// Get first London block's gas limit as baseline (after elasticity adjustment)
+	firstLondonHeader := chain.GetHeaderByNumber(1)
+	require.NotNil(t, firstLondonHeader)
+	firstLondonGasLimit := firstLondonHeader.GasLimit
+
+	t.Logf("Genesis gas limit: %d", genesis.GasLimit)
+	t.Logf("First London block gas limit: %d", firstLondonGasLimit)
+	t.Logf("Dynamic config - Min: %d, Max: %d, TargetBaseFee: %d, Buffer: %d",
+		dynamicConfig.GasLimitMin, dynamicConfig.GasLimitMax,
+		dynamicConfig.TargetBaseFee, dynamicConfig.BaseFeeBuffer)
+
+	// Track gas limit changes - should remain relatively stable
+	var maxDeviation uint64
+
+	for i := uint64(1); i <= targetBlockNum; i++ {
+		header := chain.GetHeaderByNumber(i)
+		if header == nil {
+			continue
+		}
+
+		var deviation uint64
+		if header.GasLimit > firstLondonGasLimit {
+			deviation = header.GasLimit - firstLondonGasLimit
+		} else {
+			deviation = firstLondonGasLimit - header.GasLimit
+		}
+
+		if deviation > maxDeviation {
+			maxDeviation = deviation
+		}
+
+		t.Logf("Block %d: GasLimit=%d, BaseFee=%s, Deviation=%d",
+			i, header.GasLimit, header.BaseFee.String(), deviation)
+	}
+
+	// When within buffer, gas limit should stay close to parent's gas limit
+	// Allow for small natural variations but not significant movement toward min/max
+	// The deviation should be much smaller than the difference between min and max
+	maxAllowedDeviation := (dynamicConfig.GasLimitMax - dynamicConfig.GasLimitMin) / 4
+	assert.Less(t, maxDeviation, maxAllowedDeviation,
+		"Gas limit should remain relatively stable when base fee is within buffer range")
+}
+
+// TestLateBlockNotEmpty tests that when a parent block is sealed late,
+// blocks still have sufficient time to include transactions.
+// This verifies the fix for empty blocks caused by late parent blocks.
+func TestLateBlockNotEmpty(t *testing.T) {
+	t.Parallel()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
+	genesis.Config.Bor.Period = map[string]uint64{"0": 2}
+	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
+	genesis.Config.Bor.RioBlock = big.NewInt(0)
+
+	// Start a single miner node
+	stack, ethBackend, err := InitMiner(genesis, keys[0], true)
+	require.NoError(t, err)
+	defer stack.Close()
+
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for initial blocks
+	log.Info("Waiting for initial blocks...")
+	for {
+		time.Sleep(500 * time.Millisecond)
+		if ethBackend.BlockChain().CurrentBlock().Number.Uint64() >= 3 {
+			break
+		}
+	}
+
+	// Stop mining and wait for it to fully stop
+	ethBackend.StopMining()
+	time.Sleep(500 * time.Millisecond)
+
+	// Capture parent block
+	parentBlock := ethBackend.BlockChain().CurrentBlock()
+	parentNumber := parentBlock.Number.Uint64()
+	parentTime := parentBlock.Time
+
+	log.Info("Parent block", "number", parentNumber, "time", parentTime)
+
+	// Add transactions BEFORE waiting (they should be in pool when we resume)
+	txpool := ethBackend.TxPool()
+	senderKey := pkey1
+	senderAddr := crypto.PubkeyToAddress(senderKey.PublicKey)
+	recipientAddr := crypto.PubkeyToAddress(pkey2.PublicKey)
+	nonce := txpool.Nonce(senderAddr)
+	signer := types.LatestSignerForChainID(genesis.Config.ChainID)
+
+	// Start goroutine to continuously add transactions
+	stopTxs := make(chan struct{})
+	txNonce := nonce
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTxs:
+				return
+			case <-ticker.C:
+				// Add 5 transactions every 100ms
+				for i := 0; i < 5; i++ {
+					tx := types.NewTransaction(
+						txNonce,
+						recipientAddr,
+						big.NewInt(1000),
+						21000,
+						big.NewInt(30000000000),
+						nil,
+					)
+					signedTx, _ := types.SignTx(tx, signer, senderKey)
+					if txpool.Add([]*types.Transaction{signedTx}, true)[0] == nil {
+						txNonce++
+					}
+				}
+			}
+		}
+	}()
+	defer close(stopTxs)
+
+	// Wait a bit for initial transactions to be added
+	time.Sleep(300 * time.Millisecond)
+
+	pending, queued := txpool.Stats()
+	log.Info("Txpool after initial txs", "pending", pending, "queued", queued)
+	require.Greater(t, pending, 0, "Expected transactions in pending")
+
+	// Wait for parent to become older than block period (simulates late parent)
+	blockPeriod := time.Duration(genesis.Config.Bor.Period["0"]) * time.Second
+
+	// Wait until parent age > blockPeriod (not just equal)
+	var parentAge int64
+	for {
+		parentBlock = ethBackend.BlockChain().CurrentBlock()
+		parentNumber = parentBlock.Number.Uint64()
+		parentTime = parentBlock.Time
+		parentAge = time.Now().Unix() - int64(parentTime)
+
+		if parentAge > int64(blockPeriod.Seconds()) {
+			log.Info("Parent is now late", "number", parentNumber, "age", parentAge, "blockPeriod", blockPeriod.Seconds())
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Resume mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for blocks to be mined and check that they ALL contain transactions
+	log.Info("Waiting for blocks after resume...")
+	blocksToCheck := uint64(3)
+	maxWait := 10 * time.Second
+	deadline := time.Now().Add(maxWait)
+	allBlocksChecked := false
+
+	var currentNumber uint64
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		currentNumber = ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+
+		if currentNumber >= parentNumber+blocksToCheck {
+			allBlocksChecked = true
+			break
+		}
+	}
+
+	require.True(t, allBlocksChecked, "Expected %d blocks to be mined", blocksToCheck)
+
+	// Verify ALL blocks after parent contain transactions
+	totalTxsInBlocks := 0
+	actualNow := time.Now().Unix()
+	parentAge = actualNow - int64(parentTime) // Update parent age for error messages
+
+	for i := uint64(1); i <= blocksToCheck; i++ {
+		block := ethBackend.BlockChain().GetBlockByNumber(parentNumber + i)
+		require.NotNil(t, block)
+		txCount := len(block.Transactions())
+		totalTxsInBlocks += txCount
+
+		// Calculate expected build time
+		expectedMinTime := int64(parentTime) + int64(blockPeriod.Seconds())
+		actualBuildTime := int64(block.Time()) - actualNow
+		timeFromParent := int64(block.Time()) - int64(parentTime)
+
+		log.Info("Block check",
+			"number", block.Number().Uint64(),
+			"txCount", txCount,
+			"blockTime", block.Time(),
+			"actualNow", actualNow,
+			"buildTime", actualBuildTime,
+			"timeFromParent", timeFromParent,
+			"expectedMin", expectedMinTime)
+
+		// KEY ASSERTION: With the fix, ALL blocks should contain transactions
+		// when there are pending transactions in the pool
+		require.Greater(t, txCount, 0,
+			"Block %d is empty! With late block fix, all blocks should include "+
+				"transactions when txpool has pending txs. Parent age was %d seconds. "+
+				"Block time: %d, Now: %d, Build time available: %d seconds.",
+			block.Number().Uint64(), parentAge, block.Time(), actualNow, actualBuildTime)
+	}
+
+	log.Info("SUCCESS: All blocks after late parent contain transactions",
+		"blocksChecked", blocksToCheck,
+		"totalTxs", totalTxsInBlocks,
+		"parentAge", parentAge)
+
+	ethBackend.StopMining()
+}

@@ -29,7 +29,7 @@ import (
 // copyConfig does a _shallow_ copy of a given config. Safe to set new values, but
 // do not use e.g. SetInt() on the numbers. For testing only
 func copyConfig(original *params.ChainConfig) *params.ChainConfig {
-	return &params.ChainConfig{
+	config := &params.ChainConfig{
 		ChainID:                 original.ChainID,
 		HomesteadBlock:          original.HomesteadBlock,
 		DAOForkBlock:            original.DAOForkBlock,
@@ -47,8 +47,34 @@ func copyConfig(original *params.ChainConfig) *params.ChainConfig {
 		TerminalTotalDifficulty: original.TerminalTotalDifficulty,
 		Ethash:                  original.Ethash,
 		Clique:                  original.Clique,
-		Bor:                     original.Bor,
 	}
+	if original.Bor != nil {
+		config.Bor = &params.BorConfig{
+			Period:                          original.Bor.Period,
+			ProducerDelay:                   original.Bor.ProducerDelay,
+			Sprint:                          original.Bor.Sprint,
+			BackupMultiplier:                original.Bor.BackupMultiplier,
+			ValidatorContract:               original.Bor.ValidatorContract,
+			StateReceiverContract:           original.Bor.StateReceiverContract,
+			OverrideStateSyncRecords:        original.Bor.OverrideStateSyncRecords,
+			OverrideStateSyncRecordsInRange: original.Bor.OverrideStateSyncRecordsInRange,
+			BlockAlloc:                      original.Bor.BlockAlloc,
+			BurntContract:                   original.Bor.BurntContract,
+			Coinbase:                        original.Bor.Coinbase,
+			SkipValidatorByteCheck:          original.Bor.SkipValidatorByteCheck,
+			JaipurBlock:                     original.Bor.JaipurBlock,
+			DelhiBlock:                      original.Bor.DelhiBlock,
+			IndoreBlock:                     original.Bor.IndoreBlock,
+			StateSyncConfirmationDelay:      original.Bor.StateSyncConfirmationDelay,
+			AhmedabadBlock:                  original.Bor.AhmedabadBlock,
+			BhilaiBlock:                     original.Bor.BhilaiBlock,
+			RioBlock:                        original.Bor.RioBlock,
+			MadhugiriBlock:                  original.Bor.MadhugiriBlock,
+			MadhugiriProBlock:               original.Bor.MadhugiriProBlock,
+			DandeliBlock:                    original.Bor.DandeliBlock,
+		}
+	}
+	return config
 }
 
 func config() *params.ChainConfig {
