@@ -742,3 +742,262 @@ func TestHandleWitnessMetadata(t *testing.T) {
 		app.Close()
 	})
 }
+
+// TestWit1HandlerMap tests that the wit1 map contains all expected handlers
+func TestWit1HandlerMap(t *testing.T) {
+	// Verify that wit1 map contains all expected message codes
+	expectedHandlers := map[uint64]string{
+		GetMsgWitness:         "handleGetWitness",
+		MsgWitness:            "handleWitness",
+		NewWitnessMsg:         "handleNewWitness",
+		NewWitnessHashesMsg:   "handleNewWitnessHashes",
+		GetWitnessMetadataMsg: "handleGetWitnessMetadata",
+		WitnessMetadataMsg:    "handleWitnessMetadata",
+	}
+
+	// Check that all expected handlers are present in wit1
+	for msgCode, handlerName := range expectedHandlers {
+		handler, exists := wit1[msgCode]
+		assert.True(t, exists, "wit1 map should contain handler for message code %d (%s)", msgCode, handlerName)
+		assert.NotNil(t, handler, "Handler for message code %d (%s) should not be nil", msgCode, handlerName)
+	}
+
+	// Verify that wit1 has exactly 6 handlers (WIT1 has 6 message types)
+	assert.Equal(t, 6, len(wit1), "wit1 map should contain exactly 6 handlers")
+
+	// Verify that wit1 includes the WIT1-specific handlers that are not in wit0
+	_, exists := wit1[GetWitnessMetadataMsg]
+	assert.True(t, exists, "wit1 should contain GetWitnessMetadataMsg handler")
+	_, exists = wit1[WitnessMetadataMsg]
+	assert.True(t, exists, "wit1 should contain WitnessMetadataMsg handler")
+}
+
+// TestHandlerMapVersionSelection tests the switch statement that selects handlers based on protocol version
+func TestHandlerMapVersionSelection(t *testing.T) {
+	backend := &mockBackend{}
+
+	t.Run("WIT1VersionUsesWit1Map", func(t *testing.T) {
+		var id enode.ID
+		id[0] = 0x20
+		p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+		app, net := p2p.MsgPipe()
+		peer := NewPeer(WIT1, p2pPeer, net, log.New())
+		defer peer.Close()
+		defer app.Close()
+
+		// Test that WIT1 peer can handle GetWitnessMetadataMsg (WIT1-specific)
+		packet := &GetWitnessMetadataPacket{
+			RequestId: 99999,
+			GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
+				Hashes: []common.Hash{{0x01, 0x02, 0x03}},
+			},
+		}
+
+		// Verify backend receives the packet
+		var receivedPacket Packet
+		backend.handleFunc = func(p *Peer, pk Packet) error {
+			receivedPacket = pk
+			return nil
+		}
+
+		// Call handleMessage in a goroutine first (it will block waiting for message)
+		done := make(chan error, 1)
+		go func() {
+			done <- handleMessage(backend, peer)
+		}()
+
+		// Send the message through the pipe (send on app, peer reads from net)
+		err := p2p.Send(app, GetWitnessMetadataMsg, packet)
+		require.NoError(t, err, "Should be able to send GetWitnessMetadataMsg")
+
+		// Wait for handleMessage to complete
+		err = <-done
+		require.NoError(t, err, "handleMessage should handle GetWitnessMetadataMsg for WIT1 peer")
+		require.NotNil(t, receivedPacket, "Backend should receive the packet")
+		_, ok := receivedPacket.(*GetWitnessMetadataPacket)
+		assert.True(t, ok, "Received packet should be GetWitnessMetadataPacket")
+	})
+
+	t.Run("WIT0VersionUsesWit0Map", func(t *testing.T) {
+		var id enode.ID
+		id[0] = 0x21
+		p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+		app, net := p2p.MsgPipe()
+		peer := NewPeer(WIT0, p2pPeer, net, log.New())
+		defer peer.Close()
+		defer app.Close()
+
+		// Test that WIT0 peer uses wit0 map (which doesn't have GetWitnessMetadataMsg)
+		// Send GetWitnessMetadataMsg which should not be handled by WIT0
+		packet := &GetWitnessMetadataPacket{
+			RequestId: 88888,
+			GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
+				Hashes: []common.Hash{{0x04, 0x05, 0x06}},
+			},
+		}
+
+		// Call handleMessage in a goroutine first (it will block waiting for message)
+		done := make(chan error, 1)
+		go func() {
+			done <- handleMessage(backend, peer)
+		}()
+
+		// Send the message through the pipe (send on app, peer reads from net)
+		err := p2p.Send(app, GetWitnessMetadataMsg, packet)
+		require.NoError(t, err, "Should be able to send GetWitnessMetadataMsg")
+
+		// Wait for handleMessage to complete
+		err = <-done
+		require.Error(t, err, "handleMessage should return error for unsupported message in WIT0")
+		assert.Contains(t, err.Error(), "invalid message code", "Error should indicate invalid message code")
+	})
+
+	t.Run("DefaultVersionFallsBackToWit0Map", func(t *testing.T) {
+		var id enode.ID
+		id[0] = 0x22
+		p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+		app, net := p2p.MsgPipe()
+		// Create peer with unknown version (e.g., 99)
+		peer := NewPeer(99, p2pPeer, net, log.New())
+		defer peer.Close()
+		defer app.Close()
+
+		// Test that unknown version falls back to wit0 map
+		// Send GetWitnessMetadataMsg which should not be handled (falls back to wit0)
+		packet := &GetWitnessMetadataPacket{
+			RequestId: 77777,
+			GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
+				Hashes: []common.Hash{{0x07, 0x08, 0x09}},
+			},
+		}
+
+		// Call handleMessage in a goroutine first (it will block waiting for message)
+		done := make(chan error, 1)
+		go func() {
+			done <- handleMessage(backend, peer)
+		}()
+
+		// Send the message through the pipe (send on app, peer reads from net)
+		err := p2p.Send(app, GetWitnessMetadataMsg, packet)
+		require.NoError(t, err, "Should be able to send GetWitnessMetadataMsg")
+
+		// Wait for handleMessage to complete
+		err = <-done
+		require.Error(t, err, "handleMessage should return error for unsupported message in default version")
+		assert.Contains(t, err.Error(), "invalid message code", "Error should indicate invalid message code")
+	})
+
+	t.Run("WIT1HandlesAllWit1Messages", func(t *testing.T) {
+		// Test all message codes in wit1 map (excluding NewWitnessMsg which requires complex witness structure)
+		testCases := []struct {
+			name    string
+			msgCode uint64
+			packet  interface{}
+		}{
+			{
+				name:    "GetMsgWitness",
+				msgCode: GetMsgWitness,
+				packet: &GetWitnessPacket{
+					RequestId: 11111,
+					GetWitnessRequest: &GetWitnessRequest{
+						WitnessPages: []WitnessPageRequest{
+							{Hash: common.Hash{0x01}, Page: 0},
+						},
+					},
+				},
+			},
+			{
+				name:    "NewWitnessHashesMsg",
+				msgCode: NewWitnessHashesMsg,
+				packet: &NewWitnessHashesPacket{
+					Hashes:  []common.Hash{{0x02}},
+					Numbers: []uint64{100},
+				},
+			},
+			{
+				name:    "GetWitnessMetadataMsg",
+				msgCode: GetWitnessMetadataMsg,
+				packet: &GetWitnessMetadataPacket{
+					RequestId: 22222,
+					GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
+						Hashes: []common.Hash{{0x03}},
+					},
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				var id enode.ID
+				id[0] = byte(0x23 + len(tc.name))
+				p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+				app, net := p2p.MsgPipe()
+				peer := NewPeer(WIT1, p2pPeer, net, log.New())
+				defer peer.Close()
+				defer app.Close()
+
+				var receivedPacket Packet
+				backend.handleFunc = func(p *Peer, pk Packet) error {
+					receivedPacket = pk
+					return nil
+				}
+
+				// Call handleMessage in a goroutine first (it will block waiting for message)
+				done := make(chan error, 1)
+				go func() {
+					done <- handleMessage(backend, peer)
+				}()
+
+				// Send the message through the pipe (send on app, peer reads from net)
+				err := p2p.Send(app, tc.msgCode, tc.packet)
+				require.NoError(t, err, "Should be able to send %s", tc.name)
+
+				// Wait for handleMessage to complete
+				err = <-done
+				require.NoError(t, err, "handleMessage should handle %s for WIT1 peer", tc.name)
+				require.NotNil(t, receivedPacket, "Backend should receive the packet for %s", tc.name)
+			})
+		}
+	})
+
+	t.Run("WIT0HandlesWit0Messages", func(t *testing.T) {
+		var id enode.ID
+		id[0] = 0x24
+		p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+		app, net := p2p.MsgPipe()
+		peer := NewPeer(WIT0, p2pPeer, net, log.New())
+		defer peer.Close()
+		defer app.Close()
+
+		// Test that WIT0 can handle its supported messages
+		var receivedPacket Packet
+		backend.handleFunc = func(p *Peer, pk Packet) error {
+			receivedPacket = pk
+			return nil
+		}
+
+		packet := &GetWitnessPacket{
+			RequestId: 33333,
+			GetWitnessRequest: &GetWitnessRequest{
+				WitnessPages: []WitnessPageRequest{
+					{Hash: common.Hash{0x04}, Page: 0},
+				},
+			},
+		}
+
+		// Call handleMessage in a goroutine first (it will block waiting for message)
+		done := make(chan error, 1)
+		go func() {
+			done <- handleMessage(backend, peer)
+		}()
+
+		// Send the message through the pipe (send on app, peer reads from net)
+		err := p2p.Send(app, GetMsgWitness, packet)
+		require.NoError(t, err, "Should be able to send GetMsgWitness")
+
+		// Wait for handleMessage to complete
+		err = <-done
+		require.NoError(t, err, "handleMessage should handle GetMsgWitness for WIT0 peer")
+		require.NotNil(t, receivedPacket, "Backend should receive the packet")
+	})
+}
