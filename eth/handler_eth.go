@@ -124,19 +124,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 			number := unknownNumbers[i]
 
 			// Create witness requester closure that captures block number
-			witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-				// Get the ethPeer from the peerSet
-				ethPeer := h.peers.getOnePeerWithWitness(hash)
-				if ethPeer == nil {
-					return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-				}
-
-				// Determine if we should request compact witness based on sliding window
-				useCompact := h.shouldRequestCompactWitness(number)
-
-				// Request witnesses (compact or full) using the wit peer with verification
-				return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompact)
-			}
+			witnessRequester := h.createWitnessRequester(number)
 
 			h.blockFetcher.Notify(peer.ID(), hash, number, time.Now(), peer.RequestOneHeader, peer.RequestBodies, witnessRequester)
 		}
@@ -219,6 +207,24 @@ func shouldUseCompactWitness(cacheWarm bool, parallel bool, blockNum, windowSize
 	return true
 }
 
+// createWitnessRequester creates a witness requester closure that can be used
+// by the block fetcher to request witnesses with verification.
+func (h *ethHandler) createWitnessRequester(blockNum uint64) func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+	return func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		// Get the ethPeer from the peerSet
+		ethPeer := h.peers.getOnePeerWithWitness(hash)
+		if ethPeer == nil {
+			return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+		}
+
+		// Determine if we should request compact witness based on sliding window
+		useCompact := h.shouldRequestCompactWitness(blockNum)
+
+		// Request witnesses using the wit peer with verification
+		return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompact)
+	}
+}
+
 // verifyPageCount verifies the witness page count for a given block hash by
 // comparing it against random peers' reported page counts.
 // Returns true if the peer is honest (page count matches consensus), false otherwise.
@@ -275,21 +281,8 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 	if h.statelessSync.Load() || h.syncWithWitnesses {
 		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 
-		// Determine if we should request compact witness for this block
-		blockNum := block.NumberU64()
-		useCompact := h.shouldRequestCompactWitness(blockNum)
-
 		// Create a witness requester closure *only if* the peer supports the protocol.
-		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-			}
-
-			// Request witnesses (compact or full) using the wit peer with verification
-			return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompact)
-		}
+		witnessRequester := h.createWitnessRequester(block.NumberU64())
 
 		// Call the new fetcher method to inject the block
 		if err := h.blockFetcher.InjectBlockWithWitnessRequirement(peer.ID(), block, witnessRequester); err != nil {

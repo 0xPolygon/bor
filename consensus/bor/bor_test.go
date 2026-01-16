@@ -743,7 +743,7 @@ func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
 
 	addr1 := common.HexToAddress("0x1")
 	// Force parent time far in the past so that after adding blockTime, header.Time is still < now
-	// and the "clamp to now" block triggers.
+	// and the "clamp to now + blockTime" block triggers.
 	pastParentTime := time.Now().Add(-10 * time.Minute).Unix()
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
@@ -771,18 +771,27 @@ func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
 
 	require.NoError(t, err)
 
-	// Validate the clamp happened: header.Time should be "now-ish", not the past-derived time.
-	require.GreaterOrEqual(t, int64(header.Time), before.Unix(), "header.Time should be clamped up to now")
-	require.LessOrEqual(t, int64(header.Time), after.Unix()+1, "header.Time should be close to now")
+	// With the late block fix, header.Time should be "now + blockTime", not just "now"
+	// This gives the block builder sufficient time to include transactions
+	expectedMinTime := before.Add(b.blockTime).Unix()
+	expectedMaxTime := after.Add(b.blockTime).Unix() + 1 // +1 for timing tolerance
+
+	require.GreaterOrEqual(t, int64(header.Time), expectedMinTime,
+		"header.Time should be at least now + blockTime to provide build time")
+	require.LessOrEqual(t, int64(header.Time), expectedMaxTime,
+		"header.Time should be approximately now + blockTime")
 
 	// Critical regression assertion:
-	// When custom blockTime is enabled for Rio, clamping header.Time to now must also set ActualTime = now.
+	// When custom blockTime is enabled for Rio, clamping header.Time must also set ActualTime = now + blockTime.
 	require.False(t, header.ActualTime.IsZero(), "ActualTime should be set when blockTime > 0 and Rio is enabled")
-	require.GreaterOrEqual(t, header.ActualTime.Unix(), before.Unix(), "ActualTime should be updated to now when clamping occurs")
-	require.LessOrEqual(t, header.ActualTime.Unix(), after.Unix()+1, "ActualTime should be close to now when clamping occurs")
+	require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMinTime,
+		"ActualTime should be at least now + blockTime when clamping occurs")
+	require.LessOrEqual(t, header.ActualTime.Unix(), expectedMaxTime,
+		"ActualTime should be approximately now + blockTime when clamping occurs")
 
-	// Optional: since clamping sets both from the same `now`, they should match on Unix seconds.
-	require.Equal(t, int64(header.Time), header.ActualTime.Unix(), "header.Time and ActualTime should align after clamping")
+	// Since clamping sets both from the same calculation, they should match on Unix seconds.
+	require.Equal(t, int64(header.Time), header.ActualTime.Unix(),
+		"header.Time and ActualTime should align after clamping")
 }
 
 func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
@@ -868,4 +877,71 @@ func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
 		t.Fatalf("unexpected Actual in WrongDifficultyError: got %d, want %d",
 			diffErr.Actual, uint64(math.MaxUint64))
 	}
+}
+
+// TestLateBlockTimestampFix verifies that late blocks get sufficient build time
+// by setting header.Time = now + blockPeriod instead of just clamping to now.
+func TestLateBlockTimestampFix(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	borCfg := &params.BorConfig{
+		Sprint: map[string]uint64{"0": 64},
+		Period: map[string]uint64{"0": 2},
+	}
+
+	t.Run("late parent gets future timestamp", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		oldParentTime := time.Now().Add(-4 * time.Second).Unix()
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(oldParentTime))
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
+
+		before := time.Now()
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+
+		// Should give full 2s build time from now, not from parent
+		expectedMin := before.Add(2 * time.Second).Unix()
+		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
+		// Add upper bound check to ensure timestamp is within reasonable range (allow 100ms execution time)
+		expectedMax := before.Add(2*time.Second + 100*time.Millisecond).Unix()
+		require.LessOrEqual(t, int64(header.Time), expectedMax)
+	})
+
+	t.Run("on-time parent uses normal calculation", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		recentParentTime := time.Now().Unix()
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(recentParentTime))
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
+
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+
+		// Should use parent.Time + period
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.GreaterOrEqual(t, header.Time, genesis.Time+borCfg.Period["0"])
+	})
+
+	t.Run("custom blockTime with Rio", func(t *testing.T) {
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		rioCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+
+		oldParentTime := time.Now().Add(-4 * time.Second).Unix()
+		chain, b := newChainAndBorForTest(t, sp, rioCfg, true, addr1, uint64(oldParentTime))
+		b.blockTime = 3 * time.Second
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
+
+		before := time.Now()
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+
+		expectedMin := before.Add(3 * time.Second).Unix()
+		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
+		require.False(t, header.ActualTime.IsZero())
+		require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMin)
+	})
 }

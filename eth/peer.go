@@ -59,6 +59,35 @@ type ethPeer struct {
 	witPeer *witPeer
 }
 
+// jailPeerForViolation handles logging and jailing a peer for a protocol violation.
+// It logs the violation details and calls the jailPeer callback if provided.
+func (p *ethPeer) jailPeerForViolation(jailPeer func(string), violation string, details map[string]interface{}) error {
+	// Log warning with violation details
+	logArgs := []interface{}{"peer", p.ID()}
+	for key, value := range details {
+		logArgs = append(logArgs, key, value)
+	}
+	p.witPeer.Peer.Log().Warn(fmt.Sprintf("Peer sent %s, dropping peer", violation), logArgs...)
+
+	// Jail the peer if callback is provided
+	if jailPeer != nil {
+		p.witPeer.Peer.Log().Warn(fmt.Sprintf("Jailing peer for %s", violation), "peer", p.ID())
+		jailPeer(p.ID())
+	}
+
+	// Build error message from details
+	errMsg := fmt.Sprintf("peer sent %s: ", violation)
+	first := true
+	for key, value := range details {
+		if !first {
+			errMsg += ", "
+		}
+		errMsg += fmt.Sprintf("%s=%v", key, value)
+		first = false
+	}
+	return fmt.Errorf("%s", errMsg)
+}
+
 // info gathers and returns some `eth` protocol metadata known about a peer.
 // nolint:typecheck
 func (p *ethPeer) info() *ethPeerInfo {
@@ -497,12 +526,11 @@ func (p *ethPeer) receiveWitnessPage(
 
 		// Validate that current page number is within bounds
 		if page.Page >= page.TotalPages {
-			p.witPeer.Peer.Log().Warn("Peer sent invalid page number, dropping peer", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
-			if jailPeer != nil {
-				p.witPeer.Peer.Log().Warn("Jailing peer for invalid page number", "peer", p.ID())
-				jailPeer(p.ID())
-			}
-			return fmt.Errorf("peer sent invalid page number: page=%d >= totalPages=%d", page.Page, page.TotalPages)
+			return p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
+				"hash":       page.Hash,
+				"page":       page.Page,
+				"totalPages": page.TotalPages,
+			})
 		}
 
 		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
@@ -521,13 +549,12 @@ func (p *ethPeer) receiveWitnessPage(
 			// We already know TotalPages - verify it hasn't changed
 			if existingTotalPages != page.TotalPages {
 				mapsMu.Unlock()
-				p.witPeer.Peer.Log().Warn("Peer sent inconsistent TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "existing", existingTotalPages, "new", page.TotalPages)
-				if jailPeer != nil {
-					p.witPeer.Peer.Log().Warn("Jailing peer for inconsistent TotalPages", "peer", p.ID())
-					jailPeer(p.ID())
-				}
 				downloadPaused[page.Hash] = true
-				return fmt.Errorf("peer sent inconsistent TotalPages: existing=%d, new=%d", existingTotalPages, page.TotalPages)
+				return p.jailPeerForViolation(jailPeer, "inconsistent TotalPages", map[string]interface{}{
+					"hash":     page.Hash,
+					"existing": existingTotalPages,
+					"new":      page.TotalPages,
+				})
 			}
 		} else {
 			// First time learning TotalPages - store it
@@ -556,15 +583,14 @@ func (p *ethPeer) receiveWitnessPage(
 		mapsMu.RUnlock()
 
 		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
-			p.witPeer.Peer.Log().Warn("Peer sent more pages than TotalPages, dropping peer", "peer", p.ID(), "hash", page.Hash, "received", len(receivedWitPages[page.Hash]), "total", currentTotalPages)
-			if jailPeer != nil {
-				p.witPeer.Peer.Log().Warn("Jailing peer for sending more pages than claimed", "peer", p.ID())
-				jailPeer(p.ID())
-			}
 			mapsMu.Lock()
 			downloadPaused[page.Hash] = true
 			mapsMu.Unlock()
-			return fmt.Errorf("peer sent more pages than TotalPages: received=%d, total=%d", len(receivedWitPages[page.Hash]), currentTotalPages)
+			return p.jailPeerForViolation(jailPeer, "more pages than TotalPages", map[string]interface{}{
+				"hash":     page.Hash,
+				"received": len(receivedWitPages[page.Hash]),
+				"total":    currentTotalPages,
+			})
 		}
 
 		// Check if download is paused before building more requests
