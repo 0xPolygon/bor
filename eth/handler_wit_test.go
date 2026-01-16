@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
@@ -24,6 +25,43 @@ func newTestWitPeer() *wit.Peer {
 	_, rw := p2p.MsgPipe()
 	return wit.NewPeer(wit.WIT1, p2pPeer, rw, log.New())
 }
+
+// newTestWitPeerWithReader creates a wit.Peer with a background reader to prevent blocking
+// on ReplyWitness and ReplyWitnessMetadata calls
+func newTestWitPeerWithReader() (*wit.Peer, func()) {
+	var id enode.ID
+	rand.Read(id[:])
+	p2pPeer := p2p.NewPeer(id, "test-peer", nil)
+	app, net := p2p.MsgPipe()
+	
+	// Start background reader to prevent WriteMsg from blocking
+	done := make(chan struct{})
+	go func() {
+		for {
+			msg, err := app.ReadMsg()
+			if err != nil {
+				close(done)
+				return
+			}
+			msg.Discard()
+		}
+	}()
+	
+	peer := wit.NewPeer(wit.WIT1, p2pPeer, net, log.New())
+	cleanup := func() {
+		app.Close()
+		peer.Close()
+		<-done
+	}
+	return peer, cleanup
+}
+
+// mockUnknownPacket is a mock packet type that implements wit.Packet
+// but is not recognized by the Handle method's switch statement
+type mockUnknownPacket struct{}
+
+func (m *mockUnknownPacket) Name() string { return "UnknownPacket" }
+func (m *mockUnknownPacket) Kind() byte   { return 0xFF }
 
 // TestHandleGetWitnessMetadataPacket tests the Handle function with GetWitnessMetadataPacket
 // This test verifies that the case statement correctly routes GetWitnessMetadataPacket
@@ -266,4 +304,162 @@ func TestHandleGetWitnessMetadata_MissingHeader(t *testing.T) {
 	assert.Equal(t, uint64(5*1024*1024), metadata.WitnessSize)
 	assert.Equal(t, uint64(1), metadata.TotalPages)
 	assert.Equal(t, uint64(0), metadata.BlockNumber) // Block number should be 0 when header is missing
+}
+
+// TestWitHandlerHandle tests the Handle method (lines 47-78) with all packet types
+func TestWitHandlerHandle(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+
+	t.Run("NewWitnessPacket", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create a test witness
+		header := &types.Header{
+			Number: big.NewInt(100),
+		}
+		witness, _ := stateless.NewWitness(header, nil)
+
+		packet := &wit.NewWitnessPacket{
+			Witness: witness,
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should successfully process NewWitnessPacket")
+	})
+
+	t.Run("NewWitnessHashesPacket", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		hashes := []common.Hash{
+			{0x01, 0x02, 0x03},
+			{0x04, 0x05, 0x06},
+		}
+		numbers := []uint64{100, 101}
+
+		packet := &wit.NewWitnessHashesPacket{
+			Hashes:  hashes,
+			Numbers: numbers,
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should successfully process NewWitnessHashesPacket")
+	})
+
+	t.Run("GetWitnessPacket", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create test header and witness
+		header := &types.Header{
+			Number: big.NewInt(200),
+		}
+		hash := header.Hash()
+
+		db := handler.chain.DB()
+		rawdb.WriteHeader(db, header)
+
+		// Create a small witness (5 MB)
+		witness := make([]byte, 5*1024*1024)
+		rand.Read(witness)
+		rawdb.WriteWitness(db, hash, witness)
+
+		packet := &wit.GetWitnessPacket{
+			RequestId: 12345,
+			GetWitnessRequest: &wit.GetWitnessRequest{
+				WitnessPages: []wit.WitnessPageRequest{
+					{Hash: hash, Page: 0},
+				},
+			},
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should successfully process GetWitnessPacket")
+	})
+
+	t.Run("GetWitnessMetadataPacket", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create test header
+		header := &types.Header{
+			Number: big.NewInt(300),
+		}
+		hash := header.Hash()
+
+		db := handler.chain.DB()
+		rawdb.WriteHeader(db, header)
+
+		// Create a witness
+		witness := make([]byte, 10*1024*1024)
+		rand.Read(witness)
+		rawdb.WriteWitness(db, hash, witness)
+
+		packet := &wit.GetWitnessMetadataPacket{
+			RequestId: 67890,
+			GetWitnessMetadataRequest: &wit.GetWitnessMetadataRequest{
+				Hashes: []common.Hash{hash},
+			},
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should successfully process GetWitnessMetadataPacket")
+	})
+
+	t.Run("UnknownPacketType", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create a mock packet type that implements Packet interface
+		// but is not one of the recognized types in the switch statement
+		// We'll use an empty struct and implement the methods inline
+		packet := &mockUnknownPacket{}
+
+		err := witHandler.Handle(peer, packet)
+		require.Error(t, err, "Handle should return error for unknown packet type")
+		assert.Contains(t, err.Error(), "unknown wit packet type", "Error message should indicate unknown packet type")
+	})
+
+	t.Run("GetWitnessPacket_ErrorHandling", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create a packet requesting a witness that doesn't exist
+		// This should still succeed (returns empty data), but tests error path in handleGetWitness
+		nonExistentHash := common.Hash{0x99, 0x88, 0x77}
+
+		packet := &wit.GetWitnessPacket{
+			RequestId: 99999,
+			GetWitnessRequest: &wit.GetWitnessRequest{
+				WitnessPages: []wit.WitnessPageRequest{
+					{Hash: nonExistentHash, Page: 0},
+				},
+			},
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should handle missing witness gracefully")
+	})
+
+	t.Run("GetWitnessMetadataPacket_ErrorHandling", func(t *testing.T) {
+		peer, cleanup := newTestWitPeerWithReader()
+		defer cleanup()
+
+		// Create a packet requesting metadata for a non-existent witness
+		nonExistentHash := common.Hash{0xAA, 0xBB, 0xCC}
+
+		packet := &wit.GetWitnessMetadataPacket{
+			RequestId: 11111,
+			GetWitnessMetadataRequest: &wit.GetWitnessMetadataRequest{
+				Hashes: []common.Hash{nonExistentHash},
+			},
+		}
+
+		err := witHandler.Handle(peer, packet)
+		require.NoError(t, err, "Handle should handle missing witness metadata gracefully")
+	})
 }
