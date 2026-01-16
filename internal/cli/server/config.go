@@ -798,7 +798,7 @@ func DefaultConfig() *Config {
 			GlobalQueue:          131072,
 			LifeTime:             3 * time.Hour,
 			Rebroadcast:          true,
-			RebroadcastInterval:  5 * time.Second,
+			RebroadcastInterval:  30 * time.Second,
 			RebroadcastMaxAge:    10 * time.Minute,
 			RebroadcastBatchSize: 200,
 		},
