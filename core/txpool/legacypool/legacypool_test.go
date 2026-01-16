@@ -5019,3 +5019,265 @@ func TestTxFiltering(t *testing.T) {
 		}
 	})
 }
+
+// TestIdentifyStuckTransactions tests the identifyStuckTransactions method
+func TestIdentifyStuckTransactions(t *testing.T) {
+	t.Parallel()
+
+	// Create a test account
+	key, _ := crypto.GenerateKey()
+
+	t.Run("TooYoungTransactions", func(t *testing.T) {
+		// Transactions younger than RebroadcastInterval should not be identified as stuck
+		pool, _ := setupPoolWithConfig(params.TestChainConfig)
+		defer pool.Close()
+
+		// Add a new transaction (will have current timestamp)
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for young tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("TooOldTransactions", func(t *testing.T) {
+		// Transactions older than RebroadcastMaxAge should not be identified as stuck
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 5 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, testKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(testKey.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), testKey)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// Simulate an old transaction by modifying the Time directly
+		pool.mu.Lock()
+		if list := pool.pending[from]; list != nil {
+			for _, pendingTx := range list.Flatten() {
+				// Set time to 10 seconds ago (older than maxAge of 5s)
+				pendingTx.SetTime(time.Now().Add(-10 * time.Second))
+			}
+		}
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for old tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("EligibleTransactions", func(t *testing.T) {
+		// Transactions within the age range should be identified as stuck
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, testKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(testKey.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), testKey)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// Simulate a moderately old transaction (within range)
+		pool.mu.Lock()
+		if list := pool.pending[from]; list != nil {
+			for _, pendingTx := range list.Flatten() {
+				// Set time to 3 seconds ago (between interval and maxAge)
+				pendingTx.SetTime(time.Now().Add(-3 * time.Second))
+			}
+		}
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 1 {
+			t.Errorf("expected 1 stuck transaction, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("RecentlyRebroadcast", func(t *testing.T) {
+		// Transactions that were recently rebroadcast should not be identified again
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, testKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(testKey.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), testKey)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// First identification should find the tx
+		pool.mu.Lock()
+		if list := pool.pending[from]; list != nil {
+			for _, pendingTx := range list.Flatten() {
+				pendingTx.SetTime(time.Now().Add(-3 * time.Second))
+			}
+		}
+		stuckTxs1 := pool.identifyStuckTransactions()
+
+		if len(stuckTxs1) != 1 {
+			pool.mu.Unlock()
+			t.Fatalf("expected 1 stuck transaction on first call, got %d", len(stuckTxs1))
+		}
+
+		// Simulate what the caller does: update lastRebroadcast for identified txs
+		now := time.Now()
+		for _, tx := range stuckTxs1 {
+			pool.lastRebroadcast[tx.Hash()] = now
+		}
+		pool.mu.Unlock()
+
+		// Immediately calling again should not find it (recently rebroadcast)
+		pool.mu.RLock()
+		stuckTxs2 := pool.identifyStuckTransactions()
+		pool.mu.RUnlock()
+
+		if len(stuckTxs2) != 0 {
+			t.Errorf("expected 0 stuck transactions after recent rebroadcast, got %d", len(stuckTxs2))
+		}
+	})
+
+	t.Run("BatchSizeLimit", func(t *testing.T) {
+		// Only RebroadcastBatchSize transactions should be returned
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 3
+
+		pool, testKey := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(testKey.PublicKey)
+		balance, _ := new(big.Int).SetString("100000000000000000000", 10) // 100 ETH
+		testAddBalance(pool, from, balance)
+
+		// Add 5 transactions
+		for i := 0; i < 5; i++ {
+			tx := pricedTransaction(uint64(i), 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), testKey)
+			if err := pool.addRemoteSync(tx); err != nil {
+				t.Fatalf("failed to add transaction %d: %v", i, err)
+			}
+		}
+
+		// Make them eligible for rebroadcast
+		pool.mu.Lock()
+		if list := pool.pending[from]; list != nil {
+			for _, pendingTx := range list.Flatten() {
+				pendingTx.SetTime(time.Now().Add(-3 * time.Second))
+			}
+		}
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 3 {
+			t.Errorf("expected batch size limit of 3, got %d", len(stuckTxs))
+		}
+	})
+}
+
+// TestRebroadcastCleanup tests that lastRebroadcast entries are cleaned up when txs are removed
+func TestRebroadcastCleanup(t *testing.T) {
+	t.Parallel()
+
+	config := testTxPoolConfig
+	config.RebroadcastInterval = 1 * time.Second
+	config.RebroadcastMaxAge = 10 * time.Second
+	config.RebroadcastBatchSize = 100
+
+	pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+		pool.config = config
+	})
+	defer pool.Close()
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(1000000000000000000))
+	tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+	if err := pool.addRemoteSync(tx); err != nil {
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	hash := tx.Hash()
+
+	// Make it eligible and identify it
+	pool.mu.Lock()
+	if list := pool.pending[from]; list != nil {
+		for _, pendingTx := range list.Flatten() {
+			pendingTx.SetTime(time.Now().Add(-3 * time.Second))
+		}
+	}
+	stuckTxs := pool.identifyStuckTransactions()
+
+	// Simulate what the caller does: update lastRebroadcast for identified txs
+	now := time.Now()
+	for _, stuckTx := range stuckTxs {
+		pool.lastRebroadcast[stuckTx.Hash()] = now
+	}
+
+	// Verify it's tracked
+	if _, ok := pool.lastRebroadcast[hash]; !ok {
+		pool.mu.Unlock()
+		t.Fatal("transaction should be tracked in lastRebroadcast")
+	}
+
+	// Remove the transaction
+	pool.removeTx(hash, true, true)
+
+	// Verify cleanup
+	_, stillTracked := pool.lastRebroadcast[hash]
+	pool.mu.Unlock()
+
+	if stillTracked {
+		t.Error("transaction should be removed from lastRebroadcast after removal")
+	}
+}
+
+// TestSubscribeRebroadcastTransactions tests the subscription mechanism
+func TestSubscribeRebroadcastTransactions(t *testing.T) {
+	t.Parallel()
+
+	pool, _ := setupPoolWithConfig(params.TestChainConfig)
+	defer pool.Close()
+
+	ch := make(chan core.StuckTxsEvent, 1)
+	sub := pool.SubscribeRebroadcastTransactions(ch)
+	defer sub.Unsubscribe()
+
+	// The subscription should be valid
+	if sub == nil {
+		t.Error("subscription should not be nil")
+	}
+}

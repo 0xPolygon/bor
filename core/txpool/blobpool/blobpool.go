@@ -1748,6 +1748,15 @@ func (p *BlobPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool
 	}
 }
 
+// SubscribeRebroadcastTransactions returns a no-op subscription. Blob pool does not
+// support stuck transaction rebroadcast since blobs are handled differently.
+func (p *BlobPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
+}
+
 // Nonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (p *BlobPool) Nonce(addr common.Address) uint64 {
