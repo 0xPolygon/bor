@@ -306,7 +306,7 @@ func TestHandleGetWitnessMetadata_MissingHeader(t *testing.T) {
 	assert.Equal(t, uint64(0), metadata.BlockNumber) // Block number should be 0 when header is missing
 }
 
-// TestWitHandlerHandle tests the Handle method (lines 47-78) with all packet types
+// TestWitHandlerHandle tests the Handle method with all packet types
 func TestWitHandlerHandle(t *testing.T) {
 	handler := newTestHandler()
 	defer handler.close()

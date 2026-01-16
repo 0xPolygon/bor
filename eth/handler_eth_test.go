@@ -813,6 +813,82 @@ func TestHandleBlockAnnounces(t *testing.T) {
 	}
 }
 
+// TestHandleBlockAnnounces_WithWitnessRequester tests handleBlockAnnounces with statelessSync enabled
+func TestHandleBlockAnnounces_WithWitnessRequester(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	// Enable statelessSync to trigger witnessRequester creation
+	handler.handler.statelessSync.Store(true)
+
+	// Create test peer
+	p2pSrc, p2pSink := p2p.MsgPipe()
+	defer p2pSrc.Close()
+	defer p2pSink.Close()
+
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, handler.txpool)
+	defer peer.Close()
+
+	ethHandler := (*ethHandler)(handler.handler)
+
+	// Test announcing unknown blocks - this should trigger witnessRequester creation
+	hashes := []common.Hash{{0x01}, {0x02}}
+	numbers := []uint64{100, 101}
+
+	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	if err != nil {
+		t.Fatalf("handleBlockAnnounces failed: %v", err)
+	}
+
+	// Verify that witnessRequester was created (indirectly by checking no panic)
+	// The actual witness requester will be nil if no peer has the witness, but the creation path is covered
+}
+
+// TestHandleBlockAnnounces_WithSyncWithWitnesses tests handleBlockAnnounces with syncWithWitnesses enabled
+func TestHandleBlockAnnounces_WithSyncWithWitnesses(t *testing.T) {
+	// Create handler with syncWithWitnesses enabled
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+	}
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+
+	txpool := newTestTxPool()
+
+	handler, _ := newHandler(&handlerConfig{
+		Database:          db,
+		Chain:             chain,
+		TxPool:            txpool,
+		Network:           1,
+		Sync:              downloader.SnapSync,
+		BloomCache:        1,
+		syncWithWitnesses: true,
+	})
+	handler.Start(1000)
+	defer handler.Stop()
+	defer chain.Stop()
+
+	ethHandler := (*ethHandler)(handler)
+
+	// Create test peer
+	p2pSrc, p2pSink := p2p.MsgPipe()
+	defer p2pSrc.Close()
+	defer p2pSink.Close()
+
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, txpool)
+	defer peer.Close()
+
+	// Test announcing unknown blocks - this should trigger witnessRequester creation)
+	hashes := []common.Hash{{0x01}, {0x02}}
+	numbers := []uint64{100, 101}
+
+	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	if err != nil {
+		t.Fatalf("handleBlockAnnounces failed: %v", err)
+	}
+}
+
 // createTestPeerWithWitness creates an eth peer with witness support for testing
 func createTestPeerWithWitness(id string, chain *core.BlockChain) (*eth.Peer, *wit.Peer) {
 	var nodeID enode.ID
@@ -824,12 +900,26 @@ func createTestPeerWithWitness(id string, chain *core.BlockChain) (*eth.Peer, *w
 	p2pPeer := p2p.NewPeer(nodeID, id, nil)
 	app, net := p2p.MsgPipe()
 
-	// Start background reader to prevent blocking
+	// Start background reader to respond to witness requests
+	// This prevents the dispatcher from waiting indefinitely
 	go func() {
 		for {
 			msg, err := app.ReadMsg()
 			if err != nil {
 				return
+			}
+			// Respond to witness requests with an empty response to unblock the dispatcher
+			if msg.Code == wit.GetMsgWitness {
+				// Decode the request to get the request ID
+				var packet wit.GetWitnessPacket
+				if err := msg.Decode(&packet); err == nil && packet.RequestId != 0 {
+					// Send an empty witness response to unblock the dispatcher
+					emptyResponse := &wit.WitnessPacketRLPPacket{
+						RequestId:             packet.RequestId,
+						WitnessPacketResponse: []wit.WitnessPageResponse{},
+					}
+					p2p.Send(app, wit.MsgWitness, emptyResponse)
+				}
 			}
 			msg.Discard()
 		}
@@ -858,7 +948,7 @@ func createTestPeerWithWitness(id string, chain *core.BlockChain) (*eth.Peer, *w
 	return ethPeer, witPeer
 }
 
-// TestVerifyPageCount_GetRandomPeers tests the getRandomPeers closure (lines 164-175)
+// TestVerifyPageCount_GetRandomPeers tests the getRandomPeers closure
 // This test verifies that getRandomPeers correctly:
 // 1. Gets all peers
 // 2. Filters peers that support witness
@@ -909,7 +999,7 @@ func TestVerifyPageCount_GetRandomPeers(t *testing.T) {
 	allPeers := handler.handler.peers.getAllPeers()
 	reportingPeerID := peer1Eth.ID() // Use the actual peer ID
 
-	// Simulate the getRandomPeers closure logic (lines 164-175)
+	// Simulate the getRandomPeers closure logic
 	randomPeers := make([]string, 0, len(allPeers))
 	for _, p := range allPeers {
 		// Exclude the reporting peer to avoid double-counting their vote
@@ -962,7 +1052,7 @@ func TestVerifyPageCount_GetRandomPeers(t *testing.T) {
 	}
 }
 
-// TestVerifyPageCount_GetWitnessPageCount tests the getWitnessPageCount closure (lines 181-191)
+// TestVerifyPageCount_GetWitnessPageCount tests the getWitnessPageCount closure
 // This test verifies that getWitnessPageCount correctly:
 // 1. Gets peer by ID
 // 2. Checks if peer exists and supports witness
@@ -985,7 +1075,7 @@ func TestVerifyPageCount_GetWitnessPageCount(t *testing.T) {
 	peerID := peerEth.ID()
 
 	// Test case 1: Peer exists and supports witness
-	// Simulate the getWitnessPageCount closure logic (lines 181-191)
+	// Simulate the getWitnessPageCount closure logic
 	peer := handler.handler.peers.peer(peerID)
 	if peer == nil {
 		t.Fatal("Expected to retrieve peer, got nil")
@@ -1034,7 +1124,7 @@ func TestVerifyPageCount_GetWitnessPageCount(t *testing.T) {
 	}
 }
 
-// TestHandleBlockBroadcast tests the handleBlockBroadcast function (lines 199-206)
+// TestHandleBlockBroadcast tests the handleBlockBroadcast function
 func TestHandleBlockBroadcast(t *testing.T) {
 	t.Run("WithStatelessSync", func(t *testing.T) {
 		handler := newTestHandler()
