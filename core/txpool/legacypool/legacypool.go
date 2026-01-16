@@ -218,7 +218,7 @@ var DefaultConfig = Config{
 	AllowUnprotectedTxs: false,
 
 	Rebroadcast:          true,
-	RebroadcastInterval:  5 * time.Second,
+	RebroadcastInterval:  30 * time.Second,
 	RebroadcastMaxAge:    10 * time.Minute,
 	RebroadcastBatchSize: 200,
 }
@@ -583,14 +583,18 @@ func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 			if age < pool.config.RebroadcastInterval {
 				continue
 			}
-			// Skip if too old (beyond max age, stop trying)
-			if age > pool.config.RebroadcastMaxAge {
-				continue
-			}
 
-			// Skip if recently rebroadcast
-			if lastTime, ok := pool.lastRebroadcast[hash]; ok {
+			// Check rebroadcast history
+			lastTime, wasRebroadcast := pool.lastRebroadcast[hash]
+			if wasRebroadcast {
+				// Skip if recently rebroadcast
 				if now.Sub(lastTime) < pool.config.RebroadcastInterval {
+					continue
+				}
+				// Skip if we've been rebroadcasting this tx for too long (max age applies
+				// only to previously rebroadcast txs - new txs that just became executable
+				// after a base fee drop should still be considered)
+				if pool.config.RebroadcastMaxAge > 0 && age > pool.config.RebroadcastMaxAge {
 					continue
 				}
 			}
