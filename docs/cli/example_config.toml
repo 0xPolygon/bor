@@ -76,10 +76,16 @@ devfakeauthor = false           # Run miner without validator set authorization 
   mine = false             # Enable mining
   etherbase = ""           # Public address for block mining rewards
   extradata = ""           # Block extra data set by the miner (default = client version)
-  gaslimit = 45000000      # Target gas ceiling for mined blocks
+  gaslimit = 50000000      # Target gas ceiling for mined blocks (used when dynamic gas limit is disabled)
   gasprice = "25000000000"  # Minimum gas price for mining a transaction. Regardless the value set, it will be enforced to 25000000000 for all networks
   recommit = "2m5s"        # The time interval for miner to re-create mining work
   commitinterrupt = true   # Interrupt the current mining work when time is exceeded and create partial blocks
+  # Dynamic gas limit configuration
+  enableDynamicGasLimit = false   # Enable dynamic gas limit adjustment based on base fee
+  gasLimitMin = 50000000          # Minimum gas limit when dynamic gas limit is enabled
+  gasLimitMax = 65000000          # Maximum gas limit when dynamic gas limit is enabled
+  targetBaseFee = 500000000000    # Target base fee in wei (500 gwei)
+  baseFeeBuffer = 300000000000    # Buffer around target base fee in wei (300 gwei)
 
 [jsonrpc]
   ipcdisable = false                               # Disable the IPC-RPC server

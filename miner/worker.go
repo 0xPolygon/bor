@@ -404,6 +404,52 @@ func (w *worker) setGasCeil(ceil uint64) {
 	w.config.GasCeil = ceil
 }
 
+// calculateDesiredGasLimit determines the target gas limit based on configuration.
+// If dynamic gas limit is enabled, it adjusts based on the parent's base fee:
+// - When base fee > target + buffer: target max gas limit (increase supply)
+// - When base fee < target - buffer: target min gas limit (decrease supply)
+// - When within buffer: maintain current gas limit (no change)
+// If dynamic gas limit is disabled, returns the static GasCeil value.
+func (w *worker) calculateDesiredGasLimit(parent *types.Header) uint64 {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// If dynamic gas limit is not enabled, use the static GasCeil
+	if !w.config.EnableDynamicGasLimit {
+		return w.config.GasCeil
+	}
+
+	// Pre-London blocks don't have base fee, use static GasCeil
+	if parent.BaseFee == nil {
+		return w.config.GasCeil
+	}
+
+	parentBaseFee := parent.BaseFee.Uint64()
+	targetBaseFee := w.config.TargetBaseFee
+	buffer := w.config.BaseFeeBuffer
+
+	// Calculate bounds
+	upperBound := targetBaseFee + buffer
+	var lowerBound uint64
+	if buffer < targetBaseFee {
+		lowerBound = targetBaseFee - buffer
+	} else {
+		lowerBound = 0 // Prevent underflow
+	}
+
+	// Determine desired gas limit based on base fee position
+	if parentBaseFee > upperBound {
+		// Base fee is too high, increase gas limit to max to reduce fee pressure
+		return w.config.GasLimitMax
+	} else if parentBaseFee < lowerBound {
+		// Base fee is too low, decrease gas limit to min to increase fee pressure
+		return w.config.GasLimitMin
+	}
+
+	// Within buffer zone, maintain current gas limit
+	return parent.GasLimit
+}
+
 // setExtra sets the content used to initialize the block extra field.
 func (w *worker) setExtra(extra []byte) {
 	w.mu.Lock()
@@ -1362,11 +1408,14 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		coinbase = genParams.coinbase
 	}
 
+	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
+	desiredGasLimit := w.calculateDesiredGasLimit(parent)
+
 	// Construct the sealing block header.
 	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     newBlockNumber,
-		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
+		GasLimit:   core.CalcGasLimit(parent.GasLimit, desiredGasLimit),
 		Time:       timestamp,
 		Coinbase:   coinbase,
 	}
@@ -1383,7 +1432,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		header.BaseFee = eip1559.CalcBaseFee(w.chainConfig, parent)
 		if !w.chainConfig.IsLondon(parent.Number) {
 			parentGasLimit := parent.GasLimit * w.chainConfig.ElasticityMultiplier()
-			header.GasLimit = core.CalcGasLimit(parentGasLimit, w.config.GasCeil)
+			header.GasLimit = core.CalcGasLimit(parentGasLimit, desiredGasLimit)
 		}
 	}
 

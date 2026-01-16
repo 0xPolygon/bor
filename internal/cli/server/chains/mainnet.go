@@ -73,6 +73,7 @@ var mainnetBor = &Chain{
 				},
 				OverrideStateSyncRecordsInRange: []params.BlockRangeOverride{
 					{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+					{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
 				},
 
 				BurntContract: map[string]string{
