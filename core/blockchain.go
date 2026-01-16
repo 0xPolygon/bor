@@ -3512,10 +3512,28 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 			}
 
 			if canonical != nil && canonical.Root() == block.Root() {
-				// In TrieDB mode, skip the ghost-state attack detection as state roots
-				// can legitimately match due to how triedb-go computes roots.
+				// In TrieDB mode, two different blocks can legitimately have the same state root
+				// if they have the same transactions (or transactions that produce the same state).
+				// This is common in multi-validator networks where validators may produce blocks
+				// with identical or equivalent transaction sets.
+				//
+				// We verify legitimacy by checking:
+				// 1. Same transaction root → same transactions → same state root is expected
+				// 2. Same parent hash → both built on same parent state
+				// If both conditions are met, this is a legitimate block, not an attack.
 				if bc.triedb.IsUsingTDB() {
-					log.Debug("Skipping ghost-state attack check in TrieDB mode", "number", block.NumberU64(), "root", block.Root())
+					if canonical.TxHash() == block.TxHash() && canonical.ParentHash() == block.ParentHash() {
+						log.Debug("TrieDB: allowing block with matching state root (same transactions and parent)",
+							"number", block.NumberU64(), "root", block.Root(), "txHash", block.TxHash())
+						// Continue processing - this is a legitimate block from another validator
+					} else {
+						// Different transactions or different parent but same state root - suspicious
+						log.Warn("TrieDB: Sidechain ghost-state attack detected (different txs/parent, same root)",
+							"number", block.NumberU64(), "sideroot", block.Root(), "canonroot", canonical.Root(),
+							"sideTxHash", block.TxHash(), "canonTxHash", canonical.TxHash(),
+							"sideParent", block.ParentHash(), "canonParent", canonical.ParentHash())
+						return nil, it.index, errors.New("sidechain ghost-state attack")
+					}
 				} else {
 					// This is most likely a shadow-state attack. When a fork is imported into the
 					// database, and it eventually reaches a block height which is not pruned, we

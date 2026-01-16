@@ -456,6 +456,20 @@ func (bc *BlockChain) HasBlockAndState(hash common.Hash, number uint64) bool {
 		return false
 	}
 
+	// In TrieDB mode, if we have the parent block and the block's state root
+	// matches our current DB state, we can process child blocks.
+	// This prevents blocks from being incorrectly routed to the sidechain path
+	// where they would fail due to TrieDB's single-state model.
+	if bc.triedb.IsUsingTDB() {
+		// Get current state root from triedb
+		currentRoot, err := bc.triedb.Disk().TrieDB().StateRoot()
+		if err == nil && common.Hash(currentRoot) == block.Root() {
+			return true
+		}
+		// If roots don't match, fall through to normal HasState check
+		// which will return false and route to sidechain path
+	}
+
 	return bc.HasState(block.Root())
 }
 
