@@ -33,7 +33,7 @@ func newTestWitPeerWithReader() (*wit.Peer, func()) {
 	rand.Read(id[:])
 	p2pPeer := p2p.NewPeer(id, "test-peer", nil)
 	app, net := p2p.MsgPipe()
-	
+
 	// Start background reader to prevent WriteMsg from blocking
 	done := make(chan struct{})
 	go func() {
@@ -46,7 +46,7 @@ func newTestWitPeerWithReader() (*wit.Peer, func()) {
 			msg.Discard()
 		}
 	}()
-	
+
 	peer := wit.NewPeer(wit.WIT1, p2pPeer, net, log.New())
 	cleanup := func() {
 		app.Close()
