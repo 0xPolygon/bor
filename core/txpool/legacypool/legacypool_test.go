@@ -5242,3 +5242,206 @@ func TestSubscribeRebroadcastTransactions(t *testing.T) {
 		t.Error("subscription should not be nil")
 	}
 }
+
+// TestIdentifyStuckTransactionsWithBaseFee tests rebroadcast with EIP-1559 base fee filtering
+func TestIdentifyStuckTransactionsWithBaseFee(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NilHead", func(t *testing.T) {
+		// When currentHead is nil, should return nil
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Set currentHead to nil
+		pool.currentHead.Store(nil)
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should return nil when head is nil
+		if stuckTxs != nil {
+			t.Errorf("expected nil for nil head, got %d transactions", len(stuckTxs))
+		}
+	})
+
+	t.Run("LowGasFeeCap", func(t *testing.T) {
+		// Transactions with gas fee cap below base fee should not be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with low gas fee cap
+		tx := dynamicFeeTx(0, 100000, big.NewInt(100), big.NewInt(1), key) // fee cap = 100 wei
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// Set the current head to have a high base fee to trigger filtering
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Inject a header with BaseFee higher than the tx's gas fee cap
+		pool.currentHead.Store(&types.Header{
+			Number:  big.NewInt(1),
+			BaseFee: big.NewInt(1000000000), // 1 gwei, higher than tx's 100 wei fee cap
+		})
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should NOT be identified because gas fee cap is below base fee
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for low fee cap tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("LowGasTip", func(t *testing.T) {
+		// Transactions with gas tip below minimum should not be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with low tip (tip = 1 wei)
+		tx := dynamicFeeTx(0, 100000, big.NewInt(10000000000), big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Directly set a high gasTip without calling SetGasTip (which would remove the tx)
+		pool.gasTip.Store(uint256.NewInt(1000000000)) // 1 gwei, higher than tx's 1 wei tip
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should NOT be identified because gas tip is below minimum
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for low tip tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("ValidEIP1559Transaction", func(t *testing.T) {
+		// Valid EIP-1559 transactions with sufficient fee cap and tip should be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with sufficient fee cap and tip
+		tx := dynamicFeeTx(0, 100000, big.NewInt(10000000000), big.NewInt(1000000000), key) // 10 gwei fee cap, 1 gwei tip
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Inject a header with BaseFee lower than the tx's gas fee cap
+		pool.currentHead.Store(&types.Header{
+			Number:  big.NewInt(1),
+			BaseFee: big.NewInt(1000000000), // 1 gwei, lower than tx's 10 gwei fee cap
+		})
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should be identified because fee cap and tip are sufficient
+		if len(stuckTxs) != 1 {
+			t.Errorf("expected 1 stuck transaction for valid EIP-1559 tx, got %d", len(stuckTxs))
+		}
+	})
+}
+
+// TestRebroadcastLoopIntegration tests the actual rebroadcast loop sending events
+func TestRebroadcastLoopIntegration(t *testing.T) {
+	t.Parallel()
+
+	config := testTxPoolConfig
+	config.RebroadcastInterval = 100 * time.Millisecond // Short interval for testing
+	config.RebroadcastMaxAge = 10 * time.Second
+	config.RebroadcastBatchSize = 100
+
+	pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+		pool.config = config
+	})
+	defer pool.Close()
+
+	// Subscribe to rebroadcast events
+	ch := make(chan core.StuckTxsEvent, 10)
+	sub := pool.SubscribeRebroadcastTransactions(ch)
+	defer sub.Unsubscribe()
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+	// Add a transaction
+	tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+	if err := pool.addRemoteSync(tx); err != nil {
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	// Manually set the transaction time to make it eligible for rebroadcast
+	pool.mu.Lock()
+	setTxAge(pool, from, 200*time.Millisecond)
+	pool.mu.Unlock()
+
+	// Wait for the rebroadcast loop to trigger
+	select {
+	case event := <-ch:
+		if len(event.Txs) != 1 {
+			t.Errorf("expected 1 transaction in rebroadcast event, got %d", len(event.Txs))
+		}
+		if event.Txs[0].Hash() != tx.Hash() {
+			t.Errorf("wrong transaction hash in rebroadcast event")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timeout waiting for rebroadcast event")
+	}
+
+	// Verify lastRebroadcast was updated
+	pool.mu.RLock()
+	_, tracked := pool.lastRebroadcast[tx.Hash()]
+	pool.mu.RUnlock()
+
+	if !tracked {
+		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
+	}
+}
