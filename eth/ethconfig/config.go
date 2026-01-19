@@ -276,6 +276,10 @@ type Config struct {
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
 
+	// Preconf related configs
+	EnablePreconfs bool
+	BpRpcEndpoints []string // rpc endpoints of block producers
+
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`

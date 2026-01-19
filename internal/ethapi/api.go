@@ -2004,6 +2004,12 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		return common.Hash{}, err
 	}
 
+	// If preconfirmations are requested, send it to the preconf service for additional validation async
+	if b.IsPreconfEnabled() {
+		log.Info("[preconfs] submitted tx for preconf validation", "hash", tx.Hash())
+		go b.SubmitTxForPreconf(tx, from)
+	}
+
 	if tx.To() == nil {
 		addr := crypto.CreateAddress(from, tx.Nonce())
 		log.Info("Submitted contract creation", "hash", tx.Hash().Hex(), "from", from, "nonce", tx.Nonce(), "contract", addr.Hex(), "value", tx.Value())
@@ -2049,6 +2055,10 @@ func (api *TransactionAPI) SendTransaction(ctx context.Context, args Transaction
 		return common.Hash{}, err
 	}
 	return SubmitTransaction(ctx, api.b, signed)
+}
+
+func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {
+	return api.b.CheckPreconfStatus(hash)
 }
 
 // FillTransaction fills the defaults (nonce, gas, gasPrice or 1559 fields)

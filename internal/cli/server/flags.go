@@ -1232,5 +1232,21 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Health",
 	})
 
+	// Preconfirmations
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "preconfs.enable",
+		Usage:   "Enable transaction pre-confirmations via block producers",
+		Value:   &c.cliConfig.Preconf.Enable,
+		Default: c.cliConfig.Preconf.Enable,
+		Group:   "Preconfs",
+	})
+	f.SliceStringFlag(&flagset.SliceStringFlag{
+		Name:    "preconfs.bp-rpc-endpoints",
+		Usage:   "Comma separated rpc endpoints of all block producers",
+		Value:   &c.cliConfig.Preconf.BpRpcEndpoints,
+		Default: c.cliConfig.Preconf.BpRpcEndpoints,
+		Group:   "Preconfs",
+	})
+
 	return f
 }

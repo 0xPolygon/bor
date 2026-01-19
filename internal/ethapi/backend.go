@@ -60,6 +60,11 @@ type Backend interface {
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
 
+	// Preconfs related API
+	IsPreconfEnabled() bool
+	SubmitTxForPreconf(tx *types.Transaction, sender common.Address)
+	CheckPreconfStatus(hash common.Hash) (bool, error)
+
 	// Blockchain API
 	SetHead(number uint64)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)

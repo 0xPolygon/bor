@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/preconfs"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -54,6 +55,9 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
+
+	// preconfs service for validating tx inclusion for issuing preconfs
+	preconfService *preconfs.Service
 }
 
 // ChainConfig returns the active chain configuration.
@@ -719,4 +723,21 @@ func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
 
 func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return b.eth.config.TxSyncMaxTimeout
+}
+
+func (b *EthAPIBackend) IsPreconfEnabled() bool {
+	return b.preconfService != nil
+}
+
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {
+	if b.preconfService != nil {
+		b.preconfService.QueuePreconfTask(tx, sender)
+	}
+}
+
+func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	if b.preconfService != nil {
+		return b.preconfService.CheckTxPreconfStatus(hash)
+	}
+	return false, errors.New("preconf service disabled")
 }
