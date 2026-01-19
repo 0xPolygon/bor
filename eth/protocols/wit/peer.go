@@ -179,6 +179,33 @@ func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response)
 	return req, nil
 }
 
+// RequestCompactWitness sends a request to the peer for compact witnesses (WIT1).
+// Compact witnesses have cached state nodes removed to reduce bandwidth.
+func (p *Peer) RequestCompactWitness(witnessPages []WitnessPageRequest, sink chan *Response) (*Request, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	log.Debug("Requesting compact witnesses", "peer", p.id, "count", len(witnessPages))
+	id := rand.Uint64()
+
+	req := &Request{
+		id:   id,
+		sink: sink,
+		code: GetCompactWitnessMsg,
+		want: CompactWitnessMsg,
+		data: &GetCompactWitnessPacket{
+			RequestId: id,
+			GetCompactWitnessRequest: &GetCompactWitnessRequest{
+				WitnessPages: witnessPages,
+			},
+		},
+	}
+	if err := p.dispatchRequest(req); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
 // Close signals the broadcast goroutine to terminate. Only ever call this if
 // you created the peer yourself via NewPeer. Otherwise let whoever created it
 // clean it up!
@@ -194,6 +221,11 @@ func (p *Peer) ID() string {
 // Version retrieves the peer's negotiated `wit` protocol version.
 func (p *Peer) Version() uint {
 	return p.version
+}
+
+// SupportsCompactWitness returns whether the peer supports compact witness (WIT1 or higher).
+func (p *Peer) SupportsCompactWitness() bool {
+	return p.version >= WIT1
 }
 
 // Log overrides the P2P logger with the higher level one containing only the id.
@@ -257,6 +289,20 @@ func (p *Peer) ReplyWitnessMetadata(requestID uint64, metadata []WitnessMetadata
 	return p2p.Send(p.rw, WitnessMetadataMsg, &WitnessMetadataPacket{
 		RequestId: requestID,
 		Metadata:  metadata,
+	})
+}
+
+// ReplyCompactWitness is the response to GetCompactWitness (WIT1)
+func (p *Peer) ReplyCompactWitness(requestID uint64, response *CompactWitnessPacketResponse) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	log.Debug("Sending compact witness reply", "peer", p.id, "reqID", requestID, "count", len(*response))
+
+	// Send the response
+	return p2p.Send(p.rw, CompactWitnessMsg, &CompactWitnessPacketRLPPacket{
+		RequestId:                    requestID,
+		CompactWitnessPacketResponse: *response,
 	})
 }
 

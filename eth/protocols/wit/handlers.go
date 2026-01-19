@@ -99,3 +99,40 @@ func handleWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
 	log.Debug("Dispatching witness metadata response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.Metadata))
 	return peer.dispatchResponse(res, nil)
 }
+
+// handleGetCompactWitness processes a GetCompactWitnessPacket request from a peer (WIT2).
+func handleGetCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the GetCompactWitnessPacket request
+	req := new(GetCompactWitnessPacket)
+	if err := msg.Decode(&req); err != nil {
+		return fmt.Errorf("failed to decode GetCompactWitnessPacket: %w", err)
+	}
+
+	// Validate request parameters
+	if len(req.WitnessPages) == 0 {
+		return fmt.Errorf("invalid GetCompactWitnessPacket: WitnessPages cannot be empty")
+	}
+
+	return backend.Handle(peer, req)
+}
+
+// handleCompactWitness processes an incoming compact witness response from a peer (WIT2).
+func handleCompactWitness(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the CompactWitnessPacketRLPPacket response
+	packet := new(CompactWitnessPacketRLPPacket)
+	if err := msg.Decode(packet); err != nil {
+		log.Error("Failed to decode compact witness response packet", "err", err)
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+
+	// Construct the response object
+	res := &Response{
+		id:   packet.RequestId,
+		code: CompactWitnessMsg,
+		Res:  packet,
+	}
+
+	// Forward the response to the dispatcher
+	log.Debug("Dispatching compact witness response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.CompactWitnessPacketResponse))
+	return peer.dispatchResponse(res, nil)
+}

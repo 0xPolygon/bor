@@ -55,8 +55,9 @@ type peerBlockRange struct {
 // ethPeer is a wrapper around eth.Peer to maintain a few extra metadata.
 type ethPeer struct {
 	*eth.Peer
-	snapExt *snapPeer // Satellite `snap` connection
-	witPeer *witPeer
+	snapExt                 *snapPeer // Satellite `snap` connection
+	witPeer                 *witPeer
+	shouldUseCompactWitness func(hash common.Hash) bool // Callback to check if compact witness should be used for a block hash
 }
 
 // jailPeerForViolation handles logging and jailing a peer for a protocol violation.
@@ -130,6 +131,8 @@ type WitnessPeer interface {
 	AsyncSendNewWitnessHash(hash common.Hash, number uint64)
 	RequestWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error)
 	RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error)
+	RequestCompactWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error)
+	SupportsCompactWitness() bool
 	Close()
 	ID() string
 	Version() uint
@@ -202,8 +205,19 @@ func (p *ethPeer) SupportsWitness() bool {
 
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
+// Automatically determines whether to use compact witness based on cache state.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
-	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil)
+	// Determine if we should use compact witness
+	// Check cache state for the first hash in the batch
+	useCompactWitness := false
+	if len(hashes) > 0 && p.shouldUseCompactWitness != nil {
+		// We check the first hash as a representative
+		// Assumption: All hashes in the batch are in similar block range (sequential blocks)
+		// This is reasonable for batch witness requests during sync
+		useCompactWitness = p.shouldUseCompactWitness(hashes[0])
+	}
+
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil, useCompactWitness)
 }
 
 // RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
@@ -316,11 +330,11 @@ func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error
 }
 
 // RequestWitnessesWithVerification requests witnesses with optional page count verification
-func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, jailPeer func(string)) (*eth.Request, error) {
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, jailPeer func(string), useCompactWitness bool) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
-	p.witPeer.Peer.Log().Trace("RequestWitnesses called", "peer", p.ID(), "hashes", len(hashes))
+	p.witPeer.Peer.Log().Trace("RequestWitnesses called", "peer", p.ID(), "hashes", len(hashes), "useCompactWitness", useCompactWitness)
 
 	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
 	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer) // semaphore to limit concurrent requests
@@ -334,7 +348,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 	var buildRequestMu sync.RWMutex
 
 	// Build all the initial requests synchronously.
-	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+	buildWitReqErr := p.buildWitnessRequests(hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, useCompactWitness)
 	if buildWitReqErr != nil {
 		p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 		return nil, buildWitReqErr
@@ -368,7 +382,7 @@ func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer, useCompactWitness)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -475,6 +489,7 @@ func (p *ethPeer) receiveWitnessPage(
 	downloadPaused map[common.Hash]bool,
 	verifyPageCount func(common.Hash, uint64, string) bool,
 	jailPeer func(string), // Function to jail a peer for malicious behavior (optional)
+	useCompactWitness bool,
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -494,7 +509,7 @@ func (p *ethPeer) receiveWitnessPage(
 			// non blocking call to avoid race condition because of semaphore
 			witReqsWg.Add(1) // protecting from not finishing before requests are built
 			go func() {
-				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+				buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompactWitness)
 				if buildWitReqErr != nil {
 					p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 				}
@@ -603,7 +618,7 @@ func (p *ethPeer) receiveWitnessPage(
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built
 		go func() {
-			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests)
+			buildWitReqErr := p.buildWitnessRequests(hashes, witReqs, witReqsWg, witTotalPages, witTotalRequest, witResCh, witReqSem, mapsMu, buildRequestMu, failedRequests, useCompactWitness)
 			if buildWitReqErr != nil {
 				p.witPeer.Peer.Log().Error("Error in building witness requests", "peer", p.ID(), "err", buildWitReqErr)
 			}
@@ -642,6 +657,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
+	useCompactWitness bool,
 ) error {
 	buildRequestMu.Lock()
 	defer buildRequestMu.Unlock()
@@ -666,6 +682,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 				witReqSem,
 				mapsMu,
 				witTotalRequest,
+				useCompactWitness,
 			); err != nil {
 				return err
 			}
@@ -686,6 +703,7 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 					witReqSem,
 					mapsMu,
 					witTotalRequest,
+					useCompactWitness,
 				); err != nil {
 					return err
 				}
@@ -707,12 +725,37 @@ func (p *ethPeer) doWitnessRequest(
 	witReqSem chan int,
 	mapsMu *sync.RWMutex,
 	witTotalRequest map[common.Hash]uint64,
+	useCompactWitness bool,
 ) error {
-	p.witPeer.Peer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page)
+	p.witPeer.Peer.Log().Debug("RequestWitnesses building a wit request", "peer", p.ID(), "hash", hash, "page", page, "compact", useCompactWitness)
 	witReqSem <- 1
 	witResCh := make(chan *wit.Response)
 	request := []wit.WitnessPageRequest{{Hash: hash, Page: page}}
-	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
+
+	var witReq *wit.Request
+	var err error
+
+	// Check if we should request compact witness
+	// Compact witness is only requested if:
+	// 1. useCompactWitness flag is true (cache is enabled and valid)
+	// 2. Peer supports compact witness (WIT1+)
+	if useCompactWitness && p.witPeer.Peer.SupportsCompactWitness() {
+		witReq, err = p.witPeer.Peer.RequestCompactWitness(request, witResCh)
+		if err != nil {
+			// Fall back to full witness if compact witness request fails
+			p.witPeer.Peer.Log().Debug("Compact witness request failed, falling back to full witness", "peer", p.ID(), "err", err)
+			witReq, err = p.witPeer.Peer.RequestWitness(request, witResCh)
+			wit.NewMetricsHelper().RecordFullWitnessRequest()
+		} else {
+			p.witPeer.Peer.Log().Debug("Requesting compact witness", "peer", p.ID(), "hash", hash, "page", page)
+			wit.NewMetricsHelper().RecordCompactWitnessRequest()
+		}
+	} else {
+		// Request full witness
+		witReq, err = p.witPeer.Peer.RequestWitness(request, witResCh)
+		wit.NewMetricsHelper().RecordFullWitnessRequest()
+	}
+
 	if err != nil {
 		p.witPeer.Peer.Log().Error("Error in making wit request", "peer", p.ID(), "err", err)
 		return err

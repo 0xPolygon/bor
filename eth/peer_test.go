@@ -1094,7 +1094,7 @@ func TestRequestWitnessesWithVerification_InvalidPageNumber(t *testing.T) {
 		}).
 		AnyTimes()
 
-	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer)
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
@@ -1174,7 +1174,7 @@ func TestRequestWitnessesWithVerification_InconsistentTotalPages(t *testing.T) {
 		}).
 		AnyTimes()
 
-	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer)
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
@@ -1236,7 +1236,7 @@ func TestRequestWitnessesWithVerification_PeerFailedVerification(t *testing.T) {
 		}).
 		AnyTimes()
 
-	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, verifyPageCount, nil)
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, verifyPageCount, nil, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
@@ -1301,7 +1301,7 @@ func TestRequestWitnessesWithVerification_MorePagesThanTotalPages(t *testing.T) 
 		}).
 		AnyTimes()
 
-	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer)
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, nil, jailPeer, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
@@ -1369,7 +1369,7 @@ func TestRequestWitnessesWithVerification_DownloadPaused(t *testing.T) {
 		}).
 		AnyTimes()
 
-	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, verifyPageCount, nil)
+	req, err := p.RequestWitnessesWithVerification([]common.Hash{hash}, dlCh, verifyPageCount, nil, false)
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 

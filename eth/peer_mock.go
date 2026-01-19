@@ -213,6 +213,35 @@ func (mr *MockWitnessPeerMockRecorder) RequestWitnessMetadata(hashes, sink inter
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestWitnessMetadata", reflect.TypeOf((*MockWitnessPeer)(nil).RequestWitnessMetadata), hashes, sink)
 }
 
+// RequestCompactWitness mocks base method.
+func (m *MockWitnessPeer) RequestCompactWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RequestCompactWitness", witnessPages, sink)
+	ret0, _ := ret[0].(*wit.Request)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RequestCompactWitness indicates an expected call of RequestCompactWitness.
+func (mr *MockWitnessPeerMockRecorder) RequestCompactWitness(witnessPages, sink interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestCompactWitness", reflect.TypeOf((*MockWitnessPeer)(nil).RequestCompactWitness), witnessPages, sink)
+}
+
+// SupportsCompactWitness mocks base method.
+func (m *MockWitnessPeer) SupportsCompactWitness() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SupportsCompactWitness")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// SupportsCompactWitness indicates an expected call of SupportsCompactWitness.
+func (mr *MockWitnessPeerMockRecorder) SupportsCompactWitness() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SupportsCompactWitness", reflect.TypeOf((*MockWitnessPeer)(nil).SupportsCompactWitness))
+}
+
 // Version mocks base method.
 func (m *MockWitnessPeer) Version() uint {
 	m.ctrl.T.Helper()

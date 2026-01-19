@@ -325,6 +325,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	}
 
+	// Initialize witness state cache (WIT1) if compact witnesses are enabled
+	// Note: Compact witness is automatically disabled when EnableParallelStatelessImport is true
+	// because parallel import is non-deterministic and would produce inconsistent cache state
+	if err == nil && eth.blockchain != nil && config.EnableCompactWitness && !config.EnableParallelStatelessImport {
+		eth.blockchain.InitializeWitnessCache(config.EnableCompactWitness)
+	}
+
 	if err != nil {
 		return nil, err
 	}

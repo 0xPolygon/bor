@@ -141,8 +141,24 @@ func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *
 			return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
 		}
 
+		// Determine if we should request compact witness
+		// Compact witness is only requested if:
+		// 1. Witness cache is enabled on this node
+		// 2. Cache is valid for the current block range
+		// 3. Cache is complete (populated continuously since window start)
+		useCompactWitness := false
+		if cache := (*handler)(h).chain.WitnessStateCache(); cache != nil && cache.IsEnabled() {
+			// Get block number for this hash to check if cache is valid
+			if header := (*handler)(h).chain.GetHeaderByHash(hash); header != nil {
+				// Only use compact witness if cache is valid AND complete
+				// Cache is incomplete after restart mid-window (missing earlier blocks)
+				// Cache becomes complete after: starting from window start OR promoting to next window
+				useCompactWitness = cache.IsValid(header.Number.Uint64()) && cache.IsCacheComplete()
+			}
+		}
+
 		// Request witnesses using the wit peer with verification
-		return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer)
+		return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer, useCompactWitness)
 	}
 }
 

@@ -359,6 +359,55 @@ func DeleteWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
 	}
 }
 
+// ReadCompactWitness retrieves the compact witness corresponding to the block hash.
+func ReadCompactWitness(db ethdb.KeyValueReader, blockHash common.Hash) []byte {
+	log.Debug("ReadCompactWitness", "blockHash", blockHash)
+	data, _ := db.Get(compactWitnessKey(blockHash))
+	return data
+}
+
+// HasCompactWitness verifies the existence of a compact witness corresponding to the hash.
+func HasCompactWitness(db ethdb.Reader, blockHash common.Hash) bool {
+	if has, err := db.Has(compactWitnessKey(blockHash)); !has || err != nil {
+		return false
+	}
+	return true
+}
+
+// ReadCompactWitnessSize retrieves the size of a compact witness.
+func ReadCompactWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
+	log.Debug("ReadCompactWitnessSize", "blockHash", blockHash)
+	data, err := db.Get(compactWitnessSizeKey(blockHash))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
+	number := binary.BigEndian.Uint64(data)
+	return &number
+}
+
+// WriteCompactWitness stores a compact witness and its size in the database.
+func WriteCompactWitness(db ethdb.KeyValueWriter, blockHash common.Hash, witness []byte) {
+	log.Debug("WriteCompactWitness", "blockHash", blockHash, "size", len(witness))
+	if err := db.Put(compactWitnessKey(blockHash), witness); err != nil {
+		log.Crit("Failed to store compact witness", "err", err)
+	}
+	if err := db.Put(compactWitnessSizeKey(blockHash), encodeBlockNumber(uint64(len(witness)))); err != nil {
+		log.Crit("Failed to store compact witness size", "err", err)
+	}
+}
+
+// DeleteCompactWitness removes a compact witness and its size from the database.
+func DeleteCompactWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
+	log.Debug("DeleteCompactWitness", "blockHash", blockHash)
+	if err := db.Delete(compactWitnessKey(blockHash)); err != nil {
+		log.Crit("Failed to remove compact witness", "err", err)
+	}
+	if err := db.Delete(compactWitnessSizeKey(blockHash)); err != nil {
+		log.Crit("Failed to remove compact witness size", "err", err)
+	}
+}
+
 func ReadWitnessPruneCursor(db ethdb.KeyValueReader) *uint64 {
 	log.Debug("ReadWitnessCursor")
 	data, err := db.Get(witnessPruneCursorKey())

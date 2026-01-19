@@ -177,14 +177,22 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 
 	h := &handler{
-		nodeID:                  config.NodeID,
-		networkID:               config.Network,
-		forkFilter:              forkid.NewFilter(config.Chain),
-		eventMux:                config.EventMux,
-		database:                config.Database,
-		txpool:                  config.TxPool,
-		chain:                   config.Chain,
-		peers:                   newPeerSet(),
+		nodeID:     config.NodeID,
+		networkID:  config.Network,
+		forkFilter: forkid.NewFilter(config.Chain),
+		eventMux:   config.EventMux,
+		database:   config.Database,
+		txpool:     config.TxPool,
+		chain:      config.Chain,
+		peers: newPeerSet(func(hash common.Hash) bool {
+			// Check if compact witness should be used for this block hash
+			if cache := config.Chain.WitnessStateCache(); cache != nil && cache.IsEnabled() {
+				if header := config.Chain.GetHeaderByHash(hash); header != nil {
+					return cache.IsValid(header.Number.Uint64()) && cache.IsCacheComplete()
+				}
+			}
+			return false
+		}),
 		ethAPI:                  config.EthAPI,
 		requiredBlocks:          config.RequiredBlocks,
 		enableBlockTracking:     config.enableBlockTracking,

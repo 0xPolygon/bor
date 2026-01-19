@@ -72,6 +72,15 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 		// Reply with metadata
 		return peer.ReplyWitnessMetadata(packet.RequestId, response)
 
+	case *wit.GetCompactWitnessPacket:
+		// Call handleGetCompactWitness which returns compact witness data (WIT1)
+		response, err := h.handleGetCompactWitness(peer, packet)
+		if err != nil {
+			return fmt.Errorf("failed to handle GetCompactWitnessPacket: %w", err)
+		}
+		// Reply using the compact witness data
+		return peer.ReplyCompactWitness(packet.RequestId, &response)
+
 	default:
 		return fmt.Errorf("unknown wit packet type %T", packet)
 	}
@@ -156,6 +165,11 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 				witnessCache[witnessPage.Hash] = queriedBytes
 				witnessBytes = queriedBytes
 				totalCached += len(queriedBytes)
+
+				// Record full witness served metric (only once per witness, not per page)
+				if witnessPage.Page == 0 {
+					wit.NewMetricsHelper().RecordFullWitnessServed()
+				}
 			}
 
 			start := PageSize * witnessPage.Page
@@ -221,5 +235,136 @@ func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnes
 	}
 
 	log.Debug("handleGetWitnessMetadata returning metadata", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
+	return response, nil
+}
+
+// handleGetCompactWitness retrieves and compacts witnesses for the requested block hashes (WIT1).
+// It reads full witnesses, removes cached state nodes, and returns compact witness data.
+func (h *witHandler) handleGetCompactWitness(peer *wit.Peer, req *wit.GetCompactWitnessPacket) (wit.CompactWitnessPacketResponse, error) {
+	log.Debug("handleGetCompactWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
+
+	// Check if compact witness is enabled
+	bc := h.Chain()
+	if bc == nil {
+		return nil, errors.New("blockchain is nil")
+	}
+
+	// Get cached nodes from the witness cache
+	cache := bc.WitnessStateCache()
+	if cache == nil || !cache.IsEnabled() {
+		// Cache not available, fall back to full witness
+		log.Debug("Witness cache not available, falling back to full witness", "peer", peer.ID())
+		// Use the regular witness handler
+		fullResponse, err := h.handleGetWitness(peer, &wit.GetWitnessPacket{
+			RequestId:         req.RequestId,
+			GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: req.WitnessPages},
+		})
+		if err != nil {
+			return nil, err
+		}
+		// Convert to compact witness response (no actual compaction done)
+		compactResponse := make(wit.CompactWitnessPacketResponse, len(fullResponse))
+		for i, page := range fullResponse {
+			compactResponse[i] = page
+		}
+		return compactResponse, nil
+	}
+
+	// List different witnesses to query
+	seen := make(map[common.Hash]struct{}, len(req.WitnessPages))
+	for _, witnessPage := range req.WitnessPages {
+		seen[witnessPage.Hash] = struct{}{}
+	}
+
+	// Witness sizes - use compact witness size if available, otherwise full witness size
+	// We ONLY serve stored compact witnesses, never compute on-the-fly
+	witnessSize := make(map[common.Hash]uint64, len(seen))
+	for witnessBlockHash := range seen {
+		// Try compact witness size first
+		size := rawdb.ReadCompactWitnessSize(bc.DB(), witnessBlockHash)
+		if size == nil {
+			// No stored compact witness, fall back to full witness size
+			size = rawdb.ReadWitnessSize(bc.DB(), witnessBlockHash)
+		}
+		if size == nil {
+			witnessSize[witnessBlockHash] = 0
+		} else {
+			witnessSize[witnessBlockHash] = *size
+		}
+	}
+
+	// Query witnesses by demand
+	// We ONLY serve stored compact witnesses. If not stored, we serve full witness.
+	// We NEVER compute compact witness on-the-fly because:
+	// - Cache state at block N is different from current cache state
+	// - On-the-fly compaction would produce incorrect compact witnesses
+	var response wit.CompactWitnessPacketResponse
+	witnessCache := make(map[common.Hash][]byte, len(seen))
+
+	totalResponsePayloadDataAmount := 0 // fast fail check
+	totalCached := 0                    // protection against heavy memory requests
+
+	for _, witnessPage := range req.WitnessPages {
+		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize
+		var witnessPageResponse wit.WitnessPageResponse
+		witnessPageResponse.Page = witnessPage.Page
+		witnessPageResponse.Hash = witnessPage.Hash
+		witnessPageResponse.TotalPages = totalPages
+
+		needToQuery := witnessPage.Page < totalPages
+		if needToQuery {
+			var witnessBytes []byte
+
+			// Check if we already have the witness cached in memory
+			if cachedBytes, exists := witnessCache[witnessPage.Hash]; exists {
+				witnessBytes = cachedBytes
+			} else {
+				// Try to read stored compact witness from database first
+				compactBytes := rawdb.ReadCompactWitness(bc.DB(), witnessPage.Hash)
+				if compactBytes != nil {
+					// Stored compact witness exists - use it
+					witnessCache[witnessPage.Hash] = compactBytes
+					witnessBytes = compactBytes
+					totalCached += len(compactBytes)
+					log.Debug("Using stored compact witness", "hash", witnessPage.Hash, "size", len(compactBytes))
+					// Record that we served a compact witness (only once per witness, not per page)
+					if witnessPage.Page == 0 {
+						wit.NewMetricsHelper().RecordCompactWitnessServed()
+					}
+				} else {
+					// No stored compact witness - fall back to full witness
+					fullWitnessBytes := bc.GetWitness(witnessPage.Hash)
+					witnessCache[witnessPage.Hash] = fullWitnessBytes
+					witnessBytes = fullWitnessBytes
+					totalCached += len(fullWitnessBytes)
+					log.Debug("No stored compact witness, serving full witness", "hash", witnessPage.Hash, "size", len(fullWitnessBytes))
+					// Record that we served a full witness (only once per witness, not per page)
+					if witnessPage.Page == 0 {
+						wit.NewMetricsHelper().RecordFullWitnessServed()
+					}
+				}
+			}
+
+			start := PageSize * witnessPage.Page
+			end := start + PageSize
+			if end > uint64(len(witnessBytes)) {
+				end = uint64(len(witnessBytes))
+			}
+			witnessPageResponse.Data = witnessBytes[start:end]
+			totalResponsePayloadDataAmount += len(witnessPageResponse.Data)
+		}
+		response = append(response, witnessPageResponse)
+
+		// fast fail check
+		if totalCached >= MaximumCachedWitnessOnARequest {
+			return nil, errors.New("request demands huge amount of memory")
+		}
+		// memory protection check
+		if totalResponsePayloadDataAmount >= MaximumResponseSize {
+			return nil, errors.New("response exceeds maximum p2p payload size")
+		}
+	}
+
+	log.Debug("handleGetCompactWitness returning compact witness pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
 }

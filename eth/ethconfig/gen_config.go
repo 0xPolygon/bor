@@ -51,6 +51,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Preimages                            bool
 		TriesInMemory                        uint64
 		FilterLogCacheSize                   int
+		AddressCacheSizes                    map[common.Address]int
 		Miner                                miner.Config
 		TxPool                               legacypool.Config
 		BlobPool                             blobpool.Config
@@ -62,7 +63,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
-		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverridePrague                       *big.Int `toml:",omitempty"`
 		HeimdallURL                          string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
@@ -77,6 +78,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		SyncWithWitnesses                    bool
 		SyncAndProduceWitnesses              bool
 		DevFakeAuthor                        bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
@@ -84,6 +86,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		WitnessPruneInterval                 time.Duration
 		EnableParallelStatelessImport        bool
 		EnableParallelStatelessImportWorkers int
+		WitnessAPIEnabled                    bool
+		EnableCompactWitness                 bool
+		DisableBlindForkValidation           bool
+		MaxBlindForkValidationLimit          uint64
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -107,6 +113,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.DatabaseCache = c.DatabaseCache
 	enc.DatabaseFreezer = c.DatabaseFreezer
 	enc.DatabaseEra = c.DatabaseEra
+	enc.LevelDbCompactionTableSize = c.LevelDbCompactionTableSize
+	enc.LevelDbCompactionTableSizeMultiplier = c.LevelDbCompactionTableSizeMultiplier
+	enc.LevelDbCompactionTotalSize = c.LevelDbCompactionTotalSize
+	enc.LevelDbCompactionTotalSizeMultiplier = c.LevelDbCompactionTotalSizeMultiplier
 	enc.TrieCleanCache = c.TrieCleanCache
 	enc.TrieDirtyCache = c.TrieDirtyCache
 	enc.TrieTimeout = c.TrieTimeout
@@ -114,6 +124,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.Preimages = c.Preimages
 	enc.TriesInMemory = c.TriesInMemory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
+	enc.AddressCacheSizes = c.AddressCacheSizes
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
@@ -125,7 +136,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
-	enc.OverrideOsaka = c.OverrideOsaka
+	enc.OverridePrague = c.OverridePrague
 	enc.HeimdallURL = c.HeimdallURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
@@ -140,6 +151,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.SyncWithWitnesses = c.SyncWithWitnesses
 	enc.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
 	enc.DevFakeAuthor = c.DevFakeAuthor
+	enc.OverrideOsaka = c.OverrideOsaka
 	enc.OverrideVerkle = c.OverrideVerkle
 	enc.EnableBlockTracking = c.EnableBlockTracking
 	enc.FastForwardThreshold = c.FastForwardThreshold
@@ -147,6 +159,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
 	enc.EnableParallelStatelessImport = c.EnableParallelStatelessImport
 	enc.EnableParallelStatelessImportWorkers = c.EnableParallelStatelessImportWorkers
+	enc.WitnessAPIEnabled = c.WitnessAPIEnabled
+	enc.EnableCompactWitness = c.EnableCompactWitness
+	enc.DisableBlindForkValidation = c.DisableBlindForkValidation
+	enc.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 	return &enc, nil
 }
 
@@ -185,6 +201,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Preimages                            *bool
 		TriesInMemory                        *uint64
 		FilterLogCacheSize                   *int
+		AddressCacheSizes                    map[common.Address]int
 		Miner                                *miner.Config
 		TxPool                               *legacypool.Config
 		BlobPool                             *blobpool.Config
@@ -196,7 +213,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
-		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverridePrague                       *big.Int `toml:",omitempty"`
 		HeimdallURL                          *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
@@ -211,6 +228,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		SyncWithWitnesses                    *bool
 		SyncAndProduceWitnesses              *bool
 		DevFakeAuthor                        *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
@@ -218,6 +236,10 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		WitnessPruneInterval                 *time.Duration
 		EnableParallelStatelessImport        *bool
 		EnableParallelStatelessImportWorkers *int
+		WitnessAPIEnabled                    *bool
+		EnableCompactWitness                 *bool
+		DisableBlindForkValidation           *bool
+		MaxBlindForkValidationLimit          *uint64
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -286,6 +308,18 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.DatabaseEra != nil {
 		c.DatabaseEra = *dec.DatabaseEra
 	}
+	if dec.LevelDbCompactionTableSize != nil {
+		c.LevelDbCompactionTableSize = *dec.LevelDbCompactionTableSize
+	}
+	if dec.LevelDbCompactionTableSizeMultiplier != nil {
+		c.LevelDbCompactionTableSizeMultiplier = *dec.LevelDbCompactionTableSizeMultiplier
+	}
+	if dec.LevelDbCompactionTotalSize != nil {
+		c.LevelDbCompactionTotalSize = *dec.LevelDbCompactionTotalSize
+	}
+	if dec.LevelDbCompactionTotalSizeMultiplier != nil {
+		c.LevelDbCompactionTotalSizeMultiplier = *dec.LevelDbCompactionTotalSizeMultiplier
+	}
 	if dec.TrieCleanCache != nil {
 		c.TrieCleanCache = *dec.TrieCleanCache
 	}
@@ -306,6 +340,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.FilterLogCacheSize != nil {
 		c.FilterLogCacheSize = *dec.FilterLogCacheSize
+	}
+	if dec.AddressCacheSizes != nil {
+		c.AddressCacheSizes = dec.AddressCacheSizes
 	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
@@ -340,8 +377,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.RPCTxFeeCap != nil {
 		c.RPCTxFeeCap = *dec.RPCTxFeeCap
 	}
-	if dec.OverrideOsaka != nil {
-		c.OverrideOsaka = dec.OverrideOsaka
+	if dec.OverridePrague != nil {
+		c.OverridePrague = dec.OverridePrague
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
@@ -385,6 +422,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.DevFakeAuthor != nil {
 		c.DevFakeAuthor = *dec.DevFakeAuthor
 	}
+	if dec.OverrideOsaka != nil {
+		c.OverrideOsaka = dec.OverrideOsaka
+	}
 	if dec.OverrideVerkle != nil {
 		c.OverrideVerkle = dec.OverrideVerkle
 	}
@@ -405,6 +445,18 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnableParallelStatelessImportWorkers != nil {
 		c.EnableParallelStatelessImportWorkers = *dec.EnableParallelStatelessImportWorkers
+	}
+	if dec.WitnessAPIEnabled != nil {
+		c.WitnessAPIEnabled = *dec.WitnessAPIEnabled
+	}
+	if dec.EnableCompactWitness != nil {
+		c.EnableCompactWitness = *dec.EnableCompactWitness
+	}
+	if dec.DisableBlindForkValidation != nil {
+		c.DisableBlindForkValidation = *dec.DisableBlindForkValidation
+	}
+	if dec.MaxBlindForkValidationLimit != nil {
+		c.MaxBlindForkValidationLimit = *dec.MaxBlindForkValidationLimit
 	}
 	return nil
 }

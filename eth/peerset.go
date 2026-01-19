@@ -64,20 +64,24 @@ type peerSet struct {
 	witWait map[string]chan *wit.Peer // Peers connected on `eth` waiting for their wit extension
 	witPend map[string]*wit.Peer      // Peers connected on the `wit` protocol, but not yet on `eth`
 
+	shouldUseCompactWitness func(hash common.Hash) bool // Callback to check if compact witness should be used
+
 	lock   sync.RWMutex
 	closed bool
 	quitCh chan struct{} // Quit channel to signal termination
 }
 
 // newPeerSet creates a new peer set to track the active participants.
-func newPeerSet() *peerSet {
+// The shouldUseCompactWitness callback is used by peers to determine if compact witness should be requested.
+func newPeerSet(shouldUseCompactWitness func(hash common.Hash) bool) *peerSet {
 	return &peerSet{
-		peers:    make(map[string]*ethPeer),
-		snapWait: make(map[string]chan *snap.Peer),
-		snapPend: make(map[string]*snap.Peer),
-		witWait:  make(map[string]chan *wit.Peer),
-		witPend:  make(map[string]*wit.Peer),
-		quitCh:   make(chan struct{}),
+		peers:                   make(map[string]*ethPeer),
+		snapWait:                make(map[string]chan *snap.Peer),
+		snapPend:                make(map[string]*snap.Peer),
+		witWait:                 make(map[string]chan *wit.Peer),
+		witPend:                 make(map[string]*wit.Peer),
+		shouldUseCompactWitness: shouldUseCompactWitness,
+		quitCh:                  make(chan struct{}),
 	}
 }
 
@@ -252,7 +256,8 @@ func (ps *peerSet) registerPeer(peer *eth.Peer, extSnap *snap.Peer, extWit *wit.
 	}
 
 	eth := &ethPeer{
-		Peer: peer,
+		Peer:                    peer,
+		shouldUseCompactWitness: ps.shouldUseCompactWitness,
 	}
 	if extSnap != nil {
 		eth.snapExt = &snapPeer{extSnap}

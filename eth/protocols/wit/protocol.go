@@ -10,7 +10,7 @@ import (
 // Constants to match up protocol versions and messages
 const (
 	WIT0 = 0
-	WIT1 = 1
+	WIT1 = 1 // Adds witness metadata + compact witness support
 )
 
 // ProtocolName is the official short name of the `wit` protocol used during
@@ -23,7 +23,7 @@ var ProtocolVersions = []uint{WIT1, WIT0}
 
 // protocolLengths are the number of implemented message corresponding to
 // different protocol versions.
-var protocolLengths = map[uint]uint64{WIT1: 6, WIT0: 4}
+var protocolLengths = map[uint]uint64{WIT1: 8, WIT0: 4}
 
 // maxMessageSize is the maximum cap on the size of a protocol message.
 const maxMessageSize = 16 * 1024 * 1024
@@ -33,8 +33,10 @@ const (
 	NewWitnessHashesMsg   = 0x01
 	GetMsgWitness         = 0x02
 	MsgWitness            = 0x03
-	GetWitnessMetadataMsg = 0x04
-	WitnessMetadataMsg    = 0x05
+	GetWitnessMetadataMsg = 0x04 // WIT1: Request witness metadata
+	WitnessMetadataMsg    = 0x05 // WIT1: Witness metadata response
+	GetCompactWitnessMsg  = 0x06 // WIT1: Request compact witness
+	CompactWitnessMsg     = 0x07 // WIT1: Compact witness response
 )
 
 var (
@@ -134,3 +136,31 @@ func (w *GetWitnessMetadataRequest) Kind() byte   { return GetWitnessMetadataMsg
 
 func (w *WitnessMetadataPacket) Name() string { return "WitnessMetadata" }
 func (w *WitnessMetadataPacket) Kind() byte   { return WitnessMetadataMsg }
+
+// GetCompactWitnessRequest represents a request for compact witnesses (WIT1).
+// Compact witnesses exclude state nodes that are already cached by the requester.
+type GetCompactWitnessRequest struct {
+	WitnessPages []WitnessPageRequest // Request by list of witness pages
+}
+
+// GetCompactWitnessPacket represents a compact witness query with request ID wrapping (WIT1).
+type GetCompactWitnessPacket struct {
+	RequestId uint64
+	*GetCompactWitnessRequest
+}
+
+// CompactWitnessPacketRLPPacket represents a compact witness response with request ID wrapping (WIT1).
+// The compact witness has cached state nodes removed to reduce bandwidth.
+type CompactWitnessPacketRLPPacket struct {
+	RequestId uint64
+	CompactWitnessPacketResponse
+}
+
+// CompactWitnessPacketResponse represents a compact witness response.
+type CompactWitnessPacketResponse []WitnessPageResponse
+
+func (w *GetCompactWitnessRequest) Name() string { return "GetCompactWitness" }
+func (w *GetCompactWitnessRequest) Kind() byte   { return GetCompactWitnessMsg }
+
+func (w *CompactWitnessPacketRLPPacket) Name() string { return "CompactWitness" }
+func (w *CompactWitnessPacketRLPPacket) Kind() byte   { return CompactWitnessMsg }

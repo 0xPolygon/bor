@@ -118,6 +118,17 @@ var (
 	statelessParallelImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/stateless/parallel/blocks", nil)
 	statelessSequentialImportBlocksCounter = metrics.NewRegisteredCounter("chain/imports/stateless/sequential/blocks", nil)
 
+	// Witness cache metrics
+	witnessCachePromotions          = metrics.NewRegisteredCounter("chain/witness/cache/promotions", nil)
+	witnessCacheComplete            = metrics.NewRegisteredGauge("chain/witness/cache/complete", nil)
+	compactWitnessCompressionRatio  = metrics.NewRegisteredGaugeFloat64("chain/witness/compression/ratio", nil)
+	compactWitnessNodesRemoved      = metrics.NewRegisteredCounter("chain/witness/compact/nodes/removed", nil)
+	compactWitnessSizeReduction     = metrics.NewRegisteredGauge("chain/witness/compact/size/reduction", nil)
+	compactWitnessStored            = metrics.NewRegisteredCounter("chain/witness/compact/stored", nil)
+	witnessDecompressionTime        = metrics.NewRegisteredTimer("chain/witness/decompression/time", nil)
+	witnessDecompressionsTotal      = metrics.NewRegisteredCounter("chain/witness/decompressions/total", nil)
+	witnessDecompressionsSkipped    = metrics.NewRegisteredCounter("chain/witness/decompressions/skipped", nil)
+
 	blockReorgMeter     = metrics.NewRegisteredMeter("chain/reorg/executes", nil)
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
 	blockReorgDropMeter = metrics.NewRegisteredMeter("chain/reorg/drop", nil)
@@ -354,11 +365,12 @@ type BlockChain struct {
 	currentSafeBlock  atomic.Pointer[types.Header] // Latest (consensus) safe block
 	historyPrunePoint atomic.Pointer[history.PrunePoint]
 
-	bodyCache     *lru.Cache[common.Hash, *types.Body]
-	bodyRLPCache  *lru.Cache[common.Hash, rlp.RawValue]
-	receiptsCache *lru.Cache[common.Hash, []*types.Receipt] // Receipts cache with all fields derived
-	blockCache    *lru.Cache[common.Hash, *types.Block]
-	witnessCache  *lru.Cache[common.Hash, []byte] // Witness cache for RLP-encoded witnesses
+	bodyCache         *lru.Cache[common.Hash, *types.Body]
+	bodyRLPCache      *lru.Cache[common.Hash, rlp.RawValue]
+	receiptsCache     *lru.Cache[common.Hash, []*types.Receipt] // Receipts cache with all fields derived
+	blockCache        *lru.Cache[common.Hash, *types.Block]
+	witnessCache      *lru.Cache[common.Hash, []byte] // Witness cache for RLP-encoded witnesses
+	witnessStateCache *stateless.DualWitnessCache     // Dual-window cache for witness state nodes (WIT1)
 
 	txLookupLock  sync.RWMutex
 	txLookupCache *lru.Cache[common.Hash, txLookup]
@@ -443,6 +455,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		txLookupCache:       lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
 		futureBlocks:        lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
 		witnessCache:        lru.NewCache[common.Hash, []byte](bodyCacheLimit),
+		witnessStateCache:   nil, // Will be initialized later based on config
 		engine:              engine,
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -626,6 +639,23 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	// Disable tx indexer in stateless mode to avoid potential issues with pruning in stateless mode.
 	if bc.cfg.TxLookupLimit >= 0 && !bc.cfg.Stateless {
 		bc.txIndexer = newTxIndexer(uint64(bc.cfg.TxLookupLimit), bc)
+	}
+
+	// Initialize witness state cache (WIT1) if in stateless mode
+	// The cache will be enabled later via InitializeWitnessCache if compact witnesses are enabled
+	// Window size and overlap are fixed constants to ensure network-wide determinism
+	if bc.cfg.Stateless {
+		currentBlock := bc.CurrentBlock()
+		startBlock := uint64(0)
+		if currentBlock != nil {
+			startBlock = currentBlock.Number.Uint64()
+		}
+		bc.witnessStateCache = stateless.NewDualWitnessCache(
+			stateless.DefaultWitnessCacheWindowSize,
+			stateless.DefaultWitnessCacheOverlap,
+			startBlock,
+		)
+		bc.witnessStateCache.Disable() // Disabled by default, enable via InitializeWitnessCache
 	}
 
 	// Start header verification loop
@@ -2243,6 +2273,44 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 		witnessBytes := witBuf.Bytes()
 		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
+
+		// Also write compact witness if cache is enabled and available
+		if bc.witnessStateCache != nil && bc.witnessStateCache.IsEnabled() {
+			cachedNodes := bc.witnessStateCache.GetCachedNodes()
+			if len(cachedNodes) > 0 {
+				// Compact the witness by removing cached nodes
+				compactWitness, stats, compactErr := stateless.CompactWitness(statedb.Witness(), cachedNodes)
+				if compactErr != nil {
+					log.Warn("Failed to compact witness", "block", block.NumberU64(), "err", compactErr)
+				} else {
+					// Encode and store compact witness
+					var compactBuf bytes.Buffer
+					if encErr := compactWitness.EncodeRLP(&compactBuf); encErr != nil {
+						log.Warn("Failed to encode compact witness", "block", block.NumberU64(), "err", encErr)
+					} else {
+						compactBytes := compactBuf.Bytes()
+						rawdb.WriteCompactWitness(blockBatch, block.Hash(), compactBytes)
+						log.Debug("Wrote compact witness", "block", block.NumberU64(), "hash", block.Hash(),
+							"originalSize", len(witnessBytes), "compactSize", len(compactBytes),
+							"removed", stats.RemovedNodes, "ratio", stats.CompressionRatio())
+
+						// Record compaction metrics
+						originalSize := int64(len(witnessBytes))
+						compactSize := int64(len(compactBytes))
+						if originalSize > 0 {
+							ratio := float64(compactSize) / float64(originalSize)
+							compactWitnessCompressionRatio.Update(ratio)
+						}
+						compactWitnessNodesRemoved.Inc(int64(stats.RemovedNodes))
+						reduction := originalSize - compactSize
+						if reduction > 0 {
+							compactWitnessSizeReduction.Update(reduction)
+						}
+						compactWitnessStored.Inc(1)
+					}
+				}
+			}
+		}
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
@@ -4133,6 +4201,40 @@ func (bc *BlockChain) GetChainConfig() *params.ChainConfig {
 	return bc.chainConfig
 }
 
+// WitnessStateCache returns the dual-window witness state cache (WIT1).
+func (bc *BlockChain) WitnessStateCache() *stateless.DualWitnessCache {
+	return bc.witnessStateCache
+}
+
+// InitializeWitnessCache configures and enables the witness state cache.
+// Should be called after blockchain initialization if compact witnesses are enabled.
+// Window size and overlap are fixed constants to ensure network-wide determinism.
+func (bc *BlockChain) InitializeWitnessCache(enable bool) {
+	if bc.witnessStateCache == nil {
+		return
+	}
+
+	if !enable {
+		bc.witnessStateCache.Disable()
+		log.Info("Witness state cache disabled")
+		return
+	}
+
+	// Get current block to start cache from
+	currentBlock := bc.CurrentBlock()
+	startBlock := uint64(0)
+	if currentBlock != nil {
+		startBlock = currentBlock.Number.Uint64()
+	}
+
+	// Enable the cache (uses constants for window size and overlap)
+	bc.witnessStateCache.Enable(startBlock)
+	log.Info("Witness state cache initialized", "enabled", enable,
+		"windowSize", stateless.DefaultWitnessCacheWindowSize,
+		"overlap", stateless.DefaultWitnessCacheOverlap,
+		"startBlock", startBlock)
+}
+
 // SetBlockValidatorAndProcessorForTesting sets the current validator and processor.
 // This method can be used to force an invalid blockchain to be verified for tests.
 // This method is unsafe and should only be used before block import starts.
@@ -4161,6 +4263,45 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
 		return nil, nil, errors.New("nil witness")
+	}
+
+	blockNum := block.NumberU64()
+
+	// Decompress compact witness if needed
+	// If the witness came from a compact witness message, it will be missing cached nodes
+	// We need to merge the cached nodes back in before execution
+	wasCompact := false
+	if bc.witnessStateCache != nil && bc.witnessStateCache.IsEnabled() {
+		cachedNodes := bc.witnessStateCache.GetCachedNodes()
+		if len(cachedNodes) > 0 {
+			// Check if witness might be compact by comparing its size
+			// A compact witness will have fewer state nodes than expected
+			// Try to decompress it (DecompactWitness will only add missing nodes)
+			decompressionStart := time.Now()
+			originalSize := len(witness.State)
+			decompressedWitness, err := stateless.DecompactWitness(witness, cachedNodes)
+			decompressionTime := time.Since(decompressionStart)
+
+			if err != nil {
+				log.Warn("Failed to decompress witness, using as-is", "block", blockNum, "err", err)
+				// Continue with original witness - it might already be full
+			} else {
+				// Check if witness was actually compact (size increased after decompression)
+				if len(decompressedWitness.State) > originalSize {
+					wasCompact = true
+					witness = decompressedWitness
+					log.Debug("Decompressed compact witness", "block", blockNum,
+						"originalNodes", originalSize, "decompressedNodes", len(witness.State))
+				}
+				// Record decompression metrics
+				if wasCompact {
+					witnessDecompressionsTotal.Inc(1)
+					witnessDecompressionTime.Update(decompressionTime)
+				} else {
+					witnessDecompressionsSkipped.Inc(1)
+				}
+			}
+		}
 	}
 
 	// Validate witness.
@@ -4205,6 +4346,37 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		err = fmt.Errorf("stateless self-validation receipt root mismatch: remote %x != local %x", block.ReceiptHash(), crossReceiptRoot)
 		return nil, nil, err
 	}
+
+	// Populate witness state cache (WIT1) if enabled and not in parallel import mode
+	// Parallel import is non-deterministic in block order, so we can't use it for caching
+	if bc.witnessStateCache != nil && bc.witnessStateCache.IsEnabled() && !bc.parallelStatelessImportEnabled.Load() {
+		// Extract state update nodes from execution
+		_, stateUpdate, commitErr := statedb.CommitAndReturnStateUpdate(block.NumberU64(), true)
+		if commitErr == nil && stateUpdate != nil && stateUpdate.Nodes != nil {
+			// Populate cache from both witness state (incoming) and state update (produced by execution)
+			blockNum := block.NumberU64()
+			bc.witnessStateCache.PopulateFromWitness(blockNum, witness)
+			bc.witnessStateCache.PopulateFromStateUpdate(blockNum, stateUpdate.Nodes)
+
+			// Check if we should promote cache windows
+			if bc.witnessStateCache.ShouldPromote(blockNum) {
+				if promoteErr := bc.witnessStateCache.Promote(); promoteErr != nil {
+					log.Warn("Failed to promote witness cache windows", "block", blockNum, "err", promoteErr)
+				} else {
+					log.Debug("Promoted witness cache windows", "block", blockNum)
+					// Record cache promotion metric
+					witnessCachePromotions.Inc(1)
+					// Update cache complete status (should be true after promotion)
+					if bc.witnessStateCache.IsCacheComplete() {
+						witnessCacheComplete.Update(1)
+					} else {
+						witnessCacheComplete.Update(0)
+					}
+				}
+			}
+		}
+	}
+
 	return statedb, res, nil
 }
 

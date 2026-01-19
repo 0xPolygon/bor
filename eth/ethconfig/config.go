@@ -79,6 +79,7 @@ var Defaults = Config{
 	RPCTxFeeCap:          1, // 1 ether
 	FastForwardThreshold: 6400,
 	WitnessAPIEnabled:    false,
+	EnableCompactWitness: true, // Enabled by default for stateless nodes to reduce bandwidth
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -254,6 +255,11 @@ type Config struct {
 
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
+
+	// EnableCompactWitness enables compact witness support (WIT1 protocol)
+	// Compact witnesses reduce bandwidth by caching deterministic state nodes
+	// Window size and overlap are fixed constants to ensure network-wide determinism
+	EnableCompactWitness bool
 
 	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
 	DisableBlindForkValidation bool
