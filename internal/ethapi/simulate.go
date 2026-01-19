@@ -234,13 +234,15 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		header.ExcessBlobGas = &excess
 	}
 	blockContext := core.NewEVMBlockContext(header, sim.newSimulatedChainContext(ctx, headers), nil)
-	if block.BlockOverrides.BlobBaseFee != nil {
+	if block.BlockOverrides != nil && block.BlockOverrides.BlobBaseFee != nil {
 		blockContext.BlobBaseFee = block.BlockOverrides.BlobBaseFee.ToInt()
 	}
 	precompiles := sim.activePrecompiles(sim.base)
 	// State overrides are applied prior to execution of a block
-	if err := block.StateOverrides.Apply(sim.state, precompiles); err != nil {
-		return nil, nil, nil, err
+	if block.StateOverrides != nil {
+		if err := block.StateOverrides.Apply(sim.state, precompiles); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	var (
 		gasUsed, blobGasUsed uint64
