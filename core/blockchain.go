@@ -81,6 +81,10 @@ var (
 	storageUpdateTimer = metrics.NewRegisteredResettingTimer("chain/storage/updates", nil)
 	storageCommitTimer = metrics.NewRegisteredResettingTimer("chain/storage/commits", nil)
 
+	// Additional breakdown timers for finding missing time
+	blockStatePrepTimer = metrics.NewRegisteredResettingTimer("chain/stateprep", nil)
+	blockCommitPrepTimer = metrics.NewRegisteredResettingTimer("chain/commitprep", nil)
+
 	accountCacheHitMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit", nil)
 	accountCacheMissMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/miss", nil)
 	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
@@ -3113,6 +3117,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		}
 		// Retrieve the parent block and it's state to execute on top
 		start := time.Now()
+		statePrepStart := time.Now() // Start tracking state preparation time
 
 		parent := it.previous()
 		if parent == nil {
@@ -3144,6 +3149,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		activeState = statedb
 
 		var followupInterrupt atomic.Bool
+
+		// Record state preparation time (after state is initialized)
+		blockStatePrepTimer.Update(time.Since(statePrepStart))
 
 		// Process block using the parent state as reference point
 		pstart := time.Now()
@@ -3216,6 +3224,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		blockValidationTimer.Update(vtime - (triehash + trieUpdate))    // The time spent on block validation
 		borConsensusTime.Update(statedb.BorConsensusTime)               // The time spent on bor consensus (span + state sync)
 		// Write the block to the chain and get the status.
+		commitPrepStart := time.Now() // Track time before write phase
 		var (
 			wstart = time.Now()
 			status WriteStatus
@@ -3235,6 +3244,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if !isValid {
 			return nil, it.index, whitelist.ErrMismatch
 		}
+
+		// Record commit preparation time (validation checks before actual write)
+		blockCommitPrepTimer.Update(time.Since(commitPrepStart))
 
 		if !setHead {
 			// Don't set the head, only insert the block

@@ -425,10 +425,14 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 		log.Error("pathdb.Update: mutation not allowed", "block", block, "err", err)
 		return err
 	}
+	// Track tree.add time
+	addStart := time.Now()
 	if err := db.tree.add(root, parentRoot, block, nodes, states); err != nil {
 		log.Error("pathdb.Update: tree.add failed", "block", block, "root", root, "parentRoot", parentRoot, "err", err)
 		return err
 	}
+	treeAddTimer.Update(time.Since(addStart))
+
 	// Keep 128 diff layers in the memory, persistent layer is 129th.
 	// - head layer is paired with HEAD state
 	// - head-1 layer is paired with HEAD-1 state
@@ -441,7 +445,11 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	if db.config.UseTrieDB {
 		layers = 0
 	}
-	return db.tree.cap(root, layers)
+	// Track tree.cap time
+	capStart := time.Now()
+	err := db.tree.cap(root, layers)
+	treeCapTimer.Update(time.Since(capStart))
+	return err
 }
 
 // Commit traverses downwards the layer tree from a specified layer with the

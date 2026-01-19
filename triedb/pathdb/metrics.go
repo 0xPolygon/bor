@@ -62,6 +62,10 @@ var (
 	commitStoragesMeter = metrics.NewRegisteredMeter("pathdb/commit/slots", nil)
 	commitBytesMeter    = metrics.NewRegisteredMeter("pathdb/commit/bytes", nil)
 
+	// Detailed breakdown of Update operation
+	treeAddTimer = metrics.NewRegisteredResettingTimer("pathdb/tree/add", nil)
+	treeCapTimer = metrics.NewRegisteredResettingTimer("pathdb/tree/cap", nil)
+
 	gcTrieNodeMeter      = metrics.NewRegisteredMeter("pathdb/gc/node/count", nil)
 	gcTrieNodeBytesMeter = metrics.NewRegisteredMeter("pathdb/gc/node/bytes", nil)
 	gcAccountMeter       = metrics.NewRegisteredMeter("pathdb/gc/account/count", nil)
