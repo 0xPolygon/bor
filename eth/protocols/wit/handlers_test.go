@@ -762,8 +762,8 @@ func TestWit1HandlerMap(t *testing.T) {
 		assert.NotNil(t, handler, "Handler for message code %d (%s) should not be nil", msgCode, handlerName)
 	}
 
-	// Verify that wit1 has exactly 6 handlers (WIT1 has 6 message types)
-	assert.Equal(t, 6, len(wit1), "wit1 map should contain exactly 6 handlers")
+	// Verify that wit1 has exactly 8 handlers (WIT1 has 8 message types)
+	assert.Equal(t, 8, len(wit1), "wit1 map should contain exactly 8 handlers")
 
 	// Verify that wit1 includes the WIT1-specific handlers that are not in wit0
 	_, exists := wit1[GetWitnessMetadataMsg]
