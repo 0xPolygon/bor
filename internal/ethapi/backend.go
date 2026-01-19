@@ -60,6 +60,11 @@ type Backend interface {
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
 
+	// Private tx relay related API
+	IsPrivateTxEnabled() bool
+	SubmitPrivateTx(hash common.Hash)
+	PurgePrivateTx(hash common.Hash)
+
 	// Blockchain API
 	SetHead(number uint64)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)

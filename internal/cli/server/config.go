@@ -273,6 +273,15 @@ type P2PConfig struct {
 
 	// TxAnnouncementOnly is used to only announce transactions to peers
 	TxAnnouncementOnly bool `hcl:"txannouncementonly,optional" toml:"txannouncementonly,optional"`
+
+	// DisableTxPropagation disables transaction broadcast and announcement completely to its peers
+	DisableTxPropagation bool `hcl:"disable-tx-propagation,optional" toml:"disable-tx-propagation,optional"`
+
+	// EnablePrivateTxRelay enables relaying transactions privately to specific peers
+	EnablePrivateTxRelay bool `hcl:"private-tx-relay,optional" toml:"private-tx-relay,optional"`
+
+	// BpP2PIdentifiers is list of p2p identifiers (id's) of active block producers
+	BpP2PIdentifiers []string `hcl:"bp-p2p-identifiers,optional" toml:"bp-p2p-identifiers,optional"`
 }
 
 type P2PDiscovery struct {
@@ -739,15 +748,18 @@ func DefaultConfig() *Config {
 		RPCBatchLimit:      100,
 		RPCReturnDataLimit: 100000,
 		P2P: &P2PConfig{
-			MaxPeers:           50,
-			MaxPendPeers:       50,
-			Bind:               "0.0.0.0",
-			Port:               30303,
-			NoDiscover:         false,
-			NAT:                "any",
-			NetRestrict:        "",
-			TxArrivalWait:      500 * time.Millisecond,
-			TxAnnouncementOnly: false,
+			MaxPeers:             50,
+			MaxPendPeers:         50,
+			Bind:                 "0.0.0.0",
+			Port:                 30303,
+			NoDiscover:           false,
+			NAT:                  "any",
+			NetRestrict:          "",
+			TxArrivalWait:        500 * time.Millisecond,
+			TxAnnouncementOnly:   false,
+			DisableTxPropagation: false,
+			EnablePrivateTxRelay: false,
+			BpP2PIdentifiers:     []string{},
 			Discovery: &P2PDiscovery{
 				DiscoveryV4:  true,
 				DiscoveryV5:  true,
@@ -1434,6 +1446,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
+	// Private tx relay related config
+	n.PrivateTxRelay = c.P2P.EnablePrivateTxRelay
+
 	return &n, nil
 }
 
@@ -1607,13 +1622,15 @@ func (c *Config) buildNode() (*node.Config, error) {
 		AllowUnprotectedTxs:   c.JsonRPC.AllowUnprotectedTxs,
 		EnablePersonal:        c.JsonRPC.EnablePersonal,
 		P2P: p2p.Config{
-			MaxPeers:           int(c.P2P.MaxPeers),
-			MaxPendingPeers:    int(c.P2P.MaxPendPeers),
-			ListenAddr:         c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
-			DiscoveryV4:        c.P2P.Discovery.DiscoveryV4,
-			DiscoveryV5:        c.P2P.Discovery.DiscoveryV5,
-			TxArrivalWait:      c.P2P.TxArrivalWait,
-			TxAnnouncementOnly: c.P2P.TxAnnouncementOnly,
+			MaxPeers:             int(c.P2P.MaxPeers),
+			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
+			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
+			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,
+			DiscoveryV5:          c.P2P.Discovery.DiscoveryV5,
+			TxArrivalWait:        c.P2P.TxArrivalWait,
+			TxAnnouncementOnly:   c.P2P.TxAnnouncementOnly,
+			DisableTxPropagation: c.P2P.DisableTxPropagation,
+			PrivatePeerIds:       c.P2P.BpP2PIdentifiers,
 		},
 		HTTPModules:         c.JsonRPC.Http.API,
 		HTTPCors:            c.JsonRPC.Http.Cors,

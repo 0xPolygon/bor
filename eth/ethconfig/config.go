@@ -276,6 +276,9 @@ type Config struct {
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
 
+	// PrivateTxRelay enables relaying transactions privately to specific peers
+	PrivateTxRelay bool
+
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`

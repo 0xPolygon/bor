@@ -51,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/privatetx"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
@@ -229,13 +230,26 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// START: Bor changes
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
-	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("------Unprotected transactions allowed-------")
-		config.TxPool.AllowUnprotectedTxs = true
+	var privateTxStore *privatetx.PrivateTxStore
+	if config.PrivateTxRelay {
+		privateTxStore = privatetx.NewPrivateTxStore()
 	}
 
-	gpoParams := config.GPO
+	var privateTxStoreSetter privatetx.PrivateTxSetter
+	if privateTxStore != nil {
+		privateTxStoreSetter = privateTxStore
+	}
+
+	var privateTxStoreGetter privatetx.PrivateTxGetter
+	if privateTxStore != nil {
+		privateTxStoreGetter = privateTxStore
+	}
+
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, privateTxStoreSetter}
+	if eth.APIBackend.allowUnprotectedTxs {
+		log.Info("Unprotected transactions allowed")
+		config.TxPool.AllowUnprotectedTxs = true
+	}
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
@@ -327,6 +341,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
+	// Set the chain head event subscription function for private tx store
+	if privateTxStore != nil {
+		privateTxStore.SetchainEventSubFn(eth.blockchain.SubscribeChainEvent)
+	}
+
 	// Set parallel stateless import toggle on blockchain
 	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
 		eth.blockchain.ParallelStatelessImportEnable()
@@ -341,18 +360,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Set blockchain reference for fork detection in whitelist service
 	checker.SetBlockchain(eth.blockchain)
-
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
-
-	// bor: this is nor present in geth
-	/*
-		_ = eth.engine.VerifyHeader(eth.blockchain, eth.blockchain.CurrentHeader()) // TODO think on it
-	*/
-
-	// BOR changes
-	eth.APIBackend.gpo.ProcessCache()
-	// BOR changes
 
 	// Initialize filtermaps log index.
 	fmConfig := filtermaps.Config{
@@ -422,10 +429,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
+		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		privatePeerIds:          eth.p2pServer.PrivatePeerIds,
+		privateTxStoreGetter:    privateTxStoreGetter,
 	}); err != nil {
 		return nil, err
 	}
@@ -438,10 +448,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
 
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
-	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("Unprotected transactions allowed")
-	}
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
 

@@ -60,6 +60,8 @@ type peerSet struct {
 	snapPeers int                 // Number of `snap` compatible peers for connection prioritization
 	witPeers  int                 // Number of `wit` compatible peers for connection prioritization
 
+	privatePeerIds map[string]struct{} // Identifiers of peers to privately relay transactions to
+
 	snapWait map[string]chan *snap.Peer // Peers connected on `eth` waiting for their snap extension
 	snapPend map[string]*snap.Peer      // Peers connected on the `snap` protocol, but not yet on `eth`
 
@@ -72,14 +74,19 @@ type peerSet struct {
 }
 
 // newPeerSet creates a new peer set to track the active participants.
-func newPeerSet() *peerSet {
+func newPeerSet(p2pIdentifiers []string) *peerSet {
+	privatePeerIds := make(map[string]struct{})
+	for _, id := range p2pIdentifiers {
+		privatePeerIds[id] = struct{}{}
+	}
 	return &peerSet{
-		peers:    make(map[string]*ethPeer),
-		snapWait: make(map[string]chan *snap.Peer),
-		snapPend: make(map[string]*snap.Peer),
-		witWait:  make(map[string]chan *wit.Peer),
-		witPend:  make(map[string]*wit.Peer),
-		quitCh:   make(chan struct{}),
+		peers:          make(map[string]*ethPeer),
+		privatePeerIds: privatePeerIds,
+		snapWait:       make(map[string]chan *snap.Peer),
+		snapPend:       make(map[string]*snap.Peer),
+		witWait:        make(map[string]chan *wit.Peer),
+		witPend:        make(map[string]*wit.Peer),
+		quitCh:         make(chan struct{}),
 	}
 }
 
@@ -359,6 +366,21 @@ func (ps *peerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
 			list = append(list, p)
 		}
 	}
+	return list
+}
+
+func (ps *peerSet) privatePeers() []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	list := make([]*ethPeer, 0, len(ps.peers))
+
+	for _, p := range ps.peers {
+		if _, ok := ps.privatePeerIds[p.ID()]; ok {
+			list = append(list, p)
+		}
+	}
+
 	return list
 }
 

@@ -501,6 +501,9 @@ func (b testBackend) RPCGasCap() uint64                        { return 10000000
 func (b testBackend) RPCEVMTimeout() time.Duration             { return time.Second }
 func (b testBackend) RPCTxFeeCap() float64                     { return 0 }
 func (b testBackend) UnprotectedAllowed() bool                 { return false }
+func (b testBackend) IsPrivateTxEnabled() bool                 { return false }
+func (b testBackend) SubmitPrivateTx(hash common.Hash)         {}
+func (b testBackend) PurgePrivateTx(hash common.Hash)          {}
 func (b testBackend) SetHead(number uint64)                    {}
 func (b testBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	if number == rpc.LatestBlockNumber {

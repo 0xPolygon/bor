@@ -133,6 +133,13 @@ type Config struct {
 
 	// TxAnnouncementOnly is used to only announce transactions to peers
 	TxAnnouncementOnly bool
+
+	// DisableTxPropagation disables transaction broadcast and announcement completely to its peers
+	DisableTxPropagation bool
+
+	// PrivatePeerIds is a list of peer identifiers which will be used for relaying
+	// transactions privately.
+	PrivatePeerIds []string
 }
 
 type configMarshaling struct {

@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
+	"github.com/ethereum/go-ethereum/eth/privatetx"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
@@ -113,14 +114,17 @@ type handlerConfig struct {
 	BloomCache              uint64              // Megabytes to alloc for snap sync bloom
 	EventMux                *event.TypeMux      // Legacy event mux, deprecate for `feed`
 	checker                 ethereum.ChainValidator
-	RequiredBlocks          map[uint64]common.Hash // Hard coded map of required block hashes for sync challenges
-	EthAPI                  *ethapi.BlockChainAPI  // EthAPI to interact
-	enableBlockTracking     bool                   // Whether to log information collected while tracking block lifecycle
-	txAnnouncementOnly      bool                   // Whether to only announce txs to peers
-	witnessProtocol         bool                   // Whether to enable witness protocol
-	syncWithWitnesses       bool                   // Whether to sync blocks with witnesses
-	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
-	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
+	RequiredBlocks          map[uint64]common.Hash    // Hard coded map of required block hashes for sync challenges
+	EthAPI                  *ethapi.BlockChainAPI     // EthAPI to interact
+	enableBlockTracking     bool                      // Whether to log information collected while tracking block lifecycle
+	txAnnouncementOnly      bool                      // Whether to only announce txs to peers
+	disableTxPropagation    bool                      // Whether to disable broadcasting and announcement of txs to peers
+	witnessProtocol         bool                      // Whether to enable witness protocol
+	syncWithWitnesses       bool                      // Whether to sync blocks with witnesses
+	syncAndProduceWitnesses bool                      // Whether to sync blocks and produce witnesses simultaneously
+	fastForwardThreshold    uint64                    // Minimum necessary distance between local header and peer to fast forward
+	privatePeerIds          []string                  // Identifiers of peers to privately relay transactions to
+	privateTxStoreGetter    privatetx.PrivateTxGetter // privateTxStoreGetter to check if a transaction requires private relaying
 }
 
 type handler struct {
@@ -145,6 +149,9 @@ type handler struct {
 
 	ethAPI *ethapi.BlockChainAPI // EthAPI to interact
 
+	// privateTxStoreGetter to check if a transaction requires private relaying
+	privateTxStoreGetter privatetx.PrivateTxGetter
+
 	eventMux      *event.TypeMux
 	txsCh         chan core.NewTxsEvent
 	txsSub        event.Subscription
@@ -153,8 +160,9 @@ type handler struct {
 
 	requiredBlocks map[uint64]common.Hash
 
-	enableBlockTracking bool
-	txAnnouncementOnly  bool
+	enableBlockTracking  bool
+	txAnnouncementOnly   bool
+	disableTxPropagation bool
 
 	// Witness protocol related fields
 	syncWithWitnesses       bool
@@ -185,17 +193,19 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		database:                config.Database,
 		txpool:                  config.TxPool,
 		chain:                   config.Chain,
-		peers:                   newPeerSet(),
+		peers:                   newPeerSet(config.privatePeerIds),
 		txBroadcastKey:          newBroadcastChoiceKey(),
 		ethAPI:                  config.EthAPI,
 		requiredBlocks:          config.RequiredBlocks,
 		enableBlockTracking:     config.enableBlockTracking,
 		txAnnouncementOnly:      config.txAnnouncementOnly,
+		disableTxPropagation:    config.disableTxPropagation,
 		quitSync:                make(chan struct{}),
 		handlerDoneCh:           make(chan struct{}),
 		handlerStartCh:          make(chan struct{}),
 		syncWithWitnesses:       config.syncWithWitnesses,
 		syncAndProduceWitnesses: config.syncAndProduceWitnesses,
+		privateTxStoreGetter:    config.privateTxStoreGetter,
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -414,9 +424,12 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	}
 	h.chainSync.handlePeerEvent()
 
-	// Propagate existing transactions. new transactions appearing
-	// after this will be sent via broadcasts.
-	h.syncTransactions(peer)
+	// Bor: skip propagating transactions if flag is set
+	if !h.disableTxPropagation {
+		// Propagate existing transactions. new transactions appearing
+		// after this will be sent via broadcasts.
+		h.syncTransactions(peer)
+	}
 
 	// Create a notification channel for pending requests if the peer goes down
 	dead := make(chan struct{})
@@ -556,11 +569,16 @@ func (h *handler) unregisterPeer(id string) {
 func (h *handler) Start(maxPeers int) {
 	h.maxPeers = maxPeers
 
-	// broadcast and announce transactions (only new ones, not resurrected ones)
-	h.wg.Add(1)
-	h.txsCh = make(chan core.NewTxsEvent, txChanSize)
-	h.txsSub = h.txpool.SubscribeTransactions(h.txsCh, false)
-	go h.txBroadcastLoop()
+	// Bor: block producers can choose to not propagate transactions to save p2p overhead
+	// broadcast and announce transactions (only new ones, not resurrected ones) only
+	// if transaction propagation is enabled
+	if !h.disableTxPropagation {
+		// broadcast and announce transactions (only new ones, not resurrected ones)
+		h.wg.Add(1)
+		h.txsCh = make(chan core.NewTxsEvent, txChanSize)
+		h.txsSub = h.txpool.SubscribeTransactions(h.txsCh, false)
+		go h.txBroadcastLoop()
+	}
 
 	// broadcast mined blocks
 	h.wg.Add(1)
@@ -694,11 +712,13 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		blobTxs  int // Number of blob transactions to announce only
 		largeTxs int // Number of large transactions to announce only
 
-		directCount int // Number of transactions sent directly to peers (duplicates included)
-		annCount    int // Number of transactions announced across all peers (duplicates included)
+		directCount  int // Number of transactions sent directly to peers (duplicates included)
+		annCount     int // Number of transactions announced across all peers (duplicates included)
+		privateCount int // Number of transactions privately relayed across all private peers (duplicates included)
 
-		txset = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
-		annos = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
+		txset        = make(map[*ethPeer][]common.Hash) // Set peer->hash to transfer directly
+		annos        = make(map[*ethPeer][]common.Hash) // Set peer->hash to announce
+		privateTxset = make(map[*ethPeer][]common.Hash) // Set peer->hash to privately relay
 
 		signer = types.LatestSigner(h.chain.Config())
 		choice = newBroadcastChoice(h.nodeID, h.txBroadcastKey)
@@ -723,6 +743,13 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 			}
 		}
 
+		if h.privateTxStoreGetter != nil && h.privateTxStoreGetter.IsTxPrivate(tx.Hash()) {
+			for _, peer := range h.peers.privatePeers() {
+				privateTxset[peer] = append(privateTxset[peer], tx.Hash())
+			}
+			continue
+		}
+
 		for _, peer := range peers {
 			if peer.KnownTransaction(tx.Hash()) {
 				continue
@@ -737,6 +764,11 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		}
 	}
 
+	for peer, hashes := range privateTxset {
+		privateCount += len(hashes)
+		peer.AsyncSendTransactions(hashes)
+	}
+
 	for peer, hashes := range txset {
 		directCount += len(hashes)
 		peer.AsyncSendTransactions(hashes)
@@ -747,7 +779,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		peer.AsyncSendPooledTransactionHashes(hashes)
 	}
 	log.Debug("Distributed transactions", "plaintxs", len(txs)-blobTxs-largeTxs, "blobtxs", blobTxs, "largetxs", largeTxs,
-		"bcastcount", directCount, "anncount", annCount)
+		"bcastcount", directCount, "anncount", annCount, "privcount", privateCount)
 }
 
 // minedBroadcastLoop sends mined blocks to connected peers.
