@@ -531,6 +531,8 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 			db.Close()
 			return nil, fmt.Errorf("failed to initialize triedb: %v", err)
 		}
+		// Start triedb-go metrics collection (every 5 seconds)
+		StartTrieDBGoMetricsCollection(5 * time.Second)
 	}
 
 	if opts.WitnessPruneEnabled || opts.Stateless {
