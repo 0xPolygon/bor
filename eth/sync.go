@@ -36,12 +36,27 @@ const (
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
 func (h *handler) syncTransactions(p *eth.Peer) {
+	// Identify is a peer is meant to receive private transactions
+	var isPrivatePeer bool
+	privatePeers := h.peers.privatePeers()
+	for _, peer := range privatePeers {
+		if peer.ID() == p.ID() {
+			isPrivatePeer = true
+			break
+		}
+	}
+
 	var hashes []common.Hash
 	for _, batch := range h.txpool.Pending(txpool.PendingFilter{BlobTxs: false}, nil) {
 		for _, tx := range batch {
+			// If the peer is not meant to receive private transactions, skip those
+			if !isPrivatePeer && h.privateTxStoreGetter != nil && h.privateTxStoreGetter.IsTxPrivate(tx.Hash) {
+				continue
+			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}
+
 	if len(hashes) == 0 {
 		return
 	}
