@@ -56,7 +56,7 @@ const (
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
-	veblopBlockTimeout = time.Second * 6 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
 )
 
 // Bor protocol constants.
@@ -1041,9 +1041,13 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	now := time.Now()
 	if header.Time < uint64(now.Unix()) {
-		header.Time = uint64(now.Unix())
+		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
+		if c.blockTime > 0 {
+			additionalBlockTime = c.blockTime
+		}
+		header.Time = uint64(now.Add(additionalBlockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
-			header.ActualTime = now
+			header.ActualTime = now.Add(additionalBlockTime)
 		}
 	}
 

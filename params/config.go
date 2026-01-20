@@ -340,6 +340,7 @@ var (
 			RioBlock:          big.NewInt(26272256),
 			MadhugiriBlock:    big.NewInt(28899616),
 			MadhugiriProBlock: big.NewInt(29287400),
+			DandeliBlock:      big.NewInt(31890000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -423,6 +424,7 @@ var (
 			RioBlock:          big.NewInt(77414656),
 			MadhugiriBlock:    big.NewInt(80084800),
 			MadhugiriProBlock: big.NewInt(80084800),
+			DandeliBlock:      big.NewInt(81424000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -457,6 +459,7 @@ var (
 			},
 			OverrideStateSyncRecordsInRange: []BlockRangeOverride{
 				{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+				{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
 			},
 
 			BurntContract: map[string]string{
@@ -888,6 +891,7 @@ type BorConfig struct {
 	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
 	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock                    *big.Int               `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -945,6 +949,10 @@ func (c *BorConfig) IsMadhugiri(number *big.Int) bool {
 
 func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
+}
+
+func (c *BorConfig) IsDandeli(number *big.Int) bool {
+	return isBlockForked(c.DandeliBlock, number)
 }
 
 // // TODO: modify this function once the block number is finalized

@@ -39,6 +39,7 @@ var mainnetBor = &Chain{
 				RioBlock:          big.NewInt(77414656),
 				MadhugiriBlock:    big.NewInt(80084800),
 				MadhugiriProBlock: big.NewInt(80084800),
+				DandeliBlock:      big.NewInt(81424000),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},
@@ -72,6 +73,7 @@ var mainnetBor = &Chain{
 				},
 				OverrideStateSyncRecordsInRange: []params.BlockRangeOverride{
 					{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+					{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
 				},
 
 				BurntContract: map[string]string{

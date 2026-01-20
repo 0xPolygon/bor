@@ -25,6 +25,7 @@
       "rioBlock": 77414656,
       "madhugiriBlock": 80084800,
       "madhugiriProBlock": 80084800,
+      "dandeliBlock": 81424000,
       "stateSyncConfirmationDelay": {
         "44934656": 128
       },
@@ -64,6 +65,11 @@
         {
           "startBlock": 73812433,
           "endBlock": 73826700,
+          "value": 0
+        },
+        {
+          "startBlock": 81556977,
+          "endBlock": 81558799,
           "value": 0
         }
       ],

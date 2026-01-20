@@ -615,7 +615,7 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 			return nil, err
 		}
 
-		rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+		rlpEncodedWitness := b.eth.blockchain.GetWitness(blockHeader.Hash())
 
 		witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
 		if err != nil {
@@ -637,7 +637,7 @@ func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash,
 		log.Error("Failed to encode witness", "error", err)
 	}
 
-	rawdb.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
+	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
 
 	return nil
 }
@@ -655,7 +655,7 @@ func (b *EthAPIBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNum
 		return nil, nil
 	}
 
-	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+	rlpEncodedWitness := b.eth.blockchain.GetWitness(blockHeader.Hash())
 	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}
@@ -681,7 +681,7 @@ func (b *EthAPIBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*s
 		return nil, nil
 	}
 
-	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), hash)
+	rlpEncodedWitness := b.eth.blockchain.GetWitness(hash)
 	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}

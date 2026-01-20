@@ -358,6 +358,7 @@ type BlockChain struct {
 	bodyRLPCache  *lru.Cache[common.Hash, rlp.RawValue]
 	receiptsCache *lru.Cache[common.Hash, []*types.Receipt] // Receipts cache with all fields derived
 	blockCache    *lru.Cache[common.Hash, *types.Block]
+	witnessCache  *lru.Cache[common.Hash, []byte] // Witness cache for RLP-encoded witnesses
 
 	txLookupLock  sync.RWMutex
 	txLookupCache *lru.Cache[common.Hash, txLookup]
@@ -441,6 +442,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		blockCache:          lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
 		txLookupCache:       lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
 		futureBlocks:        lru.NewCache[common.Hash, *types.Block](maxFutureBlocks),
+		witnessCache:        lru.NewCache[common.Hash, []byte](bodyCacheLimit),
 		engine:              engine,
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -1402,6 +1404,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 	bc.receiptsCache.Purge()
 	bc.blockCache.Purge()
 	bc.txLookupCache.Purge()
+	bc.witnessCache.Purge()
 	bc.borReceiptsCache.Purge()
 
 	// Clear safe block, finalized block if needed
@@ -2238,7 +2241,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 
-		rawdb.WriteWitness(blockBatch, block.Hash(), witBuf.Bytes())
+		witnessBytes := witBuf.Bytes()
+		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
