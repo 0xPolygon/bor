@@ -33,6 +33,7 @@ package hexutil
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 )
@@ -86,7 +87,15 @@ func MustDecode(input string) []byte {
 
 // Encode encodes b as a hex string with 0x prefix.
 func Encode(b []byte) string {
-	enc := make([]byte, len(b)*2+2)
+	// Compute encoded length in a wider type to avoid overflow on int.
+	l := len(b)
+	encodedLen := uint64(l)*2 + 2
+	if encodedLen > math.MaxInt {
+		// Extremely large input; prevent silent overflow in allocation.
+		panic("hexutil: input too large for Encode")
+	}
+
+	enc := make([]byte, int(encodedLen))
 	copy(enc, "0x")
 	hex.Encode(enc[2:], b)
 

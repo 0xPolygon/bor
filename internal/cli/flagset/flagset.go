@@ -236,9 +236,9 @@ type IntFlag struct {
 }
 
 func (b *IntFlag) UpdateValue(value string) {
-	v, _ := strconv.ParseInt(value, 10, 64)
+	v, _ := strconv.Atoi(value)
 
-	*b.Value = int(v)
+	*b.Value = v
 }
 
 func (f *Flagset) IntFlag(i *IntFlag) {
