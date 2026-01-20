@@ -5064,9 +5064,9 @@ func TestIdentifyStuckTransactions(t *testing.T) {
 		defer pool.Close()
 
 		// Transaction has current timestamp, so it's too young
-		pool.mu.Lock()
+		pool.mu.RLock()
 		stuckTxs := pool.identifyStuckTransactions()
-		pool.mu.Unlock()
+		pool.mu.RUnlock()
 
 		if len(stuckTxs) != 0 {
 			t.Errorf("expected 0 stuck transactions for young tx, got %d", len(stuckTxs))

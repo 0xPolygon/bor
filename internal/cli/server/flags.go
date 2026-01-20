@@ -328,14 +328,14 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Transaction Pool",
 	})
 	f.DurationFlag(&flagset.DurationFlag{
-		Name:    "txpool.rebroadcastmaxage",
+		Name:    "txpool.rebroadcast-max-age",
 		Usage:   "Maximum age for a transaction to be eligible for rebroadcast",
 		Value:   &c.cliConfig.TxPool.RebroadcastMaxAge,
 		Default: c.cliConfig.TxPool.RebroadcastMaxAge,
 		Group:   "Transaction Pool",
 	})
 	f.IntFlag(&flagset.IntFlag{
-		Name:    "txpool.rebroadcastbatch",
+		Name:    "txpool.rebroadcast-batch-size",
 		Usage:   "Maximum number of transactions to rebroadcast per cycle",
 		Value:   &c.cliConfig.TxPool.RebroadcastBatchSize,
 		Default: c.cliConfig.TxPool.RebroadcastBatchSize,

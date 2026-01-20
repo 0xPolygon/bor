@@ -556,7 +556,6 @@ func (pool *LegacyPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxs
 // - Have not been rebroadcast recently (within RebroadcastInterval)
 // - Are immediately executable (gas price meets current requirements)
 //
-// identifyStuckTransactions finds pending transactions that may be stuck and need rebroadcast.
 // Must be called with pool.mu.RLock held (read lock only - does not modify pool state).
 func (pool *LegacyPool) identifyStuckTransactions() []*types.Transaction {
 	now := time.Now()

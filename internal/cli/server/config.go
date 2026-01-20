@@ -375,10 +375,10 @@ type TxPoolConfig struct {
 
 	// RebroadcastMaxAge is the maximum age for rebroadcast eligibility
 	RebroadcastMaxAge    time.Duration `hcl:"-,optional" toml:"-"`
-	RebroadcastMaxAgeRaw string        `hcl:"rebroadcastmaxage,optional" toml:"rebroadcastmaxage,optional"`
+	RebroadcastMaxAgeRaw string        `hcl:"rebroadcast-max-age,optional" toml:"rebroadcast-max-age,optional"`
 
 	// RebroadcastBatchSize is the maximum number of transactions per rebroadcast cycle
-	RebroadcastBatchSize int `hcl:"rebroadcastbatch,optional" toml:"rebroadcastbatch,optional"`
+	RebroadcastBatchSize int `hcl:"rebroadcast-batch-size,optional" toml:"rebroadcast-batch-size,optional"`
 }
 
 type SealerConfig struct {
@@ -1021,7 +1021,7 @@ func (c *Config) fillTimeDurations() error {
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
 		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
-		{"txpool.rebroadcastmaxage", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
+		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 	}
