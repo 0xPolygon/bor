@@ -17,12 +17,17 @@
 package core
 
 import (
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // NewTxsEvent is posted when a batch of transactions enter the transaction pool.
 type NewTxsEvent struct{ Txs []*types.Transaction }
+
+// PrivateTxsEvent is posted when a transaction meant to be relayed privately
+// needs rebroadcast.
+type PrivateTxsEvent struct{ Txs []common.Hash }
 
 // NewMinedBlockEvent is posted when a block has been imported.
 type NewMinedBlockEvent struct {

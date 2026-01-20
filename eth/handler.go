@@ -155,6 +155,8 @@ type handler struct {
 	eventMux      *event.TypeMux
 	txsCh         chan core.NewTxsEvent
 	txsSub        event.Subscription
+	privateTxsCh  chan core.PrivateTxsEvent
+	privateTxsSub event.Subscription
 	minedBlockSub *event.TypeMuxSubscription
 	blockRange    *blockRangeState
 
@@ -578,6 +580,14 @@ func (h *handler) Start(maxPeers int) {
 		h.txsCh = make(chan core.NewTxsEvent, txChanSize)
 		h.txsSub = h.txpool.SubscribeTransactions(h.txsCh, false)
 		go h.txBroadcastLoop()
+	}
+
+	// If private tx relay is enabled, start a routine to rebroadcast
+	if h.privateTxStoreGetter != nil {
+		h.wg.Add(1)
+		h.privateTxsCh = make(chan core.PrivateTxsEvent, txChanSize)
+		h.privateTxsSub = h.privateTxStoreGetter.SubscribePrivateTxsRebroadcast(h.privateTxsCh)
+		go h.privateTxRebroadcastLoop()
 	}
 
 	// broadcast mined blocks
@@ -1047,4 +1057,23 @@ func (bc *broadcastChoice) choosePeers(peers []*ethPeer, txSender common.Address
 		bc.buffer[bc.tmp[i].p] = struct{}{}
 	}
 	return bc.buffer
+}
+
+// privateTxRebroadcastLoop tries to rebroadcast transactions which are
+// to be relayed privately.
+func (h *handler) privateTxRebroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case event := <-h.privateTxsCh:
+			privatePeers := h.peers.privatePeers()
+			for _, peer := range privatePeers {
+				peer.AsyncSendTransactions(event.Txs)
+			}
+			log.Debug("Rebroadcasted private transactions", "count", len(event.Txs), "peers", len(privatePeers))
+		case <-h.privateTxsSub.Err():
+			return
+		}
+	}
 }
