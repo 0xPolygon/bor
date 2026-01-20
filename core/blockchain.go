@@ -4261,6 +4261,8 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
+	processStart := time.Now()
+
 	if witness == nil {
 		return nil, nil, errors.New("nil witness")
 	}
@@ -4290,8 +4292,12 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 				if len(decompressedWitness.State) > originalSize {
 					wasCompact = true
 					witness = decompressedWitness
-					log.Debug("Decompressed compact witness", "block", blockNum,
-						"originalNodes", originalSize, "decompressedNodes", len(witness.State))
+					log.Info("PSP - Decompressed compact witness", "block", blockNum,
+						"originalNodes", originalSize, "decompressedNodes", len(witness.State),
+						"decompressionTime", decompressionTime)
+				} else {
+					log.Info("PSP - Witness decompression skipped (already full)", "block", blockNum,
+						"nodes", originalSize, "decompressionTime", decompressionTime)
 				}
 				// Record decompression metrics
 				if wasCompact {
@@ -4329,7 +4335,11 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
+	executionStart := time.Now()
 	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	executionTime := time.Since(executionStart)
+	log.Info("PSP - Block execution completed", "block", blockNum, "executionTime", executionTime, "txs", len(block.Transactions()))
+
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
@@ -4350,20 +4360,33 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Populate witness state cache (WIT1) if enabled and not in parallel import mode
 	// Parallel import is non-deterministic in block order, so we can't use it for caching
 	if bc.witnessStateCache != nil && bc.witnessStateCache.IsEnabled() && !bc.parallelStatelessImportEnabled.Load() {
+		cachePopulationStart := time.Now()
+
 		// Extract state update nodes from execution
+		commitStart := time.Now()
 		_, stateUpdate, commitErr := statedb.CommitAndReturnStateUpdate(block.NumberU64(), true)
+		commitTime := time.Since(commitStart)
+
 		if commitErr == nil && stateUpdate != nil && stateUpdate.Nodes != nil {
 			// Populate cache from both witness state (incoming) and state update (produced by execution)
 			blockNum := block.NumberU64()
+
+			witnessPopulateStart := time.Now()
 			bc.witnessStateCache.PopulateFromWitness(blockNum, witness)
+			witnessPopulateTime := time.Since(witnessPopulateStart)
+
+			stateUpdatePopulateStart := time.Now()
 			bc.witnessStateCache.PopulateFromStateUpdate(blockNum, stateUpdate.Nodes)
+			stateUpdatePopulateTime := time.Since(stateUpdatePopulateStart)
 
 			// Check if we should promote cache windows
 			if bc.witnessStateCache.ShouldPromote(blockNum) {
+				promoteStart := time.Now()
 				if promoteErr := bc.witnessStateCache.Promote(); promoteErr != nil {
 					log.Warn("Failed to promote witness cache windows", "block", blockNum, "err", promoteErr)
 				} else {
-					log.Debug("Promoted witness cache windows", "block", blockNum)
+					promoteTime := time.Since(promoteStart)
+					log.Info("PSP - Promoted witness cache windows", "block", blockNum, "promoteTime", promoteTime)
 					// Record cache promotion metric
 					witnessCachePromotions.Inc(1)
 					// Update cache complete status (should be true after promotion)
@@ -4374,8 +4397,25 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 					}
 				}
 			}
+
+			totalCacheTime := time.Since(cachePopulationStart)
+			log.Info("PSP - Witness cache population timing",
+				"block", blockNum,
+				"commitTime", commitTime,
+				"witnessPopulateTime", witnessPopulateTime,
+				"stateUpdatePopulateTime", stateUpdatePopulateTime,
+				"totalCacheTime", totalCacheTime)
+		} else if commitErr != nil {
+			log.Info("PSP - Witness cache: CommitAndReturnStateUpdate failed",
+				"block", block.NumberU64(),
+				"commitTime", commitTime,
+				"err", commitErr)
 		}
 	}
+
+	totalProcessTime := time.Since(processStart)
+	log.Info("PSP - ProcessBlockWithWitnesses completed", "block", blockNum,
+		"totalTime", totalProcessTime, "txs", len(block.Transactions()))
 
 	return statedb, res, nil
 }
