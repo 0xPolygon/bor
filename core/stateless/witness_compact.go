@@ -61,6 +61,8 @@ func CompactWitness(witness *Witness, cachedNodes map[string]struct{}) (*Witness
 
 // DecompactWitness reconstructs a full witness by merging a compact witness with cached nodes.
 // This is called before witness execution to restore the complete state.
+// IMPORTANT: This function should ONLY add nodes that are actually MISSING from the witness.
+// If the witness is already full (from a wit0 peer), it should return unchanged.
 func DecompactWitness(compact *Witness, cachedNodes map[string]struct{}) (*Witness, error) {
 	if compact == nil {
 		return nil, fmt.Errorf("compact witness is nil")
@@ -74,9 +76,21 @@ func DecompactWitness(compact *Witness, cachedNodes map[string]struct{}) (*Witne
 	// Create a copy of the compact witness
 	full := compact.Copy()
 
-	// Add all cached nodes to the witness state
+	// Only add cached nodes that are MISSING from the witness
+	// This prevents corrupting full witnesses by adding unrelated nodes
+	addedCount := 0
 	for key := range cachedNodes {
-		full.State[key] = struct{}{}
+		if _, exists := full.State[key]; !exists {
+			// Node is missing from witness, add it from cache
+			full.State[key] = struct{}{}
+			addedCount++
+		}
+	}
+
+	// If we didn't add any nodes, the witness was already full
+	// This is expected when receiving from wit0 peers
+	if addedCount == 0 {
+		return compact, nil // Return original unchanged
 	}
 
 	return full, nil

@@ -4289,15 +4289,17 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 				// Continue with original witness - it might already be full
 			} else {
 				// Check if witness was actually compact (size increased after decompression)
-				if len(decompressedWitness.State) > originalSize {
+				nodesAdded := len(decompressedWitness.State) - originalSize
+				if nodesAdded > 0 {
 					wasCompact = true
 					witness = decompressedWitness
 					log.Info("PSP - Decompressed compact witness", "block", blockNum,
 						"originalNodes", originalSize, "decompressedNodes", len(witness.State),
+						"nodesAdded", nodesAdded, "cacheSize", len(cachedNodes),
 						"decompressionTime", decompressionTime)
 				} else {
 					log.Info("PSP - Witness decompression skipped (already full)", "block", blockNum,
-						"nodes", originalSize, "decompressionTime", decompressionTime)
+						"nodes", originalSize, "cacheSize", len(cachedNodes), "decompressionTime", decompressionTime)
 				}
 				// Record decompression metrics
 				if wasCompact {
