@@ -1,0 +1,47 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    branches:
+      - develop
+      - claude_pr_reviews
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Please review this pull request for the Bor (Polygon PoS) Ethereum client with a focus on:
+            - Code quality and adherence to Go best practices
+            - Potential bugs, race conditions, or logic errors
+            - Security implications, especially around consensus, networking, and transaction handling
+            - Performance considerations and resource usage
+            - Compatibility with existing Ethereum and Polygon protocols
+            - Test coverage and documentation where applicable
+
+            Note: The PR branch is already checked out in the current working directory.
+
+            Use `gh pr comment` for top-level feedback and summaries.
+            Use `mcp__github_inline_comment__create_inline_comment` to highlight specific code issues with line-level precision.
+
+            Only post GitHub comments - don't submit review text as messages to me.
+
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*)"
