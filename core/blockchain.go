@@ -56,6 +56,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
@@ -4364,22 +4365,97 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	if bc.witnessStateCache != nil && bc.witnessStateCache.IsEnabled() && !bc.parallelStatelessImportEnabled.Load() {
 		cachePopulationStart := time.Now()
 
+		blockNum := block.NumberU64()
+
+		// Snapshot cache sizes BEFORE population
+		activeCacheSizeBefore := 0
+		nextCacheSizeBefore := 0
+		if bc.witnessStateCache.Active != nil {
+			activeCacheSizeBefore = len(bc.witnessStateCache.Active.Nodes)
+		}
+		if bc.witnessStateCache.Next != nil {
+			nextCacheSizeBefore = len(bc.witnessStateCache.Next.Nodes)
+		}
+
+		// Log incoming witness size
+		witnessStateSize := len(witness.State)
+		log.Info("PSP - Witness received for cache population",
+			"block", blockNum,
+			"witnessNodes", witnessStateSize,
+			"activeCacheBefore", activeCacheSizeBefore,
+			"nextCacheBefore", nextCacheSizeBefore)
+
 		// Extract state update nodes from execution
 		commitStart := time.Now()
 		_, stateUpdate, commitErr := statedb.CommitAndReturnStateUpdate(block.NumberU64(), true)
 		commitTime := time.Since(commitStart)
 
 		if commitErr == nil && stateUpdate != nil && stateUpdate.Nodes != nil {
-			// Populate cache from both witness state (incoming) and state update (produced by execution)
-			blockNum := block.NumberU64()
+			// Count nodes in state update
+			stateUpdateNodeCount := 0
+			for owner := range stateUpdate.Nodes.Sets {
+				nodeSet := stateUpdate.Nodes.Sets[owner]
+				if nodeSet != nil {
+					nodeSet.ForEachWithOrder(func(path string, node *trienode.Node) {
+						if node != nil && !node.IsDeleted() && node.Blob != nil {
+							stateUpdateNodeCount++
+						}
+					})
+				}
+			}
 
+			log.Info("PSP - State update extracted",
+				"block", blockNum,
+				"stateUpdateNodes", stateUpdateNodeCount)
+
+			// Populate cache from witness state (incoming nodes)
 			witnessPopulateStart := time.Now()
 			bc.witnessStateCache.PopulateFromWitness(blockNum, witness)
 			witnessPopulateTime := time.Since(witnessPopulateStart)
 
+			// Snapshot after witness population
+			activeCacheAfterWitness := 0
+			nextCacheAfterWitness := 0
+			if bc.witnessStateCache.Active != nil {
+				activeCacheAfterWitness = len(bc.witnessStateCache.Active.Nodes)
+			}
+			if bc.witnessStateCache.Next != nil {
+				nextCacheAfterWitness = len(bc.witnessStateCache.Next.Nodes)
+			}
+
+			nodesAddedFromWitness := (activeCacheAfterWitness - activeCacheSizeBefore) +
+									 (nextCacheAfterWitness - nextCacheSizeBefore)
+
+			// Populate cache from state update (execution results)
 			stateUpdatePopulateStart := time.Now()
 			bc.witnessStateCache.PopulateFromStateUpdate(blockNum, stateUpdate.Nodes)
 			stateUpdatePopulateTime := time.Since(stateUpdatePopulateStart)
+
+			// Snapshot AFTER state update population (final state before potential promotion)
+			activeCacheSizeAfter := 0
+			nextCacheSizeAfter := 0
+			if bc.witnessStateCache.Active != nil {
+				activeCacheSizeAfter = len(bc.witnessStateCache.Active.Nodes)
+			}
+			if bc.witnessStateCache.Next != nil {
+				nextCacheSizeAfter = len(bc.witnessStateCache.Next.Nodes)
+			}
+
+			nodesAddedFromStateUpdate := (activeCacheSizeAfter - activeCacheAfterWitness) +
+										 (nextCacheSizeAfter - nextCacheAfterWitness)
+
+			totalNodesAdded := (activeCacheSizeAfter - activeCacheSizeBefore) +
+							   (nextCacheSizeAfter - nextCacheSizeBefore)
+
+			log.Info("PSP - Cache population completed",
+				"block", blockNum,
+				"nodesAddedFromWitness", nodesAddedFromWitness,
+				"nodesAddedFromStateUpdate", nodesAddedFromStateUpdate,
+				"totalNodesAdded", totalNodesAdded,
+				"activeCacheAfter", activeCacheSizeAfter,
+				"nextCacheAfter", nextCacheSizeAfter,
+				"activeCacheGrowth", activeCacheSizeAfter-activeCacheSizeBefore,
+				"nextCacheGrowth", nextCacheSizeAfter-nextCacheSizeBefore)
 
 			// Check if we should promote cache windows
 			if bc.witnessStateCache.ShouldPromote(blockNum) {
@@ -4388,7 +4464,34 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 					log.Warn("Failed to promote witness cache windows", "block", blockNum, "err", promoteErr)
 				} else {
 					promoteTime := time.Since(promoteStart)
-					log.Info("PSP - Promoted witness cache windows", "block", blockNum, "promoteTime", promoteTime)
+
+					// Log new cache state after promotion
+					newActiveCacheSize := 0
+					newNextCacheSize := 0
+					activeStart := uint64(0)
+					activeEnd := uint64(0)
+					nextStart := uint64(0)
+					nextEnd := uint64(0)
+
+					if bc.witnessStateCache.Active != nil {
+						newActiveCacheSize = len(bc.witnessStateCache.Active.Nodes)
+						activeStart = bc.witnessStateCache.Active.StartBlock
+						activeEnd = bc.witnessStateCache.Active.EndBlock
+					}
+					if bc.witnessStateCache.Next != nil {
+						newNextCacheSize = len(bc.witnessStateCache.Next.Nodes)
+						nextStart = bc.witnessStateCache.Next.StartBlock
+						nextEnd = bc.witnessStateCache.Next.EndBlock
+					}
+
+					log.Info("PSP - Promoted witness cache windows",
+						"block", blockNum,
+						"promoteTime", promoteTime,
+						"newActiveCacheSize", newActiveCacheSize,
+						"newNextCacheSize", newNextCacheSize,
+						"activeWindow", fmt.Sprintf("[%d-%d]", activeStart, activeEnd),
+						"nextWindow", fmt.Sprintf("[%d-%d]", nextStart, nextEnd))
+
 					// Record cache promotion metric
 					witnessCachePromotions.Inc(1)
 					// Update cache complete status (should be true after promotion)
