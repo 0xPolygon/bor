@@ -365,6 +365,20 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// Rebroadcast enables the stuck transaction rebroadcast mechanism
+	Rebroadcast bool `hcl:"rebroadcast,optional" toml:"rebroadcast,optional"`
+
+	// RebroadcastInterval is the interval between rebroadcast checks
+	RebroadcastInterval    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastIntervalRaw string        `hcl:"rebroadcast-interval,optional" toml:"rebroadcast-interval,optional"`
+
+	// RebroadcastMaxAge is the maximum age for rebroadcast eligibility
+	RebroadcastMaxAge    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastMaxAgeRaw string        `hcl:"rebroadcast-max-age,optional" toml:"rebroadcast-max-age,optional"`
+
+	// RebroadcastBatchSize is the maximum number of transactions per rebroadcast cycle
+	RebroadcastBatchSize int `hcl:"rebroadcast-batch-size,optional" toml:"rebroadcast-batch-size,optional"`
 }
 
 type SealerConfig struct {
@@ -772,17 +786,21 @@ func DefaultConfig() *Config {
 		BorLogs:     false,
 
 		TxPool: &TxPoolConfig{
-			Locals:       []string{},
-			NoLocals:     false,
-			Journal:      "transactions.rlp",
-			Rejournal:    1 * time.Hour,
-			PriceLimit:   params.BorDefaultTxPoolPriceLimit, // bor's default
-			PriceBump:    10,
-			AccountSlots: 16,
-			GlobalSlots:  131072,
-			AccountQueue: 64,
-			GlobalQueue:  131072,
-			LifeTime:     3 * time.Hour,
+			Locals:               []string{},
+			NoLocals:             false,
+			Journal:              "transactions.rlp",
+			Rejournal:            1 * time.Hour,
+			PriceLimit:           params.BorDefaultTxPoolPriceLimit, // bor's default
+			PriceBump:            10,
+			AccountSlots:         16,
+			GlobalSlots:          131072,
+			AccountQueue:         64,
+			GlobalQueue:          131072,
+			LifeTime:             3 * time.Hour,
+			Rebroadcast:          true,
+			RebroadcastInterval:  30 * time.Second,
+			RebroadcastMaxAge:    10 * time.Minute,
+			RebroadcastBatchSize: 200,
 		},
 		Sealer: &SealerConfig{
 			Enabled:               false,
@@ -1002,6 +1020,8 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
+		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
+		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 	}
@@ -1126,6 +1146,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		} else {
 			n.TxPool.FilteredAddresses = filteredAddrs
 		}
+
+		// Rebroadcast options
+		n.TxPool.Rebroadcast = c.TxPool.Rebroadcast
+		n.TxPool.RebroadcastInterval = c.TxPool.RebroadcastInterval
+		n.TxPool.RebroadcastMaxAge = c.TxPool.RebroadcastMaxAge
+		n.TxPool.RebroadcastBatchSize = c.TxPool.RebroadcastBatchSize
 	}
 
 	// miner options

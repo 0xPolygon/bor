@@ -516,6 +516,23 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 	return state.New(root, bc.statedb)
 }
 
+// StateAtWithReaders returns a new mutable state based on a particular point in time,
+// along with two separate readers that share the same cache but track separate statistics.
+// The first reader (prefetch) is intended for prefetch operations, and the second (process)
+// is for actual transaction processing. This enables independent cache hit/miss tracking
+// for both phases of block production.
+func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return statedb, prefetchReader, processReader, nil
+}
+
 // HistoricState returns a historic state specified by the given root.
 // Live states are not available and won't be served, please use `State`
 // or `StateAt` instead.

@@ -412,3 +412,14 @@ func (ps *peerSet) close() {
 	}
 	ps.closed = true
 }
+
+// ForgetTransactions removes the given transaction hashes from all peers'
+// known transaction sets, allowing them to be re-broadcast.
+func (ps *peerSet) ForgetTransactions(hashes []common.Hash) {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	for _, p := range ps.peers {
+		p.Peer.ForgetTransactions(hashes)
+	}
+}

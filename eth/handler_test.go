@@ -21,6 +21,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -51,8 +53,9 @@ var (
 type testTxPool struct {
 	pool map[common.Hash]*types.Transaction // Hash map of collected transactions
 
-	txFeed event.Feed   // Notification feed to allow waiting for inclusion
-	lock   sync.RWMutex // Protects the transaction pool
+	txFeed          event.Feed   // Notification feed to allow waiting for inclusion
+	rebroadcastFeed event.Feed   // Notification feed for stuck tx rebroadcast
+	lock            sync.RWMutex // Protects the transaction pool
 }
 
 // newTestTxPool creates a mock transaction pool.
@@ -159,6 +162,16 @@ func (p *testTxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bo
 	return p.txFeed.Subscribe(ch)
 }
 
+// SubscribeRebroadcastTransactions returns a subscription to the rebroadcast feed.
+func (p *testTxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return p.rebroadcastFeed.Subscribe(ch)
+}
+
+// SendStuckTxs sends stuck transactions to the rebroadcast feed for testing.
+func (p *testTxPool) SendStuckTxs(txs []*types.Transaction) {
+	p.rebroadcastFeed.Send(core.StuckTxsEvent{Txs: txs})
+}
+
 // testHandler is a live implementation of the Ethereum protocol handler, just
 // preinitialized with some sane testing defaults and the transaction pool mocked
 // out.
@@ -214,4 +227,49 @@ func newTestHandlerWithBlocks(blocks int) *testHandler {
 func (b *testHandler) close() {
 	b.handler.Stop()
 	b.chain.Stop()
+}
+
+func TestStuckTxBroadcastLoop(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler()
+	defer handler.close()
+
+	// Mark handler as synced so it processes stuck transactions
+	handler.handler.synced.Store(true)
+
+	// Create a test transaction
+	tx := types.NewTransaction(0, testAddr, big.NewInt(100), 21000, big.NewInt(1000000000), nil)
+	signedTx, err := types.SignTx(tx, types.HomesteadSigner{}, testKey)
+	if err != nil {
+		t.Fatalf("failed to sign tx: %v", err)
+	}
+
+	// Send stuck transaction event
+	handler.txpool.SendStuckTxs([]*types.Transaction{signedTx})
+
+	// Give the loop time to process
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestStuckTxBroadcastLoopNotSynced(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler()
+	defer handler.close()
+
+	// Handler is not synced by default (synced.Load() == false)
+
+	// Create a test transaction
+	tx := types.NewTransaction(0, testAddr, big.NewInt(100), 21000, big.NewInt(1000000000), nil)
+	signedTx, err := types.SignTx(tx, types.HomesteadSigner{}, testKey)
+	if err != nil {
+		t.Fatalf("failed to sign tx: %v", err)
+	}
+
+	// Send stuck transaction event - should be ignored since not synced
+	handler.txpool.SendStuckTxs([]*types.Transaction{signedTx})
+
+	// Give the loop time to process (or ignore)
+	time.Sleep(100 * time.Millisecond)
 }

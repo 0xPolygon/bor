@@ -255,3 +255,74 @@ func ExampleGenerateChain() {
 	// balance of addr2: 10000
 	// balance of addr3: 19687500000000001000
 }
+
+// TestGenerateChainHandlesFinalizeAndAssemble tests that GenerateChain properly
+// handles the FinalizeAndAssemble signature change (returns time.Duration for commit time)
+func TestGenerateChainHandlesFinalizeAndAssemble(t *testing.T) {
+	t.Parallel()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(0).Mul(big.NewInt(1000), big.NewInt(params.Ether)) // 1000 ETH
+		gspec   = &Genesis{
+			Config: params.TestChainConfig,
+			Alloc:  types.GenesisAlloc{address: {Balance: funds}},
+		}
+		genDb = rawdb.NewMemoryDatabase()
+	)
+
+	genesis := gspec.MustCommit(genDb, triedb.NewDatabase(genDb, triedb.HashDefaults))
+
+	// Generate a chain with some transactions
+	signer := types.LatestSigner(gspec.Config)
+	chain, receipts := GenerateChain(gspec.Config, genesis, ethash.NewFaker(), genDb, 3, func(i int, gen *BlockGen) {
+		// Add a transaction in each block
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(address), common.Address{byte(i + 1)}, big.NewInt(1000), params.TxGas, gen.BaseFee(), nil),
+			signer,
+			key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Verify chain was generated successfully
+	if len(chain) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(chain))
+	}
+
+	// Verify each block has valid state root (set by FinalizeAndAssemble)
+	for i, block := range chain {
+		if block.Root() == (common.Hash{}) {
+			t.Fatalf("block %d has empty root hash", i)
+		}
+
+		if block.Header().Root == (common.Hash{}) {
+			t.Fatalf("block %d header has empty root hash", i)
+		}
+
+		// Verify receipts were generated
+		if len(receipts[i]) != 1 {
+			t.Fatalf("block %d expected 1 receipt, got %d", i, len(receipts[i]))
+		}
+
+		// Verify receipt has the correct block hash
+		if receipts[i][0].BlockHash != block.Hash() {
+			t.Fatalf("block %d receipt has wrong block hash", i)
+		}
+	}
+
+	// Import the chain to verify it's valid
+	db := rawdb.NewMemoryDatabase()
+	blockchain, _ := NewBlockChain(db, gspec, ethash.NewFaker(), DefaultConfig())
+	defer blockchain.Stop()
+
+	if i, err := blockchain.InsertChain(chain, false); err != nil {
+		t.Fatalf("insert error (block %d): %v", chain[i].NumberU64(), err)
+	}
+
+	// Verify the final state
+	if blockchain.CurrentBlock().Number.Uint64() != 3 {
+		t.Fatalf("expected current block to be 3, got %d", blockchain.CurrentBlock().Number.Uint64())
+	}
+}
