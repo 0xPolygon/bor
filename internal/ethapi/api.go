@@ -41,6 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -2011,6 +2012,13 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		log.Info("Submitted transaction", "hash", tx.Hash().Hex(), "from", from, "nonce", tx.Nonce(), "recipient", tx.To(), "value", tx.Value())
 	}
 
+	// If preconf / private tx is enabled, submit tx directly to BP
+	if b.PreconfEnabled() {
+		// submit tx to bps
+	} else if b.PrivateTxEnabled() {
+		// submit tx to bps
+	}
+
 	return tx.Hash(), nil
 }
 
@@ -2199,6 +2207,57 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 			}
 		}
 	}
+}
+
+// SendRawTransactionForPreconf will accept a preconf transaction from relay if enabled. It will
+// offer a soft inclusion confirmation if the transaction is accepted into the pending pool.
+func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, bool, error) {
+	if !api.b.AcceptPreconfTxs() {
+		return common.Hash{}, false, errors.New("preconf transactions are not accepted on this node")
+	}
+
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return common.Hash{}, false, err
+	}
+
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+
+	// Check tx status leaving a small delay for internal pool rearrangements
+	// TODO: try to have a better estimate for this or replace with a subscription
+	time.Sleep(100 * time.Millisecond)
+
+	txStatus := api.b.TxStatus(hash)
+	var txConfirmed bool
+	if txStatus == txpool.TxStatusPending || txStatus == txpool.TxStatusIncluded {
+		txConfirmed = true
+	}
+
+	return hash, txConfirmed, err
+}
+
+// SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure
+// that the transaction is not gossiped over public network.
+func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	if !api.b.AcceptPrivateTxs() {
+		return common.Hash{}, errors.New("private transactions are not accepted on this node")
+	}
+
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return common.Hash{}, err
+	}
+
+	// Track the tx hash to ensure it is not gossiped in public
+	api.b.RecordPrivateTx(tx.Hash())
+
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+	if err != nil {
+		// Purge tx from private tx tracker if submission failed
+		api.b.PurgePrivateTx(tx.Hash())
+	}
+
+	return hash, err
 }
 
 // Sign calculates an ECDSA signature for:

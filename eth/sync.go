@@ -39,6 +39,9 @@ func (h *handler) syncTransactions(p *eth.Peer) {
 	var hashes []common.Hash
 	for _, batch := range h.txpool.Pending(txpool.PendingFilter{BlobTxs: false}, nil) {
 		for _, tx := range batch {
+			if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash) {
+				continue
+			}
 			hashes = append(hashes, tx.Hash)
 		}
 	}

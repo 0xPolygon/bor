@@ -50,6 +50,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -484,6 +485,15 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	return backend
 }
 
+func (b testBackend) PreconfEnabled() bool                                            { return false }
+func (b testBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {}
+func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error)               { return false, nil }
+func (b testBackend) PrivateTxEnabled() bool                                          { return false }
+func (b testBackend) AcceptPreconfTxs() bool                                          { return false }
+func (b testBackend) AcceptPrivateTxs() bool                                          { return false }
+func (b testBackend) RecordPrivateTx(hash common.Hash)                                {}
+func (b testBackend) PurgePrivateTx(hash common.Hash)                                 {}
+
 func (b testBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 	return ethereum.SyncProgress{}
 }
@@ -686,6 +696,9 @@ func (b testBackend) TxPoolContent() (map[common.Address][]*types.Transaction, m
 	panic("implement me")
 }
 func (b testBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
+	panic("implement me")
+}
+func (b testBackend) TxStatus(hash common.Hash) txpool.TxStatus {
 	panic("implement me")
 }
 func (b testBackend) SubscribeNewTxsEvent(events chan<- core.NewTxsEvent) event.Subscription {
