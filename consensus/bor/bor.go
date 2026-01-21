@@ -473,10 +473,11 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	// Calculate TTL for the header cache entry
 	// If the header time is in the future (early announced block), add extra time to TTL
 	cacheTTL := veblopBlockTimeout
-	now = uint64(time.Now().Unix())
-	if header.Time > now {
+	nowTime := time.Now()
+	headerTime := time.Unix(int64(header.Time), 0)
+	if headerTime.After(nowTime) {
 		// Add the time from now until header time as extra to the base timeout
-		extraTime := time.Duration(header.Time-now) * time.Second
+		extraTime := headerTime.Sub(nowTime)
 		cacheTTL = veblopBlockTimeout + extraTime
 	}
 
