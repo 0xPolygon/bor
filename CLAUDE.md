@@ -24,6 +24,9 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 8. **Node** (`node/`): Node lifecycle management, service orchestration, and RPC stack
 9. **Tracing** (`eth/tracers/`): Transaction tracing with JS, native, and live tracers
 10. **CLI** (`cmd/cli/`, `internal/cli/`): Command-line interface with gRPC server for node management
+11. **TxPool** (`core/txpool/`): Transaction pool with subpools (legacy, blob) for pending transaction management
+12. **Stateless** (`core/stateless/`): Stateless execution engine with witness tracking and verification
+13. **WIT Protocol** (`eth/protocols/wit/`): Witness protocol for peer communication and witness data broadcasting
 
 ### Key Design Principles
 
@@ -181,3 +184,13 @@ Prefix with package name: `eth, rpc: make trace configs optional`
 
 - **develop** - Main development branch, PRs target here
 - **master** - Stable release branch
+
+## Maintaining This File
+
+Update CLAUDE.md when:
+
+- Claude makes a mistake or wrong assumption → Add clarifying context
+- New patterns or conventions are established → Document them
+- Frequently asked questions arise → Add answers here
+
+This file should evolve over time to capture project-specific knowledge that helps AI agents work more effectively.
