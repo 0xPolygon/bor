@@ -400,7 +400,9 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
 		// number of the signer in the current sprint.
-		if header.Time-c.config.CalculatePeriod(number) > now {
+		// Uses CalcProducerDelay instead of block period to account for producer delay on sprint start blocks.
+		// We assume succession 0 (primary producer) to not be much restrictive for early block announcements.
+		if header.Time-CalcProducerDelay(number, 0, c.config) > now {
 			log.Error("Block announced too early post bhilai", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
@@ -468,7 +470,17 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return err
 	}
 
-	c.recentVerifiedHeaders.Set(header.Hash(), header, ttlcache.DefaultTTL)
+	// Calculate TTL for the header cache entry
+	// If the header time is in the future (early announced block), add extra time to TTL
+	cacheTTL := veblopBlockTimeout
+	now = uint64(time.Now().Unix())
+	if header.Time > now {
+		// Add the time from now until header time as extra to the base timeout
+		extraTime := time.Duration(header.Time-now) * time.Second
+		cacheTTL = veblopBlockTimeout + extraTime
+	}
+
+	c.recentVerifiedHeaders.Set(header.Hash(), header, cacheTTL)
 	return nil
 }
 
@@ -1018,6 +1030,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
 
+	var delay time.Duration
+	delay = 0
+
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
 
@@ -1035,8 +1050,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
+		delay = time.Until(parentActualBlockTime)
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
@@ -1049,6 +1066,16 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(additionalBlockTime)
 		}
+	}
+
+	successionNumber, err := snap.GetSignerSuccessionNumber(currentSigner.signer)
+	if err != nil {
+		return err
+	}
+
+	// Wait before start the block production if needed (previsously this wait was on Seal)
+	if c.config.IsBhilai(header.Number) && successionNumber == 0 {
+		<-time.After(delay)
 	}
 
 	return nil
@@ -1306,14 +1333,8 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time for non-primary validators
-		// Disable early block announcement
-		// if successionNumber == 0 {
-		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
-		// 	// for early block announcement instead of waiting for full block time.
-		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
-		// }
+	if c.config.IsBhilai(header.Number) && successionNumber == 0 {
+		delay = 0 // delay was moved to Prepare for bhilai and later
 	} else {
 		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}

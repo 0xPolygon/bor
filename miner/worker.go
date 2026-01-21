@@ -1617,7 +1617,6 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	if w.syncing.Load() {
 		return
 	}
-	start := time.Now()
 
 	// Clear the pending work block number when commitWork completes (success or failure).
 	defer func() {
@@ -1643,6 +1642,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		timestamp: uint64(timestamp),
 		coinbase:  coinbase,
 	}, w.makeWitness)
+
+	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
+	start := time.Now()
 
 	if err != nil {
 		return
