@@ -97,6 +97,13 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 4. **Context**: Always propagate for cancellation
 5. **Database**: Use `ethdb` interfaces, batch writes when possible
 
+## Before Making Changes
+
+1. **Identify impact**: What other components depend on this code?
+2. **Plan implementation**: Outline the approach before writing code
+3. **Plan testing**: How will you verify correctness? What edge cases exist?
+4. **Check for breaking changes**: Will this affect public APIs, configs, or stored data?
+
 ## Common Pitfalls
 
 1. **Don't Block Goroutines**: Avoid sync operations in async contexts
