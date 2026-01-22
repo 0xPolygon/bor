@@ -2257,7 +2257,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	return map[string]interface{}{
 		"hash":         hash,
 		"preconfirmed": txConfirmed,
-	}, err
+	}, nil
 }
 
 // SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure
