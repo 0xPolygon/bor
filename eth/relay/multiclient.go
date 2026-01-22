@@ -56,7 +56,7 @@ func newMultiClient(urls []string) *multiClient {
 		}
 
 		number, _ := hexutil.DecodeUint64(blockNumber)
-		log.Info("[tx-relay] Dial successfull", "blockNumber", number, "index", i)
+		log.Info("[tx-relay] Dial successful", "blockNumber", number, "index", i)
 
 		clients = append(clients, client)
 	}
