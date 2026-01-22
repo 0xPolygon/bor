@@ -667,7 +667,7 @@ func TestCustomBlockTimeValidation(t *testing.T) {
 				ParentHash: genesis.Hash(),
 			}
 
-			err := b.Prepare(chain.HeaderChain(), header)
+			err := b.Prepare(chain.HeaderChain(), header, false)
 
 			if tc.expectError {
 				require.Error(t, err, tc.description)
@@ -702,7 +702,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Number:     big.NewInt(1),
 			ParentHash: genesis.Hash(),
 		}
-		err := b.Prepare(chain.HeaderChain(), header1)
+		err := b.Prepare(chain.HeaderChain(), header1, false)
 		require.NoError(t, err)
 
 		require.False(t, header1.ActualTime.IsZero(), "ActualTime should be set")
@@ -729,7 +729,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(3 * time.Second)
@@ -762,7 +762,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: parentHash,
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(4 * time.Second)
@@ -795,7 +795,7 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
@@ -830,7 +830,7 @@ func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
 	}
 
 	before := time.Now()
-	err := b.Prepare(chain.HeaderChain(), header)
+	err := b.Prepare(chain.HeaderChain(), header, false)
 	after := time.Now()
 
 	require.NoError(t, err)
@@ -962,7 +962,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should give full 2s build time from now, not from parent
 		expectedMin := before.Add(2 * time.Second).Unix()
@@ -979,7 +979,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should use parent.Time + period
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -1001,7 +1001,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		expectedMin := before.Add(3 * time.Second).Unix()
 		require.GreaterOrEqual(t, int64(header.Time), expectedMin)

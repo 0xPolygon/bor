@@ -29,18 +29,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// statePrefetcher is a basic Prefetcher that executes transactions from a block
+// StatePrefetcher is a basic Prefetcher that executes transactions from a block
 // on top of the parent state, aiming to prefetch potentially useful state data
 // from disk. Transactions are executed in parallel to fully leverage the
 // SSD's read performance.
-type statePrefetcher struct {
+type StatePrefetcher struct {
 	config *params.ChainConfig // Chain configuration options
 	chain  *HeaderChain        // Canonical block chain
 }
 
-// newStatePrefetcher initialises a new statePrefetcher.
-func newStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *statePrefetcher {
-	return &statePrefetcher{
+// NewStatePrefetcher initialises a new statePrefetcher.
+func NewStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *StatePrefetcher {
+	return &StatePrefetcher{
 		config: config,
 		chain:  chain,
 	}
@@ -49,7 +49,7 @@ func newStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *statePr
 // Prefetch processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb, but any changes are discarded. The
 // only goal is to warm the state caches.
-func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) {
+func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) {
 	var (
 		fails   atomic.Int64
 		header  = block.Header()

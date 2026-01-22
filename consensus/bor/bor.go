@@ -933,7 +933,7 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
@@ -1075,7 +1075,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	}
 
 	// Wait before start the block production if needed (previsously this wait was on Seal)
-	if c.config.IsBhilai(header.Number) && successionNumber == 0 {
+	if c.config.IsBhilai(header.Number) && successionNumber == 0 && waitOnPrepare {
 		<-time.After(delay)
 	}
 
