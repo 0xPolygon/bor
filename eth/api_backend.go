@@ -732,15 +732,20 @@ func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 func (b *EthAPIBackend) PreconfEnabled() bool {
 	return b.relay.PreconfEnabled()
 }
-func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {
-	// Implementation here
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	return b.relay.SubmitPreconfTransaction(tx)
 }
+
 func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
-	// Implementation here
-	return false, nil
+	return b.relay.CheckPreconfStatus(hash)
 }
+
 func (b *EthAPIBackend) PrivateTxEnabled() bool {
 	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	return b.relay.SubmitPrivateTransaction(tx)
 }
 
 // Preconf / Private tx related API for block producers

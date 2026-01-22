@@ -319,14 +319,15 @@ func (b *backendMock) setFork(fork string) error {
 	return nil
 }
 
-func (b *backendMock) PreconfEnabled() bool                                            { return false }
-func (b *backendMock) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {}
-func (b *backendMock) CheckPreconfStatus(hash common.Hash) (bool, error)               { return false, nil }
-func (b *backendMock) PrivateTxEnabled() bool                                          { return false }
-func (b *backendMock) AcceptPreconfTxs() bool                                          { return false }
-func (b *backendMock) AcceptPrivateTxs() bool                                          { return false }
-func (b *backendMock) RecordPrivateTx(hash common.Hash)                                {}
-func (b *backendMock) PurgePrivateTx(hash common.Hash)                                 {}
+func (b *backendMock) PreconfEnabled() bool                              { return false }
+func (b *backendMock) SubmitTxForPreconf(tx *types.Transaction) error    { return nil }
+func (b *backendMock) CheckPreconfStatus(hash common.Hash) (bool, error) { return false, nil }
+func (b *backendMock) PrivateTxEnabled() bool                            { return false }
+func (b *backendMock) SubmitPrivateTx(tx *types.Transaction) error       { return nil }
+func (b *backendMock) AcceptPreconfTxs() bool                            { return false }
+func (b *backendMock) AcceptPrivateTxs() bool                            { return false }
+func (b *backendMock) RecordPrivateTx(hash common.Hash)                  {}
+func (b *backendMock) PurgePrivateTx(hash common.Hash)                   {}
 
 func (b *backendMock) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return big.NewInt(42), nil

@@ -261,6 +261,16 @@ func (api *TxPoolAPI) Status() map[string]hexutil.Uint {
 	}
 }
 
+// TxStatus returns the current status of a transaction in the pool given transaction hash.
+// Returns
+// - 0 if status is unknown
+// - 1 if status is queued
+// - 2 if status is pending
+// - 3 if status is included in a block
+func (api *TxPoolAPI) TxStatus(hash common.Hash) txpool.TxStatus {
+	return api.b.TxStatus(hash)
+}
+
 // Inspect retrieves the content of the transaction pool and flattens it into an
 // easily inspectable list.
 func (api *TxPoolAPI) Inspect() map[string]map[string]map[string]string {
@@ -2014,9 +2024,17 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 
 	// If preconf / private tx is enabled, submit tx directly to BP
 	if b.PreconfEnabled() {
-		// submit tx to bps
+		// Preconf processing mostly happens in background so don't float the error back to user
+		if err := b.SubmitTxForPreconf(tx); err != nil {
+			log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
+		}
 	} else if b.PrivateTxEnabled() {
-		// submit tx to bps
+		// Return an error here to inform user that private tx submission failed as it is critical.
+		// Note that it will be retried in background.
+		if err := b.SubmitPrivateTx(tx); err != nil {
+			log.Error("Private tx accepted locally but submission failed", "err", err)
+			return tx.Hash(), fmt.Errorf("private tx accepted locally, submission failed. reason: %w", err)
+		}
 	}
 
 	return tx.Hash(), nil
@@ -2211,17 +2229,20 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 
 // SendRawTransactionForPreconf will accept a preconf transaction from relay if enabled. It will
 // offer a soft inclusion confirmation if the transaction is accepted into the pending pool.
-func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, bool, error) {
+func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (map[string]interface{}, error) {
 	if !api.b.AcceptPreconfTxs() {
-		return common.Hash{}, false, errors.New("preconf transactions are not accepted on this node")
+		return nil, errors.New("preconf transactions are not accepted on this node")
 	}
 
 	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(input); err != nil {
-		return common.Hash{}, false, err
+		return nil, err
 	}
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check tx status leaving a small delay for internal pool rearrangements
 	// TODO: try to have a better estimate for this or replace with a subscription
@@ -2233,7 +2254,10 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 		txConfirmed = true
 	}
 
-	return hash, txConfirmed, err
+	return map[string]interface{}{
+		"hash":         hash,
+		"preconfirmed": txConfirmed,
+	}, err
 }
 
 // SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure
@@ -2258,6 +2282,13 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 	}
 
 	return hash, err
+}
+
+func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {
+	if !api.b.PreconfEnabled() {
+		return false, errors.New("preconf transactions are not accepted on this node")
+	}
+	return api.b.CheckPreconfStatus(hash)
 }
 
 // Sign calculates an ECDSA signature for:

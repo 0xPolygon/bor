@@ -485,14 +485,15 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	return backend
 }
 
-func (b testBackend) PreconfEnabled() bool                                            { return false }
-func (b testBackend) SubmitTxForPreconf(tx *types.Transaction, sender common.Address) {}
-func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error)               { return false, nil }
-func (b testBackend) PrivateTxEnabled() bool                                          { return false }
-func (b testBackend) AcceptPreconfTxs() bool                                          { return false }
-func (b testBackend) AcceptPrivateTxs() bool                                          { return false }
-func (b testBackend) RecordPrivateTx(hash common.Hash)                                {}
-func (b testBackend) PurgePrivateTx(hash common.Hash)                                 {}
+func (b testBackend) PreconfEnabled() bool                              { return false }
+func (b testBackend) SubmitTxForPreconf(tx *types.Transaction) error    { return nil }
+func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error) { return false, nil }
+func (b testBackend) PrivateTxEnabled() bool                            { return false }
+func (b testBackend) SubmitPrivateTx(tx *types.Transaction) error       { return nil }
+func (b testBackend) AcceptPreconfTxs() bool                            { return false }
+func (b testBackend) AcceptPrivateTxs() bool                            { return false }
+func (b testBackend) RecordPrivateTx(hash common.Hash)                  {}
+func (b testBackend) PurgePrivateTx(hash common.Hash)                   {}
 
 func (b testBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 	return ethereum.SyncProgress{}

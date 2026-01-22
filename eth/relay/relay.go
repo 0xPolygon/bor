@@ -1,14 +1,25 @@
 package relay
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 )
 
+var (
+	errRelayNotConfigured = errors.New("relay service not configured")
+)
+
 type Config struct {
+	// for relay
 	enablePreconf   bool
 	enablePrivateTx bool
+
+	// for block producers
 	acceptPreconfTx bool
 	acceptPrivateTx bool
 }
@@ -17,9 +28,10 @@ type Config struct {
 type RelayService struct {
 	config         Config
 	privateTxStore *PrivateTxStore
+	txRelay        *Service
 }
 
-func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool) *RelayService {
+func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool, blockProducerURLs []string) *RelayService {
 	config := Config{
 		enablePreconf:   enablePreconf,
 		enablePrivateTx: enablePrivateTx,
@@ -30,9 +42,14 @@ func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool)
 	if acceptPrivateTx {
 		privateTxStore = NewPrivateTxStore()
 	}
+	var txRelay *Service
+	if enablePreconf || enablePrivateTx {
+		txRelay = NewService(blockProducerURLs)
+	}
 	return &RelayService{
 		config:         config,
 		privateTxStore: privateTxStore,
+		txRelay:        txRelay,
 	}
 }
 
@@ -76,4 +93,51 @@ func (s *RelayService) AcceptPreconfTxs() bool {
 
 func (s *RelayService) AcceptPrivateTxs() bool {
 	return s.config.acceptPrivateTx
+}
+
+// SubmitPreconfTransaction submits a transaction for preconfirmation to block producers
+func (s *RelayService) SubmitPreconfTransaction(tx *types.Transaction) error {
+	if s.txRelay == nil {
+		return fmt.Errorf("request dropped: %w", errRelayNotConfigured)
+	}
+	err := s.txRelay.SubmitTransactionForPreconf(tx)
+	if err != nil {
+		return fmt.Errorf("request dropped: %w", err)
+	}
+	return nil
+}
+
+// SubmitPrivateTransaction submits a private transaction to block producers
+func (s *RelayService) SubmitPrivateTransaction(tx *types.Transaction) error {
+	if s.txRelay == nil {
+		return fmt.Errorf("request dropped: %w", errRelayNotConfigured)
+	}
+	err := s.txRelay.SubmitPrivateTx(tx)
+	if err != nil {
+		// Don't add extra context to this error as it will be floated back to user
+		return err
+	}
+	return nil
+}
+
+// CheckPreconfStatus checks the preconfirmation status of a transaction
+func (s *RelayService) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	if s.txRelay == nil {
+		return false, fmt.Errorf("request dropped: %w", errRelayNotConfigured)
+	}
+	preconf, err := s.txRelay.CheckTxPreconfStatus(hash)
+	if err != nil {
+		return false, fmt.Errorf("unable to offer preconf: %w", err)
+	}
+	return preconf, nil
+}
+
+// Close closes the relay service and all its components
+func (s *RelayService) Close() {
+	if s.txRelay != nil {
+		s.txRelay.close()
+	}
+	if s.privateTxStore != nil {
+		s.privateTxStore.Close()
+	}
 }

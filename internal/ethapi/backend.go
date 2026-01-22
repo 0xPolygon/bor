@@ -63,9 +63,10 @@ type Backend interface {
 
 	// Preconf / Private tx related API for relay
 	PreconfEnabled() bool
-	SubmitTxForPreconf(tx *types.Transaction, sender common.Address)
+	SubmitTxForPreconf(tx *types.Transaction) error
 	CheckPreconfStatus(hash common.Hash) (bool, error)
 	PrivateTxEnabled() bool
+	SubmitPrivateTx(tx *types.Transaction) error
 
 	// Preconf / Private tx related API for block producers
 	AcceptPreconfTxs() bool
