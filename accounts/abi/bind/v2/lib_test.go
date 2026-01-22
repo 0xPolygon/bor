@@ -28,53 +28,39 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2/internal/contracts/nested_libraries"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2/internal/contracts/solc_errors"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/ethclient/simulated"
-	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
 )
 
 var testKey, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 var testAddr = crypto.PubkeyToAddress(testKey.PublicKey)
 
-func testSetup() (*backends.SimulatedBackend, error) {
-	backend := simulated.NewBackend(
+// testChainID is the chain ID used by MergedTestChainConfig
+var testChainID = big.NewInt(1)
+
+func testSetup() *backends.SimulatedBackend {
+	return backends.NewSimulatedBackendWithConfig(
+		rawdb.NewMemoryDatabase(),
 		types.GenesisAlloc{
 			testAddr: {Balance: big.NewInt(1000000000000000000)},
 		},
-		func(nodeConf *node.Config, ethConf *ethconfig.Config) {
-			ethConf.Genesis.Difficulty = big.NewInt(0)
-		},
+		60000000,
+		params.MergedTestChainConfig,
 	)
-
-	// we should just be able to use the backend directly, instead of using
-	// this deprecated interface. However, the simulated backend no longer
-	// implements backends.SimulatedBackend...
-	bindBackend := backends.SimulatedBackend{
-		Backend: backend,
-		Client:  backend.Client(),
-	}
-	return &bindBackend, nil
 }
 
-func makeTestDeployer(backend simulated.Client) func(input, deployer []byte) (common.Address, *types.Transaction, error) {
-	chainId, _ := backend.ChainID(context.Background())
-	return bind.DefaultDeployer(bind.NewKeyedTransactor(testKey, chainId), backend)
+func makeTestDeployer(backend *backends.SimulatedBackend) func(input, deployer []byte) (common.Address, *types.Transaction, error) {
+	return bind.DefaultDeployer(bind.NewKeyedTransactor(testKey, testChainID), backend)
 }
 
 // test that deploying a contract with library dependencies works,
 // verifying by calling method on the deployed contract.
 func TestDeploymentLibraries(t *testing.T) {
-	// TODO - bor: refactor and enable (task: POS-3046)
-	t.Skip("bor: Skipping all tests for now. To be fixed later")
-	bindBackend, err := testSetup()
-	if err != nil {
-		t.Fatalf("err setting up test: %v", err)
-	}
-	defer bindBackend.Backend.Close()
+	backend := testSetup()
+	defer backend.Close()
 
 	c := nested_libraries.NewC1()
 	constructorInput := c.PackConstructor(big.NewInt(42), big.NewInt(1))
@@ -82,17 +68,17 @@ func TestDeploymentLibraries(t *testing.T) {
 		Contracts: []*bind.MetaData{&nested_libraries.C1MetaData},
 		Inputs:    map[string][]byte{nested_libraries.C1MetaData.ID: constructorInput},
 	}
-	res, err := bind.LinkAndDeploy(deploymentParams, makeTestDeployer(bindBackend.Client))
+	res, err := bind.LinkAndDeploy(deploymentParams, makeTestDeployer(backend))
 	if err != nil {
 		t.Fatalf("err: %+v\n", err)
 	}
-	bindBackend.Commit()
+	backend.Commit()
 
 	if len(res.Addresses) != 5 {
 		t.Fatalf("deployment should have generated 5 addresses.  got %d", len(res.Addresses))
 	}
 	for _, tx := range res.Txs {
-		_, err = bind.WaitDeployed(t.Context(), bindBackend, tx.Hash())
+		_, err = bind.WaitDeployed(t.Context(), backend, tx.Hash())
 		if err != nil {
 			t.Fatalf("error deploying library: %+v", err)
 		}
@@ -101,7 +87,7 @@ func TestDeploymentLibraries(t *testing.T) {
 	doInput := c.PackDo(big.NewInt(1))
 	contractAddr := res.Addresses[nested_libraries.C1MetaData.ID]
 	callOpts := &bind.CallOpts{From: common.Address{}, Context: t.Context()}
-	instance := c.Instance(bindBackend, contractAddr)
+	instance := c.Instance(backend, contractAddr)
 	internalCallCount, err := bind.Call(instance, callOpts, doInput, c.UnpackDo)
 	if err != nil {
 		t.Fatalf("err unpacking result: %v", err)
@@ -114,29 +100,24 @@ func TestDeploymentLibraries(t *testing.T) {
 // Same as TestDeployment.  However, stagger the deployments with overrides:
 // first deploy the library deps and then the contract.
 func TestDeploymentWithOverrides(t *testing.T) {
-	// TODO - bor: refactor and enable (task: POS-3046)
-	t.Skip("bor: Skipping all tests for now. To be fixed later")
-	bindBackend, err := testSetup()
-	if err != nil {
-		t.Fatalf("err setting up test: %v", err)
-	}
-	defer bindBackend.Backend.Close()
+	backend := testSetup()
+	defer backend.Close()
 
 	// deploy all the library dependencies of our target contract, but not the target contract itself.
 	deploymentParams := &bind.DeploymentParams{
 		Contracts: nested_libraries.C1MetaData.Deps,
 	}
-	res, err := bind.LinkAndDeploy(deploymentParams, makeTestDeployer(bindBackend))
+	res, err := bind.LinkAndDeploy(deploymentParams, makeTestDeployer(backend))
 	if err != nil {
 		t.Fatalf("err: %+v\n", err)
 	}
-	bindBackend.Commit()
+	backend.Commit()
 
 	if len(res.Addresses) != 4 {
 		t.Fatalf("deployment should have generated 4 addresses.  got %d", len(res.Addresses))
 	}
 	for _, tx := range res.Txs {
-		_, err = bind.WaitDeployed(t.Context(), bindBackend, tx.Hash())
+		_, err = bind.WaitDeployed(t.Context(), backend, tx.Hash())
 		if err != nil {
 			t.Fatalf("error deploying library: %+v", err)
 		}
@@ -152,17 +133,17 @@ func TestDeploymentWithOverrides(t *testing.T) {
 		Inputs:    map[string][]byte{nested_libraries.C1MetaData.ID: constructorInput},
 		Overrides: overrides,
 	}
-	res, err = bind.LinkAndDeploy(deploymentParams, makeTestDeployer(bindBackend))
+	res, err = bind.LinkAndDeploy(deploymentParams, makeTestDeployer(backend))
 	if err != nil {
 		t.Fatalf("err: %+v\n", err)
 	}
-	bindBackend.Commit()
+	backend.Commit()
 
 	if len(res.Addresses) != 1 {
 		t.Fatalf("deployment should have generated 1 address.  got %d", len(res.Addresses))
 	}
 	for _, tx := range res.Txs {
-		_, err = bind.WaitDeployed(t.Context(), bindBackend, tx.Hash())
+		_, err = bind.WaitDeployed(t.Context(), backend, tx.Hash())
 		if err != nil {
 			t.Fatalf("error deploying library: %+v", err)
 		}
@@ -170,7 +151,7 @@ func TestDeploymentWithOverrides(t *testing.T) {
 
 	// call the deployed contract and make sure it returns the correct result
 	doInput := c.PackDo(big.NewInt(1))
-	instance := c.Instance(bindBackend, res.Addresses[nested_libraries.C1MetaData.ID])
+	instance := c.Instance(backend, res.Addresses[nested_libraries.C1MetaData.ID])
 	callOpts := new(bind.CallOpts)
 	internalCallCount, err := bind.Call(instance, callOpts, doInput, c.UnpackDo)
 	if err != nil {
@@ -183,7 +164,7 @@ func TestDeploymentWithOverrides(t *testing.T) {
 
 // returns transaction auth to send a basic transaction from testAddr
 func defaultTxAuth() *bind.TransactOpts {
-	signer := types.LatestSigner(params.AllDevChainProtocolChanges)
+	signer := types.LatestSigner(params.MergedTestChainConfig)
 	opts := &bind.TransactOpts{
 		From:  testAddr,
 		Nonce: nil,
@@ -204,13 +185,10 @@ func defaultTxAuth() *bind.TransactOpts {
 }
 
 func TestEvents(t *testing.T) {
-	// TODO - bor: refactor and enable (task: POS-3046)
-	t.Skip("bor: Skipping all tests for now. To be fixed later")
 	// test watch/filter logs method on a contract that emits various kinds of events (struct-containing, etc.)
-	backend, err := testSetup()
-	if err != nil {
-		t.Fatalf("error setting up testing env: %v", err)
-	}
+	backend := testSetup()
+	defer backend.Close()
+
 	deploymentParams := &bind.DeploymentParams{
 		Contracts: []*bind.MetaData{&events.CMetaData},
 	}
@@ -313,13 +291,10 @@ done:
 }
 
 func TestErrors(t *testing.T) {
-	// TODO - bor: refactor and enable (task: POS-3046)
-	t.Skip("bor: Skipping all tests for now. To be fixed later")
 	// test watch/filter logs method on a contract that emits various kinds of events (struct-containing, etc.)
-	backend, err := testSetup()
-	if err != nil {
-		t.Fatalf("error setting up testing env: %v", err)
-	}
+	backend := testSetup()
+	defer backend.Close()
+
 	deploymentParams := &bind.DeploymentParams{
 		Contracts: []*bind.MetaData{&solc_errors.CMetaData},
 	}
@@ -336,7 +311,7 @@ func TestErrors(t *testing.T) {
 	c := solc_errors.NewC()
 	instance := c.Instance(backend, res.Addresses[solc_errors.CMetaData.ID])
 	packedInput := c.PackFoo()
-	opts := &bind.CallOpts{From: res.Addresses[solc_errors.CMetaData.ID]}
+	opts := &bind.CallOpts{From: testAddr} // Use EOA, not contract address
 	_, err = bind.Call[struct{}](instance, opts, packedInput, nil)
 	if err == nil {
 		t.Fatalf("expected call to fail")

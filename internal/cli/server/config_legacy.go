@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 func readLegacyConfig(path string) (*Config, error) {
@@ -17,8 +18,13 @@ func readLegacyConfig(path string) (*Config, error) {
 
 	conf := *DefaultConfig()
 
-	if _, err := toml.Decode(tomlData, &conf); err != nil {
+	meta, err := toml.Decode(tomlData, &conf)
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode toml config file: %v", err)
+	}
+
+	for _, key := range meta.Undecoded() {
+		log.Warn("Unrecognised config value", "key", key.String())
 	}
 
 	if err := conf.fillBigInt(); err != nil {
