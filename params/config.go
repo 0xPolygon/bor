@@ -671,8 +671,9 @@ var (
 
 	// MergedTestChainConfig contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers for testing purposes.
+	// Includes all Bor hard forks enabled at block 0.
 	MergedTestChainConfig = &ChainConfig{
-		ChainID:                 big.NewInt(1),
+		ChainID:                 big.NewInt(1337),
 		HomesteadBlock:          big.NewInt(0),
 		DAOForkBlock:            nil,
 		DAOForkSupport:          false,
@@ -703,10 +704,24 @@ var (
 			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
-			Sprint: map[string]uint64{
-				"0": 4},
-			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
-			Period:        map[string]uint64{"0": 2},
+			Sprint:                map[string]uint64{"0": 4},
+			Period:                map[string]uint64{"0": 2},
+			ProducerDelay:         map[string]uint64{"0": 1},
+			BackupMultiplier:      map[string]uint64{"0": 2},
+			ValidatorContract:     "0x0000000000000000000000000000000000001000",
+			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			BurntContract:         map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			BlockAlloc:            map[string]interface{}{},
+			// Bor hard forks
+			JaipurBlock:       big.NewInt(0),
+			DelhiBlock:        big.NewInt(0),
+			IndoreBlock:       big.NewInt(0),
+			AhmedabadBlock:    big.NewInt(0),
+			BhilaiBlock:       big.NewInt(0),
+			RioBlock:          big.NewInt(0),
+			MadhugiriBlock:    big.NewInt(0),
+			MadhugiriProBlock: big.NewInt(0),
+			DandeliBlock:      big.NewInt(0),
 		},
 	}
 

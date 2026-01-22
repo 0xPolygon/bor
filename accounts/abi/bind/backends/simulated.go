@@ -31,6 +31,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
@@ -71,6 +73,7 @@ type SimulatedBackend struct {
 
 	database   ethdb.Database   // In memory database to store our testing data
 	blockchain *core.BlockChain // Ethereum blockchain to handle the consensus
+	engine     consensus.Engine // Consensus engine for block generation
 
 	mu              sync.Mutex
 	pendingBlock    *types.Block   // Currently pending block that will be imported on request
@@ -87,17 +90,32 @@ type SimulatedBackend struct {
 // and uses a simulated blockchain for testing purposes.
 // A simulated backend always uses chainID 1337.
 func NewSimulatedBackendWithDatabase(database ethdb.Database, alloc types.GenesisAlloc, gasLimit uint64) *SimulatedBackend {
+	return NewSimulatedBackendWithConfig(database, alloc, gasLimit, params.AllEthashProtocolChanges)
+}
+
+// NewSimulatedBackendWithConfig creates a new binding backend based on the given database
+// and chain config. Use this when you need features from newer EVM versions (e.g., PUSH0 from Shanghai).
+func NewSimulatedBackendWithConfig(database ethdb.Database, alloc types.GenesisAlloc, gasLimit uint64, config *params.ChainConfig) *SimulatedBackend {
 	genesis := core.Genesis{
-		Config:   params.AllEthashProtocolChanges,
+		Config:   config,
 		GasLimit: gasLimit,
 		Alloc:    alloc,
 	}
 
-	blockchain, _ := core.NewBlockChain(database, &genesis, ethash.NewFaker(), core.DefaultConfig())
+	// Use beacon.NewFaker() for post-merge configs (Shanghai+), ethash.NewFaker() otherwise
+	var engine consensus.Engine
+	if config.ShanghaiBlock != nil {
+		engine = beacon.NewFaker()
+	} else {
+		engine = ethash.NewFaker()
+	}
+
+	blockchain, _ := core.NewBlockChain(database, &genesis, engine, core.DefaultConfig())
 
 	backend := &SimulatedBackend{
 		database:   database,
 		blockchain: blockchain,
+		engine:     engine,
 		config:     genesis.Config,
 	}
 
@@ -155,7 +173,7 @@ func (b *SimulatedBackend) Rollback() {
 }
 
 func (b *SimulatedBackend) rollback(parent *types.Block) {
-	blocks, _ := core.GenerateChain(b.config, parent, ethash.NewFaker(), b.database, 1, func(int, *core.BlockGen) {})
+	blocks, _ := core.GenerateChain(b.config, parent, b.engine, b.database, 1, func(int, *core.BlockGen) {})
 
 	b.pendingBlock = blocks[0]
 	b.pendingState, _ = state.New(b.pendingBlock.Root(), b.blockchain.StateCache())
@@ -687,6 +705,10 @@ func (b *SimulatedBackend) callContract(ctx context.Context, call ethereum.CallM
 	if call.Gas == 0 {
 		call.Gas = 10 * header.GasLimit
 	}
+	// Cap gas to protocol limit to avoid exceeding MaxTxGas
+	if call.Gas > params.MaxTxGas {
+		call.Gas = params.MaxTxGas
+	}
 	if call.Value == nil {
 		call.Value = new(big.Int)
 	}
@@ -739,7 +761,7 @@ func (b *SimulatedBackend) SendTransaction(ctx context.Context, tx *types.Transa
 		return fmt.Errorf("invalid transaction nonce: got %d, want %d", tx.Nonce(), nonce)
 	}
 	// Include tx in chain
-	blocks, receipts := core.GenerateChain(b.config, block, ethash.NewFaker(), b.database, 1, func(number int, block *core.BlockGen) {
+	blocks, receipts := core.GenerateChain(b.config, block, b.engine, b.database, 1, func(number int, block *core.BlockGen) {
 		for _, tx := range b.pendingBlock.Transactions() {
 			block.AddTxWithChain(b.blockchain, tx)
 		}
@@ -770,7 +792,7 @@ func (b *SimulatedBackend) FilterLogs(ctx context.Context, query ethereum.Filter
 		if query.FromBlock != nil {
 			from = query.FromBlock.Int64()
 		}
-		to := int64(-1)
+		to := int64(rpc.LatestBlockNumber)
 		if query.ToBlock != nil {
 			to = query.ToBlock.Int64()
 		}
@@ -865,7 +887,7 @@ func (b *SimulatedBackend) AdjustTime(adjustment time.Duration) error {
 		return errors.New("could not find parent")
 	}
 
-	blocks, _ := core.GenerateChain(b.config, block, ethash.NewFaker(), b.database, 1, func(number int, block *core.BlockGen) {
+	blocks, _ := core.GenerateChain(b.config, block, b.engine, b.database, 1, func(number int, block *core.BlockGen) {
 		block.OffsetTime(int64(adjustment.Seconds()))
 	})
 	stateDB, err := b.blockchain.State()
@@ -967,19 +989,23 @@ func (fb *filterBackend) SubscribePendingLogsEvent(ch chan<- []*types.Log) event
 func (fb *filterBackend) BloomStatus() (uint64, uint64) { return 4096, 0 }
 
 func (fb *filterBackend) ChainConfig() *params.ChainConfig {
-	panic("not supported")
+	return fb.bc.Config()
 }
 
 func (fb *filterBackend) CurrentHeader() *types.Header {
-	panic("not supported")
+	return fb.bc.CurrentHeader()
 }
 
 func (fb *filterBackend) NewMatcherBackend() filtermaps.MatcherBackend {
-	panic("not supported")
+	return &simulatedMatcherBackend{bc: fb.bc}
 }
 
 func (fb *filterBackend) CurrentView() *filtermaps.ChainView {
-	panic("implement me")
+	head := fb.bc.CurrentBlock()
+	if head == nil {
+		return nil
+	}
+	return filtermaps.NewChainView(fb.bc, head.Number.Uint64(), head.Hash())
 }
 
 func (fb *filterBackend) HistoryPruningCutoff() uint64 {
@@ -992,3 +1018,41 @@ func nullSubscription() event.Subscription {
 		return nil
 	})
 }
+
+// simulatedMatcherBackend implements filtermaps.MatcherBackend for simulated backend.
+// It returns empty indexed ranges to force unindexed search, which works correctly
+// for simulated backends without needing full FilterMaps indexing.
+type simulatedMatcherBackend struct {
+	bc *core.BlockChain
+}
+
+func (s *simulatedMatcherBackend) GetParams() *filtermaps.Params {
+	return nil
+}
+
+func (s *simulatedMatcherBackend) GetBlockLvPointer(ctx context.Context, blockNumber uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (s *simulatedMatcherBackend) GetFilterMapRows(ctx context.Context, mapIndices []uint32, rowIndex uint32, baseLayerOnly bool) ([]filtermaps.FilterRow, error) {
+	return nil, nil
+}
+
+func (s *simulatedMatcherBackend) GetLogByLvIndex(ctx context.Context, lvIndex uint64) (*types.Log, error) {
+	return nil, nil
+}
+
+func (s *simulatedMatcherBackend) SyncLogIndex(ctx context.Context) (filtermaps.SyncRange, error) {
+	head := s.bc.CurrentBlock()
+	if head == nil {
+		return filtermaps.SyncRange{}, nil
+	}
+	// Return empty IndexedBlocks to force unindexed search
+	return filtermaps.SyncRange{
+		IndexedView:   nil,
+		ValidBlocks:   common.Range[uint64]{},
+		IndexedBlocks: common.Range[uint64]{},
+	}, nil
+}
+
+func (s *simulatedMatcherBackend) Close() {}
