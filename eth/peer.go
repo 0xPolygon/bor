@@ -67,12 +67,17 @@ func (p *ethPeer) jailPeerForViolation(jailPeer func(string), violation string, 
 	for key, value := range details {
 		logArgs = append(logArgs, key, value)
 	}
-	p.witPeer.Peer.Log().Warn(fmt.Sprintf("Peer sent %s, dropping peer", violation), logArgs...)
+
+	log.Info("PSP - PROTOCOL VIOLATION DETECTED", append([]interface{}{"violation", violation}, logArgs...)...)
+	p.witPeer.Peer.Log().Warn(fmt.Sprintf("PSP - Peer sent %s, dropping peer", violation), logArgs...)
 
 	// Jail the peer if callback is provided
 	if jailPeer != nil {
-		p.witPeer.Peer.Log().Warn(fmt.Sprintf("Jailing peer for %s", violation), "peer", p.ID())
+		log.Info("PSP - Jailing peer for protocol violation", "peer", p.ID(), "violation", violation)
+		p.witPeer.Peer.Log().Warn(fmt.Sprintf("PSP - Jailing peer for %s", violation), "peer", p.ID())
 		jailPeer(p.ID())
+	} else {
+		log.Info("PSP - Jail callback not available, peer will not be jailed", "peer", p.ID(), "violation", violation)
 	}
 
 	// Build error message from details
@@ -215,10 +220,12 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 
 	// Check if peer supports WIT1 protocol with metadata message
 	if p.witPeer.Peer.Version() < wit.WIT1 {
+		log.Info("PSP - Using legacy method for WIT0 peer", "peer", p.ID(), "hash", hash, "peerVersion", p.witPeer.Peer.Version())
 		// Fallback to old method for WIT0 peers: request page 0
 		return p.requestWitnessPageCountLegacy(hash)
 	}
 
+	log.Info("PSP - RequestWitnessPageCount called (WIT1)", "peer", p.ID(), "hash", hash, "peerVersion", p.witPeer.Peer.Version())
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
 
 	// Use the new efficient metadata request (WIT1)
@@ -226,26 +233,32 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 
 	witReq, err := p.witPeer.Peer.RequestWitnessMetadata([]common.Hash{hash}, witResCh)
 	if err != nil {
+		log.Info("PSP - Error requesting witness metadata", "peer", p.ID(), "hash", hash, "error", err)
 		p.witPeer.Peer.Log().Error("Error requesting witness metadata", "peer", p.ID(), "err", err)
 		return 0, err
 	}
 	defer witReq.Close()
 
+	log.Info("PSP - Waiting for witness metadata response", "peer", p.ID(), "hash", hash)
+
 	// Wait for metadata response with timeout
 	select {
 	case witRes := <-witResCh:
 		if witRes == nil {
+			log.Info("PSP - Received nil witness metadata response", "peer", p.ID(), "hash", hash)
 			return 0, errors.New("nil witness metadata response")
 		}
 
 		// Extract WitnessMetadataPacket from the response
 		metadataPacket, ok := witRes.Res.(*wit.WitnessMetadataPacket)
 		if !ok {
+			log.Info("PSP - Unexpected witness metadata response type", "peer", p.ID(), "hash", hash, "type", fmt.Sprintf("%T", witRes.Res))
 			return 0, fmt.Errorf("unexpected witness metadata response type: %T", witRes.Res)
 		}
 
 		// Extract metadata
 		if len(metadataPacket.Metadata) == 0 {
+			log.Info("PSP - Empty witness metadata response", "peer", p.ID(), "hash", hash)
 			return 0, errors.New("empty witness metadata response")
 		}
 
@@ -253,8 +266,16 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 
 		// Validate that witness is available
 		if !metadata.Available {
+			log.Info("PSP - Witness not available on peer", "peer", p.ID(), "hash", hash)
 			return 0, fmt.Errorf("witness not available on peer %s for hash %s", p.ID(), hash)
 		}
+
+		log.Info("PSP - Received witness metadata successfully",
+			"peer", p.ID(),
+			"hash", hash,
+			"totalPages", metadata.TotalPages,
+			"witnessSize", metadata.WitnessSize,
+			"blockNumber", metadata.BlockNumber)
 
 		p.witPeer.Peer.Log().Debug("Received witness metadata",
 			"peer", p.ID(),
@@ -267,6 +288,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 		return metadata.TotalPages, nil
 
 	case <-time.After(5 * time.Second):
+		log.Info("PSP - Timeout waiting for witness metadata", "peer", p.ID(), "hash", hash)
 		return 0, fmt.Errorf("timeout waiting for witness metadata from peer %s", p.ID())
 	}
 }
@@ -274,6 +296,7 @@ func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
 // requestWitnessPageCountLegacy is the fallback method for WIT0 peers that don't support metadata requests.
 // It requests page 0 to get the TotalPages field.
 func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error) {
+	log.Info("PSP - RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)
 	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)
 
 	// Request only the first page (page 0) to get TotalPages metadata
@@ -282,35 +305,43 @@ func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error
 
 	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
 	if err != nil {
+		log.Info("PSP - Error requesting witness page count (legacy)", "peer", p.ID(), "hash", hash, "error", err)
 		p.witPeer.Peer.Log().Error("Error requesting witness page count (legacy)", "peer", p.ID(), "err", err)
 		return 0, err
 	}
 	defer witReq.Close()
 
+	log.Info("PSP - Waiting for witness page 0 (legacy)", "peer", p.ID(), "hash", hash)
+
 	// Wait for the first page response with timeout
 	select {
 	case witRes := <-witResCh:
 		if witRes == nil {
+			log.Info("PSP - Received nil witness response (legacy)", "peer", p.ID(), "hash", hash)
 			return 0, errors.New("nil witness response")
 		}
 
 		// Extract WitnessPacketRLPPacket from the response
 		witPacket, ok := witRes.Res.(*wit.WitnessPacketRLPPacket)
 		if !ok {
+			log.Info("PSP - Unexpected witness response type (legacy)", "peer", p.ID(), "hash", hash, "type", fmt.Sprintf("%T", witRes.Res))
 			return 0, fmt.Errorf("unexpected witness response type: %T", witRes.Res)
 		}
 
 		// Extract TotalPages from the first page
 		if len(witPacket.WitnessPacketResponse) == 0 {
+			log.Info("PSP - Empty witness packet response (legacy)", "peer", p.ID(), "hash", hash)
 			return 0, errors.New("empty witness packet response")
 		}
 
 		totalPages := witPacket.WitnessPacketResponse[0].TotalPages
+		log.Info("PSP - Received witness page count (legacy)", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
 		p.witPeer.Peer.Log().Debug("Received witness page count (legacy)", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
 
 		return totalPages, nil
 
 	case <-time.After(5 * time.Second):
+		log.Info("PSP - Timeout waiting for witness page count (legacy)", "peer", p.ID(), "hash", hash)
 		return 0, fmt.Errorf("timeout waiting for witness page count from peer %s", p.ID())
 	}
 }
@@ -522,13 +553,16 @@ func (p *ethPeer) receiveWitnessPage(
 		}
 
 		// Validate that current page number is within bounds
+		log.Info("PSP - Validating page number", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
 		if page.Page >= page.TotalPages {
+			log.Info("PSP - VALIDATION FAILED: Invalid page number (page >= totalPages)", "peer", p.ID(), "hash", page.Hash, "page", page.Page, "totalPages", page.TotalPages)
 			return p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
 				"hash":       page.Hash,
 				"page":       page.Page,
 				"totalPages": page.TotalPages,
 			})
 		}
+		log.Info("PSP - Page number validation passed", "peer", p.ID(), "hash", page.Hash, "page", page.Page)
 
 		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
 		if len(receivedWitPages[page.Hash]) == int(page.TotalPages) {
@@ -544,17 +578,21 @@ func (p *ethPeer) receiveWitnessPage(
 		existingTotalPages, hasTotalPages := witTotalPages[page.Hash]
 		if hasTotalPages {
 			// We already know TotalPages - verify it hasn't changed
+			log.Info("PSP - Checking TotalPages consistency", "peer", p.ID(), "hash", page.Hash, "existingTotalPages", existingTotalPages, "newTotalPages", page.TotalPages)
 			if existingTotalPages != page.TotalPages {
 				mapsMu.Unlock()
 				downloadPaused[page.Hash] = true
+				log.Info("PSP - VALIDATION FAILED: Inconsistent TotalPages detected", "peer", p.ID(), "hash", page.Hash, "existing", existingTotalPages, "new", page.TotalPages)
 				return p.jailPeerForViolation(jailPeer, "inconsistent TotalPages", map[string]interface{}{
 					"hash":     page.Hash,
 					"existing": existingTotalPages,
 					"new":      page.TotalPages,
 				})
 			}
+			log.Info("PSP - TotalPages consistency check passed", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 		} else {
 			// First time learning TotalPages - store it
+			log.Info("PSP - First time learning TotalPages for hash", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 			witTotalPages[page.Hash] = page.TotalPages
 		}
 		mapsMu.Unlock()
@@ -562,16 +600,19 @@ func (p *ethPeer) receiveWitnessPage(
 		// Trigger page count verification if callback is provided (only on first page)
 		// If verification fails (peer is dishonest), drop the peer immediately
 		if verifyPageCount != nil && !hasTotalPages {
+			log.Info("PSP - Triggering page count verification", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
 			if !isHonest {
 				// Peer is dishonest - pause download and discard pages
+				log.Info("PSP - VERIFICATION FAILED: Peer is dishonest, pausing download", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 				mapsMu.Lock()
 				downloadPaused[page.Hash] = true
 				mapsMu.Unlock()
-				p.witPeer.Peer.Log().Warn("Peer failed verification, dropping peer", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
+				p.witPeer.Peer.Log().Warn("PSP - Peer failed verification, dropping peer", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 				// Return error to trigger peer drop
 				return fmt.Errorf("peer failed page count verification: claimed=%d pages", page.TotalPages)
 			}
+			log.Info("PSP - Verification passed, peer is honest", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
 		}
 
 		// Additional check: Verify we haven't received more pages than claimed
@@ -579,7 +620,9 @@ func (p *ethPeer) receiveWitnessPage(
 		currentTotalPages := witTotalPages[page.Hash]
 		mapsMu.RUnlock()
 
+		log.Info("PSP - Checking received pages count", "peer", p.ID(), "hash", page.Hash, "receivedPages", len(receivedWitPages[page.Hash]), "totalPages", currentTotalPages)
 		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
+			log.Info("PSP - VALIDATION FAILED: Received more pages than TotalPages", "peer", p.ID(), "hash", page.Hash, "received", len(receivedWitPages[page.Hash]), "total", currentTotalPages)
 			mapsMu.Lock()
 			downloadPaused[page.Hash] = true
 			mapsMu.Unlock()
@@ -589,6 +632,7 @@ func (p *ethPeer) receiveWitnessPage(
 				"total":    currentTotalPages,
 			})
 		}
+		log.Info("PSP - Received pages count check passed", "peer", p.ID(), "hash", page.Hash, "receivedPages", len(receivedWitPages[page.Hash]))
 
 		// Check if download is paused before building more requests
 		mapsMu.RLock()
@@ -597,6 +641,7 @@ func (p *ethPeer) receiveWitnessPage(
 
 		if paused {
 			// Download is paused, don't build more requests
+			log.Info("PSP - Download is paused for hash, not building more requests", "peer", p.ID(), "hash", page.Hash)
 			return nil
 		}
 

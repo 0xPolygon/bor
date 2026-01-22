@@ -64,11 +64,14 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 		return peer.ReplyWitness(packet.RequestId, &response)
 
 	case *wit.GetWitnessMetadataPacket:
+		log.Info("PSP - Received GetWitnessMetadataPacket", "peer", peer.ID(), "reqID", packet.RequestId, "hashes", len(packet.Hashes))
 		// Call handleGetWitnessMetadata which returns only metadata (page count)
 		response, err := h.handleGetWitnessMetadata(peer, packet)
 		if err != nil {
+			log.Info("PSP - Failed to handle GetWitnessMetadataPacket", "peer", peer.ID(), "reqID", packet.RequestId, "error", err)
 			return fmt.Errorf("failed to handle GetWitnessMetadataPacket: %w", err)
 		}
+		log.Info("PSP - Sending WitnessMetadata response", "peer", peer.ID(), "reqID", packet.RequestId, "responseCount", len(response))
 		// Reply with metadata
 		return peer.ReplyWitnessMetadata(packet.RequestId, response)
 
@@ -186,11 +189,14 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 // handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.
 // This is efficient for verification purposes where we don't need the actual witness data.
 func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnessMetadataPacket) ([]wit.WitnessMetadataResponse, error) {
+	log.Info("PSP - handleGetWitnessMetadata processing request", "peer", peer.ID(), "reqID", req.RequestId, "hashes", len(req.Hashes))
 	log.Debug("handleGetWitnessMetadata processing request", "peer", peer.ID(), "reqID", req.RequestId, "hashes", len(req.Hashes))
 
 	var response []wit.WitnessMetadataResponse
 
 	for _, hash := range req.Hashes {
+		log.Info("PSP - Retrieving witness metadata from database", "peer", peer.ID(), "hash", hash)
+
 		// Get witness size from database
 		size := rawdb.ReadWitnessSize(h.Chain().DB(), hash)
 		witnessSize := uint64(0)
@@ -199,10 +205,14 @@ func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnes
 		if size != nil {
 			witnessSize = *size
 			available = true
+			log.Info("PSP - Witness found in database", "peer", peer.ID(), "hash", hash, "witnessSize", witnessSize)
+		} else {
+			log.Info("PSP - Witness NOT found in database", "peer", peer.ID(), "hash", hash)
 		}
 
 		// Calculate total pages
 		totalPages := (witnessSize + PageSize - 1) / PageSize // ceil(witnessSize/PageSize)
+		log.Info("PSP - Calculated total pages", "peer", peer.ID(), "hash", hash, "totalPages", totalPages, "witnessSize", witnessSize)
 
 		// Get block number from header
 		blockNumber := uint64(0)
@@ -218,8 +228,11 @@ func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnes
 			BlockNumber: blockNumber,
 			Available:   available,
 		})
+
+		log.Info("PSP - Added metadata to response", "peer", peer.ID(), "hash", hash, "totalPages", totalPages, "available", available, "blockNumber", blockNumber)
 	}
 
+	log.Info("PSP - handleGetWitnessMetadata returning metadata", "peer", peer.ID(), "reqID", req.RequestId, "responseCount", len(response))
 	log.Debug("handleGetWitnessMetadata returning metadata", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
 }

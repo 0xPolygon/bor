@@ -156,9 +156,12 @@ func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *
 // - Not called if cache hit (recently verified witnesses)
 // This avoids unnecessary peer queries and metadata requests in most cases.
 func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer string) bool {
+	log.Info("PSP - verifyPageCount called", "peer", peer, "hash", hash, "pageCount", pageCount)
+
 	// Define function to get random peers for verification
 	// Note: This function is only called if verification is actually needed (cache miss + threshold exceeded)
 	getRandomPeers := func() []string {
+		log.Info("PSP - Getting random peers for verification", "excludePeer", peer)
 		allPeers := h.peers.getAllPeers()
 		randomPeers := make([]string, 0, len(allPeers))
 		for _, p := range allPeers {
@@ -172,26 +175,34 @@ func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer st
 			j := rand.Intn(i + 1)
 			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
 		}
-		log.Info("[wm] Random peers (excluding original)", "randomPeers", randomPeers, "excluded", peer)
+		log.Info("PSP - Random peers selected (excluding original)", "randomPeers", randomPeers, "excludedPeer", peer, "count", len(randomPeers))
 		return randomPeers
 	}
 
 	// Define function to get witness page count from a peer
 	// Note: This function is only called if verification is needed (after cache check)
 	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
+		log.Info("PSP - Requesting witness page count from peer", "peer", peerID, "hash", hash)
 		peer := h.peers.peer(peerID)
 		if peer == nil || !peer.SupportsWitness() {
-			log.Info("[wm] Peer not available or doesn't support witness", "peer", peerID)
+			log.Info("PSP - Peer not available or doesn't support witness", "peer", peerID)
 			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
 		}
 
 		// Use the new efficient method that only downloads page 0
-		log.Info("[wm] Getting witness page count from peer", "peer", peerID, "hash", hash)
-		return peer.RequestWitnessPageCount(hash)
+		pageCount, err := peer.RequestWitnessPageCount(hash)
+		if err != nil {
+			log.Info("PSP - Failed to get witness page count from peer", "peer", peerID, "hash", hash, "error", err)
+		} else {
+			log.Info("PSP - Successfully received witness page count from peer", "peer", peerID, "hash", hash, "pageCount", pageCount)
+		}
+		return pageCount, err
 	}
 
 	// Run synchronous verification and return result
-	return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+	result := h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
+	log.Info("PSP - verifyPageCount result", "peer", peer, "hash", hash, "pageCount", pageCount, "isHonest", result)
+	return result
 }
 
 // handleBlockBroadcast is invoked from a peer's message handler when it transmits a
