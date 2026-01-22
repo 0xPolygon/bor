@@ -521,6 +521,11 @@ type HttpTimeouts struct {
 	ReadTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	ReadTimeoutRaw string        `hcl:"read,optional" toml:"read,optional"`
 
+	// ReadHeaderTimeout is the amount of time allowed to read
+	// request headers.
+	ReadHeaderTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	ReadHeaderTimeoutRaw string        `hcl:"readheader,optional" toml:"readheader,optional"`
+
 	// WriteTimeout is the maximum duration before timing out
 	// writes of the response. It is reset whenever a new
 	// request's header is read. Like ReadTimeout, it does not
@@ -861,9 +866,10 @@ func DefaultConfig() *Config {
 				VHost:   []string{"localhost"},
 			},
 			HttpTimeout: &HttpTimeouts{
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 30 * time.Second,
-				IdleTimeout:  120 * time.Second,
+				ReadTimeout:       10 * time.Second,
+				ReadHeaderTimeout: 30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       120 * time.Second,
 			},
 			Auth: &AUTHConfig{
 				JWTSecret: "",
@@ -1014,6 +1020,7 @@ func (c *Config) fillTimeDurations() error {
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
 		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
+		{"jsonrpc.timeouts.readheader", &c.JsonRPC.HttpTimeout.ReadHeaderTimeout, &c.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
 		{"jsonrpc.timeouts.idle", &c.JsonRPC.HttpTimeout.IdleTimeout, &c.JsonRPC.HttpTimeout.IdleTimeoutRaw},
 		{"jsonrpc.ws.ep-requesttimeout", &c.JsonRPC.Ws.ExecutionPoolRequestTimeout, &c.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw},
@@ -1670,9 +1677,10 @@ func (c *Config) buildNode() (*node.Config, error) {
 		GraphQLCors:         c.JsonRPC.Graphql.Cors,
 		GraphQLVirtualHosts: c.JsonRPC.Graphql.VHost,
 		HTTPTimeouts: rpc.HTTPTimeouts{
-			ReadTimeout:  c.JsonRPC.HttpTimeout.ReadTimeout,
-			WriteTimeout: c.JsonRPC.HttpTimeout.WriteTimeout,
-			IdleTimeout:  c.JsonRPC.HttpTimeout.IdleTimeout,
+			ReadTimeout:       c.JsonRPC.HttpTimeout.ReadTimeout,
+			ReadHeaderTimeout: c.JsonRPC.HttpTimeout.ReadHeaderTimeout,
+			WriteTimeout:      c.JsonRPC.HttpTimeout.WriteTimeout,
+			IdleTimeout:       c.JsonRPC.HttpTimeout.IdleTimeout,
 		},
 		JWTSecret:                              c.JsonRPC.Auth.JWTSecret,
 		AuthPort:                               int(c.JsonRPC.Auth.Port),

@@ -1042,6 +1042,39 @@ func (c *ChainConfig) Description() string {
 
 	banner += "\n"
 
+	// Bor-specific hard forks.
+	if c.Bor != nil {
+		banner += "Bor hard forks (block based):\n"
+		if c.Bor.JaipurBlock != nil {
+			banner += fmt.Sprintf(" - Jaipur:                      #%-8v\n", c.Bor.JaipurBlock)
+		}
+		if c.Bor.DelhiBlock != nil {
+			banner += fmt.Sprintf(" - Delhi:                       #%-8v\n", c.Bor.DelhiBlock)
+		}
+		if c.Bor.IndoreBlock != nil {
+			banner += fmt.Sprintf(" - Indore:                      #%-8v\n", c.Bor.IndoreBlock)
+		}
+		if c.Bor.AhmedabadBlock != nil {
+			banner += fmt.Sprintf(" - Ahmedabad:                   #%-8v\n", c.Bor.AhmedabadBlock)
+		}
+		if c.Bor.BhilaiBlock != nil {
+			banner += fmt.Sprintf(" - Bhilai:                      #%-8v\n", c.Bor.BhilaiBlock)
+		}
+		if c.Bor.RioBlock != nil {
+			banner += fmt.Sprintf(" - Rio:                         #%-8v\n", c.Bor.RioBlock)
+		}
+		if c.Bor.MadhugiriBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri:                   #%-8v\n", c.Bor.MadhugiriBlock)
+		}
+		if c.Bor.MadhugiriProBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri Pro:               #%-8v\n", c.Bor.MadhugiriProBlock)
+		}
+		if c.Bor.DandeliBlock != nil {
+			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		return banner
+	}
+
 	// Create a list of forks with a short description of them. Forks that only
 	// makes sense for mainnet should be optional at printing to avoid bloating
 	// the output for testnets and private networks.
