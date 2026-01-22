@@ -1,6 +1,7 @@
 package bor
 
 import (
+	"crypto/ecdsa"
 	"math/big"
 	"sort"
 	"testing"
@@ -109,11 +110,7 @@ func TestGetSignerSuccessionNumber_ProposerNotFound(t *testing.T) {
 	signerTest := snap.ValidatorSet.Validators[3].Address
 
 	_, err := snap.GetSignerSuccessionNumber(signerTest)
-	require.NotNil(t, err)
-
-	e, ok := err.(*UnauthorizedProposerError)
-	require.True(t, ok)
-	require.Equal(t, dummyProposerAddress.Bytes(), e.Proposer)
+	assertUnauthorizedProposerError(t, err, dummyProposerAddress)
 }
 
 func TestGetSignerSuccessionNumber_SignerNotFound(t *testing.T) {
@@ -126,103 +123,71 @@ func TestGetSignerSuccessionNumber_SignerNotFound(t *testing.T) {
 
 	dummySignerAddress := randomAddress(toAddresses(validators)...)
 	_, err := snap.GetSignerSuccessionNumber(dummySignerAddress)
-	require.NotNil(t, err)
-
-	e, ok := err.(*UnauthorizedSignerError)
-	require.True(t, ok)
-
-	require.Equal(t, dummySignerAddress.Bytes(), e.Signer)
+	assertUnauthorizedSignerError(t, err, 0, dummySignerAddress)
 }
 
 func TestGetSignerSuccessionNumber_WithValidatorOverride(t *testing.T) {
 	t.Parallel()
 
-	// Create normal validator set
 	validators := buildRandomValidatorSet(numVals)
 	validatorSet := valset.NewValidatorSet(validators)
-
-	// Override validator that is NOT in the normal validator set
 	overrideValidator := randomAddress(toAddresses(validators)...)
 
-	snap := Snapshot{
-		ValidatorSet: validatorSet,
-		Number:       150,
-		chainConfig: &params.ChainConfig{
-			Bor: &params.BorConfig{
-				OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
-					{
-						StartBlock: 100,
-						EndBlock:   200,
-						Validators: []common.Address{overrideValidator},
+	tests := []struct {
+		name      string
+		block     uint64
+		expectErr bool
+	}{
+		{"within range", 150, false},
+		{"outside range", 250, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap := Snapshot{
+				ValidatorSet: validatorSet,
+				Number:       tt.block,
+				chainConfig: &params.ChainConfig{
+					Bor: &params.BorConfig{
+						OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
+							{
+								StartBlock: 100,
+								EndBlock:   200,
+								Validators: []common.Address{overrideValidator},
+							},
+						},
 					},
 				},
-			},
-		},
-	}
+			}
 
-	// Test that the override validator can get succession number
-	// This tests the critical path in GetSignerSuccessionNumber where:
-	// - signerIndex == -1 (not in normal validator set)
-	// - isAllowedByValidatorSetOverride returns true
-	// - tempIndex is set to -1 (snapshot.go:198)
-	// - succession number is calculated with tempIndex = -1 (snapshot.go:199-205)
-	succession, err := snap.GetSignerSuccessionNumber(overrideValidator)
-	require.NoError(t, err)
-	// When signerIndex is -1 (not in normal set), tempIndex is -1
-	// succession = tempIndex - proposerIndex = -1 - proposerIndex
-	// Since proposerIndex is always >= 0, succession will be negative or at boundary
-	require.GreaterOrEqual(t, succession, -1)
+			succession, err := snap.GetSignerSuccessionNumber(overrideValidator)
+			if tt.expectErr {
+				assertUnauthorizedSignerError(t, err, tt.block, overrideValidator)
+			} else {
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, succession, -1)
+			}
+		})
+	}
 }
 
-func TestGetSignerSuccessionNumber_WithValidatorOverride_OutsideRange(t *testing.T) {
-	t.Parallel()
+func TestIsAllowedByValidatorSetOverride_EdgeCases(t *testing.T) {
+	testAddr := addr("0x1")
 
-	// Create normal validator set
-	validators := buildRandomValidatorSet(numVals)
-	validatorSet := valset.NewValidatorSet(validators)
-
-	// Override validator that is NOT in the normal validator set
-	overrideValidator := randomAddress(toAddresses(validators)...)
-
-	snap := Snapshot{
-		ValidatorSet: validatorSet,
-		Number:       250, // Outside the override range
-		chainConfig: &params.ChainConfig{
-			Bor: &params.BorConfig{
-				OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
-					{
-						StartBlock: 100,
-						EndBlock:   200,
-						Validators: []common.Address{overrideValidator},
-					},
-				},
-			},
-		},
+	tests := []struct {
+		name string
+		snap *Snapshot
+	}{
+		{"no config", &Snapshot{Number: 100}},
+		{"empty overrides", newSnapshotWithOverrides(nil, 100)},
 	}
 
-	// Test that the override validator is rejected outside the range
-	_, err := snap.GetSignerSuccessionNumber(overrideValidator)
-	require.NotNil(t, err)
-
-	e, ok := err.(*UnauthorizedSignerError)
-	require.True(t, ok)
-	require.Equal(t, overrideValidator.Bytes(), e.Signer)
-}
-
-func TestIsAllowedByValidatorSetOverride_NoConfig(t *testing.T) {
-	snap := &Snapshot{
-		Number: 100,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ok := tt.snap.isAllowedByValidatorSetOverride(testAddr, tt.snap.Number)
+			require.False(t, ok)
+		})
 	}
-
-	ok := snap.isAllowedByValidatorSetOverride(addr("0x1"), snap.Number)
-	require.False(t, ok)
-}
-
-func TestIsAllowedByValidatorSetOverride_EmptyOverrides(t *testing.T) {
-	snap := newSnapshotWithOverrides(nil, 100)
-
-	ok := snap.isAllowedByValidatorSetOverride(addr("0x1"), snap.Number)
-	require.False(t, ok)
 }
 
 func TestIsAllowedByValidatorSetOverride_SingleRange(t *testing.T) {
@@ -337,104 +302,79 @@ func TestIsAllowedByValidatorSetOverride_MultipleRanges(t *testing.T) {
 	}
 }
 
-func TestIsAllowedByValidatorSetOverride_SingleBlockRange(t *testing.T) {
-	validator := addr("0x1111111111111111111111111111111111111111")
+func TestIsAllowedByValidatorSetOverride_RangeScenarios(t *testing.T) {
+	t.Parallel()
 
-	overrides := []params.BlockRangeOverrideValidatorSet{
+	validator := addr("0x1111111111111111111111111111111111111111")
+	mainnetValidator := addr("0x41018795fa95783117242244303fd7e26e964ee8")
+
+	tests := []struct {
+		name      string
+		validator common.Address
+		overrides []params.BlockRangeOverrideValidatorSet
+		testCases []struct {
+			block    uint64
+			expected bool
+		}
+	}{
 		{
-			StartBlock: 100,
-			EndBlock:   100, // Single block
-			Validators: []common.Address{validator},
+			name:      "single block range",
+			validator: validator,
+			overrides: []params.BlockRangeOverrideValidatorSet{
+				{StartBlock: 100, EndBlock: 100, Validators: []common.Address{validator}},
+			},
+			testCases: []struct {
+				block    uint64
+				expected bool
+			}{
+				{99, false},
+				{100, true},
+				{101, false},
+			},
 		},
-	}
-
-	tests := []struct {
-		name     string
-		block    uint64
-		expected bool
-	}{
-		{"allowed at single block", 100, true},
-		{"not allowed before", 99, false},
-		{"not allowed after", 101, false},
+		{
+			name:      "real world mainnet scenario",
+			validator: mainnetValidator,
+			overrides: []params.BlockRangeOverrideValidatorSet{
+				{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{mainnetValidator}},
+			},
+			testCases: []struct {
+				block    uint64
+				expected bool
+			}{
+				{80440818, false},
+				{80440819, true},
+				{80440826, true},
+				{80440834, true},
+				{80440835, false},
+			},
+		},
+		{
+			name:      "consecutive ranges",
+			validator: validator,
+			overrides: []params.BlockRangeOverrideValidatorSet{
+				{StartBlock: 100, EndBlock: 200, Validators: []common.Address{validator}},
+				{StartBlock: 201, EndBlock: 300, Validators: []common.Address{validator}},
+			},
+			testCases: []struct {
+				block    uint64
+				expected bool
+			}{
+				{100, true},
+				{200, true},
+				{201, true},
+				{300, true},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			snap := newSnapshotWithOverrides(overrides, tt.block)
-			ok := snap.isAllowedByValidatorSetOverride(validator, snap.Number)
-			require.Equal(t, tt.expected, ok)
-		})
-	}
-}
-
-func TestIsAllowedByValidatorSetOverride_RealWorldScenario(t *testing.T) {
-	// Simulate the actual mainnet override scenario
-	overrideValidator := addr("0x41018795fa95783117242244303fd7e26e964ee8")
-
-	snap := newSnapshotWithOverrides(
-		[]params.BlockRangeOverrideValidatorSet{
-			{
-				StartBlock: 80440819,
-				EndBlock:   80440834,
-				Validators: []common.Address{overrideValidator},
-			},
-		},
-		80440819,
-	)
-
-	tests := []struct {
-		name     string
-		block    uint64
-		expected bool
-	}{
-		{"allowed at start block", 80440819, true},
-		{"allowed in middle of range", 80440826, true},
-		{"allowed at end block", 80440834, true},
-		{"not allowed before start", 80440818, false},
-		{"not allowed after end", 80440835, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ok := snap.isAllowedByValidatorSetOverride(overrideValidator, tt.block)
-			require.Equal(t, tt.expected, ok)
-		})
-	}
-}
-
-func TestIsAllowedByValidatorSetOverride_ConsecutiveRanges(t *testing.T) {
-	validator := addr("0x1111111111111111111111111111111111111111")
-
-	snap := newSnapshotWithOverrides(
-		[]params.BlockRangeOverrideValidatorSet{
-			{
-				StartBlock: 100,
-				EndBlock:   200,
-				Validators: []common.Address{validator},
-			},
-			{
-				StartBlock: 201, // Consecutive
-				EndBlock:   300,
-				Validators: []common.Address{validator},
-			},
-		},
-		100,
-	)
-
-	tests := []struct {
-		name  string
-		block uint64
-	}{
-		{"first range start", 100},
-		{"first range end", 200},
-		{"second range start", 201},
-		{"second range end", 300},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ok := snap.isAllowedByValidatorSetOverride(validator, tt.block)
-			require.True(t, ok)
+			for _, tc := range tt.testCases {
+				snap := newSnapshotWithOverrides(tt.overrides, tc.block)
+				ok := snap.isAllowedByValidatorSetOverride(tt.validator, tc.block)
+				require.Equal(t, tc.expected, ok, "block %d", tc.block)
+			}
 		})
 	}
 }
@@ -591,40 +531,41 @@ func newSnapshotWithOverrides(overrides []params.BlockRangeOverrideValidatorSet,
 	}
 }
 
-func TestSnapshot_Apply_WithValidatorOverride(t *testing.T) {
-	t.Parallel()
+// applyTestSetup contains all setup for Apply tests
+type applyTestSetup struct {
+	privKey      *ecdsa.PrivateKey
+	signer       common.Address
+	validatorSet *valset.ValidatorSet
+	snapshot     *Snapshot
+	borConfig    *params.BorConfig
+	bor          *Bor
+}
 
-	// Create a private key for signing
+// setupApplyTest creates a complete test setup for Snapshot.apply tests
+func setupApplyTest(t *testing.T, snapshotBlock uint64, overrideRange *params.BlockRangeOverrideValidatorSet) *applyTestSetup {
+	t.Helper()
+
 	privKey, err := crypto.GenerateKey()
 	require.NoError(t, err)
 
-	overrideValidator := crypto.PubkeyToAddress(privKey.PublicKey)
-
-	// Create normal validators (without the override validator)
+	signer := crypto.PubkeyToAddress(privKey.PublicKey)
 	normalValidators := buildRandomValidatorSet(5)
 	validatorSet := valset.NewValidatorSet(normalValidators)
 
-	// Create signature cache
 	sigcache, err := lru.NewARC(10)
 	require.NoError(t, err)
 
 	borConfig := &params.BorConfig{
 		Sprint: map[string]uint64{"0": 64},
 		Period: map[string]uint64{"0": 1},
-		OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
-			{
-				StartBlock: 0,
-				EndBlock:   10,
-				Validators: []common.Address{overrideValidator},
-			},
-		},
 	}
 
-	// Create initial snapshot at block 0
-	// Note: GetSignerSuccessionNumber uses s.Number for the override check,
-	// so the snapshot's block number needs to be within the override range
+	if overrideRange != nil {
+		borConfig.OverrideValidatorSetInRange = []params.BlockRangeOverrideValidatorSet{*overrideRange}
+	}
+
 	snap := &Snapshot{
-		Number:       0,
+		Number:       snapshotBlock,
 		Hash:         common.Hash{},
 		ValidatorSet: validatorSet,
 		Recents:      make(map[uint64]common.Address),
@@ -634,183 +575,137 @@ func TestSnapshot_Apply_WithValidatorOverride(t *testing.T) {
 		},
 	}
 
-	// Create a header at block 1 signed by the override validator
-	header := &types.Header{
-		Number:     big.NewInt(1),
-		Time:       1,
-		Difficulty: big.NewInt(1),
-		Extra:      make([]byte, 32+65), // 32 bytes vanity + 65 bytes signature
+	bor := &Bor{
+		config: borConfig,
 	}
 
-	// Sign the header
-	sigHash := SealHash(header, borConfig)
+	return &applyTestSetup{
+		privKey:      privKey,
+		signer:       signer,
+		validatorSet: validatorSet,
+		snapshot:     snap,
+		borConfig:    borConfig,
+		bor:          bor,
+	}
+}
+
+// createSignedHeader creates and signs a header for testing
+func createSignedHeader(t *testing.T, blockNum uint64, privKey *ecdsa.PrivateKey, config *params.BorConfig) *types.Header {
+	t.Helper()
+
+	header := &types.Header{
+		Number:     big.NewInt(int64(blockNum)),
+		Time:       blockNum,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, 32+65),
+	}
+
+	sigHash := SealHash(header, config)
 	sig, err := crypto.Sign(sigHash.Bytes(), privKey)
 	require.NoError(t, err)
 	copy(header.Extra[len(header.Extra)-65:], sig)
 
-	// Create a mock Bor instance (minimal, just for the apply function)
-	bor := &Bor{
-		config: borConfig,
+	return header
+}
+
+// assertUnauthorizedSignerError checks if error is UnauthorizedSignerError with expected values
+func assertUnauthorizedSignerError(t *testing.T, err error, expectedNumber uint64, expectedSigner common.Address) {
+	t.Helper()
+	require.Error(t, err)
+	var authErr *UnauthorizedSignerError
+	require.ErrorAs(t, err, &authErr)
+	require.Equal(t, expectedNumber, authErr.Number)
+	require.Equal(t, expectedSigner.Bytes(), authErr.Signer)
+}
+
+// assertUnauthorizedProposerError checks if error is UnauthorizedProposerError with expected values
+func assertUnauthorizedProposerError(t *testing.T, err error, expectedProposer common.Address) {
+	t.Helper()
+	require.Error(t, err)
+	var authErr *UnauthorizedProposerError
+	require.ErrorAs(t, err, &authErr)
+	require.Equal(t, expectedProposer.Bytes(), authErr.Proposer)
+}
+
+func TestSnapshot_Apply_WithValidatorOverride(t *testing.T) {
+	t.Parallel()
+
+	// First create setup without override to get the signer address
+	setup := setupApplyTest(t, 0, nil)
+
+	// Now update the config with the override using the actual signer
+	override := &params.BlockRangeOverrideValidatorSet{
+		StartBlock: 0,
+		EndBlock:   10,
+		Validators: []common.Address{setup.signer},
 	}
+	setup.borConfig.OverrideValidatorSetInRange = []params.BlockRangeOverrideValidatorSet{*override}
+	setup.snapshot.chainConfig.Bor = setup.borConfig
+
+	header := createSignedHeader(t, 1, setup.privKey, setup.borConfig)
 
 	// Apply the header - this should succeed because the override validator is allowed
 	// This tests snapshot.go lines 139-140:
 	// if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, number) {
 	//     return nil, &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	// }
-	newSnap, err := snap.apply([]*types.Header{header}, bor)
+	newSnap, err := setup.snapshot.apply([]*types.Header{header}, setup.bor)
 	require.NoError(t, err)
 	require.NotNil(t, newSnap)
 	require.Equal(t, uint64(1), newSnap.Number)
-	require.Equal(t, overrideValidator, newSnap.Recents[1])
+	require.Equal(t, setup.signer, newSnap.Recents[1])
 }
 
 func TestSnapshot_Apply_WithValidatorOverride_OutsideRange(t *testing.T) {
 	t.Parallel()
 
-	// Create a private key for signing
-	privKey, err := crypto.GenerateKey()
-	require.NoError(t, err)
+	// Create setup with override range 1-10, but snapshot at block 10
+	setup := setupApplyTest(t, 10, nil)
 
-	overrideValidator := crypto.PubkeyToAddress(privKey.PublicKey)
-
-	// Create normal validators (without the override validator)
-	normalValidators := buildRandomValidatorSet(5)
-	validatorSet := valset.NewValidatorSet(normalValidators)
-
-	// Create signature cache
-	sigcache, err := lru.NewARC(10)
-	require.NoError(t, err)
-
-	borConfig := &params.BorConfig{
-		Sprint: map[string]uint64{"0": 64},
-		Period: map[string]uint64{"0": 1},
-		OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
-			{
-				StartBlock: 1,
-				EndBlock:   10,
-				Validators: []common.Address{overrideValidator},
-			},
-		},
+	override := &params.BlockRangeOverrideValidatorSet{
+		StartBlock: 1,
+		EndBlock:   10,
+		Validators: []common.Address{setup.signer},
 	}
+	setup.borConfig.OverrideValidatorSetInRange = []params.BlockRangeOverrideValidatorSet{*override}
+	setup.snapshot.chainConfig.Bor = setup.borConfig
 
-	// Create initial snapshot at block 10
-	snap := &Snapshot{
-		Number:       10,
-		Hash:         common.Hash{},
-		ValidatorSet: validatorSet,
-		Recents:      make(map[uint64]common.Address),
-		sigcache:     sigcache,
-		chainConfig: &params.ChainConfig{
-			Bor: borConfig,
-		},
-	}
-
-	// Create a header at block 11 (outside the override range) signed by the override validator
-	header := &types.Header{
-		Number:     big.NewInt(11),
-		Time:       11,
-		Difficulty: big.NewInt(1),
-		Extra:      make([]byte, 32+65), // 32 bytes vanity + 65 bytes signature
-	}
-
-	// Sign the header
-	sigHash := SealHash(header, borConfig)
-	sig, err := crypto.Sign(sigHash.Bytes(), privKey)
-	require.NoError(t, err)
-	copy(header.Extra[len(header.Extra)-65:], sig)
-
-	// Create a mock Bor instance
-	bor := &Bor{
-		config: borConfig,
-	}
+	// Create a header at block 11 (outside the override range)
+	header := createSignedHeader(t, 11, setup.privKey, setup.borConfig)
 
 	// Apply the header - this should FAIL because block 11 is outside the override range
 	// This tests that the override check at snapshot.go:139 properly rejects
-	newSnap, err := snap.apply([]*types.Header{header}, bor)
-	require.Error(t, err)
+	newSnap, err := setup.snapshot.apply([]*types.Header{header}, setup.bor)
 	require.Nil(t, newSnap)
-
-	// Verify it's an UnauthorizedSignerError
-	var authErr *UnauthorizedSignerError
-	require.ErrorAs(t, err, &authErr)
-	require.Equal(t, uint64(11), authErr.Number)
-	require.Equal(t, overrideValidator.Bytes(), authErr.Signer)
+	assertUnauthorizedSignerError(t, err, 11, setup.signer)
 }
 
 func TestSnapshot_Apply_UnauthorizedSigner(t *testing.T) {
 	t.Parallel()
 
-	// Create a private key for an unauthorized signer
-	privKey, err := crypto.GenerateKey()
-	require.NoError(t, err)
+	// Create setup with NO override configuration
+	setup := setupApplyTest(t, 0, nil)
 
-	unauthorizedSigner := crypto.PubkeyToAddress(privKey.PublicKey)
-
-	// Create normal validators (WITHOUT the unauthorized signer)
-	normalValidators := buildRandomValidatorSet(5)
-	validatorSet := valset.NewValidatorSet(normalValidators)
-
-	// Ensure the unauthorized signer is not in the validator set
-	for _, v := range normalValidators {
-		require.NotEqual(t, unauthorizedSigner, v.Address)
-	}
-
-	// Create signature cache
-	sigcache, err := lru.NewARC(10)
-	require.NoError(t, err)
-
-	borConfig := &params.BorConfig{
-		Sprint: map[string]uint64{"0": 64},
-		Period: map[string]uint64{"0": 1},
-		// NO override configuration - this is key!
-		OverrideValidatorSetInRange: nil,
-	}
-
-	// Create initial snapshot at block 0
-	snap := &Snapshot{
-		Number:       0,
-		Hash:         common.Hash{},
-		ValidatorSet: validatorSet,
-		Recents:      make(map[uint64]common.Address),
-		sigcache:     sigcache,
-		chainConfig: &params.ChainConfig{
-			Bor: borConfig,
-		},
+	// Ensure the signer is not in the validator set
+	for _, v := range setup.validatorSet.Validators {
+		require.NotEqual(t, setup.signer, v.Address)
 	}
 
 	// Create a header at block 1 signed by the unauthorized signer
-	header := &types.Header{
-		Number:     big.NewInt(1),
-		Time:       1,
-		Difficulty: big.NewInt(1),
-		Extra:      make([]byte, 32+65), // 32 bytes vanity + 65 bytes signature
-	}
-
-	// Sign the header
-	sigHash := SealHash(header, borConfig)
-	sig, err := crypto.Sign(sigHash.Bytes(), privKey)
-	require.NoError(t, err)
-	copy(header.Extra[len(header.Extra)-65:], sig)
-
-	// Create a mock Bor instance
-	bor := &Bor{
-		config: borConfig,
-	}
+	header := createSignedHeader(t, 1, setup.privKey, setup.borConfig)
 
 	// Apply the header - this should FAIL at snapshot.go:140
 	// Because:
 	// 1. !snap.ValidatorSet.HasAddress(signer) = true (not in validator set)
 	// 2. !snap.isAllowedByValidatorSetOverride(signer, number) = true (no override config)
 	// Therefore the condition at line 139 is true and line 140 executes
-	newSnap, err := snap.apply([]*types.Header{header}, bor)
-	require.Error(t, err)
+	newSnap, err := setup.snapshot.apply([]*types.Header{header}, setup.bor)
 	require.Nil(t, newSnap)
 
 	// Verify it's an UnauthorizedSignerError from line 140
 	var authErr *UnauthorizedSignerError
 	require.ErrorAs(t, err, &authErr)
 	require.Equal(t, uint64(1), authErr.Number)
-	require.Equal(t, unauthorizedSigner.Bytes(), authErr.Signer)
-	require.Equal(t, validatorSet.Validators, authErr.AllowedSigners)
+	require.Equal(t, setup.signer.Bytes(), authErr.Signer)
+	require.Equal(t, setup.validatorSet.Validators, authErr.AllowedSigners)
 }
