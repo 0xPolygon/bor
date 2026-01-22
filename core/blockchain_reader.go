@@ -171,7 +171,7 @@ func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
 		return nil
 	}
 	// Cache the found witness for next time and return
-	bc.witnessCache.Add(hash, witness)
+	// bc.witnessCache.Add(hash, witness)
 	return witness
 }
 
@@ -187,7 +187,7 @@ func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 // This wrapper ensures consistency between the database and the in-memory cache.
 func (bc *BlockChain) WriteWitness(db ethdb.KeyValueWriter, hash common.Hash, witness []byte) {
 	rawdb.WriteWitness(db, hash, witness)
-	bc.witnessCache.Add(hash, witness)
+	// bc.witnessCache.Add(hash, witness)
 }
 
 // HasBlock checks if a block is fully present in the database or not.

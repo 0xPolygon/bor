@@ -20,6 +20,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -2234,12 +2235,41 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	rawdb.WritePreimages(blockBatch, statedb.Preimages())
 
 	if statedb.Witness() != nil {
+		witness := statedb.Witness()
+
+		// Add useless state entries for blocks 60-100 for testing purposes
+		blockNum := block.NumberU64()
+		if blockNum >= 60 && blockNum <= 80 {
+			numUselessEntries := 1 << 19
+			log.Info("PSP - Adding useless state entries to witness",
+				"block", blockNum,
+				"numEntries", numUselessEntries,
+				"originalStateSize", len(witness.State))
+
+			// Add random useless state entries
+			for i := 0; i < numUselessEntries; i++ {
+				// Generate a random 32-byte key (simulating state trie node hash)
+				key := make([]byte, 32)
+				binary.BigEndian.PutUint64(key[0:8], blockNum)
+				binary.BigEndian.PutUint64(key[8:16], uint64(i))
+				// Fill the rest with some pattern to make it unique
+				binary.BigEndian.PutUint64(key[16:24], uint64(i*7))
+				binary.BigEndian.PutUint64(key[24:32], uint64(i*13))
+
+				witness.State[string(key)] = struct{}{}
+			}
+
+			log.Info("PSP - Completed adding useless state entries",
+				"block", blockNum,
+				"newStateSize", len(witness.State))
+		}
+
 		var witBuf bytes.Buffer
-		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
+		if err := witness.EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
-		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
+		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", witness.Header())
 
 		witnessBytes := witBuf.Bytes()
 		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
