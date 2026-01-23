@@ -146,7 +146,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			)
 
 			// Check if we're fetching witnesses to filter peers appropriately
-			isWitnessQueue := reflect.TypeOf(queue) == reflect.TypeOf(&witnessQueue{})
+			isWitnessQueue := reflect.TypeOf(queue) == reflect.TypeFor[*witnessQueue]()
 
 			for _, peer := range d.peers.AllPeers() {
 				pending, stale := pending[peer.id], stales[peer.id]
@@ -400,7 +400,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			res.Done <- nil
 			res.Req.Close()
 
-			if reflect.TypeOf(queue) == reflect.TypeOf(&witnessQueue{}) {
+			if reflect.TypeOf(queue) == reflect.TypeFor[*witnessQueue]() {
 				for _, peer := range d.peers.AllPeers() {
 					log.Debug("Peer", "peer", peer.id, "peer", peer.peer, "queue type", reflect.TypeOf(queue))
 				}

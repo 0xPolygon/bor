@@ -476,7 +476,7 @@ func TestPrecompiledP256VerifyAlwaysAvailableInHFs(t *testing.T) {
 //
 //  5. After all checks done, you can increase insert the NewHF on the expected list to make the test pass
 func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
-	rulesType := reflect.TypeOf(params.Rules{})
+	rulesType := reflect.TypeFor[params.Rules]()
 
 	// Extract actual field names
 	actual := make([]string, 0, rulesType.NumField())

@@ -256,7 +256,7 @@ func (s *Server) DebugBlock(req *proto.DebugBlockRequest, stream proto.Bor_Debug
 	return nil
 }
 
-var bigIntT = reflect.TypeOf(new(big.Int)).Kind()
+var bigIntT = reflect.TypeFor[*big.Int]().Kind()
 
 // gatherForks gathers all the fork numbers via reflection
 func gatherForks(configList ...interface{}) []*proto.StatusResponse_Fork {
