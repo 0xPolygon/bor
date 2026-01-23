@@ -317,6 +317,30 @@ func (d *DualWitnessCache) PopulateFromWitness(blockNum uint64, witness *Witness
 	}
 }
 
+// PopulateFromOriginalWitnessState adds nodes from the ORIGINAL witness state map to the appropriate cache window(s).
+// This is critical: we must cache the original incoming witness state, NOT the decompressed/merged state.
+// When we receive a full witness from a WIT0 peer and decompress it (adding cached nodes),
+// we must cache only the original witness nodes, otherwise we create a positive feedback loop
+// where corrupted witnesses are cached, making subsequent witnesses even more corrupted.
+func (d *DualWitnessCache) PopulateFromOriginalWitnessState(blockNum uint64, originalWitnessState map[string]struct{}) {
+	d.lock.RLock()
+	defer d.lock.RUnlock()
+
+	if !d.enabled || originalWitnessState == nil {
+		return
+	}
+
+	// Add to active cache if block is in its range
+	if d.Active != nil && blockNum >= d.Active.StartBlock && blockNum <= d.Active.EndBlock {
+		d.Active.PopulateFromWitnessState(originalWitnessState)
+	}
+
+	// Add to next cache if block is in its range
+	if d.Next != nil && blockNum >= d.Next.StartBlock && blockNum <= d.Next.EndBlock {
+		d.Next.PopulateFromWitnessState(originalWitnessState)
+	}
+}
+
 // ShouldPromote checks if the cache windows should be promoted at the given block number.
 // Promotion occurs when we reach the end of the active window.
 func (d *DualWitnessCache) ShouldPromote(blockNum uint64) bool {

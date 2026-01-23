@@ -4270,6 +4270,17 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 
 	blockNum := block.NumberU64()
 
+	// CRITICAL FIX: Save the ORIGINAL witness state before any processing.
+	// We must cache the original incoming witness state, NOT the decompressed/merged state.
+	// When we receive a full witness from a WIT0 peer and decompress it (adding cached nodes),
+	// we must cache only the original witness nodes, otherwise we create a positive feedback loop
+	// where corrupted witnesses are cached, making subsequent witnesses even more corrupted.
+	// This is the key lesson from Implementation A (psp-pos-2947).
+	originalWitnessState := make(map[string]struct{}, len(witness.State))
+	for stateNode := range witness.State {
+		originalWitnessState[stateNode] = struct{}{}
+	}
+
 	// Decompress compact witness if needed
 	// If the witness came from a compact witness message, it will be missing cached nodes
 	// We need to merge the cached nodes back in before execution
@@ -4378,10 +4389,14 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		}
 
 		// Log incoming witness size
-		witnessStateSize := len(witness.State)
+		// IMPORTANT: Use the ORIGINAL witness state for logging and caching
+		originalWitnessSize := len(originalWitnessState)
+		decompressedWitnessSize := len(witness.State)
 		log.Info("PSP - Witness received for cache population",
 			"block", blockNum,
-			"witnessNodes", witnessStateSize,
+			"originalWitnessNodes", originalWitnessSize,
+			"decompressedWitnessNodes", decompressedWitnessSize,
+			"nodesAddedByDecompression", decompressedWitnessSize-originalWitnessSize,
 			"activeCacheBefore", activeCacheSizeBefore,
 			"nextCacheBefore", nextCacheSizeBefore)
 
@@ -4408,9 +4423,11 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 				"block", blockNum,
 				"stateUpdateNodes", stateUpdateNodeCount)
 
-			// Populate cache from witness state (incoming nodes)
+			// CRITICAL FIX: Populate cache from ORIGINAL witness state (incoming nodes), NOT the decompressed witness
+			// This is the key fix from Implementation A (psp-pos-2947).
+			// We must never cache the decompressed/merged witness state, only the original incoming state.
 			witnessPopulateStart := time.Now()
-			bc.witnessStateCache.PopulateFromWitness(blockNum, witness)
+			bc.witnessStateCache.PopulateFromOriginalWitnessState(blockNum, originalWitnessState)
 			witnessPopulateTime := time.Since(witnessPopulateStart)
 
 			// Snapshot after witness population
@@ -4424,7 +4441,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			}
 
 			nodesAddedFromWitness := (activeCacheAfterWitness - activeCacheSizeBefore) +
-									 (nextCacheAfterWitness - nextCacheSizeBefore)
+				(nextCacheAfterWitness - nextCacheSizeBefore)
 
 			// Populate cache from state update (execution results)
 			stateUpdatePopulateStart := time.Now()
@@ -4442,10 +4459,10 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 			}
 
 			nodesAddedFromStateUpdate := (activeCacheSizeAfter - activeCacheAfterWitness) +
-										 (nextCacheSizeAfter - nextCacheAfterWitness)
+				(nextCacheSizeAfter - nextCacheAfterWitness)
 
 			totalNodesAdded := (activeCacheSizeAfter - activeCacheSizeBefore) +
-							   (nextCacheSizeAfter - nextCacheSizeBefore)
+				(nextCacheSizeAfter - nextCacheSizeBefore)
 
 			log.Info("PSP - Cache population completed",
 				"block", blockNum,
