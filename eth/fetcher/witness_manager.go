@@ -60,13 +60,14 @@ type cachedWitness struct {
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
-	parentQuit        <-chan struct{}        // Parent fetcher's quit channel
-	parentDropPeer    peerDropFn             // Function to drop a misbehaving peer
-	parentJailPeer    peerJailFn             // Function to jail a peer to prevent reconnection (optional)
-	parentEnqueueCh   chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
-	parentGetBlock    blockRetrievalFn       // Function to check if block is known locally
-	parentGetHeader   HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
-	parentChainHeight chainHeightFn          // Retrieve chain height for distance checks
+	parentQuit          <-chan struct{}        // Parent fetcher's quit channel
+	parentDropPeer      peerDropFn             // Function to drop a misbehaving peer
+	parentJailPeer      peerJailFn             // Function to jail a peer to prevent reconnection (optional)
+	parentEnqueueCh     chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
+	parentGetBlock      blockRetrievalFn       // Function to check if block is known locally
+	parentGetHeader     HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
+	parentChainHeight   chainHeightFn          // Retrieve chain height for distance checks
+	parentCurrentHeader currentHeaderFn        // Retrieve current block header for gas limit
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
@@ -105,6 +106,7 @@ func newWitnessManager(
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
 	parentChainHeight chainHeightFn,
+	parentCurrentHeader currentHeaderFn,
 	gasCeil uint64,
 ) *witnessManager {
 	// Create TTL cache with 1 minute expiration for witnesses
@@ -121,6 +123,7 @@ func newWitnessManager(
 		parentGetBlock:      parentGetBlock,
 		parentGetHeader:     parentGetHeader,
 		parentChainHeight:   parentChainHeight,
+		parentCurrentHeader: parentCurrentHeader,
 		pending:             make(map[common.Hash]*witnessRequestState),
 		witnessUnavailable:  make(map[common.Hash]time.Time),
 		witnessCache:        witnessCache,
@@ -910,6 +913,28 @@ var ErrNoWitnessPeerAvailable = errors.New("no peer with witness available") // 
 // Formula: ceil(gasCeil (in millions) / maxPageSizeMB)
 // Example: 50M gas / 15MB per page = ceil(3.33) = 4 pages
 func (m *witnessManager) calculatePageThreshold() uint64 {
+	// Try to get the actual gas limit from the current block header
+	if m.parentCurrentHeader != nil {
+		if header := m.parentCurrentHeader(); header != nil {
+			actualGasLimit := header.GasLimit
+			gasCeilMB := actualGasLimit / gasPerMB
+
+			// Ceiling division: (a + b - 1) / b
+			threshold := (gasCeilMB + maxPageSizeMB - 1) / maxPageSizeMB
+
+			// Ensure minimum threshold of 1 page
+			if threshold < 1 {
+				threshold = 1
+			}
+
+			log.Debug("[wm] Calculated dynamic page threshold from block header",
+				"blockNumber", header.Number.Uint64(), "blockGasLimit", actualGasLimit,
+				"gasCeilMB", gasCeilMB, "threshold", threshold)
+			return threshold
+		}
+	}
+
+	// Fallback to config value if header not available
 	if m.gasCeil == 0 {
 		return witnessPageThreshold // Return default if gas ceil not set
 	}
@@ -925,7 +950,7 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 		threshold = 1
 	}
 
-	log.Debug("[wm] Calculated dynamic page threshold", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
+	log.Debug("[wm] Calculated dynamic page threshold from config", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
 	return threshold
 }
 
