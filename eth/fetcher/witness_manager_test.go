@@ -72,7 +72,7 @@ func newTestWitnessManager() *testWitnessManager {
 	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
 	chainHeight := chainHeightFn(func() uint64 { return 100 })
 
-	tw.manager = newWitnessManager(quit, dropPeer, nil, enqueueCh, getBlock, getHeader, chainHeight, 0)
+	tw.manager = newWitnessManager(quit, dropPeer, nil, enqueueCh, getBlock, getHeader, chainHeight, nil, 0)
 	return tw
 }
 
@@ -189,6 +189,7 @@ func TestHandleNeedDuplicates(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -245,6 +246,7 @@ func TestHandleNeedKnownBlock(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -293,6 +295,7 @@ func TestHandleBroadcast(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -365,6 +368,7 @@ func TestWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -426,6 +430,7 @@ func TestForget(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -476,6 +481,7 @@ func TestHandleFilterResult(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -514,6 +520,7 @@ func TestCheckCompleting(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -556,6 +563,7 @@ func TestWitnessFetchFailure(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -668,6 +676,7 @@ func TestCleanupUnavailableCache(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -723,6 +732,7 @@ func TestWitnessFetchWithBlockNoLongerPending(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -835,6 +845,7 @@ func TestTick(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -920,6 +931,7 @@ func TestTickMaxRetries(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -978,6 +990,7 @@ func TestTickWithWitnessAlreadyPresent(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1060,6 +1073,7 @@ func TestHandleWitnessFetchSuccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1127,6 +1141,7 @@ func TestHandleWitnessFetchSuccessNoPending(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1159,6 +1174,7 @@ func TestHandleWitnessFetchSuccessWitnessAlreadyPresent(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1208,6 +1224,7 @@ func TestRescheduleWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1263,6 +1280,7 @@ func TestSafeEnqueueWithNilWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1306,6 +1324,7 @@ func TestSafeEnqueueChannelClosed(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1342,6 +1361,7 @@ func TestHandleNeedDistanceCheck(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1385,6 +1405,7 @@ func TestHandleNeedMissingFetchWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1424,6 +1445,7 @@ func TestLoop(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1497,6 +1519,7 @@ func TestHandleFilterResultWithoutWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1537,6 +1560,7 @@ func TestCheckCompletingWithoutWitness(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1577,6 +1601,7 @@ func TestFetchWitnessError(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1619,6 +1644,7 @@ func TestHandleFilterResultWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1661,6 +1687,7 @@ func TestHandleFilterResultDuplicate(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1706,6 +1733,7 @@ func TestCheckCompletingWitnessUnavailable(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1748,6 +1776,7 @@ func TestCheckCompletingDuplicate(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1800,6 +1829,7 @@ func TestCheckCompletingKnownBlock(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1837,6 +1867,7 @@ func TestTickInvalidPendingState(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1879,6 +1910,7 @@ func TestTickNotReadyYet(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -1941,6 +1973,7 @@ func TestSafeEnqueueSuccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -2003,6 +2036,7 @@ func TestConcurrentWitnessFetchFailure(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -2061,6 +2095,7 @@ func TestCheckWitnessPageCountWithPeerJailing(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
@@ -2124,6 +2159,7 @@ func TestCheckWitnessPageCountWithConsensusFailure(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
@@ -2216,6 +2252,7 @@ func TestCheckWitnessPageCountWithPeerFailures(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
@@ -2289,6 +2326,7 @@ func TestCheckWitnessPageCountWithInsufficientPeers(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
@@ -2354,6 +2392,7 @@ func TestCheckWitnessPageCountBelowThreshold(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
@@ -2416,6 +2455,7 @@ func TestConcurrentWitnessVerification(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		gasCeil,
 	)
 
