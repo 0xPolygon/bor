@@ -3688,7 +3688,7 @@ func (bc *BlockChain) recoverAncestors(block *types.Block, makeWitness bool) (co
 // processing of a block. These logs are later announced as deleted or reborn.
 func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
 	var blobGasPrice *big.Int
-	if b.ExcessBlobGas() != nil {
+	if b.ExcessBlobGas() != nil && bc.chainConfig.BlobScheduleConfig != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, b.Header())
 	}
 	receipts := rawdb.ReadRawReceipts(bc.db, b.Hash(), b.NumberU64())

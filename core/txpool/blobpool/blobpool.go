@@ -424,7 +424,7 @@ func (p *BlobPool) Init(gasTip uint64, head *types.Header, reserver txpool.Reser
 		basefee = uint256.MustFromBig(eip1559.CalcBaseFee(p.chain.Config(), p.head))
 		blobfee = uint256.NewInt(params.BlobTxMinBlobGasprice)
 	)
-	if p.head.ExcessBlobGas != nil {
+	if p.head.ExcessBlobGas != nil && p.chain.Config().BlobScheduleConfig != nil {
 		blobfee = uint256.MustFromBig(eip4844.CalcBlobFee(p.chain.Config(), p.head))
 	}
 	p.evict = newPriceHeap(basefee, blobfee, p.index)
@@ -1746,6 +1746,15 @@ func (p *BlobPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool
 	} else {
 		return p.discoverFeed.Subscribe(ch)
 	}
+}
+
+// SubscribeRebroadcastTransactions returns a no-op subscription. Blob pool does not
+// support stuck transaction rebroadcast since blobs are handled differently.
+func (p *BlobPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
 }
 
 // Nonce returns the next nonce of an account, with all transactions executable

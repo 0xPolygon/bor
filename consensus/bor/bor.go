@@ -56,7 +56,7 @@ const (
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
-	veblopBlockTimeout = time.Second * 6 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
 )
 
 // Bor protocol constants.
@@ -853,7 +853,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) && !isPartOfVeBlopSet(signer, header.Number.Uint64()) {
+	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1195,13 +1195,13 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
+func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return nil, nil, consensus.ErrUnexpectedWithdrawals
+		return nil, nil, 0, consensus.ErrUnexpectedWithdrawals
 	}
 	if header.RequestsHash != nil {
-		return nil, nil, consensus.ErrUnexpectedRequests
+		return nil, nil, 0, consensus.ErrUnexpectedRequests
 	}
 
 	var (
@@ -1216,7 +1216,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		if !c.config.IsRio(header.Number) {
 			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1225,18 +1225,20 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 			stateSyncData, err = c.CommitStates(state, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
 		log.Error("Error changing contract code", "error", err)
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	// No block rewards in PoA, so the state remains as it is
+	start := time.Now()
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	commitTime := time.Since(start)
 
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
@@ -1257,7 +1259,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
 	// return the final block for sealing
-	return block, receipts, nil
+	return block, receipts, commitTime, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -1293,7 +1295,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Bail out if we're unauthorized to sign a block
-	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !isPartOfVeBlopSet(currentSigner.signer, header.Number.Uint64()) {
+	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !snap.isAllowedByValidatorSetOverride(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1823,16 +1825,4 @@ func countLogsFromReceipts(receipts []*types.Receipt) int {
 		}
 	}
 	return total
-}
-
-// TODO: hack - remove me later
-func isPartOfVeBlopSet(addr common.Address, blockNumber uint64) bool {
-	if blockNumber < 80440819 || blockNumber > 80443486 {
-		return false
-	}
-	a := addr.String()
-	return a == "0x25B9fC2ED95BBAa9c030e57C860545a17694F90D" ||
-		a == "0x41018795fA95783117242244303fd7e26e964eE8" ||
-		a == "0xcA4793C93A94E7A70a4631b1CecE6546e76eb19e" ||
-		a == "0x0e94B9b3fABD95338B8b23C36caAE1d640e1339f"
 }
