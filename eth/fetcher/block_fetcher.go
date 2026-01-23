@@ -100,6 +100,9 @@ type blockBroadcasterFn func(block *types.Block, witness *stateless.Witness, pro
 // chainHeightFn is a callback type to retrieve the current chain height.
 type chainHeightFn func() uint64
 
+// currentHeaderFn is a callback type to retrieve the current block header.
+type currentHeaderFn func() *types.Header
+
 // headersInsertFn is a callback type to insert a batch of headers into the local chain.
 type headersInsertFn func(headers []*types.Header) (int, error)
 
@@ -233,6 +236,7 @@ type BlockFetcher struct {
 	verifyHeader   headerVerifierFn   // Checks if a block's headers have a valid proof of work
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
+	currentHeader  currentHeaderFn    // Retrieves the current block header
 	insertHeaders  headersInsertFn    // Injects a batch of headers into the chain
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
@@ -251,7 +255,7 @@ type BlockFetcher struct {
 }
 
 // NewBlockFetcher creates a block fetcher to retrieve blocks based on hash announcements.
-func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, jailPeer peerJailFn, enableBlockTracking bool, requireWitness bool, gasCeil uint64) *BlockFetcher {
+func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, currentHeader currentHeaderFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, jailPeer peerJailFn, enableBlockTracking bool, requireWitness bool, gasCeil uint64) *BlockFetcher {
 	f := &BlockFetcher{
 		light:               light,
 		notify:              make(chan *blockAnnounce),
@@ -274,6 +278,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		verifyHeader:        verifyHeader,
 		broadcastBlock:      broadcastBlock,
 		chainHeight:         chainHeight,
+		currentHeader:       currentHeader,
 		insertHeaders:       insertHeaders,
 		insertChain:         insertChain,
 		dropPeer:            dropPeer,
@@ -291,6 +296,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		f.getBlock,
 		f.getHeader,
 		f.chainHeight,
+		f.currentHeader,
 		gasCeil,
 	)
 
