@@ -356,7 +356,10 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 				)
 				// Trace all the transactions contained within
 				txs, stateSyncPresent, stateSyncHash := api.getAllBlockTransactions(ctx, task.block)
-				if !*config.BorTraceEnabled && stateSyncPresent {
+				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
+				isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(task.block.Number())
+				includeStateSyncTx := isMadhugiri || *config.BorTraceEnabled
+				if stateSyncPresent && !includeStateSyncTx {
 					txs = txs[:len(txs)-1]
 					stateSyncPresent = false
 				}
@@ -378,10 +381,8 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 
 					var err error
 
-					if stateSyncPresent && i == len(txs)-1 {
-						if *config.BorTraceEnabled {
-							config.BorTx = newBoolPtr(true)
-						}
+					if stateSyncPresent && i == len(txs)-1 && includeStateSyncTx {
+						config.BorTx = newBoolPtr(true)
 					}
 
 					res, err = api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, config, nil)
@@ -705,6 +706,9 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 	}
 
 	txs, stateSyncPresent, stateSyncHash := api.getAllBlockTransactions(ctx, block)
+	// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
+	isMadhugiri := chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(block.Number())
+	includeStateSyncTx := isMadhugiri || *config.BorTraceEnabled
 	for i, tx := range txs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -714,7 +718,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 
 		//nolint:nestif
 		if stateSyncPresent && i == len(txs)-1 {
-			if *config.BorTraceEnabled {
+			if includeStateSyncTx {
 				callmsg := prepareCallMessage(*msg)
 				statedb.SetTxContext(stateSyncHash, i)
 				if _, err := statefull.ApplyMessage(ctx, callmsg, statedb, block.Header(), api.backend.ChainConfig(), api.chainContext(ctx)); err != nil {
@@ -857,9 +861,10 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 				var err error
 
+				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
 				if stateSyncPresent && task.index == len(txs)-1 {
-					if *config.BorTraceEnabled {
-						// avoid data race
+					isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
+					if isMadhugiri || *config.BorTraceEnabled {
 						config.BorTx = newBoolPtr(true)
 					}
 				}
@@ -1018,11 +1023,14 @@ txloop:
 		return nil, failed
 	}
 
-	if !*config.BorTraceEnabled && stateSyncPresent {
+	// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
+	isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
+	includeStateSyncTx := isMadhugiri || *config.BorTraceEnabled
+	if stateSyncPresent && !includeStateSyncTx {
 		return results[:len(results)-1], nil
-	} else {
-		return results, nil
 	}
+
+	return results, nil
 }
 
 // standardTraceBlockToFile configures a new tracer which uses standard JSON output,
@@ -1095,7 +1103,10 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 	}
 
 	txs, stateSyncPresent, stateSyncHash := api.getAllBlockTransactions(ctx, block)
-	if !*config.BorTraceEnabled && stateSyncPresent {
+	// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
+	isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
+	includeStateSyncTx := isMadhugiri || *config.BorTraceEnabled
+	if stateSyncPresent && !includeStateSyncTx {
 		txs = txs[:len(txs)-1]
 		stateSyncPresent = false
 	}
@@ -1137,18 +1148,17 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			}
 		}
 		// Execute the transaction and flush any traces to disk
+		// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
 		//nolint:nestif
-		if stateSyncPresent && i == len(txs)-1 {
-			if *config.BorTraceEnabled {
-				callmsg := prepareCallMessage(*msg)
-				statedb.SetTxContext(stateSyncHash, i)
-				_, err = statefull.ApplyBorMessage(evm, callmsg)
+		if stateSyncPresent && i == len(txs)-1 && includeStateSyncTx {
+			callmsg := prepareCallMessage(*msg)
+			statedb.SetTxContext(stateSyncHash, i)
+			_, err = statefull.ApplyBorMessage(evm, callmsg)
 
-				if writer != nil {
-					writer.Flush()
-				}
+			if writer != nil {
+				writer.Flush()
 			}
-		} else {
+		} else if !(stateSyncPresent && i == len(txs)-1) {
 			statedb.SetTxContext(tx.Hash(), i)
 			if vmConf.Tracer.OnTxStart != nil {
 				vmConf.Tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
