@@ -313,15 +313,18 @@ func getConsensusIncludingOriginal(originalCount uint64, randomCounts []uint64) 
 	return 0 // No consensus
 }
 
-// TestSimplifiedWitnessVerification tests the simplified verification logic
-func TestSimplifiedWitnessVerification(t *testing.T) {
-	tests := []struct {
-		name           string
-		reportedPages  uint64
-		peerPages      []uint64
-		expectedHonest bool
-		description    string
-	}{
+// witnessVerificationTestCase defines a test case for witness verification
+type witnessVerificationTestCase struct {
+	name           string
+	reportedPages  uint64
+	peerPages      []uint64
+	expectedHonest bool
+	description    string
+}
+
+// getCommonVerificationTestCases returns the common test cases for witness verification
+func getCommonVerificationTestCases() []witnessVerificationTestCase {
+	return []witnessVerificationTestCase{
 		{
 			name:           "UnderThreshold_ShouldBeHonest",
 			reportedPages:  5,
@@ -358,17 +361,26 @@ func TestSimplifiedWitnessVerification(t *testing.T) {
 			description:    "Insufficient peers should default to honest (conservative)",
 		},
 	}
+}
 
+// runVerificationTests runs verification tests with a given simulation function
+func runVerificationTests(t *testing.T, tests []witnessVerificationTestCase, simulateFunc func(uint64, []uint64) bool) {
+	t.Helper()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Simulate the simplified verification logic
-			isHonest := simulateSimplifiedWitnessVerification(tt.reportedPages, tt.peerPages)
+			isHonest := simulateFunc(tt.reportedPages, tt.peerPages)
 
 			if isHonest != tt.expectedHonest {
 				t.Errorf("%s: expected honest=%v, got honest=%v", tt.description, tt.expectedHonest, isHonest)
 			}
 		})
 	}
+}
+
+// TestSimplifiedWitnessVerification tests the simplified verification logic
+func TestSimplifiedWitnessVerification(t *testing.T) {
+	tests := getCommonVerificationTestCases()
+	runVerificationTests(t, tests, simulateSimplifiedWitnessVerification)
 }
 
 // simulateSimplifiedWitnessVerification simulates the simplified verification logic
@@ -562,60 +574,8 @@ func TestTotalPagesConsistency(t *testing.T) {
 
 // TestWitnessPageCountVerification tests the page count verification logic
 func TestWitnessPageCountVerification(t *testing.T) {
-	tests := []struct {
-		name           string
-		reportedPages  uint64
-		peerPages      []uint64
-		expectedHonest bool
-		description    string
-	}{
-		{
-			name:           "UnderThreshold_ShouldBeHonest",
-			reportedPages:  5,
-			peerPages:      []uint64{5, 5},
-			expectedHonest: true,
-			description:    "Page count under threshold should be considered honest",
-		},
-		{
-			name:           "OverThreshold_ConsensusAgreement",
-			reportedPages:  15,
-			peerPages:      []uint64{15, 15},
-			expectedHonest: true,
-			description:    "Consensus agreement should mark peer as honest",
-		},
-		{
-			name:           "OverThreshold_ConsensusDisagreement",
-			reportedPages:  15,
-			peerPages:      []uint64{20, 20},
-			expectedHonest: false,
-			description:    "Consensus disagreement should mark peer as dishonest",
-		},
-		{
-			name:           "OverThreshold_MixedResults",
-			reportedPages:  15,
-			peerPages:      []uint64{15, 20},
-			expectedHonest: true,
-			description:    "Mixed results should default to honest (conservative)",
-		},
-		{
-			name:           "OverThreshold_InsufficientPeers",
-			reportedPages:  15,
-			peerPages:      []uint64{15},
-			expectedHonest: true,
-			description:    "Insufficient peers should default to honest (conservative)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Simulate the verification logic
-			isHonest := simulateWitnessPageCountVerification(tt.reportedPages, tt.peerPages)
-
-			if isHonest != tt.expectedHonest {
-				t.Errorf("%s: expected honest=%v, got honest=%v", tt.description, tt.expectedHonest, isHonest)
-			}
-		})
-	}
+	tests := getCommonVerificationTestCases()
+	runVerificationTests(t, tests, simulateWitnessPageCountVerification)
 }
 
 // simulateWitnessPageCountVerification simulates the verification logic from witness_manager.go

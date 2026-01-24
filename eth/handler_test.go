@@ -232,79 +232,31 @@ func (b *testHandler) close() {
 	b.chain.Stop()
 }
 
-// TestJailPeer tests the jailPeer function with various scenarios
-func TestJailPeer(t *testing.T) {
-	t.Run("NilP2PServer", func(t *testing.T) {
-		// Create a handler with nil p2pServer
-		db := rawdb.NewMemoryDatabase()
-		gspec := &core.Genesis{
-			Config: params.TestChainConfig,
-			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-		}
-		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
-		txpool := newTestTxPool()
+// jailPeerTestSetup holds the common test setup for jail peer tests
+type jailPeerTestSetup struct {
+	db        ethdb.Database
+	chain     *core.BlockChain
+	txpool    *testTxPool
+	p2pServer *p2p.Server
+	handler   *handler
+}
 
-		handler, _ := newHandler(&handlerConfig{
-			Database: db,
-			Chain:    chain,
-			TxPool:   txpool,
-			Network:  1,
-			Sync:     downloader.SnapSync,
-			// p2pServer is nil by default
-		})
-		handler.Start(1000)
-		defer handler.Stop()
-		defer chain.Stop()
+// setupJailPeerTest creates a test setup with optional p2p server configuration
+func setupJailPeerTest(t *testing.T, startP2PServer bool) *jailPeerTestSetup {
+	t.Helper()
 
-		// Should return early without error when p2pServer is nil
-		handler.jailPeer("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
-		// No assertion needed - just ensure it doesn't panic
-	})
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+	}
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+	txpool := newTestTxPool()
 
-	t.Run("InvalidPeerID", func(t *testing.T) {
-		// Create a handler with a p2pServer
-		db := rawdb.NewMemoryDatabase()
-		gspec := &core.Genesis{
-			Config: params.TestChainConfig,
-			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-		}
-		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
-		txpool := newTestTxPool()
-
-		// Create a minimal p2p.Server (peerJail will be nil)
-		p2pServer := &p2p.Server{}
-
-		handler, _ := newHandler(&handlerConfig{
-			Database:  db,
-			Chain:     chain,
-			TxPool:    txpool,
-			Network:   1,
-			Sync:      downloader.SnapSync,
-			p2pServer: p2pServer,
-		})
-		handler.Start(1000)
-		defer handler.Stop()
-		defer chain.Stop()
-
-		// Should return early without error when ParseID fails
-		// (peerJail is nil, so JailPeer returns early, but ParseID fails first)
-		handler.jailPeer("invalid-id")
-		// No assertion needed - just ensure it doesn't panic and logs a warning
-	})
-
-	t.Run("ValidPeerID", func(t *testing.T) {
-		// Create a handler with a started p2pServer to initialize peerJail
-		db := rawdb.NewMemoryDatabase()
-		gspec := &core.Genesis{
-			Config: params.TestChainConfig,
-			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-		}
-		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
-		txpool := newTestTxPool()
-
-		// Create and start a minimal p2p.Server to initialize peerJail
+	var p2pServer *p2p.Server
+	if startP2PServer {
 		key, _ := crypto.GenerateKey()
-		p2pServer := &p2p.Server{
+		p2pServer = &p2p.Server{
 			Config: p2p.Config{
 				PrivateKey:  key,
 				NoDial:      true,
@@ -314,19 +266,68 @@ func TestJailPeer(t *testing.T) {
 		if err := p2pServer.Start(); err != nil {
 			t.Fatalf("Failed to start p2p server: %v", err)
 		}
-		defer p2pServer.Stop()
+	}
 
-		handler, _ := newHandler(&handlerConfig{
-			Database:  db,
-			Chain:     chain,
-			TxPool:    txpool,
-			Network:   1,
-			Sync:      downloader.SnapSync,
-			p2pServer: p2pServer,
-		})
-		handler.Start(1000)
-		defer handler.Stop()
-		defer chain.Stop()
+	handler, _ := newHandler(&handlerConfig{
+		Database:  db,
+		Chain:     chain,
+		TxPool:    txpool,
+		Network:   1,
+		Sync:      downloader.SnapSync,
+		p2pServer: p2pServer,
+	})
+	handler.Start(1000)
+
+	t.Cleanup(func() {
+		handler.Stop()
+		chain.Stop()
+		if p2pServer != nil {
+			p2pServer.Stop()
+		}
+	})
+
+	return &jailPeerTestSetup{
+		db:        db,
+		chain:     chain,
+		txpool:    txpool,
+		p2pServer: p2pServer,
+		handler:   handler,
+	}
+}
+
+// verifyPeerJailInitialized checks if peerJail was initialized in the p2p server
+func verifyPeerJailInitialized(t *testing.T, p2pServer *p2p.Server) {
+	t.Helper()
+	rv := reflect.ValueOf(p2pServer).Elem()
+	peerJailField := rv.FieldByName("peerJail")
+	if !peerJailField.IsValid() || peerJailField.IsNil() {
+		t.Error("peerJail should be initialized after Start()")
+	}
+}
+
+// TestJailPeer tests the jailPeer function with various scenarios
+func TestJailPeer(t *testing.T) {
+	t.Run("NilP2PServer", func(t *testing.T) {
+		setup := setupJailPeerTest(t, false)
+
+		// Should return early without error when p2pServer is nil
+		setup.handler.jailPeer("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+		// No assertion needed - just ensure it doesn't panic
+	})
+
+	t.Run("InvalidPeerID", func(t *testing.T) {
+		setup := setupJailPeerTest(t, false)
+		// Create a minimal p2p.Server (peerJail will be nil)
+		setup.p2pServer = &p2p.Server{}
+
+		// Should return early without error when ParseID fails
+		// (peerJail is nil, so JailPeer returns early, but ParseID fails first)
+		setup.handler.jailPeer("invalid-id")
+		// No assertion needed - just ensure it doesn't panic and logs a warning
+	})
+
+	t.Run("ValidPeerID", func(t *testing.T) {
+		setup := setupJailPeerTest(t, true)
 
 		// Use a valid peer ID (64 hex characters = 32 bytes)
 		peerID := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -339,51 +340,14 @@ func TestJailPeer(t *testing.T) {
 		// Note: We can't verify the internal state using reflection due to Go's
 		// restrictions on calling methods on values from unexported fields.
 		// The fact that it doesn't panic with valid input is sufficient coverage.
-		handler.jailPeer(peerID)
+		setup.handler.jailPeer(peerID)
 
-		// Verify peerJail was initialized (can check field exists, but can't call methods)
-		rv := reflect.ValueOf(p2pServer).Elem()
-		peerJailField := rv.FieldByName("peerJail")
-		if !peerJailField.IsValid() || peerJailField.IsNil() {
-			t.Error("peerJail should be initialized after Start()")
-		}
+		// Verify peerJail was initialized
+		verifyPeerJailInitialized(t, setup.p2pServer)
 	})
 
 	t.Run("ValidPeerIDWith0xPrefix", func(t *testing.T) {
-		// Create a handler with a started p2pServer
-		db := rawdb.NewMemoryDatabase()
-		gspec := &core.Genesis{
-			Config: params.TestChainConfig,
-			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-		}
-		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
-		txpool := newTestTxPool()
-
-		// Create and start a minimal p2p.Server to initialize peerJail
-		key, _ := crypto.GenerateKey()
-		p2pServer := &p2p.Server{
-			Config: p2p.Config{
-				PrivateKey:  key,
-				NoDial:      true,
-				NoDiscovery: true,
-			},
-		}
-		if err := p2pServer.Start(); err != nil {
-			t.Fatalf("Failed to start p2p server: %v", err)
-		}
-		defer p2pServer.Stop()
-
-		handler, _ := newHandler(&handlerConfig{
-			Database:  db,
-			Chain:     chain,
-			TxPool:    txpool,
-			Network:   1,
-			Sync:      downloader.SnapSync,
-			p2pServer: p2pServer,
-		})
-		handler.Start(1000)
-		defer handler.Stop()
-		defer chain.Stop()
+		setup := setupJailPeerTest(t, true)
 
 		// Use a valid peer ID with 0x prefix (should still parse correctly)
 		peerID := "0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -393,14 +357,10 @@ func TestJailPeer(t *testing.T) {
 		}
 
 		// Call jailPeer - should work with 0x prefix
-		handler.jailPeer(peerID)
+		setup.handler.jailPeer(peerID)
 
-		// Verify peerJail was initialized (can check field exists, but can't call methods)
-		rv := reflect.ValueOf(p2pServer).Elem()
-		peerJailField := rv.FieldByName("peerJail")
-		if !peerJailField.IsValid() || peerJailField.IsNil() {
-			t.Error("peerJail should be initialized after Start()")
-		}
+		// Verify peerJail was initialized
+		verifyPeerJailInitialized(t, setup.p2pServer)
 	})
 }
 
