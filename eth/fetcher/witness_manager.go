@@ -930,12 +930,14 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 			log.Debug("[wm] Calculated dynamic page threshold from block header",
 				"blockNumber", header.Number.Uint64(), "blockGasLimit", actualGasLimit,
 				"gasCeilMB", gasCeilMB, "threshold", threshold)
+			witnessThresholdGauge.Update(int64(threshold))
 			return threshold
 		}
 	}
 
 	// Fallback to config value if header not available
 	if m.gasCeil == 0 {
+		witnessThresholdGauge.Update(int64(witnessPageThreshold))
 		return witnessPageThreshold // Return default if gas ceil not set
 	}
 
@@ -951,6 +953,7 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	}
 
 	log.Debug("[wm] Calculated dynamic page threshold from config", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
+	witnessThresholdGauge.Update(int64(threshold))
 	return threshold
 }
 
@@ -993,6 +996,9 @@ func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
 // Returns true if peer is honest (or under threshold), false if peer should be dropped
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
+	// Track that a verification check is being performed
+	witnessVerifyCheckMeter.Mark(1)
+
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
 
@@ -1000,11 +1006,13 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	// No peer queries are made in this case
 	if pageCount <= threshold {
 		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		witnessPageCountBelowThresholdMeter.Mark(1)
 		return true
 	}
 
 	// Page count exceeds threshold - verify synchronously
 	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	witnessPageCountAboveThresholdMeter.Mark(1)
 	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
@@ -1015,6 +1023,7 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	if len(randomPeers) < witnessVerificationPeers {
 		// Not enough peers for verification, assume honest (conservative approach)
 		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
+		witnessVerifyPeersInsuffMeter.Mark(1)
 		return true
 	}
 
@@ -1028,16 +1037,27 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
 		// Peer is dishonest - drop and jail immediately
 		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
+		witnessVerifyFailureMeter.Mark(1)
+
 		m.parentDropPeer(reportingPeer)
+		witnessVerifyDropMeter.Mark(1)
+
 		// Also jail the peer to prevent reconnection
 		if m.parentJailPeer != nil {
 			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
 			m.parentJailPeer(reportingPeer)
+			witnessVerifyJailMeter.Mark(1)
 		}
 		return false
 	}
 
+	// Track no consensus case
+	if consensusPageCount == 0 {
+		witnessVerifyNoConsensusMeter.Mark(1)
+	}
+
 	// Peer is honest or no consensus (assume honest to avoid false positives)
 	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
+	witnessVerifySuccessMeter.Mark(1)
 	return true
 }
