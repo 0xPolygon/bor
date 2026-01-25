@@ -365,6 +365,20 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// Rebroadcast enables the stuck transaction rebroadcast mechanism
+	Rebroadcast bool `hcl:"rebroadcast,optional" toml:"rebroadcast,optional"`
+
+	// RebroadcastInterval is the interval between rebroadcast checks
+	RebroadcastInterval    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastIntervalRaw string        `hcl:"rebroadcast-interval,optional" toml:"rebroadcast-interval,optional"`
+
+	// RebroadcastMaxAge is the maximum age for rebroadcast eligibility
+	RebroadcastMaxAge    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastMaxAgeRaw string        `hcl:"rebroadcast-max-age,optional" toml:"rebroadcast-max-age,optional"`
+
+	// RebroadcastBatchSize is the maximum number of transactions per rebroadcast cycle
+	RebroadcastBatchSize int `hcl:"rebroadcast-batch-size,optional" toml:"rebroadcast-batch-size,optional"`
 }
 
 type SealerConfig struct {
@@ -382,6 +396,13 @@ type SealerConfig struct {
 
 	// GasCeil is the target gas ceiling for mined blocks.
 	GasCeil uint64 `hcl:"gaslimit,optional" toml:"gaslimit,optional"`
+
+	// Dynamic gas limit configuration
+	EnableDynamicGasLimit bool   `hcl:"enableDynamicGasLimit,optional" toml:"enableDynamicGasLimit,optional"`
+	GasLimitMin           uint64 `hcl:"gasLimitMin,optional" toml:"gasLimitMin,optional"`
+	GasLimitMax           uint64 `hcl:"gasLimitMax,optional" toml:"gasLimitMax,optional"`
+	TargetBaseFee         uint64 `hcl:"targetBaseFee,optional" toml:"targetBaseFee,optional"`
+	BaseFeeBuffer         uint64 `hcl:"baseFeeBuffer,optional" toml:"baseFeeBuffer,optional"`
 
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
@@ -499,6 +520,11 @@ type HttpTimeouts struct {
 	// ReadHeaderTimeout. It is valid to use them both.
 	ReadTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	ReadTimeoutRaw string        `hcl:"read,optional" toml:"read,optional"`
+
+	// ReadHeaderTimeout is the amount of time allowed to read
+	// request headers.
+	ReadHeaderTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	ReadHeaderTimeoutRaw string        `hcl:"readheader,optional" toml:"readheader,optional"`
 
 	// WriteTimeout is the maximum duration before timing out
 	// writes of the response. It is reset whenever a new
@@ -765,28 +791,37 @@ func DefaultConfig() *Config {
 		BorLogs:     false,
 
 		TxPool: &TxPoolConfig{
-			Locals:       []string{},
-			NoLocals:     false,
-			Journal:      "transactions.rlp",
-			Rejournal:    1 * time.Hour,
-			PriceLimit:   params.BorDefaultTxPoolPriceLimit, // bor's default
-			PriceBump:    10,
-			AccountSlots: 16,
-			GlobalSlots:  131072,
-			AccountQueue: 64,
-			GlobalQueue:  131072,
-			LifeTime:     3 * time.Hour,
+			Locals:               []string{},
+			NoLocals:             false,
+			Journal:              "transactions.rlp",
+			Rejournal:            1 * time.Hour,
+			PriceLimit:           params.BorDefaultTxPoolPriceLimit, // bor's default
+			PriceBump:            10,
+			AccountSlots:         16,
+			GlobalSlots:          131072,
+			AccountQueue:         64,
+			GlobalQueue:          131072,
+			LifeTime:             3 * time.Hour,
+			Rebroadcast:          true,
+			RebroadcastInterval:  30 * time.Second,
+			RebroadcastMaxAge:    10 * time.Minute,
+			RebroadcastBatchSize: 200,
 		},
 		Sealer: &SealerConfig{
-			Enabled:             false,
-			AllowGasTipOverride: false,
-			Etherbase:           "",
-			GasCeil:             miner.DefaultConfig.GasCeil,
-			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
-			ExtraData:           "",
-			Recommit:            125 * time.Second,
-			CommitInterruptFlag: true,
-			BlockTime:           0,
+			Enabled:               false,
+			AllowGasTipOverride:   false,
+			Etherbase:             "",
+			GasCeil:               miner.DefaultConfig.GasCeil,
+			EnableDynamicGasLimit: miner.DefaultConfig.EnableDynamicGasLimit,
+			GasLimitMin:           miner.DefaultConfig.GasLimitMin,
+			GasLimitMax:           miner.DefaultConfig.GasLimitMax,
+			TargetBaseFee:         miner.DefaultConfig.TargetBaseFee,
+			BaseFeeBuffer:         miner.DefaultConfig.BaseFeeBuffer,
+			GasPrice:              big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
+			ExtraData:             "",
+			Recommit:              125 * time.Second,
+			CommitInterruptFlag:   true,
+			BlockTime:             0,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -831,9 +866,10 @@ func DefaultConfig() *Config {
 				VHost:   []string{"localhost"},
 			},
 			HttpTimeout: &HttpTimeouts{
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 30 * time.Second,
-				IdleTimeout:  120 * time.Second,
+				ReadTimeout:       10 * time.Second,
+				ReadHeaderTimeout: 30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       120 * time.Second,
 			},
 			Auth: &AUTHConfig{
 				JWTSecret: "",
@@ -984,12 +1020,15 @@ func (c *Config) fillTimeDurations() error {
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
 		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
+		{"jsonrpc.timeouts.readheader", &c.JsonRPC.HttpTimeout.ReadHeaderTimeout, &c.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
 		{"jsonrpc.timeouts.idle", &c.JsonRPC.HttpTimeout.IdleTimeout, &c.JsonRPC.HttpTimeout.IdleTimeoutRaw},
 		{"jsonrpc.ws.ep-requesttimeout", &c.JsonRPC.Ws.ExecutionPoolRequestTimeout, &c.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw},
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
+		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
+		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
 	}
@@ -1114,6 +1153,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		} else {
 			n.TxPool.FilteredAddresses = filteredAddrs
 		}
+
+		// Rebroadcast options
+		n.TxPool.Rebroadcast = c.TxPool.Rebroadcast
+		n.TxPool.RebroadcastInterval = c.TxPool.RebroadcastInterval
+		n.TxPool.RebroadcastMaxAge = c.TxPool.RebroadcastMaxAge
+		n.TxPool.RebroadcastBatchSize = c.TxPool.RebroadcastBatchSize
 	}
 
 	// miner options
@@ -1126,6 +1171,26 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+
+		// Dynamic gas limit configuration
+		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
+		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
+		n.Miner.GasLimitMax = c.Sealer.GasLimitMax
+		n.Miner.TargetBaseFee = c.Sealer.TargetBaseFee
+		n.Miner.BaseFeeBuffer = c.Sealer.BaseFeeBuffer
+
+		// Validate dynamic gas limit configuration
+		if c.Sealer.EnableDynamicGasLimit {
+			if c.Sealer.GasLimitMin >= c.Sealer.GasLimitMax {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be less than miner.gasLimitMax (%d)", c.Sealer.GasLimitMin, c.Sealer.GasLimitMax)
+			}
+			if c.Sealer.GasLimitMin < params.MinGasLimit {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be at least %d (protocol minimum)", c.Sealer.GasLimitMin, params.MinGasLimit)
+			}
+			if c.Sealer.TargetBaseFee == 0 {
+				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic gas limit is enabled")
+			}
+		}
 
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {
@@ -1612,9 +1677,10 @@ func (c *Config) buildNode() (*node.Config, error) {
 		GraphQLCors:         c.JsonRPC.Graphql.Cors,
 		GraphQLVirtualHosts: c.JsonRPC.Graphql.VHost,
 		HTTPTimeouts: rpc.HTTPTimeouts{
-			ReadTimeout:  c.JsonRPC.HttpTimeout.ReadTimeout,
-			WriteTimeout: c.JsonRPC.HttpTimeout.WriteTimeout,
-			IdleTimeout:  c.JsonRPC.HttpTimeout.IdleTimeout,
+			ReadTimeout:       c.JsonRPC.HttpTimeout.ReadTimeout,
+			ReadHeaderTimeout: c.JsonRPC.HttpTimeout.ReadHeaderTimeout,
+			WriteTimeout:      c.JsonRPC.HttpTimeout.WriteTimeout,
+			IdleTimeout:       c.JsonRPC.HttpTimeout.IdleTimeout,
 		},
 		JWTSecret:                              c.JsonRPC.Auth.JWTSecret,
 		AuthPort:                               int(c.JsonRPC.Auth.Port),

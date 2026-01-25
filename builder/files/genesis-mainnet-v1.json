@@ -66,6 +66,20 @@
           "startBlock": 73812433,
           "endBlock": 73826700,
           "value": 0
+        },
+        {
+          "startBlock": 81556977,
+          "endBlock": 81558799,
+          "value": 0
+        }
+      ],
+      "overrideValidatorSetInRange": [
+        {
+          "startBlock": 80440819,
+          "endBlock": 80440834,
+          "validators": [
+            "0x41018795fA95783117242244303fd7e26e964eE8"
+          ]
         }
       ],
       "blockAlloc": {
