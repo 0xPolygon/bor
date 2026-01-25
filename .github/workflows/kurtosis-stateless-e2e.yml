@@ -20,7 +20,7 @@ env:
 
 jobs:
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     timeout-minutes: 45
 
     steps:
