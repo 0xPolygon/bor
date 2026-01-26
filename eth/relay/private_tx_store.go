@@ -28,8 +28,9 @@ type PrivateTxStore struct {
 	chainEventSubFn func(ch chan<- core.ChainEvent) event.Subscription
 
 	// metrics
-	txsAdded  atomic.Uint64
-	txsPurged atomic.Uint64
+	txsAdded   atomic.Uint64
+	txsPurged  atomic.Uint64 // deleted by an explicit call
+	txsDeleted atomic.Uint64 // deleted because tx got included
 
 	closeCh chan struct{}
 }
@@ -93,10 +94,14 @@ func (s *PrivateTxStore) cleanup() error {
 		select {
 		case event := <-chainEventCh:
 			s.mu.Lock()
+			deleted := uint64(0)
 			for _, tx := range event.Transactions {
-				delete(s.txs, tx.Hash())
+				if _, exists := s.txs[tx.Hash()]; exists {
+					deleted++
+					delete(s.txs, tx.Hash())
+				}
 			}
-			s.txsPurged.Add(uint64(len(event.Transactions)))
+			s.txsDeleted.Add(deleted)
 			s.mu.Unlock()
 		case err := <-chainEventSub.Err():
 			return err
@@ -108,7 +113,7 @@ func (s *PrivateTxStore) cleanup() error {
 }
 
 func (s *PrivateTxStore) SetchainEventSubFn(fn func(ch chan<- core.ChainEvent) event.Subscription) {
-	if s.chainEventSubFn != nil {
+	if fn != nil && s.chainEventSubFn == nil {
 		s.chainEventSubFn = fn
 		go s.cleanupLoop()
 	}
@@ -124,9 +129,10 @@ func (s *PrivateTxStore) report() {
 			s.mu.RLock()
 			storeSize := len(s.txs)
 			s.mu.RUnlock()
-			log.Info("[private-tx-store] stats", "len", storeSize, "added", s.txsAdded.Load(), "purged", s.txsPurged.Load())
+			log.Info("[private-tx-store] stats", "len", storeSize, "added", s.txsAdded.Load(), "purged", s.txsPurged.Load(), "deleted", s.txsDeleted.Load())
 			s.txsAdded.Store(0)
 			s.txsPurged.Store(0)
+			s.txsDeleted.Store(0)
 		case <-s.closeCh:
 			return
 		}
