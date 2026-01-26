@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # Install build dependencies
       - name: Install dependencies on Linux
         if: runner.os == 'Linux'
         run: sudo apt update && sudo apt install build-essential
@@ -33,17 +34,35 @@ jobs:
         with:
           go-version: 'stable'
 
+      # Build bor
       - name: Checkout bor
         uses: actions/checkout@v5
         with:
           path: bor
 
+      - name: Build bor docker image
+        working-directory: bor
+        run: docker build -t bor:local --file Dockerfile .
+
+      # Build heimdall-v2
       - name: Checkout heimdall-v2
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/heimdall-v2
           ref: develop
           path: heimdall-v2
+      
+      - name: Build heimdall-v2 docker image
+        working-directory: heimdall-v2
+        run: docker build -t heimdall-v2:local --file Dockerfile .
+
+      # Deploy kurtosis enclave
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: hv2/tx-eip1559-gas-price-configs
+          path: kurtosis-pos
 
       - name: Checkout pos-workflows
         uses: actions/checkout@v5
@@ -52,26 +71,11 @@ jobs:
           ref: main
           path: pos-workflows
 
-      - name: Checkout kurtosis-pos
-        uses: actions/checkout@v5
-        with:
-          repository: 0xPolygon/kurtosis-pos
-          ref: hv2/tx-eip1559-gas-price-configs
-          path: kurtosis-pos
-
       - name: Pre kurtosis run
         uses: ./pos-workflows/.github/actions/kurtosis-pre-run
         with:
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
-
-      - name: Build bor docker image
-        working-directory: bor
-        run: docker build -t bor:local --file Dockerfile .
-
-      - name: Build heimdall-v2 docker image
-        working-directory: heimdall-v2
-        run: docker build -t heimdall-v2:local --file Dockerfile .
 
       - name: Copy kurtosis config
         run: cp ./pos-workflows/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
@@ -83,6 +87,7 @@ jobs:
       - name: Inspect enclave
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
+      # Run tests
       - name: Test state syncs
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
 
@@ -96,6 +101,7 @@ jobs:
       - name: Run smoke tests (Checkpoints and Milestones)
         run: bash ./pos-workflows/tests/kurtosis_smoke_test.sh
 
+      # Clean up
       - name: Post kurtosis run
         if: always()
         uses: ./pos-workflows/.github/actions/kurtosis-post-run
