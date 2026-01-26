@@ -653,8 +653,8 @@ func TestGetTargetGasPercentage(t *testing.T) {
 
 	t.Run("Post-Dandeli with nil TargetGasPercentage returns default", func(t *testing.T) {
 		config := &BorConfig{
-			DandeliBlock:         big.NewInt(1000),
-			TargetGasPercentage:  nil,
+			DandeliBlock:        big.NewInt(1000),
+			TargetGasPercentage: nil,
 		}
 
 		result := config.GetTargetGasPercentage(big.NewInt(1000))
@@ -753,8 +753,8 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 
 	t.Run("Post-Delhi Pre-Bhilai returns BaseFeeChangeDenominatorPostDelhi", func(t *testing.T) {
 		config := &BorConfig{
-			DelhiBlock:  big.NewInt(1000),
-			BhilaiBlock: big.NewInt(2000),
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  big.NewInt(2000),
 			DandeliBlock: nil,
 		}
 
