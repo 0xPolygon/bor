@@ -18,68 +18,38 @@ import (
 )
 
 // mockHeimdallClient implements bor.IHeimdallClient for testing
-type mockHeimdallClient struct {
-	spanCalled bool
-}
+type mockHeimdallClient struct{}
 
 func (m *mockHeimdallClient) Close() {}
-
-func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+func (m *mockHeimdallClient) StateSyncEvents(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
-
-func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
-	m.spanCalled = true
-	validators := []*stakeTypes.Validator{
-		{
-			ValId:            1,
-			Signer:           "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a",
-			VotingPower:      100,
-			ProposerPriority: 0,
-		},
-	}
-	validatorSet := stakeTypes.ValidatorSet{
-		Validators: validators,
-		Proposer:   validators[0],
-	}
+func (m *mockHeimdallClient) GetSpan(_ context.Context, spanID uint64) (*borTypes.Span, error) {
 	return &borTypes.Span{
-		Id:           spanID,
-		StartBlock:   0,
-		EndBlock:     255,
-		ValidatorSet: validatorSet,
+		Id: spanID, StartBlock: 0, EndBlock: 255,
+		ValidatorSet: stakeTypes.ValidatorSet{
+			Validators: []*stakeTypes.Validator{{ValId: 1, Signer: "0x96C42C56fdb78294F96B0cFa33c92bed7D75F96a", VotingPower: 100}},
+		},
 	}, nil
 }
-
 func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
 	return m.GetSpan(ctx, 0)
 }
-
-func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+func (m *mockHeimdallClient) FetchCheckpoint(context.Context, int64) (*checkpoint.Checkpoint, error) {
 	return nil, nil
 }
-
-func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
-	return 0, nil
-}
-
-func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+func (m *mockHeimdallClient) FetchCheckpointCount(context.Context) (int64, error) { return 0, nil }
+func (m *mockHeimdallClient) FetchMilestone(context.Context) (*milestone.Milestone, error) {
 	return nil, nil
 }
-
-func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
-	return 0, nil
-}
-
-func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+func (m *mockHeimdallClient) FetchMilestoneCount(context.Context) (int64, error) { return 0, nil }
+func (m *mockHeimdallClient) FetchStatus(context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 
-func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
-	// Create a mock heimdall client
-	mockClient := &mockHeimdallClient{}
-
-	// Create chain config with Bor consensus
-	chainConfig := &params.ChainConfig{
+// newTestBorChainConfig creates a minimal Bor chain config for testing
+func newTestBorChainConfig() *params.ChainConfig {
+	return &params.ChainConfig{
 		ChainID:             big.NewInt(137),
 		HomesteadBlock:      big.NewInt(0),
 		EIP150Block:         big.NewInt(0),
@@ -101,72 +71,29 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 			StateReceiverContract: "0x0000000000000000000000000000000000001001",
 		},
 	}
+}
 
-	// Create eth config with override client
+func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 	ethConfig := &Config{
-		OverrideHeimdallClient: mockClient,
+		OverrideHeimdallClient: &mockHeimdallClient{},
 		WithoutHeimdall:        false,
 	}
 
-	// Create in-memory database
-	db := rawdb.NewMemoryDatabase()
-
-	// Create consensus engine - blockchainAPI can be nil for this test since
-	// we just need to verify the override client is used
-	engine, err := CreateConsensusEngine(chainConfig, ethConfig, db, nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
 	require.NoError(t, err)
-	require.NotNil(t, engine)
+	defer engine.Close()
 
-	// Verify we got a Bor engine
-	borEngine, ok := engine.(*bor.Bor)
+	_, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
-	require.NotNil(t, borEngine)
-
-	// The override client should have been passed to the Bor engine
-	// We can verify this by checking that our mock client is used
-	// when calling SetHeimdallClient (which updates the span store)
-	// This proves the override path was taken during construction
 }
 
 func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
-	// Create chain config with Bor consensus
-	chainConfig := &params.ChainConfig{
-		ChainID:             big.NewInt(137),
-		HomesteadBlock:      big.NewInt(0),
-		EIP150Block:         big.NewInt(0),
-		EIP155Block:         big.NewInt(0),
-		EIP158Block:         big.NewInt(0),
-		ByzantiumBlock:      big.NewInt(0),
-		ConstantinopleBlock: big.NewInt(0),
-		PetersburgBlock:     big.NewInt(0),
-		IstanbulBlock:       big.NewInt(0),
-		MuirGlacierBlock:    big.NewInt(0),
-		BerlinBlock:         big.NewInt(0),
-		LondonBlock:         big.NewInt(0),
-		Bor: &params.BorConfig{
-			Period:                map[string]uint64{"0": 2},
-			ProducerDelay:         map[string]uint64{"0": 4},
-			Sprint:                map[string]uint64{"0": 64},
-			BackupMultiplier:      map[string]uint64{"0": 2},
-			ValidatorContract:     "0x0000000000000000000000000000000000001000",
-			StateReceiverContract: "0x0000000000000000000000000000000000001001",
-		},
-	}
+	ethConfig := &Config{WithoutHeimdall: true}
 
-	// Create eth config without heimdall
-	ethConfig := &Config{
-		WithoutHeimdall: true,
-	}
-
-	// Create in-memory database
-	db := rawdb.NewMemoryDatabase()
-
-	// Create consensus engine
-	engine, err := CreateConsensusEngine(chainConfig, ethConfig, db, nil)
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
 	require.NoError(t, err)
-	require.NotNil(t, engine)
+	defer engine.Close()
 
-	// Verify we got a Bor engine
 	_, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 }
