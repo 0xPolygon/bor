@@ -81,6 +81,7 @@ jobs:
           repository: 0xPolygon/kurtosis-pos
           ref: hv2/tx-eip1559-gas-price-configs
 
+      # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
         uses: ./.github/actions/kurtosis-pre-run
         with:
