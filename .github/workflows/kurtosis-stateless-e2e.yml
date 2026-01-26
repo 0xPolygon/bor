@@ -74,23 +74,6 @@ jobs:
       actions: write
       id-token: write
     steps:
-      # Load images
-      - name: Download bor image
-        uses: actions/download-artifact@v4
-        with:
-          name: bor-image
-
-      - name: Download heimdall-v2 image
-        uses: actions/download-artifact@v4
-        with:
-          name: heimdall-v2-image
-
-      - name: Load bor image
-        run: gunzip -c bor-image.tar.gz | docker load
-
-      - name: Load heimdall-v2 image
-        run: gunzip -c heimdall-v2-image.tar.gz | docker load
-      
       # Set up kurtosis
       - name: Checkout kurtosis-pos
         uses: actions/checkout@v5
@@ -114,6 +97,24 @@ jobs:
       - name: Copy kurtosis config
         run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
 
+      # Load images
+      - name: Download bor image
+        uses: actions/download-artifact@v4
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 image
+        uses: actions/download-artifact@v4
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor image
+        run: gunzip -c bor-image.tar.gz | docker load
+
+      - name: Load heimdall-v2 image
+        run: gunzip -c heimdall-v2-image.tar.gz | docker load
+      
+      # Deploy kurtosis enclave
       - name: Kurtosis run
         run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
