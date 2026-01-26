@@ -301,7 +301,7 @@ func TestDeveloperModeGasParameters(t *testing.T) {
 		config := DefaultConfig()
 		config.Developer.Enabled = true
 		config.Developer.Period = 0
-		config.Sealer.TargetGasPercentage = 75      // > 0, so line 1295 true
+		config.Sealer.TargetGasPercentage = 75       // > 0, so line 1295 true
 		config.Sealer.BaseFeeChangeDenominator = 128 // > 0, so line 1301 true
 
 		server, err := CreateMockServer(config)
@@ -322,7 +322,7 @@ func TestDeveloperModeGasParameters(t *testing.T) {
 		config := DefaultConfig()
 		config.Developer.Enabled = true
 		config.Developer.Period = 0
-		config.Sealer.TargetGasPercentage = 80      // > 0, so line 1295 true
+		config.Sealer.TargetGasPercentage = 80     // > 0, so line 1295 true
 		config.Sealer.BaseFeeChangeDenominator = 0 // == 0, so line 1301 false
 
 		server, err := CreateMockServer(config)
