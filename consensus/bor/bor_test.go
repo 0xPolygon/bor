@@ -1315,6 +1315,7 @@ func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
 }
 
 func TestBor_PurgeCache(t *testing.T) {
+	t.Parallel()
 	borConfig := &params.BorConfig{
 		Period:                map[string]uint64{"0": 2},
 		ProducerDelay:         map[string]uint64{"0": 4},

@@ -1528,6 +1528,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 }
 
 func TestSpanStore_PurgeCache(t *testing.T) {
+	t.Parallel()
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
 	ctx := t.Context()

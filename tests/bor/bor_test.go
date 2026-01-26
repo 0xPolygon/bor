@@ -2590,6 +2590,7 @@ func TestLateBlockNotEmpty(t *testing.T) {
 //     (signed by validator 1, but span 1 says validator 2 should be the producer)
 //  5. The chain should rewind to block 15 and validator 2 should rebuild blocks 16+
 func TestVerifyPendingHeadersSpanRotationReorg(t *testing.T) {
+	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
 

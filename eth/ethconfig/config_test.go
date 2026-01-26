@@ -74,6 +74,7 @@ func newTestBorChainConfig() *params.ChainConfig {
 }
 
 func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
+	t.Parallel()
 	ethConfig := &Config{
 		OverrideHeimdallClient: &mockHeimdallClient{},
 		WithoutHeimdall:        false,
@@ -88,6 +89,7 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 }
 
 func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
+	t.Parallel()
 	ethConfig := &Config{WithoutHeimdall: true}
 
 	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
