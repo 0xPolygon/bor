@@ -61,6 +61,3 @@ cmd/evm/evm
 cmd/geth/geth
 cmd/rlpdump/rlpdump
 cmd/workload/workload
-
-# Claude AI assistant context
-.claude.md
