@@ -158,3 +158,136 @@ func TestConfigStateScheme(t *testing.T) {
 	_, err = config.buildEth(nil, nil)
 	assert.NoError(t, err)
 }
+
+func TestSealerTargetGasPercentageConfig(t *testing.T) {
+	t.Run("Valid custom value sets BorConfig", func(t *testing.T) {
+		testCases := []uint64{1, 50, 65, 100}
+
+		for _, targetVal := range testCases {
+			config := DefaultConfig()
+			config.Sealer.TargetGasPercentage = targetVal
+
+			assert.NoError(t, config.loadChain())
+
+			_, err := config.buildNode()
+			assert.NoError(t, err)
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+
+			assert.NotNil(t, ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+			assert.Equal(t, targetVal, *ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+		}
+	})
+
+	t.Run("Invalid value >100 returns error", func(t *testing.T) {
+		testCases := []uint64{101, 200, 1000}
+
+		for _, invalidVal := range testCases {
+			config := DefaultConfig()
+			config.Sealer.TargetGasPercentage = invalidVal
+
+			assert.NoError(t, config.loadChain())
+
+			_, err := config.buildNode()
+			assert.NoError(t, err)
+
+			_, err = config.buildEth(nil, nil)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
+		}
+	})
+}
+
+func TestSealerBaseFeeChangeDenominatorConfig(t *testing.T) {
+	t.Run("Valid custom value sets BorConfig", func(t *testing.T) {
+		testCases := []uint64{1, 8, 16, 32, 64, 128}
+
+		for _, denomVal := range testCases {
+			config := DefaultConfig()
+			config.Sealer.BaseFeeChangeDenominator = denomVal
+
+			assert.NoError(t, config.loadChain())
+
+			_, err := config.buildNode()
+			assert.NoError(t, err)
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+
+			assert.NotNil(t, ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+			assert.Equal(t, denomVal, *ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+		}
+	})
+}
+
+func TestSealerBothGasParametersConfig(t *testing.T) {
+	t.Run("Both parameters set together", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.TargetGasPercentage = 75
+		config.Sealer.BaseFeeChangeDenominator = 128
+
+		assert.NoError(t, config.loadChain())
+
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+
+		ethConfig, err := config.buildEth(nil, nil)
+		assert.NoError(t, err)
+
+		assert.NotNil(t, ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+		assert.Equal(t, uint64(75), *ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+
+		assert.NotNil(t, ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+		assert.Equal(t, uint64(128), *ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+	})
+
+	t.Run("Only TargetGasPercentage set", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.TargetGasPercentage = 80
+		config.Sealer.BaseFeeChangeDenominator = 0
+
+		assert.NoError(t, config.loadChain())
+
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+
+		ethConfig, err := config.buildEth(nil, nil)
+		assert.NoError(t, err)
+
+		assert.NotNil(t, ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+		assert.Equal(t, uint64(80), *ethConfig.Genesis.Config.Bor.TargetGasPercentage)
+	})
+
+	t.Run("Only BaseFeeChangeDenominator set", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.TargetGasPercentage = 0
+		config.Sealer.BaseFeeChangeDenominator = 256
+
+		assert.NoError(t, config.loadChain())
+
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+
+		ethConfig, err := config.buildEth(nil, nil)
+		assert.NoError(t, err)
+
+		assert.NotNil(t, ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+		assert.Equal(t, uint64(256), *ethConfig.Genesis.Config.Bor.BaseFeeChangeDenominator)
+	})
+
+	t.Run("Invalid TargetGasPercentage with valid BaseFeeChangeDenominator", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.TargetGasPercentage = 150
+		config.Sealer.BaseFeeChangeDenominator = 64
+
+		assert.NoError(t, config.loadChain())
+
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+
+		_, err = config.buildEth(nil, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
+	})
+}

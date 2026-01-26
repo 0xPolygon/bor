@@ -1213,6 +1213,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	if !c.Developer.Enabled && n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
 		// Only set if non-zero (0 means not set via CLI, use defaults from consensus)
 		if c.Sealer.TargetGasPercentage > 0 {
+			if c.Sealer.TargetGasPercentage > 100 {
+				return nil, fmt.Errorf("miner.targetGasPercentage must be between 1-100, got %d", c.Sealer.TargetGasPercentage)
+			}
 			n.Genesis.Config.Bor.TargetGasPercentage = &c.Sealer.TargetGasPercentage
 		}
 		if c.Sealer.BaseFeeChangeDenominator > 0 {
