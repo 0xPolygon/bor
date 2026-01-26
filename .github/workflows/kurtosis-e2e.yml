@@ -114,6 +114,9 @@ jobs:
       - name: Copy kurtosis config
         run: cp ./pos-workflows/.github/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
 
+      - name: Debug
+        run: docker images
+
       - name: Kurtosis run
         run: kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
 
