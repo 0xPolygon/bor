@@ -165,14 +165,13 @@ func TestCalcBaseFee(t *testing.T) {
 	}
 }
 
-// TestCalcBaseFeeDelhi assumes all blocks are 1559-blocks post Delhi Hard Fork
+// TestCalcBaseFeeDelhi assumes all blocks are 1559-blocks and uses
+// parameters post Delhi Hard Fork
 func TestCalcBaseFeeDelhi(t *testing.T) {
 	t.Parallel()
 
+	// Delhi HF kicks in at block 8
 	testConfig := copyConfig(config())
-
-	// Test Delhi Hard Fork
-	// Hard fork kicks in at block 8
 
 	tests := []struct {
 		parentBaseFee   int64
@@ -185,6 +184,41 @@ func TestCalcBaseFeeDelhi(t *testing.T) {
 		{params.InitialBaseFee, 20000000, 11000000, 1006250000},            // usage above target
 		{params.InitialBaseFee, 20000000, 20000000, 1062500000},            // usage full
 		{params.InitialBaseFee, 20000000, 0, 937500000},                    // usage 0
+
+	}
+	for i, test := range tests {
+		parent := &types.Header{
+			Number:   big.NewInt(8),
+			GasLimit: test.parentGasLimit,
+			GasUsed:  test.parentGasUsed,
+			BaseFee:  big.NewInt(test.parentBaseFee),
+		}
+		if have, want := CalcBaseFee(testConfig, parent), big.NewInt(test.expectedBaseFee); have.Cmp(want) != 0 {
+			t.Errorf("test %d: have %d  want %d, ", i, have, want)
+		}
+	}
+}
+
+// TestCalcBaseFeeBhilai assumes all blocks are 1559-blocks and uses
+// parameters post Bhilai Hard Fork
+func TestCalcBaseFeeBhilai(t *testing.T) {
+	t.Parallel()
+
+	// Bhilai HF kicks in at block 8
+	testConfig := copyConfig(config())
+	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+
+	tests := []struct {
+		parentBaseFee   int64
+		parentGasLimit  uint64
+		parentGasUsed   uint64
+		expectedBaseFee int64
+	}{
+		{params.InitialBaseFee, 20000000, 10000000, params.InitialBaseFee}, // usage == target
+		{params.InitialBaseFee, 20000000, 9000000, 998437500},              // usage below target
+		{params.InitialBaseFee, 20000000, 11000000, 1001562500},            // usage above target
+		{params.InitialBaseFee, 20000000, 20000000, 1015625000},            // usage full
+		{params.InitialBaseFee, 20000000, 0, 984375000},                    // usage 0
 
 	}
 	for i, test := range tests {

@@ -130,15 +130,14 @@ const (
 	// Introduced in Tangerine Whistle (Eip 150)
 	CreateBySelfdestructGas uint64 = 25000
 
-	BaseFeeChangeDenominatorPreDelhi   = 8  // Bounds the amount the base fee can change between blocks before Delhi Hard Fork.
+	DefaultBaseFeeChangeDenominator    = 8  // Bounds the amount the base fee can change between blocks.
 	BaseFeeChangeDenominatorPostDelhi  = 16 // Bounds the amount the base fee can change between blocks after Delhi Hard Fork.
 	BaseFeeChangeDenominatorPostBhilai = 64 // Bounds the amount the base fee can change between blocks after Bhilai Hard Fork.
 
-	ElasticityMultiplier = 2          // Bounds the maximum gas limit an EIP-1559 block may have.
-	InitialBaseFee       = 1000000000 // Initial base fee for EIP-1559 blocks.
+	DefaultElasticityMultiplier = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
+	ElasticityMultiplier        = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
 
-	DefaultBaseFeeChangeDenominator = 8 // Bounds the amount the base fee can change between blocks.
-	DefaultElasticityMultiplier     = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
+	InitialBaseFee = 1000000000 // Initial base fee for EIP-1559 blocks.
 
 	DefaultTargetGasPercentage     = 50 // Specifies target block gas as percentage of block gas limit for EIP-1559
 	TargetGasPercentagePostDandeli = 65 // Specifies target block gas as percentage of block gas limit for EIP-1559 after Dandeli hard fork

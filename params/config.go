@@ -462,6 +462,11 @@ var (
 				{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
 				{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
 			},
+			OverrideValidatorSetInRange: []BlockRangeOverrideValidatorSet{
+				{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{
+					common.HexToAddress("0x41018795fA95783117242244303fd7e26e964eE8"),
+				}},
+			},
 
 			BurntContract: map[string]string{
 				"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
@@ -869,20 +874,27 @@ type BlockRangeOverride struct {
 	Value      int    `json:"value"`
 }
 
+type BlockRangeOverrideValidatorSet struct {
+	StartBlock uint64           `json:"startBlock"`
+	EndBlock   uint64           `json:"endBlock"`
+	Validators []common.Address `json:"validators"`
+}
+
 // BorConfig is the consensus engine configs for Matic bor based sealing.
 type BorConfig struct {
-	Period                          map[string]uint64      `json:"period"`                          // Number of seconds between blocks to enforce
-	ProducerDelay                   map[string]uint64      `json:"producerDelay"`                   // Number of seconds delay between two producer interval
-	Sprint                          map[string]uint64      `json:"sprint"`                          // Epoch length to proposer
-	BackupMultiplier                map[string]uint64      `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
-	ValidatorContract               string                 `json:"validatorContract"`               // Validator set contract
-	StateReceiverContract           string                 `json:"stateReceiverContract"`           // State receiver contract
-	OverrideStateSyncRecords        map[string]int         `json:"overrideStateSyncRecords"`        // override state records count
-	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
-	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
-	BurntContract                   map[string]string      `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string      `json:"coinbase"`               // coinbase address
-	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"` // skip validator byte check
+	Period                          map[string]uint64                `json:"period"`                          // Number of seconds between blocks to enforce
+	ProducerDelay                   map[string]uint64                `json:"producerDelay"`                   // Number of seconds delay between two producer interval
+	Sprint                          map[string]uint64                `json:"sprint"`                          // Epoch length to proposer
+	BackupMultiplier                map[string]uint64                `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
+	ValidatorContract               string                           `json:"validatorContract"`               // Validator set contract
+	StateReceiverContract           string                           `json:"stateReceiverContract"`           // State receiver contract
+	OverrideStateSyncRecords        map[string]int                   `json:"overrideStateSyncRecords"`        // override state records count
+	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
+	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range
+	BlockAlloc                      map[string]interface{}           `json:"blockAlloc"`
+	BurntContract                   map[string]string                `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string                `json:"coinbase"`               // coinbase address
+	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"` // skip validator byte check
 
 	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
 	// These affect consensus gas pricing but are configurable per-node for operational flexibility
@@ -1011,19 +1023,8 @@ func (c *BorConfig) GetBaseFeeChangeDenominator(number *big.Int) uint64 {
 	} else if c.IsDelhi(number) {
 		return BaseFeeChangeDenominatorPostDelhi
 	}
-	return BaseFeeChangeDenominatorPreDelhi
+	return DefaultBaseFeeChangeDenominator
 }
-
-// // TODO: modify this function once the block number is finalized
-// func (c *BorConfig) IsNapoli(number *big.Int) bool {
-// 	if c.NapoliBlock != nil {
-// 		if c.NapoliBlock.Cmp(big.NewInt(0)) == 0 {
-// 			return false
-// 		}
-// 	}
-
-// 	return isBlockForked(c.NapoliBlock, number)
-// }
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {
 	return number%c.CalculateSprint(number) == 0
@@ -1100,6 +1101,39 @@ func (c *ChainConfig) Description() string {
 	}
 
 	banner += "\n"
+
+	// Bor-specific hard forks.
+	if c.Bor != nil {
+		banner += "Bor hard forks (block based):\n"
+		if c.Bor.JaipurBlock != nil {
+			banner += fmt.Sprintf(" - Jaipur:                      #%-8v\n", c.Bor.JaipurBlock)
+		}
+		if c.Bor.DelhiBlock != nil {
+			banner += fmt.Sprintf(" - Delhi:                       #%-8v\n", c.Bor.DelhiBlock)
+		}
+		if c.Bor.IndoreBlock != nil {
+			banner += fmt.Sprintf(" - Indore:                      #%-8v\n", c.Bor.IndoreBlock)
+		}
+		if c.Bor.AhmedabadBlock != nil {
+			banner += fmt.Sprintf(" - Ahmedabad:                   #%-8v\n", c.Bor.AhmedabadBlock)
+		}
+		if c.Bor.BhilaiBlock != nil {
+			banner += fmt.Sprintf(" - Bhilai:                      #%-8v\n", c.Bor.BhilaiBlock)
+		}
+		if c.Bor.RioBlock != nil {
+			banner += fmt.Sprintf(" - Rio:                         #%-8v\n", c.Bor.RioBlock)
+		}
+		if c.Bor.MadhugiriBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri:                   #%-8v\n", c.Bor.MadhugiriBlock)
+		}
+		if c.Bor.MadhugiriProBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri Pro:               #%-8v\n", c.Bor.MadhugiriProBlock)
+		}
+		if c.Bor.DandeliBlock != nil {
+			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		return banner
+	}
 
 	// Create a list of forks with a short description of them. Forks that only
 	// makes sense for mainnet should be optional at printing to avoid bloating

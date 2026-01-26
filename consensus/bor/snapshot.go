@@ -136,7 +136,7 @@ func (s *Snapshot) apply(headers []*types.Header, c *Bor) (*Snapshot, error) {
 		}
 
 		// check if signer is in validator set
-		if !snap.ValidatorSet.HasAddress(signer) && !isPartOfVeBlopSet(signer, number) {
+		if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, number) {
 			return nil, &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 		}
 
@@ -191,7 +191,7 @@ func (s *Snapshot) GetSignerSuccessionNumber(signer common.Address) (int, error)
 
 	signerIndex, _ := s.ValidatorSet.GetByAddress(signer)
 
-	if signerIndex == -1 && !isPartOfVeBlopSet(signer, s.Number) {
+	if signerIndex == -1 && !s.isAllowedByValidatorSetOverride(signer, s.Number) {
 		return -1, &UnauthorizedSignerError{s.Number, signer.Bytes(), s.ValidatorSet.Validators}
 	}
 
@@ -236,4 +236,33 @@ func Difficulty(validatorSet *valset.ValidatorSet, signer common.Address) uint64
 	}
 
 	return uint64(totalValidators - (tempIndex - proposerIndex))
+}
+
+func (s *Snapshot) isAllowedByValidatorSetOverride(addr common.Address, blockNumber uint64) bool {
+	if s.chainConfig == nil || s.chainConfig.Bor == nil {
+		return false
+	}
+
+	overrides := s.chainConfig.Bor.OverrideValidatorSetInRange
+	if len(overrides) == 0 {
+		return false
+	}
+
+	for _, o := range overrides {
+		// Check block range (inclusive)
+		if blockNumber < o.StartBlock || blockNumber > o.EndBlock {
+			continue
+		}
+
+		// Block is within override range, check if signer is allowed
+		for _, v := range o.Validators {
+			if v == addr {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	return false
 }

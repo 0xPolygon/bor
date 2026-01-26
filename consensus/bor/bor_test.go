@@ -15,6 +15,11 @@ import (
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil" //nolint:typecheck
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
+	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -29,15 +34,24 @@ import (
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
+	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 )
 
 // fakeSpanner implements Spanner for tests
 type fakeSpanner struct {
-	vals []*valset.Validator
+	vals             []*valset.Validator
+	shouldFailCommit bool
+	spanEndBlock     uint64
+	spanID           uint64
 }
 
 func (s *fakeSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Hash, st *state.StateDB) (*borTypes.Span, error) {
-	return &borTypes.Span{Id: 0, StartBlock: 0, EndBlock: 255}, nil
+	endBlock := s.spanEndBlock
+	if endBlock == 0 {
+		endBlock = 255
+	}
+	spanID := s.spanID
+	return &borTypes.Span{Id: spanID, StartBlock: 0, EndBlock: endBlock}, nil
 }
 func (s *fakeSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error) {
 	return s.vals, nil
@@ -46,7 +60,56 @@ func (s *fakeSpanner) GetCurrentValidatorsByBlockNrOrHash(ctx context.Context, _
 	return s.vals, nil
 }
 func (s *fakeSpanner) CommitSpan(ctx context.Context, _ borTypes.Span, _ []stakeTypes.MinimalVal, _ []stakeTypes.MinimalVal, _ vm.StateDB, _ *types.Header, _ core.ChainContext) error {
+	if s.shouldFailCommit {
+		return errors.New("span commit failed")
+	}
 	return nil
+}
+
+// failingHeimdallClient simulates HeimdallClient failures
+type failingHeimdallClient struct{}
+
+// failingGenesisContract simulates GenesisContract failures
+type failingGenesisContract struct{}
+
+func (f *failingGenesisContract) CommitState(event *clerk.EventRecordWithTime, state vm.StateDB, header *types.Header, chCtx statefull.ChainContext) (uint64, error) {
+	return 0, errors.New("commit state failed")
+}
+
+func (f *failingGenesisContract) LastStateId(arg0 *state.StateDB, number uint64, hash common.Hash) (*big.Int, error) {
+	return nil, errors.New("last state id failed")
+}
+
+func (f *failingHeimdallClient) Close() {}
+func (f *failingHeimdallClient) FetchStateSyncEvents(ctx context.Context, fromID uint64, to int64, limit int) ([]*types.StateSyncData, error) {
+	return nil, errors.New("state sync failed")
+}
+func (f *failingHeimdallClient) FetchStateSyncEvent(ctx context.Context, id uint64) (*types.StateSyncData, error) {
+	return nil, errors.New("state sync failed")
+}
+func (f *failingHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, errors.New("state sync failed")
+}
+func (f *failingHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
+	return nil, errors.New("get span failed")
+}
+func (f *failingHeimdallClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
+	return nil, errors.New("get latest span failed")
+}
+func (f *failingHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+	return nil, errors.New("fetch checkpoint failed")
+}
+func (f *failingHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
+	return 0, errors.New("fetch checkpoint count failed")
+}
+func (f *failingHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+	return nil, errors.New("fetch milestone failed")
+}
+func (f *failingHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	return 0, errors.New("fetch milestone count failed")
+}
+func (f *failingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	return nil, errors.New("fetch status failed")
 }
 
 // newChainAndBorForTest centralizes common Bor + HeaderChain initialization for tests
@@ -68,6 +131,7 @@ func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, d
 		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
 	)
 	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String())
+	b.SetSpanner(sp)
 	// set a default authorized signer to prevent nil deref in snapshot
 	b.authorizedSigner.Store(&signer{signer: common.Address{}, signFn: func(_ accounts.Account, _ string, _ []byte) ([]byte, error) {
 		return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
@@ -943,5 +1007,309 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
 		require.False(t, header.ActualTime.IsZero())
 		require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMin)
+	})
+}
+
+// setupFinalizeTest creates a test environment for FinalizeAndAssemble tests
+func setupFinalizeTest(t *testing.T, borCfg *params.BorConfig, addr common.Address) (*core.BlockChain, *Bor, *types.Header, *state.StateDB) {
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, uint64(time.Now().Unix()))
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+
+	db := rawdb.NewMemoryDatabase()
+	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
+	require.NoError(t, err)
+
+	return chain, b, genesis, statedb
+}
+
+// createTestHeader creates a test header with the given parameters
+func createTestHeader(genesis *types.Header, blockNum uint64, period uint64) *types.Header {
+	return &types.Header{
+		Number:     big.NewInt(int64(blockNum)),
+		ParentHash: genesis.Hash(),
+		Time:       genesis.Time + period*blockNum,
+		GasLimit:   genesis.GasLimit,
+	}
+}
+
+func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	t.Run("commit time increases with state size", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(1000000),
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		// Add some state changes to increase commit time
+		testAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+		for i := 0; i < 100; i++ {
+			statedb.SetState(testAddr, common.BigToHash(big.NewInt(int64(i))), common.BigToHash(big.NewInt(int64(i*2))))
+		}
+		statedb.AddBalance(testAddr, uint256.NewInt(1000000), 0)
+
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		// Call FinalizeAndAssemble and ensure commit time is measured
+		_, _, commitTime, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.NoError(t, err)
+		require.Greater(t, commitTime, time.Duration(0), "commitTime should be positive with state changes")
+	})
+
+	t.Run("rejects withdrawals", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		// Try to finalize with withdrawals - should fail
+		_, _, _, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{
+				Transactions: nil,
+				Uncles:       nil,
+				Withdrawals:  []*types.Withdrawal{{Validator: 1, Address: addr1, Amount: 100}},
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, consensus.ErrUnexpectedWithdrawals)
+	})
+
+	t.Run("rejects withdrawals hash in header", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		withdrawalsHash := common.Hash{0x01}
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+		header.WithdrawalsHash = &withdrawalsHash
+
+		// Try to finalize with withdrawals hash - should fail
+		_, _, _, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, consensus.ErrUnexpectedWithdrawals)
+	})
+
+	t.Run("rejects requests hash in header", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		requestsHash := common.Hash{0x02}
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+		header.RequestsHash = &requestsHash
+
+		// Try to finalize with requests hash - should fail
+		_, _, _, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
+	})
+
+	t.Run("non-sprint block skips span check", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 16}, // Sprint of 16 blocks
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(1000000),
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		// Block 15 is NOT a sprint start (15 % 16 != 0), so span check is skipped
+		header := createTestHeader(genesis, 15, borCfg.Period["0"])
+
+		// Call FinalizeAndAssemble - should skip span check
+		_, _, commitTime, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, commitTime, time.Duration(0))
+	})
+
+	t.Run("madhugiri fork processes blocks", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			MadhugiriBlock: big.NewInt(0), // Enable Madhugiri from start
+			RioBlock:       big.NewInt(1000000),
+		}
+		chain, b, genesis, statedb := setupFinalizeTest(t, borCfg, addr1)
+
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		// Provide empty receipts (non-nil)
+		inputReceipts := []*types.Receipt{}
+
+		// Call FinalizeAndAssemble with Madhugiri enabled
+		block, outputReceipts, commitTime, err := b.FinalizeAndAssemble(
+			chain,
+			header,
+			statedb,
+			&types.Body{Transactions: nil, Uncles: nil},
+			inputReceipts,
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, block)
+		require.NotNil(t, outputReceipts)
+		require.GreaterOrEqual(t, commitTime, time.Duration(0))
+	})
+
+	t.Run("span commit failure triggers error path", func(t *testing.T) {
+		// Test line 1219: checkAndCommitSpan error
+		configData := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(math.MaxInt64), // Rio disabled
+		}
+
+		spannerWithError := &fakeSpanner{
+			vals:             []*valset.Validator{{Address: addr1, VotingPower: 100}},
+			shouldFailCommit: true,
+			spanEndBlock:     127, // EndBlock - 64 + 1 == 64 => EndBlock == 127 to trigger needToCommitSpan
+			spanID:           1,   // Use Id: 1 to avoid the 0th span skip logic
+		}
+		blockchain, borInstance := newChainAndBorForTest(t, spannerWithError, configData, true, addr1, uint64(time.Now().Unix()))
+
+		genesisHdr := blockchain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesisHdr)
+
+		memDB := rawdb.NewMemoryDatabase()
+		stateDatabase, initErr := state.New(genesisHdr.Root, state.NewDatabase(triedb.NewDatabase(memDB, triedb.HashDefaults), nil))
+		require.NoError(t, initErr)
+
+		// Block 64 is sprint start (64 % 64 == 0)
+		testHeader := createTestHeader(genesisHdr, 64, configData.Period["0"])
+
+		// FinalizeAndAssemble should fail due to span commit error
+		_, _, _, finalizeErr := borInstance.FinalizeAndAssemble(
+			blockchain,
+			testHeader,
+			stateDatabase,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.Error(t, finalizeErr)
+		require.Contains(t, finalizeErr.Error(), "span commit failed")
+	})
+
+	t.Run("state sync commit failure returns error", func(t *testing.T) {
+		// Test line 1228: CommitStates error
+		cfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 16},
+			Period:   map[string]uint64{"0": 1},
+			RioBlock: big.NewInt(math.MaxInt64),
+		}
+
+		validatorAddr := common.HexToAddress("0x9")
+		spannerObj := &fakeSpanner{vals: []*valset.Validator{{Address: validatorAddr, VotingPower: 100}}}
+
+		// Create Bor with failing genesis contract
+		ch, borEngine := newChainAndBorForTest(t, spannerObj, cfg, true, validatorAddr, uint64(time.Now().Unix()))
+		borEngine.HeimdallClient = &failingHeimdallClient{}
+		borEngine.GenesisContractsClient = &failingGenesisContract{}
+
+		genesisBlock := ch.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesisBlock)
+
+		database := rawdb.NewMemoryDatabase()
+		stateObj, stateErr := state.New(genesisBlock.Root, state.NewDatabase(triedb.NewDatabase(database, triedb.HashDefaults), nil))
+		require.NoError(t, stateErr)
+
+		// Block 16 is sprint start
+		hdr := createTestHeader(genesisBlock, 16, cfg.Period["0"])
+
+		// Should fail during CommitStates when calling LastStateId
+		_, _, _, executionErr := borEngine.FinalizeAndAssemble(
+			ch,
+			hdr,
+			stateObj,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.Error(t, executionErr)
+		require.Contains(t, executionErr.Error(), "last state id failed")
+	})
+
+	t.Run("contract code change failure halts finalization", func(t *testing.T) {
+		// Test line 1235: changeContractCodeIfNeeded error
+		borConfiguration := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+			BlockAlloc: map[string]interface{}{
+				"5": "invalid-json-data", // This will cause decode error
+			},
+			RioBlock: big.NewInt(math.MaxInt64),
+		}
+
+		accountAddr := common.HexToAddress("0xBEEF")
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: accountAddr, VotingPower: 50}}}
+		blockchainObj, borObj := newChainAndBorForTest(t, sp, borConfiguration, true, accountAddr, uint64(time.Now().Unix()))
+
+		genesisHeader := blockchainObj.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesisHeader)
+
+		db := rawdb.NewMemoryDatabase()
+		stateDatabase, dbErr := state.New(genesisHeader.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
+		require.NoError(t, dbErr)
+
+		// Block 5 has invalid BlockAlloc which triggers decode error
+		headerObj := createTestHeader(genesisHeader, 5, borConfiguration.Period["0"])
+
+		// FinalizeAndAssemble should fail during changeContractCodeIfNeeded
+		_, _, _, processingErr := borObj.FinalizeAndAssemble(
+			blockchainObj,
+			headerObj,
+			stateDatabase,
+			&types.Body{Transactions: nil, Uncles: nil},
+			nil,
+		)
+
+		require.Error(t, processingErr)
+		require.Contains(t, processingErr.Error(), "failed to decode genesis alloc")
 	})
 }
