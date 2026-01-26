@@ -60,6 +60,8 @@ type stateObject struct {
 	originStorage  Storage // Storage entries that have been accessed within the current block
 	dirtyStorage   Storage // Storage entries that have been modified within the current transaction
 	pendingStorage Storage // Storage entries that have been modified within the current block
+	// originStorageDepth stores the lookup-path depth for accessed slots.
+	originStorageDepth map[common.Hash]uint64
 
 	// uncommittedStorage tracks a set of storage entries that have been modified
 	// but not yet committed since the "last commit operation", along with their
@@ -112,6 +114,7 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		origin:             origin,
 		data:               *acct,
 		originStorage:      make(Storage),
+		originStorageDepth: make(map[common.Hash]uint64),
 		dirtyStorage:       make(Storage),
 		pendingStorage:     make(Storage),
 		uncommittedStorage: make(Storage),
@@ -204,6 +207,13 @@ func (s *stateObject) GetState(key common.Hash) common.Hash {
 	return value
 }
 
+// GetStateWithDepth retrieves a value associated with the given storage key,
+// along with the depth (number of nodes traversed) used to resolve it.
+func (s *stateObject) GetStateWithDepth(key common.Hash) (common.Hash, uint64) {
+	value, depth := s.getStateWithDepth(key)
+	return value, depth
+}
+
 // getState retrieves a value associated with the given storage key, along with
 // its original value.
 func (s *stateObject) getState(key common.Hash) (common.Hash, common.Hash) {
@@ -215,18 +225,56 @@ func (s *stateObject) getState(key common.Hash) (common.Hash, common.Hash) {
 	return origin, origin
 }
 
+// getStateWithDepth retrieves a value associated with the given storage key,
+// along with the depth of the lookup path.
+func (s *stateObject) getStateWithDepth(key common.Hash) (common.Hash, uint64) {
+	origin, depth := s.GetCommittedStateWithDepth(key)
+	value, dirty := s.dirtyStorage[key]
+	if dirty {
+		return value, depth
+	}
+	return origin, depth
+}
+
+func (s *stateObject) getCachedStateDepth(key common.Hash) uint64 {
+	s.storageMutex.Lock()
+	defer s.storageMutex.Unlock()
+	if depth, ok := s.originStorageDepth[key]; ok {
+		return depth
+	}
+	return 0
+}
+
 // GetCommittedState retrieves the value associated with the specific key
 // without any mutations caused in the current execution.
 func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
+	value, _ := s.GetCommittedStateWithDepth(key)
+	return value
+}
+
+// GetCommittedStateWithDepth retrieves the value associated with the specific key
+// without any mutations caused in the current execution, along with the depth
+// of the lookup path.
+func (s *stateObject) GetCommittedStateWithDepth(key common.Hash) (common.Hash, uint64) {
 	s.storageMutex.Lock()
 	defer s.storageMutex.Unlock()
 	// If we have a pending write or clean cached, return that
 	if value, pending := s.pendingStorage[key]; pending {
-		return value
+		return value, s.originStorageDepth[key]
 	}
 
 	if value, cached := s.originStorage[key]; cached {
-		return value
+		if depth, ok := s.originStorageDepth[key]; ok {
+			return value, depth
+		}
+		// Depth missing, resolve it from trie without altering the cached value.
+		depth, err := s.resolveStorageDepth(key)
+		if err != nil {
+			log.Error("Failed to resolve storage slot depth", "address", s.address, "err", err)
+			return value, 0
+		}
+		s.originStorageDepth[key] = depth
+		return value, depth
 	}
 
 	// If the object was destructed in *this* block (and potentially resurrected),
@@ -236,16 +284,17 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	//      have been handles via pendingStorage above.
 	//   2) we don't have new values, and can deliver empty response back
 	if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
-		s.originStorage[key] = common.Hash{} // track the empty slot as origin value
-		return common.Hash{}
+		s.originStorage[key] = common.Hash{}      // track the empty slot as origin value
+		s.originStorageDepth[key] = 0            // depth is undefined for cleared storage
+		return common.Hash{}, 0
 	}
 	s.db.StorageLoaded++
 
 	start := time.Now()
-	value, err := s.db.reader.Storage(s.address, key)
+	value, depth, err := s.resolveStorageWithDepth(key)
 	if err != nil {
 		s.db.setError(err)
-		return common.Hash{}
+		return common.Hash{}, 0
 	}
 	s.db.StorageReads += time.Since(start)
 
@@ -256,8 +305,28 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		}
 	}
 	s.originStorage[key] = value
+	s.originStorageDepth[key] = depth
 
-	return value
+	return value, depth
+}
+
+func (s *stateObject) resolveStorageWithDepth(key common.Hash) (common.Hash, uint64, error) {
+	tr, err := s.getTrie()
+	if err != nil {
+		return common.Hash{}, 0, err
+	}
+	ret, depth, err := tr.GetStorage(s.address, key.Bytes())
+	if err != nil {
+		return common.Hash{}, 0, err
+	}
+	var value common.Hash
+	value.SetBytes(ret)
+	return value, depth, nil
+}
+
+func (s *stateObject) resolveStorageDepth(key common.Hash) (uint64, error) {
+	_, depth, err := s.resolveStorageWithDepth(key)
+	return depth, err
 }
 
 // SetState updates a value in account storage.
@@ -542,6 +611,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 		data:                     s.data,
 		code:                     s.code,
 		originStorage:            s.originStorage.Copy(),
+		originStorageDepth:       copyDepthMap(s.originStorageDepth),
 		pendingStorage:           s.pendingStorage.Copy(),
 		dirtyStorage:             s.dirtyStorage.Copy(),
 		uncommittedStorage:       s.uncommittedStorage.Copy(),
@@ -555,6 +625,17 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 		obj.trie = mustCopyTrie(s.trie)
 	}
 	return obj
+}
+
+func copyDepthMap(src map[common.Hash]uint64) map[common.Hash]uint64 {
+	if len(src) == 0 {
+		return make(map[common.Hash]uint64)
+	}
+	dst := make(map[common.Hash]uint64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 //

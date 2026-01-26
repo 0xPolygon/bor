@@ -110,21 +110,21 @@ func testMissingNode(t *testing.T, memonly bool, scheme string) {
 
 	trie, _ = New(TrieID(root), triedb)
 
-	_, err := trie.Get([]byte("120000"))
+	_, _, err := trie.Get([]byte("120000"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
 	trie, _ = New(TrieID(root), triedb)
 
-	_, err = trie.Get([]byte("120099"))
+	_, _, err = trie.Get([]byte("120099"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
 	trie, _ = New(TrieID(root), triedb)
 
-	_, err = trie.Get([]byte("123456"))
+	_, _, err = trie.Get([]byte("123456"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -160,15 +160,15 @@ func testMissingNode(t *testing.T, memonly bool, scheme string) {
 		rawdb.DeleteTrieNode(diskdb, common.Hash{}, path, hash, scheme)
 	}
 
-	_, err = trie.Get([]byte("120000"))
+	_, _, err = trie.Get([]byte("120000"))
 	if _, ok := err.(*MissingNodeError); !ok {
 		t.Errorf("Wrong error: %v", err)
 	}
-	_, err = trie.Get([]byte("120099"))
+	_, _, err = trie.Get([]byte("120099"))
 	if _, ok := err.(*MissingNodeError); !ok {
 		t.Errorf("Wrong error: %v", err)
 	}
-	_, err = trie.Get([]byte("123456"))
+	_, _, err = trie.Get([]byte("123456"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -1520,7 +1520,7 @@ func testTrieCopyOldTrie(t *testing.T, entries []kv) {
 	// Traverse the original tree, the changes made on the copy one shouldn't
 	// affect the old one
 	for _, entry := range entries {
-		d, _ := tr.Get(entry.k)
+		d, _, _ := tr.Get(entry.k)
 		if !bytes.Equal(d, entry.v) {
 			t.Errorf("Unexpected data, key: %v, want: %v, got: %v", entry.k, entry.v, d)
 		}
@@ -1569,7 +1569,7 @@ func testTrieCopyNewTrie(t *testing.T, entries []kv) {
 	// Traverse the original tree, the changes made on the copy one shouldn't
 	// affect the old one
 	for _, entry := range entries {
-		d, _ := trCpy.Get(entry.k)
+		d, _, _ := trCpy.Get(entry.k)
 		if !bytes.Equal(d, entry.v) {
 			t.Errorf("Unexpected data, key: %v, want: %v, got: %v", entry.k, entry.v, d)
 		}

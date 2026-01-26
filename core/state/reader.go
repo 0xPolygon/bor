@@ -325,7 +325,7 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 			r.muSubTries.Unlock()
 		}
 	}
-	ret, err := tr.GetStorage(addr, key.Bytes())
+	ret, _, err := tr.GetStorage(addr, key.Bytes())
 	if err != nil {
 		return common.Hash{}, err
 	}

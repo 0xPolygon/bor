@@ -93,7 +93,7 @@ func updateAccount(ctx *context, db database.NodeDatabase, addr common.Address) 
 	}
 	// The account may or may not existent in post-state, try to
 	// load it and decode if it's found.
-	blob, err := ctx.accountTrie.Get(addrHash.Bytes())
+	blob, _, err := ctx.accountTrie.Get(addrHash.Bytes())
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func updateAccount(ctx *context, db database.NodeDatabase, addr common.Address) 
 func deleteAccount(ctx *context, db database.NodeDatabase, addr common.Address) error {
 	// The account must be existent in post-state, load the account.
 	addrHash := crypto.Keccak256Hash(addr.Bytes())
-	blob, err := ctx.accountTrie.Get(addrHash.Bytes())
+	blob, _, err := ctx.accountTrie.Get(addrHash.Bytes())
 	if err != nil {
 		return err
 	}

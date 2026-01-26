@@ -298,6 +298,11 @@ type StorageVal[T any] struct {
 	Value *T
 }
 
+type stateWithDepth struct {
+	value common.Hash
+	depth uint64
+}
+
 func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *StateDB) T) (v T) {
 	if s.mvHashmap == nil {
 		return readStorage(s)
@@ -722,11 +727,37 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	return MVRead(s, blockstm.NewStateKey(addr, hash), common.Hash{}, func(s *StateDB) common.Hash {
 		stateObject := s.getStateObject(addr)
 		if stateObject != nil {
-			return stateObject.GetState(hash)
+			value, _ := stateObject.GetStateWithDepth(hash)
+			return value
 		}
 
 		return common.Hash{}
 	})
+}
+
+// GetStateDepth returns the cached depth (number of nodes traversed) for a
+// previously accessed storage slot, or 0 if not available.
+func (s *StateDB) GetStateDepth(addr common.Address, hash common.Hash) uint64 {
+	stateObject := s.getStateObject(addr)
+	if stateObject == nil {
+		return 0
+	}
+	return stateObject.getCachedStateDepth(hash)
+}
+
+// GetStateWithDepth retrieves the value associated with the specific key along
+// with the depth (number of nodes traversed) used to resolve it.
+func (s *StateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (common.Hash, uint64) {
+	res := MVRead(s, blockstm.NewStateKey(addr, hash), stateWithDepth{}, func(s *StateDB) stateWithDepth {
+		stateObject := s.getStateObject(addr)
+		if stateObject != nil {
+			value, depth := stateObject.GetStateWithDepth(hash)
+			return stateWithDepth{value: value, depth: depth}
+		}
+
+		return stateWithDepth{}
+	})
+	return res.value, res.depth
 }
 
 // GetCommittedState retrieves the value associated with the specific key

@@ -34,11 +34,21 @@ import (
 const (
 	// storageTrieLogStepGas is the gas charged per logarithmic step.
 	// 0 disables trie-size charging.
-	storageTrieLogStepGas uint64 = 1
+	storageTrieLogStepGas uint64 = 0
 
 	// storageTrieFreeBytes is the size (in NodeBlob-bytes) below which no extra
 	// gas is charged.
-	storageTrieFreeBytes uint64 = 256 * 1024
+	storageTrieFreeBytes uint64 = 1024
+
+	// storageTrieDepthStepGas is the gas charged per trie-level when accessing a
+	// particular storage slot. 0 disables depth-based charging.
+	//
+	// This is experimental and potentially expensive, since it may require a trie
+	// traversal to measure the canonical lookup-path node count.
+	storageTrieDepthStepGas uint64 = 0
+
+	// storageTrieDepthFreeLevels is the number of trie levels that are free.
+	storageTrieDepthFreeLevels uint64 = 0
 )
 
 // chargeStorageTrieGas returns additional gas to charge based on the storage
@@ -62,6 +72,18 @@ func chargeStorageTrieGas(evm *EVM, storageOwner common.Address) uint64 {
 	return steps * storageTrieLogStepGas
 }
 
+// storageTrieDepthSurcharge returns additional gas to charge based on how deep
+// in the storage trie a particular slot access traversed.
+func storageTrieDepthSurcharge(depth uint64) uint64 {
+	if storageTrieDepthStepGas == 0 {
+		return 0
+	}
+	if depth <= storageTrieDepthFreeLevels {
+		return 0
+	}
+	return (depth - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+}
+
 func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 		// If we fail the minimum gas availability invariant, fail (0)
@@ -69,11 +91,11 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			return 0, errors.New("not enough gas for reentrancy sentry")
 		}
 		// Optional extra gas based on storage trie size (disabled by default).
+		slot := common.Hash(stack.peek().Bytes32())
 		extra := chargeStorageTrieGas(evm, contract.Address())
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
 			y, x    = stack.Back(1), stack.peek()
-			slot    = common.Hash(x.Bytes32())
 			current = evm.StateDB.GetState(contract.Address(), slot)
 			cost    = uint64(0)
 		)

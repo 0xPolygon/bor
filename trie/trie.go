@@ -142,7 +142,7 @@ func (t *Trie) NodeIterator(start []byte) (NodeIterator, error) {
 // MustGet is a wrapper of Get and will omit any encountered error but just
 // print out an error message.
 func (t *Trie) MustGet(key []byte) []byte {
-	res, err := t.Get(key)
+	res, _, err := t.Get(key)
 	if err != nil {
 		log.Error("Unhandled trie error in Trie.Get", "err", err)
 	}
@@ -150,62 +150,65 @@ func (t *Trie) MustGet(key []byte) []byte {
 	return res
 }
 
-// Get returns the value for key stored in the trie.
+// Get returns the value for key stored in the trie along with the depth
+// (number of nodes traversed on the canonical lookup path).
 // The value bytes must not be modified by the caller.
 //
 // If the requested node is not present in trie, no error will be returned.
 // If the trie is corrupted, a MissingNodeError is returned.
-func (t *Trie) Get(key []byte) ([]byte, error) {
+func (t *Trie) Get(key []byte) ([]byte, uint64, error) {
 	// Short circuit if the trie is already committed and not usable.
 	if t.committed {
-		return nil, ErrCommitted
+		return nil, 0, ErrCommitted
 	}
-	value, newroot, didResolve, err := t.get(t.root, keybytesToHex(key), 0)
+	value, newroot, didResolve, depth, err := t.get(t.root, keybytesToHex(key), 0)
 	if err == nil && didResolve {
 		t.root = newroot
 	}
 
-	return value, err
+	return value, depth, err
 }
 
-func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, err error) {
+func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, depth uint64, err error) {
 	switch n := (origNode).(type) {
 	case nil:
-		return nil, nil, false, nil
+		return nil, nil, false, 0, nil
 	case valueNode:
-		return n, n, false, nil
+		return n, n, false, 1, nil
 	case *shortNode:
 		if !bytes.HasPrefix(key[pos:], n.Key) {
 			// key not found in trie
-			return nil, n, false, nil
+			return nil, n, false, 1, nil
 		}
 
-		value, newnode, didResolve, err = t.get(n.Val, key, pos+len(n.Key))
+		value, newnode, didResolve, childDepth, err := t.get(n.Val, key, pos+len(n.Key))
 		if err == nil && didResolve {
 			n.Val = newnode
 		}
 
-		return value, n, didResolve, err
+		return value, n, didResolve, 1 + childDepth, err
 	case *fullNode:
-		value, newnode, didResolve, err = t.get(n.Children[key[pos]], key, pos+1)
+		value, newnode, didResolve, childDepth, err := t.get(n.Children[key[pos]], key, pos+1)
 		if err == nil && didResolve {
 			n.Children[key[pos]] = newnode
 		}
 
-		return value, n, didResolve, err
+		return value, n, didResolve, 1 + childDepth, err
 	case hashNode:
 		child, err := t.resolveAndTrack(n, key[:pos])
 		if err != nil {
-			return nil, n, true, err
+			return nil, n, true, 0, err
 		}
 
-		value, newnode, _, err := t.get(child, key, pos)
+		value, newnode, _, childDepth, err := t.get(child, key, pos)
 
-		return value, newnode, true, err
+		return value, newnode, true, childDepth, err
 	default:
 		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
 	}
 }
+
+
 
 // MustGetNode is a wrapper of GetNode and will omit any encountered error but
 // just print out an error message.

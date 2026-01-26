@@ -93,6 +93,14 @@ func (s *hookedStateDB) GetState(addr common.Address, hash common.Hash) common.H
 	return s.inner.GetState(addr, hash)
 }
 
+func (s *hookedStateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (common.Hash, uint64) {
+	return s.inner.GetStateWithDepth(addr, hash)
+}
+
+func (s *hookedStateDB) GetStateDepth(addr common.Address, hash common.Hash) uint64 {
+	return s.inner.GetStateDepth(addr, hash)
+}
+
 func (s *hookedStateDB) GetStorageRoot(addr common.Address) common.Hash {
 	return s.inner.GetStorageRoot(addr)
 }
