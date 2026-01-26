@@ -75,7 +75,7 @@ func (s *RelayService) GetPrivateTxGetter() PrivateTxGetter {
 
 func (s *RelayService) SetchainEventSubFn(fn func(ch chan<- core.ChainEvent) event.Subscription) {
 	if s.privateTxStore != nil {
-		s.privateTxStore.chainEventSubFn = fn
+		s.privateTxStore.SetchainEventSubFn(fn)
 	}
 }
 

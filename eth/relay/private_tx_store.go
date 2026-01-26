@@ -36,7 +36,8 @@ type PrivateTxStore struct {
 
 func NewPrivateTxStore() *PrivateTxStore {
 	store := &PrivateTxStore{
-		txs: make(map[common.Hash]time.Time),
+		txs:     make(map[common.Hash]time.Time),
+		closeCh: make(chan struct{}),
 	}
 	go store.report()
 	return store
