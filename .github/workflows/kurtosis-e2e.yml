@@ -78,22 +78,19 @@ jobs:
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
       - name: Build bor docker image
-        run: |
-          cd bor
-          docker build -t bor:local --file Dockerfile .
+        working-directory: bor
+        run: docker build -t bor:local --file Dockerfile .
 
       - name: Build heimdall-v2 docker image
-        run: |
-          cd heimdall-v2
-          docker build -t heimdall-v2:local --file Dockerfile .
+        working-directory: heimdall-v2
+        run: docker build -t heimdall-v2:local --file Dockerfile .
 
       - name: Copy kurtosis config
         run: cp ./pos-workflows/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
 
       - name: Kurtosis run
-        run: |
-          cd kurtosis-pos
-          kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+        working-directory: kurtosis-pos
+        run: kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
@@ -102,12 +99,10 @@ jobs:
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
 
       - name: Run RPC tests
+        working-directory: pos-workflows/tests/rpc_tests
         run: |
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
-
-          cd pos-workflows/tests/rpc_tests
-          go mod tidy
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
       - name: Run smoke tests (Checkpoints and Milestones)

@@ -73,30 +73,26 @@ jobs:
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
       - name: Build bor docker image
-        run: |
-          cd bor
-          docker build -t bor:local --file Dockerfile .
+        working-directory: bor
+        run: docker build -t bor:local --file Dockerfile .
 
       - name: Build heimdall-v2 docker image
-        run: |
-          cd heimdall-v2
-          docker build -t heimdall-v2:local --file Dockerfile .
+        working-directory: heimdall-v2
+        run: docker build -t heimdall-v2:local --file Dockerfile .
 
       - name: Copy kurtosis config
         run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
 
       - name: Kurtosis run
-        run: |
-          cd kurtosis-pos
-          kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
+        working-directory: kurtosis-pos
+        run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Run stateless sync tests
-        run: |
-          cd pos-workflows
-          bash tests/stateless_tests/kurtosis_stateless_test.sh
+        working-directory: pos-workflows
+        run: bash tests/stateless_tests/kurtosis_stateless_test.sh
 
       - name: Test state syncs (post VeBlop HF)
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
