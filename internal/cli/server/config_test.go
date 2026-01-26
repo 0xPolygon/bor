@@ -291,3 +291,83 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
 	})
 }
+
+// TestDeveloperModeGasParameters tests the developer mode specific code path
+// for setting TargetGasPercentage and BaseFeeChangeDenominator (lines 1293-1304 in config.go).
+// The default config uses mainnet which has Bor config, so these tests actually execute lines 1293-1304.
+func TestDeveloperModeGasParameters(t *testing.T) {
+	t.Run("Scenario 1: Both TargetGasPercentage > 0 AND BaseFeeChangeDenominator > 0", func(t *testing.T) {
+		// Tests lines 1295-1300 AND 1301-1303 both execute
+		config := DefaultConfig()
+		config.Developer.Enabled = true
+		config.Developer.Period = 0
+		config.Sealer.TargetGasPercentage = 75      // > 0, so line 1295 true
+		config.Sealer.BaseFeeChangeDenominator = 128 // > 0, so line 1301 true
+
+		server, err := CreateMockServer(config)
+		assert.NoError(t, err)
+		defer CloseMockServer(server)
+
+		// Mainnet config has Bor, so lines 1295-1303 execute and set both values
+		chainConfig := server.backend.BlockChain().GetChainConfig()
+		assert.NotNil(t, chainConfig.Bor)
+		assert.NotNil(t, chainConfig.Bor.TargetGasPercentage)
+		assert.Equal(t, uint64(75), *chainConfig.Bor.TargetGasPercentage)
+		assert.NotNil(t, chainConfig.Bor.BaseFeeChangeDenominator)
+		assert.Equal(t, uint64(128), *chainConfig.Bor.BaseFeeChangeDenominator)
+	})
+
+	t.Run("Scenario 2: Only TargetGasPercentage > 0, BaseFeeChangeDenominator == 0", func(t *testing.T) {
+		// Tests line 1295 true (executes), line 1301 false (skips)
+		config := DefaultConfig()
+		config.Developer.Enabled = true
+		config.Developer.Period = 0
+		config.Sealer.TargetGasPercentage = 80      // > 0, so line 1295 true
+		config.Sealer.BaseFeeChangeDenominator = 0 // == 0, so line 1301 false
+
+		server, err := CreateMockServer(config)
+		assert.NoError(t, err)
+		defer CloseMockServer(server)
+
+		chainConfig := server.backend.BlockChain().GetChainConfig()
+		assert.NotNil(t, chainConfig.Bor)
+		// Line 1299 sets TargetGasPercentage
+		assert.NotNil(t, chainConfig.Bor.TargetGasPercentage)
+		assert.Equal(t, uint64(80), *chainConfig.Bor.TargetGasPercentage)
+		// Line 1301 condition is false, so BaseFeeChangeDenominator uses default from chain
+		// (not nil, but not set by our config)
+	})
+
+	t.Run("Scenario 3: TargetGasPercentage == 0, only BaseFeeChangeDenominator > 0", func(t *testing.T) {
+		// Tests line 1295 false (skips), line 1301 true (executes)
+		config := DefaultConfig()
+		config.Developer.Enabled = true
+		config.Developer.Period = 0
+		config.Sealer.TargetGasPercentage = 0       // == 0, so line 1295 false
+		config.Sealer.BaseFeeChangeDenominator = 64 // > 0, so line 1301 true
+
+		server, err := CreateMockServer(config)
+		assert.NoError(t, err)
+		defer CloseMockServer(server)
+
+		chainConfig := server.backend.BlockChain().GetChainConfig()
+		assert.NotNil(t, chainConfig.Bor)
+		// Line 1295 condition is false, so TargetGasPercentage uses default from chain
+		// Line 1302 sets BaseFeeChangeDenominator
+		assert.NotNil(t, chainConfig.Bor.BaseFeeChangeDenominator)
+		assert.Equal(t, uint64(64), *chainConfig.Bor.BaseFeeChangeDenominator)
+	})
+
+	t.Run("Validation: TargetGasPercentage > 100 fails", func(t *testing.T) {
+		// Tests line 1296-1298 validation executes and returns error
+		config := DefaultConfig()
+		config.Developer.Enabled = true
+		config.Developer.Period = 0
+		config.Sealer.TargetGasPercentage = 150 // Invalid value
+
+		// With mainnet Bor config, validation at line 1296-1298 executes and returns error
+		_, err := CreateMockServer(config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasPercentage must be between 1-100")
+	})
+}
