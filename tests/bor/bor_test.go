@@ -2595,7 +2595,9 @@ func TestVerifyPendingHeadersSpanRotationReorg(t *testing.T) {
 
 	faucets := make([]*ecdsa.PrivateKey, 128)
 	for i := 0; i < len(faucets); i++ {
-		faucets[i], _ = crypto.GenerateKey()
+		var err error
+		faucets[i], err = crypto.GenerateKey()
+		require.NoError(t, err)
 	}
 
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
@@ -2835,27 +2837,18 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 			return []*valset.Validator{{ID: 0, Address: validator1, VotingPower: 1000}}, nil
 		}).AnyTimes()
 
-	spanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, headerHash common.Hash, blockNum uint64) (*borTypes.Span, error) {
-			if blockNum >= rotationBlock {
-				validator := valset.Validator{ID: 1, Address: validator2, VotingPower: 1000}
-				return &borTypes.Span{
-					Id:                1,
-					StartBlock:        rotationBlock,
-					EndBlock:          rotationBlock + 255,
-					ValidatorSet:      borSpan.ConvertBorValSetToHeimdallValSet(&valset.ValidatorSet{Validators: []*valset.Validator{&validator}, Proposer: &validator}),
-					SelectedProducers: borSpan.ConvertBorValidatorsToHeimdallValidators([]*valset.Validator{&validator}),
-				}, nil
-			}
-			validator := valset.Validator{ID: 0, Address: validator1, VotingPower: 1000}
-			return &borTypes.Span{
-				Id:                0,
-				StartBlock:        0,
-				EndBlock:          rotationBlock - 1,
-				ValidatorSet:      borSpan.ConvertBorValSetToHeimdallValSet(&valset.ValidatorSet{Validators: []*valset.Validator{&validator}, Proposer: &validator}),
-				SelectedProducers: borSpan.ConvertBorValidatorsToHeimdallValidators([]*valset.Validator{&validator}),
-			}, nil
-		}).AnyTimes()
+	// GetCurrentSpan returns the new span after rotation.
+	// Note: This spanner is only installed after span rotation, so it returns the new span.
+	// Block-number based validation is handled by GetCurrentValidatorsByHash.
+	validator2Val := valset.Validator{ID: 1, Address: validator2, VotingPower: 1000}
+	span1Mock := &borTypes.Span{
+		Id:                1,
+		StartBlock:        rotationBlock,
+		EndBlock:          rotationBlock + 255,
+		ValidatorSet:      borSpan.ConvertBorValSetToHeimdallValSet(&valset.ValidatorSet{Validators: []*valset.Validator{&validator2Val}, Proposer: &validator2Val}),
+		SelectedProducers: borSpan.ConvertBorValidatorsToHeimdallValidators([]*valset.Validator{&validator2Val}),
+	}
+	spanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any(), gomock.Any()).Return(span1Mock, nil).AnyTimes()
 
 	spanner.EXPECT().CommitSpan(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
