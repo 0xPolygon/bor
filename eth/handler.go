@@ -597,7 +597,9 @@ func (h *handler) Start(maxPeers int) {
 }
 
 func (h *handler) Stop() {
-	h.txsSub.Unsubscribe() // quits txBroadcastLoop
+	if h.txsSub != nil {
+		h.txsSub.Unsubscribe() // quits txBroadcastLoop
+	}
 	h.minedBlockSub.Unsubscribe()
 	h.blockRange.stop()
 
