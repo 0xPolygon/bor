@@ -93,10 +93,9 @@ jobs:
         with:
           repository: 0xPolygon/kurtosis-pos
           ref: hv2/tx-eip1559-gas-price-configs
-          path: kurtosis-pos
 
       - name: Pre kurtosis run
-        uses: ./kurtosis-pos/.github/actions/kurtosis-pre-run
+        uses: ./.github/actions/kurtosis-pre-run
         with:
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
@@ -109,10 +108,9 @@ jobs:
           path: pos-workflows
 
       - name: Copy kurtosis config
-        run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-pos/kurtosis-stateless-e2e.yml
+        run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
 
       - name: Kurtosis run
-        working-directory: kurtosis-pos
         run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
@@ -129,6 +127,6 @@ jobs:
       # Clean up
       - name: Post kurtosis run
         if: always()
-        uses: ./kurtosis-pos/.github/actions/kurtosis-post-run
+        uses: ./.github/actions/kurtosis-post-run
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
