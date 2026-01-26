@@ -15,12 +15,6 @@ concurrency:
   group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# These permissions are required to log in to GCR
-permissions:
-  contents: read
-  actions: write
-  id-token: write
-
 env:
   ENCLAVE_NAME: kurtosis-e2e
 
@@ -74,6 +68,11 @@ jobs:
       - build-heimdall-v2
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # These permissions are required to log in to GCR
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
     steps:
       # Load images
       - name: Download bor image

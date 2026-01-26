@@ -15,12 +15,6 @@ concurrency:
   group: stateless-sync-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# These permissions are required to log in to GCR
-permissions:
-  contents: read
-  actions: write
-  id-token: write
-
 env:
   ENCLAVE_NAME: kurtosis-stateless-e2e
 
@@ -74,6 +68,11 @@ jobs:
       - build-heimdall-v2
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     timeout-minutes: 45
+    # These permissions are required to log in to GCR
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
     steps:
       # Load images
       - name: Download bor image
