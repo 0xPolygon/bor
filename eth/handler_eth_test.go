@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/stretchr/testify/require"
 )
 
 // testEthHandler is a mock event handler to listen for inbound network requests
@@ -796,7 +798,7 @@ func testDisableTxPropagation(t *testing.T, protocol uint) {
 
 	// Transactions are also propagated via broadcast and announcement loops. Ensure that
 	// none of the receive any transactions.
-	source.txpool.Add(txs[:5], false)
+	source.txpool.Add(txs[5:], false)
 	for i := range sinks {
 		wg.Add(1)
 		go func(idx int) {
@@ -810,4 +812,149 @@ func testDisableTxPropagation(t *testing.T, protocol uint) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// A simple private tx store for tests
+type PrivateTxStore struct {
+	store map[common.Hash]struct{}
+}
+
+func (p *PrivateTxStore) IsTxPrivate(hash common.Hash) bool {
+	_, ok := p.store[hash]
+	return ok
+}
+
+// Tests that when a tx is set to private, it's not propagated to any
+// connected peers.
+func TestPrivateTxNotPropagated68(t *testing.T) {
+	testPrivateTxNotPropagated(t, eth.ETH68)
+}
+func TestPrivateTxNotPropagated69(t *testing.T) {
+	testPrivateTxNotPropagated(t, eth.ETH69)
+}
+
+func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
+	t.Parallel()
+
+	// Initialize a private tx store
+	privateTxStore := &PrivateTxStore{store: make(map[common.Hash]struct{})}
+
+	// Set the private tx store getter on the source handler
+	updateConfig := func(cfg *handlerConfig) *handlerConfig {
+		cfg.privateTxGetter = privateTxStore
+		return cfg
+	}
+
+	// Create a source handler to send transactions from and a number of sinks
+	// to receive them. We need multiple sinks to ensure none of them gets
+	// any transactions.
+	source := newTestHandlerWithConfig(updateConfig)
+	source.handler.snapSync.Store(false) // Avoid requiring snap, otherwise some will be dropped below
+	defer source.close()
+
+	// Fill the source pool with transactions
+	txs := make([]*types.Transaction, 10)
+	for nonce := range txs {
+		tx := types.NewTransaction(uint64(nonce), common.Address{}, big.NewInt(0), 100000, big.NewInt(0), nil)
+		tx, _ = types.SignTx(tx, types.HomesteadSigner{}, testKey)
+		txs[nonce] = tx
+	}
+	source.txpool.Add(txs[:5], false)
+
+	// Mark some transactions as private
+	privateTxStore.store[txs[3].Hash()] = struct{}{}
+	privateTxStore.store[txs[4].Hash()] = struct{}{}
+
+	sinks := make([]*testHandler, 10)
+	for i := 0; i < len(sinks); i++ {
+		sinks[i] = newTestHandler()
+		defer sinks[i].close()
+
+		sinks[i].handler.synced.Store(true) // mark synced to accept transactions
+	}
+
+	// Interconnect all the sink handlers with the source handler
+	for i, sink := range sinks {
+		sourcePipe, sinkPipe := p2p.MsgPipe()
+		defer sourcePipe.Close()
+		defer sinkPipe.Close()
+
+		sourcePeer := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{byte(i + 1)}, "", nil, sourcePipe), sourcePipe, source.txpool)
+		sinkPeer := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{0}, "", nil, sinkPipe), sinkPipe, sink.txpool)
+		defer sourcePeer.Close()
+		defer sinkPeer.Close()
+
+		go source.handler.runEthPeer(sourcePeer, func(peer *eth.Peer) error {
+			return eth.Handle((*ethHandler)(source.handler), peer)
+		})
+		go sink.handler.runEthPeer(sinkPeer, func(peer *eth.Peer) error {
+			return eth.Handle((*ethHandler)(sink.handler), peer)
+		})
+	}
+
+	// Subscribe to all the transaction pools
+	txChs := make([]chan core.NewTxsEvent, len(sinks))
+	for i := 0; i < len(sinks); i++ {
+		txChs[i] = make(chan core.NewTxsEvent, 10)
+
+		sub := sinks[i].txpool.SubscribeTransactions(txChs[i], false)
+		defer sub.Unsubscribe()
+	}
+
+	var wg sync.WaitGroup
+
+	// Transactions are propagated during initial sync via `runEthPeer`. As the
+	// source has disabled tx propagation, ensure that none of the sinks receive
+	// any transactions.
+	var txReceivedCount atomic.Uint64
+	for i := range sinks {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			select {
+			case txs := <-txChs[idx]:
+				txReceivedCount.Add(uint64(len(txs.Txs)))
+				for _, tx := range txs.Txs {
+					// Ensure no private txs are received
+					if _, ok := privateTxStore.store[tx.Hash()]; ok {
+						t.Errorf("sink %d: received private transaction %x", idx, tx.Hash())
+					}
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("sink %d: transaction propagation timed out", idx)
+			}
+		}(i)
+	}
+	wg.Wait()
+	require.Equal(t, txReceivedCount.Load(), uint64(len(sinks)*3), "sinks should have received only public transactions")
+
+	// Transactions are also propagated via broadcast and announcement loops. Ensure that
+	// none of the receive any transactions.
+	source.txpool.Add(txs[5:], false)
+
+	// Mark some transactions as private
+	privateTxStore.store[txs[8].Hash()] = struct{}{}
+	privateTxStore.store[txs[9].Hash()] = struct{}{}
+
+	txReceivedCount.Store(0)
+	for i := range sinks {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			select {
+			case txs := <-txChs[idx]:
+				txReceivedCount.Add(uint64(len(txs.Txs)))
+				for _, tx := range txs.Txs {
+					// Ensure no private txs are received
+					if _, ok := privateTxStore.store[tx.Hash()]; ok {
+						t.Errorf("sink %d: received private transaction %x", idx, tx.Hash())
+					}
+				}
+			case <-time.After(2 * time.Second):
+				t.Errorf("sink %d: transaction propagation timed out", idx)
+			}
+		}(i)
+	}
+	wg.Wait()
+	require.Equal(t, txReceivedCount.Load(), uint64(len(sinks)*3), "sinks should have received only public transactions")
 }
