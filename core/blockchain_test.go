@@ -6132,7 +6132,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// Test that prefetch and process readers are independent
 	t.Run("independent readers", func(t *testing.T) {
 		block := blocks[0]
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
 		if err != nil {
 			t.Fatalf("StateAtWithReaders failed: %v", err)
 		}
@@ -6168,7 +6168,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// implementation. It's kept for API compatibility and future-proofing.
 	t.Run("error from invalid root", func(t *testing.T) {
 		invalidRoot := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
 
 		if err == nil {
 			t.Fatal("expected error when using invalid root hash")
