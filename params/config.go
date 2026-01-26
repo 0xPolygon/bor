@@ -1001,31 +1001,6 @@ func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
 	return TargetGasPercentagePostDandeli
 }
 
-// GetBaseFeeChangeDenominator returns the base fee change denominator.
-// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
-// It validates the configured value and falls back to hard fork based defaults if invalid or nil.
-func (c *BorConfig) GetBaseFeeChangeDenominator(number *big.Int) uint64 {
-	// If Dandeli is active and custom value is set, validate and use it
-	if c.IsDandeli(number) && c.BaseFeeChangeDenominator != nil {
-		val := *c.BaseFeeChangeDenominator
-		// Validate: must be non-zero to prevent division by zero
-		if val > 0 {
-			return val
-		}
-		// Invalid value - log error and fall back to default
-		log.Error("Invalid BaseFeeChangeDenominator in BorConfig (must be > 0), falling back to default",
-			"configured", val)
-	}
-
-	// Fall back to hard fork based values
-	if c.IsBhilai(number) {
-		return BaseFeeChangeDenominatorPostBhilai
-	} else if c.IsDelhi(number) {
-		return BaseFeeChangeDenominatorPostDelhi
-	}
-	return DefaultBaseFeeChangeDenominator
-}
-
 func (c *BorConfig) IsSprintStart(number uint64) bool {
 	return number%c.CalculateSprint(number) == 0
 }
@@ -1690,30 +1665,6 @@ func newBlockCompatError(what string, storedblock, newblock *big.Int) *ConfigCom
 	}
 	if rew != nil && rew.Sign() > 0 {
 		err.RewindToBlock = rew.Uint64() - 1
-	}
-
-	return err
-}
-
-// nolint
-func newTimestampCompatError(what string, storedtime, newtime *uint64) *ConfigCompatError {
-	var rew *uint64
-	switch {
-	case storedtime == nil:
-		rew = newtime
-	case newtime == nil || *storedtime < *newtime:
-		rew = storedtime
-	default:
-		rew = newtime
-	}
-	err := &ConfigCompatError{
-		What:         what,
-		StoredTime:   storedtime,
-		NewTime:      newtime,
-		RewindToTime: 0,
-	}
-	if rew != nil && *rew != 0 {
-		err.RewindToTime = *rew - 1
 	}
 
 	return err

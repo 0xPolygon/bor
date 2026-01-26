@@ -20,6 +20,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 const (
@@ -247,6 +248,23 @@ func BaseFeeChangeDenominator(borConfig *BorConfig, number *big.Int) uint64 {
 	if borConfig == nil {
 		return DefaultBaseFeeChangeDenominator
 	}
-	// Use the helper function which includes validation
-	return borConfig.GetBaseFeeChangeDenominator(number)
+	// If Dandeli is active and custom value is set, validate and use it
+	if borConfig.IsDandeli(number) && borConfig.BaseFeeChangeDenominator != nil {
+		val := *borConfig.BaseFeeChangeDenominator
+		// Validate: must be non-zero to prevent division by zero
+		if val > 0 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid BaseFeeChangeDenominator in BorConfig (must be > 0), falling back to default",
+			"configured", val)
+	}
+
+	// Fall back to hard fork based values
+	if borConfig.IsBhilai(number) {
+		return BaseFeeChangeDenominatorPostBhilai
+	} else if borConfig.IsDelhi(number) {
+		return BaseFeeChangeDenominatorPostDelhi
+	}
+	return DefaultBaseFeeChangeDenominator
 }

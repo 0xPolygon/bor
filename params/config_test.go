@@ -740,12 +740,12 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			BhilaiBlock: nil,
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(500))
+		result := BaseFeeChangeDenominator(config, big.NewInt(500))
 		if result != DefaultBaseFeeChangeDenominator {
 			t.Errorf("Pre-Delhi: expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(999))
+		result = BaseFeeChangeDenominator(config, big.NewInt(999))
 		if result != DefaultBaseFeeChangeDenominator {
 			t.Errorf("Pre-Delhi (block 999): expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
 		}
@@ -758,19 +758,19 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			DandeliBlock: nil,
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(1000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
 		if result != BaseFeeChangeDenominatorPostDelhi {
 			t.Errorf("Post-Delhi, Pre-Bhilai (block 1000): expected %d, got %d",
 				BaseFeeChangeDenominatorPostDelhi, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(1500))
+		result = BaseFeeChangeDenominator(config, big.NewInt(1500))
 		if result != BaseFeeChangeDenominatorPostDelhi {
 			t.Errorf("Post-Delhi, Pre-Bhilai (block 1500): expected %d, got %d",
 				BaseFeeChangeDenominatorPostDelhi, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(1999))
+		result = BaseFeeChangeDenominator(config, big.NewInt(1999))
 		if result != BaseFeeChangeDenominatorPostDelhi {
 			t.Errorf("Post-Delhi, Pre-Bhilai (block 1999): expected %d, got %d",
 				BaseFeeChangeDenominatorPostDelhi, result)
@@ -784,19 +784,19 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			DandeliBlock: big.NewInt(3000),
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(2000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2000): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(2500))
+		result = BaseFeeChangeDenominator(config, big.NewInt(2500))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2500): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(2999))
+		result = BaseFeeChangeDenominator(config, big.NewInt(2999))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2999): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
@@ -811,13 +811,13 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			BaseFeeChangeDenominator: nil,
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(3000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Dandeli with nil custom value: expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 
-		result = config.GetBaseFeeChangeDenominator(big.NewInt(4000))
+		result = BaseFeeChangeDenominator(config, big.NewInt(4000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Dandeli with nil custom value (block 4000): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
@@ -837,7 +837,7 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 					BaseFeeChangeDenominator: &val,
 				}
 
-				result := config.GetBaseFeeChangeDenominator(big.NewInt(3000))
+				result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 				if result != customVal {
 					t.Errorf("Post-Dandeli with custom value %d: expected %d, got %d",
 						customVal, customVal, result)
@@ -855,7 +855,7 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			BaseFeeChangeDenominator: &invalidVal,
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(3000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Post-Dandeli with invalid value 0: expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
@@ -872,7 +872,7 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 		}
 
 		// Before Dandeli, custom value should be ignored
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(2500))
+		result := BaseFeeChangeDenominator(config, big.NewInt(2500))
 		if result != BaseFeeChangeDenominatorPostBhilai {
 			t.Errorf("Pre-Dandeli with custom value (block 2500): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
@@ -886,7 +886,7 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			DandeliBlock: big.NewInt(2000),
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(2000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
 		if result != BaseFeeChangeDenominatorPostDelhi {
 			t.Errorf("Post-Dandeli, Pre-Bhilai: expected %d, got %d",
 				BaseFeeChangeDenominatorPostDelhi, result)
@@ -900,7 +900,7 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 			DandeliBlock: big.NewInt(1000),
 		}
 
-		result := config.GetBaseFeeChangeDenominator(big.NewInt(1000))
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
 		if result != DefaultBaseFeeChangeDenominator {
 			t.Errorf("Post-Dandeli, Pre-Delhi: expected %d, got %d",
 				DefaultBaseFeeChangeDenominator, result)
