@@ -27,9 +27,19 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+const (
+	// MaxBaseFeeChangePercent limits the maximum base fee change per block to 5% of parent base fee.
+	// This prevents excessive fee volatility by capping both increases and decreases.
+	// The 5% limit provides protection against aggressive parameter configurations while
+	// accommodating the natural behavior of default post-Dandeli parameters (maximum ~1.7% change).
+	MaxBaseFeeChangePercent = 5
+)
+
 // VerifyEIP1559Header verifies some header attributes which were changed in EIP-1559,
 // - gas limit check
-// - basefee check (pre-Dandeli only; after Dandeli HF base fee validation is removed to allow dynamic setting)
+// - basefee check with different rules pre/post Dandeli:
+//   - Pre-Dandeli: Strict validation (baseFee must exactly match calculated value)
+//   - Post-Dandeli: Boundary validation (baseFee change must be within MaxBaseFeeChangePercent)
 func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Header) error {
 	// Verify that the gas limit remains within allowed bounds
 	parentGasLimit := parent.GasLimit
@@ -44,13 +54,9 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 		return errors.New("header is missing baseFee")
 	}
 
-	// After Dandeli hard fork, base fee validation is removed to allow dynamic configuration.
-	// This enables validators to set base fees according to new consensus rules without
-	// strict protocol enforcement, supporting more flexible fee markets.
-	// Pre-Dandeli blocks still require strict base fee validation for consensus safety.
+	// Post-Dandeli: Validate that base fee changes are within allowed boundaries
 	if config.Bor != nil && config.Bor.IsDandeli(header.Number) {
-		// Post-Dandeli: Skip base fee validation
-		return nil
+		return verifyBaseFeeWithinBoundaries(parent, header)
 	}
 
 	// Pre-Dandeli: Verify the baseFee is correct based on the parent header
@@ -58,6 +64,33 @@ func VerifyEIP1559Header(config *params.ChainConfig, parent, header *types.Heade
 	if header.BaseFee.Cmp(expectedBaseFee) != 0 {
 		return fmt.Errorf("invalid baseFee: have %s, want %s, parentBaseFee %s, parentGasUsed %d",
 			header.BaseFee, expectedBaseFee, parent.BaseFee, parent.GasUsed)
+	}
+
+	return nil
+}
+
+// verifyBaseFeeWithinBoundaries checks that the base fee change is within the allowed boundary.
+// This prevents excessive fee volatility while allowing dynamic fee adjustment post-Dandeli.
+// The boundary limit is defined by MaxBaseFeeChangePercent constant.
+func verifyBaseFeeWithinBoundaries(parent, header *types.Header) error {
+	// Calculate the maximum allowed change (MaxBaseFeeChangePercent of parent base fee)
+	maxAllowedChange := new(big.Int).Mul(parent.BaseFee, big.NewInt(MaxBaseFeeChangePercent))
+	maxAllowedChange.Div(maxAllowedChange, big.NewInt(100))
+
+	// Calculate the actual change in base fee
+	actualChange := new(big.Int)
+	if header.BaseFee.Cmp(parent.BaseFee) >= 0 {
+		// Base fee increased or stayed the same
+		actualChange.Sub(header.BaseFee, parent.BaseFee)
+	} else {
+		// Base fee decreased
+		actualChange.Sub(parent.BaseFee, header.BaseFee)
+	}
+
+	// Verify the change is within the allowed boundary
+	if actualChange.Cmp(maxAllowedChange) > 0 {
+		return fmt.Errorf("baseFee change exceeds %d%% limit: change=%s, maxAllowed=%s, parentBaseFee=%s, headerBaseFee=%s",
+			MaxBaseFeeChangePercent, actualChange, maxAllowedChange, parent.BaseFee, header.BaseFee)
 	}
 
 	return nil
@@ -83,6 +116,14 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		baseFeeChangeDenominatorUint64 = params.BaseFeeChangeDenominator(config.Bor, parent.Number)
 	)
 
+	// Calculate maximum allowed change (only applies post-Dandeli)
+	var maxAllowedChange *big.Int
+	applyBoundaryCap := config.Bor != nil && config.Bor.IsDandeli(parent.Number)
+	if applyBoundaryCap {
+		maxAllowedChange = new(big.Int).Mul(parent.BaseFee, big.NewInt(MaxBaseFeeChangePercent))
+		maxAllowedChange.Div(maxAllowedChange, big.NewInt(100))
+	}
+
 	if parent.GasUsed > parentGasTarget {
 		// If the parent block used more gas than its target, the baseFee should increase.
 		// max(1, parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator)
@@ -90,6 +131,12 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		num.Mul(num, parent.BaseFee)
 		num.Div(num, denom.SetUint64(parentGasTarget))
 		num.Div(num, denom.SetUint64(baseFeeChangeDenominatorUint64))
+
+		// Cap the increase to MaxBaseFeeChangePercent post-Dandeli
+		if applyBoundaryCap && num.Cmp(maxAllowedChange) > 0 {
+			num.Set(maxAllowedChange)
+		}
+
 		if num.Cmp(common.Big1) < 0 {
 			return num.Add(parent.BaseFee, common.Big1)
 		}
@@ -101,6 +148,11 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 		num.Mul(num, parent.BaseFee)
 		num.Div(num, denom.SetUint64(parentGasTarget))
 		num.Div(num, denom.SetUint64(baseFeeChangeDenominatorUint64))
+
+		// Cap the decrease to MaxBaseFeeChangePercent post-Dandeli
+		if applyBoundaryCap && num.Cmp(maxAllowedChange) > 0 {
+			num.Set(maxAllowedChange)
+		}
 
 		baseFee := num.Sub(parent.BaseFee, num)
 		if baseFee.Cmp(common.Big0) < 0 {

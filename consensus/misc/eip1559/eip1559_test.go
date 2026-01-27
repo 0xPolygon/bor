@@ -615,13 +615,14 @@ func TestDynamicBaseFeeChangeDenominator(t *testing.T) {
 	})
 }
 
-// TestVerifyEIP1559HeaderNoBaseFeeValidation tests that after removing the base fee validation,
-// headers with any base fee are accepted (as long as it's not nil)
+// TestVerifyEIP1559HeaderNoBaseFeeValidation tests post-Dandeli boundary validation
+// instead of strict validation. Base fees must be within MaxBaseFeeChangePercent boundary.
 func TestVerifyEIP1559HeaderNoBaseFeeValidation(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
+	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
 	parent := &types.Header{
 		Number:   big.NewInt(20),
@@ -630,25 +631,25 @@ func TestVerifyEIP1559HeaderNoBaseFeeValidation(t *testing.T) {
 		BaseFee:  big.NewInt(1_000_000_000),
 	}
 
-	t.Run("accepts arbitrary base fee after validation removal", func(t *testing.T) {
-		// Header with a base fee that doesn't match the calculated value
-		// This should be accepted since we removed the validation
+	t.Run("accepts base fee within boundary", func(t *testing.T) {
+		// Header with a base fee that doesn't match calculated value but is within MaxBaseFeeChangePercent boundary
 		header := &types.Header{
 			Number:   big.NewInt(21),
 			GasLimit: 30_000_000,
 			GasUsed:  20_000_000,
-			BaseFee:  big.NewInt(5_000_000_000), // Arbitrary value
+			BaseFee:  big.NewInt(1_040_000_000), // 4% increase - within boundary
 		}
 
 		err := VerifyEIP1559Header(testConfig, parent, header)
-		require.NoError(t, err, "should accept header with arbitrary base fee")
+		require.NoError(t, err, "should accept header with base fee within boundary")
 	})
 
-	t.Run("accepts base fee different from calculated", func(t *testing.T) {
+	t.Run("accepts base fee different from calculated but within boundary", func(t *testing.T) {
 		calculatedBaseFee := CalcBaseFee(testConfig, parent)
 
-		// Use a completely different base fee
-		differentBaseFee := new(big.Int).Mul(calculatedBaseFee, big.NewInt(10))
+		// Use a different base fee that's still within MaxBaseFeeChangePercent of parent
+		differentBaseFee := new(big.Int).Mul(parent.BaseFee, big.NewInt(103))
+		differentBaseFee.Div(differentBaseFee, big.NewInt(100)) // 3% increase
 
 		header := &types.Header{
 			Number:   big.NewInt(21),
@@ -658,7 +659,21 @@ func TestVerifyEIP1559HeaderNoBaseFeeValidation(t *testing.T) {
 		}
 
 		err := VerifyEIP1559Header(testConfig, parent, header)
-		require.NoError(t, err, "should accept header with base fee different from calculated")
+		require.NoError(t, err, "should accept header with base fee within boundary even if different from calculated: calculated=%s, header=%s", calculatedBaseFee, differentBaseFee)
+	})
+
+	t.Run("rejects base fee exceeding boundary", func(t *testing.T) {
+		// Base fee that exceeds MaxBaseFeeChangePercent boundary
+		header := &types.Header{
+			Number:   big.NewInt(21),
+			GasLimit: 30_000_000,
+			GasUsed:  20_000_000,
+			BaseFee:  big.NewInt(1_100_000_000), // 10% increase - exceeds boundary
+		}
+
+		err := VerifyEIP1559Header(testConfig, parent, header)
+		require.Error(t, err, "should reject header with base fee exceeding boundary")
+		require.Contains(t, err.Error(), "baseFee change exceeds", "error should mention boundary exceeded")
 	})
 
 	t.Run("rejects nil base fee", func(t *testing.T) {
@@ -674,16 +689,23 @@ func TestVerifyEIP1559HeaderNoBaseFeeValidation(t *testing.T) {
 		require.Contains(t, err.Error(), "baseFee", "error should mention baseFee")
 	})
 
-	t.Run("accepts zero base fee", func(t *testing.T) {
+	t.Run("accepts zero base fee when parent is also zero", func(t *testing.T) {
+		parentZero := &types.Header{
+			Number:   big.NewInt(20),
+			GasLimit: 30_000_000,
+			GasUsed:  15_000_000,
+			BaseFee:  big.NewInt(0),
+		}
+
 		header := &types.Header{
 			Number:   big.NewInt(21),
 			GasLimit: 30_000_000,
 			GasUsed:  20_000_000,
-			BaseFee:  big.NewInt(0), // Zero is valid
+			BaseFee:  big.NewInt(0), // Zero is valid when parent is also zero
 		}
 
-		err := VerifyEIP1559Header(testConfig, parent, header)
-		require.NoError(t, err, "should accept header with zero base fee")
+		err := VerifyEIP1559Header(testConfig, parentZero, header)
+		require.NoError(t, err, "should accept header with zero base fee when parent is zero")
 	})
 }
 
@@ -864,7 +886,7 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 		require.NoError(t, err, "should accept correct base fee pre-Dandeli")
 	})
 
-	t.Run("post-Dandeli: accepts any base fee", func(t *testing.T) {
+	t.Run("post-Dandeli: accepts base fee within boundary", func(t *testing.T) {
 		parent := &types.Header{
 			Number:   big.NewInt(20), // Post-Dandeli
 			GasLimit: 30_000_000,
@@ -873,16 +895,18 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 		}
 
 		calculatedBaseFee := CalcBaseFee(testConfig, parent)
-		arbitraryBaseFee := new(big.Int).Mul(calculatedBaseFee, big.NewInt(5))
+		// Use a base fee within MaxBaseFeeChangePercent boundary (3% increase)
+		baseFeeWithinBoundary := new(big.Int).Mul(parent.BaseFee, big.NewInt(103))
+		baseFeeWithinBoundary.Div(baseFeeWithinBoundary, big.NewInt(100))
 
 		header := &types.Header{
 			Number:   big.NewInt(21),
 			GasLimit: 30_000_000,
 			GasUsed:  20_000_000,
-			BaseFee:  arbitraryBaseFee, // Arbitrary base fee
+			BaseFee:  baseFeeWithinBoundary, // Within boundary
 		}
 
 		err := VerifyEIP1559Header(testConfig, parent, header)
-		require.NoError(t, err, "should accept arbitrary base fee post-Dandeli")
+		require.NoError(t, err, "should accept base fee within boundary post-Dandeli: calculated=%s, header=%s", calculatedBaseFee, baseFeeWithinBoundary)
 	})
 }
