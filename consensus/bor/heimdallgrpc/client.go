@@ -122,7 +122,7 @@ func NewHeimdallGRPCClient(grpcAddress string, heimdallURL string, timeout time.
 
 	// Retry options
 	retryOpts := []grpcRetry.CallOption{
-		grpcRetry.WithMax(10000),
+		grpcRetry.WithMax(25),
 		grpcRetry.WithBackoff(grpcRetry.BackoffLinear(5 * time.Second)),
 		grpcRetry.WithCodes(codes.Internal, codes.Unavailable, codes.Aborted, codes.NotFound),
 	}
@@ -156,7 +156,10 @@ func (h *HeimdallGRPCClient) Close() {
 		return
 	}
 	log.Debug("Shutdown detected, Closing Heimdall gRPC client")
-	_ = h.conn.Close()
+	err := h.conn.Close()
+	if err != nil {
+		log.Error("Error closing Heimdall gRPC client connection", "err", err)
+	}
 }
 
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
