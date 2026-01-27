@@ -139,7 +139,8 @@ jobs:
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
       - name: Run smoke tests (Checkpoints and Milestones)
-        run: bash ./pos-workflows/tests/kurtosis_smoke_test.sh
+        working-directory: pos-workflows/tests
+        run: bash ./kurtosis_smoke_test.sh
 
       # Clean up
       - name: Post kurtosis run
