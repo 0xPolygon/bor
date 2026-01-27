@@ -46,7 +46,7 @@ func newMultiClient(urls []string) *multiClient {
 
 		// Test connection with a simple call
 		var blockNumber string
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		err = client.CallContext(ctx, &blockNumber, "eth_blockNumber")
 		cancel()
 		if err != nil {
@@ -111,7 +111,7 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 	return false, lastErr
 }
 
-func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash) error {
+func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool) error {
 	// Submit tx to all block producers in parallel (initial attempt)
 	hexTx := hexutil.Encode(rawTx)
 
@@ -155,7 +155,9 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash) error {
 	log.Debug("[tx-relay] Failed to submit private tx to one or more block producers, starting retry",
 		"err", lastErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
 
-	go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, successfulIndices)
+	if retry {
+		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, successfulIndices)
+	}
 
 	return lastErr
 }
