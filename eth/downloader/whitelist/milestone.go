@@ -43,19 +43,19 @@ type milestoneService interface {
 }
 
 var (
-	//Metrics for collecting the whitelisted milestone number
+	// whitelistedMilestoneMeter is a metric for collecting the whitelisted milestone number
 	whitelistedMilestoneMeter = metrics.NewRegisteredGauge("chain/milestone/latest", nil)
 
-	//Metrics for collecting the future milestone number
+	// FutureMilestoneMeter is a metric for collecting the future milestone number
 	FutureMilestoneMeter = metrics.NewRegisteredGauge("chain/milestone/future", nil)
 
-	//Metrics for collecting the length of the MilestoneIds map
+	// MilestoneIdsLengthMeter is a metric for collecting the length of the MilestoneIds map
 	MilestoneIdsLengthMeter = metrics.NewRegisteredGauge("chain/milestone/idslength", nil)
 
-	//Metrics for collecting the number of valid chains received
+	// MilestoneChainMeter is a metric for collecting the number of valid chains received
 	MilestoneChainMeter = metrics.NewRegisteredMeter("chain/milestone/isvalidchain", nil)
 
-	//Metrics for collecting the number of valid peers received
+	// MilestonePeerMeter is a metric for collecting the number of valid peers received
 	MilestonePeerMeter = metrics.NewRegisteredMeter("chain/milestone/isvalidpeer", nil)
 )
 
@@ -70,7 +70,7 @@ func (m *milestone) IsValidChain(currentHeader *types.Header, chain []*types.Hea
 	m.finality.RLock()
 	defer m.finality.RUnlock()
 
-	var isValid bool = false
+	var isValid = false
 
 	defer func() {
 		if isValid {
@@ -157,11 +157,11 @@ func (m *milestone) Process(block uint64, hash common.Hash) {
 
 	whitelistedMilestoneMeter.Update(int64(block))
 
-	m.UnlockSprint(block)
+	m.unlockSprintLocked(block)
 }
 
-// This function will Lock the mutex at the time of voting
-// fixme: get rid of it
+// LockMutex locks the mutex at the time of voting
+// TODO: we can get rid of this function
 func (m *milestone) LockMutex(endBlockNum uint64) bool {
 	m.finality.Lock()
 
@@ -178,13 +178,13 @@ func (m *milestone) LockMutex(endBlockNum uint64) bool {
 	return true
 }
 
-// This function will unlock the mutex locked in LockMutex
-// fixme: get rid of it
+// UnlockMutex unlocks the mutex locked in LockMutex
+// TODO: we can get rid of this function
 func (m *milestone) UnlockMutex(doLock bool, milestoneId string, endBlockNum uint64, endBlockHash common.Hash) {
 	m.Locked = m.Locked || doLock
 
 	if doLock {
-		m.UnlockSprint(m.LockedMilestoneNumber)
+		m.unlockSprintLocked(m.LockedMilestoneNumber)
 		m.Locked = true
 		m.LockedMilestoneHash = endBlockHash
 		m.LockedMilestoneNumber = endBlockNum
@@ -202,23 +202,16 @@ func (m *milestone) UnlockMutex(doLock bool, milestoneId string, endBlockNum uin
 	m.finality.Unlock()
 }
 
-// This function will unlock the locked sprint
+// UnlockSprint will unlock the locked sprint.
+// It acquires the finality write lock and then calls unlockSprintLocked.
 func (m *milestone) UnlockSprint(endBlockNum uint64) {
-	if endBlockNum < m.LockedMilestoneNumber {
-		return
-	}
+	m.finality.Lock()
+	defer m.finality.Unlock()
 
-	m.Locked = false
-	m.purgeMilestoneIDsList()
-
-	err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs)
-
-	if err != nil {
-		log.Error("Error in writing lock data of milestone to db", "err", err)
-	}
+	m.unlockSprintLocked(endBlockNum)
 }
 
-// This function will remove the stored milestoneID
+// RemoveMilestoneID removes the stored milestoneID
 func (m *milestone) RemoveMilestoneID(milestoneId string) {
 	m.finality.Lock()
 
@@ -236,7 +229,7 @@ func (m *milestone) RemoveMilestoneID(milestoneId string) {
 	m.finality.Unlock()
 }
 
-// This will check whether the incoming chain matches the locked sprint hash
+// IsReorgAllowed checks whether the incoming chain matches the locked sprint hash
 func (m *milestone) IsReorgAllowed(chain []*types.Header, lockedMilestoneNumber uint64, lockedMilestoneHash common.Hash) bool {
 	if chain[len(chain)-1].Number.Uint64() <= lockedMilestoneNumber { //Can't reorg if the end block of incoming
 		return false //chain is less than locked sprint number
@@ -251,12 +244,12 @@ func (m *milestone) IsReorgAllowed(chain []*types.Header, lockedMilestoneNumber 
 	return true
 }
 
-// This will return the list of milestoneIDs stored.
+// GetMilestoneIDsList returns the list of milestoneIDs stored.
 func (m *milestone) GetMilestoneIDsList() []string {
 	m.finality.RLock()
 	defer m.finality.RUnlock()
 
-	// fixme: use generics :)
+	// TODO: we can use generics here
 	keys := make([]string, 0, len(m.LockedMilestoneIDs))
 	for key := range m.LockedMilestoneIDs {
 		keys = append(keys, key)
@@ -265,7 +258,7 @@ func (m *milestone) GetMilestoneIDsList() []string {
 	return keys
 }
 
-// This is remove the milestoneIDs stored in the list.
+// purgeMilestoneIDsList removes the milestoneIDs stored in the list.
 func (m *milestone) purgeMilestoneIDsList() {
 	m.LockedMilestoneIDs = make(map[string]struct{})
 }
@@ -284,7 +277,7 @@ func (m *milestone) IsFutureMilestoneCompatible(chain []*types.Header) bool {
 					endBlockNum := m.FutureMilestoneOrder[i]
 					endBlockHash := m.FutureMilestoneList[endBlockNum]
 
-					//Checking the received chain matches with future milestone
+					// Checking the received chain matches with the future milestone
 					return chain[j].Hash() == endBlockHash
 				}
 			}
@@ -295,42 +288,10 @@ func (m *milestone) IsFutureMilestoneCompatible(chain []*types.Header) bool {
 }
 
 func (m *milestone) ProcessFutureMilestone(num uint64, hash common.Hash) {
-	if len(m.FutureMilestoneOrder) < m.MaxCapacity {
-		m.enqueueFutureMilestone(num, hash)
-	}
+	m.finality.Lock()
+	defer m.finality.Unlock()
 
-	if num < m.LockedMilestoneNumber {
-		return
-	}
-
-	m.Locked = false
-	m.purgeMilestoneIDsList()
-
-	err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs)
-
-	if err != nil {
-		log.Error("Error in writing lock data of milestone to db", "err", err)
-	}
-}
-
-// EnqueueFutureMilestone add the future milestone to the list
-func (m *milestone) enqueueFutureMilestone(key uint64, hash common.Hash) {
-	if _, ok := m.FutureMilestoneList[key]; ok {
-		log.Debug("Future milestone already exist", "endBlockNumber", key, "futureMilestoneHash", hash)
-		return
-	}
-
-	log.Debug("Enqueuing new future milestone", "endBlockNumber", key, "futureMilestoneHash", hash)
-
-	m.FutureMilestoneList[key] = hash
-	m.FutureMilestoneOrder = append(m.FutureMilestoneOrder, key)
-
-	err := rawdb.WriteFutureMilestoneList(m.db, m.FutureMilestoneOrder, m.FutureMilestoneList)
-	if err != nil {
-		log.Error("Error in writing future milestone data to db", "err", err)
-	}
-
-	FutureMilestoneMeter.Update(int64(key))
+	m.processFutureMilestoneLocked(num, hash)
 }
 
 // DequeueFutureMilestone remove the future milestone entry from the list.
@@ -342,4 +303,55 @@ func (m *milestone) dequeueFutureMilestone() {
 	if err != nil {
 		log.Error("Error in writing future milestone data to db", "err", err)
 	}
+}
+
+// unlockSprintLocked assumes m.finality.Lock() is already held.
+func (m *milestone) unlockSprintLocked(endBlockNum uint64) {
+	if endBlockNum < m.LockedMilestoneNumber {
+		return
+	}
+
+	m.Locked = false
+	m.purgeMilestoneIDsList()
+
+	if err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs); err != nil {
+		log.Error("Error in writing lock data of milestone to db", "err", err)
+	}
+}
+
+// processFutureMilestoneLocked assumes m.finality.Lock() is already held.
+func (m *milestone) processFutureMilestoneLocked(num uint64, hash common.Hash) {
+	if len(m.FutureMilestoneOrder) < m.MaxCapacity {
+		m.enqueueFutureMilestoneLocked(num, hash)
+	}
+
+	if num < m.LockedMilestoneNumber {
+		return
+	}
+
+	m.Locked = false
+	m.purgeMilestoneIDsList()
+
+	if err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs); err != nil {
+		log.Error("Error in writing lock data of milestone to db", "err", err)
+	}
+}
+
+// enqueueFutureMilestoneLocked assumes m.finality.Lock() is already held.
+func (m *milestone) enqueueFutureMilestoneLocked(key uint64, hash common.Hash) {
+	if _, ok := m.FutureMilestoneList[key]; ok {
+		log.Debug("Future milestone already exist", "endBlockNumber", key, "futureMilestoneHash", hash)
+		return
+	}
+
+	log.Debug("Enqueuing new future milestone", "endBlockNumber", key, "futureMilestoneHash", hash)
+
+	m.FutureMilestoneList[key] = hash
+	m.FutureMilestoneOrder = append(m.FutureMilestoneOrder, key)
+
+	if err := rawdb.WriteFutureMilestoneList(m.db, m.FutureMilestoneOrder, m.FutureMilestoneList); err != nil {
+		log.Error("Error in writing future milestone data to db", "err", err)
+	}
+
+	FutureMilestoneMeter.Update(int64(key))
 }

@@ -290,7 +290,21 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
 				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
 			} else if ethConfig.HeimdallgRPCAddress != "" {
-				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress, ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(
+					ethConfig.HeimdallgRPCAddress,
+					ethConfig.HeimdallURL,
+					ethConfig.HeimdallTimeout,
+				)
+				if err != nil {
+					log.Error("Failed to initialize Heimdall gRPC client; falling back to HTTP Heimdall client",
+						"heimdall_grpc", ethConfig.HeimdallgRPCAddress,
+						"heimdall_http", ethConfig.HeimdallURL,
+						"err", err,
+					)
+					heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				} else {
+					heimdallClient = grpcClient
+				}
 			} else {
 				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			}
