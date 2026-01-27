@@ -123,8 +123,8 @@ func TestGetWitnessPacket(t *testing.T) {
 
 // TestProtocolVersionConstants tests that protocol version constants are defined correctly
 func TestProtocolVersionConstants(t *testing.T) {
-	assert.Equal(t, 0, WIT0, "WIT0 should be version 0")
-	assert.Equal(t, 1, WIT1, "WIT1 should be version 1")
+	assert.Equal(t, 1, WIT0, "WIT0 should be version 1")
+	assert.Equal(t, 2, WIT1, "WIT1 should be version 2")
 	assert.True(t, WIT1 > WIT0, "WIT1 should be greater than WIT0")
 }
 
