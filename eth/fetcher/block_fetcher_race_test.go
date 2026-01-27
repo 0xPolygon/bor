@@ -47,6 +47,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 		verifyHeader,
 		broadcastBlock,
 		chainHeight,
+		nil, // no current header function
 		insertHeaders,
 		insertChain,
 		dropPeer,
@@ -252,6 +253,7 @@ func TestWitnessManagerConcurrentAccess(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -479,6 +481,7 @@ func TestBlockFetcherMapStateConsistency(t *testing.T) {
 		verifyHeader,
 		broadcastBlock,
 		chainHeight,
+		nil,
 		insertHeaders,
 		insertChain,
 		dropPeer,
@@ -545,6 +548,7 @@ func TestWitnessManagerStateConsistency(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 
@@ -599,6 +603,7 @@ func TestBlockFetcherMemoryLeaks(t *testing.T) {
 		verifyHeader,
 		broadcastBlock,
 		chainHeight,
+		nil,
 		insertHeaders,
 		insertChain,
 		dropPeer,
@@ -663,6 +668,7 @@ func TestWitnessManagerMemoryLeaks(t *testing.T) {
 		getBlock,
 		getHeader,
 		chainHeight,
+		nil,
 		0,
 	)
 

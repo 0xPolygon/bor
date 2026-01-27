@@ -293,7 +293,7 @@ func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 		return nil, fmt.Errorf("block header is not found, %d, %x", blockNumber, blockHash)
 	}
 	var blobGasPrice *big.Int
-	if header.ExcessBlobGas != nil {
+	if header.ExcessBlobGas != nil && bc.chainConfig.BlobScheduleConfig != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, header)
 	}
 	receipt, ctx, err := rawdb.ReadCanonicalRawReceipt(bc.db, blockHash, blockNumber, txIndex)
@@ -514,6 +514,23 @@ func (bc *BlockChain) State() (*state.StateDB, error) {
 // StateAt returns a new mutable state based on a particular point in time.
 func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 	return state.New(root, bc.statedb)
+}
+
+// StateAtWithReaders returns a new mutable state based on a particular point in time,
+// along with two separate readers that share the same cache but track separate statistics.
+// The first reader (prefetch) is intended for prefetch operations, and the second (process)
+// is for actual transaction processing. This enables independent cache hit/miss tracking
+// for both phases of block production.
+func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return statedb, prefetchReader, processReader, nil
 }
 
 // HistoricState returns a historic state specified by the given root.

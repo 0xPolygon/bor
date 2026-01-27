@@ -789,25 +789,95 @@ func TestVerifyPageCount(t *testing.T) {
 }
 
 // TestHandleBlockAnnounces tests the handleBlockAnnounces function
-func TestHandleBlockAnnounces(t *testing.T) {
-	handler := newTestHandler()
-	defer handler.close()
+// blockAnnouncesTestSetup holds the setup for block announces tests
+type blockAnnouncesTestSetup struct {
+	handler *testHandler
+	ethHdlr *ethHandler
+	peer    *eth.Peer
+	p2pSrc  *p2p.MsgPipeRW
+	p2pSink *p2p.MsgPipeRW
+	hashes  []common.Hash
+	numbers []uint64
+}
+
+// setupBlockAnnouncesTest creates a test setup for block announces tests
+func setupBlockAnnouncesTest(t *testing.T, statelessSync bool, syncWithWitnesses bool) *blockAnnouncesTestSetup {
+	t.Helper()
+
+	var handler *testHandler
+	var ethHdlr *ethHandler
+
+	if syncWithWitnesses {
+		// Create handler with syncWithWitnesses enabled
+		db := rawdb.NewMemoryDatabase()
+		gspec := &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+		}
+		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+		txpool := newTestTxPool()
+
+		h, _ := newHandler(&handlerConfig{
+			Database:          db,
+			Chain:             chain,
+			TxPool:            txpool,
+			Network:           1,
+			Sync:              downloader.SnapSync,
+			BloomCache:        1,
+			syncWithWitnesses: true,
+		})
+		h.Start(1000)
+
+		t.Cleanup(func() {
+			h.Stop()
+			chain.Stop()
+		})
+
+		ethHdlr = (*ethHandler)(h)
+	} else {
+		handler = newTestHandler()
+		t.Cleanup(handler.close)
+
+		if statelessSync {
+			handler.handler.statelessSync.Store(true)
+		}
+		ethHdlr = (*ethHandler)(handler.handler)
+	}
 
 	// Create test peer
 	p2pSrc, p2pSink := p2p.MsgPipe()
-	defer p2pSrc.Close()
-	defer p2pSink.Close()
+	t.Cleanup(func() {
+		p2pSrc.Close()
+		p2pSink.Close()
+	})
 
-	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, handler.txpool)
-	defer peer.Close()
+	var txpool *testTxPool
+	if handler != nil {
+		txpool = handler.txpool
+	}
 
-	ethHandler := (*ethHandler)(handler.handler)
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, txpool)
+	t.Cleanup(peer.Close)
 
-	// Test announcing unknown blocks
+	// Create test data
 	hashes := []common.Hash{{0x01}, {0x02}}
 	numbers := []uint64{100, 101}
 
-	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	return &blockAnnouncesTestSetup{
+		handler: handler,
+		ethHdlr: ethHdlr,
+		peer:    peer,
+		p2pSrc:  p2pSrc,
+		p2pSink: p2pSink,
+		hashes:  hashes,
+		numbers: numbers,
+	}
+}
+
+func TestHandleBlockAnnounces(t *testing.T) {
+	setup := setupBlockAnnouncesTest(t, false, false)
+
+	err := setup.ethHdlr.handleBlockAnnounces(setup.peer, setup.hashes, setup.numbers)
 	if err != nil {
 		t.Fatalf("handleBlockAnnounces failed: %v", err)
 	}
@@ -815,27 +885,9 @@ func TestHandleBlockAnnounces(t *testing.T) {
 
 // TestHandleBlockAnnounces_WithWitnessRequester tests handleBlockAnnounces with statelessSync enabled
 func TestHandleBlockAnnounces_WithWitnessRequester(t *testing.T) {
-	handler := newTestHandler()
-	defer handler.close()
+	setup := setupBlockAnnouncesTest(t, true, false)
 
-	// Enable statelessSync to trigger witnessRequester creation
-	handler.handler.statelessSync.Store(true)
-
-	// Create test peer
-	p2pSrc, p2pSink := p2p.MsgPipe()
-	defer p2pSrc.Close()
-	defer p2pSink.Close()
-
-	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, handler.txpool)
-	defer peer.Close()
-
-	ethHandler := (*ethHandler)(handler.handler)
-
-	// Test announcing unknown blocks - this should trigger witnessRequester creation
-	hashes := []common.Hash{{0x01}, {0x02}}
-	numbers := []uint64{100, 101}
-
-	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	err := setup.ethHdlr.handleBlockAnnounces(setup.peer, setup.hashes, setup.numbers)
 	if err != nil {
 		t.Fatalf("handleBlockAnnounces failed: %v", err)
 	}
@@ -846,44 +898,9 @@ func TestHandleBlockAnnounces_WithWitnessRequester(t *testing.T) {
 
 // TestHandleBlockAnnounces_WithSyncWithWitnesses tests handleBlockAnnounces with syncWithWitnesses enabled
 func TestHandleBlockAnnounces_WithSyncWithWitnesses(t *testing.T) {
-	// Create handler with syncWithWitnesses enabled
-	db := rawdb.NewMemoryDatabase()
-	gspec := &core.Genesis{
-		Config: params.TestChainConfig,
-		Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-	}
-	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+	setup := setupBlockAnnouncesTest(t, false, true)
 
-	txpool := newTestTxPool()
-
-	handler, _ := newHandler(&handlerConfig{
-		Database:          db,
-		Chain:             chain,
-		TxPool:            txpool,
-		Network:           1,
-		Sync:              downloader.SnapSync,
-		BloomCache:        1,
-		syncWithWitnesses: true,
-	})
-	handler.Start(1000)
-	defer handler.Stop()
-	defer chain.Stop()
-
-	ethHandler := (*ethHandler)(handler)
-
-	// Create test peer
-	p2pSrc, p2pSink := p2p.MsgPipe()
-	defer p2pSrc.Close()
-	defer p2pSink.Close()
-
-	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, txpool)
-	defer peer.Close()
-
-	// Test announcing unknown blocks - this should trigger witnessRequester creation)
-	hashes := []common.Hash{{0x01}, {0x02}}
-	numbers := []uint64{100, 101}
-
-	err := ethHandler.handleBlockAnnounces(peer, hashes, numbers)
+	err := setup.ethHdlr.handleBlockAnnounces(setup.peer, setup.hashes, setup.numbers)
 	if err != nil {
 		t.Fatalf("handleBlockAnnounces failed: %v", err)
 	}
@@ -1125,40 +1142,110 @@ func TestVerifyPageCount_GetWitnessPageCount(t *testing.T) {
 }
 
 // TestHandleBlockBroadcast tests the handleBlockBroadcast function
+// blockBroadcastTestSetup holds the setup for block broadcast tests
+type blockBroadcastTestSetup struct {
+	handler *testHandler
+	chain   *core.BlockChain
+	ethHdlr *ethHandler
+	peer    *eth.Peer
+	p2pSrc  *p2p.MsgPipeRW
+	p2pSink *p2p.MsgPipeRW
+	block   *types.Block
+	td      *big.Int
+}
+
+// setupBlockBroadcastTest creates a test setup for block broadcast tests
+func setupBlockBroadcastTest(t *testing.T, statelessSync bool, syncWithWitnesses bool) *blockBroadcastTestSetup {
+	t.Helper()
+
+	var handler *testHandler
+	var chain *core.BlockChain
+	var ethHdlr *ethHandler
+	var txpool *testTxPool
+
+	if syncWithWitnesses {
+		// Create handler with syncWithWitnesses enabled
+		db := rawdb.NewMemoryDatabase()
+		gspec := &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+		}
+		chain, _ = core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+		txpool = newTestTxPool()
+
+		h, _ := newHandler(&handlerConfig{
+			Database:          db,
+			Chain:             chain,
+			TxPool:            txpool,
+			Network:           1,
+			Sync:              downloader.SnapSync,
+			BloomCache:        1,
+			syncWithWitnesses: true,
+		})
+		h.Start(1000)
+
+		t.Cleanup(func() {
+			h.Stop()
+			chain.Stop()
+		})
+
+		ethHdlr = (*ethHandler)(h)
+	} else {
+		handler = newTestHandler()
+		t.Cleanup(handler.close)
+
+		handler.handler.statelessSync.Store(statelessSync)
+		if !statelessSync {
+			handler.handler.syncWithWitnesses = false
+		}
+
+		ethHdlr = (*ethHandler)(handler.handler)
+		chain = handler.chain
+		txpool = handler.txpool
+	}
+
+	// Create a test peer
+	p2pSrc, p2pSink := p2p.MsgPipe()
+	t.Cleanup(func() {
+		p2pSrc.Close()
+		p2pSink.Close()
+	})
+
+	peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "test-peer", nil, p2pSrc), p2pSrc, txpool)
+	t.Cleanup(peer.Close)
+
+	// Initialize peer head and TD to prevent nil pointer dereference
+	peerValue := reflect.ValueOf(peer).Elem()
+	tdField := peerValue.FieldByName("td")
+	if tdField.IsValid() {
+		newTD := big.NewInt(1000)
+		rf := reflect.NewAt(tdField.Type(), unsafe.Pointer(tdField.UnsafeAddr())).Elem()
+		rf.Set(reflect.ValueOf(newTD))
+	}
+	peer.SetHead(common.Hash{0x01}, big.NewInt(1000))
+
+	// Create a test block
+	block := chain.GetBlock(chain.CurrentBlock().Hash(), chain.CurrentBlock().Number.Uint64())
+	td := big.NewInt(1000)
+
+	return &blockBroadcastTestSetup{
+		handler: handler,
+		chain:   chain,
+		ethHdlr: ethHdlr,
+		peer:    peer,
+		p2pSrc:  p2pSrc,
+		p2pSink: p2pSink,
+		block:   block,
+		td:      td,
+	}
+}
+
 func TestHandleBlockBroadcast(t *testing.T) {
 	t.Run("WithStatelessSync", func(t *testing.T) {
-		handler := newTestHandler()
-		defer handler.close()
-
-		// Enable stateless sync
-		handler.handler.statelessSync.Store(true)
-
-		ethHandler := (*ethHandler)(handler.handler)
-
-		// Create a test peer
-		p2pSrc, p2pSink := p2p.MsgPipe()
-		defer p2pSrc.Close()
-		defer p2pSink.Close()
-
-		peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "test-peer", nil, p2pSrc), p2pSrc, handler.txpool)
-		defer peer.Close()
-
-		// Initialize peer head and TD to prevent nil pointer dereference
-		peerValue := reflect.ValueOf(peer).Elem()
-		tdField := peerValue.FieldByName("td")
-		if tdField.IsValid() {
-			newTD := big.NewInt(1000)
-			rf := reflect.NewAt(tdField.Type(), unsafe.Pointer(tdField.UnsafeAddr())).Elem()
-			rf.Set(reflect.ValueOf(newTD))
-		}
-		peer.SetHead(common.Hash{0x01}, big.NewInt(1000))
-
-		// Create a test block
-		block := handler.chain.GetBlock(handler.chain.CurrentBlock().Hash(), handler.chain.CurrentBlock().Number.Uint64())
-		td := big.NewInt(1000)
+		setup := setupBlockBroadcastTest(t, true, false)
 
 		// Test handleBlockBroadcast - should use InjectBlockWithWitnessRequirement
-		err := ethHandler.handleBlockBroadcast(peer, block, td)
+		err := setup.ethHdlr.handleBlockBroadcast(setup.peer, setup.block, setup.td)
 		if err != nil {
 			t.Fatalf("handleBlockBroadcast failed: %v", err)
 		}
@@ -1168,94 +1255,20 @@ func TestHandleBlockBroadcast(t *testing.T) {
 	})
 
 	t.Run("WithSyncWithWitnesses", func(t *testing.T) {
-		// Create handler with syncWithWitnesses enabled
-		db := rawdb.NewMemoryDatabase()
-		gspec := &core.Genesis{
-			Config: params.TestChainConfig,
-			Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
-		}
-		chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
-
-		txpool := newTestTxPool()
-
-		handler, _ := newHandler(&handlerConfig{
-			Database:          db,
-			Chain:             chain,
-			TxPool:            txpool,
-			Network:           1,
-			Sync:              downloader.SnapSync,
-			BloomCache:        1,
-			syncWithWitnesses: true,
-		})
-		handler.Start(1000)
-		defer handler.Stop()
-		defer chain.Stop()
-
-		ethHandler := (*ethHandler)(handler)
-
-		// Create a test peer
-		p2pSrc, p2pSink := p2p.MsgPipe()
-		defer p2pSrc.Close()
-		defer p2pSink.Close()
-
-		peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "test-peer", nil, p2pSrc), p2pSrc, txpool)
-		defer peer.Close()
-
-		// Initialize peer head and TD to prevent nil pointer dereference
-		peerValue := reflect.ValueOf(peer).Elem()
-		tdField := peerValue.FieldByName("td")
-		if tdField.IsValid() {
-			newTD := big.NewInt(1000)
-			rf := reflect.NewAt(tdField.Type(), unsafe.Pointer(tdField.UnsafeAddr())).Elem()
-			rf.Set(reflect.ValueOf(newTD))
-		}
-		peer.SetHead(common.Hash{0x01}, big.NewInt(1000))
-
-		// Create a test block
-		block := chain.GetBlock(chain.CurrentBlock().Hash(), chain.CurrentBlock().Number.Uint64())
-		td := big.NewInt(1000)
+		setup := setupBlockBroadcastTest(t, false, true)
 
 		// Test handleBlockBroadcast - should use InjectBlockWithWitnessRequirement
-		err := ethHandler.handleBlockBroadcast(peer, block, td)
+		err := setup.ethHdlr.handleBlockBroadcast(setup.peer, setup.block, setup.td)
 		if err != nil {
 			t.Fatalf("handleBlockBroadcast failed: %v", err)
 		}
 	})
 
 	t.Run("WithoutStatelessSync", func(t *testing.T) {
-		handler := newTestHandler()
-		defer handler.close()
-
-		// Ensure stateless sync is disabled
-		handler.handler.statelessSync.Store(false)
-		handler.handler.syncWithWitnesses = false
-
-		ethHandler := (*ethHandler)(handler.handler)
-
-		// Create a test peer
-		p2pSrc, p2pSink := p2p.MsgPipe()
-		defer p2pSrc.Close()
-		defer p2pSink.Close()
-
-		peer := eth.NewPeer(eth.ETH69, p2p.NewPeerPipe(enode.ID{1}, "test-peer", nil, p2pSrc), p2pSrc, handler.txpool)
-		defer peer.Close()
-
-		// Initialize peer head and TD to prevent nil pointer dereference
-		peerValue := reflect.ValueOf(peer).Elem()
-		tdField := peerValue.FieldByName("td")
-		if tdField.IsValid() {
-			newTD := big.NewInt(1000)
-			rf := reflect.NewAt(tdField.Type(), unsafe.Pointer(tdField.UnsafeAddr())).Elem()
-			rf.Set(reflect.ValueOf(newTD))
-		}
-		peer.SetHead(common.Hash{0x01}, big.NewInt(1000))
-
-		// Create a test block
-		block := handler.chain.GetBlock(handler.chain.CurrentBlock().Hash(), handler.chain.CurrentBlock().Number.Uint64())
-		td := big.NewInt(1000)
+		setup := setupBlockBroadcastTest(t, false, false)
 
 		// Test handleBlockBroadcast - should use Enqueue instead
-		err := ethHandler.handleBlockBroadcast(peer, block, td)
+		err := setup.ethHdlr.handleBlockBroadcast(setup.peer, setup.block, setup.td)
 		if err != nil {
 			t.Fatalf("handleBlockBroadcast failed: %v", err)
 		}

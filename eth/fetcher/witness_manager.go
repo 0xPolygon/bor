@@ -60,13 +60,14 @@ type cachedWitness struct {
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
-	parentQuit        <-chan struct{}        // Parent fetcher's quit channel
-	parentDropPeer    peerDropFn             // Function to drop a misbehaving peer
-	parentJailPeer    peerJailFn             // Function to jail a peer to prevent reconnection (optional)
-	parentEnqueueCh   chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
-	parentGetBlock    blockRetrievalFn       // Function to check if block is known locally
-	parentGetHeader   HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
-	parentChainHeight chainHeightFn          // Retrieve chain height for distance checks
+	parentQuit          <-chan struct{}        // Parent fetcher's quit channel
+	parentDropPeer      peerDropFn             // Function to drop a misbehaving peer
+	parentJailPeer      peerJailFn             // Function to jail a peer to prevent reconnection (optional)
+	parentEnqueueCh     chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
+	parentGetBlock      blockRetrievalFn       // Function to check if block is known locally
+	parentGetHeader     HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
+	parentChainHeight   chainHeightFn          // Retrieve chain height for distance checks
+	parentCurrentHeader currentHeaderFn        // Retrieve current block header for gas limit
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
@@ -105,6 +106,7 @@ func newWitnessManager(
 	parentGetBlock blockRetrievalFn,
 	parentGetHeader HeaderRetrievalFn,
 	parentChainHeight chainHeightFn,
+	parentCurrentHeader currentHeaderFn,
 	gasCeil uint64,
 ) *witnessManager {
 	// Create TTL cache with 1 minute expiration for witnesses
@@ -121,6 +123,7 @@ func newWitnessManager(
 		parentGetBlock:      parentGetBlock,
 		parentGetHeader:     parentGetHeader,
 		parentChainHeight:   parentChainHeight,
+		parentCurrentHeader: parentCurrentHeader,
 		pending:             make(map[common.Hash]*witnessRequestState),
 		witnessUnavailable:  make(map[common.Hash]time.Time),
 		witnessCache:        witnessCache,
@@ -910,7 +913,31 @@ var ErrNoWitnessPeerAvailable = errors.New("no peer with witness available") // 
 // Formula: ceil(gasCeil (in millions) / maxPageSizeMB)
 // Example: 50M gas / 15MB per page = ceil(3.33) = 4 pages
 func (m *witnessManager) calculatePageThreshold() uint64 {
+	// Try to get the actual gas limit from the current block header
+	if m.parentCurrentHeader != nil {
+		if header := m.parentCurrentHeader(); header != nil {
+			actualGasLimit := header.GasLimit
+			gasCeilMB := actualGasLimit / gasPerMB
+
+			// Ceiling division: (a + b - 1) / b
+			threshold := (gasCeilMB + maxPageSizeMB - 1) / maxPageSizeMB
+
+			// Ensure minimum threshold of 1 page
+			if threshold < 1 {
+				threshold = 1
+			}
+
+			log.Debug("[wm] Calculated dynamic page threshold from block header",
+				"blockNumber", header.Number.Uint64(), "blockGasLimit", actualGasLimit,
+				"gasCeilMB", gasCeilMB, "threshold", threshold)
+			witnessThresholdGauge.Update(int64(threshold))
+			return threshold
+		}
+	}
+
+	// Fallback to config value if header not available
 	if m.gasCeil == 0 {
+		witnessThresholdGauge.Update(int64(witnessPageThreshold))
 		return witnessPageThreshold // Return default if gas ceil not set
 	}
 
@@ -925,7 +952,8 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 		threshold = 1
 	}
 
-	log.Debug("[wm] Calculated dynamic page threshold", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
+	log.Debug("[wm] Calculated dynamic page threshold from config", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold)
+	witnessThresholdGauge.Update(int64(threshold))
 	return threshold
 }
 
@@ -968,6 +996,9 @@ func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash 
 // CheckWitnessPageCount checks if a witness page count should trigger verification
 // Returns true if peer is honest (or under threshold), false if peer should be dropped
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
+	// Track that a verification check is being performed
+	witnessVerifyCheckMeter.Mark(1)
+
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
 
@@ -975,11 +1006,13 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	// No peer queries are made in this case
 	if pageCount <= threshold {
 		log.Debug("[wm] Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		witnessPageCountBelowThresholdMeter.Mark(1)
 		return true
 	}
 
 	// Page count exceeds threshold - verify synchronously
 	log.Debug("[wm] Witness page count exceeds threshold, running synchronous verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	witnessPageCountAboveThresholdMeter.Mark(1)
 	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
@@ -990,6 +1023,7 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	if len(randomPeers) < witnessVerificationPeers {
 		// Not enough peers for verification, assume honest (conservative approach)
 		log.Debug("[wm] Not enough peers for verification, assuming honest", "peer", reportingPeer, "availablePeers", len(randomPeers))
+		witnessVerifyPeersInsuffMeter.Mark(1)
 		return true
 	}
 
@@ -1003,16 +1037,27 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	if consensusPageCount != reportedPageCount && consensusPageCount != 0 {
 		// Peer is dishonest - drop and jail immediately
 		log.Warn("Dropping dishonest peer - consensus verification failed", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
+		witnessVerifyFailureMeter.Mark(1)
+
 		m.parentDropPeer(reportingPeer)
+		witnessVerifyDropMeter.Mark(1)
+
 		// Also jail the peer to prevent reconnection
 		if m.parentJailPeer != nil {
 			log.Warn("Jailing dishonest peer", "peer", reportingPeer)
 			m.parentJailPeer(reportingPeer)
+			witnessVerifyJailMeter.Mark(1)
 		}
 		return false
 	}
 
+	// Track no consensus case
+	if consensusPageCount == 0 {
+		witnessVerifyNoConsensusMeter.Mark(1)
+	}
+
 	// Peer is honest or no consensus (assume honest to avoid false positives)
 	log.Debug("[wm] Peer verification successful", "peer", reportingPeer, "pageCount", reportedPageCount, "hash", hash)
+	witnessVerifySuccessMeter.Mark(1)
 	return true
 }
