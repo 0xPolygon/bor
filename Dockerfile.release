@@ -1,4 +1,4 @@
-FROM alpine:latest
+FROM mirror.gcr.io/library/alpine:3.21
 
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR

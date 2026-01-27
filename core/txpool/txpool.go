@@ -156,7 +156,11 @@ func (p *TxPool) loop(head *types.Header) {
 		newHeadCh  = make(chan core.ChainHeadEvent)
 		newHeadSub = p.chain.SubscribeChainHeadEvent(newHeadCh)
 	)
-	defer newHeadSub.Unsubscribe()
+	defer func() {
+		if newHeadSub != nil {
+			newHeadSub.Unsubscribe()
+		}
+	}()
 
 	// Track the previous and current head to feed to an idle reset
 	var (
@@ -407,6 +411,22 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 	subs := make([]event.Subscription, len(p.subpools))
 	for i, subpool := range p.subpools {
 		subs[i] = subpool.SubscribeTransactions(ch, reorgs)
+	}
+	return p.subs.Track(event.JoinSubscriptions(subs...))
+}
+
+// SubscribeRebroadcastTransactions registers a subscription for stuck transaction
+// rebroadcast events from all subpools.
+func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	if p == nil {
+		return event.NewSubscription(func(quit <-chan struct{}) error {
+			<-quit
+			return nil
+		})
+	}
+	subs := make([]event.Subscription, len(p.subpools))
+	for i, subpool := range p.subpools {
+		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
 	}
 	return p.subs.Track(event.JoinSubscriptions(subs...))
 }

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -56,6 +57,35 @@ type ethPeer struct {
 	*eth.Peer
 	snapExt *snapPeer // Satellite `snap` connection
 	witPeer *witPeer
+}
+
+// jailPeerForViolation handles logging and jailing a peer for a protocol violation.
+// It logs the violation details and calls the jailPeer callback if provided.
+func (p *ethPeer) jailPeerForViolation(jailPeer func(string), violation string, details map[string]interface{}) error {
+	// Log warning with violation details
+	logArgs := []interface{}{"peer", p.ID()}
+	for key, value := range details {
+		logArgs = append(logArgs, key, value)
+	}
+	p.witPeer.Peer.Log().Warn(fmt.Sprintf("Peer sent %s, dropping peer", violation), logArgs...)
+
+	// Jail the peer if callback is provided
+	if jailPeer != nil {
+		p.witPeer.Peer.Log().Warn(fmt.Sprintf("Jailing peer for %s", violation), "peer", p.ID())
+		jailPeer(p.ID())
+	}
+
+	// Build error message from details
+	errMsg := fmt.Sprintf("peer sent %s: ", violation)
+	first := true
+	for key, value := range details {
+		if !first {
+			errMsg += ", "
+		}
+		errMsg += fmt.Sprintf("%s=%v", key, value)
+		first = false
+	}
+	return fmt.Errorf("%s", errMsg)
 }
 
 // info gathers and returns some `eth` protocol metadata known about a peer.
@@ -99,6 +129,7 @@ type WitnessPeer interface {
 	AsyncSendNewWitness(witness *stateless.Witness)
 	AsyncSendNewWitnessHash(hash common.Hash, number uint64)
 	RequestWitness(witnessPages []wit.WitnessPageRequest, sink chan *wit.Response) (*wit.Request, error)
+	RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error)
 	Close()
 	ID() string
 	Version() uint
@@ -172,6 +203,120 @@ func (p *ethPeer) SupportsWitness() bool {
 // RequestWitnesses implements downloader.Peer.
 // It requests witnesses using the wit protocol for the given block hashes.
 func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Response) (*eth.Request, error) {
+	return p.RequestWitnessesWithVerification(hashes, dlResCh, nil, nil)
+}
+
+// RequestWitnessPageCount requests only the page count for a witness using the new metadata protocol.
+// This is efficient for verification purposes where we only need metadata, not the actual witness data.
+func (p *ethPeer) RequestWitnessPageCount(hash common.Hash) (uint64, error) {
+	if p.witPeer == nil {
+		return 0, errors.New("witness peer not found")
+	}
+
+	// Check if peer supports WIT1 protocol with metadata message
+	if p.witPeer.Peer.Version() < wit.WIT1 {
+		// Fallback to old method for WIT0 peers: request page 0
+		return p.requestWitnessPageCountLegacy(hash)
+	}
+
+	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount called", "peer", p.ID(), "hash", hash)
+
+	// Use the new efficient metadata request (WIT1)
+	witResCh := make(chan *wit.Response, 1)
+
+	witReq, err := p.witPeer.Peer.RequestWitnessMetadata([]common.Hash{hash}, witResCh)
+	if err != nil {
+		p.witPeer.Peer.Log().Error("Error requesting witness metadata", "peer", p.ID(), "err", err)
+		return 0, err
+	}
+	defer witReq.Close()
+
+	// Wait for metadata response with timeout
+	select {
+	case witRes := <-witResCh:
+		if witRes == nil {
+			return 0, errors.New("nil witness metadata response")
+		}
+
+		// Extract WitnessMetadataPacket from the response
+		metadataPacket, ok := witRes.Res.(*wit.WitnessMetadataPacket)
+		if !ok {
+			return 0, fmt.Errorf("unexpected witness metadata response type: %T", witRes.Res)
+		}
+
+		// Extract metadata
+		if len(metadataPacket.Metadata) == 0 {
+			return 0, errors.New("empty witness metadata response")
+		}
+
+		metadata := metadataPacket.Metadata[0]
+
+		// Validate that witness is available
+		if !metadata.Available {
+			return 0, fmt.Errorf("witness not available on peer %s for hash %s", p.ID(), hash)
+		}
+
+		p.witPeer.Peer.Log().Debug("Received witness metadata",
+			"peer", p.ID(),
+			"hash", hash,
+			"totalPages", metadata.TotalPages,
+			"witnessSize", metadata.WitnessSize,
+			"blockNumber", metadata.BlockNumber,
+			"available", metadata.Available)
+
+		return metadata.TotalPages, nil
+
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("timeout waiting for witness metadata from peer %s", p.ID())
+	}
+}
+
+// requestWitnessPageCountLegacy is the fallback method for WIT0 peers that don't support metadata requests.
+// It requests page 0 to get the TotalPages field.
+func (p *ethPeer) requestWitnessPageCountLegacy(hash common.Hash) (uint64, error) {
+	p.witPeer.Peer.Log().Trace("RequestWitnessPageCount (legacy) called", "peer", p.ID(), "hash", hash)
+
+	// Request only the first page (page 0) to get TotalPages metadata
+	witResCh := make(chan *wit.Response, 1)
+	request := []wit.WitnessPageRequest{{Hash: hash, Page: 0}}
+
+	witReq, err := p.witPeer.Peer.RequestWitness(request, witResCh)
+	if err != nil {
+		p.witPeer.Peer.Log().Error("Error requesting witness page count (legacy)", "peer", p.ID(), "err", err)
+		return 0, err
+	}
+	defer witReq.Close()
+
+	// Wait for the first page response with timeout
+	select {
+	case witRes := <-witResCh:
+		if witRes == nil {
+			return 0, errors.New("nil witness response")
+		}
+
+		// Extract WitnessPacketRLPPacket from the response
+		witPacket, ok := witRes.Res.(*wit.WitnessPacketRLPPacket)
+		if !ok {
+			return 0, fmt.Errorf("unexpected witness response type: %T", witRes.Res)
+		}
+
+		// Extract TotalPages from the first page
+		if len(witPacket.WitnessPacketResponse) == 0 {
+			return 0, errors.New("empty witness packet response")
+		}
+
+		totalPages := witPacket.WitnessPacketResponse[0].TotalPages
+		p.witPeer.Peer.Log().Debug("Received witness page count (legacy)", "peer", p.ID(), "hash", hash, "totalPages", totalPages)
+
+		return totalPages, nil
+
+	case <-time.After(5 * time.Second):
+		return 0, fmt.Errorf("timeout waiting for witness page count from peer %s", p.ID())
+	}
+}
+
+// RequestWitnessesWithVerification requests witnesses with optional page count verification
+func (p *ethPeer) RequestWitnessesWithVerification(hashes []common.Hash, dlResCh chan *eth.Response, verifyPageCount func(common.Hash, uint64, string) bool, jailPeer func(string)) (*eth.Request, error) {
 	if p.witPeer == nil {
 		return nil, errors.New("witness peer not found")
 	}
@@ -184,6 +329,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 	witTotalPages := make(map[common.Hash]uint64)   // witness hash and its total pages required
 	witTotalRequest := make(map[common.Hash]uint64) // witness hash and its total requests
 	failedRequests := make(map[common.Hash]map[uint64]witReqRetryCount)
+	downloadPaused := make(map[common.Hash]bool) // Track if download is paused for verification
 	var mapsMu sync.RWMutex
 	var buildRequestMu sync.RWMutex
 
@@ -222,7 +368,7 @@ func (p *ethPeer) RequestWitnesses(hashes []common.Hash, dlResCh chan *eth.Respo
 		reconstructedWitness := make(map[common.Hash]*stateless.Witness)
 		var lastWitRes *wit.Response
 		for witRes := range witReqResCh {
-			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests)
+			p.receiveWitnessPage(witRes, receivedWitPages, reconstructedWitness, hashes, &witReqs, &witReqsWg, witTotalPages, witTotalRequest, witReqResCh, witReqSem, &mapsMu, &buildRequestMu, failedRequests, downloadPaused, verifyPageCount, jailPeer)
 
 			<-witReqSem
 			// Check if the Response is nil before accessing the Done channel.
@@ -326,6 +472,9 @@ func (p *ethPeer) receiveWitnessPage(
 	mapsMu *sync.RWMutex,
 	buildRequestMu *sync.RWMutex,
 	failedRequests map[common.Hash]map[uint64]witReqRetryCount,
+	downloadPaused map[common.Hash]bool,
+	verifyPageCount func(common.Hash, uint64, string) bool,
+	jailPeer func(string), // Function to jail a peer for malicious behavior (optional)
 ) (retrievedError error) {
 	defer func() {
 		// if fails map on retry count and request again
@@ -372,6 +521,15 @@ func (p *ethPeer) receiveWitnessPage(
 			continue
 		}
 
+		// Validate that current page number is within bounds
+		if page.Page >= page.TotalPages {
+			return p.jailPeerForViolation(jailPeer, "invalid page number", map[string]interface{}{
+				"hash":       page.Hash,
+				"page":       page.Page,
+				"totalPages": page.TotalPages,
+			})
+		}
+
 		receivedWitPages[page.Hash] = append(receivedWitPages[page.Hash], page)
 		if len(receivedWitPages[page.Hash]) == int(page.TotalPages) {
 			wit, err := p.reconstructWitness(receivedWitPages[page.Hash])
@@ -381,10 +539,66 @@ func (p *ethPeer) receiveWitnessPage(
 			reconstructedWitness[page.Hash] = wit
 		}
 
-		// check and build any remaining witnessRequest for the witnesses we dont know previously the totalPages
+		// Check and validate TotalPages consistency
 		mapsMu.Lock()
-		witTotalPages[page.Hash] = page.TotalPages
+		existingTotalPages, hasTotalPages := witTotalPages[page.Hash]
+		if hasTotalPages {
+			// We already know TotalPages - verify it hasn't changed
+			if existingTotalPages != page.TotalPages {
+				mapsMu.Unlock()
+				downloadPaused[page.Hash] = true
+				return p.jailPeerForViolation(jailPeer, "inconsistent TotalPages", map[string]interface{}{
+					"hash":     page.Hash,
+					"existing": existingTotalPages,
+					"new":      page.TotalPages,
+				})
+			}
+		} else {
+			// First time learning TotalPages - store it
+			witTotalPages[page.Hash] = page.TotalPages
+		}
 		mapsMu.Unlock()
+
+		// Trigger page count verification if callback is provided (only on first page)
+		// If verification fails (peer is dishonest), drop the peer immediately
+		if verifyPageCount != nil && !hasTotalPages {
+			isHonest := verifyPageCount(page.Hash, page.TotalPages, p.ID())
+			if !isHonest {
+				// Peer is dishonest - pause download and discard pages
+				mapsMu.Lock()
+				downloadPaused[page.Hash] = true
+				mapsMu.Unlock()
+				p.witPeer.Peer.Log().Warn("Peer failed verification, dropping peer", "peer", p.ID(), "hash", page.Hash, "totalPages", page.TotalPages)
+				// Return error to trigger peer drop
+				return fmt.Errorf("peer failed page count verification: claimed=%d pages", page.TotalPages)
+			}
+		}
+
+		// Additional check: Verify we haven't received more pages than claimed
+		mapsMu.RLock()
+		currentTotalPages := witTotalPages[page.Hash]
+		mapsMu.RUnlock()
+
+		if len(receivedWitPages[page.Hash]) > int(currentTotalPages) {
+			mapsMu.Lock()
+			downloadPaused[page.Hash] = true
+			mapsMu.Unlock()
+			return p.jailPeerForViolation(jailPeer, "more pages than TotalPages", map[string]interface{}{
+				"hash":     page.Hash,
+				"received": len(receivedWitPages[page.Hash]),
+				"total":    currentTotalPages,
+			})
+		}
+
+		// Check if download is paused before building more requests
+		mapsMu.RLock()
+		paused := downloadPaused[page.Hash]
+		mapsMu.RUnlock()
+
+		if paused {
+			// Download is paused, don't build more requests
+			return nil
+		}
 
 		// non blocking call to avoid race condition because of semaphore
 		witReqsWg.Add(1) // protecting from not finishing before requests are built

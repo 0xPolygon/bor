@@ -61,7 +61,10 @@ func filterFuzzCmd(ctx *cli.Context) error {
 				if parent, _ := headerCache.Get(newPtr.ParentHash); parent != nil {
 					newPtr = parent
 				} else {
-					newPtr, _ = getHeaderByHash(f.client, newPtr.ParentHash)
+					newPtr, err := getHeaderByHash(f.client, newPtr.ParentHash)
+					if err != nil {
+						return nil
+					}
 					if newPtr == nil {
 						return nil
 					}

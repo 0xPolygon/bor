@@ -62,3 +62,40 @@ func handleNewWitnessHashes(backend Backend, msg Decoder, peer *Peer) error {
 
 	return backend.Handle(peer, req)
 }
+
+// handleGetWitnessMetadata processes a GetWitnessMetadataPacket request from a peer.
+func handleGetWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the GetWitnessMetadataPacket request
+	req := new(GetWitnessMetadataPacket)
+	if err := msg.Decode(&req); err != nil {
+		return fmt.Errorf("failed to decode GetWitnessMetadataPacket: %w", err)
+	}
+
+	// Validate request parameters
+	if len(req.Hashes) == 0 {
+		return fmt.Errorf("invalid GetWitnessMetadataPacket: Hashes cannot be empty")
+	}
+
+	return backend.Handle(peer, req)
+}
+
+// handleWitnessMetadata processes an incoming witness metadata response from a peer.
+func handleWitnessMetadata(backend Backend, msg Decoder, peer *Peer) error {
+	// Decode the WitnessMetadataPacket response
+	packet := new(WitnessMetadataPacket)
+	if err := msg.Decode(packet); err != nil {
+		log.Error("Failed to decode witness metadata response packet", "err", err)
+		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
+	}
+
+	// Construct the response object
+	res := &Response{
+		id:   packet.RequestId,
+		code: WitnessMetadataMsg,
+		Res:  packet,
+	}
+
+	// Forward the response to the dispatcher
+	log.Debug("Dispatching witness metadata response packet", "peer", peer.ID(), "reqID", packet.RequestId, "count", len(packet.Metadata))
+	return peer.dispatchResponse(res, nil)
+}

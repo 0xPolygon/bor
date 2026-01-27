@@ -313,6 +313,34 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
 		Group:   "Transaction Pool",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.rebroadcast",
+		Usage:   "Enable stuck transaction rebroadcast mechanism",
+		Value:   &c.cliConfig.TxPool.Rebroadcast,
+		Default: c.cliConfig.TxPool.Rebroadcast,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.rebroadcast-interval",
+		Usage:   "Interval between rebroadcast checks for stuck transactions",
+		Value:   &c.cliConfig.TxPool.RebroadcastInterval,
+		Default: c.cliConfig.TxPool.RebroadcastInterval,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.rebroadcast-max-age",
+		Usage:   "Maximum age for a transaction to be eligible for rebroadcast",
+		Value:   &c.cliConfig.TxPool.RebroadcastMaxAge,
+		Default: c.cliConfig.TxPool.RebroadcastMaxAge,
+		Group:   "Transaction Pool",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "txpool.rebroadcast-batch-size",
+		Usage:   "Maximum number of transactions to rebroadcast per cycle",
+		Value:   &c.cliConfig.TxPool.RebroadcastBatchSize,
+		Default: c.cliConfig.TxPool.RebroadcastBatchSize,
+		Group:   "Transaction Pool",
+	})
 
 	// sealer options
 	f.BoolFlag(&flagset.BoolFlag{
@@ -376,6 +404,41 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.",
 		Value:   &c.cliConfig.Sealer.BlockTime,
 		Default: c.cliConfig.Sealer.BlockTime,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.enableDynamicGasLimit",
+		Usage:   "Enable dynamic gas limit adjustment based on base fee",
+		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,
+		Default: c.cliConfig.Sealer.EnableDynamicGasLimit,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.gasLimitMin",
+		Usage:   "Minimum gas limit when dynamic gas limit is enabled",
+		Value:   &c.cliConfig.Sealer.GasLimitMin,
+		Default: c.cliConfig.Sealer.GasLimitMin,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.gasLimitMax",
+		Usage:   "Maximum gas limit when dynamic gas limit is enabled",
+		Value:   &c.cliConfig.Sealer.GasLimitMax,
+		Default: c.cliConfig.Sealer.GasLimitMax,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetBaseFee",
+		Usage:   "Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei)",
+		Value:   &c.cliConfig.Sealer.TargetBaseFee,
+		Default: c.cliConfig.Sealer.TargetBaseFee,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.baseFeeBuffer",
+		Usage:   "Buffer around target base fee in wei (no adjustment when within buffer)",
+		Value:   &c.cliConfig.Sealer.BaseFeeBuffer,
+		Default: c.cliConfig.Sealer.BaseFeeBuffer,
 		Group:   "Sealer",
 	})
 
@@ -582,6 +645,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap)",
 		Value:   &c.cliConfig.JsonRPC.TxFeeCap,
 		Default: c.cliConfig.JsonRPC.TxFeeCap,
+		Group:   "JsonRPC",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.logquerylimit",
+		Usage:   "Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap)",
+		Value:   &c.cliConfig.JsonRPC.LogQueryLimit,
+		Default: c.cliConfig.JsonRPC.LogQueryLimit,
 		Group:   "JsonRPC",
 	})
 	f.BoolFlag(&flagset.BoolFlag{

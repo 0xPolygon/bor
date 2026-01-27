@@ -144,10 +144,18 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		}
 
 		var canonicalChain []*types.Block
-
 		length := end - rewindTo
 
-		canonicalChain = eth.BlockChain().GetBlocksFromHash(common.HexToHash(hash), int(length))
+		// Only milestones provide a block-hash anchor (end block hash).
+		// For checkpoints, `hash` is a merkle root, not a block hash; attempting to
+		// resolve it via GetBlocksFromHash is always invalid.
+		if !isCheckpoint {
+			canonicalChain = eth.BlockChain().GetBlocksFromHash(
+				common.HexToHash(hash),
+				int(length))
+		} else {
+			canonicalChain = nil
+		}
 
 		// Reverse the canonical chain
 		for i, j := 0, len(canonicalChain)-1; i < j; i, j = i+1, j-1 {
@@ -158,6 +166,17 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 			canonicalChain = nil
 		}
 
+		// Never rewind unless we actually have a canonical chain segment to insert.
+		if len(canonicalChain) == 0 {
+			if isCheckpoint {
+				log.Warn("Checkpoint mismatch: refusing to rewind without a canonical chain segment",
+					"head", head, "rewindTo", rewindTo, "start", start, "end", end)
+			} else {
+				log.Warn("Milestone mismatch: refusing to rewind without a canonical chain segment",
+					"head", head, "rewindTo", rewindTo, "start", start, "end", end)
+			}
+			return hash, errHashMismatch
+		}
 		reorgToFinalized(eth, head, rewindTo, canonicalChain)
 
 		return hash, errHashMismatch
@@ -178,6 +197,13 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 // reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
 // and inserts the chain finalized by checkpoint/milestone.
 func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
+	// do nothing if there is no canonical chain to insert.
+	if len(canonicalChain) == 0 {
+		log.Warn("Refusing to reorg finalized without canonical chain",
+			"head", head, "rewindTo", rewindTo)
+		return
+	}
+
 	if eth.Miner() != nil && eth.Miner().Mining() {
 		ch := make(chan struct{})
 		eth.Miner().Stop(ch)

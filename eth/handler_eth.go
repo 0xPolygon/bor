@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -120,16 +121,7 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	var witnessRequester func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error)
 	if h.statelessSync.Load() || h.syncWithWitnesses {
 		// Create a witness requester that uses the wit.Peer's RequestWitness method
-		witnessRequester = func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-			}
-
-			// Request witnesses using the wit peer
-			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
-		}
+		witnessRequester = h.createWitnessRequester()
 	}
 
 	for i := 0; i < len(unknownHashes); i++ {
@@ -137,6 +129,69 @@ func (h *ethHandler) handleBlockAnnounces(peer *eth.Peer, hashes []common.Hash, 
 	}
 
 	return nil
+}
+
+// createWitnessRequester creates a witness requester closure that can be used
+// by the block fetcher to request witnesses with verification.
+func (h *ethHandler) createWitnessRequester() func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+	return func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
+		// Get the ethPeer from the peerSet
+		ethPeer := h.peers.getOnePeerWithWitness(hash)
+		if ethPeer == nil {
+			return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
+		}
+
+		// Request witnesses using the wit peer with verification
+		return ethPeer.RequestWitnessesWithVerification([]common.Hash{hash}, sink, h.verifyPageCount, (*handler)(h).jailPeer)
+	}
+}
+
+// verifyPageCount verifies the witness page count for a given block hash by
+// comparing it against random peers' reported page counts.
+// Returns true if the peer is honest (page count matches consensus), false otherwise.
+//
+// Optimization: The functions below (getRandomPeers, getWitnessPageCount) are passed as
+// closures to CheckWitnessPageCount but are only executed if needed:
+// - Not called if pageCount <= threshold (small witnesses)
+// - Not called if cache hit (recently verified witnesses)
+// This avoids unnecessary peer queries and metadata requests in most cases.
+func (h *ethHandler) verifyPageCount(hash common.Hash, pageCount uint64, peer string) bool {
+	// Define function to get random peers for verification
+	// Note: This function is only called if verification is actually needed (cache miss + threshold exceeded)
+	getRandomPeers := func() []string {
+		allPeers := h.peers.getAllPeers()
+		randomPeers := make([]string, 0, len(allPeers))
+		for _, p := range allPeers {
+			// Exclude the reporting peer to avoid double-counting their vote
+			if p.SupportsWitness() && p.ID() != peer {
+				randomPeers = append(randomPeers, p.ID())
+			}
+		}
+		// Shuffle the peers to get random selection
+		for i := len(randomPeers) - 1; i > 0; i-- {
+			j := rand.Intn(i + 1)
+			randomPeers[i], randomPeers[j] = randomPeers[j], randomPeers[i]
+		}
+		log.Info("[wm] Random peers (excluding original)", "randomPeers", randomPeers, "excluded", peer)
+		return randomPeers
+	}
+
+	// Define function to get witness page count from a peer
+	// Note: This function is only called if verification is needed (after cache check)
+	getWitnessPageCount := func(peerID string, hash common.Hash) (uint64, error) {
+		peer := h.peers.peer(peerID)
+		if peer == nil || !peer.SupportsWitness() {
+			log.Info("[wm] Peer not available or doesn't support witness", "peer", peerID)
+			return 0, fmt.Errorf("peer %s not available or doesn't support witness", peerID)
+		}
+
+		// Use the new efficient method that only downloads page 0
+		log.Info("[wm] Getting witness page count from peer", "peer", peerID, "hash", hash)
+		return peer.RequestWitnessPageCount(hash)
+	}
+
+	// Run synchronous verification and return result
+	return h.blockFetcher.GetWitnessManager().CheckWitnessPageCount(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
 // handleBlockBroadcast is invoked from a peer's message handler when it transmits a
@@ -148,16 +203,7 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 		log.Debug("Received block broadcast during stateless sync", "blockNumber", block.NumberU64(), "blockHash", block.Hash())
 
 		// Create a witness requester closure *only if* the peer supports the protocol.
-		witnessRequester := func(hash common.Hash, sink chan *eth.Response) (*eth.Request, error) {
-			// Get the ethPeer from the peerSet
-			ethPeer := h.peers.getOnePeerWithWitness(hash)
-			if ethPeer == nil {
-				return nil, fmt.Errorf("no peer with witness for hash %s is available", hash)
-			}
-
-			// Request witnesses using the wit peer
-			return ethPeer.RequestWitnesses([]common.Hash{hash}, sink)
-		}
+		witnessRequester := h.createWitnessRequester()
 
 		// Call the new fetcher method to inject the block
 		if err := h.blockFetcher.InjectBlockWithWitnessRequirement(peer.ID(), block, witnessRequester); err != nil {

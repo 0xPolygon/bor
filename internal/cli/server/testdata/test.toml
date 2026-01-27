@@ -17,6 +17,7 @@ snapshot = true
 [jsonrpc]
   evmtimeout = "5s"
   txfeecap = 6.0
+  logquerylimit = 1000
   [jsonrpc.http]
     api = ["eth", "bor"]
   [jsonrpc.ws]

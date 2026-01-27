@@ -100,6 +100,9 @@ type txPool interface {
 	// can decide whether to receive notifications only for newly seen transactions
 	// or also for reorged out ones.
 	SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) event.Subscription
+
+	// SubscribeRebroadcastTransactions subscribes to stuck transaction rebroadcast events.
+	SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription
 }
 
 // handlerConfig is the collection of initialization parameters to create a full
@@ -123,6 +126,8 @@ type handlerConfig struct {
 	syncWithWitnesses       bool                   // Whether to sync blocks with witnesses
 	syncAndProduceWitnesses bool                   // Whether to sync blocks and produce witnesses simultaneously
 	fastForwardThreshold    uint64                 // Minimum necessary distance between local header and peer to fast forward
+	gasCeil                 uint64                 // Gas ceiling for dynamic witness page threshold calculation
+	p2pServer               *p2p.Server            // P2P server for jailing peers
 	privateTxGetter         relay.PrivateTxGetter  // privateTxGetter to check if a transaction needs to be treated as private or not
 }
 
@@ -154,6 +159,8 @@ type handler struct {
 	eventMux      *event.TypeMux
 	txsCh         chan core.NewTxsEvent
 	txsSub        event.Subscription
+	stuckTxsCh    chan core.StuckTxsEvent
+	stuckTxsSub   event.Subscription
 	minedBlockSub *event.TypeMuxSubscription
 	blockRange    *blockRangeState
 
@@ -162,6 +169,8 @@ type handler struct {
 	enableBlockTracking  bool
 	txAnnouncementOnly   bool
 	disableTxPropagation bool
+
+	p2pServer *p2p.Server // P2P server for jailing peers
 
 	// Witness protocol related fields
 	syncWithWitnesses       bool
@@ -199,6 +208,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		enableBlockTracking:     config.enableBlockTracking,
 		txAnnouncementOnly:      config.txAnnouncementOnly,
 		disableTxPropagation:    config.disableTxPropagation,
+		p2pServer:               config.p2pServer,
 		quitSync:                make(chan struct{}),
 		handlerDoneCh:           make(chan struct{}),
 		handlerStartCh:          make(chan struct{}),
@@ -296,7 +306,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, nil, inserter, h.removePeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -525,6 +535,20 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 	return handler(peer)
 }
 
+// jailPeer jails a peer to prevent reconnection for a period of time
+func (h *handler) jailPeer(id string) {
+	if h.p2pServer == nil {
+		return
+	}
+	// Convert peer ID (string) to enode.ID
+	nodeID, err := enode.ParseID(id)
+	if err != nil {
+		log.Warn("Failed to parse peer ID for jailing", "peer", id, "err", err)
+		return
+	}
+	h.p2pServer.JailPeer(nodeID)
+}
+
 // removePeer requests disconnection of a peer.
 func (h *handler) removePeer(id string) {
 	peer := h.peers.peer(id)
@@ -578,6 +602,12 @@ func (h *handler) Start(maxPeers int) {
 		go h.txBroadcastLoop()
 	}
 
+	// rebroadcast stuck transactions
+	h.wg.Add(1)
+	h.stuckTxsCh = make(chan core.StuckTxsEvent, txChanSize)
+	h.stuckTxsSub = h.txpool.SubscribeRebroadcastTransactions(h.stuckTxsCh)
+	go h.stuckTxBroadcastLoop()
+
 	// broadcast mined blocks
 	h.wg.Add(1)
 	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
@@ -600,6 +630,7 @@ func (h *handler) Stop() {
 	if h.txsSub != nil {
 		h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	}
+	h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
 	h.minedBlockSub.Unsubscribe()
 	h.blockRange.stop()
 
@@ -798,6 +829,40 @@ func (h *handler) txBroadcastLoop() {
 		case event := <-h.txsCh:
 			h.BroadcastTransactions(event.Txs)
 		case <-h.txsSub.Err():
+			return
+		}
+	}
+}
+
+// stuckTxBroadcastLoop handles rebroadcasting of stuck transactions.
+// It clears the transaction hashes from peers' knownTxs caches and
+// rebroadcasts them to the network.
+func (h *handler) stuckTxBroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case event := <-h.stuckTxsCh:
+			// Only rebroadcast when synced
+			if !h.synced.Load() {
+				continue
+			}
+
+			// Collect hashes to clear from knownTxs
+			hashes := make([]common.Hash, len(event.Txs))
+			for i, tx := range event.Txs {
+				hashes[i] = tx.Hash()
+			}
+
+			// Clear from all peers' knownTxs
+			h.peers.ForgetTransactions(hashes)
+
+			// Rebroadcast
+			h.BroadcastTransactions(event.Txs)
+
+			log.Debug("Rebroadcast stuck transactions", "count", len(event.Txs))
+
+		case <-h.stuckTxsSub.Err():
 			return
 		}
 	}

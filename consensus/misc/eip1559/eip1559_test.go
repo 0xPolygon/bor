@@ -29,7 +29,7 @@ import (
 // copyConfig does a _shallow_ copy of a given config. Safe to set new values, but
 // do not use e.g. SetInt() on the numbers. For testing only
 func copyConfig(original *params.ChainConfig) *params.ChainConfig {
-	return &params.ChainConfig{
+	config := &params.ChainConfig{
 		ChainID:                 original.ChainID,
 		HomesteadBlock:          original.HomesteadBlock,
 		DAOForkBlock:            original.DAOForkBlock,
@@ -47,8 +47,34 @@ func copyConfig(original *params.ChainConfig) *params.ChainConfig {
 		TerminalTotalDifficulty: original.TerminalTotalDifficulty,
 		Ethash:                  original.Ethash,
 		Clique:                  original.Clique,
-		Bor:                     original.Bor,
 	}
+	if original.Bor != nil {
+		config.Bor = &params.BorConfig{
+			Period:                          original.Bor.Period,
+			ProducerDelay:                   original.Bor.ProducerDelay,
+			Sprint:                          original.Bor.Sprint,
+			BackupMultiplier:                original.Bor.BackupMultiplier,
+			ValidatorContract:               original.Bor.ValidatorContract,
+			StateReceiverContract:           original.Bor.StateReceiverContract,
+			OverrideStateSyncRecords:        original.Bor.OverrideStateSyncRecords,
+			OverrideStateSyncRecordsInRange: original.Bor.OverrideStateSyncRecordsInRange,
+			BlockAlloc:                      original.Bor.BlockAlloc,
+			BurntContract:                   original.Bor.BurntContract,
+			Coinbase:                        original.Bor.Coinbase,
+			SkipValidatorByteCheck:          original.Bor.SkipValidatorByteCheck,
+			JaipurBlock:                     original.Bor.JaipurBlock,
+			DelhiBlock:                      original.Bor.DelhiBlock,
+			IndoreBlock:                     original.Bor.IndoreBlock,
+			StateSyncConfirmationDelay:      original.Bor.StateSyncConfirmationDelay,
+			AhmedabadBlock:                  original.Bor.AhmedabadBlock,
+			BhilaiBlock:                     original.Bor.BhilaiBlock,
+			RioBlock:                        original.Bor.RioBlock,
+			MadhugiriBlock:                  original.Bor.MadhugiriBlock,
+			MadhugiriProBlock:               original.Bor.MadhugiriProBlock,
+			DandeliBlock:                    original.Bor.DandeliBlock,
+		}
+	}
+	return config
 }
 
 func config() *params.ChainConfig {
@@ -139,14 +165,13 @@ func TestCalcBaseFee(t *testing.T) {
 	}
 }
 
-// TestCalcBaseFeeDelhi assumes all blocks are 1559-blocks post Delhi Hard Fork
+// TestCalcBaseFeeDelhi assumes all blocks are 1559-blocks and uses
+// parameters post Delhi Hard Fork
 func TestCalcBaseFeeDelhi(t *testing.T) {
 	t.Parallel()
 
+	// Delhi HF kicks in at block 8
 	testConfig := copyConfig(config())
-
-	// Test Delhi Hard Fork
-	// Hard fork kicks in at block 8
 
 	tests := []struct {
 		parentBaseFee   int64
@@ -159,6 +184,41 @@ func TestCalcBaseFeeDelhi(t *testing.T) {
 		{params.InitialBaseFee, 20000000, 11000000, 1006250000},            // usage above target
 		{params.InitialBaseFee, 20000000, 20000000, 1062500000},            // usage full
 		{params.InitialBaseFee, 20000000, 0, 937500000},                    // usage 0
+
+	}
+	for i, test := range tests {
+		parent := &types.Header{
+			Number:   big.NewInt(8),
+			GasLimit: test.parentGasLimit,
+			GasUsed:  test.parentGasUsed,
+			BaseFee:  big.NewInt(test.parentBaseFee),
+		}
+		if have, want := CalcBaseFee(testConfig, parent), big.NewInt(test.expectedBaseFee); have.Cmp(want) != 0 {
+			t.Errorf("test %d: have %d  want %d, ", i, have, want)
+		}
+	}
+}
+
+// TestCalcBaseFeeBhilai assumes all blocks are 1559-blocks and uses
+// parameters post Bhilai Hard Fork
+func TestCalcBaseFeeBhilai(t *testing.T) {
+	t.Parallel()
+
+	// Bhilai HF kicks in at block 8
+	testConfig := copyConfig(config())
+	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+
+	tests := []struct {
+		parentBaseFee   int64
+		parentGasLimit  uint64
+		parentGasUsed   uint64
+		expectedBaseFee int64
+	}{
+		{params.InitialBaseFee, 20000000, 10000000, params.InitialBaseFee}, // usage == target
+		{params.InitialBaseFee, 20000000, 9000000, 998437500},              // usage below target
+		{params.InitialBaseFee, 20000000, 11000000, 1001562500},            // usage above target
+		{params.InitialBaseFee, 20000000, 20000000, 1015625000},            // usage full
+		{params.InitialBaseFee, 20000000, 0, 984375000},                    // usage 0
 
 	}
 	for i, test := range tests {

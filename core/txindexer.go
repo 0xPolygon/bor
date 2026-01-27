@@ -262,7 +262,11 @@ func (indexer *txIndexer) loop(chain *BlockChain) {
 		headCh = make(chan ChainHeadEvent)
 		sub    = chain.SubscribeChainHeadEvent(headCh)
 	)
-	defer sub.Unsubscribe()
+	defer func() {
+		if sub != nil {
+			sub.Unsubscribe()
+		}
+	}()
 
 	// Validate the transaction indexes and repair if necessary
 	head := indexer.head.Load()
