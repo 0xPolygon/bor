@@ -105,10 +105,6 @@ func (s *hookedStateDB) GetStorageRoot(addr common.Address) common.Hash {
 	return s.inner.GetStorageRoot(addr)
 }
 
-func (s *hookedStateDB) StorageTrieSize(addr common.Address) (uint64, bool) {
-	return s.inner.StorageTrieSize(addr)
-}
-
 func (s *hookedStateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
 	return s.inner.GetTransientState(addr, key)
 }

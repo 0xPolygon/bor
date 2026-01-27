@@ -87,12 +87,6 @@ type stateObject struct {
 	// object was previously existent and is being deployed as a contract within
 	// the current transaction.
 	newContract bool
-
-	// storageTrieSizeBytes holds an approximate storage trie "size" computed as
-	// the sum of RLP-encoded standalone trie node blobs (NodeBlob sizes) for the
-	// current storage trie root.
-	storageTrieSizeBytes     uint64
-	storageTrieSizeBytesInit bool
 }
 
 // empty returns whether the account is considered empty.
@@ -123,7 +117,6 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 
 func (s *stateObject) markSelfdestructed() {
 	s.selfDestructed = true
-	s.storageTrieSizeBytesInit = false
 }
 
 func (s *stateObject) touch() {
@@ -163,42 +156,6 @@ func (s *stateObject) getPrefetchedTrie() Trie {
 	}
 	// Attempt to retrieve the trie from the prefetcher
 	return s.db.prefetcher.trie(s.addrHash, s.data.Root)
-}
-
-// storageTrieSize walks the entire storage trie and returns an approximate size
-// metric as the sum of RLP-encoded standalone trie node blobs (NodeBlob sizes).
-// The result is cached per state object within the current execution scope to
-// avoid redundant traversals. If the trie can't be loaded or iterated, the
-// method returns false to signal that the size is unavailable.
-func (s *stateObject) storageTrieSize() (uint64, bool) {
-	if s.storageTrieSizeBytesInit {
-		return s.storageTrieSizeBytes, true
-	}
-	tr, err := s.getTrie()
-	if err != nil {
-		log.Error("Failed to open storage trie", "address", s.address, "err", err)
-		return 0, false
-	}
-	it, err := tr.NodeIterator(nil)
-	if err != nil {
-		log.Error("Failed to create storage trie iterator", "address", s.address, "err", err)
-		return 0, false
-	}
-	var size uint64
-	for it.Next(true) {
-		blob := it.NodeBlob()
-		if blob == nil {
-			continue
-		}
-		size += uint64(len(blob))
-	}
-	if err := it.Error(); err != nil {
-		log.Error("Failed to iterate storage trie", "address", s.address, "err", err)
-		return 0, false
-	}
-	s.storageTrieSizeBytes = size
-	s.storageTrieSizeBytesInit = true
-	return size, true
 }
 
 // GetState retrieves a value associated with the given storage key.
@@ -284,8 +241,8 @@ func (s *stateObject) GetCommittedStateWithDepth(key common.Hash) (common.Hash, 
 	//      have been handles via pendingStorage above.
 	//   2) we don't have new values, and can deliver empty response back
 	if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
-		s.originStorage[key] = common.Hash{}      // track the empty slot as origin value
-		s.originStorageDepth[key] = 0            // depth is undefined for cleared storage
+		s.originStorage[key] = common.Hash{} // track the empty slot as origin value
+		s.originStorageDepth[key] = 0        // depth is undefined for cleared storage
 		return common.Hash{}, 0
 	}
 	s.db.StorageLoaded++
@@ -347,7 +304,6 @@ func (s *stateObject) SetState(key, value common.Hash) common.Hash {
 // setState updates a value in account dirty storage. The dirtiness will be
 // removed if the value being set equals to the original value.
 func (s *stateObject) setState(key common.Hash, value common.Hash, origin common.Hash) {
-	s.storageTrieSizeBytesInit = false
 	// Storage slot is set back to its original value, undo the dirty marker
 	if value == origin {
 		delete(s.dirtyStorage, key)
@@ -604,22 +560,20 @@ func (s *stateObject) setBalance(amount *uint256.Int) {
 
 func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 	obj := &stateObject{
-		db:                       db,
-		address:                  s.address,
-		addrHash:                 s.addrHash,
-		origin:                   s.origin,
-		data:                     s.data,
-		code:                     s.code,
-		originStorage:            s.originStorage.Copy(),
-		originStorageDepth:       copyDepthMap(s.originStorageDepth),
-		pendingStorage:           s.pendingStorage.Copy(),
-		dirtyStorage:             s.dirtyStorage.Copy(),
-		uncommittedStorage:       s.uncommittedStorage.Copy(),
-		dirtyCode:                s.dirtyCode,
-		selfDestructed:           s.selfDestructed,
-		newContract:              s.newContract,
-		storageTrieSizeBytes:     s.storageTrieSizeBytes,
-		storageTrieSizeBytesInit: s.storageTrieSizeBytesInit,
+		db:                 db,
+		address:            s.address,
+		addrHash:           s.addrHash,
+		origin:             s.origin,
+		data:               s.data,
+		code:               s.code,
+		originStorage:      s.originStorage.Copy(),
+		originStorageDepth: copyDepthMap(s.originStorageDepth),
+		pendingStorage:     s.pendingStorage.Copy(),
+		dirtyStorage:       s.dirtyStorage.Copy(),
+		uncommittedStorage: s.uncommittedStorage.Copy(),
+		dirtyCode:          s.dirtyCode,
+		selfDestructed:     s.selfDestructed,
+		newContract:        s.newContract,
 	}
 	if s.trie != nil {
 		obj.trie = mustCopyTrie(s.trie)

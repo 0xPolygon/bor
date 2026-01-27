@@ -104,8 +104,7 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		y, x    = stack.Back(1), stack.Back(0)
 		current = evm.StateDB.GetState(contract.Address(), x.Bytes32())
 	)
-	// Optional extra gas based on storage trie size (disabled by default).
-	extra := chargeStorageTrieGas(evm, contract.Address())
+	extra := uint64(0)
 	// The legacy gas metering only takes into consideration the current state
 	// Legacy rules should be applied if we are in Petersburg (removal of EIP-1283)
 	// OR Constantinople is not active
@@ -202,8 +201,7 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 		y, x    = stack.Back(1), stack.Back(0)
 		current = evm.StateDB.GetState(contract.Address(), x.Bytes32())
 	)
-	// Optional extra gas based on storage trie size (disabled by default).
-	extra := chargeStorageTrieGas(evm, contract.Address())
+	extra := uint64(0)
 
 	value := common.Hash(y.Bytes32())
 

@@ -18,7 +18,6 @@ package vm
 
 import (
 	"errors"
-	"math/bits"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -30,16 +29,7 @@ import (
 // Storage-trie gas charging parameters.
 //
 // These are consensus-affecting; keep disabled (0) unless activated by fork.
-// The metric used is StateDB.StorageTrieSize which is NodeBlob-based bytes.
 const (
-	// storageTrieLogStepGas is the gas charged per logarithmic step.
-	// 0 disables trie-size charging.
-	storageTrieLogStepGas uint64 = 0
-
-	// storageTrieFreeBytes is the size (in NodeBlob-bytes) below which no extra
-	// gas is charged.
-	storageTrieFreeBytes uint64 = 1024
-
 	// storageTrieDepthStepGas is the gas charged per trie-level when accessing a
 	// particular storage slot. 0 disables depth-based charging.
 	//
@@ -50,27 +40,6 @@ const (
 	// storageTrieDepthFreeLevels is the number of trie levels that are free.
 	storageTrieDepthFreeLevels uint64 = 0
 )
-
-// chargeStorageTrieGas returns additional gas to charge based on the storage
-// trie's NodeBlob-byte size.
-//
-// The caller is expected to add the returned value to the opcode gas.
-func chargeStorageTrieGas(evm *EVM, storageOwner common.Address) uint64 {
-	if storageTrieLogStepGas == 0 {
-		return 0
-	}
-	size, ok := evm.StateDB.StorageTrieSize(storageOwner)
-	if !ok || size <= storageTrieFreeBytes {
-		return 0
-	}
-	ratio := size / storageTrieFreeBytes
-	if ratio == 0 {
-		return 0
-	}
-	// floor(log2(ratio)) via bit length.
-	steps := uint64(bits.Len64(ratio) - 1)
-	return steps * storageTrieLogStepGas
-}
 
 // storageTrieDepthSurcharge returns additional gas to charge based on how deep
 // in the storage trie a particular slot access traversed.
@@ -90,9 +59,8 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		if contract.Gas <= params.SstoreSentryGasEIP2200 {
 			return 0, errors.New("not enough gas for reentrancy sentry")
 		}
-		// Optional extra gas based on storage trie size (disabled by default).
 		slot := common.Hash(stack.peek().Bytes32())
-		extra := chargeStorageTrieGas(evm, contract.Address())
+		extra := uint64(0)
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
 			y, x    = stack.Back(1), stack.peek()
@@ -164,8 +132,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 func gasSLoadEIP2929(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	loc := stack.peek()
 	slot := common.Hash(loc.Bytes32())
-	// Optional extra gas based on storage trie size (disabled by default).
-	extra := chargeStorageTrieGas(evm, contract.Address())
+	extra := uint64(0)
 	// Check slot presence in the access list
 	if _, slotPresent := evm.StateDB.SlotInAccessList(contract.Address(), slot); !slotPresent {
 		// If the caller cannot afford the cost, this change will be rolled back
