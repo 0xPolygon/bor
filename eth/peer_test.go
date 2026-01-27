@@ -1388,3 +1388,119 @@ func TestRequestWitnessesWithVerification_DownloadPaused(t *testing.T) {
 		t.Fatal("timed out waiting for response")
 	}
 }
+
+// TestDoWitnessRequest_RaceCondition_WitTotalRequest exposes the race condition in doWitnessRequest
+// where witTotalRequest[hash] is read without lock protection but written with lock protection.
+// Run this test with: go test -race -run TestDoWitnessRequest_RaceCondition_WitTotalRequest
+func TestDoWitnessRequest_RaceCondition_WitTotalRequest(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash := common.Hash{0xab, 0xcd}
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().ID().Return("test-peer").AnyTimes()
+
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	// Mock RequestWitness to simulate responses with small delays
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				// Add small delay to increase chance of concurrent access
+				time.Sleep(1 * time.Millisecond)
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{
+						WitnessPacketResponse: []wit.WitnessPageResponse{{
+							Page:       wpr[0].Page,
+							TotalPages: 100, // Large number to trigger many requests
+							Hash:       hash,
+							Data:       []byte{0x01, 0x02},
+						}},
+					},
+					Done: make(chan error, 10),
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	// Setup the data structures that doWitnessRequest uses
+	witTotalPages := make(map[common.Hash]uint64)
+	witTotalRequest := make(map[common.Hash]uint64)
+	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	var mapsMu sync.RWMutex
+	var witReqs []*wit.Request
+	var witReqsWg sync.WaitGroup
+
+	// Initialize with TotalPages so we know how many requests to make
+	witTotalPages[hash] = 50
+	witTotalRequest[hash] = 0
+
+	// Run multiple iterations to increase the chance of catching the race
+	const iterations = 10
+	for iter := 0; iter < iterations; iter++ {
+		// Reset the counter for each iteration
+		mapsMu.Lock()
+		witTotalRequest[hash] = 0
+		mapsMu.Unlock()
+
+		// Launch many concurrent doWitnessRequest calls
+		// This simulates concurrent goroutines trying to request different pages
+		const numConcurrentRequests = 20
+		var wg sync.WaitGroup
+
+		for i := 0; i < numConcurrentRequests; i++ {
+			wg.Add(1)
+			page := uint64(i)
+
+			go func(pg uint64) {
+				defer wg.Done()
+
+				// Call doWitnessRequest which contains the race condition
+				// Multiple goroutines will simultaneously:
+				// 1. Read witTotalRequest[hash] (unprotected) at line 731
+				// 2. Compare page >= witTotalRequest[hash]
+				// 3. Write witTotalRequest[hash]++ (protected) at line 733
+				err := p.doWitnessRequest(
+					hash,
+					pg,
+					&witReqs,
+					&witReqsWg,
+					witReqResCh,
+					witReqSem,
+					&mapsMu,
+					witTotalRequest,
+				)
+
+				// Consume from semaphore to prevent blocking
+				select {
+				case <-witReqSem:
+				case <-time.After(100 * time.Millisecond):
+				}
+
+				if err != nil {
+					// Error is expected in some cases, not critical for this test
+					t.Logf("doWitnessRequest returned error: %v", err)
+				}
+			}(page)
+		}
+
+		// Wait for all goroutines to complete
+		wg.Wait()
+
+		// Small delay between iterations
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The test itself doesn't need to assert anything specific
+	// The race detector will catch the unprotected read if run with -race flag
+	t.Logf("Test completed %d iterations with %d concurrent requests each", iterations, 20)
+	t.Log("If running with -race flag, any data race will be reported by the race detector")
+}

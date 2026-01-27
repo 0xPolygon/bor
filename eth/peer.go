@@ -728,11 +728,11 @@ func (p *ethPeer) doWitnessRequest(
 	witReqsWg.Add(1)
 	*witReqs = append(*witReqs, witReq)
 
+	mapsMu.Lock()
 	if page >= witTotalRequest[hash] {
-		mapsMu.Lock()
 		witTotalRequest[hash]++
-		mapsMu.Unlock()
 	}
+	mapsMu.Unlock()
 
 	return nil
 }
