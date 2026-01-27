@@ -110,10 +110,16 @@ jobs:
           name: heimdall-v2-image
 
       - name: Load bor image
-        run: gunzip -c bor-image.tar.gz | docker load
+        run: |
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
 
       - name: Load heimdall-v2 image
-        run: gunzip -c heimdall-v2-image.tar.gz | docker load
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
 
       # Deploy kurtosis enclave
       - name: Kurtosis run
