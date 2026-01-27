@@ -930,6 +930,7 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 			log.Info("PSP - Calculated dynamic page threshold from block header",
 				"blockNumber", header.Number.Uint64(), "blockGasLimit", actualGasLimit,
 				"gasCeilMB", gasCeilMB, "threshold", threshold, "m.gasCeil", m.gasCeil)
+			witnessThresholdGauge.Update(int64(threshold))
 			return threshold
 		}
 	}
@@ -937,6 +938,7 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	// Fallback to config value if header not available
 	if m.gasCeil == 0 {
 		log.Info("PSP - Using default page threshold", "defaultThreshold", witnessPageThreshold, "reason", "gasCeil not set")
+		witnessThresholdGauge.Update(int64(witnessPageThreshold))
 		return witnessPageThreshold // Return default if gas ceil not set
 	}
 
@@ -952,6 +954,7 @@ func (m *witnessManager) calculatePageThreshold() uint64 {
 	}
 
 	log.Info("PSP - Calculated dynamic page threshold", "gasCeil", m.gasCeil, "gasCeilMB", gasCeilMB, "threshold", threshold, "maxPageSizeMB", maxPageSizeMB)
+	witnessThresholdGauge.Update(int64(threshold))
 	return threshold
 }
 
@@ -1003,6 +1006,8 @@ func (m *witnessManager) getConsensusPageCountWithOriginal(peers []string, hash 
 // Returns true if peer is honest (or under threshold), false if peer should be dropped
 func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint64, peer string, getRandomPeers func() []string, getWitnessPageCount func(peer string, hash common.Hash) (uint64, error)) bool {
 	log.Info("PSP - CheckWitnessPageCount called", "peer", peer, "hash", hash, "pageCount", pageCount)
+	// Track that a verification check is being performed
+	witnessVerifyCheckMeter.Mark(1)
 
 	// Calculate dynamic threshold based on gas ceiling
 	threshold := m.calculatePageThreshold()
@@ -1011,11 +1016,13 @@ func (m *witnessManager) CheckWitnessPageCount(hash common.Hash, pageCount uint6
 	// No peer queries are made in this case
 	if pageCount <= threshold {
 		log.Info("PSP - Witness page count within threshold, no verification needed", "peer", peer, "pageCount", pageCount, "threshold", threshold)
+		witnessPageCountBelowThresholdMeter.Mark(1)
 		return true
 	}
 
 	// Page count exceeds threshold - verify synchronously
 	log.Info("PSP - Witness page count EXCEEDS threshold, triggering verification", "peer", peer, "hash", hash, "pageCount", pageCount, "threshold", threshold)
+	witnessPageCountAboveThresholdMeter.Mark(1)
 	return m.verifyWitnessPageCountSync(hash, pageCount, peer, getRandomPeers, getWitnessPageCount)
 }
 
@@ -1030,6 +1037,7 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 	if len(randomPeers) < witnessVerificationPeers {
 		// Not enough peers for verification, assume honest (conservative approach)
 		log.Info("PSP - Not enough peers for verification, assuming peer is honest", "peer", reportingPeer, "availablePeers", len(randomPeers), "required", witnessVerificationPeers)
+		witnessVerifyPeersInsuffMeter.Mark(1)
 		return true
 	}
 
@@ -1045,19 +1053,30 @@ func (m *witnessManager) verifyWitnessPageCountSync(hash common.Hash, reportedPa
 		// Peer is dishonest - drop and jail immediately
 		log.Info("PSP - PEER DISHONEST - Consensus verification FAILED", "peer", reportingPeer, "reportedPageCount", reportedPageCount, "consensusPageCount", consensusPageCount)
 		log.Warn("PSP - Dropping dishonest peer", "peer", reportingPeer, "reported", reportedPageCount, "consensus", consensusPageCount)
+		witnessVerifyFailureMeter.Mark(1)
+
 		m.parentDropPeer(reportingPeer)
+		witnessVerifyDropMeter.Mark(1)
+
 		// Also jail the peer to prevent reconnection
 		if m.parentJailPeer != nil {
 			log.Info("PSP - Jailing dishonest peer to prevent reconnection", "peer", reportingPeer)
 			log.Warn("PSP - Jailing dishonest peer", "peer", reportingPeer)
 			m.parentJailPeer(reportingPeer)
+			witnessVerifyJailMeter.Mark(1)
 		} else {
 			log.Info("PSP - Jail callback not available, peer will not be jailed", "peer", reportingPeer)
 		}
 		return false
 	}
 
+	// Track no consensus case
+	if consensusPageCount == 0 {
+		witnessVerifyNoConsensusMeter.Mark(1)
+	}
+
 	// Peer is honest or no consensus (assume honest to avoid false positives)
 	log.Info("PSP - Peer verification SUCCESSFUL", "peer", reportingPeer, "pageCount", reportedPageCount, "consensusPageCount", consensusPageCount, "hash", hash)
+	witnessVerifySuccessMeter.Mark(1)
 	return true
 }

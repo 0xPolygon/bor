@@ -70,7 +70,7 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	var (
 		num                            = new(big.Int)
 		denom                          = new(big.Int)
-		baseFeeChangeDenominatorUint64 = params.BaseFeeChangeDenominator(config.Bor, parent.Number)
+		baseFeeChangeDenominatorUint64 = baseFeeChangeDenominator(config, parent.Number)
 	)
 
 	if parent.GasUsed > parentGasTarget {
@@ -97,6 +97,25 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 			baseFee = common.Big0
 		}
 		return baseFee
+	}
+}
+
+// baseFeeChangeDenominator returns the denominator used to bound the amount the base fee can change between blocks.
+// The value varies based on the hard fork:
+// - Pre-Delhi: 8 (default)
+// - Post-Delhi: 16
+// - Post-Bhilai: 64
+// If borConfig is nil, returns the default value of 8.
+func baseFeeChangeDenominator(config *params.ChainConfig, number *big.Int) uint64 {
+	if config.Bor == nil {
+		return params.DefaultBaseFeeChangeDenominator
+	}
+	if config.Bor.IsBhilai(number) {
+		return params.BaseFeeChangeDenominatorPostBhilai
+	} else if config.Bor.IsDelhi(number) {
+		return params.BaseFeeChangeDenominatorPostDelhi
+	} else {
+		return params.DefaultBaseFeeChangeDenominator
 	}
 }
 

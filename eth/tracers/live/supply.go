@@ -166,7 +166,7 @@ func (s *supplyTracer) onBlockStart(ev tracing.BlockEvent) {
 		s.delta.Burn.EIP1559 = burn
 	}
 	// Blob burnt gas
-	if blobGas := ev.Block.BlobGasUsed(); blobGas != nil && *blobGas > 0 && ev.Block.ExcessBlobGas() != nil {
+	if blobGas := ev.Block.BlobGasUsed(); blobGas != nil && *blobGas > 0 && ev.Block.ExcessBlobGas() != nil && s.chainConfig.BlobScheduleConfig != nil {
 		var (
 			baseFee = eip4844.CalcBlobFee(s.chainConfig, ev.Block.Header())
 			burn    = new(big.Int).Mul(new(big.Int).SetUint64(*blobGas), baseFee)

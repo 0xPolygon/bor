@@ -99,6 +99,24 @@ var (
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
+	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
+	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
+	// intermediateRootTimer measures time taken to calculate intermediate root
+	intermediateRootTimer = metrics.NewRegisteredTimer("worker/intermediateRoot", nil)
+	// commitTimer measures total time for complete block building (tx execution + finalization + state root)
+	commitTimer = metrics.NewRegisteredTimer("worker/commit", nil)
+
+	// Cache hit/miss metrics for block production (miner path)
+	// These are the same meters used by the import path in blockchain.go
+	accountCacheHitMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit", nil)
+	accountCacheMissMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/miss", nil)
+	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
+	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
+
+	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
+	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
+	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
+	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -120,6 +138,10 @@ type environment struct {
 	depsMVFullWriteList [][]blockstm.WriteDescriptor
 	mvReadMapList       []map[blockstm.Key]blockstm.ReadDescriptor
 	witness             *stateless.Witness
+
+	// Readers with stats tracking for metrics reporting
+	prefetchReader state.ReaderWithStats
+	processReader  state.ReaderWithStats
 }
 
 // copy creates a deep copy of environment.
@@ -133,6 +155,8 @@ func (env *environment) copy() *environment {
 		receipts:            copyReceipts(env.receipts),
 		depsMVFullWriteList: env.depsMVFullWriteList,
 		mvReadMapList:       env.mvReadMapList,
+		prefetchReader:      env.prefetchReader,
+		processReader:       env.processReader,
 	}
 
 	if env.gasPool != nil {
@@ -965,8 +989,8 @@ func (w *worker) resultLoop() {
 
 // makeEnv creates a new environment for the sealing block.
 func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address, witness bool) (*environment, error) {
-	// Retrieve the parent state to execute on top.
-	state, err := w.chain.StateAt(parent.Root)
+	// Retrieve the parent state to execute on top, with separate readers for stats tracking.
+	state, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -983,12 +1007,14 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
-		state:    state,
-		coinbase: coinbase,
-		header:   header,
-		witness:  state.Witness(),
-		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		signer:         types.MakeSigner(w.chainConfig, header.Number, header.Time),
+		state:          state,
+		coinbase:       coinbase,
+		header:         header,
+		witness:        state.Witness(),
+		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		prefetchReader: prefetchReader,
+		processReader:  processReader,
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1595,7 +1621,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 	}
 
 	var block *types.Block
-	block, work.receipts, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
+	block, work.receipts, _, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
 
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1747,6 +1773,29 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+	// Track total block building time and report metrics at the end of the commit cycle.
+	defer func() {
+		// Update total commit timer (matches the "elapsed" time in log)
+		commitTimer.Update(time.Since(start))
+
+		// Report cache hit/miss metrics (matches behavior in blockchain.go for import path)
+		if metrics.Enabled() && env.prefetchReader != nil && env.processReader != nil {
+			// Report prefetch reader stats
+			prefetchStats := env.prefetchReader.GetStats()
+			accountCacheHitPrefetchMeter.Mark(prefetchStats.AccountHit)
+			accountCacheMissPrefetchMeter.Mark(prefetchStats.AccountMiss)
+			storageCacheHitPrefetchMeter.Mark(prefetchStats.StorageHit)
+			storageCacheMissPrefetchMeter.Mark(prefetchStats.StorageMiss)
+
+			// Report process reader stats
+			processStats := env.processReader.GetStats()
+			accountCacheHitMeter.Mark(processStats.AccountHit)
+			accountCacheMissMeter.Mark(processStats.AccountMiss)
+			storageCacheHitMeter.Mark(processStats.StorageHit)
+			storageCacheMissMeter.Mark(processStats.StorageMiss)
+		}
+	}()
+
 	if w.IsRunning() {
 		if interval != nil {
 			interval()
@@ -1757,9 +1806,16 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// Withdrawals are set to nil here, because this is only called in PoW.
 		var block *types.Block
 		var err error
-		block, env.receipts, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
+
+		// Track time for FinalizeAndAssemble (state root calculation + block assembly)
+		finalizeStart := time.Now()
+		var commitTime time.Duration
+		block, env.receipts, commitTime, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
 			Transactions: env.txs,
 		}, env.receipts)
+		finalizeDuration := time.Since(finalizeStart)
+		finalizeAndAssembleTimer.Update(finalizeDuration)
+		intermediateRootTimer.Update(commitTime)
 
 		if err != nil {
 			return err
@@ -1771,7 +1827,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"txs", env.tcount, "gas", block.GasUsed(), "fees", feesInEther,
-				"elapsed", common.PrettyDuration(time.Since(start)))
+				"elapsed", common.PrettyDuration(time.Since(start)), "finalize", common.PrettyDuration(finalizeDuration))
 
 		case <-w.exitCh:
 			log.Info("Worker has exited")

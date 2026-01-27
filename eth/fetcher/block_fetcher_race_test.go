@@ -47,7 +47,7 @@ func TestBlockFetcherConcurrentMapAccess(t *testing.T) {
 		verifyHeader,
 		broadcastBlock,
 		chainHeight,
-		nil,           // no current header function
+		nil, // no current header function
 		insertHeaders,
 		insertChain,
 		dropPeer,

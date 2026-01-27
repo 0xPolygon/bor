@@ -75,6 +75,11 @@ var mainnetBor = &Chain{
 					{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
 					{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
 				},
+				OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
+					{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{
+						common.HexToAddress("0x41018795fA95783117242244303fd7e26e964eE8"),
+					}},
+				},
 
 				BurntContract: map[string]string{
 					"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",

@@ -9,8 +9,8 @@ import (
 
 // Constants to match up protocol versions and messages
 const (
-	WIT0 = 0
-	WIT1 = 1
+	WIT0 = 1
+	WIT1 = 2
 )
 
 // ProtocolName is the official short name of the `wit` protocol used during

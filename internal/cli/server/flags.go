@@ -313,6 +313,34 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.TxPool.FilteredAddressesFile,
 		Group:   "Transaction Pool",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "txpool.rebroadcast",
+		Usage:   "Enable stuck transaction rebroadcast mechanism",
+		Value:   &c.cliConfig.TxPool.Rebroadcast,
+		Default: c.cliConfig.TxPool.Rebroadcast,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.rebroadcast-interval",
+		Usage:   "Interval between rebroadcast checks for stuck transactions",
+		Value:   &c.cliConfig.TxPool.RebroadcastInterval,
+		Default: c.cliConfig.TxPool.RebroadcastInterval,
+		Group:   "Transaction Pool",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "txpool.rebroadcast-max-age",
+		Usage:   "Maximum age for a transaction to be eligible for rebroadcast",
+		Value:   &c.cliConfig.TxPool.RebroadcastMaxAge,
+		Default: c.cliConfig.TxPool.RebroadcastMaxAge,
+		Group:   "Transaction Pool",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "txpool.rebroadcast-batch-size",
+		Usage:   "Maximum number of transactions to rebroadcast per cycle",
+		Value:   &c.cliConfig.TxPool.RebroadcastBatchSize,
+		Default: c.cliConfig.TxPool.RebroadcastBatchSize,
+		Group:   "Transaction Pool",
+	})
 
 	// sealer options
 	f.BoolFlag(&flagset.BoolFlag{

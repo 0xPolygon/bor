@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 func TestSimulateSanitizeBlockOrder(t *testing.T) {
@@ -80,7 +81,10 @@ func TestSimulateSanitizeBlockOrder(t *testing.T) {
 			err:           "block timestamps must be in order: 72 <= 72",
 		},
 	} {
-		sim := &simulator{base: &types.Header{Number: big.NewInt(int64(tc.baseNumber)), Time: tc.baseTimestamp}}
+		sim := &simulator{
+			base:        &types.Header{Number: big.NewInt(int64(tc.baseNumber)), Time: tc.baseTimestamp},
+			chainConfig: params.TestChainConfig, // In real usage, sanitizeChain is always called with chainConfig
+		}
 		res, err := sim.sanitizeChain(tc.blocks)
 		if err != nil {
 			if err.Error() == tc.err {

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -376,7 +377,7 @@ func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.
 
 // FinalizeAndAssemble implements consensus.Engine, setting the final state and
 // assembling the block.
-func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
+func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
 	if !beacon.IsPoSHeader(header) {
 		return beacon.ethone.FinalizeAndAssemble(chain, header, state, body, receipts)
 	}
@@ -389,56 +390,21 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 	} else {
 		if len(body.Withdrawals) > 0 {
-			return nil, nil, errors.New("withdrawals set before Shanghai activation")
+			return nil, nil, 0, errors.New("withdrawals set before Shanghai activation")
 		}
 	}
 	// Finalize and assemble the block.
 	receipts = beacon.Finalize(chain, header, state, body, receipts)
 
 	// Assign the final state root to header.
+	start := time.Now()
 	header.Root = state.IntermediateRoot(true)
+	commitTime := time.Since(start)
 
 	// Assemble the final block.
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
-	// Create the block witness and attach to block.
-	// This step needs to happen as late as possible to catch all access events.
-	if chain.Config().IsVerkle(header.Number) {
-		keys := state.AccessEvents().Keys()
-
-		// Open the pre-tree to prove the pre-state against
-		parent := chain.GetHeaderByNumber(header.Number.Uint64() - 1)
-		if parent == nil {
-			return nil, nil, fmt.Errorf("nil parent header for block %d", header.Number)
-		}
-		preTrie, err := state.Database().OpenTrie(parent.Root)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error opening pre-state tree root: %w", err)
-		}
-		postTrie := state.GetTrie()
-		if postTrie == nil {
-			return nil, nil, errors.New("post-state tree is not available")
-		}
-		vktPreTrie, okpre := preTrie.(*trie.VerkleTrie)
-		vktPostTrie, okpost := postTrie.(*trie.VerkleTrie)
-
-		// The witness is only attached iff both parent and current block are
-		// using verkle tree.
-		if okpre && okpost {
-			if len(keys) > 0 {
-				verkleProof, stateDiff, err := vktPreTrie.Proof(vktPostTrie, keys)
-				if err != nil {
-					return nil, nil, fmt.Errorf("error generating verkle proof for block %d: %w", header.Number, err)
-				}
-				block = block.WithWitness(&types.ExecutionWitness{
-					StateDiff:   stateDiff,
-					VerkleProof: verkleProof,
-				})
-			}
-		}
-	}
-
-	return block, receipts, nil
+	return block, receipts, commitTime, nil
 }
 
 // Seal generates a new sealing request for the given input block and pushes
