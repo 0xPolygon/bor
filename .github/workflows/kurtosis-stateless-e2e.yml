@@ -17,6 +17,7 @@ concurrency:
 
 env:
   ENCLAVE_NAME: kurtosis-stateless-e2e
+  POLYCLI_VERSION: v0.1.102
 
 jobs:
   build-bor:
@@ -123,6 +124,15 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       # Run e2e tests
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
       - name: Run stateless sync tests
         working-directory: pos-workflows
         run: bash tests/stateless_tests/kurtosis_stateless_test.sh
