@@ -876,6 +876,47 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		rpcServers[1].handleTxStatus = defaultHandleTxStatus
 	})
 
+	t.Run("retry even if tx status check fails", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+			// Fail tx status checks for all servers
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				defaultSendError(w, id, -32601, "internal server error")
+			}
+		}
+
+		// Server 0 fails for first 2 runs
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			count := callCounts[0].Add(1)
+			if count <= 2 {
+				defaultSendError(w, id, -32601, "temporary failure")
+			} else {
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		require.Error(t, err, "expected error on initial submission")
+
+		// Wait for one retry attempt
+		time.Sleep(2*privateTxRetryInterval + 100*time.Millisecond)
+
+		// Server 0 should be called multiple times due to retries
+		require.Equal(t, int32(3), callCounts[0].Load(), "expected server 0 to be called thrice (1 initial + 2 retries)")
+		// All others should only be called once
+		for i := 1; i < 4; i++ {
+			require.Equal(t, int32(1), callCounts[i].Load(), "expected server %d to be called only once during initial submission", i)
+		}
+	})
+
 	t.Run("retry until max retries reached", func(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
@@ -884,6 +925,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
 			}
+			rpcServers[i].handleTxStatus = defaultHandleTxStatus
 		}
 
 		// Server 0 always fails
