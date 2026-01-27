@@ -44,7 +44,7 @@ func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool,
 	}
 	var txRelay *Service
 	if enablePreconf || enablePrivateTx {
-		txRelay = NewService(blockProducerURLs)
+		txRelay = NewService(blockProducerURLs, nil)
 	}
 	return &RelayService{
 		config:         config,
@@ -112,7 +112,7 @@ func (s *RelayService) SubmitPrivateTransaction(tx *types.Transaction) error {
 	if s.txRelay == nil {
 		return fmt.Errorf("request dropped: %w", errRelayNotConfigured)
 	}
-	err := s.txRelay.SubmitPrivateTx(tx)
+	err := s.txRelay.SubmitPrivateTx(tx, true)
 	if err != nil {
 		// Don't add extra context to this error as it will be floated back to user
 		return err

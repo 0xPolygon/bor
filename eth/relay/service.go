@@ -19,12 +19,19 @@ var (
 	errPrivateTxSubmissionFailed = errors.New("private tx submission failed partially, background retry scheduled")
 )
 
-const (
-	expiryTickerInterval = time.Minute
-	expiryInterval       = 10 * time.Minute
-	maxQueuedTasks       = 40_000
-	maxConcurrentTasks   = 1024
-)
+type ServiceConfig struct {
+	expiryTickerInterval time.Duration
+	expiryInterval       time.Duration
+	maxQueuedTasks       int
+	maxConcurrentTasks   int
+}
+
+var DefaultServiceConfig = ServiceConfig{
+	expiryTickerInterval: time.Minute,
+	expiryInterval:       10 * time.Minute,
+	maxQueuedTasks:       40_000,
+	maxConcurrentTasks:   1024,
+}
 
 // TxTask represents a transaction submission task
 type TxTask struct {
@@ -37,6 +44,7 @@ type TxTask struct {
 }
 
 type Service struct {
+	config      *ServiceConfig
 	multiclient *multiClient
 	store       map[common.Hash]TxTask
 	storeMu     sync.RWMutex
@@ -45,12 +53,17 @@ type Service struct {
 	closeCh     chan struct{} // to limit concurrent tasks
 }
 
-func NewService(urls []string) *Service {
+func NewService(urls []string, config *ServiceConfig) *Service {
+	if config == nil {
+		defaultConfig := DefaultServiceConfig
+		config = &defaultConfig
+	}
 	s := &Service{
+		config:      config,
 		multiclient: newMultiClient(urls),
 		store:       make(map[common.Hash]TxTask),
-		taskCh:      make(chan TxTask, maxQueuedTasks),
-		semaphore:   make(chan struct{}, maxConcurrentTasks),
+		taskCh:      make(chan TxTask, config.maxQueuedTasks),
+		semaphore:   make(chan struct{}, config.maxConcurrentTasks),
 		closeCh:     make(chan struct{}),
 	}
 	go s.processPreconfTasks()
@@ -75,18 +88,18 @@ func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 
 	// Queue for processing (non-blocking until queue is full)
 	select {
-	case s.taskCh <- TxTask{rawtx: rawTx, hash: tx.Hash()}:
-		return nil
 	case <-s.closeCh:
 		log.Debug("[tx-relay] Dropping task, service closing", "hash", tx.Hash())
 		return errRpcClientUnavailable
+	case s.taskCh <- TxTask{rawtx: rawTx, hash: tx.Hash()}:
+		return nil
 	default:
 		log.Debug("[tx-relay] Task queue full, dropping transaction", "hash", tx.Hash())
 		return errQueueOverflow
 	}
 }
 
-func (s *Service) SubmitPrivateTx(tx *types.Transaction) error {
+func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 	if s.multiclient == nil {
 		log.Warn("[tx-relay] No rpc client available to submit transactions")
 		return errRpcClientUnavailable
@@ -98,7 +111,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction) error {
 		return err
 	}
 
-	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), true)
+	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry)
 	if err != nil {
 		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "err", err)
 		return errPrivateTxSubmissionFailed
@@ -134,6 +147,9 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 
 	// Re-check the tx status from block producers if the tx was not preconfirmed earlier
 	res, err := s.multiclient.checkTxStatus(hash)
+	if !res && err == nil {
+		err = errPreconfValidationFailed
+	}
 	task.preconfirmed = res
 	task.err = err
 	s.storeMu.Lock()
@@ -144,7 +160,7 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 		log.Debug("[tx-relay] Unable to validate tx status for preconf", "err", err)
 	}
 
-	return task.preconfirmed, errPreconfValidationFailed
+	return task.preconfirmed, err
 }
 
 func (s *Service) processPreconfTasks() {
@@ -165,7 +181,7 @@ func (s *Service) processPreconfTasks() {
 
 // cleanup is a periodic routine to delete old preconf results
 func (s *Service) cleanup() {
-	ticker := time.NewTicker(expiryTickerInterval)
+	ticker := time.NewTicker(s.config.expiryTickerInterval)
 	defer ticker.Stop()
 
 	for {
@@ -175,7 +191,7 @@ func (s *Service) cleanup() {
 			s.storeMu.Lock()
 			now := time.Now()
 			for hash, task := range s.store {
-				if now.Sub(task.insertedAt) > expiryInterval {
+				if now.Sub(task.insertedAt) > s.config.expiryInterval {
 					delete(s.store, hash)
 					count++
 				}
