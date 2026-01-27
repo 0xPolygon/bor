@@ -98,7 +98,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction) error {
 		return err
 	}
 
-	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash())
+	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), true)
 	if err != nil {
 		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "err", err)
 		return errPrivateTxSubmissionFailed
