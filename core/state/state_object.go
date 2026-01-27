@@ -193,13 +193,11 @@ func (s *stateObject) getStateWithDepth(key common.Hash) (common.Hash, uint64) {
 	return origin, depth
 }
 
-func (s *stateObject) getCachedStateDepth(key common.Hash) uint64 {
+func (s *stateObject) getCachedStateDepth(key common.Hash) (uint64, bool) {
 	s.storageMutex.Lock()
 	defer s.storageMutex.Unlock()
-	if depth, ok := s.originStorageDepth[key]; ok {
-		return depth
-	}
-	return 0
+	depth, ok := s.originStorageDepth[key]
+	return depth, ok
 }
 
 // GetCommittedState retrieves the value associated with the specific key

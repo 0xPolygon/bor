@@ -742,7 +742,12 @@ func (s *StateDB) GetStateDepth(addr common.Address, hash common.Hash) uint64 {
 	if stateObject == nil {
 		return 0
 	}
-	return stateObject.getCachedStateDepth(hash)
+	if depth, ok := stateObject.getCachedStateDepth(hash); ok {
+		return depth
+	}
+	log.Error("Storage slot depth cache miss", "address", addr, "slot", hash)
+	_, depth := stateObject.GetCommittedStateWithDepth(hash)
+	return depth
 }
 
 // GetStateWithDepth retrieves the value associated with the specific key along
