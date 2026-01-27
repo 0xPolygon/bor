@@ -86,11 +86,16 @@ func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 		return err
 	}
 
-	// Queue for processing (non-blocking until queue is full)
+	// First check if service is closed/closing
 	select {
 	case <-s.closeCh:
 		log.Debug("[tx-relay] Dropping task, service closing", "hash", tx.Hash())
 		return errRpcClientUnavailable
+	default:
+	}
+
+	// Queue for processing (non-blocking until queue is full)
+	select {
 	case s.taskCh <- TxTask{rawtx: rawTx, hash: tx.Hash()}:
 		return nil
 	default:

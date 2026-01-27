@@ -50,14 +50,21 @@ func newMultiClient(urls []string) *multiClient {
 		err = client.CallContext(ctx, &blockNumber, "eth_blockNumber")
 		cancel()
 		if err != nil {
+			client.Close()
 			failed++
 			log.Warn("[tx-relay] Failed to fetch latest block number, skipping", "url", url, "index", i, "err", err)
 			continue
 		}
 
-		number, _ := hexutil.DecodeUint64(blockNumber)
-		log.Info("[tx-relay] Dial successful", "blockNumber", number, "index", i)
+		number, err := hexutil.DecodeUint64(blockNumber)
+		if err != nil {
+			client.Close()
+			failed++
+			log.Warn("[tx-relay] Failed to decode latest block number, skipping", "url", url, "index", i, "err", err)
+			continue
+		}
 
+		log.Info("[tx-relay] Dial successful", "blockNumber", number, "index", i)
 		clients = append(clients, client)
 	}
 
