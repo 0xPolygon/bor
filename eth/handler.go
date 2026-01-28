@@ -592,6 +592,10 @@ func (h *handler) unregisterPeer(id string) {
 func (h *handler) Start(maxPeers int) {
 	h.maxPeers = maxPeers
 
+	if h.disableTxPropagation {
+		log.Info("Disabling transaction propagation completely")
+	}
+
 	// Bor: block producers can choose to not propagate transactions to save p2p overhead
 	// broadcast and announce transactions (only new ones, not resurrected ones) only
 	// if transaction propagation is enabled
@@ -603,10 +607,12 @@ func (h *handler) Start(maxPeers int) {
 	}
 
 	// rebroadcast stuck transactions
-	h.wg.Add(1)
-	h.stuckTxsCh = make(chan core.StuckTxsEvent, txChanSize)
-	h.stuckTxsSub = h.txpool.SubscribeRebroadcastTransactions(h.stuckTxsCh)
-	go h.stuckTxBroadcastLoop()
+	if !h.disableTxPropagation {
+		h.wg.Add(1)
+		h.stuckTxsCh = make(chan core.StuckTxsEvent, txChanSize)
+		h.stuckTxsSub = h.txpool.SubscribeRebroadcastTransactions(h.stuckTxsCh)
+		go h.stuckTxBroadcastLoop()
+	}
 
 	// broadcast mined blocks
 	h.wg.Add(1)
@@ -630,7 +636,9 @@ func (h *handler) Stop() {
 	if h.txsSub != nil {
 		h.txsSub.Unsubscribe() // quits txBroadcastLoop
 	}
-	h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
+	if h.stuckTxsSub != nil {
+		h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
+	}
 	h.minedBlockSub.Unsubscribe()
 	h.blockRange.stop()
 
@@ -757,6 +765,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	for _, tx := range txs {
 		// Skip gossip if transaction is marked as private
 		if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash()) {
+			log.Info("[tx-relay] skip tx broadcast for private tx", "hash", tx.Hash())
 			continue
 		}
 		var directSet map[*ethPeer]struct{}
