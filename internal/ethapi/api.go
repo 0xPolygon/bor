@@ -263,10 +263,10 @@ func (api *TxPoolAPI) Status() map[string]hexutil.Uint {
 
 // TxStatus returns the current status of a transaction in the pool given transaction hash.
 // Returns
-// - 0 if status is unknown
-// - 1 if status is queued
-// - 2 if status is pending
-// - 3 if status is included in a block
+// - 0 if status is unknown.
+// - 1 if status is queued.
+// - 2 if status is pending.
+// Note that because it only checks in txpool, it doesn't return 'included' status.
 func (api *TxPoolAPI) TxStatus(hash common.Hash) txpool.TxStatus {
 	return api.b.TxStatus(hash)
 }
