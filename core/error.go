@@ -162,3 +162,13 @@ var (
 	ErrAuthorizationDestinationHasCode = errors.New("EIP-7702 authorization destination is a contract")
 	ErrAuthorizationNonceMismatch      = errors.New("EIP-7702 authorization nonce does not match current account nonce")
 )
+
+// Bor related errors
+var (
+	// ErrStateSyncProcessing should be used when state-sync isn't applied correctly
+	// in bor consensus. It can be either due to
+	// - Error in fetching event from heimdall
+	// - Error in processing state-sync event in EVM
+	// - Invalid state-sync tx data in block body post Madhugiri HF
+	ErrStateSyncProcessing = errors.New("unable to process state-sync tx")
+)

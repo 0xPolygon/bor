@@ -170,9 +170,10 @@ func insertNewBlock(t *testing.T, chain *core.BlockChain, block *types.Block) {
 	}
 }
 
-type Option func(header *types.Header)
+type modifyHeaderFunc func(header *types.Header)
+type modifyBlockFunc func(block *types.Block, receipts []*types.Receipt) *types.Block
 
-func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, opts ...Option) *types.Header {
+func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, modifyHeader []modifyHeaderFunc) *types.Header {
 	t.Helper()
 
 	header := &types.Header{
@@ -265,18 +266,18 @@ func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block,
 		}
 	}
 
-	for _, opt := range opts {
-		opt(header)
+	for _, fn := range modifyHeader {
+		fn(header)
 	}
 
 	return header
 }
 
-func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, opts ...Option) *types.Block {
+func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, modifyHeader []modifyHeaderFunc, modifyBody []modifyBlockFunc) *types.Block {
 	t.Helper()
 
 	// Build a new header based on parent block
-	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, opts...)
+	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, modifyHeader)
 	state, err := chain.State()
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -294,6 +295,10 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 	}, b.receipts)
 	if err != nil {
 		panic(fmt.Sprintf("error finalizing block: %v", err))
+	}
+
+	for _, fn := range modifyBody {
+		block = fn(block, b.receipts)
 	}
 
 	// Write state changes to db

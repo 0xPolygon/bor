@@ -153,6 +153,32 @@ func (p *Peer) RequestWitness(witnessPages []WitnessPageRequest, sink chan *Resp
 	return req, nil
 }
 
+// RequestWitnessMetadata sends a request to the peer for witness metadata (page count only).
+func (p *Peer) RequestWitnessMetadata(hashes []common.Hash, sink chan *Response) (*Request, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	log.Debug("Requesting witness metadata", "peer", p.id, "count", len(hashes))
+	id := rand.Uint64()
+
+	req := &Request{
+		id:   id,
+		sink: sink,
+		code: GetWitnessMetadataMsg,
+		want: WitnessMetadataMsg,
+		data: &GetWitnessMetadataPacket{
+			RequestId: id,
+			GetWitnessMetadataRequest: &GetWitnessMetadataRequest{
+				Hashes: hashes,
+			},
+		},
+	}
+	if err := p.dispatchRequest(req); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
 // Close signals the broadcast goroutine to terminate. Only ever call this if
 // you created the peer yourself via NewPeer. Otherwise let whoever created it
 // clean it up!
@@ -219,6 +245,18 @@ func (p *Peer) ReplyWitness(requestID uint64, response *WitnessPacketResponse) e
 	return p2p.Send(p.rw, MsgWitness, &WitnessPacketRLPPacket{
 		RequestId:             requestID,
 		WitnessPacketResponse: *response,
+	})
+}
+
+// ReplyWitnessMetadata is the response to GetWitnessMetadata
+func (p *Peer) ReplyWitnessMetadata(requestID uint64, metadata []WitnessMetadataResponse) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	// Send the response
+	return p2p.Send(p.rw, WitnessMetadataMsg, &WitnessMetadataPacket{
+		RequestId: requestID,
+		Metadata:  metadata,
 	})
 }
 

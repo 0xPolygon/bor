@@ -25,6 +25,7 @@ import (
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
 
@@ -891,19 +892,25 @@ type BorConfig struct {
 	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
 	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range
 	BlockAlloc                      map[string]interface{}           `json:"blockAlloc"`
-	BurntContract                   map[string]string                `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string                `json:"coinbase"`                   // coinbase address
-	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"`     // skip validator byte check
-	JaipurBlock                     *big.Int                         `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                      *big.Int                         `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                     *big.Int                         `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay      map[string]uint64                `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock                  *big.Int                         `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                     *big.Int                         `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                        *big.Int                         `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock                  *big.Int                         `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock               *big.Int                         `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	DandeliBlock                    *big.Int                         `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	BurntContract                   map[string]string                `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string                `json:"coinbase"`               // coinbase address
+	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"` // skip validator byte check
+
+	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
+	// These affect consensus gas pricing but are configurable per-node for operational flexibility
+	TargetGasPercentage      *uint64 `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
+
+	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay map[string]uint64 `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock             *big.Int          `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                *big.Int          `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                   *big.Int          `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -967,16 +974,32 @@ func (c *BorConfig) IsDandeli(number *big.Int) bool {
 	return isBlockForked(c.DandeliBlock, number)
 }
 
-// // TODO: modify this function once the block number is finalized
-// func (c *BorConfig) IsNapoli(number *big.Int) bool {
-// 	if c.NapoliBlock != nil {
-// 		if c.NapoliBlock.Cmp(big.NewInt(0)) == 0 {
-// 			return false
-// 		}
-// 	}
+// GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
+// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// It validates the configured value and falls back to defaults if invalid or nil.
+// Valid range: 1-100 (percentage).
+func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
+	// Only applies after Dandeli
+	if !c.IsDandeli(number) {
+		return 0 // Caller should use ElasticityMultiplier for pre-Dandeli
+	}
 
-// 	return isBlockForked(c.NapoliBlock, number)
-// }
+	// If custom value is set, validate it
+	if c.TargetGasPercentage != nil {
+		val := *c.TargetGasPercentage
+		// Validate: must be between 1 and 100
+		if val > 0 && val <= 100 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid TargetGasPercentage in BorConfig, falling back to default",
+			"configured", val,
+			"validRange", "1-100")
+	}
+
+	// Default for post-Dandeli
+	return TargetGasPercentagePostDandeli
+}
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {
 	return number%c.CalculateSprint(number) == 0
@@ -1642,30 +1665,6 @@ func newBlockCompatError(what string, storedblock, newblock *big.Int) *ConfigCom
 	}
 	if rew != nil && rew.Sign() > 0 {
 		err.RewindToBlock = rew.Uint64() - 1
-	}
-
-	return err
-}
-
-// nolint
-func newTimestampCompatError(what string, storedtime, newtime *uint64) *ConfigCompatError {
-	var rew *uint64
-	switch {
-	case storedtime == nil:
-		rew = newtime
-	case newtime == nil || *storedtime < *newtime:
-		rew = storedtime
-	default:
-		rew = newtime
-	}
-	err := &ConfigCompatError{
-		What:         what,
-		StoredTime:   storedtime,
-		NewTime:      newtime,
-		RewindToTime: 0,
-	}
-	if rew != nil && *rew != 0 {
-		err.RewindToTime = *rew - 1
 	}
 
 	return err

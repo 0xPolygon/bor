@@ -408,6 +408,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		EventMux:                eth.eventMux,
 		RequiredBlocks:          config.RequiredBlocks,
 		EthAPI:                  blockChainAPI,
+		gasCeil:                 config.Miner.GasCeil,
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
@@ -415,6 +416,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		p2pServer:               eth.p2pServer,
 	}); err != nil {
 		return nil, err
 	}

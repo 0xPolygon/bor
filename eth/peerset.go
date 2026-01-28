@@ -378,6 +378,18 @@ func (ps *peerSet) snapLen() int {
 	return ps.snapPeers
 }
 
+// getAllPeers returns all connected peers
+func (ps *peerSet) getAllPeers() []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	peers := make([]*ethPeer, 0, len(ps.peers))
+	for _, peer := range ps.peers {
+		peers = append(peers, peer)
+	}
+	return peers
+}
+
 // peerWithHighestTD retrieves the known peer with the currently highest total
 // difficulty, but below the given PoS switchover threshold.
 func (ps *peerSet) peerWithHighestTD() *eth.Peer {

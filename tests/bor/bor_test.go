@@ -45,6 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -407,7 +408,7 @@ func TestInsertingSpanSizeBlocks(t *testing.T) {
 
 	// Insert sprintSize # of blocks so that span is fetched at the start of a new sprint.
 	for i := uint64(1); i <= spanSize; i++ {
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, false, nil, nil)
 		insertNewBlock(t, chain, block)
 	}
 
@@ -490,11 +491,11 @@ func TestFetchStateSyncEvents_PreMadhugiriHF(t *testing.T) {
 			currentValidators = borValSet.Validators
 		}
 
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false, nil, nil)
 		insertNewBlock(t, chain, block)
 	}
 
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false, nil, nil)
 
 	// Validate the state sync transactions set by consensus.
 	validateStateSyncEvents(t, eventRecords, chain.GetStateSync())
@@ -576,11 +577,11 @@ func TestFetchStateSyncEvents_PostMadhugiriHF(t *testing.T) {
 			currentValidators = borValSet.Validators
 		}
 
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false, nil, nil)
 		insertNewBlock(t, chain, block)
 	}
 
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false, nil, nil)
 	insertNewBlock(t, chain, block)
 
 	// Fetch the last block and check if state-sync tx and receipts are available
@@ -675,7 +676,7 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 	// Set the current validators from span0
 	currentValidators := span0.ValidatorSet.Validators
 	for i := uint64(1); i <= sprintSize; i++ {
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators, false, nil, nil)
 		insertNewBlock(t, chain, block)
 	}
 
@@ -714,7 +715,7 @@ func TestFetchStateSyncEvents_2(t *testing.T) {
 			}}
 		}
 
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(res.ValidatorSet).Validators, false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValSetToBorValSet(res.ValidatorSet).Validators, false, nil, nil)
 		insertNewBlock(t, chain, block)
 	}
 
@@ -779,7 +780,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 			span0.ValidatorSet.Validators = currentValidators
 		}
 
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, setDifficulty)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{setDifficulty}, nil)
 		insertNewBlock(t, chain, block)
 	}
 
@@ -803,7 +804,7 @@ func TestOutOfTurnSigning(t *testing.T) {
 		header.Difficulty = big.NewInt(int64(len(res.ValidatorSet.Validators)) - turn)
 	}
 
-	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false, setParentTime, setDifficulty)
+	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false, []modifyHeaderFunc{setParentTime, setDifficulty}, nil)
 	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t,
 		bor.BlockTooSoonError{Number: spanSize, Succession: expectedSuccessionNumber},
@@ -868,7 +869,7 @@ func TestSignerNotFound(t *testing.T) {
 		return crypto.Sign(crypto.Keccak256(data), newKey)
 	})
 
-	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false)
+	block = buildNextBlock(t, _bor, chain, block, signerKey, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(res.ValidatorSet.Validators), false, nil, nil)
 
 	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Equal(t,
@@ -1590,7 +1591,7 @@ func TestJaipurFork(t *testing.T) {
 			// stored in cache, we're updating the underlying pointer here and hence we don't need to update the cache.
 			span0.ValidatorSet.Validators = currentValidators
 		}
-		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false)
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, nil, nil)
 		insertNewBlock(t, chain, block)
 
 		if block.Number().Uint64() == init.genesis.Config.Bor.JaipurBlock.Uint64()-1 {
@@ -1707,7 +1708,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	}
 
 	// Build block 1 normally
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime}, nil)
 	i, err := chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #1")
@@ -1724,7 +1725,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	maxDelay := time.Until(time.Unix(int64(headerTime), 0)) + waitingTime
 	// Track time taken to build, and seal (basically announce) the block
 	start := time.Now()
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime}, nil)
 	blockAnnouncementTime := time.Since(start)
 	// The building + sealing time should be less than the expected pre-bhilai block building time (~2s)
 	require.LessOrEqual(t, blockAnnouncementTime, maxDelay, fmt.Sprintf("block announcement happened after header time"))
@@ -1740,7 +1741,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	// Wait until header.Time + 1s before building the block
 	headerTime = block.Time() + bor.CalcProducerDelay(block.NumberU64(), getSuccession(), init.genesis.Config.Bor)
 	time.Sleep(time.Until(time.Unix(int64(headerTime)+1, 0)))
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime}, nil)
 	require.Greater(t, block.Time(), headerTime, "block time should be greated than expected header time")
 	// Block verified and imported successfully
 	i, err = chain.InsertChain([]*types.Block{block}, false)
@@ -1748,7 +1749,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #3")
 
 	// Build block 4 normally
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime}, nil)
 	i, err = chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #4")
@@ -1767,7 +1768,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 		}
 	}
 	signer, err := hex.DecodeString(privKey)
-	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTimeWithoutSleep)
+	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, []modifyHeaderFunc{updateTimeWithoutSleep}, nil)
 	i, err = chain.InsertChain([]*types.Block{tempBlock}, false)
 	// No error is expected here because block will be added to future chain and is
 	// technically valid (according to insert chain function)
@@ -1778,7 +1779,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	require.ErrorIs(t, err, consensus.ErrFutureBlock, "incorrect error while verifying block #5")
 
 	// Build block 5 again normally
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime}, nil)
 	i, err = chain.InsertChain([]*types.Block{block}, false)
 	// Block verified and imported successfully
 	require.NoError(t, err, "error inserting block #5")
@@ -1790,7 +1791,7 @@ func TestEarlyBlockAnnouncementPostBhilai_Primary(t *testing.T) {
 	setTime := func(header *types.Header) {
 		header.Time = block.Time() + bor.CalcProducerDelay(block.NumberU64(), getSuccession(), init.genesis.Config.Bor) - 1
 	}
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, setTime)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{setTime}, nil)
 	// Consensus verification will fail and this error will float up unlike future block error
 	// as we've tweaked the header time which is not allowed.
 	i, err = chain.InsertChain([]*types.Block{block}, false)
@@ -1880,7 +1881,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		// parent block (which is genesis) which we don't want.
 		header.Difficulty = new(big.Int).SetUint64(3)
 	}
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime, updateDiff)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime, updateDiff}, nil)
 	i, err := chain.InsertChain([]*types.Block{block}, false)
 	require.NoError(t, err, "error inserting block #1")
 	require.Equal(t, 1, i, "incorrect number of blocks inserted while inserting block #1")
@@ -1905,7 +1906,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		header.Difficulty = new(big.Int).SetUint64(1)
 		header.Time = block.Time() - 1
 	}
-	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTime, updateHeader)
+	tempBlock := buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, []modifyHeaderFunc{updateTime, updateHeader}, nil)
 	i, err = chain.InsertChain([]*types.Block{tempBlock}, false)
 	require.Equal(t, bor.ErrInvalidTimestamp, err, "incorrect error while inserting block #2")
 	require.Equal(t, 0, i, "incorrect number of blocks inserted while inserting block #2")
@@ -1919,7 +1920,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		// Succession is 2 because of tertiary validator
 		header.Time = block.Time() + bor.CalcProducerDelay(block.NumberU64(), getSuccession(), init.genesis.Config.Bor)
 	}
-	tempBlock = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTime, updateHeader)
+	tempBlock = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, []modifyHeaderFunc{updateTime, updateHeader}, nil)
 	// Block is invalid according to consensus rules and should return appropriate error
 	// Insert chain would accept the block as future block so we don't attempt calling it.
 	err = engine.VerifyHeader(chain, tempBlock.Header())
@@ -1936,7 +1937,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 	}
 	// Capture the time taken in block building (mainly sealing due to delay)
 	start := time.Now()
-	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, updateTime, updateHeader)
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), false, []modifyHeaderFunc{updateTime, updateHeader}, nil)
 	blockAnnouncementTime := time.Since(start)
 	// The building + sealing time should be greater than ideal time (6s for tertiary validator)
 	// as early block announcement is not allowed for non-primary validators.
@@ -1953,7 +1954,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 		header.Difficulty = new(big.Int).SetUint64(1)
 		header.Time = block.Time() + bor.CalcProducerDelay(block.NumberU64(), getSuccession(), init.genesis.Config.Bor)
 	}
-	block = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTime, updateHeader)
+	block = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, []modifyHeaderFunc{updateTime, updateHeader}, nil)
 
 	// reject if announced early (here: parent block time + 2s)
 	time.Sleep(2 * time.Second)
@@ -1984,7 +1985,7 @@ func TestEarlyBlockAnnouncementPostBhilai_NonPrimary(t *testing.T) {
 	}
 	// Capture time to wait until the expected header time before announcing the block
 	timeToWait := time.Until(time.Unix(int64(block.Time()+bor.CalcProducerDelay(block.NumberU64(), getSuccession(), init.genesis.Config.Bor)), 0))
-	block = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, updateTime, updateHeader)
+	block = buildNextBlock(t, _bor, chain, block, signer, init.genesis.Config.Bor, nil, borSpan.ConvertHeimdallValidatorsToBorValidatorsByRef(currentValidators), true, []modifyHeaderFunc{updateTime, updateHeader}, nil)
 
 	// Wait for expected time + some buffer
 	time.Sleep(timeToWait)
@@ -2069,6 +2070,92 @@ func TestCustomBlockTimeMining(t *testing.T) {
 		fmt.Sprintf("Too few blocks mined. Expected at least %d, got %d", minExpectedBlocks, blocksMinedCount))
 	require.LessOrEqual(t, blocksMinedCount, maxExpectedBlocks,
 		fmt.Sprintf("Too many blocks mined. Expected at most %d, got %d", maxExpectedBlocks, blocksMinedCount))
+}
+
+// TestInvalidStateSyncInBlockBody tests that a block containing invalid state sync event data
+// in form of a state-sync tx in block body will be rejected by consensus.
+func TestInvalidStateSyncInBlockBody(t *testing.T) {
+	t.Parallel()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	updateGenesis := func(gen *core.Genesis) {
+		gen.Config.Bor.Sprint = map[string]uint64{"0": sprintSize}
+		gen.Config.Bor.StateSyncConfirmationDelay = map[string]uint64{"0": 128}
+		gen.Config.Bor.MadhugiriBlock = big.NewInt(0) // Enable Madhugiri hardfork from genesis.
+	}
+	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
+	chain := init.ethereum.BlockChain()
+	engine := init.ethereum.Engine()
+	_bor := engine.(*bor.Bor)
+	defer _bor.Close()
+
+	// Insert blocks for 0th sprint
+	block := init.genesis.ToBlock()
+
+	// Create a mock span 0
+	span0 := createMockSpan(addr, chain.Config().ChainID.String())
+	borValSet := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet)
+	currentValidators := borValSet.Validators
+
+	// Load mock span 0
+	res := loadSpanFromFile(t)
+
+	// Create mock bor spanner
+	spanner := getMockedSpanner(t, currentValidators)
+	_bor.SetSpanner(spanner)
+
+	// Create mock heimdall client
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	h := createMockHeimdall(ctrl, &span0, res)
+
+	// Mock state sync events
+	eventCount := 1
+	sample := getSampleEventRecord(t)
+	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
+
+	h.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).Return(eventRecords, nil).AnyTimes()
+	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
+	_bor.SetHeimdallClient(h)
+
+	// Insert sprintSize # of blocks so that span is fetched at the start of a new sprint
+	for i := uint64(1); i < sprintSize; i++ {
+		if IsSpanEnd(i) {
+			currentValidators = borValSet.Validators
+		}
+
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false, nil, nil)
+		insertNewBlock(t, chain, block)
+	}
+
+	// Create a malicious block with arbitrary state-sync tx which is different from what's actually applied
+	// on state.
+	createMaliciousBlock := func(block *types.Block, receipts []*types.Receipt) *types.Block {
+		maliciousBody := &types.Body{
+			Transactions: []*types.Transaction{types.NewTx(&types.StateSyncTx{
+				StateSyncData: []*types.StateSyncData{&types.StateSyncData{
+					ID:       1,
+					Contract: common.HexToAddress("0x0000000000000000000000000000000000001000"),
+					Data:     []byte{0x01, 0x02, 0x03},
+					TxHash:   common.HexToHash("0xabcdef"),
+				}},
+			})},
+		}
+		return types.NewBlock(block.Header(), maliciousBody, receipts, trie.NewStackTrie(nil))
+	}
+
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false, nil, []modifyBlockFunc{createMaliciousBlock})
+	txs := block.Transactions()
+	require.Equal(t, 1, len(txs), "state-sync tx should be part of block body")
+	require.Equal(t, uint8(types.StateSyncTxType), txs[0].Type(), "transaction should be of state-sync type")
+
+	// Try inserting the malicious block. Due to mismatch in tx data and data from heimdall, receipt
+	// shouldn't be applied and an error should be returned while inserting the block.
+	_, err := chain.InsertChain([]*types.Block{block}, false)
+	require.Error(t, err, "insert chain successed for block with invalid state-sync tx in body")
+	require.ErrorIs(t, err, core.ErrStateSyncProcessing, "received incorrect error for invalid state-sync tx in block body")
 }
 
 // TestDynamicGasLimit_LowBaseFee tests that when base fee is below the target-buffer,

@@ -114,6 +114,13 @@ var (
 
 	errUncleDetected     = errors.New("uncles not allowed")
 	errUnknownValidators = errors.New("unknown validators")
+
+	// errReorgDuringRootComputation indicates a reorganization occurred while calculating the checkpoint root.
+	errReorgDuringRootComputation = errors.New("reorg occurred while computing checkpoint root")
+
+	// errNonContiguousHeaderRange is returned when the header range [start,end]
+	// is not contiguous in terms of parent-child relationships.
+	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -1104,7 +1111,15 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
 		if len(body.Transactions) > 0 {
+			// Craft a state-sync tx to validate it against the tx in block body
+			stateSyncTx := types.NewTx(&types.StateSyncTx{
+				StateSyncData: stateSyncData,
+			})
 			lastTx := body.Transactions[len(body.Transactions)-1]
+			if stateSyncTx.Hash() != lastTx.Hash() {
+				log.Error("Invalid state-sync tx in block body", "got", lastTx.Hash(), "want", stateSyncTx.Hash())
+				return receipts
+			}
 			if lastTx.Type() == types.StateSyncTxType {
 				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
 			}
