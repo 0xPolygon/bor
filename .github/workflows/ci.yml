@@ -108,7 +108,7 @@ jobs:
       - name: Test
         run: make test
 
-      - uses: PaloAltoNetworks/upload-secure-artifact@v1
+      - uses: PaloAltoNetworks/upload-secure-artifact@b4ca654
         with:
           name: unitTest-coverage
           path: cover.out
@@ -158,7 +158,7 @@ jobs:
       - name: test-integration
         run: make test-integration
 
-      - uses: PaloAltoNetworks/upload-secure-artifact@v1
+      - uses: PaloAltoNetworks/upload-secure-artifact@b4ca654
         with:
           name: integrationTest-coverage
           path: cover.out
