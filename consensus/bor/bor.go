@@ -1739,6 +1739,17 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.spanStore.setHeimdallClient(h)
 }
 
+// PurgeCache clears all cached snapshots and span data. This is useful in tests
+// when the mock heimdall client is changed and old cached data needs to be invalidated.
+func (c *Bor) PurgeCache() {
+	// Clear the recents cache (snapshots)
+	c.recents.DeleteAll()
+	// Clear the recent verified headers cache
+	c.recentVerifiedHeaders.DeleteAll()
+	// Clear the span store cache
+	c.spanStore.PurgeCache()
+}
+
 func (c *Bor) GetCurrentValidators(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error) {
 	return c.spanner.GetCurrentValidatorsByHash(ctx, headerHash, blockNumber)
 }

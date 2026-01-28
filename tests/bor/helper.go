@@ -577,7 +577,13 @@ func InitGenesis(t *testing.T, faucets []*ecdsa.PrivateKey, fileLocation string,
 }
 
 func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
-	return InitMinerWithBlockTime(genesis, privKey, withoutHeimdall, 0)
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, 0, nil)
+}
+
+// InitMinerWithHeimdall creates a miner node with a mock HeimdallClient injected during initialization.
+// This is the preferred way to test with mock Heimdall clients as it avoids caching issues.
+func InitMinerWithHeimdall(genesis *core.Genesis, privKey *ecdsa.PrivateKey, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, false, 0, heimdallClient)
 }
 
 // DynamicGasLimitConfig holds configuration for dynamic gas limit testing
@@ -668,6 +674,11 @@ func InitMinerWithDynamicGasLimit(genesis *core.Genesis, privKey *ecdsa.PrivateK
 }
 
 func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, blockTime, nil)
+}
+
+// InitMinerWithOptions is the base function for creating miner nodes with various options.
+func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
 	if err != nil {
@@ -707,7 +718,8 @@ func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, wi
 			BlockTime:           blockTime,
 			CommitInterruptFlag: true,
 		},
-		WithoutHeimdall: withoutHeimdall,
+		WithoutHeimdall:        withoutHeimdall,
+		OverrideHeimdallClient: heimdallClient,
 	})
 
 	if err != nil {

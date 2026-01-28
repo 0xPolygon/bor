@@ -1314,3 +1314,50 @@ func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
 		require.Contains(t, processingErr.Error(), "failed to decode genesis alloc")
 	})
 }
+
+func TestBor_PurgeCache(t *testing.T) {
+	t.Parallel()
+	borConfig := &params.BorConfig{
+		Period:                map[string]uint64{"0": 2},
+		ProducerDelay:         map[string]uint64{"0": 4},
+		Sprint:                map[string]uint64{"0": 64},
+		BackupMultiplier:      map[string]uint64{"0": 2},
+		ValidatorContract:     "0x0000000000000000000000000000000000001000",
+		StateReceiverContract: "0x0000000000000000000000000000000000001001",
+	}
+	accountAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: accountAddr, VotingPower: 50}}}
+	_, borObj := newChainAndBorForTest(t, sp, borConfig, true, accountAddr, uint64(time.Now().Unix()))
+
+	// Add some entries to the recents cache (snapshots)
+	hash1 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	hash2 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+
+	snapshot1 := &Snapshot{Number: 1, Hash: hash1}
+	snapshot2 := &Snapshot{Number: 2, Hash: hash2}
+
+	borObj.recents.Set(hash1, snapshot1, ttlcache.DefaultTTL)
+	borObj.recents.Set(hash2, snapshot2, ttlcache.DefaultTTL)
+
+	// Add some entries to the recentVerifiedHeaders cache
+	header1 := &types.Header{Number: big.NewInt(1)}
+	header2 := &types.Header{Number: big.NewInt(2)}
+
+	borObj.recentVerifiedHeaders.Set(hash1, header1, ttlcache.DefaultTTL)
+	borObj.recentVerifiedHeaders.Set(hash2, header2, ttlcache.DefaultTTL)
+
+	// Verify caches are populated
+	require.Equal(t, 2, borObj.recents.Len(), "recents cache should have 2 entries")
+	require.Equal(t, 2, borObj.recentVerifiedHeaders.Len(), "recentVerifiedHeaders cache should have 2 entries")
+
+	// Purge the cache
+	borObj.PurgeCache()
+
+	// Verify caches are cleared
+	require.Equal(t, 0, borObj.recents.Len(), "recents cache should be empty after purge")
+	require.Equal(t, 0, borObj.recentVerifiedHeaders.Len(), "recentVerifiedHeaders cache should be empty after purge")
+
+	// Verify we can still add entries after purge
+	borObj.recents.Set(hash1, snapshot1, ttlcache.DefaultTTL)
+	require.Equal(t, 1, borObj.recents.Len(), "should be able to add to recents cache after purge")
+}

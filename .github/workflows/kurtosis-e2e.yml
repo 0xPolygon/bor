@@ -19,43 +19,74 @@ env:
   ENCLAVE_NAME: kurtosis-e2e
 
 jobs:
-  e2e-tests:
+  build-bor:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 20
     steps:
-      # This is needed because the job fails with "System.IO.IOException: No space left on device".
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          android: false
-          docker-images: false
-          dotnet: true
-          haskell: true
-          large-packages: false
-          swap-storage: false
-          tool-cache: true
-
-      - name: Install dependencies on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt update && sudo apt install build-essential
-
-      - name: Install Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: 'stable'
-
       - name: Checkout bor
         uses: actions/checkout@v5
-        with:
-          path: bor
 
+      - name: Build docker image
+        run: docker build -t bor:local --file Dockerfile .
+
+      - name: Save image
+        run: docker save bor:local | gzip > bor-image.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: bor-image
+          path: bor-image.tar.gz
+          retention-days: 1
+
+  build-heimdall-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
       - name: Checkout heimdall-v2
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/heimdall-v2
           ref: develop
-          path: heimdall-v2
+
+      - name: Build docker image
+        run: docker build -t heimdall-v2:local --file Dockerfile .
+
+      - name: Save image
+        run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: heimdall-v2-image
+          path: heimdall-v2-image.tar.gz
+          retention-days: 1
+
+  e2e-tests:
+    needs:
+      - build-bor
+      - build-heimdall-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # These permissions are required to log in to GCR
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      # Set up kurtosis
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: hv2/tx-eip1559-gas-price-configs
+
+      # This step will free disk space and thus remove any docker images previously built
+      - name: Pre kurtosis run
+        uses: ./.github/actions/kurtosis-pre-run
+        with:
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
       - name: Checkout pos-workflows
         uses: actions/checkout@v5
@@ -64,57 +95,62 @@ jobs:
           ref: main
           path: pos-workflows
 
-      - name: Checkout kurtosis-pos
-        uses: actions/checkout@v5
-        with:
-          repository: 0xPolygon/kurtosis-pos
-          ref: hv2/tx-eip1559-gas-price-configs
-          path: kurtosis-pos
-
-      - name: Pre kurtosis run
-        uses: ./pos-workflows/.github/actions/kurtosis-pre-run
-        with:
-          docker_username: ${{ secrets.DOCKERHUB }}
-          docker_token: ${{ secrets.DOCKERHUB_KEY }}
-
-      - name: Build bor docker image
-        run: |
-          cd bor
-          docker build -t bor:local --file Dockerfile .
-
-      - name: Build heimdall-v2 docker image
-        run: |
-          cd heimdall-v2
-          docker build -t heimdall-v2:local --file Dockerfile .
-
       - name: Copy kurtosis config
-        run: cp ./pos-workflows/.github/configs/kurtosis-e2e.yml ./kurtosis-pos/kurtosis-e2e.yml
+        run: cp ./pos-workflows/.github/configs/kurtosis-e2e.yml ./kurtosis-e2e.yml
 
-      - name: Kurtosis run
+      # Load images
+      - name: Download bor image
+        uses: actions/download-artifact@v4
+        with:
+          name: bor-image
+
+      - name: Download heimdall-v2 image
+        uses: actions/download-artifact@v4
+        with:
+          name: heimdall-v2-image
+
+      - name: Load bor image
         run: |
-          cd kurtosis-pos
-          kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
+          gunzip -c bor-image.tar.gz | docker load
+          echo "Loaded bor image:"
+          docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
+
+      - name: Load heimdall-v2 image
+        run: |
+          gunzip -c heimdall-v2-image.tar.gz | docker load
+          echo "Loaded heimdall-v2 image:"
+          docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
+
+      # Deploy kurtosis enclave
+      - name: Kurtosis run
+        run: kurtosis run --args-file=kurtosis-e2e.yml --enclave=${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
+      # Run e2e tests
       - name: Test state syncs
         run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
 
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
       - name: Run RPC tests
+        working-directory: pos-workflows/tests/rpc_tests
         run: |
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
-
-          cd pos-workflows/tests/rpc_tests
-          go mod tidy
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
       - name: Run smoke tests (Checkpoints and Milestones)
-        run: bash ./pos-workflows/tests/kurtosis_smoke_test.sh
+        working-directory: pos-workflows/tests
+        run: bash ./kurtosis_smoke_test.sh
 
+      # Clean up
       - name: Post kurtosis run
         if: always()
-        uses: ./pos-workflows/.github/actions/kurtosis-post-run
+        uses: ./.github/actions/kurtosis-post-run
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

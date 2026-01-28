@@ -715,7 +715,6 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 			return fmt.Errorf("Transactions: transaction %d is nil", i)
 		}
 
-		// TODO(raneet10): Discuss whether dedup is desirable here
 		hash := tx.Hash()
 		if _, exists := seen[hash]; exists {
 			return fmt.Errorf("Transactions: multiple copies of the same hash %v", hash)
@@ -745,7 +744,6 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 			return fmt.Errorf("PooledTransactions: transaction %d is nil", i)
 		}
 
-		// TODO(raneet10): Discuss whether dedup is desirable here
 		hash := tx.Hash()
 		if _, exists := seen[hash]; exists {
 			return fmt.Errorf("PooledTransactions: multiple copies of the same hash %v", hash)
