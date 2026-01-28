@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,14 @@ const (
 	privateTxRetryInterval = 2 * time.Second
 	privateTxMaxRetries    = 5
 )
+
+// isAlreadyKnownError checks if the error indicates the transaction is already known to the node
+func isAlreadyKnownError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "already known")
+}
 
 // multiClient holds multiple rpc client instances for each block producer
 // to perform certain queries across all of them and make a unified decision.
@@ -99,6 +108,11 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 			err := client.CallContext(ctx, &preconfResponse, "eth_sendRawTransactionForPreconf", hexutil.Encode(rawTx))
 			cancel()
 			if err != nil {
+				// If the tx is already known, treat it as preconfirmed for this node
+				if isAlreadyKnownError(err) {
+					preconfOfferedCount.Add(1)
+					return
+				}
 				lastErr = err
 				return
 			}
@@ -142,6 +156,11 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
+				// If the tx is already known, treat it as successful submission
+				if isAlreadyKnownError(err) {
+					successfulIndices = append(successfulIndices, index)
+					return
+				}
 				lastErr = err
 				failedIndices = append(failedIndices, index)
 				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash)
@@ -223,6 +242,13 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 				cancel()
 
 				if err != nil {
+					// If the tx is already known, treat it as successful submission
+					if isAlreadyKnownError(err) {
+						mu.Lock()
+						successfulIndices = append(successfulIndices, idx)
+						mu.Unlock()
+						return
+					}
 					mu.Lock()
 					newFailedIndices = append(newFailedIndices, idx)
 					mu.Unlock()
@@ -241,10 +267,10 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 	}
 
 	if len(currentFailedIndices) > 0 {
-		log.Debug("[tx-relay] Finished retry attempts with some producers still failing",
+		log.Info("[tx-relay] Finished retry attempts with some producers still failing",
 			"hash", hash, "failed", len(currentFailedIndices))
 	} else {
-		log.Debug("[tx-relay] All producers accepted private tx after retries", "hash", hash)
+		log.Info("[tx-relay] All producers accepted private tx after retries", "hash", hash)
 	}
 }
 

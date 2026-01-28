@@ -371,6 +371,78 @@ func TestSubmitPreconfTx(t *testing.T) {
 		require.Greater(t, elapsed, rpcTimeout-100*time.Millisecond, "expected calls to take at least time taken by all calls")
 	})
 
+	t.Run("submitPreconfTx with already known error from one BP", func(t *testing.T) {
+		// Reset all handlers to default
+		for i := range rpcServers {
+			rpcServers[i].handleSendPreconfTx = defaultHandleSendPreconfTx
+		}
+
+		// Mock server 0 to return "already known" error
+		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		res, err := mc.submitPreconfTx(rawTx)
+		require.NoError(t, err, "expected no error when one BP returns already known")
+		require.True(t, res, "expected preconf to be offered when all BPs accept (including already known)")
+	})
+
+	t.Run("submitPreconfTx with already known error from all BPs", func(t *testing.T) {
+		// Mock all servers to return "already known" error
+		for i := range rpcServers {
+			rpcServers[i].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				defaultSendError(w, id, -32000, "already known")
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		res, err := mc.submitPreconfTx(rawTx)
+		require.NoError(t, err, "expected no error when all BPs return already known")
+		require.True(t, res, "expected preconf to be offered when all BPs return already known")
+	})
+
+	t.Run("submitPreconfTx with already known and different error", func(t *testing.T) {
+		// Some BPs return already known, one returns a different error, rest succeed
+		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		}
+		rpcServers[1].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32601, "internal server error")
+		}
+		rpcServers[2].handleSendPreconfTx = defaultHandleSendPreconfTx
+		rpcServers[3].handleSendPreconfTx = defaultHandleSendPreconfTx
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		res, err := mc.submitPreconfTx(rawTx)
+		require.Error(t, err, "expected error when one BP returns an error which apart from already known")
+		require.ErrorContains(t, err, "internal server error", "expected internal server error")
+		require.False(t, res, "expected preconf to not be offered when one BP fails with non-already-known error")
+	})
+
+	t.Run("submitPreconfTx with already known and rejection", func(t *testing.T) {
+		// Some BPs return already known, one rejects preconf
+		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		}
+		rpcServers[1].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[2].handleSendPreconfTx = defaultHandleSendPreconfTx
+		rpcServers[3].handleSendPreconfTx = defaultHandleSendPreconfTx
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		res, err := mc.submitPreconfTx(rawTx)
+		require.NoError(t, err, "expected no error")
+		require.False(t, res, "expected preconf to not be offered when one BP rejects")
+	})
+
 	t.Run("submitPreconfTx with some failing servers", func(t *testing.T) {
 		// Set handlers back to default
 		for i := range rpcServers {
@@ -528,6 +600,58 @@ func TestSubmitPrivateTx(t *testing.T) {
 		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
 		require.Error(t, err, "expected error when all BPs fail")
 		require.ErrorContains(t, err, "internal server error", "expected error message from failing BPs")
+	})
+
+	t.Run("submitPrivateTx with already known error from one BP", func(t *testing.T) {
+		// Reset all handlers to default
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = defaultHandleSendPrivateTx
+		}
+
+		// Mock one server to return "already known" error
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		require.NoError(t, err, "expected no error when one BP returns already known")
+	})
+
+	t.Run("submitPrivateTx with already known error from all BPs", func(t *testing.T) {
+		// Mock all servers to return "already known" error
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				defaultSendError(w, id, -32000, "already known")
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		require.NoError(t, err, "expected no error when all BPs return already known")
+	})
+
+	t.Run("submitPrivateTx with already known and different error", func(t *testing.T) {
+		// Some BPs return already known, one returns a different error, rest succeed
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		}
+		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32601, "internal server error")
+		}
+		rpcServers[2].handleSendPrivateTx = defaultHandleSendPrivateTx
+		rpcServers[3].handleSendPrivateTx = defaultHandleSendPrivateTx
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		require.Error(t, err, "expected error when one BP returns non-already-known error")
+		require.ErrorContains(t, err, "internal server error", "expected internal server error")
 	})
 
 	t.Run("submitPrivateTx with some BPs failing after initialization", func(t *testing.T) {
@@ -1061,5 +1185,161 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		for i := 1; i < 4; i++ {
 			require.Equal(t, int32(1), callCounts[i].Load(), "expected server %d to be called only once", i)
 		}
+	})
+
+	t.Run("retry receives already known error on first retry", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+			rpcServers[i].handleTxStatus = defaultHandleTxStatus
+		}
+
+		// Server 0 fails first, then returns already known on retry
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			count := callCounts[0].Add(1)
+			if count == 1 {
+				defaultSendError(w, id, -32601, "internal server error")
+			} else {
+				// On retry, return already known
+				defaultSendError(w, id, -32000, "already known")
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		require.Error(t, err, "expected error on initial submission")
+
+		// Wait for one retry attempt
+		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+
+		// Server 0 should be called twice (initial + 1 retry with already known)
+		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
+
+		// No further retries should happen after already known
+		time.Sleep(privateTxRetryInterval)
+		require.Equal(t, int32(2), callCounts[0].Load(), "expected no further retries after already known")
+	})
+
+	t.Run("retry with already known error from multiple BPs", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		// Servers 0 and 1 fail initially, then return already known on retry
+		for i := 0; i < 2; i++ {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				count := callCounts[i].Add(1)
+				if count == 1 {
+					defaultSendError(w, id, -32601, "temporary failure")
+				} else {
+					// On retry, return already known
+					defaultSendError(w, id, -32000, "already known")
+				}
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		require.Error(t, err, "expected error on initial submission")
+
+		// Wait for retry
+		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+
+		// Servers 0 and 1 should be called twice (initial + retry)
+		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
+		require.Equal(t, int32(2), callCounts[1].Load(), "expected server 1 to be called twice")
+		// Other servers should be called only once
+		require.Equal(t, int32(1), callCounts[2].Load(), "expected server 2 to be called once")
+		require.Equal(t, int32(1), callCounts[3].Load(), "expected server 3 to be called once")
+	})
+
+	t.Run("retry with already known on initial submission", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		// Server 0 returns already known on initial submission
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			callCounts[0].Add(1)
+			defaultSendError(w, id, -32000, "already known")
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		require.NoError(t, err, "expected no error when all submissions succeed or return already known")
+
+		// Wait to ensure no retries happen
+		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+
+		// Server 0 should be called only once (no retry needed as already known treated as success)
+		require.Equal(t, int32(1), callCounts[0].Load(), "expected server 0 to be called only once")
+	})
+
+	t.Run("retry with mix of already known and successful retries", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		// Server 0 fails, then returns already known
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			count := callCounts[0].Add(1)
+			if count == 1 {
+				defaultSendError(w, id, -32601, "temporary failure")
+			} else {
+				defaultSendError(w, id, -32000, "already known")
+			}
+		}
+
+		// Server 1 fails, then succeeds normally
+		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			count := callCounts[1].Add(1)
+			if count == 1 {
+				defaultSendError(w, id, -32602, "temporary failure")
+			} else {
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		require.Error(t, err, "expected error on initial submission")
+
+		// Wait for retry
+		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+
+		// Both servers 0 and 1 should be called twice
+		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
+		require.Equal(t, int32(2), callCounts[1].Load(), "expected server 1 to be called twice")
+		// No further retries should happen
+		time.Sleep(privateTxRetryInterval)
+		require.Equal(t, int32(2), callCounts[0].Load(), "expected no further retries")
+		require.Equal(t, int32(2), callCounts[1].Load(), "expected no further retries")
 	})
 }
