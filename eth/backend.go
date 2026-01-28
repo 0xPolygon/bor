@@ -239,6 +239,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		config.TxPool.AllowUnprotectedTxs = true
 	}
 
+	// Set transaction getter for relay service to query local database
+	relayService.SetTxGetter(eth.APIBackend.GetCanonicalTransaction)
+
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
 	eth.engine = engine

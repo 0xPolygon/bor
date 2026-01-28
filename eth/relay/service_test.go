@@ -623,6 +623,209 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 			rpcServers[i].handleSendPreconfTx = defaultHandleSendPreconfTx
 		}
 	})
+
+	t.Run("tx found in local database via txGetter", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track if checkTxStatus is called (it shouldn't be)
+		var checkTxStatusCalled atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				checkTxStatusCalled.Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		// Create a transaction that will be "found" in local database
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		txHash := tx.Hash()
+
+		// Set up mock txGetter that returns the transaction
+		service.SetTxGetter(func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			if hash == txHash {
+				return true, tx, common.Hash{}, 0, 0
+			}
+			return false, nil, common.Hash{}, 0, 0
+		})
+
+		// Check preconfirmation status - should find in local DB
+		preconfirmed, err := service.CheckTxPreconfStatus(txHash)
+		require.NoError(t, err, "expected no error when tx found in local database")
+		require.True(t, preconfirmed, "expected preconfirmation to be true when tx found in local database")
+
+		// Verify checkTxStatus was not called
+		require.Equal(t, int32(0), checkTxStatusCalled.Load(), "expected checkTxStatus to not be called when tx found in local database")
+
+		// Verify cache was updated
+		service.storeMu.RLock()
+		task, exists := service.store[txHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed in cache")
+		require.NoError(t, task.err, "expected no error as tx was found in local database")
+
+		// Check again - should hit cache and not call txGetter or checkTxStatus
+		preconfirmed, err = service.CheckTxPreconfStatus(txHash)
+		require.NoError(t, err, "expected no error on second check")
+		require.True(t, preconfirmed, "expected preconfirmation to be true on second check")
+		require.Equal(t, int32(0), checkTxStatusCalled.Load(), "expected checkTxStatus to still not be called")
+	})
+
+	t.Run("tx not found in local database falls back to checkTxStatus", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track if checkTxStatus is called
+		var checkTxStatusCalled atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				checkTxStatusCalled.Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		unknownHash := common.HexToHash("0x1")
+
+		// Set up mock txGetter that doesn't find the transaction
+		var txGetterCalled atomic.Int32
+		service.SetTxGetter(func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			txGetterCalled.Add(1)
+			return false, nil, common.Hash{}, 0, 0
+		})
+
+		// Check preconfirmation status - should fall back to checkTxStatus
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error when falling back to checkTxStatus")
+		require.True(t, preconfirmed, "expected preconfirmation to be true from checkTxStatus")
+
+		// Verify txGetter was called
+		require.Equal(t, int32(1), txGetterCalled.Load(), "expected txGetter to be called once")
+
+		// Verify checkTxStatus was called as fallback
+		require.Equal(t, int32(2), checkTxStatusCalled.Load(), "expected checkTxStatus to be called on both servers")
+
+		// Verify cache was updated
+		service.storeMu.RLock()
+		task, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed in cache")
+	})
+
+	t.Run("txGetter not set falls back to checkTxStatus", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Don't set txGetter - it should fall back to checkTxStatus
+
+		// Track if checkTxStatus is called
+		var checkTxStatusCalled atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				checkTxStatusCalled.Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		unknownHash := common.HexToHash("0x1")
+
+		// Check preconfirmation status - should go straight to checkTxStatus
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error when txGetter not set")
+		require.True(t, preconfirmed, "expected preconfirmation to be true from checkTxStatus")
+
+		// Verify checkTxStatus was called
+		require.Equal(t, int32(2), checkTxStatusCalled.Load(), "expected checkTxStatus to be called on both servers")
+	})
+
+	t.Run("tx found in local database updates cache for non-preconfirmed task", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Submit tx that gets rejected
+		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		err := service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify task exists but not preconfirmed
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored")
+		require.False(t, task.preconfirmed, "expected task to be not preconfirmed initially")
+
+		// Set up txGetter that finds the transaction (simulating it got included)
+		service.SetTxGetter(func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			if hash == tx.Hash() {
+				return true, tx, common.Hash{}, 0, 0
+			}
+			return false, nil, common.Hash{}, 0, 0
+		})
+
+		// Track if checkTxStatus is called (it shouldn't be)
+		var checkTxStatusCalled atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				checkTxStatusCalled.Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		// Check status - should find in local DB and update cache
+		preconfirmed, err := service.CheckTxPreconfStatus(tx.Hash())
+		require.NoError(t, err, "expected no error when tx found in local database")
+		require.True(t, preconfirmed, "expected preconfirmation to be true when tx found in local database")
+
+		// Verify checkTxStatus was not called
+		require.Equal(t, int32(0), checkTxStatusCalled.Load(), "expected checkTxStatus to not be called")
+
+		// Verify cache was updated to preconfirmed
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still be stored")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed after update")
+		require.NoError(t, task.err, "expected task error to be nil after update")
+
+		// Reset handler
+		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+	})
+
+	t.Run("txGetter returns error still falls back to checkTxStatus", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		unknownHash := common.HexToHash("0xabcd")
+
+		// Set up txGetter that returns false (not found)
+		var txGetterCalled atomic.Int32
+		service.SetTxGetter(func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			txGetterCalled.Add(1)
+			// Return false indicating not found
+			return false, nil, common.Hash{}, 0, 0
+		})
+
+		// Track if checkTxStatus is called
+		var checkTxStatusCalled atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				checkTxStatusCalled.Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		// Check status - should try txGetter then fall back to checkTxStatus
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error")
+		require.True(t, preconfirmed, "expected preconfirmation from checkTxStatus")
+
+		// Verify both were called
+		require.Equal(t, int32(1), txGetterCalled.Load(), "expected txGetter to be called")
+		require.Equal(t, int32(2), checkTxStatusCalled.Load(), "expected checkTxStatus to be called as fallback")
+	})
 }
 
 func TestTaskCleanup(t *testing.T) {

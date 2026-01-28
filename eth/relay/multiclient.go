@@ -132,7 +132,7 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 	return false, lastErr
 }
 
-func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool) error {
+func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool, txGetter TxGetter) error {
 	// Submit tx to all block producers in parallel (initial attempt)
 	hexTx := hexutil.Encode(rawTx)
 
@@ -182,15 +182,15 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 		"err", lastErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
 
 	if retry {
-		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, successfulIndices)
+		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, txGetter)
 	}
 
 	return lastErr
 }
 
 // retryPrivateTxSubmission runs in background to retry private tx submission to producers
-// that failed initially. It checks status in successful producers to detect if tx is included.
-func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, failedIndices []int, successfulIndices []int) {
+// that failed initially. It uses local txGetter to check if tx was included in a block.
+func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, failedIndices []int, txGetter TxGetter) {
 	currentFailedIndices := failedIndices
 
 	for retry := 0; retry < privateTxMaxRetries; retry++ {
@@ -204,26 +204,14 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 
 		log.Debug("[tx-relay] Retrying private tx submission", "producers", len(currentFailedIndices), "attempt", retry+1, "hash", hash)
 
-		// Check if tx is already included in any successful producer. If included, retry
-		// can be skipped altogether.
-		var skipRetry bool
-		for i := 0; i < len(successfulIndices); i++ {
-			client := mc.clients[successfulIndices[i]]
-			var txStatus txpool.TxStatus
-			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-			err := client.CallContext(ctx, &txStatus, "txpool_txStatus", hash)
-			cancel()
-			if err != nil {
-				continue
+		// Check if tx was already included in a block in local db. If yes, skip
+		// retrying submission altogether.
+		if txGetter != nil {
+			found, tx, _, _, _ := txGetter(hash)
+			if found && tx != nil {
+				log.Debug("[tx-relay] Transaction found in local database, stopping retry", "hash", hash)
+				return
 			}
-			// Tx is included so skip retrying submission
-			if txStatus == txpool.TxStatusIncluded {
-				skipRetry = true
-			}
-		}
-
-		if skipRetry {
-			return
 		}
 
 		// Retry submission for failed producers
@@ -244,18 +232,10 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 				if err != nil {
 					// If the tx is already known, treat it as successful submission
 					if isAlreadyKnownError(err) {
-						mu.Lock()
-						successfulIndices = append(successfulIndices, idx)
-						mu.Unlock()
 						return
 					}
 					mu.Lock()
 					newFailedIndices = append(newFailedIndices, idx)
-					mu.Unlock()
-				} else {
-					// This producer is now successful, add to successful indices for future status checks
-					mu.Lock()
-					successfulIndices = append(successfulIndices, idx)
 					mu.Unlock()
 				}
 			}(mc.clients[index], index)
@@ -267,10 +247,10 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 	}
 
 	if len(currentFailedIndices) > 0 {
-		log.Info("[tx-relay] Finished retry attempts with some producers still failing",
+		log.Debug("[tx-relay] Finished retry attempts with some producers still failing",
 			"hash", hash, "failed", len(currentFailedIndices))
 	} else {
-		log.Info("[tx-relay] All producers accepted private tx after retries", "hash", hash)
+		log.Debug("[tx-relay] All producers accepted private tx after retries", "hash", hash)
 	}
 }
 
@@ -279,7 +259,6 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 	var lastErr error
 	var preconfOfferedCount atomic.Uint64
 	var wg sync.WaitGroup
-	var txIncluded atomic.Bool
 	for i, client := range mc.clients {
 		wg.Add(1)
 		go func(client *rpc.Client, index int) {
@@ -293,21 +272,12 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 				lastErr = err
 				return
 			}
-			// If the tx is included in a block, don't bother checking for anything else
-			if txStatus == txpool.TxStatusIncluded {
-				txIncluded.Store(true)
-			}
-			if txStatus == txpool.TxStatusPending || txStatus == txpool.TxStatusIncluded {
+			if txStatus == txpool.TxStatusPending {
 				preconfOfferedCount.Add(1)
 			}
 		}(client, i)
 	}
 	wg.Wait()
-
-	// Tx was already included in a block
-	if txIncluded.Load() {
-		return true, nil
-	}
 
 	// Only offer a preconf if the tx was accepted by all block producers
 	if preconfOfferedCount.Load() == uint64(len(mc.clients)) {

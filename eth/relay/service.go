@@ -18,6 +18,10 @@ var (
 	errPrivateTxSubmissionFailed = errors.New("private tx submission failed partially, background retry scheduled")
 )
 
+// TxGetter defines a function that retrieves a transaction by its hash from local database.
+// Returns: found (bool), transaction, blockHash, blockNumber, txIndex
+type TxGetter func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64)
+
 type ServiceConfig struct {
 	expiryTickerInterval time.Duration
 	expiryInterval       time.Duration
@@ -50,6 +54,8 @@ type Service struct {
 	taskCh      chan TxTask // channel to queue new tasks
 	semaphore   chan struct{}
 	closeCh     chan struct{} // to limit concurrent tasks
+
+	txGetter TxGetter // function to get transaction from local database
 }
 
 func NewService(urls []string, config *ServiceConfig) *Service {
@@ -68,6 +74,11 @@ func NewService(urls []string, config *ServiceConfig) *Service {
 	go s.processPreconfTasks()
 	go s.cleanup()
 	return s
+}
+
+// SetTxGetter sets the transaction getter function for querying local database
+func (s *Service) SetTxGetter(getter TxGetter) {
+	s.txGetter = getter
 }
 
 // SubmitTransaction attempts to queue a transaction submission task for preconf / private tx
@@ -115,7 +126,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 		return err
 	}
 
-	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry)
+	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry, s.txGetter)
 	if err != nil {
 		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "err", err)
 		return errPrivateTxSubmissionFailed
@@ -145,20 +156,38 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	task, exists := s.store[hash]
 	s.storeMu.RUnlock()
 
+	// If task exists in cache and is already preconfirmed, return immediately
 	if exists && task.preconfirmed {
 		return true, nil
 	}
 
-	// Re-check the tx status from block producers in the following cases:
-	// - Task does not exist in cache
-	// - Task exists but was not preconfirmed earlier
+	// If task is not in cache or not preconfirmed, check locally if the tx
+	// was included in a block or not.
+	if s.txGetter != nil {
+		found, tx, _, _, _ := s.txGetter(hash)
+		if found && tx != nil {
+			// Create a new task if there wasn't one earlier
+			if !exists {
+				task = TxTask{hash: hash, insertedAt: time.Now()}
+			}
+			task.preconfirmed = true
+			task.err = nil
+			s.storeMu.Lock()
+			s.store[hash] = task
+			s.storeMu.Unlock()
+			log.Debug("[tx-relay] Transaction found in local database", "hash", hash)
+			return true, nil
+		}
+	}
+
+	// If tx not found locally, query block producers for status
 	res, err := s.multiclient.checkTxStatus(hash)
 	if !res && err == nil {
 		err = errPreconfValidationFailed
 	}
 	// Create a new task if there wasn't one earlier
 	if !exists {
-		task = TxTask{hash: hash}
+		task = TxTask{hash: hash, insertedAt: time.Now()}
 	}
 	task.preconfirmed = res
 	task.err = err

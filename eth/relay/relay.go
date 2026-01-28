@@ -79,6 +79,12 @@ func (s *RelayService) SetchainEventSubFn(fn func(ch chan<- core.ChainEvent) eve
 	}
 }
 
+func (s *RelayService) SetTxGetter(getter TxGetter) {
+	if s.txRelay != nil {
+		s.txRelay.SetTxGetter(getter)
+	}
+}
+
 func (s *RelayService) PreconfEnabled() bool {
 	return s.config.enablePreconf
 }

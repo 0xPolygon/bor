@@ -499,7 +499,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error in submitting private tx to all healthy BPs")
 	})
 
@@ -508,7 +508,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		defer mc.close()
 
 		invalidRawTx := []byte{0x01, 0x02, 0x03}
-		err := mc.submitPrivateTx(invalidRawTx, common.Hash{}, false)
+		err := mc.submitPrivateTx(invalidRawTx, common.Hash{}, false, nil)
 		require.Error(t, err, "expected error in submitting invalid private tx")
 	})
 
@@ -521,7 +521,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP fails")
 		require.ErrorContains(t, err, "internal server error", "expected internal server error")
 	})
@@ -539,7 +539,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP times out")
 		require.ErrorContains(t, err, "context deadline exceeded", "expected context deadline exceeded error")
 	})
@@ -557,7 +557,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		defer mc.close()
 
 		start := time.Now()
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		elapsed := time.Since(start)
 
 		require.NoError(t, err, "expected no error in submitting private tx")
@@ -582,7 +582,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when multiple BPs fail")
 	})
 
@@ -597,7 +597,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when all BPs fail")
 		require.ErrorContains(t, err, "internal server error", "expected error message from failing BPs")
 	})
@@ -616,7 +616,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error when one BP returns already known")
 	})
 
@@ -631,7 +631,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error when all BPs return already known")
 	})
 
@@ -649,7 +649,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP returns non-already-known error")
 		require.ErrorContains(t, err, "internal server error", "expected internal server error")
 	})
@@ -667,7 +667,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		// Close one server to simulate failure after initialization
 		rpcServers[0].close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when BP fails after initialization")
 	})
 
@@ -680,7 +680,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		rpcServers[2].close()
 		rpcServers[3].close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when all BPs fail")
 	})
 }
@@ -948,7 +948,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for retries to complete (2 retries * 2s interval + buffer)
@@ -963,7 +963,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		require.Equal(t, int32(1), callCounts[3].Load(), "expected server 3 to be called once")
 	})
 
-	t.Run("retry stops when tx included in a successful BP", func(t *testing.T) {
+	t.Run("retry stops when tx found in local database", func(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
@@ -979,63 +979,27 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 			defaultSendError(w, id, -32601, "internal server error")
 		}
 
-		// Server 1 succeeds but returns tx as included immediately
-		rpcServers[1].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{tx1.Hash(): txpool.TxStatusIncluded})
-
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		// Set up txGetter that will return the transaction as found (simulating it got included)
+		txGetter := func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			if hash == tx1.Hash() {
+				return true, tx1, common.Hash{}, 0, 0
+			}
+			return false, nil, common.Hash{}, 0, 0
+		}
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for one retry attempt
 		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
 
-		// Since tx is included, retry should stop early. All servers should be called only once during initial submission
-		for i := 0; i < 4; i++ {
-			require.Equal(t, int32(1), callCounts[i].Load(), "expected server %d to be called only once during initial submission", i)
-		}
-
-		// Reset handlers
-		rpcServers[1].handleTxStatus = defaultHandleTxStatus
-	})
-
-	t.Run("retry even if tx status check fails", func(t *testing.T) {
-		// Reset handlers to default first
-		var callCounts [4]atomic.Int32
-		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
-				callCounts[i].Add(1)
-				defaultHandleSendPrivateTx(w, id, params)
-			}
-			// Fail tx status checks for all servers
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
-				defaultSendError(w, id, -32601, "internal server error")
-			}
-		}
-
-		// Server 0 fails for first 2 runs
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
-			count := callCounts[0].Add(1)
-			if count <= 2 {
-				defaultSendError(w, id, -32601, "temporary failure")
-			} else {
-				defaultHandleSendPrivateTx(w, id, params)
-			}
-		}
-
-		mc := newMultiClient(urls)
-		defer mc.close()
-
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
-		require.Error(t, err, "expected error on initial submission")
-
-		// Wait for one retry attempt
-		time.Sleep(2*privateTxRetryInterval + 100*time.Millisecond)
-
-		// Server 0 should be called multiple times due to retries
-		require.Equal(t, int32(3), callCounts[0].Load(), "expected server 0 to be called thrice (1 initial + 2 retries)")
-		// All others should only be called once
+		// Since tx is found in local database, retry should stop early
+		// Server 0 should be called only once during initial submission (no retries)
+		require.Equal(t, int32(1), callCounts[0].Load(), "expected server 0 to be called only once, no retries after tx found")
+		// All other servers should be called only once during initial submission
 		for i := 1; i < 4; i++ {
 			require.Equal(t, int32(1), callCounts[i].Load(), "expected server %d to be called only once during initial submission", i)
 		}
@@ -1061,7 +1025,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for all retries to complete (5 retries * 2s interval + buffer)
@@ -1104,7 +1068,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for all retries to complete (5 retries * 2s interval + buffer)
@@ -1139,7 +1103,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission when all BPs fail")
 
 		// Wait for retry to complete
@@ -1173,7 +1137,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected timeout error on initial submission")
 		require.ErrorContains(t, err, "context deadline exceeded", "expected timeout error")
 
@@ -1212,7 +1176,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for one retry attempt
@@ -1252,7 +1216,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for retry
@@ -1285,7 +1249,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.NoError(t, err, "expected no error when all submissions succeed or return already known")
 
 		// Wait to ensure no retries happen
@@ -1328,7 +1292,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true)
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
 		// Wait for retry
@@ -1341,5 +1305,43 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		time.Sleep(privateTxRetryInterval)
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected no further retries")
 		require.Equal(t, int32(2), callCounts[1].Load(), "expected no further retries")
+	})
+
+	t.Run("retry with txGetter not finding tx continues retrying", func(t *testing.T) {
+		// Reset handlers to default first
+		var callCounts [4]atomic.Int32
+		for i := range rpcServers {
+			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCounts[i].Add(1)
+				defaultHandleSendPrivateTx(w, id, params)
+			}
+		}
+
+		// Server 0 always fails
+		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			callCounts[0].Add(1)
+			defaultSendError(w, id, -32601, "internal server error")
+		}
+
+		mc := newMultiClient(urls)
+		defer mc.close()
+
+		// Set up txGetter that doesn't find the transaction
+		var txGetterCallCount atomic.Int32
+		txGetter := func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+			txGetterCallCount.Add(1)
+			return false, nil, common.Hash{}, 0, 0
+		}
+
+		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
+		require.Error(t, err, "expected error on initial submission")
+
+		// Wait for all retries to complete
+		time.Sleep(5*privateTxRetryInterval + 100*time.Millisecond)
+
+		// Server 0 should be called 6 times (1 initial + 5 retries)
+		require.Equal(t, int32(6), callCounts[0].Load(), "expected server 0 to be called 6 times")
+		// TxGetter should be called 5 times (once per retry attempt)
+		require.Equal(t, int32(5), txGetterCallCount.Load(), "expected txGetter to be called 5 times during retries")
 	})
 }
