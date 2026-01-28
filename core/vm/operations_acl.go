@@ -35,10 +35,10 @@ const (
 	//
 	// This is experimental and potentially expensive, since it may require a trie
 	// traversal to measure the canonical lookup-path node count.
-	storageTrieDepthStepGas uint64 = 0
+	storageTrieDepthStepGas uint64 = 1
 
 	// storageTrieDepthFreeLevels is the number of trie levels that are free.
-	storageTrieDepthFreeLevels uint64 = 0
+	storageTrieDepthFreeLevels uint64 = 2
 )
 
 // storageTrieDepthSurcharge returns additional gas to charge based on how deep
@@ -60,7 +60,6 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			return 0, errors.New("not enough gas for reentrancy sentry")
 		}
 		slot := common.Hash(stack.peek().Bytes32())
-		extra := uint64(0)
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
 			y, x    = stack.Back(1), stack.peek()
@@ -79,13 +78,13 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		if current == value { // noop (1)
 			// EIP 2200 original clause:
 			//		return params.SloadGasEIP2200, nil
-			return cost + params.WarmStorageReadCostEIP2929 + extra, nil // SLOAD_GAS
+			return cost + params.WarmStorageReadCostEIP2929, nil // SLOAD_GAS
 		}
 
 		original := evm.StateDB.GetCommittedState(contract.Address(), x.Bytes32())
 		if original == current {
 			if original == (common.Hash{}) { // create slot (2.1.1)
-				return cost + params.SstoreSetGasEIP2200 + extra, nil
+				return cost + params.SstoreSetGasEIP2200, nil
 			}
 
 			if value == (common.Hash{}) { // delete slot (2.1.2b)
@@ -93,7 +92,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			}
 			// EIP-2200 original clause:
 			//		return params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
-			return cost + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929) + extra, nil // write existing slot (2.1.2)
+			return cost + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929), nil // write existing slot (2.1.2)
 		}
 
 		if original != (common.Hash{}) {
@@ -120,7 +119,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 		// EIP-2200 original clause:
 		//return params.SloadGasEIP2200, nil // dirty update (2.2)
-		return cost + params.WarmStorageReadCostEIP2929 + extra, nil // dirty update (2.2)
+		return cost + params.WarmStorageReadCostEIP2929, nil // dirty update (2.2)
 	}
 }
 
@@ -132,16 +131,15 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 func gasSLoadEIP2929(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	loc := stack.peek()
 	slot := common.Hash(loc.Bytes32())
-	extra := uint64(0)
 	// Check slot presence in the access list
 	if _, slotPresent := evm.StateDB.SlotInAccessList(contract.Address(), slot); !slotPresent {
 		// If the caller cannot afford the cost, this change will be rolled back
 		// If he does afford it, we can skip checking the same thing later on, during execution
 		evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
-		return params.ColdSloadCostEIP2929 + extra, nil
+		return params.ColdSloadCostEIP2929, nil
 	}
 
-	return params.WarmStorageReadCostEIP2929 + extra, nil
+	return params.WarmStorageReadCostEIP2929, nil
 }
 
 // gasExtCodeCopyEIP2929 implements extcodecopy according to EIP-2929

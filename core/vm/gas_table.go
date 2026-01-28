@@ -104,7 +104,6 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		y, x    = stack.Back(1), stack.Back(0)
 		current = evm.StateDB.GetState(contract.Address(), x.Bytes32())
 	)
-	extra := uint64(0)
 	// The legacy gas metering only takes into consideration the current state
 	// Legacy rules should be applied if we are in Petersburg (removal of EIP-1283)
 	// OR Constantinople is not active
@@ -116,12 +115,12 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		// 3. From a non-zero to a non-zero                         (CHANGE)
 		switch {
 		case current == (common.Hash{}) && y.Sign() != 0: // 0 => non 0
-			return params.SstoreSetGas + extra, nil
+			return params.SstoreSetGas, nil
 		case current != (common.Hash{}) && y.Sign() == 0: // non 0 => 0
 			evm.StateDB.AddRefund(params.SstoreRefundGas)
-			return params.SstoreClearGas + extra, nil
+			return params.SstoreClearGas, nil
 		default: // non 0 => non 0 (or 0 => 0)
-			return params.SstoreResetGas + extra, nil
+			return params.SstoreResetGas, nil
 		}
 	}
 
@@ -141,20 +140,20 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 	//			(2.2.2.2.) Otherwise, add 4800 gas to refund counter.
 	value := common.Hash(y.Bytes32())
 	if current == value { // noop (1)
-		return params.NetSstoreNoopGas + extra, nil
+		return params.NetSstoreNoopGas, nil
 	}
 
 	original := evm.StateDB.GetCommittedState(contract.Address(), x.Bytes32())
 	if original == current {
 		if original == (common.Hash{}) { // create slot (2.1.1)
-			return params.NetSstoreInitGas + extra, nil
+			return params.NetSstoreInitGas, nil
 		}
 
 		if value == (common.Hash{}) { // delete slot (2.1.2b)
 			evm.StateDB.AddRefund(params.NetSstoreClearRefund)
 		}
 
-		return params.NetSstoreCleanGas + extra, nil // write existing slot (2.1.2)
+		return params.NetSstoreCleanGas, nil // write existing slot (2.1.2)
 	}
 
 	if original != (common.Hash{}) {
@@ -173,7 +172,7 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		}
 	}
 
-	return params.NetSstoreDirtyGas + extra, nil
+	return params.NetSstoreDirtyGas, nil
 }
 
 // Here come the EIP2200 rules:
@@ -201,25 +200,24 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 		y, x    = stack.Back(1), stack.Back(0)
 		current = evm.StateDB.GetState(contract.Address(), x.Bytes32())
 	)
-	extra := uint64(0)
 
 	value := common.Hash(y.Bytes32())
 
 	if current == value { // noop (1)
-		return params.SloadGasEIP2200 + extra, nil
+		return params.SloadGasEIP2200, nil
 	}
 
 	original := evm.StateDB.GetCommittedState(contract.Address(), x.Bytes32())
 	if original == current {
 		if original == (common.Hash{}) { // create slot (2.1.1)
-			return params.SstoreSetGasEIP2200 + extra, nil
+			return params.SstoreSetGasEIP2200, nil
 		}
 
 		if value == (common.Hash{}) { // delete slot (2.1.2b)
 			evm.StateDB.AddRefund(params.SstoreClearsScheduleRefundEIP2200)
 		}
 
-		return params.SstoreResetGasEIP2200 + extra, nil // write existing slot (2.1.2)
+		return params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
 	}
 
 	if original != (common.Hash{}) {
@@ -238,7 +236,7 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 		}
 	}
 
-	return params.SloadGasEIP2200 + extra, nil // dirty update (2.2)
+	return params.SloadGasEIP2200, nil // dirty update (2.2)
 }
 
 func makeGasLog(n uint64) gasFunc {
