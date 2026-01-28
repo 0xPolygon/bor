@@ -182,7 +182,7 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList())
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
@@ -421,12 +421,18 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	var requests [][]byte
 
-	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
+	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
 	receipts = p.engine.Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
 	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
+		// In case of any errors in state-sync tx processing, the number of receipts won't match
+		// the number of transactions in the block body.
+		if len(block.Transactions()) != len(receipts) {
+			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {

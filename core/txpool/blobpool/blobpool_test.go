@@ -1102,7 +1102,7 @@ func TestChangingSlotterSize(t *testing.T) {
 
 	// Write the two safely sized txs to store. note: although the store is
 	// configured for a blob count of 6, it can also support around ~1mb of call
-	// data - all this to say that we aren't using the the absolute largest shelf
+	// data - all this to say that we aren't using the absolute largest shelf
 	// available.
 	store.Put(blob1)
 	store.Put(blob2)
@@ -1781,5 +1781,51 @@ func benchmarkPoolPending(b *testing.B, datacap uint64) {
 		if len(p) != int(capacity) {
 			b.Fatalf("have %d want %d", len(p), capacity)
 		}
+	}
+}
+
+// TestSubscribeRebroadcastTransactions tests that the blob pool returns a no-op
+// subscription for rebroadcast events since blobs are not rebroadcast.
+func TestSubscribeRebroadcastTransactions(t *testing.T) {
+	// Create a temporary directory for the pool data
+	storage := t.TempDir()
+
+	// Create a minimal state database
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	statedb.Commit(0, true, false)
+
+	// Create a test blockchain with minimal config
+	chain := &testBlockChain{
+		config:  testChainConfig,
+		basefee: uint256.NewInt(params.InitialBaseFee),
+		blobfee: uint256.NewInt(params.BlobTxMinBlobGasprice),
+		statedb: statedb,
+	}
+
+	// Create the blob pool
+	pool := New(Config{Datadir: storage}, chain, nil)
+	if err := pool.Init(1, chain.CurrentBlock(), newReserver()); err != nil {
+		t.Fatalf("failed to create blob pool: %v", err)
+	}
+	defer pool.Close()
+
+	// Create a channel and subscribe to rebroadcast events
+	ch := make(chan core.StuckTxsEvent, 1)
+	sub := pool.SubscribeRebroadcastTransactions(ch)
+
+	// Verify the subscription is valid
+	if sub == nil {
+		t.Fatal("expected non-nil subscription")
+	}
+
+	// Unsubscribe should work without issues
+	sub.Unsubscribe()
+
+	// Channel should be empty (no events should be sent)
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event: %v", event)
+	default:
+		// Expected - no events
 	}
 }

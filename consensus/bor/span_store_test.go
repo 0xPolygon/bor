@@ -1526,3 +1526,54 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.False(t, status.CatchingUp, "Status should show not catching up after recovery")
 	})
 }
+
+func TestSpanStore_PurgeCache(t *testing.T) {
+	t.Parallel()
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	defer spanStore.Close()
+	ctx := t.Context()
+
+	// Populate the cache with some spans
+	for i := uint64(0); i < 5; i++ {
+		span, err := spanStore.spanById(ctx, i)
+		require.NoError(t, err, "err in spanById for id=%d", i)
+		require.NotNil(t, span)
+	}
+
+	// Verify cache is populated
+	keys := spanStore.store.Keys()
+	require.Len(t, keys, 5, "cache should have 5 spans")
+
+	// Set up lastUsedSpan and latestKnownSpanId
+	span, err := spanStore.spanById(ctx, 2)
+	require.NoError(t, err)
+	spanStore.lastUsedSpan.Store(span)
+	spanStore.latestKnownSpanId.Store(4)
+	spanStore.latestSpanCache.Store(span)
+
+	// Verify values are set
+	require.NotNil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be set")
+	require.Equal(t, uint64(4), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 4")
+	require.NotNil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be set")
+
+	// Purge the cache
+	spanStore.PurgeCache()
+
+	// Verify cache is cleared
+	keys = spanStore.store.Keys()
+	require.Len(t, keys, 0, "cache should be empty after purge")
+
+	// Verify atomic values are reset
+	require.Nil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be nil after purge")
+	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 0 after purge")
+	require.Nil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be nil after purge")
+
+	// Verify we can still fetch spans after purge (cache miss should re-fetch)
+	span, err = spanStore.spanById(ctx, 0)
+	require.NoError(t, err, "should be able to fetch span after purge")
+	require.Equal(t, uint64(0), span.Id, "span id should be 0")
+
+	// Verify cache is being populated again
+	keys = spanStore.store.Keys()
+	require.Len(t, keys, 1, "cache should have 1 span after re-fetch")
+}

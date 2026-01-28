@@ -158,9 +158,36 @@ func (bc *BlockChain) GetBodyRLP(hash common.Hash) rlp.RawValue {
 	return body
 }
 
-// HasWitness checks if a witness is present in the database or not.
+// GetWitness retrieves a witness in RLP encoding from the database by hash,
+// caching it if found.
+func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
+	// Short circuit if the witness is already in the cache, retrieve otherwise
+	if cached, ok := bc.witnessCache.Get(hash); ok {
+		return cached
+	}
+
+	witness := rawdb.ReadWitness(bc.db, hash)
+	if len(witness) == 0 {
+		return nil
+	}
+	// Cache the found witness for next time and return
+	bc.witnessCache.Add(hash, witness)
+	return witness
+}
+
+// HasWitness checks if a witness is present in the cache or database.
 func (bc *BlockChain) HasWitness(hash common.Hash) bool {
+	if bc.witnessCache.Contains(hash) {
+		return true
+	}
 	return rawdb.HasWitness(bc.db, hash)
+}
+
+// WriteWitness writes the witness to the database and updates the cache.
+// This wrapper ensures consistency between the database and the in-memory cache.
+func (bc *BlockChain) WriteWitness(db ethdb.KeyValueWriter, hash common.Hash, witness []byte) {
+	rawdb.WriteWitness(db, hash, witness)
+	bc.witnessCache.Add(hash, witness)
 }
 
 // HasBlock checks if a block is fully present in the database or not.
@@ -266,7 +293,7 @@ func (bc *BlockChain) GetCanonicalReceipt(tx *types.Transaction, blockHash commo
 		return nil, fmt.Errorf("block header is not found, %d, %x", blockNumber, blockHash)
 	}
 	var blobGasPrice *big.Int
-	if header.ExcessBlobGas != nil {
+	if header.ExcessBlobGas != nil && bc.chainConfig.BlobScheduleConfig != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, header)
 	}
 	receipt, ctx, err := rawdb.ReadCanonicalRawReceipt(bc.db, blockHash, blockNumber, txIndex)
@@ -487,6 +514,23 @@ func (bc *BlockChain) State() (*state.StateDB, error) {
 // StateAt returns a new mutable state based on a particular point in time.
 func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 	return state.New(root, bc.statedb)
+}
+
+// StateAtWithReaders returns a new mutable state based on a particular point in time,
+// along with two separate readers that share the same cache but track separate statistics.
+// The first reader (prefetch) is intended for prefetch operations, and the second (process)
+// is for actual transaction processing. This enables independent cache hit/miss tracking
+// for both phases of block production.
+func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return statedb, prefetchReader, processReader, nil
 }
 
 // HistoricState returns a historic state specified by the given root.

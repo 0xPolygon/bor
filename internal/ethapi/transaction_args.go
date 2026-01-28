@@ -255,7 +255,7 @@ func (args *TransactionArgs) setFeeDefaults(ctx context.Context, b Backend, head
 // setCancunFeeDefaults fills in reasonable default fee values for unspecified fields.
 func (args *TransactionArgs) setCancunFeeDefaults(config *params.ChainConfig, head *types.Header) {
 	// Set maxFeePerBlobGas if it is missing.
-	if args.BlobHashes != nil && args.BlobFeeCap == nil {
+	if args.BlobHashes != nil && args.BlobFeeCap == nil && config.BlobScheduleConfig != nil {
 		blobBaseFee := eip4844.CalcBlobFee(config, head)
 		// Set the max fee to be 2 times larger than the previous block's blob base fee.
 		// The additional slack allows the tx to not become invalidated if the base

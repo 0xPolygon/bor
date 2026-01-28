@@ -92,3 +92,81 @@ func TestPeerSet(t *testing.T) {
 		t.Fatalf("bad size")
 	}
 }
+
+func TestKnownCacheRemove(t *testing.T) {
+	size := 10
+	s := newKnownCache(size)
+
+	// Add some items
+	hashes := make([]common.Hash, 5)
+	for i := 0; i < 5; i++ {
+		hashes[i] = common.Hash{byte(i)}
+		s.Add(hashes[i])
+	}
+
+	if s.Cardinality() != 5 {
+		t.Fatalf("wrong size after add, expected 5 but found %d", s.Cardinality())
+	}
+
+	// Remove some items
+	s.Remove(hashes[0], hashes[2], hashes[4])
+
+	if s.Cardinality() != 2 {
+		t.Fatalf("wrong size after remove, expected 2 but found %d", s.Cardinality())
+	}
+
+	// Verify the correct items were removed
+	if s.Contains(hashes[0]) {
+		t.Error("hash[0] should have been removed")
+	}
+	if !s.Contains(hashes[1]) {
+		t.Error("hash[1] should still be present")
+	}
+	if s.Contains(hashes[2]) {
+		t.Error("hash[2] should have been removed")
+	}
+	if !s.Contains(hashes[3]) {
+		t.Error("hash[3] should still be present")
+	}
+	if s.Contains(hashes[4]) {
+		t.Error("hash[4] should have been removed")
+	}
+}
+
+func TestPeerForgetTransactions(t *testing.T) {
+	// Create a peer with a known tx cache
+	app, _ := p2p.MsgPipe()
+	defer app.Close()
+
+	var id enode.ID
+	rand.Read(id[:])
+
+	peer := NewPeer(ETH68, p2p.NewPeer(id, "test", nil), app, nil)
+	defer peer.Close()
+
+	// Add some transaction hashes to the known set
+	hashes := make([]common.Hash, 5)
+	for i := 0; i < 5; i++ {
+		hashes[i] = common.Hash{byte(i + 100)}
+		peer.knownTxs.Add(hashes[i])
+	}
+
+	if peer.knownTxs.Cardinality() != 5 {
+		t.Fatalf("wrong size after add, expected 5 but found %d", peer.knownTxs.Cardinality())
+	}
+
+	// Forget some transactions
+	peer.ForgetTransactions([]common.Hash{hashes[0], hashes[2], hashes[4]})
+
+	if peer.knownTxs.Cardinality() != 2 {
+		t.Fatalf("wrong size after forget, expected 2 but found %d", peer.knownTxs.Cardinality())
+	}
+
+	// Verify the transactions were forgotten
+	if peer.knownTxs.Contains(hashes[0]) {
+		t.Error("hash[0] should have been forgotten")
+	}
+	if !peer.knownTxs.Contains(hashes[1]) {
+		t.Error("hash[1] should still be known")
+	}
+}

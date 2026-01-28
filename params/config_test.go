@@ -630,3 +630,280 @@ func TestCalculateCoinbase(t *testing.T) {
 		}
 	})
 }
+
+func TestGetTargetGasPercentage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Pre-Dandeli block returns 0", func(t *testing.T) {
+		config := &BorConfig{
+			DandeliBlock: big.NewInt(1000),
+		}
+
+		// Test before Dandeli fork
+		result := config.GetTargetGasPercentage(big.NewInt(500))
+		if result != 0 {
+			t.Errorf("Pre-Dandeli: expected 0, got %d", result)
+		}
+
+		result = config.GetTargetGasPercentage(big.NewInt(999))
+		if result != 0 {
+			t.Errorf("Pre-Dandeli (block 999): expected 0, got %d", result)
+		}
+	})
+
+	t.Run("Post-Dandeli with nil TargetGasPercentage returns default", func(t *testing.T) {
+		config := &BorConfig{
+			DandeliBlock:        big.NewInt(1000),
+			TargetGasPercentage: nil,
+		}
+
+		result := config.GetTargetGasPercentage(big.NewInt(1000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with nil: expected %d, got %d", TargetGasPercentagePostDandeli, result)
+		}
+
+		result = config.GetTargetGasPercentage(big.NewInt(2000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with nil (block 2000): expected %d, got %d", TargetGasPercentagePostDandeli, result)
+		}
+	})
+
+	t.Run("Post-Dandeli with valid custom values", func(t *testing.T) {
+		testCases := []struct {
+			customValue uint64
+			description string
+		}{
+			{1, "minimum valid value"},
+			{50, "mid-range value"},
+			{100, "maximum valid value"},
+			{65, "default value"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				val := tc.customValue
+				config := &BorConfig{
+					DandeliBlock:        big.NewInt(1000),
+					TargetGasPercentage: &val,
+				}
+
+				result := config.GetTargetGasPercentage(big.NewInt(1000))
+				if result != tc.customValue {
+					t.Errorf("Post-Dandeli with custom value %d: expected %d, got %d",
+						tc.customValue, tc.customValue, result)
+				}
+			})
+		}
+	})
+
+	t.Run("Post-Dandeli with invalid value 0 falls back to default", func(t *testing.T) {
+		invalidVal := uint64(0)
+		config := &BorConfig{
+			DandeliBlock:        big.NewInt(1000),
+			TargetGasPercentage: &invalidVal,
+		}
+
+		result := config.GetTargetGasPercentage(big.NewInt(1000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with invalid value 0: expected %d, got %d",
+				TargetGasPercentagePostDandeli, result)
+		}
+	})
+
+	t.Run("Post-Dandeli with invalid value >100 falls back to default", func(t *testing.T) {
+		testCases := []uint64{101, 200, 1000}
+
+		for _, invalidVal := range testCases {
+			t.Run(fmt.Sprintf("value_%d", invalidVal), func(t *testing.T) {
+				val := invalidVal
+				config := &BorConfig{
+					DandeliBlock:        big.NewInt(1000),
+					TargetGasPercentage: &val,
+				}
+
+				result := config.GetTargetGasPercentage(big.NewInt(1000))
+				if result != TargetGasPercentagePostDandeli {
+					t.Errorf("Post-Dandeli with invalid value %d: expected %d, got %d",
+						invalidVal, TargetGasPercentagePostDandeli, result)
+				}
+			})
+		}
+	})
+}
+
+func TestGetBaseFeeChangeDenominator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Pre-Delhi returns DefaultBaseFeeChangeDenominator", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:  big.NewInt(1000),
+			BhilaiBlock: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(500))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Pre-Delhi: expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(999))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Pre-Delhi (block 999): expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
+		}
+	})
+
+	t.Run("Post-Delhi Pre-Bhilai returns BaseFeeChangeDenominatorPostDelhi", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  big.NewInt(2000),
+			DandeliBlock: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(1500))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(1999))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1999): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+	})
+
+	t.Run("Post-Bhilai Pre-Dandeli returns BaseFeeChangeDenominatorPostBhilai", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  big.NewInt(2000),
+			DandeliBlock: big.NewInt(3000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(2500))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(2999))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2999): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Dandeli with nil custom value falls back to Bhilai default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			BaseFeeChangeDenominator: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Dandeli with nil custom value: expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(4000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Dandeli with nil custom value (block 4000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Dandeli with valid custom value", func(t *testing.T) {
+		testCases := []uint64{1, 8, 16, 32, 64, 128}
+
+		for _, customVal := range testCases {
+			t.Run(fmt.Sprintf("value_%d", customVal), func(t *testing.T) {
+				val := customVal
+				config := &BorConfig{
+					DelhiBlock:               big.NewInt(1000),
+					BhilaiBlock:              big.NewInt(2000),
+					DandeliBlock:             big.NewInt(3000),
+					BaseFeeChangeDenominator: &val,
+				}
+
+				result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+				if result != customVal {
+					t.Errorf("Post-Dandeli with custom value %d: expected %d, got %d",
+						customVal, customVal, result)
+				}
+			})
+		}
+	})
+
+	t.Run("Post-Dandeli with invalid value 0 falls back to Bhilai default", func(t *testing.T) {
+		invalidVal := uint64(0)
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			BaseFeeChangeDenominator: &invalidVal,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Dandeli with invalid value 0: expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Pre-Dandeli with custom value ignores it", func(t *testing.T) {
+		customVal := uint64(999)
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			BaseFeeChangeDenominator: &customVal,
+		}
+
+		// Before Dandeli, custom value should be ignored
+		result := BaseFeeChangeDenominator(config, big.NewInt(2500))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Pre-Dandeli with custom value (block 2500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Dandeli but Pre-Bhilai falls back to Delhi default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  nil,
+			DandeliBlock: big.NewInt(2000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Dandeli, Pre-Bhilai: expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+	})
+
+	t.Run("Post-Dandeli but Pre-Delhi falls back to default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   nil,
+			BhilaiBlock:  nil,
+			DandeliBlock: big.NewInt(1000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Post-Dandeli, Pre-Delhi: expected %d, got %d",
+				DefaultBaseFeeChangeDenominator, result)
+		}
+	})
+}

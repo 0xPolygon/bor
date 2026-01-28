@@ -2025,3 +2025,40 @@ func TestShouldDeleteSmartContractIfItExistsInState(t *testing.T) {
 	codeAfterDeletion := s.GetCode(addr)
 	assert.Equal(t, []byte(nil), codeAfterDeletion, "smart contract should be deleted")
 }
+
+// containsKey returns true if the provided write descriptor list contains the given key.
+func containsKey(writes []blockstm.WriteDescriptor, key blockstm.Key) bool {
+	for _, w := range writes {
+		if w.Path == key {
+			return true
+		}
+	}
+	return false
+}
+
+// Test that selfdestruct writes (suicide and balance) are excluded after revert.
+func TestRevertWriteSelfDestruct(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x06")
+	s.CreateAccount(addr)
+	s.SetBalance(addr, uint256.NewInt(100), tracing.BalanceChangeTransfer)
+	// Clear writes so only selfdestruct writes are tracked
+	s.ClearWriteMap()
+
+	snap := s.Snapshot()
+	s.SelfDestruct(addr)
+
+	keySuicide := blockstm.NewSubpathKey(addr, SuicidePath)
+	assert.True(t, containsKey(s.MVFullWriteList(), keySuicide))
+	assert.True(t, containsKey(s.MVWriteList(), keySuicide))
+
+	s.RevertToSnapshot(snap)
+	// Full list still contains both, filtered excludes both
+	assert.True(t, containsKey(s.MVFullWriteList(), keySuicide))
+	assert.False(t, containsKey(s.MVWriteList(), keySuicide))
+}

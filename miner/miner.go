@@ -50,10 +50,18 @@ type Config struct {
 	Etherbase           common.Address `toml:",omitempty"` // Public address for block mining rewards
 	ExtraData           hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
 	GasCeil             uint64         // Target gas ceiling for mined blocks.
-	GasPrice            *big.Int       // Minimum gas price for mining a transaction
-	Recommit            time.Duration  // The time interval for miner to re-create mining work.
-	CommitInterruptFlag bool           // Interrupt commit when time is up ( default = true)
-	BlockTime           time.Duration  // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+
+	// Dynamic gas limit configuration
+	EnableDynamicGasLimit bool   // Enable dynamic gas limit adjustment based on base fee
+	GasLimitMin           uint64 // Minimum gas limit when dynamic gas limit is enabled
+	GasLimitMax           uint64 // Maximum gas limit when dynamic gas limit is enabled
+	TargetBaseFee         uint64 // Target base fee in wei for dynamic gas limit adjustment
+	BaseFeeBuffer         uint64 // Buffer around target base fee in wei (no adjustment when within buffer)
+
+	GasPrice            *big.Int      // Minimum gas price for mining a transaction
+	Recommit            time.Duration // The time interval for miner to re-create mining work.
+	CommitInterruptFlag bool          // Interrupt commit when time is up ( default = true)
+	BlockTime           time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
 	NewPayloadTimeout time.Duration // The maximum time allowance for creating a new payload
 }
@@ -63,6 +71,13 @@ var DefaultConfig = Config{
 	// Polygon/bor: PIP-60 (increase gas limit to 45M)
 	GasCeil:  45_000_000,
 	GasPrice: big.NewInt(params.BorDefaultMinerGasPrice), // enforces minimum gas price of 25 gwei in bor
+
+	// Dynamic gas limit defaults (disabled by default)
+	EnableDynamicGasLimit: false,
+	GasLimitMin:           50_000_000,      // 50M gas
+	GasLimitMax:           65_000_000,      // 65M gas
+	TargetBaseFee:         500_000_000_000, // 500 gwei
+	BaseFeeBuffer:         300_000_000_000, // 300 gwei buffer
 
 	// The default recommit time is chosen as two seconds since
 	// consensus-layer usually will wait a half slot of time(6s)

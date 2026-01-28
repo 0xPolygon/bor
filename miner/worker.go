@@ -77,7 +77,12 @@ const (
 	intervalAdjustBias = 200 * 1000.0 * 1000.0
 
 	// staleThreshold is the maximum depth of the acceptable stale block.
-	staleThreshold = 7
+	// In PoW chains (like pre-merge Ethereum), this is set to 7 because orphaned blocks
+	// can still be included as "uncle blocks" up to 6-7 blocks deep, earning partial rewards.
+	// In Bor's PoS consensus, validators take turns producing blocks deterministically,
+	// so there are no competing miners and no uncle block concept. Any non-canonical block
+	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
+	staleThreshold = 0
 )
 
 var (
@@ -94,6 +99,24 @@ var (
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
+	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
+	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
+	// intermediateRootTimer measures time taken to calculate intermediate root
+	intermediateRootTimer = metrics.NewRegisteredTimer("worker/intermediateRoot", nil)
+	// commitTimer measures total time for complete block building (tx execution + finalization + state root)
+	commitTimer = metrics.NewRegisteredTimer("worker/commit", nil)
+
+	// Cache hit/miss metrics for block production (miner path)
+	// These are the same meters used by the import path in blockchain.go
+	accountCacheHitMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit", nil)
+	accountCacheMissMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/miss", nil)
+	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
+	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
+
+	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
+	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
+	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
+	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -115,6 +138,10 @@ type environment struct {
 	depsMVFullWriteList [][]blockstm.WriteDescriptor
 	mvReadMapList       []map[blockstm.Key]blockstm.ReadDescriptor
 	witness             *stateless.Witness
+
+	// Readers with stats tracking for metrics reporting
+	prefetchReader state.ReaderWithStats
+	processReader  state.ReaderWithStats
 }
 
 // copy creates a deep copy of environment.
@@ -128,6 +155,8 @@ func (env *environment) copy() *environment {
 		receipts:            copyReceipts(env.receipts),
 		depsMVFullWriteList: env.depsMVFullWriteList,
 		mvReadMapList:       env.mvReadMapList,
+		prefetchReader:      env.prefetchReader,
+		processReader:       env.processReader,
 	}
 
 	if env.gasPool != nil {
@@ -245,6 +274,10 @@ type worker struct {
 
 	pendingMu    sync.RWMutex
 	pendingTasks map[common.Hash]*task
+
+	// Block number which is currently being worked on (0 = none).
+	// Used to prevent duplicate work.
+	pendingWorkBlock atomic.Uint64
 
 	snapshotMu       sync.RWMutex // The lock used to protect the snapshots below
 	snapshotBlock    *types.Block
@@ -395,6 +428,52 @@ func (w *worker) setGasCeil(ceil uint64) {
 	w.config.GasCeil = ceil
 }
 
+// calculateDesiredGasLimit determines the target gas limit based on configuration.
+// If dynamic gas limit is enabled, it adjusts based on the parent's base fee:
+// - When base fee > target + buffer: target max gas limit (increase supply)
+// - When base fee < target - buffer: target min gas limit (decrease supply)
+// - When within buffer: maintain current gas limit (no change)
+// If dynamic gas limit is disabled, returns the static GasCeil value.
+func (w *worker) calculateDesiredGasLimit(parent *types.Header) uint64 {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// If dynamic gas limit is not enabled, use the static GasCeil
+	if !w.config.EnableDynamicGasLimit {
+		return w.config.GasCeil
+	}
+
+	// Pre-London blocks don't have base fee, use static GasCeil
+	if parent.BaseFee == nil {
+		return w.config.GasCeil
+	}
+
+	parentBaseFee := parent.BaseFee.Uint64()
+	targetBaseFee := w.config.TargetBaseFee
+	buffer := w.config.BaseFeeBuffer
+
+	// Calculate bounds
+	upperBound := targetBaseFee + buffer
+	var lowerBound uint64
+	if buffer < targetBaseFee {
+		lowerBound = targetBaseFee - buffer
+	} else {
+		lowerBound = 0 // Prevent underflow
+	}
+
+	// Determine desired gas limit based on base fee position
+	if parentBaseFee > upperBound {
+		// Base fee is too high, increase gas limit to max to reduce fee pressure
+		return w.config.GasLimitMax
+	} else if parentBaseFee < lowerBound {
+		// Base fee is too low, decrease gas limit to min to increase fee pressure
+		return w.config.GasLimitMin
+	}
+
+	// Within buffer zone, maintain current gas limit
+	return parent.GasLimit
+}
+
 // setExtra sets the content used to initialize the block extra field.
 func (w *worker) setExtra(extra []byte) {
 	w.mu.Lock()
@@ -502,7 +581,9 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	<-timer.C // discard the initial tick
 
 	veblopTimeout := time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
-
+	if veblopTimeout < w.blockTime {
+		veblopTimeout = w.blockTime
+	}
 	veblopTimer := time.NewTimer(veblopTimeout)
 	defer veblopTimer.Stop()
 
@@ -519,36 +600,44 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			return
 		}
 		timer.Reset(recommit)
+		veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(w.chain.CurrentBlock().Number.Uint64())) * time.Second
+		if veblopTimeout < w.blockTime {
+			veblopTimeout = w.blockTime
+		}
 		veblopTimer.Reset(veblopTimeout)
 		w.newTxs.Store(0)
-	}
-	// clearPending cleans the stale pending tasks.
-	clearPending := func(number uint64) {
-		w.pendingMu.Lock()
-		for h, t := range w.pendingTasks {
-			if t.block.NumberU64()+staleThreshold <= number {
-				delete(w.pendingTasks, h)
-			}
-		}
-		w.pendingMu.Unlock()
 	}
 
 	for {
 		select {
 		case <-w.startCh:
-			clearPending(w.chain.CurrentBlock().Number.Uint64())
+			w.clearPending(w.chain.CurrentBlock().Number.Uint64())
 
 			timestamp = time.Now().Unix()
+			w.pendingWorkBlock.Store(w.chain.CurrentBlock().Number.Uint64() + 1)
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
-			clearPending(head.Header.Number.Uint64())
+			w.clearPending(head.Header.Number.Uint64())
+
+			pendingWorkBlock := w.pendingWorkBlock.Load()
+			if pendingWorkBlock == head.Header.Number.Uint64()+1 {
+				// Next block is already being worked on, skip the commit.
+				continue
+			}
 
 			timestamp = time.Now().Unix()
+			w.pendingWorkBlock.Store(head.Header.Number.Uint64() + 1)
 			commit(false, commitInterruptNewHead)
 
 		case <-veblopTimer.C:
 			currentBlock := w.chain.CurrentBlock()
+
+			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
+			if veblopTimeout < w.blockTime {
+				veblopTimeout = w.blockTime
+			}
+
 			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsRio(currentBlock.Number) {
 				veblopTimer.Reset(veblopTimeout)
 				continue
@@ -558,25 +647,25 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			hasPendingTasks := len(w.pendingTasks) > 0
 			w.pendingMu.RUnlock()
 
+			pendingWorkBlock := w.pendingWorkBlock.Load()
+			if pendingWorkBlock == currentBlock.Number.Uint64()+1 {
+				// Next block is already being worked on, reset the timer.
+				veblopTimer.Reset(veblopTimeout)
+				continue
+			}
+
 			if !hasPendingTasks && time.Now().Unix()-int64(currentBlock.Time) >= int64(veblopTimeout.Seconds()) {
 				timestamp = time.Now().Unix()
+				w.pendingWorkBlock.Store(currentBlock.Number.Uint64() + 1)
 				commit(false, commitInterruptNewHead)
+				// veblopTimer is already reset by commit() so we don't need to reset it here.
+			} else {
+				veblopTimer.Reset(veblopTimeout)
 			}
-
-			veblopTimeout = time.Duration(w.chainConfig.Bor.CalculatePeriod(currentBlock.Number.Uint64())) * time.Second
-			veblopTimer.Reset(veblopTimeout)
 
 		case <-timer.C:
-			// If sealing is running resubmit a new work cycle periodically to pull in
-			// higher priced transactions. Disable this overhead for pending blocks.
-			if w.IsRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
-				// Short circuit if no new transaction arrives.
-				if w.newTxs.Load() == 0 {
-					timer.Reset(recommit)
-					continue
-				}
-				commit(true, commitInterruptResubmit)
-			}
+			// Recommit disabled due to the current low block period (no need to capture more txs on the block already built)
+			continue
 
 		case interval := <-w.resubmitIntervalCh:
 			// Adjust resubmit interval explicitly by user.
@@ -869,6 +958,10 @@ func (w *worker) resultLoop() {
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
+				// Error writing block to chain, delete the pending task.
+				w.pendingMu.Lock()
+				delete(w.pendingTasks, sealhash)
+				w.pendingMu.Unlock()
 				continue
 			}
 
@@ -884,6 +977,10 @@ func (w *worker) resultLoop() {
 				sealedEmptyBlocksCounter.Inc(1)
 			}
 
+			// Clear all pending tasks for blocks at or below the sealed block number.
+			// These tasks are now obsolete since the chain has progressed past them.
+			w.clearPending(block.NumberU64())
+
 		case <-w.exitCh:
 			return
 		}
@@ -892,8 +989,8 @@ func (w *worker) resultLoop() {
 
 // makeEnv creates a new environment for the sealing block.
 func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address, witness bool) (*environment, error) {
-	// Retrieve the parent state to execute on top.
-	state, err := w.chain.StateAt(parent.Root)
+	// Retrieve the parent state to execute on top, with separate readers for stats tracking.
+	state, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -910,12 +1007,14 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
-		state:    state,
-		coinbase: coinbase,
-		header:   header,
-		witness:  state.Witness(),
-		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		signer:         types.MakeSigner(w.chainConfig, header.Number, header.Time),
+		state:          state,
+		coinbase:       coinbase,
+		header:         header,
+		witness:        state.Witness(),
+		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		prefetchReader: prefetchReader,
+		processReader:  processReader,
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1335,11 +1434,14 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		coinbase = genParams.coinbase
 	}
 
+	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
+	desiredGasLimit := w.calculateDesiredGasLimit(parent)
+
 	// Construct the sealing block header.
 	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     newBlockNumber,
-		GasLimit:   core.CalcGasLimit(parent.GasLimit, w.config.GasCeil),
+		GasLimit:   core.CalcGasLimit(parent.GasLimit, desiredGasLimit),
 		Time:       timestamp,
 		Coinbase:   coinbase,
 	}
@@ -1356,7 +1458,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 		header.BaseFee = eip1559.CalcBaseFee(w.chainConfig, parent)
 		if !w.chainConfig.IsLondon(parent.Number) {
 			parentGasLimit := parent.GasLimit * w.chainConfig.ElasticityMultiplier()
-			header.GasLimit = core.CalcGasLimit(parentGasLimit, w.config.GasCeil)
+			header.GasLimit = core.CalcGasLimit(parentGasLimit, desiredGasLimit)
 		}
 	}
 
@@ -1519,7 +1621,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 	}
 
 	var block *types.Block
-	block, work.receipts, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
+	block, work.receipts, _, err = w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, &body, work.receipts)
 
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1542,6 +1644,11 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 	start := time.Now()
+
+	// Clear the pending work block number when commitWork completes (success or failure).
+	defer func() {
+		w.pendingWorkBlock.Store(0)
+	}()
 
 	var (
 		work *environment
@@ -1666,6 +1773,29 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+	// Track total block building time and report metrics at the end of the commit cycle.
+	defer func() {
+		// Update total commit timer (matches the "elapsed" time in log)
+		commitTimer.Update(time.Since(start))
+
+		// Report cache hit/miss metrics (matches behavior in blockchain.go for import path)
+		if metrics.Enabled() && env.prefetchReader != nil && env.processReader != nil {
+			// Report prefetch reader stats
+			prefetchStats := env.prefetchReader.GetStats()
+			accountCacheHitPrefetchMeter.Mark(prefetchStats.AccountHit)
+			accountCacheMissPrefetchMeter.Mark(prefetchStats.AccountMiss)
+			storageCacheHitPrefetchMeter.Mark(prefetchStats.StorageHit)
+			storageCacheMissPrefetchMeter.Mark(prefetchStats.StorageMiss)
+
+			// Report process reader stats
+			processStats := env.processReader.GetStats()
+			accountCacheHitMeter.Mark(processStats.AccountHit)
+			accountCacheMissMeter.Mark(processStats.AccountMiss)
+			storageCacheHitMeter.Mark(processStats.StorageHit)
+			storageCacheMissMeter.Mark(processStats.StorageMiss)
+		}
+	}()
+
 	if w.IsRunning() {
 		if interval != nil {
 			interval()
@@ -1676,9 +1806,16 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// Withdrawals are set to nil here, because this is only called in PoW.
 		var block *types.Block
 		var err error
-		block, env.receipts, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
+
+		// Track time for FinalizeAndAssemble (state root calculation + block assembly)
+		finalizeStart := time.Now()
+		var commitTime time.Duration
+		block, env.receipts, commitTime, err = w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, &types.Body{
 			Transactions: env.txs,
 		}, env.receipts)
+		finalizeDuration := time.Since(finalizeStart)
+		finalizeAndAssembleTimer.Update(finalizeDuration)
+		intermediateRootTimer.Update(commitTime)
 
 		if err != nil {
 			return err
@@ -1690,7 +1827,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"txs", env.tcount, "gas", block.GasUsed(), "fees", feesInEther,
-				"elapsed", common.PrettyDuration(time.Since(start)))
+				"elapsed", common.PrettyDuration(time.Since(start)), "finalize", common.PrettyDuration(finalizeDuration))
 
 		case <-w.exitCh:
 			log.Info("Worker has exited")
@@ -1730,6 +1867,17 @@ func (w *worker) adjustResubmitInterval(message *intervalAdjust) {
 	default:
 		log.Warn("the resubmitAdjustCh is full, discard the message")
 	}
+}
+
+// clearPending cleans the stale pending tasks.
+func (w *worker) clearPending(number uint64) {
+	w.pendingMu.Lock()
+	for h, t := range w.pendingTasks {
+		if t.block.NumberU64()+staleThreshold <= number {
+			delete(w.pendingTasks, h)
+		}
+	}
+	w.pendingMu.Unlock()
 }
 
 // copyReceipts makes a deep copy of the given receipts.

@@ -5,7 +5,7 @@ The ```bor snapshot prune-block``` command will prune historical blockchain data
 
 The brief workflow as below:
 
-1. backup the the number of specified number of blocks backward in original ancientdb into new ancient_backup,
+1. backup the number of specified number of blocks backward in original ancientdb into new ancient_backup,
 2. then delete the original ancientdb dir and rename the ancient_backup to original one for replacement,
 3. finally assemble the statedb and new ancientdb together.
 

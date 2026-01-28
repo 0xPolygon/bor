@@ -148,12 +148,18 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
-	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
+	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
 	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
 	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
+		// In case of any errors in state-sync tx processing, the number of receipts won't match
+		// the number of transactions in the block body.
+		if len(block.Transactions()) != len(receipts) {
+			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {

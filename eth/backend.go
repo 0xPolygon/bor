@@ -307,6 +307,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	options.Overrides = &overrides
+	options.Checker = checker
 
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
@@ -384,10 +385,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
 	}
 
-	// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
-	// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
-	eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
-
 	if !config.TxPool.NoLocals {
 		rejournal := config.TxPool.Rejournal
 		if rejournal < time.Second {
@@ -411,6 +408,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		EventMux:                eth.eventMux,
 		RequiredBlocks:          config.RequiredBlocks,
 		EthAPI:                  blockChainAPI,
+		gasCeil:                 config.Miner.GasCeil,
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
@@ -418,6 +416,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		p2pServer:               eth.p2pServer,
 	}); err != nil {
 		return nil, err
 	}

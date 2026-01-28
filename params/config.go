@@ -25,6 +25,7 @@ import (
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
 
@@ -340,6 +341,7 @@ var (
 			RioBlock:          big.NewInt(26272256),
 			MadhugiriBlock:    big.NewInt(28899616),
 			MadhugiriProBlock: big.NewInt(29287400),
+			DandeliBlock:      big.NewInt(31890000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -423,6 +425,7 @@ var (
 			RioBlock:          big.NewInt(77414656),
 			MadhugiriBlock:    big.NewInt(80084800),
 			MadhugiriProBlock: big.NewInt(80084800),
+			DandeliBlock:      big.NewInt(81424000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -457,6 +460,12 @@ var (
 			},
 			OverrideStateSyncRecordsInRange: []BlockRangeOverride{
 				{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+				{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
+			},
+			OverrideValidatorSetInRange: []BlockRangeOverrideValidatorSet{
+				{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{
+					common.HexToAddress("0x41018795fA95783117242244303fd7e26e964eE8"),
+				}},
 			},
 
 			BurntContract: map[string]string{
@@ -865,29 +874,43 @@ type BlockRangeOverride struct {
 	Value      int    `json:"value"`
 }
 
+type BlockRangeOverrideValidatorSet struct {
+	StartBlock uint64           `json:"startBlock"`
+	EndBlock   uint64           `json:"endBlock"`
+	Validators []common.Address `json:"validators"`
+}
+
 // BorConfig is the consensus engine configs for Matic bor based sealing.
 type BorConfig struct {
-	Period                          map[string]uint64      `json:"period"`                          // Number of seconds between blocks to enforce
-	ProducerDelay                   map[string]uint64      `json:"producerDelay"`                   // Number of seconds delay between two producer interval
-	Sprint                          map[string]uint64      `json:"sprint"`                          // Epoch length to proposer
-	BackupMultiplier                map[string]uint64      `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
-	ValidatorContract               string                 `json:"validatorContract"`               // Validator set contract
-	StateReceiverContract           string                 `json:"stateReceiverContract"`           // State receiver contract
-	OverrideStateSyncRecords        map[string]int         `json:"overrideStateSyncRecords"`        // override state records count
-	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
-	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
-	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
-	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
-	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	Period                          map[string]uint64                `json:"period"`                          // Number of seconds between blocks to enforce
+	ProducerDelay                   map[string]uint64                `json:"producerDelay"`                   // Number of seconds delay between two producer interval
+	Sprint                          map[string]uint64                `json:"sprint"`                          // Epoch length to proposer
+	BackupMultiplier                map[string]uint64                `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
+	ValidatorContract               string                           `json:"validatorContract"`               // Validator set contract
+	StateReceiverContract           string                           `json:"stateReceiverContract"`           // State receiver contract
+	OverrideStateSyncRecords        map[string]int                   `json:"overrideStateSyncRecords"`        // override state records count
+	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
+	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range
+	BlockAlloc                      map[string]interface{}           `json:"blockAlloc"`
+	BurntContract                   map[string]string                `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string                `json:"coinbase"`               // coinbase address
+	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"` // skip validator byte check
+
+	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
+	// These affect consensus gas pricing but are configurable per-node for operational flexibility
+	TargetGasPercentage      *uint64 `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
+
+	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay map[string]uint64 `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock             *big.Int          `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                *big.Int          `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                   *big.Int          `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -947,16 +970,36 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
 }
 
-// // TODO: modify this function once the block number is finalized
-// func (c *BorConfig) IsNapoli(number *big.Int) bool {
-// 	if c.NapoliBlock != nil {
-// 		if c.NapoliBlock.Cmp(big.NewInt(0)) == 0 {
-// 			return false
-// 		}
-// 	}
+func (c *BorConfig) IsDandeli(number *big.Int) bool {
+	return isBlockForked(c.DandeliBlock, number)
+}
 
-// 	return isBlockForked(c.NapoliBlock, number)
-// }
+// GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
+// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// It validates the configured value and falls back to defaults if invalid or nil.
+// Valid range: 1-100 (percentage).
+func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
+	// Only applies after Dandeli
+	if !c.IsDandeli(number) {
+		return 0 // Caller should use ElasticityMultiplier for pre-Dandeli
+	}
+
+	// If custom value is set, validate it
+	if c.TargetGasPercentage != nil {
+		val := *c.TargetGasPercentage
+		// Validate: must be between 1 and 100
+		if val > 0 && val <= 100 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid TargetGasPercentage in BorConfig, falling back to default",
+			"configured", val,
+			"validRange", "1-100")
+	}
+
+	// Default for post-Dandeli
+	return TargetGasPercentagePostDandeli
+}
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {
 	return number%c.CalculateSprint(number) == 0
@@ -1033,6 +1076,39 @@ func (c *ChainConfig) Description() string {
 	}
 
 	banner += "\n"
+
+	// Bor-specific hard forks.
+	if c.Bor != nil {
+		banner += "Bor hard forks (block based):\n"
+		if c.Bor.JaipurBlock != nil {
+			banner += fmt.Sprintf(" - Jaipur:                      #%-8v\n", c.Bor.JaipurBlock)
+		}
+		if c.Bor.DelhiBlock != nil {
+			banner += fmt.Sprintf(" - Delhi:                       #%-8v\n", c.Bor.DelhiBlock)
+		}
+		if c.Bor.IndoreBlock != nil {
+			banner += fmt.Sprintf(" - Indore:                      #%-8v\n", c.Bor.IndoreBlock)
+		}
+		if c.Bor.AhmedabadBlock != nil {
+			banner += fmt.Sprintf(" - Ahmedabad:                   #%-8v\n", c.Bor.AhmedabadBlock)
+		}
+		if c.Bor.BhilaiBlock != nil {
+			banner += fmt.Sprintf(" - Bhilai:                      #%-8v\n", c.Bor.BhilaiBlock)
+		}
+		if c.Bor.RioBlock != nil {
+			banner += fmt.Sprintf(" - Rio:                         #%-8v\n", c.Bor.RioBlock)
+		}
+		if c.Bor.MadhugiriBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri:                   #%-8v\n", c.Bor.MadhugiriBlock)
+		}
+		if c.Bor.MadhugiriProBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri Pro:               #%-8v\n", c.Bor.MadhugiriProBlock)
+		}
+		if c.Bor.DandeliBlock != nil {
+			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		return banner
+	}
 
 	// Create a list of forks with a short description of them. Forks that only
 	// makes sense for mainnet should be optional at printing to avoid bloating
@@ -1589,30 +1665,6 @@ func newBlockCompatError(what string, storedblock, newblock *big.Int) *ConfigCom
 	}
 	if rew != nil && rew.Sign() > 0 {
 		err.RewindToBlock = rew.Uint64() - 1
-	}
-
-	return err
-}
-
-// nolint
-func newTimestampCompatError(what string, storedtime, newtime *uint64) *ConfigCompatError {
-	var rew *uint64
-	switch {
-	case storedtime == nil:
-		rew = newtime
-	case newtime == nil || *storedtime < *newtime:
-		rew = storedtime
-	default:
-		rew = newtime
-	}
-	err := &ConfigCompatError{
-		What:         what,
-		StoredTime:   storedtime,
-		NewTime:      newtime,
-		RewindToTime: 0,
-	}
-	if rew != nil && *rew != 0 {
-		err.RewindToTime = *rew - 1
 	}
 
 	return err

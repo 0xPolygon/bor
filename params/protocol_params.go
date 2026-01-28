@@ -20,6 +20,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 const (
@@ -130,15 +131,17 @@ const (
 	// Introduced in Tangerine Whistle (Eip 150)
 	CreateBySelfdestructGas uint64 = 25000
 
-	BaseFeeChangeDenominatorPreDelhi   = 8  // Bounds the amount the base fee can change between blocks before Delhi Hard Fork.
+	DefaultBaseFeeChangeDenominator    = 8  // Bounds the amount the base fee can change between blocks.
 	BaseFeeChangeDenominatorPostDelhi  = 16 // Bounds the amount the base fee can change between blocks after Delhi Hard Fork.
 	BaseFeeChangeDenominatorPostBhilai = 64 // Bounds the amount the base fee can change between blocks after Bhilai Hard Fork.
 
-	ElasticityMultiplier = 2          // Bounds the maximum gas limit an EIP-1559 block may have.
-	InitialBaseFee       = 1000000000 // Initial base fee for EIP-1559 blocks.
+	DefaultElasticityMultiplier = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
+	ElasticityMultiplier        = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
 
-	DefaultBaseFeeChangeDenominator = 8 // Bounds the amount the base fee can change between blocks.
-	DefaultElasticityMultiplier     = 2 // Bounds the maximum gas limit an EIP-1559 block may have.
+	InitialBaseFee = 1000000000 // Initial base fee for EIP-1559 blocks.
+
+	DefaultTargetGasPercentage     = 50 // Specifies target block gas as percentage of block gas limit for EIP-1559
+	TargetGasPercentagePostDandeli = 65 // Specifies target block gas as percentage of block gas limit for EIP-1559 after Dandeli hard fork
 
 	MaxCodeSize              = 24576           // Maximum bytecode to permit for a contract
 	MaxCodeSizePostAhmedabad = 32768           // Maximum bytecode to permit for a contract post Ahmedabad hard fork (bor / polygon pos) (32KB)
@@ -238,17 +241,30 @@ var (
 // - Pre-Delhi: 8 (default)
 // - Post-Delhi: 16
 // - Post-Bhilai: 64
+// - Post-Dandeli: Configurable via BorConfig.BaseFeeChangeDenominator (validated, falls back to Bhilai default if invalid)
 // If borConfig is nil, returns the default value of 8.
 func BaseFeeChangeDenominator(borConfig *BorConfig, number *big.Int) uint64 {
 	// Handle cases where bor consensus isn't available to avoid panic
 	if borConfig == nil {
 		return DefaultBaseFeeChangeDenominator
 	}
+	// If Dandeli is active and custom value is set, validate and use it
+	if borConfig.IsDandeli(number) && borConfig.BaseFeeChangeDenominator != nil {
+		val := *borConfig.BaseFeeChangeDenominator
+		// Validate: must be non-zero to prevent division by zero
+		if val > 0 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid BaseFeeChangeDenominator in BorConfig (must be > 0), falling back to default",
+			"configured", val)
+	}
+
+	// Fall back to hard fork based values
 	if borConfig.IsBhilai(number) {
 		return BaseFeeChangeDenominatorPostBhilai
 	} else if borConfig.IsDelhi(number) {
 		return BaseFeeChangeDenominatorPostDelhi
-	} else {
-		return BaseFeeChangeDenominatorPreDelhi
 	}
+	return DefaultBaseFeeChangeDenominator
 }
