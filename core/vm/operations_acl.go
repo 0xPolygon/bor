@@ -35,7 +35,7 @@ const (
 	//
 	// This is experimental and potentially expensive, since it may require a trie
 	// traversal to measure the canonical lookup-path node count.
-	storageTrieDepthStepGas uint64 = 1
+	storageTrieDepthStepGas uint64 = 1000
 
 	// storageTrieDepthFreeLevels is the number of trie levels that are free.
 	storageTrieDepthFreeLevels uint64 = 2
