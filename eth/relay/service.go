@@ -130,6 +130,8 @@ func (s *Service) processPreconfTask(task TxTask) {
 	task.preconfirmed = res
 	task.err = err
 	task.insertedAt = time.Now()
+	// Note: We can purge the raw tx here to save memory. Keeping it
+	// incase we have some changes in the retry logic.
 
 	s.storeMu.Lock()
 	s.store[task.hash] = task
@@ -141,19 +143,20 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	task, exists := s.store[hash]
 	s.storeMu.RUnlock()
 
-	// Note: If this method is exposed for all transactions (not just preconf ones), check
-	// the status of a tx on the fly.
-	if !exists {
-		return false, errPreconfTaskNotFound
-	}
-	if task.preconfirmed {
+	if exists && task.preconfirmed {
 		return true, nil
 	}
 
-	// Re-check the tx status from block producers if the tx was not preconfirmed earlier
+	// Re-check the tx status from block producers in the following cases:
+	// - Task does not exist in cache
+	// - Task exists but was not preconfirmed earlier
 	res, err := s.multiclient.checkTxStatus(hash)
 	if !res && err == nil {
 		err = errPreconfValidationFailed
+	}
+	// Create a new task if there wasn't one earlier
+	if !exists {
+		task = TxTask{hash: hash}
 	}
 	task.preconfirmed = res
 	task.err = err

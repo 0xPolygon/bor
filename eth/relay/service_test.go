@@ -326,17 +326,7 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		}
 	}()
 
-	t.Run("error when task not found", func(t *testing.T) {
-		service := NewService(urls, nil)
-		defer service.close()
-
-		unknownHash := common.HexToHash("0x1")
-		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
-		require.Equal(t, errPreconfTaskNotFound, err, "expected errPreconfTaskNotFound")
-		require.False(t, preconfirmed, "expected preconfirmed to be false")
-	})
-
-	t.Run("returns true when task already preconfirmed", func(t *testing.T) {
+	t.Run("respond task preconfirmation result from cache", func(t *testing.T) {
 		service := NewService(urls, nil)
 		defer service.close()
 
@@ -350,6 +340,239 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		preconfirmed, err := service.CheckTxPreconfStatus(tx.Hash())
 		require.NoError(t, err, "expected no error when checking preconf status")
 		require.True(t, preconfirmed, "expected preconfirmation to be true")
+	})
+
+	// Case when task is not available in cache and we do the status check by hash
+	// against block producers and it passes.
+	t.Run("check tx status when task not available in cache", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track call count to ensure checkTxStatus is called
+		var callCount [2]atomic.Int32
+		for i, server := range rpcServers {
+			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCount[i].Add(1)
+				defaultHandleTxStatus(w, id, params)
+			}
+		}
+
+		// Confirm that unknown tx is not present in cache
+		unknownHash := common.HexToHash("0x1")
+		service.storeMu.RLock()
+		_, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.False(t, exists, "expected task to not exist in cache")
+
+		// Check preconfirmation status
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error when checking preconf status for unknown tx")
+		require.True(t, preconfirmed, "expected preconfirmation to be true for unknown tx")
+
+		// Ensure that checkTxStatus was called on all rpc servers
+		for i := range rpcServers {
+			require.Equal(t, int32(1), callCount[i].Load(), "expected checkTxStatus to be called once on rpc server %d", i)
+		}
+
+		// Ensure that cache is updated
+		service.storeMu.RLock()
+		task, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed in cache")
+
+		// Check preconfirmation status again to verify cache hit
+		preconfirmed, err = service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error when checking preconf status for unknown tx")
+		require.True(t, preconfirmed, "expected preconfirmation to be true for unknown tx")
+
+		// Ensure checkTxStatus wasn't called again
+		for i := range rpcServers {
+			require.Equal(t, int32(1), callCount[i].Load(), "expected checkTxStatus to be called once on rpc server %d", i)
+		}
+	})
+
+	// Case when task is not available in cache and we do the status check by hash
+	// against block producers. The call passes but returns false suggesting tx is
+	// not preconfirmed.
+	t.Run("tx status returns no preconfirmation when task not available in cache", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track call count to ensure checkTxStatus is called and it returns no preconf
+		var callCount [2]atomic.Int32
+		handleTxStatus := makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
+		for i, server := range rpcServers {
+			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCount[i].Add(1)
+				handleTxStatus(w, id, params)
+			}
+		}
+
+		// Confirm that unknown tx is not present in cache
+		unknownHash := common.HexToHash("0x1")
+		service.storeMu.RLock()
+		_, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.False(t, exists, "expected task to not exist in cache")
+
+		// Check preconfirmation status
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.Error(t, err, "expected error when checking preconf status for unknown tx")
+		require.ErrorIs(t, err, errPreconfValidationFailed, "expected errPreconfValidationFailed")
+		require.False(t, preconfirmed, "expected preconfirmation to be false for unknown tx")
+
+		// Ensure that checkTxStatus was called on all rpc servers
+		for i := range rpcServers {
+			require.Equal(t, int32(1), callCount[i].Load(), "expected checkTxStatus to be called once on rpc server %d", i)
+		}
+
+		// Ensure that cache is updated
+		service.storeMu.RLock()
+		task, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.False(t, task.preconfirmed, "expected task to be not preconfirmed in cache")
+		require.ErrorIs(t, task.err, errPreconfValidationFailed, "expected task error to be errPreconfValidationFailed")
+
+		// Check preconfirmation status again to ensure tx status is re-checked
+		preconfirmed, err = service.CheckTxPreconfStatus(unknownHash)
+		require.Error(t, err, "expected error when checking preconf status for unknown tx")
+		require.ErrorIs(t, err, errPreconfValidationFailed, "expected errPreconfValidationFailed")
+		require.False(t, preconfirmed, "expected preconfirmation to be false for unknown tx")
+
+		// Ensure checkTxStatus was called again
+		for i := range rpcServers {
+			require.Equal(t, int32(2), callCount[i].Load(), "expected checkTxStatus to be called twice on rpc server %d", i)
+		}
+	})
+
+	// Case when task is not available in cache and we do the status check by hash
+	// against block producers. The call fails suggesting tx is not preconfirmed.
+	t.Run("tx status check fails when task not available in cache", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track call count to ensure checkTxStatus is called and the call fails.
+		var callCount [2]atomic.Int32
+		for i, server := range rpcServers {
+			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCount[i].Add(1)
+				defaultSendError(w, id, -32603, "internal server error")
+			}
+		}
+
+		// Confirm that unknown tx is not present in cache
+		unknownHash := common.HexToHash("0x1")
+		service.storeMu.RLock()
+		_, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.False(t, exists, "expected task to not exist in cache")
+
+		// Check preconfirmation status
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.Error(t, err, "expected error when checking preconf status for unknown tx")
+		require.NotErrorIs(t, err, errPreconfValidationFailed, "expected an error other than errPreconfValidationFailed")
+		require.False(t, preconfirmed, "expected preconfirmation to be false for unknown tx")
+
+		// Ensure that checkTxStatus was called on all rpc servers
+		for i := range rpcServers {
+			require.Equal(t, int32(1), callCount[i].Load(), "expected checkTxStatus to be called once on rpc server %d", i)
+		}
+
+		// Ensure that cache is updated
+		service.storeMu.RLock()
+		task, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.False(t, task.preconfirmed, "expected task to be not preconfirmed in cache")
+		require.NotErrorIs(t, task.err, errPreconfValidationFailed, "expected an error other than errPreconfValidationFailed")
+
+		// Check preconfirmation status again to ensure tx status is re-checked
+		preconfirmed, err = service.CheckTxPreconfStatus(unknownHash)
+		require.Error(t, err, "expected error when checking preconf status for unknown tx")
+		require.NotErrorIs(t, err, errPreconfValidationFailed, "expected an error other than errPreconfValidationFailed")
+		require.False(t, preconfirmed, "expected preconfirmation to be false for unknown tx")
+
+		// Ensure checkTxStatus was called again
+		for i := range rpcServers {
+			require.Equal(t, int32(2), callCount[i].Load(), "expected checkTxStatus to be called twice on rpc server %d", i)
+		}
+	})
+
+	// Case when task is not available in cache and we do the status check by hash
+	// against block producers. The call fails initially but later passes second time.
+	t.Run("tx status check fails first and then passes when task not available in cache", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Track call count to ensure checkTxStatus is called and the call fails.
+		var callCount [2]atomic.Int32
+		for i, server := range rpcServers {
+			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCount[i].Add(1)
+				defaultSendError(w, id, -32603, "internal server error")
+			}
+		}
+
+		// Confirm that unknown tx is not present in cache
+		unknownHash := common.HexToHash("0x1")
+		service.storeMu.RLock()
+		_, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.False(t, exists, "expected task to not exist in cache")
+
+		// Check preconfirmation status
+		preconfirmed, err := service.CheckTxPreconfStatus(unknownHash)
+		require.Error(t, err, "expected error when checking preconf status for unknown tx")
+		require.NotErrorIs(t, err, errPreconfValidationFailed, "expected an error other than errPreconfValidationFailed")
+		require.False(t, preconfirmed, "expected preconfirmation to be false for unknown tx")
+
+		// Ensure that checkTxStatus was called on all rpc servers
+		for i := range rpcServers {
+			require.Equal(t, int32(1), callCount[i].Load(), "expected checkTxStatus to be called once on rpc server %d", i)
+		}
+
+		// Ensure that cache is updated
+		service.storeMu.RLock()
+		task, exists := service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.False(t, task.preconfirmed, "expected task to be not preconfirmed in cache")
+		require.NotErrorIs(t, task.err, errPreconfValidationFailed, "expected an error other than errPreconfValidationFailed")
+
+		// Update the handler to return preconfirmed status
+		for i := range rpcServers {
+			handleTxStatus := makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+				unknownHash: txpool.TxStatusPending,
+			})
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				callCount[i].Add(1)
+				handleTxStatus(w, id, params)
+			}
+		}
+
+		// Check preconfirmation status again to ensure tx status is re-checked
+		preconfirmed, err = service.CheckTxPreconfStatus(unknownHash)
+		require.NoError(t, err, "expected no error when checking preconf status for unknown tx")
+		require.True(t, preconfirmed, "expected preconfirmation to be true for unknown tx")
+
+		// Ensure checkTxStatus was called again
+		for i := range rpcServers {
+			require.Equal(t, int32(2), callCount[i].Load(), "expected checkTxStatus to be called twice on rpc server %d", i)
+		}
+
+		// Ensure that cache is updated to preconfirmed
+		service.storeMu.RLock()
+		task, exists = service.store[unknownHash]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored in cache")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed in cache")
+
+		// Ensure checkTxStatus wasn't called again to verify cache hit
+		for i := range rpcServers {
+			require.Equal(t, int32(2), callCount[i].Load(), "expected checkTxStatus to be called twice on rpc server %d", i)
+		}
 	})
 
 	t.Run("re-checks status when not preconfirmed initially", func(t *testing.T) {
