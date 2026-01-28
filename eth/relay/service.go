@@ -14,7 +14,6 @@ import (
 var (
 	errRpcClientUnavailable      = fmt.Errorf("rpc client unavailable to submit transactions")
 	errQueueOverflow             = fmt.Errorf("relay task queue overflow")
-	errPreconfTaskNotFound       = errors.New("unable to find preconf task associated with transaction hash")
 	errPreconfValidationFailed   = errors.New("failed to validate transaction inclusion status for issuing preconf")
 	errPrivateTxSubmissionFailed = errors.New("private tx submission failed partially, background retry scheduled")
 )
@@ -89,7 +88,7 @@ func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 	// First check if service is closed/closing
 	select {
 	case <-s.closeCh:
-		log.Debug("[tx-relay] Dropping task, service closing", "hash", tx.Hash())
+		log.Info("[tx-relay] Dropping task, service closing", "hash", tx.Hash())
 		return errRpcClientUnavailable
 	default:
 	}
@@ -99,7 +98,7 @@ func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 	case s.taskCh <- TxTask{rawtx: rawTx, hash: tx.Hash()}:
 		return nil
 	default:
-		log.Debug("[tx-relay] Task queue full, dropping transaction", "hash", tx.Hash())
+		log.Info("[tx-relay] Task queue full, dropping transaction", "hash", tx.Hash())
 		return errQueueOverflow
 	}
 }
@@ -127,6 +126,9 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 
 func (s *Service) processPreconfTask(task TxTask) {
 	res, err := s.multiclient.submitPreconfTx(task.rawtx)
+	if err != nil {
+		log.Warn("[tx-relay] failed to submit preconf tx", "err", err)
+	}
 	task.preconfirmed = res
 	task.err = err
 	task.insertedAt = time.Now()
@@ -165,7 +167,7 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	s.storeMu.Unlock()
 
 	if err != nil {
-		log.Debug("[tx-relay] Unable to validate tx status for preconf", "err", err)
+		log.Info("[tx-relay] Unable to validate tx status for preconf", "err", err)
 	}
 
 	return task.preconfirmed, err
