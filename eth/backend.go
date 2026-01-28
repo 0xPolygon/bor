@@ -1002,6 +1002,11 @@ func (s *Ethereum) Stop() error {
 	// Stop all the peer-related stuff first.
 	s.discmix.Close()
 
+	// Close the tx relay service if enabled
+	if s.APIBackend.relay != nil {
+		s.APIBackend.relay.Close()
+	}
+
 	// Close the engine before handler else it may cause a deadlock where
 	// the heimdall is unresponsive and the syncing loop keeps waiting
 	// for a response and is unable to proceed to exit `Finalize` during
