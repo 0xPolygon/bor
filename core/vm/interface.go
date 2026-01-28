@@ -54,8 +54,8 @@ type StateDB interface {
 	GetCommittedState(common.Address, common.Hash) common.Hash
 	GetState(common.Address, common.Hash) common.Hash
 	GetStateWithDepth(common.Address, common.Hash) (common.Hash, uint64)
-	GetStateDepth(common.Address, common.Hash) uint64
 	SetState(common.Address, common.Hash, common.Hash) common.Hash
+	SetStateWithDepth(common.Address, common.Hash, common.Hash) (common.Hash, uint64)
 	GetStorageRoot(addr common.Address) common.Hash
 
 	GetTransientState(addr common.Address, key common.Hash) common.Hash

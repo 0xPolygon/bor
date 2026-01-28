@@ -595,8 +595,8 @@ func opSstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 	val := scope.Stack.pop()
 	addr := scope.Contract.Address()
 	slot := common.Hash(loc.Bytes32())
-	interpreter.evm.StateDB.SetState(addr, slot, common.Hash(val.Bytes32()))
-	if extra := storageTrieDepthSurcharge(interpreter.evm.StateDB.GetStateDepth(addr, slot)); extra != 0 {
+	_, depth := interpreter.evm.StateDB.SetStateWithDepth(addr, slot, common.Hash(val.Bytes32()))
+	if extra := storageTrieDepthSurcharge(depth); extra != 0 {
 		if !scope.Contract.UseGas(extra, interpreter.evm.Config.Tracer, tracing.GasChangeUnspecified) {
 			return nil, ErrOutOfGas
 		}

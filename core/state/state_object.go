@@ -299,6 +299,25 @@ func (s *stateObject) SetState(key, value common.Hash) common.Hash {
 	return prev
 }
 
+// SetStateWithDepth updates a value in account storage and returns the previous
+// value along with the lookup depth used to resolve the slot.
+func (s *stateObject) SetStateWithDepth(key, value common.Hash) (common.Hash, uint64) {
+	origin, depth := s.GetCommittedStateWithDepth(key)
+	prev := origin
+	if dirtyValue, dirty := s.dirtyStorage[key]; dirty {
+		prev = dirtyValue
+	}
+	// If the new value is the same as old, don't set. Otherwise, track only the
+	// dirty changes, supporting reverting all of it back to no change.
+	if prev == value {
+		return prev, depth
+	}
+	// New value is different, update and journal the change
+	s.db.journal.storageChange(s.address, key, prev, origin)
+	s.setState(key, value, origin)
+	return prev, depth
+}
+
 // setState updates a value in account dirty storage. The dirtiness will be
 // removed if the value being set equals to the original value.
 func (s *stateObject) setState(key common.Hash, value common.Hash, origin common.Hash) {

@@ -735,21 +735,6 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	})
 }
 
-// GetStateDepth returns the cached depth (number of nodes traversed) for a
-// previously accessed storage slot, or 0 if not available.
-func (s *StateDB) GetStateDepth(addr common.Address, hash common.Hash) uint64 {
-	stateObject := s.getStateObject(addr)
-	if stateObject == nil {
-		return 0
-	}
-	if depth, ok := stateObject.getCachedStateDepth(hash); ok {
-		return depth
-	}
-	log.Error("Storage slot depth cache miss", "address", addr, "slot", hash)
-	_, depth := stateObject.GetCommittedStateWithDepth(hash)
-	return depth
-}
-
 // GetStateWithDepth retrieves the value associated with the specific key along
 // with the depth (number of nodes traversed) used to resolve it.
 func (s *StateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (common.Hash, uint64) {
@@ -902,6 +887,18 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) common.H
 		return stateObject.SetState(key, value)
 	}
 	return common.Hash{}
+}
+
+// SetStateWithDepth updates storage and returns the previous value along with
+// the lookup depth used to resolve the slot.
+func (s *StateDB) SetStateWithDepth(addr common.Address, key, value common.Hash) (common.Hash, uint64) {
+	stateObject := s.getOrNewStateObject(addr)
+	if stateObject != nil {
+		stateObject = s.mvRecordWritten(stateObject)
+		MVWrite(s, blockstm.NewStateKey(addr, key))
+		return stateObject.SetStateWithDepth(key, value)
+	}
+	return common.Hash{}, 0
 }
 
 // SetStorage replaces the entire storage for the specified account with given
