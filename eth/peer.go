@@ -479,6 +479,7 @@ func (p *ethPeer) receiveWitnessPage(
 	defer func() {
 		// if fails map on retry count and request again
 		if retrievedError != nil {
+			mapsMu.Lock()
 			for _, request := range witReqRes.Request {
 				if failedRequests[request.Hash] == nil {
 					failedRequests[request.Hash] = make(map[uint64]witReqRetryCount)
@@ -490,6 +491,7 @@ func (p *ethPeer) receiveWitnessPage(
 				}
 				failedRequests[request.Hash][request.Page] = retryCount
 			}
+			mapsMu.Unlock()
 
 			// non blocking call to avoid race condition because of semaphore
 			witReqsWg.Add(1) // protecting from not finishing before requests are built
@@ -673,26 +675,42 @@ func (p *ethPeer) buildWitnessRequests(hashes []common.Hash,
 	}
 
 	// checking failed requests to retry
-	for hash, _ := range failedRequests {
-		for page, _ := range failedRequests[hash] {
-			retryCount := failedRequests[hash][page]
+	type retryItem struct {
+		hash common.Hash
+		page uint64
+	}
+	var toRetry []retryItem
+
+	mapsMu.RLock()
+	for hash, pages := range failedRequests {
+		for page, retryCount := range pages {
 			if retryCount.ShouldRetryAgain {
-				if err := p.doWitnessRequest(
-					hash,
-					page,
-					witReqs,
-					witReqsWg,
-					witReqResCh,
-					witReqSem,
-					mapsMu,
-					witTotalRequest,
-				); err != nil {
-					return err
-				}
-				retryCount.ShouldRetryAgain = false
+				toRetry = append(toRetry, retryItem{hash, page})
 			}
-			failedRequests[hash][page] = retryCount
 		}
+	}
+	mapsMu.RUnlock()
+
+	for _, item := range toRetry {
+		if err := p.doWitnessRequest(
+			item.hash,
+			item.page,
+			witReqs,
+			witReqsWg,
+			witReqResCh,
+			witReqSem,
+			mapsMu,
+			witTotalRequest,
+		); err != nil {
+			return err
+		}
+		mapsMu.Lock()
+		if failedRequests[item.hash] != nil {
+			retryCount := failedRequests[item.hash][item.page]
+			retryCount.ShouldRetryAgain = false
+			failedRequests[item.hash][item.page] = retryCount
+		}
+		mapsMu.Unlock()
 	}
 	return nil
 }
