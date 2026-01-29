@@ -20,16 +20,58 @@ import (
 // state sync transaction handling across the Madhugiri hardfork.
 type borTestBackend struct {
 	testBackend
+
+	modifiedBlocks map[uint64]bool
+	modifiedHashes map[common.Hash]uint64
+}
+
+// BlockByNumber overrides testBackend to read modified blocks from DB.
+func (b *borTestBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
+	if number == rpc.PendingBlockNumber || number == rpc.LatestBlockNumber {
+		return b.chain.GetBlockByNumber(b.chain.CurrentBlock().Number.Uint64()), nil
+	}
+
+	blockNum := uint64(number)
+	if b.modifiedBlocks != nil && b.modifiedBlocks[blockNum] {
+		header := b.chain.GetHeaderByNumber(blockNum)
+		if header == nil {
+			return nil, nil
+		}
+		body := rawdb.ReadBody(b.chaindb, header.Hash(), blockNum)
+		if body == nil {
+			return nil, nil
+		}
+		return types.NewBlockWithHeader(header).WithBody(*body), nil
+	}
+
+	return b.chain.GetBlockByNumber(blockNum), nil
+}
+
+// BlockByHash overrides testBackend to read modified blocks from DB.
+func (b *borTestBackend) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
+	if b.modifiedHashes != nil {
+		if blockNum, ok := b.modifiedHashes[hash]; ok {
+			header := b.chain.GetHeaderByNumber(blockNum)
+			if header == nil {
+				return nil, nil
+			}
+			body := rawdb.ReadBody(b.chaindb, header.Hash(), blockNum)
+			if body == nil {
+				return nil, nil
+			}
+			return types.NewBlockWithHeader(header).WithBody(*body), nil
+		}
+	}
+
+	return b.chain.GetBlockByHash(hash), nil
 }
 
 // newBorChainConfig creates a chain config suitable for Bor state sync testing.
-// Includes all Bor-specific hardfork blocks from mainnet.
-// Note: Shanghai/Cancun/Prague omitted as ethash.NewFaker() doesn't support them.
 func newBorChainConfig(madhugiriBlock *big.Int) *params.ChainConfig {
 	return &params.ChainConfig{
 		ChainID:             big.NewInt(137),
 		HomesteadBlock:      big.NewInt(0),
-		DAOForkBlock:        nil,
+		DAOForkBlock:        big.NewInt(0),
 		DAOForkSupport:      true,
 		EIP150Block:         big.NewInt(0),
 		EIP155Block:         big.NewInt(0),
@@ -75,22 +117,80 @@ func newBorChainConfig(madhugiriBlock *big.Int) *params.ChainConfig {
 	}
 }
 
-// newBorTestBackend creates a test backend with Bor consensus config.
-// madhugiriBlock specifies when the Madhugiri fork activates (nil = no fork).
+// newBorChainConfigForInsertion creates a chain config with Bor settings but without Madhugiri
+// for block insertion. This allows transaction execution (which needs BorConfig for burnt contract)
+// while avoiding state-sync validation during insertion.
+func newBorChainConfigForInsertion() *params.ChainConfig {
+	return &params.ChainConfig{
+		ChainID:             big.NewInt(137),
+		HomesteadBlock:      big.NewInt(0),
+		DAOForkBlock:        big.NewInt(0),
+		DAOForkSupport:      true,
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		Bor: &params.BorConfig{
+			JaipurBlock:       big.NewInt(0),
+			DelhiBlock:        big.NewInt(0),
+			IndoreBlock:       big.NewInt(0),
+			AhmedabadBlock:    big.NewInt(0),
+			BhilaiBlock:       big.NewInt(0),
+			RioBlock:          big.NewInt(0),
+			MadhugiriBlock:    nil, // No Madhugiri - disables state-sync validation
+			MadhugiriProBlock: nil,
+			DandeliBlock:      big.NewInt(0),
+			Period: map[string]uint64{
+				"0": 2,
+			},
+			ProducerDelay: map[string]uint64{
+				"0": 2,
+			},
+			Sprint: map[string]uint64{
+				"0": 16,
+			},
+			BackupMultiplier: map[string]uint64{
+				"0": 2,
+			},
+			ValidatorContract:     "0x0000000000000000000000000000000000001000",
+			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			BurntContract: map[string]string{
+				"0": "0x000000000000000000000000000000000000dead",
+			},
+			Coinbase: map[string]string{
+				"0": "0x0000000000000000000000000000000000000000",
+			},
+		},
+	}
+}
+
+// newBorTestBackend creates a test backend that:
+// 1. Inserts blocks without Bor validation (to avoid state-sync processing issues)
+// 2. Exposes a Bor chain config to the tracer API (to test Madhugiri logic)
+// 3. Allows manual injection of state-sync txs into block bodies after insertion
 func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, madhugiriBlock *big.Int, generator func(i int, b *core.BlockGen)) *borTestBackend {
-	// Create a proper Bor chain config
-	chainConfig := newBorChainConfig(madhugiriBlock)
-	gspec.Config = chainConfig
+	// Use config without Bor for block insertion
+	insertionConfig := newBorChainConfigForInsertion()
+	gspec.Config = insertionConfig
 
 	backend := &borTestBackend{
 		testBackend: testBackend{
-			chainConfig: chainConfig,
+			// Use Bor config for API queries (this is what the tracer API sees)
+			chainConfig: newBorChainConfig(madhugiriBlock),
 			engine:      ethash.NewFaker(),
 			chaindb:     rawdb.NewMemoryDatabase(),
 		},
+		modifiedBlocks: make(map[uint64]bool),
+		modifiedHashes: make(map[common.Hash]uint64),
 	}
 
-	// Generate blocks
+	// Generate blocks with insertion config (no Bor)
 	_, blocks, _ := core.GenerateChainWithGenesis(gspec, backend.engine, n, generator)
 
 	// Import the canonical chain
@@ -101,6 +201,8 @@ func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, madhugiriBlock 
 		SnapshotLimit:  0,
 		ArchiveMode:    true,
 	}
+
+	// Create chain with insertion config (no Bor validation)
 	chain, err := core.NewBlockChain(backend.chaindb, gspec, backend.engine, options)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
@@ -114,6 +216,35 @@ func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, madhugiriBlock 
 
 	backend.chain = chain
 	return backend
+}
+
+// injectStateSyncTx appends a state-sync transaction to the specified block's body.
+// This simulates post-Madhugiri blocks that have state-sync txs in their body.
+func (b *borTestBackend) injectStateSyncTx(blockNum uint64, stateSyncTx *types.Transaction) error {
+	block := b.chain.GetBlockByNumber(blockNum)
+	if block == nil {
+		return nil
+	}
+
+	// Read existing body and append state-sync tx
+	existingBody := block.Body()
+	newTxs := make([]*types.Transaction, len(existingBody.Transactions)+1)
+	copy(newTxs, existingBody.Transactions)
+	newTxs[len(newTxs)-1] = stateSyncTx
+
+	newBody := &types.Body{
+		Transactions: newTxs,
+		Uncles:       existingBody.Uncles,
+		Withdrawals:  existingBody.Withdrawals,
+	}
+
+	// Write modified body back to database
+	rawdb.WriteBody(b.chaindb, block.Hash(), blockNum, newBody)
+
+	// Track this block as modified so BlockByNumber/BlockByHash reads from DB
+	b.modifiedBlocks[blockNum] = true
+	b.modifiedHashes[block.Hash()] = blockNum
+	return nil
 }
 
 // createStateSyncTx creates a state sync transaction for testing.
@@ -159,15 +290,16 @@ func TestTraceBlockStateSyncPostMadhugiri(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		// Add state sync tx to post-Madhugiri blocks (block 6+)
-		// In real Bor, this happens during block finalization
-		if i >= 5 {
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into post-Madhugiri blocks (block 6+)
+	for i := uint64(6); i <= 10; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -306,14 +438,16 @@ func TestTraceBlockMadhugiriForkBoundary(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		// Add state sync tx starting at Madhugiri block
-		if i >= 4 { // Block 5 is index 4 (0-indexed)
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx starting at Madhugiri block (block 5+)
+	for i := uint64(5); i <= 10; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -401,13 +535,16 @@ func TestTraceBlockByHashStateSyncPostMadhugiri(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		if i >= 5 {
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into post-Madhugiri blocks
+	for i := uint64(6); i <= 10; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -455,13 +592,16 @@ func TestTraceChainStateSyncPostMadhugiri(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		if i >= 5 {
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into post-Madhugiri blocks
+	for i := uint64(5); i <= 10; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -527,13 +667,16 @@ func TestIntermediateRootsStateSyncPostMadhugiri(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		if i >= 5 {
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into post-Madhugiri blocks
+	for i := uint64(6); i <= 10; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -657,12 +800,16 @@ func TestMadhugiriAtGenesis(t *testing.T) {
 			GasTipCap: big.NewInt(1),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		// All blocks have state sync (Madhugiri active from genesis)
-		stateSyncTx := createStateSyncTx(uint64(i))
-		b.AddUncheckedTx(stateSyncTx)
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into all blocks (Madhugiri active from genesis)
+	for i := uint64(1); i <= 5; i++ {
+		stateSyncTx := createStateSyncTx(i)
+		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
+			t.Fatalf("failed to inject state-sync tx: %v", err)
+		}
+	}
 
 	api := NewAPI(backend)
 
@@ -713,18 +860,20 @@ func TestMultipleStateSyncEvents(t *testing.T) {
 			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
 		}), b.Signer(), key)
 		b.AddTx(tx)
-
-		// Create state sync tx with multiple events
-		stateSyncTx := types.NewTx(&types.StateSyncTx{
-			StateSyncData: []*types.StateSyncData{
-				{ID: uint64(i*10 + 1), Contract: common.HexToAddress("0x1001"), Data: []byte{0x01}},
-				{ID: uint64(i*10 + 2), Contract: common.HexToAddress("0x1001"), Data: []byte{0x02}},
-				{ID: uint64(i*10 + 3), Contract: common.HexToAddress("0x1001"), Data: []byte{0x03}},
-			},
-		})
-		b.AddUncheckedTx(stateSyncTx)
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx with multiple events into block 3
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: []*types.StateSyncData{
+			{ID: 31, Contract: common.HexToAddress("0x1001"), Data: []byte{0x01}},
+			{ID: 32, Contract: common.HexToAddress("0x1001"), Data: []byte{0x02}},
+			{ID: 33, Contract: common.HexToAddress("0x1001"), Data: []byte{0x03}},
+		},
+	})
+	if err := backend.injectStateSyncTx(3, stateSyncTx); err != nil {
+		t.Fatalf("failed to inject state-sync tx: %v", err)
+	}
 
 	api := NewAPI(backend)
 
@@ -766,14 +915,17 @@ func TestEmptyBlockWithStateSyncOnly(t *testing.T) {
 	madhugiriBlock := big.NewInt(0)
 	genBlocks := 5
 
+	// Generate empty blocks (no regular txs)
 	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		// Only add state sync tx, no regular txs
-		if i == 2 {
-			stateSyncTx := createStateSyncTx(uint64(i))
-			b.AddUncheckedTx(stateSyncTx)
-		}
+		// No transactions added
 	})
 	defer backend.chain.Stop()
+
+	// Inject state-sync tx into block 3 (which is otherwise empty)
+	stateSyncTx := createStateSyncTx(3)
+	if err := backend.injectStateSyncTx(3, stateSyncTx); err != nil {
+		t.Fatalf("failed to inject state-sync tx: %v", err)
+	}
 
 	api := NewAPI(backend)
 
@@ -783,6 +935,9 @@ func TestEmptyBlockWithStateSyncOnly(t *testing.T) {
 	}
 
 	expectedTxCount := len(block.Transactions())
+	if expectedTxCount != 1 {
+		t.Fatalf("expected 1 tx (state-sync only), got %d", expectedTxCount)
+	}
 
 	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(3), nil)
 	if err != nil {
