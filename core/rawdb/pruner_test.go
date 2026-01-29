@@ -572,3 +572,98 @@ func TestWitnessPruner_Reorg_Offline(t *testing.T) {
 		t.Fatalf("expected witnesses to be pruned (or stay pruned) after offline reorg at heights: %v", badRetained)
 	}
 }
+
+func TestWitnessPruner_CursorBeyondHead_Clamping(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	const head uint64 = 50
+	hashes := buildCanonicalChain(t, db, head)
+
+	// Write witnesses for every block.
+	for i := uint64(0); i <= head; i++ {
+		WriteWitness(db, hashes[i], []byte{0xDE, 0xAD})
+	}
+
+	ws := &WitnessStrategy{retention: 10}
+
+	// Manually set cursor to a value beyond the head (simulates corrupted state or edge case).
+	invalidCursor := head + 20
+	ws.WriteCursor(db, invalidCursor)
+
+	// Verify cursor is set beyond head.
+	cur := ReadWitnessPruneCursor(db)
+	if cur == nil || *cur != invalidCursor {
+		t.Fatalf("expected cursor to be set to %d, got %v", invalidCursor, cur)
+	}
+
+	// Create pruner and run prune cycle.
+	p := NewPruner(db, ws)
+	p.prune()
+
+	// After prune, cursor should be clamped to head.
+	cur = ReadWitnessPruneCursor(db)
+	if cur == nil {
+		t.Fatalf("expected cursor to be written after clamping")
+	}
+	if *cur != head {
+		t.Fatalf("expected cursor to be clamped to head %d, got %d", head, *cur)
+	}
+
+	// Pruner should have updated the head.
+	if headPtr := ws.ReadPrunerHead(db); headPtr == nil || *headPtr != head {
+		if headPtr == nil {
+			t.Fatalf("expected pruner head to be written")
+		}
+		t.Fatalf("expected pruner head to be %d, got %d", head, *headPtr)
+	}
+}
+
+func TestBlockPruner_CursorBeyondHead_Clamping(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	const head uint64 = 50
+	hashes := buildCanonicalChain(t, db, head)
+
+	bs := &BlockStrategy{retention: 10}
+
+	// Manually set cursor to a value beyond the head (simulates corrupted state or edge case).
+	invalidCursor := head + 20
+	bs.WriteCursor(db, invalidCursor)
+
+	// Verify cursor is set beyond head.
+	cur := ReadBlockPruneCursor(db)
+	if cur == nil || *cur != invalidCursor {
+		t.Fatalf("expected cursor to be set to %d, got %v", invalidCursor, cur)
+	}
+
+	// Create pruner and run prune cycle.
+	p := NewPruner(db, bs)
+	p.prune()
+
+	// After prune, cursor should be clamped to head.
+	cur = ReadBlockPruneCursor(db)
+	if cur == nil {
+		t.Fatalf("expected cursor to be written after clamping")
+	}
+	if *cur != head {
+		t.Fatalf("expected cursor to be clamped to head %d, got %d", head, *cur)
+	}
+
+	// Pruner should have updated the head.
+	if headPtr := bs.ReadPrunerHead(db); headPtr == nil || *headPtr != head {
+		if headPtr == nil {
+			t.Fatalf("expected pruner head to be written")
+		}
+		t.Fatalf("expected pruner head to be %d, got %d", head, *headPtr)
+	}
+
+	// All blocks should still be present since no actual pruning should have occurred.
+	for i := uint64(1); i <= head; i++ {
+		if !HasHeader(db, hashes[i], i) {
+			t.Fatalf("expected block %d to still exist after cursor clamping", i)
+		}
+		if canon := ReadCanonicalHash(db, i); canon != hashes[i] {
+			t.Fatalf("expected canonical hash at %d to be preserved", i)
+		}
+	}
+}
