@@ -820,10 +820,13 @@ func testDisableTxPropagation(t *testing.T, protocol uint) {
 
 // A simple private tx store for tests
 type PrivateTxStore struct {
+	mu    sync.RWMutex
 	store map[common.Hash]struct{}
 }
 
 func (p *PrivateTxStore) IsTxPrivate(hash common.Hash) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	_, ok := p.store[hash]
 	return ok
 }
@@ -866,8 +869,10 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 	source.txpool.Add(txs[:5], false)
 
 	// Mark some transactions as private
+	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[3].Hash()] = struct{}{}
 	privateTxStore.store[txs[4].Hash()] = struct{}{}
+	privateTxStore.mu.Unlock()
 
 	sinks := make([]*testHandler, 10)
 	for i := 0; i < len(sinks); i++ {
@@ -937,8 +942,10 @@ func testPrivateTxNotPropagated(t *testing.T, protocol uint) {
 	source.txpool.Add(txs[5:], false)
 
 	// Mark some transactions as private
+	privateTxStore.mu.Lock()
 	privateTxStore.store[txs[8].Hash()] = struct{}{}
 	privateTxStore.store[txs[9].Hash()] = struct{}{}
+	privateTxStore.mu.Unlock()
 
 	txReceivedCount.Store(0)
 	for i := range sinks {

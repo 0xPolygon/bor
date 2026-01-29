@@ -179,6 +179,10 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 		}
 	}
 
+	if s.multiclient == nil {
+		return false, errRpcClientUnavailable
+	}
+
 	// If tx not found locally, query block producers for status
 	res, err := s.multiclient.checkTxStatus(hash)
 	if !res && err == nil {

@@ -2250,7 +2250,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 
 	txStatus := api.b.TxStatus(hash)
 	var txConfirmed bool
-	if txStatus == txpool.TxStatusPending || txStatus == txpool.TxStatusIncluded {
+	if txStatus == txpool.TxStatusPending {
 		txConfirmed = true
 	}
 
