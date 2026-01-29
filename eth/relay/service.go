@@ -2,7 +2,6 @@ package relay
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -12,8 +11,8 @@ import (
 )
 
 var (
-	errRpcClientUnavailable      = fmt.Errorf("rpc client unavailable to submit transactions")
-	errQueueOverflow             = fmt.Errorf("relay task queue overflow")
+	errRpcClientUnavailable      = errors.New("rpc client unavailable to submit transactions")
+	errQueueOverflow             = errors.New("relay task queue overflow")
 	errPreconfValidationFailed   = errors.New("failed to validate transaction inclusion status for issuing preconf")
 	errPrivateTxSubmissionFailed = errors.New("private tx submission failed partially, background retry scheduled")
 )

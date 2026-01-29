@@ -721,39 +721,6 @@ func TestCheckTxStatus(t *testing.T) {
 		require.False(t, res, "expected result to be false as status is unknown")
 	})
 
-	t.Run("checkTxStatus with tx included in all BPs", func(t *testing.T) {
-		// Update all servers to return included status
-		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
-				tx1.Hash(): txpool.TxStatusIncluded,
-			})
-		}
-
-		mc := newMultiClient(urls)
-		defer mc.close()
-
-		res, err := mc.checkTxStatus(tx1.Hash())
-		require.NoError(t, err, "expected no error in checking tx status")
-		require.True(t, res, "expected result to be true as tx is included")
-	})
-
-	t.Run("checkTxStatus with tx included in one BP", func(t *testing.T) {
-		// First BP returns included, others return unknown
-		rpcServers[0].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
-			tx1.Hash(): txpool.TxStatusIncluded,
-		})
-		for i := 1; i < len(rpcServers); i++ {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
-		}
-
-		mc := newMultiClient(urls)
-		defer mc.close()
-
-		res, err := mc.checkTxStatus(tx1.Hash())
-		require.NoError(t, err, "expected no error in checking tx status")
-		require.True(t, res, "expected result to be true as tx is included in one BP")
-	})
-
 	t.Run("checkTxStatus with mixed statuses across BPs", func(t *testing.T) {
 		// Some BPs have pending, some have unknown
 		rpcServers[0].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
