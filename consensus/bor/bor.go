@@ -394,8 +394,25 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
 
-	// Allow early blocks if Bhilai HF is enabled
-	if c.config.IsBhilai(header.Number) {
+	if c.config.IsRio(header.Number) {
+		// Rio HF introduced flexible blocktime (can be set larger than consensus without approval).
+		// Using strict CalcProducerDelay would reject valid blocks, so we just ensure announcement
+		// time comes after parent time to allow for flexible blocktime.
+		var parent *types.Header
+
+		if len(parents) > 0 {
+			parent = parents[len(parents)-1]
+		} else {
+			parent = chain.GetHeader(header.ParentHash, number-1)
+		}
+		if parent == nil || now < parent.Time {
+			log.Error("Block announced too early post rio", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+
+		}
+
+	} else if c.config.IsBhilai(header.Number) { // Allow early blocks if Bhilai HF is enabled
+
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
@@ -1079,7 +1096,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	now := time.Now()
 	if header.Time < uint64(now.Unix()) {
 		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
-		if c.blockTime > 0 {
+		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			additionalBlockTime = c.blockTime
 		}
 		header.Time = uint64(now.Add(additionalBlockTime).Unix())
