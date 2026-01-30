@@ -91,6 +91,13 @@ var (
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 
+	// Additional prefetch attribution metrics
+	accountHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/insert", nil)
+	prefetchAccountUsedByProcessUniqueMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/prefetch_used_unique", nil)
+
 	accountReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
 	storageReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
@@ -720,6 +727,16 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
 		storageCacheMissMeter.Mark(stats.StorageMiss)
+
+		// Report additional prefetch attribution metrics
+		prefetchStats := prefetch.GetPrefetchStats()
+		accountInsertPrefetchMeter.Mark(prefetchStats.AccountInsert)
+		storageInsertPrefetchMeter.Mark(prefetchStats.StorageInsert)
+
+		processStats := process.GetPrefetchStats()
+		accountHitFromPrefetchMeter.Mark(processStats.AccountHitFromPrefetch)
+		storageHitFromPrefetchMeter.Mark(processStats.StorageHitFromPrefetch)
+		prefetchAccountUsedByProcessUniqueMeter.Mark(processStats.PrefetchAccountUsedByProcessUnique)
 	}()
 
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {

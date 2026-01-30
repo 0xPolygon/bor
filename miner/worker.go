@@ -117,6 +117,13 @@ var (
 	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
+
+	// Additional prefetch attribution metrics
+	accountHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/insert", nil)
+	prefetchAccountUsedByProcessUniqueMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/prefetch_used_unique", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -1931,6 +1938,16 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			accountCacheMissMeter.Mark(processStats.AccountMiss)
 			storageCacheHitMeter.Mark(processStats.StorageHit)
 			storageCacheMissMeter.Mark(processStats.StorageMiss)
+
+			// Report additional prefetch attribution metrics
+			prefetchAttribStats := env.prefetchReader.GetPrefetchStats()
+			accountInsertPrefetchMeter.Mark(prefetchAttribStats.AccountInsert)
+			storageInsertPrefetchMeter.Mark(prefetchAttribStats.StorageInsert)
+
+			processAttribStats := env.processReader.GetPrefetchStats()
+			accountHitFromPrefetchMeter.Mark(processAttribStats.AccountHitFromPrefetch)
+			storageHitFromPrefetchMeter.Mark(processAttribStats.StorageHitFromPrefetch)
+			prefetchAccountUsedByProcessUniqueMeter.Mark(processAttribStats.PrefetchAccountUsedByProcessUnique)
 		}
 	}()
 

@@ -229,7 +229,7 @@ func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithSta
 		return nil, nil, err
 	}
 	shared := newReaderWithCache(reader)
-	return newReaderWithCacheStats(shared), newReaderWithCacheStats(shared), nil
+	return newReaderWithCacheStats(shared, rolePrefetch), newReaderWithCacheStats(shared, roleProcess), nil
 }
 
 // OpenTrie opens the main account trie at a specific root hash.
