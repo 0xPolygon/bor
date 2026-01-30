@@ -108,22 +108,22 @@ var (
 
 	// Cache hit/miss metrics for block production (miner path)
 	// These are the same meters used by the import path in blockchain.go
-	accountCacheHitMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit", nil)
-	accountCacheMissMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/miss", nil)
-	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
-	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
+	accountCacheHitMeter  = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit", nil)
+	accountCacheMissMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/miss", nil)
+	storageCacheHitMeter  = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit", nil)
+	storageCacheMissMeter = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/miss", nil)
 
-	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
-	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
-	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
-	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
+	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/hit", nil)
+	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/miss", nil)
+	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/hit", nil)
+	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/miss", nil)
 
 	// Additional prefetch attribution metrics
-	accountHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit_from_prefetch", nil)
-	storageHitFromPrefetchMeter              = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit_from_prefetch", nil)
-	accountInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/insert", nil)
-	storageInsertPrefetchMeter               = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/insert", nil)
-	prefetchAccountUsedByProcessUniqueMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/prefetch_used_unique", nil)
+	accountHitFromPrefetchMeter             = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter             = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/insert", nil)
+	prefetchAccountUsedByProcessUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
 )
 
 // environment is the worker's current environment and holds all
