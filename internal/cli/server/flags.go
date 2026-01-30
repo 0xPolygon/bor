@@ -559,6 +559,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.AddressCacheSizesRaw,
 		Group:   "Cache",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.preloadratelimit",
+		Usage:   "Rate limit for address cache preloading (e.g. 5MB, 10MB, 0 for unlimited). Limits I/O during sync. Default: 5MB",
+		Value:   &c.cliConfig.Cache.PreloadRateLimit,
+		Default: c.cliConfig.Cache.PreloadRateLimit,
+		Group:   "Cache",
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "cache.triesinmemory",
 		Usage:   "Number of block states (tries) to keep in memory",
