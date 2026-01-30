@@ -413,6 +413,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.EnablePrefetch,
 		Group:   "Sealer",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.prefetch.gaslimit.percent",
+		Usage:   "Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)",
+		Value:   &c.cliConfig.Sealer.PrefetchGasLimitPercent,
+		Default: c.cliConfig.Sealer.PrefetchGasLimitPercent,
+		Group:   "Sealer",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",

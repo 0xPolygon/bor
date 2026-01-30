@@ -19,6 +19,7 @@ package core
 import (
 	"bytes"
 	"runtime"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -46,16 +47,25 @@ func NewStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *StatePr
 	}
 }
 
+// PrefetchResult contains the results of prefetching transactions
+type PrefetchResult struct {
+	TotalGasUsed  uint64
+	SuccessfulTxs []common.Hash
+}
+
 // Prefetch processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb, but any changes are discarded. The
 // only goal is to warm the state caches.
-func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) {
+func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) *PrefetchResult {
 	var (
-		fails   atomic.Int64
-		header  = block.Header()
-		signer  = types.MakeSigner(p.config, header.Number, header.Time)
-		workers errgroup.Group
-		reader  = statedb.Reader()
+		fails        atomic.Int64
+		totalGasUsed atomic.Uint64
+		successfulTxs []common.Hash
+		txsMutex     sync.Mutex
+		header       = block.Header()
+		signer       = types.MakeSigner(p.config, header.Number, header.Time)
+		workers      errgroup.Group
+		reader       = statedb.Reader()
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
@@ -107,10 +117,16 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 			// We attempt to apply a transaction. The goal is not to execute
 			// the transaction successfully, rather to warm up touched data slots.
-			if _, err := ApplyMessage(evm, msg, new(GasPool).AddGas(block.GasLimit()), interrupt); err != nil {
+			result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(block.GasLimit()), interrupt)
+			if err != nil {
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
+			// Track gas used and successful transaction
+			totalGasUsed.Add(result.UsedGas)
+			txsMutex.Lock()
+			successfulTxs = append(successfulTxs, tx.Hash())
+			txsMutex.Unlock()
 			// Pre-load trie nodes for the intermediate root.
 			//
 			// This operation incurs significant memory allocations due to
@@ -124,4 +140,9 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 	blockPrefetchTxsValidMeter.Mark(int64(len(block.Transactions())) - fails.Load())
 	blockPrefetchTxsInvalidMeter.Mark(fails.Load())
+
+	return &PrefetchResult{
+		TotalGasUsed:  totalGasUsed.Load(),
+		SuccessfulTxs: successfulTxs,
+	}
 }

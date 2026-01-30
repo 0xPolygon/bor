@@ -316,6 +316,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: true)
 
+- ```miner.prefetch.gaslimit.percent```: Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%) (default: 100)
+
 ### Telemetry Options
 
 - ```metrics```: Enable metrics collection and reporting (default: false)

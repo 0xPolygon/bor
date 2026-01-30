@@ -1804,20 +1804,42 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
 
+	// Initialize total gas pool with configured percentage of header gas limit
+	gasLimitPercent := w.config.PrefetchGasLimitPercent
+	if gasLimitPercent == 0 {
+		gasLimitPercent = 100 // Default to 100% if not configured
+	}
+	totalGasLimit := header.GasLimit * gasLimitPercent / 100
+	totalGasPool := new(core.GasPool).AddGas(totalGasLimit)
+
 	txsAlreadyPrefetched := make(map[common.Hash]struct{})
 	loopIteration := 0
 
-	log.Info("[debuglocal] prefetchFromPool started", "targetBlock", number)
+	log.Info("[debuglocal] prefetchFromPool started", "targetBlock", number, "totalGasLimit", totalGasLimit, "gasLimitPercent", gasLimitPercent)
 
 	for {
 		if interruptPrefetch.Load() {
-			log.Info("[debuglocal] prefetchFromPool interrupted", "loopIteration", loopIteration, "totalTxsPrefetched", len(txsAlreadyPrefetched), "targetBlock", number)
+			log.Info("[debuglocal] prefetchFromPool interrupted", "loopIteration", loopIteration, "totalTxsPrefetched", len(txsAlreadyPrefetched), "remainingGas", totalGasPool.Gas(), "targetBlock", number)
 			return
 		}
+
+		// Check if we've exhausted the total gas pool
+		if totalGasPool.Gas() == 0 {
+			log.Info("[debuglocal] prefetchFromPool total gas limit reached", "loopIteration", loopIteration, "totalTxsPrefetched", len(txsAlreadyPrefetched), "targetBlock", number)
+			return
+		}
+
 		loopStart := time.Now()
 		loopIteration++
 
-		gaspool := new(core.GasPool).AddGas(header.GasLimit)
+		// Use the remaining gas from totalGasPool, but cap at header.GasLimit per loop
+		remainingGas := totalGasPool.Gas()
+		loopGasLimit := header.GasLimit
+		if remainingGas < loopGasLimit {
+			loopGasLimit = remainingGas
+		}
+		gaspool := new(core.GasPool).AddGas(loopGasLimit)
+
 		pendingTxs := w.eth.TxPool().Pending(filter, interruptPrefetch)
 		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interruptPrefetch)
 
@@ -1826,9 +1848,6 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 		skippedInsufficientGas := 0
 		skippedNilTx := 0
 
-		// TODO: optmize transaction filtering
-		// TODO: check on gas usage vs gaslimit, we are subtracting the gaslimit of tx on the pool, which can be more than necessary
-		// leading to less txs being prefetched than possible
 		for {
 			ltx, _ := txs.Peek()
 			if ltx == nil {
@@ -1858,17 +1877,27 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 		}
 
 		block := types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil))
-		prefetcher.Prefetch(block, throwaway, vm.Config{}, interruptPrefetch)
+		result := prefetcher.Prefetch(block, throwaway, vm.Config{}, interruptPrefetch)
 
-		for _, tx := range transactions {
-			txsAlreadyPrefetched[tx.Hash()] = struct{}{}
+		// Use the actual gas used from prefetch result and mark successful transactions
+		if result != nil {
+			totalGasPool.SubGas(result.TotalGasUsed)
+			for _, txHash := range result.SuccessfulTxs {
+				txsAlreadyPrefetched[txHash] = struct{}{}
+			}
 		}
 
 		if len(transactions) > 0 {
+			gasUsed := uint64(0)
+			if result != nil {
+				gasUsed = result.TotalGasUsed
+			}
 			log.Info("[debuglocal] prefetchFromPool loop iteration",
 				"targetBlock", number,
 				"iteration", loopIteration,
 				"newTxs", len(transactions),
+				"gasUsed", gasUsed,
+				"remainingGas", totalGasPool.Gas(),
 				"skippedAlreadyPrefetched", skippedAlreadyPrefetched,
 				"skippedInsufficientGas", skippedInsufficientGas,
 				"skippedNilTx", skippedNilTx,

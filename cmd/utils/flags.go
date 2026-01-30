@@ -580,6 +580,12 @@ var (
 		Value:    true,
 		Category: flags.MinerCategory,
 	}
+	MinerPrefetchGasLimitPercentFlag = &cli.Uint64Flag{
+		Name:     "miner.prefetch.gaslimit.percent",
+		Usage:    "Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)",
+		Value:    100,
+		Category: flags.MinerCategory,
+	}
 
 	// Account settings
 	PasswordFileFlag = &cli.PathFlag{
@@ -1674,6 +1680,10 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 
 	if ctx.IsSet(MinerPrefetchFlag.Name) {
 		cfg.EnablePrefetch = ctx.Bool(MinerPrefetchFlag.Name)
+	}
+
+	if ctx.IsSet(MinerPrefetchGasLimitPercentFlag.Name) {
+		cfg.PrefetchGasLimitPercent = ctx.Uint64(MinerPrefetchGasLimitPercentFlag.Name)
 	}
 }
 

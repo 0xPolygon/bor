@@ -420,6 +420,9 @@ type SealerConfig struct {
 
 	// EnablePrefetch enables transaction prefetching from pool during block building
 	EnablePrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
+
+	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -818,9 +821,10 @@ func DefaultConfig() *Config {
 			GasPrice:              big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:             "",
 			Recommit:              125 * time.Second,
-			CommitInterruptFlag:   true,
-			BlockTime:             0,
-			EnablePrefetch:        true,
+			CommitInterruptFlag:     true,
+			BlockTime:               0,
+			EnablePrefetch:          true,
+			PrefetchGasLimitPercent: 100,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1169,6 +1173,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
+		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
 
 		// Dynamic gas limit configuration
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
