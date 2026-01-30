@@ -417,6 +417,9 @@ type SealerConfig struct {
 	// BlockTime is the block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
+
+	// EnablePrefetch enables transaction prefetching from pool during block building
+	EnablePrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -817,6 +820,7 @@ func DefaultConfig() *Config {
 			Recommit:              125 * time.Second,
 			CommitInterruptFlag:   true,
 			BlockTime:             0,
+			EnablePrefetch:        true,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1164,6 +1168,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 
 		// Dynamic gas limit configuration
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit

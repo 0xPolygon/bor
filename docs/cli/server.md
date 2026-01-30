@@ -314,6 +314,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
 
+- ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: true)
+
 ### Telemetry Options
 
 - ```metrics```: Enable metrics collection and reporting (default: false)

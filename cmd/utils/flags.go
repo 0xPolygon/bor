@@ -574,6 +574,12 @@ var (
 		Value:    ethconfig.Defaults.Miner.Recommit,
 		Category: flags.MinerCategory,
 	}
+	MinerPrefetchFlag = &cli.BoolFlag{
+		Name:     "miner.prefetch",
+		Usage:    "Enable transaction prefetching from the pool during block building",
+		Value:    true,
+		Category: flags.MinerCategory,
+	}
 
 	// Account settings
 	PasswordFileFlag = &cli.PathFlag{
@@ -1664,6 +1670,10 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	if ctx.IsSet(MinerNewPayloadTimeoutFlag.Name) {
 		log.Warn("The flag --miner.newpayload-timeout is deprecated and will be removed, please use --miner.recommit")
 		cfg.Recommit = ctx.Duration(MinerNewPayloadTimeoutFlag.Name)
+	}
+
+	if ctx.IsSet(MinerPrefetchFlag.Name) {
+		cfg.EnablePrefetch = ctx.Bool(MinerPrefetchFlag.Name)
 	}
 }
 

@@ -1707,7 +1707,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	var interruptPrefetch atomic.Bool
-	go w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+	if w.config.EnablePrefetch {
+		go w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+	}
 	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
 }
 

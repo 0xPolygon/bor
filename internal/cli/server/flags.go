@@ -407,6 +407,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.prefetch",
+		Usage:   "Enable transaction prefetching from the pool during block building",
+		Value:   &c.cliConfig.Sealer.EnablePrefetch,
+		Default: c.cliConfig.Sealer.EnablePrefetch,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
 		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,
