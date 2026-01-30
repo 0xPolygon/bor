@@ -45,8 +45,8 @@ const (
 	defaultBufferSize = 64 * 1024 * 1024
 
 	// defaultPreloadRateLimit is the default rate limit for address cache preloading
-	// in bytes per second. 5 MB/s is conservative and minimizes sync impact.
-	defaultPreloadRateLimit = 5 * 1024 * 1024
+	// in bytes per second. 500 KB/s is conservative and minimizes sync impact.
+	defaultPreloadRateLimit = 500 * 1024
 )
 
 var (
@@ -87,7 +87,7 @@ type Config struct {
 
 	// PreloadRateLimit limits cache preload I/O in bytes per second.
 	// This prevents preloading from overwhelming the disk during sync.
-	// 0 = unlimited (legacy behavior), default = 5MB/s
+	// 0 = unlimited (legacy behavior), default = 500KB/s
 	PreloadRateLimit int64
 
 	// Testing configurations

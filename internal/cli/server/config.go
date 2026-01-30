@@ -681,7 +681,7 @@ type CacheConfig struct {
 
 	// PreloadRateLimit limits cache preload I/O in bytes per second.
 	// This prevents preloading from overwhelming the disk during sync.
-	// Accepts values like  "5MB", "10MB", "1GB", or "0" (for unlimited). Default: 5MB/s
+	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 500KB/s
 	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
 	// GC settings
@@ -1442,18 +1442,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 		}
 
-		// Parse preload rate limit (default: 5MB/s)
+		// Parse preload rate limit (default: 500KB/s)
 		if c.Cache.PreloadRateLimit != "" {
 			rateLimitBytes, err := parseByteSize(c.Cache.PreloadRateLimit)
 			if err != nil {
-				log.Warn("Failed to parse preload rate limit, using default 5MB/s", "error", err)
-				n.PreloadRateLimit = 5 * 1024 * 1024
+				log.Warn("Failed to parse preload rate limit, using default 500KB/s", "error", err)
+				n.PreloadRateLimit = 500 * 1024
 			} else {
 				n.PreloadRateLimit = rateLimitBytes
 			}
 		} else {
-			// Default to 5MB/s if not specified
-			n.PreloadRateLimit = 5 * 1024 * 1024
+			// Default to 500KB/s if not specified
+			n.PreloadRateLimit = 500 * 1024
 		}
 	}
 

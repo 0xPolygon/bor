@@ -561,7 +561,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "cache.preloadratelimit",
-		Usage:   "Rate limit for address cache preloading (e.g. 5MB, 10MB, 0 for unlimited). Limits I/O during sync. Default: 5MB",
+		Usage:   "Rate limit for address cache preloading (e.g. 500KB, 1MB, 0 for unlimited). Limits I/O during sync. Default: 500KB",
 		Value:   &c.cliConfig.Cache.PreloadRateLimit,
 		Default: c.cliConfig.Cache.PreloadRateLimit,
 		Group:   "Cache",

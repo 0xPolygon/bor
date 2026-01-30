@@ -107,10 +107,10 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	}
 	addrCache := cacheValue.(*fastcache.Cache)
 
-	// Create rate limiter if configured (burst of 256KB for efficiency)
+	// Create rate limiter if configured (burst of 64KB for smoother throttling)
 	var limiter *rate.Limiter
 	if c.rateLimitBPS > 0 {
-		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 256*1024)
+		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 64*1024)
 	}
 
 	// Local stats for logging progress
@@ -152,20 +152,6 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		default:
 		}
 
-		// Apply rate limiting before reading from database
-		// Average trie node is ~200-300 bytes, use 256 as estimate
-		if limiter != nil {
-			if err := limiter.WaitN(c.ctx, 256); err != nil {
-				log.Info("Preload interrupted during rate limit wait",
-					"account hash", accountHash.Hex(),
-					"entries", entriesLoaded,
-					"max depth", maxDepthReached,
-					"size", common.StorageSize(totalBytesLoaded).String(),
-					"elapsed", time.Since(startTime))
-				return
-			}
-		}
-
 		item := queue[0]
 		queue = queue[1:]
 
@@ -186,6 +172,19 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		if len(nodeData) == 0 {
 			// Node doesn't exist, skip
 			continue
+		}
+
+		// Apply rate limiting after reading, based on actual bytes read
+		if limiter != nil {
+			if err := limiter.WaitN(c.ctx, len(nodeData)); err != nil {
+				log.Info("Preload interrupted during rate limit wait",
+					"account hash", accountHash.Hex(),
+					"entries", entriesLoaded,
+					"max depth", maxDepthReached,
+					"size", common.StorageSize(totalBytesLoaded).String(),
+					"elapsed", time.Since(startTime))
+				return
+			}
 		}
 
 		// Check if adding this node would exceed cache size
