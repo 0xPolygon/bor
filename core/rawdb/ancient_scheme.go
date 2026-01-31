@@ -98,7 +98,7 @@ var freezers = []string{ChainFreezerName, MerkleStateFreezerName, VerkleStateFre
 //     state freezer.
 func NewStateFreezer(ancientDir string, verkle bool, readOnly bool) (ethdb.ResettableAncientStore, error) {
 	if ancientDir == "" {
-		return NewMemoryFreezer(readOnly, stateFreezerTableConfigs), nil
+		return NewMemoryFreezer(readOnly, 0, stateFreezerTableConfigs), nil
 	}
 	var name string
 	if verkle {

@@ -69,7 +69,7 @@ func NewChainFreezer(datadir string, namespace string, readonly bool, offset uin
 func newChainFreezer(datadir string, eraDir string, namespace string, readonly bool, offset uint64) (*chainFreezer, error) {
 	if datadir == "" {
 		return &chainFreezer{
-			ancients: NewMemoryFreezer(readonly, chainFreezerTableConfigs),
+			ancients: NewMemoryFreezer(readonly, offset, chainFreezerTableConfigs),
 			quit:     make(chan struct{}),
 			trigger:  make(chan chan struct{}),
 		}, nil
