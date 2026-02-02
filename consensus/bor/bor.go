@@ -1231,13 +1231,10 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
-			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
+			if err = c.checkAndCommitSpan(state, header, cx, vmCfg); err != nil {
 				log.Error("Error while committing span", "error", err)
 				return nil, nil, 0, err
 			}
-		if err = c.checkAndCommitSpan(state, header, cx, vmCfg); err != nil {
-			log.Error("Error while committing span", "error", err)
-			return nil, err
 		}
 
 		if c.HeimdallClient != nil {
