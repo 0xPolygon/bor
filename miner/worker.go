@@ -1743,13 +1743,11 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
-		log.Info("[debuglocal] Failed at prepare work", "err", err)
 		return
 	}
 
 	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
 	start := time.Now()
-	log.Info("[debuglocal] Setting interrupt flag true after waiting", "block", work.header.Number)
 	interruptPrefetch.Store(true)
 
 	stopFn := func() {}
@@ -1824,7 +1822,6 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
 	header, _, err := w.makeHeader(genParams, false)
 	if err != nil {
-		log.Info("[debuglocal] prefetchFromPool failed to make header", "err", err)
 		return
 	}
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
@@ -1846,17 +1843,13 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	txsAlreadyPrefetched := make(map[common.Hash]struct{})
 	loopIteration := 0
 
-	log.Info("[debuglocal] prefetchFromPool started", "targetBlock", number, "totalGasLimit", totalGasLimit, "gasLimitPercent", gasLimitPercent)
-
 	for {
 		if interruptPrefetch.Load() {
-			log.Info("[debuglocal] prefetchFromPool interrupted", "loopIteration", loopIteration, "totalTxsPrefetched", len(txsAlreadyPrefetched), "remainingGas", totalGasPool.Gas(), "targetBlock", number)
 			return
 		}
 
 		// Check if we've exhausted the total gas pool
 		if totalGasPool.Gas() == 0 {
-			log.Info("[debuglocal] prefetchFromPool total gas limit reached", "loopIteration", loopIteration, "totalTxsPrefetched", len(txsAlreadyPrefetched), "targetBlock", number)
 			return
 		}
 
@@ -1917,24 +1910,6 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 				txsAlreadyPrefetched[txHash] = struct{}{}
 			}
 		}
-
-		if len(transactions) > 0 {
-			gasUsed := uint64(0)
-			if result != nil {
-				gasUsed = result.TotalGasUsed
-			}
-			log.Info("[debuglocal] prefetchFromPool loop iteration",
-				"targetBlock", number,
-				"iteration", loopIteration,
-				"newTxs", len(transactions),
-				"gasUsed", gasUsed,
-				"remainingGas", totalGasPool.Gas(),
-				"skippedAlreadyPrefetched", skippedAlreadyPrefetched,
-				"skippedInsufficientGas", skippedInsufficientGas,
-				"skippedNilTx", skippedNilTx,
-				"totalPrefetchedSoFar", len(txsAlreadyPrefetched))
-		}
-
 		// Calculate elapsed time and wait if necessary to ensure minimum 100ms interval
 		elapsed := time.Since(loopStart)
 		if elapsed < minLoopInterval {

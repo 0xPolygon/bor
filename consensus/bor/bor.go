@@ -1066,28 +1066,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
 		delay = time.Until(parentActualBlockTime)
-		now := time.Now()
-		log.Info("[debuglocal] delay calculation (Rio mode)",
-			"blockTime", c.blockTime,
-			"parentBlockTime", parentBlockTime.Format("15:04:05.000"),
-			"parentActualBlockTime", parentActualBlockTime.Format("15:04:05.000"),
-			"actualNewBlockTime", actualNewBlockTime.Format("15:04:05.000"),
-			"delay", delay,
-			"waitingUntil", parentActualBlockTime.Format("15:04:05.000"),
-			"now", now.Format("15:04:05.000"))
 	} else {
 		parentTime := time.Unix(int64(parent.Time), 0)
 		producerDelay := CalcProducerDelay(number, succession, c.config)
 		header.Time = parent.Time + producerDelay
 		delay = time.Until(parentTime)
-		now := time.Now()
-		log.Info("[debuglocal] delay calculation (legacy mode)",
-			"parentTime", parentTime.Format("15:04:05.000"),
-			"producerDelay", producerDelay,
-			"headerTime", header.Time,
-			"delay", delay,
-			"waitingUntil", parentTime.Format("15:04:05.000"),
-			"now", now.Format("15:04:05.000"))
 	}
 
 	now := time.Now()
@@ -1109,16 +1092,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	// Wait before start the block production if needed (previsously this wait was on Seal)
 	if c.config.IsBhilai(header.Number) && successionNumber == 0 && waitOnPrepare {
-		waitUntil := time.Now().Add(delay)
-		log.Info("[debuglocal] waiting in Prepare phase",
-			"delay", delay,
-			"waitUntil", waitUntil.Format("15:04:05.000"),
-			"now", time.Now().Format("15:04:05.000"),
-			"blockNumber", header.Number)
 		<-time.After(delay)
-		log.Info("[debuglocal] wait in Prepare phase completed",
-			"blockNumber", header.Number,
-			"now", time.Now().Format("15:04:05.000"))
 	}
 
 	return nil
