@@ -322,6 +322,21 @@ func (b *testWorkerBackend) newStorageContractCallTx(to common.Address, nonce ui
 	return tx
 }
 
+// addTransactionBatch adds a batch of transactions to the transaction pool.
+// If mixContracts is true, every 10th transaction will be a contract deployment.
+// nolint:thelper
+func addTransactionBatch(b *testWorkerBackend, count int, mixContracts bool) {
+	for i := 0; i < count; i++ {
+		var tx *types.Transaction
+		if mixContracts && i%10 == 0 {
+			tx = b.newRandomTxWithNonce(true, uint64(i))
+		} else {
+			tx = b.newRandomTxWithNonce(false, uint64(i))
+		}
+		b.txPool.Add([]*types.Transaction{tx}, true)
+	}
+}
+
 func newTestWorker(t TensingObject, config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database, noempty bool, delay uint) (*worker, *testWorkerBackend, func()) {
 	backend := newTestWorkerBackend(t, chainConfig, engine, db)
 	backend.txPool.Add(pendingTxs, false)
@@ -331,6 +346,52 @@ func newTestWorker(t TensingObject, config *Config, chainConfig *params.ChainCon
 	// enable empty blocks
 	w.noempty.Store(noempty)
 	return w, backend, w.close
+}
+
+// setupBorWorkerWithPrefetch sets up a worker with Bor consensus engine and prefetch enabled.
+// Returns worker, backend, consensus engine, and mock controller for cleanup.
+// nolint:thelper
+func setupBorWorkerWithPrefetch(t *testing.T, gasPercent uint64, recommit time.Duration) (*worker, *testWorkerBackend, consensus.Engine, *gomock.Controller) {
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+
+	config := DefaultTestConfig()
+	config.EnablePrefetch = true
+	config.PrefetchGasLimitPercent = gasPercent
+	config.Recommit = recommit
+
+	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+
+	return w, b, engine, ctrl
+}
+
+// runWorkerAndMine starts the worker, waits for the specified duration, stops the worker,
+// and returns the final block number.
+// nolint:thelper
+func runWorkerAndMine(t *testing.T, w *worker, duration time.Duration) uint64 {
+	w.start()
+	time.Sleep(duration)
+	w.stop()
+
+	currentBlock := w.chain.CurrentBlock()
+	return currentBlock.Number.Uint64()
+}
+
+// countPendingTransactions counts the total number of pending transactions in the pool.
+// nolint:thelper
+func countPendingTransactions(b *testWorkerBackend) int {
+	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
+	totalPending := 0
+	for _, txs := range pending {
+		totalPending += len(txs)
+	}
+	return totalPending
 }
 
 func TestGenerateAndImportBlock(t *testing.T) {
@@ -1707,42 +1768,15 @@ func TestCommitWithReaderStats(t *testing.T) {
 // TestPrefetchFromPool_BasicExecution validates that the prefetch feature
 // executes without errors when enabled
 func TestPrefetchFromPool_BasicExecution(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with prefetch enabled
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 100
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add 50 simple transfer transactions
-	for i := 0; i < 50; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 50, false)
 
-	// Start the worker
-	w.start()
-
-	// Wait for blocks to be mined
-	time.Sleep(3 * time.Second)
-
-	w.stop()
-
-	// Verify that blocks were produced successfully with prefetch enabled
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined with prefetch enabled")
+	blockNumber := runWorkerAndMine(t, w, 3*time.Second)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined with prefetch enabled")
 
 	// The test validates that:
 	// 1. The prefetchFromPool goroutine was spawned (when EnablePrefetch=true)
@@ -1754,42 +1788,15 @@ func TestPrefetchFromPool_BasicExecution(t *testing.T) {
 // TestPrefetchFromPool_GasLimitTracking verifies that gas limit percentage correctly
 // limits the amount of prefetch work performed
 func TestPrefetchFromPool_GasLimitTracking(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 50, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with 50% gas limit for prefetch
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 50
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add 100 simple transactions (each uses ~21,000 gas)
-	for i := 0; i < 100; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 100, false)
 
-	// Start the worker
-	w.start()
-
-	// Wait for mining
-	time.Sleep(3 * time.Second)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
+	blockNumber := runWorkerAndMine(t, w, 3*time.Second)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
 	// The test validates that with 50% gas limit, prefetch doesn't consume full block capacity
 	// Detailed validation would require hooking into prefetch loop to count actual gas used
@@ -1799,42 +1806,15 @@ func TestPrefetchFromPool_GasLimitTracking(t *testing.T) {
 // TestPrefetchFromPool_SkipAlreadyPrefetched ensures that transactions already prefetched
 // in one loop iteration are skipped in subsequent iterations
 func TestPrefetchFromPool_SkipAlreadyPrefetched(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with prefetch enabled
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 100
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add 20 transactions - enough for multiple prefetch iterations
-	for i := 0; i < 20; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 20, false)
 
-	// Start the worker
-	w.start()
-
-	// Wait for prefetch to run multiple iterations
-	time.Sleep(3 * time.Second)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
+	blockNumber := runWorkerAndMine(t, w, 3*time.Second)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
 	// The deduplication logic (txsAlreadyPrefetched map) is internal to prefetchFromPool
 	// This test validates that the code runs without errors
@@ -1844,43 +1824,15 @@ func TestPrefetchFromPool_SkipAlreadyPrefetched(t *testing.T) {
 // TestPrefetchFromPool_EarlyInterruption validates that the interruption mechanism
 // stops prefetch promptly when block building starts
 func TestPrefetchFromPool_EarlyInterruption(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 500*time.Millisecond)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with prefetch enabled and fast block time
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 100
-	config.Recommit = 500 * time.Millisecond // Fast recommit to trigger interruption quickly
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add many transactions to give prefetch work to do
-	for i := 0; i < 1000; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 1000, false)
 
-	// Start the worker
-	w.start()
-
-	// Wait for several blocks to be mined (each should interrupt prefetch)
-	time.Sleep(3 * time.Second)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(1), "multiple blocks should have been mined")
+	blockNumber := runWorkerAndMine(t, w, 3*time.Second)
+	require.Greater(t, blockNumber, uint64(1), "multiple blocks should have been mined")
 
 	// The interruption mechanism works if block building proceeds without hanging
 	// If interruption failed, the worker would be blocked waiting for prefetch to complete
@@ -1928,43 +1880,15 @@ func TestPrefetchGasLimitPercent_EdgeValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			var (
-				engine      consensus.Engine
-				chainConfig = params.BorUnittestChainConfig
-				db          = rawdb.NewMemoryDatabase()
-				ctrl        *gomock.Controller
-			)
-
-			engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+			w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, tc.gasPercent, 1*time.Second)
 			defer engine.Close()
 			defer ctrl.Finish()
-
-			// Configure worker with specific gas percentage
-			config := DefaultTestConfig()
-			config.EnablePrefetch = true
-			config.PrefetchGasLimitPercent = tc.gasPercent
-
-			w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 			defer w.close()
 
-			// Add transactions
-			for i := 0; i < 50; i++ {
-				tx := b.newRandomTxWithNonce(false, uint64(i))
-				b.txPool.Add([]*types.Transaction{tx}, true)
-			}
+			addTransactionBatch(b, 50, false)
+			blockNumber := runWorkerAndMine(t, w, 2*time.Second)
 
-			// Start the worker
-			w.start()
-
-			// Wait for mining
-			time.Sleep(2 * time.Second)
-
-			w.stop()
-
-			// Verify blocks were produced
-			currentBlock := w.chain.CurrentBlock()
-			require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined with gas percent %d", tc.gasPercent)
-
+			require.Greater(t, blockNumber, uint64(0), "blocks should have been mined with gas percent %d", tc.gasPercent)
 			t.Logf("Test case '%s' passed: %s", tc.name, tc.expectation)
 		})
 	}
@@ -1991,23 +1915,10 @@ func TestEnablePrefetch_DisabledConfig(t *testing.T) {
 	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add transactions
-	for i := 0; i < 50; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 50, false)
 
-	// Start the worker
-	w.start()
-
-	// Wait for mining
-	time.Sleep(3 * time.Second)
-
-	w.stop()
-
-	// Verify blocks were produced normally even with prefetch disabled
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined even with prefetch disabled")
+	blockNumber := runWorkerAndMine(t, w, 3*time.Second)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined even with prefetch disabled")
 
 	// The test validates that:
 	// 1. When EnablePrefetch=false, no prefetch goroutine is spawned
@@ -2018,58 +1929,21 @@ func TestEnablePrefetch_DisabledConfig(t *testing.T) {
 // TestPrefetchFromPool_ActuallyProcessesTransactions verifies that prefetch
 // loop actually processes transactions (not just exits early)
 func TestPrefetchFromPool_ActuallyProcessesTransactions(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with prefetch enabled and slower block time
-	// to give prefetch more time to actually run
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 100
-	config.Recommit = 2 * time.Second // Longer recommit to give prefetch time
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add many transactions that will definitely be pending
-	// Using both local (true) and remote transactions
-	txCount := 200
-	for i := 0; i < txCount; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		// Add as local to ensure they're promoted to pending quickly
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 200, false)
 
 	// Give the pool time to promote transactions to pending
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify we have pending transactions before starting
-	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
-	totalPending := 0
-	for _, txs := range pending {
-		totalPending += len(txs)
-	}
+	totalPending := countPendingTransactions(b)
 	t.Logf("Total pending transactions before mining: %d", totalPending)
 
-	// Start the worker - this will trigger prefetch
-	w.start()
-
-	// Wait long enough for prefetch to run but not complete all work
-	time.Sleep(1500 * time.Millisecond)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
+	blockNumber := runWorkerAndMine(t, w, 1500*time.Millisecond)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
 	// The key validation here is that:
 	// 1. We had pending transactions available
@@ -2090,66 +1964,23 @@ func TestPrefetchFromPool_ActuallyProcessesTransactions(t *testing.T) {
 // TestPrefetchFromPool_TransactionProcessingLoop specifically targets the
 // transaction processing logic to maximize code coverage
 func TestPrefetchFromPool_TransactionProcessingLoop(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 150, 3*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure with moderate gas limit to trigger gas exhaustion paths
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 150 // Use 150% to test over-limit scenarios
-	config.Recommit = 3 * time.Second    // Longer window for prefetch
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Create a mix of transaction types to exercise different code paths:
-	// 1. Normal transactions that will be successfully prefetched
-	// 2. Contract deployments (higher gas usage)
-	for i := 0; i < 100; i++ {
-		var tx *types.Transaction
-		if i%10 == 0 {
-			// Every 10th tx is a contract deployment (high gas)
-			tx = b.newRandomTxWithNonce(true, uint64(i))
-		} else {
-			// Regular transfer (low gas)
-			tx = b.newRandomTxWithNonce(false, uint64(i))
-		}
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 100, true)
 
 	// Wait for pool to promote transactions
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify pending state
-	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
-	totalPending := 0
-	for _, txs := range pending {
-		totalPending += len(txs)
-	}
+	totalPending := countPendingTransactions(b)
 	t.Logf("Pending transactions: %d", totalPending)
 
-	// Start worker - prefetch will run with the gas limit
-	w.start()
+	blockNumber := runWorkerAndMine(t, w, 2500*time.Millisecond)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
-	// Give prefetch enough time to process multiple loop iterations
-	time.Sleep(2500 * time.Millisecond)
-
-	w.stop()
-
-	// Verify blocks were successfully produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
-
-	t.Logf("Mined %d blocks with prefetch processing %d pending txs",
-		currentBlock.Number.Uint64(), totalPending)
+	t.Logf("Mined %d blocks with prefetch processing %d pending txs", blockNumber, totalPending)
 
 	// This test validates:
 	// 1. Lines 1890-1892: transactions.append, gaspool.SubGas, txs.Shift
@@ -2163,67 +1994,23 @@ func TestPrefetchFromPool_TransactionProcessingLoop(t *testing.T) {
 // TestPrefetchFromPool_TxSelectionLogic verifies that prefetch correctly
 // filters and skips transactions based on various conditions
 func TestPrefetchFromPool_TxSelectionLogic(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 50, 3*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure worker with moderate gas limit to trigger filtering
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 50 // Limited gas to trigger skipping
-	config.Recommit = 3 * time.Second
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Create a mix of transactions:
-	// 1. Low gas transactions (will fit in gas limit)
-	// 2. High gas contract deployments (may exceed per-loop gas limit)
-	// 3. Multiple transactions from same sender (test nonce ordering)
-	for i := 0; i < 150; i++ {
-		var tx *types.Transaction
-		if i%20 == 0 {
-			// Every 20th tx is a contract deployment (high gas ~144k)
-			tx = b.newRandomTxWithNonce(true, uint64(i))
-		} else {
-			// Regular transfer (low gas ~21k)
-			tx = b.newRandomTxWithNonce(false, uint64(i))
-		}
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 150, true)
 
 	// Wait for pool promotion
 	time.Sleep(500 * time.Millisecond)
 
-	// Verify we have transactions
-	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
-	totalPending := 0
-	for _, txs := range pending {
-		totalPending += len(txs)
-	}
+	totalPending := countPendingTransactions(b)
 	t.Logf("Total pending transactions: %d", totalPending)
 
-	// Start worker
-	w.start()
+	blockNumber := runWorkerAndMine(t, w, 2500*time.Millisecond)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
-	// Let prefetch run with gas constraints
-	time.Sleep(2500 * time.Millisecond)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
-
-	t.Logf("Mined %d blocks with %d pending txs and 50%% gas limit",
-		currentBlock.Number.Uint64(), totalPending)
+	t.Logf("Mined %d blocks with %d pending txs and 50%% gas limit", blockNumber, totalPending)
 
 	// This test validates that prefetch handles:
 	// 1. Gas limit filtering (skippedInsufficientGas counter)
@@ -2234,59 +2021,23 @@ func TestPrefetchFromPool_TxSelectionLogic(t *testing.T) {
 // TestPrefetchFromPool_IterativeLoops validates that prefetch runs
 // multiple loop iterations with proper pacing and gas tracking
 func TestPrefetchFromPool_IterativeLoops(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 200, 5*time.Second)
 	defer engine.Close()
 	defer ctrl.Finish()
-
-	// Configure to encourage multiple prefetch iterations
-	config := DefaultTestConfig()
-	config.EnablePrefetch = true
-	config.PrefetchGasLimitPercent = 200 // 200% to allow multiple iterations
-	config.Recommit = 5 * time.Second    // Long window for multiple iterations
-
-	w, b, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Add enough transactions to span multiple iterations
-	// With 100ms minimum loop interval, we can fit ~40-50 iterations in 5 seconds
-	txCount := 500
-	for i := 0; i < txCount; i++ {
-		tx := b.newRandomTxWithNonce(false, uint64(i))
-		b.txPool.Add([]*types.Transaction{tx}, true)
-	}
+	addTransactionBatch(b, 500, false)
 
 	// Wait for promotion
 	time.Sleep(500 * time.Millisecond)
 
-	// Check pending state
-	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
-	totalPending := 0
-	for _, txs := range pending {
-		totalPending += len(txs)
-	}
+	totalPending := countPendingTransactions(b)
 	t.Logf("Pending transactions before mining: %d", totalPending)
 
-	// Start worker - prefetch will run multiple iterations
-	w.start()
+	blockNumber := runWorkerAndMine(t, w, 3500*time.Millisecond)
+	require.Greater(t, blockNumber, uint64(0), "blocks should have been mined")
 
-	// Wait long enough for multiple iterations (but not full 5s recommit)
-	time.Sleep(3500 * time.Millisecond)
-
-	w.stop()
-
-	// Verify blocks were produced
-	currentBlock := w.chain.CurrentBlock()
-	require.Greater(t, currentBlock.Number.Uint64(), uint64(0), "blocks should have been mined")
-
-	t.Logf("Mined %d blocks with prefetch running on %d pending txs",
-		currentBlock.Number.Uint64(), totalPending)
+	t.Logf("Mined %d blocks with prefetch running on %d pending txs", blockNumber, totalPending)
 
 	// This test validates:
 	// 1. Multiple iterations of the prefetch loop (lines 1820-1913)
