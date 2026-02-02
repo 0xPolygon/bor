@@ -1427,7 +1427,17 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 
 		testHeader := createTestHeader(genesisWithWait, 1, borCfgWithBhilai.Period["0"])
 
+		// Calculate expected wait time dynamically based on actual genesis time
+		// This accounts for test setup overhead between setting genesis time and calling Prepare
 		start := time.Now()
+		genesisTimestamp := time.Unix(int64(genesisWithWait.Time), 0)
+		expectedDelay := time.Until(genesisTimestamp)
+
+		// If genesis time has already passed due to slow test setup, test won't wait
+		if expectedDelay < 0 {
+			t.Skipf("Test setup took too long (%v), genesis time already passed", time.Since(time.Unix(int64(genesisTime), 0)))
+		}
+
 		err := bWithWait.Prepare(chainWithWait, testHeader, true)
 		elapsed := time.Since(start)
 
@@ -1437,16 +1447,19 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 
 		// With Bhilai enabled, DevFakeAuthor=true (making this node the primary producer),
 		// and waitOnPrepare=true, should wait until parent (genesis) time has passed
-		// Since genesis is 3 seconds in the future, delay should be around 2.5-3 seconds
-		// (accounting for test setup time)
-		minWait := 2300 * time.Millisecond // Allow generous tolerance for test setup
-		maxWait := 3200 * time.Millisecond
+		// Allow 100ms tolerance for timing precision and scheduling overhead
+		minWait := expectedDelay - 100*time.Millisecond
+		maxWait := expectedDelay + 200*time.Millisecond // Allow extra time for scheduling
+
+		if minWait < 0 {
+			minWait = 0
+		}
 
 		if elapsed < minWait {
-			t.Errorf("Prepare waited %v, expected at least %v", elapsed, minWait)
+			t.Errorf("Prepare waited %v, expected at least %v (calculated from expectedDelay=%v)", elapsed, minWait, expectedDelay)
 		}
 		if elapsed > maxWait {
-			t.Logf("Warning: Prepare took %v, expected around 2.5-3s", elapsed)
+			t.Logf("Warning: Prepare took %v, expected around %v (calculated from expectedDelay=%v)", elapsed, expectedDelay, expectedDelay)
 		}
 
 		// Verify header is valid
@@ -1454,7 +1467,7 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 			t.Error("Header time should be set")
 		}
 
-		t.Logf("Prepare with waitOnPrepare=true completed in %v", elapsed)
+		t.Logf("Prepare with waitOnPrepare=true completed in %v (expected delay was %v)", elapsed, expectedDelay)
 	})
 
 	// Test 3: Verify both produce compatible headers
