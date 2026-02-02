@@ -63,9 +63,9 @@ type Config struct {
 	CommitInterruptFlag bool          // Interrupt commit when time is up ( default = true)
 	BlockTime           time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
-	NewPayloadTimeout         time.Duration // The maximum time allowance for creating a new payload
-	EnablePrefetch            bool          // Enable transaction prefetching from pool during block building
-	PrefetchGasLimitPercent   uint64        // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	NewPayloadTimeout       time.Duration // The maximum time allowance for creating a new payload
+	EnablePrefetch          bool          // Enable transaction prefetching from pool during block building
+	PrefetchGasLimitPercent uint64        // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 }
 
 // DefaultConfig contains default settings for miner.

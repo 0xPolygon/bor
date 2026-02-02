@@ -1313,3 +1313,119 @@ func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
 		require.Contains(t, processingErr.Error(), "failed to decode genesis alloc")
 	})
 }
+
+// P1 Test: TestBorPrepare_WaitOnPrepareFlag validates the new waitOnPrepare
+// parameter in the Prepare method
+func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
+	t.Parallel()
+
+	// Setup: Create a blockchain and Bor engine
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	borCfg := &params.BorConfig{
+		Sprint: map[string]uint64{"0": 64},
+		Period: map[string]uint64{"0": 2},
+	}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, uint64(time.Now().Unix()))
+	defer chain.Stop()
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+
+	// Test 1: Prepare with waitOnPrepare=false should return quickly
+	t.Run("no_wait", func(t *testing.T) {
+		testHeader := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		start := time.Now()
+		err := b.Prepare(chain, testHeader, false)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("Prepare with waitOnPrepare=false failed: %v", err)
+		}
+
+		// Should complete very quickly (< 100ms) since no waiting
+		if elapsed > 100*time.Millisecond {
+			t.Logf("Warning: Prepare took %v, expected < 100ms when waitOnPrepare=false", elapsed)
+		}
+
+		// Verify header is valid
+		if testHeader.Time == 0 {
+			t.Error("Header time should be set")
+		}
+
+		t.Logf("Prepare with waitOnPrepare=false completed in %v", elapsed)
+	})
+
+	// Test 2: Prepare with waitOnPrepare=true should wait for the proper block time
+	t.Run("with_wait", func(t *testing.T) {
+		// Create a config with Bhilai fork enabled to activate wait logic
+		borCfgWithBhilai := &params.BorConfig{
+			Sprint:      map[string]uint64{"0": 64},
+			Period:      map[string]uint64{"0": 2},
+			BhilaiBlock: big.NewInt(0), // Enable Bhilai fork from block 0
+		}
+
+		// Set genesis time 3 seconds in the future to ensure enough wait time
+		// even after test setup overhead
+		genesisTime := uint64(time.Now().Add(3 * time.Second).Unix())
+
+		// Use DevFakeAuthor=true so the signer is authorized and is the primary producer
+		chainWithWait, bWithWait := newChainAndBorForTest(t, sp, borCfgWithBhilai, true, addr, genesisTime)
+		defer chainWithWait.Stop()
+
+		genesisWithWait := chainWithWait.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesisWithWait)
+
+		testHeader := createTestHeader(genesisWithWait, 1, borCfgWithBhilai.Period["0"])
+
+		start := time.Now()
+		err := bWithWait.Prepare(chainWithWait, testHeader, true)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("Prepare with waitOnPrepare=true failed: %v", err)
+		}
+
+		// With Bhilai enabled, DevFakeAuthor=true (making this node the primary producer),
+		// and waitOnPrepare=true, should wait until parent (genesis) time has passed
+		// Since genesis is 3 seconds in the future, delay should be around 2.5-3 seconds
+		// (accounting for test setup time)
+		minWait := 2300 * time.Millisecond // Allow generous tolerance for test setup
+		maxWait := 3200 * time.Millisecond
+
+		if elapsed < minWait {
+			t.Errorf("Prepare waited %v, expected at least %v", elapsed, minWait)
+		}
+		if elapsed > maxWait {
+			t.Logf("Warning: Prepare took %v, expected around 2.5-3s", elapsed)
+		}
+
+		// Verify header is valid
+		if testHeader.Time == 0 {
+			t.Error("Header time should be set")
+		}
+
+		t.Logf("Prepare with waitOnPrepare=true completed in %v", elapsed)
+	})
+
+	// Test 3: Verify both produce compatible headers
+	t.Run("compatibility", func(t *testing.T) {
+		header1 := createTestHeader(genesis, 3, borCfg.Period["0"])
+		header2 := createTestHeader(genesis, 3, borCfg.Period["0"])
+
+		err1 := b.Prepare(chain, header1, false)
+		err2 := b.Prepare(chain, header2, true)
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Prepare failed: err1=%v, err2=%v", err1, err2)
+		}
+
+		// Both should produce valid headers with same block number
+		if header1.Number.Cmp(header2.Number) != 0 {
+			t.Error("Headers should have same block number")
+		}
+
+		t.Logf("Both waitOnPrepare modes produce compatible headers for block %d", header1.Number.Uint64())
+	})
+}

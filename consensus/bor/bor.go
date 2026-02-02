@@ -408,11 +408,9 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		if parent == nil || now < parent.Time {
 			log.Error("Block announced too early post rio", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
-
 		}
-
-	} else if c.config.IsBhilai(header.Number) { // Allow early blocks if Bhilai HF is enabled
-
+	} else if c.config.IsBhilai(header.Number) {
+		// Allow early blocks if Bhilai HF is enabled
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
@@ -1049,7 +1047,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	}
 
 	var delay time.Duration
-	delay = 0
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later

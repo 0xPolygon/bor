@@ -996,7 +996,23 @@ func (w *worker) resultLoop() {
 
 // makeEnv creates a new environment for the sealing block.
 func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness bool, genParams *generateParams) (*environment, error) {
-	state := genParams.statedb
+	var state *state.StateDB
+
+	// If statedb is not provided (e.g., from getSealingBlock path), create it
+	if genParams.statedb == nil {
+		parent := w.chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+		if parent == nil {
+			return nil, fmt.Errorf("parent block not found")
+		}
+		var err error
+		state, err = w.chain.StateAt(parent.Root)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Use the provided statedb (from commitWork with dual readers)
+		state = genParams.statedb
+	}
 
 	if witness {
 		bundle, err := stateless.NewWitness(header, w.chain)

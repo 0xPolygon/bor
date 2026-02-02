@@ -58,14 +58,14 @@ type PrefetchResult struct {
 // only goal is to warm the state caches.
 func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) *PrefetchResult {
 	var (
-		fails        atomic.Int64
-		totalGasUsed atomic.Uint64
+		fails         atomic.Int64
+		totalGasUsed  atomic.Uint64
 		successfulTxs []common.Hash
-		txsMutex     sync.Mutex
-		header       = block.Header()
-		signer       = types.MakeSigner(p.config, header.Number, header.Time)
-		workers      errgroup.Group
-		reader       = statedb.Reader()
+		txsMutex      sync.Mutex
+		header        = block.Header()
+		signer        = types.MakeSigner(p.config, header.Number, header.Time)
+		workers       errgroup.Group
+		reader        = statedb.Reader()
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
