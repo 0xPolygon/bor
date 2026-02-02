@@ -823,7 +823,7 @@ func DefaultConfig() *Config {
 			Recommit:                125 * time.Second,
 			CommitInterruptFlag:     true,
 			BlockTime:               0,
-			EnablePrefetch:          true,
+			EnablePrefetch:          false, // Disabled by default, requires explicit opt-in
 			PrefetchGasLimitPercent: 100,
 		},
 		Gpo: &GpoConfig{
@@ -1174,6 +1174,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+
+		// Validate prefetch gas limit percentage
+		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {
+			return nil, fmt.Errorf("miner.prefetch-gaslimit-percent (%d) must not exceed 150%%", c.Sealer.PrefetchGasLimitPercent)
+		}
 
 		// Dynamic gas limit configuration
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit

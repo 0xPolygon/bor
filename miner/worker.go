@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,6 +125,7 @@ var (
 	accountInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/insert", nil)
 	storageInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/insert", nil)
 	prefetchAccountUsedByProcessUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
+	prefetchPanicMeter                      = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
 )
 
 // environment is the worker's current environment and holds all
@@ -1724,7 +1726,15 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	var interruptPrefetch atomic.Bool
 	if w.config.EnablePrefetch {
-		go w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))
+					prefetchPanicMeter.Mark(1)
+				}
+			}()
+			w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+		}()
 	}
 	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
 }
@@ -1824,6 +1834,11 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	gasLimitPercent := w.config.PrefetchGasLimitPercent
 	if gasLimitPercent == 0 {
 		gasLimitPercent = 100 // Default to 100% if not configured
+	}
+	// Defensive cap at 150% to prevent misconfiguration DoS
+	if gasLimitPercent > 150 {
+		log.Warn("Prefetch gas limit percent exceeds maximum, capping at 150%", "configured", gasLimitPercent)
+		gasLimitPercent = 150
 	}
 	totalGasLimit := header.GasLimit * gasLimitPercent / 100
 	totalGasPool := new(core.GasPool).AddGas(totalGasLimit)
