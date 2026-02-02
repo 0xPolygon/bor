@@ -121,7 +121,7 @@ jobs:
           gunzip -c heimdall-v2-image.tar.gz | docker load
           echo "Loaded heimdall-v2 image:"
           docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
-      
+
       # Deploy kurtosis enclave
       - name: Kurtosis run
         run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
@@ -143,8 +143,10 @@ jobs:
         working-directory: pos-workflows/tests/stateless_tests
         run: bash kurtosis_stateless_test.sh
 
-      - name: Test state syncs (post VeBlop HF)
-        run: kurtosis service exec ${{ env.ENCLAVE_NAME }} test-runner "bats --filter 'bridge MATIC/POL, ERC20, and ERC721 from L1 to L2 and confirm L2 balances increased' tests/pos/bridge.bats"
+      - name: Test state syncs
+        uses: ./.github/actions/state-sync-test
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
 
       # Clean up
       - name: Post kurtosis run
