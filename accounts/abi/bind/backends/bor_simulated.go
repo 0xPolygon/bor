@@ -10,13 +10,13 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 )
 
-func (fb *filterBackend) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	number := rawdb.ReadHeaderNumber(fb.db, hash)
-	if number == nil {
+func (fb *filterBackend) GetBorBlockReceipt(_ context.Context, hash common.Hash) (*types.Receipt, error) {
+	number, found := rawdb.ReadHeaderNumber(fb.db, hash)
+	if !found {
 		return nil, nil
 	}
 
-	receipt := rawdb.ReadRawBorReceipt(fb.db, hash, *number)
+	receipt := rawdb.ReadRawBorReceipt(fb.db, hash, number)
 	if receipt == nil {
 		return nil, nil
 	}
@@ -24,7 +24,7 @@ func (fb *filterBackend) GetBorBlockReceipt(ctx context.Context, hash common.Has
 	return receipt, nil
 }
 
-func (fb *filterBackend) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
+func (fb *filterBackend) GetVoteOnHash(_ context.Context, _ uint64, _ uint64, _ string, _ string) (bool, error) {
 	return false, nil
 }
 

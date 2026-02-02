@@ -20,11 +20,12 @@ import (
 	"maps"
 	gomath "math"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie/utils"
-	"github.com/holiman/uint256"
 )
 
 // mode specifies how a tree location has been accessed

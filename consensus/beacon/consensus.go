@@ -22,6 +22,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -34,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/holiman/uint256"
 )
 
 // Proof-of-stake protocol constants.
@@ -72,17 +73,6 @@ func New(ethone consensus.Engine) *Beacon {
 		panic("nested consensus engine")
 	}
 	return &Beacon{ethone: ethone}
-}
-
-// isPostMerge reports whether the given block number is assumed to be post-merge.
-// Here we check the MergeNetsplitBlock to allow configuring networks with a PoW or
-// PoA chain for unit testing purposes.
-// nolint : unused
-func isPostMerge(config *params.ChainConfig, blockNum uint64, timestamp uint64) bool {
-	mergedAtGenesis := config.TerminalTotalDifficulty != nil && config.TerminalTotalDifficulty.Sign() == 0
-	return mergedAtGenesis ||
-		config.MergeNetsplitBlock != nil && blockNum >= config.MergeNetsplitBlock.Uint64() ||
-		config.ShanghaiBlock != nil && blockNum >= config.ShanghaiBlock.Uint64()
 }
 
 // Author implements consensus.Engine, returning the verified author of the block.

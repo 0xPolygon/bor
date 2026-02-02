@@ -30,7 +30,7 @@ const (
 	headLogDelay = time.Second      // head indexing log info delay (do not log if finished faster)
 )
 
-// updateLoop initializes and updates the log index structure according to the
+// indexerLoop initializes and updates the log index structure according to the
 // current targetView.
 func (f *FilterMaps) indexerLoop() {
 	defer f.closeWg.Done()

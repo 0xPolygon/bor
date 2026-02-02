@@ -36,12 +36,12 @@ func (b *TestBackend) BloomStatus() (uint64, uint64) {
 */
 
 func (b *TestBackend) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	number := rawdb.ReadHeaderNumber(b.DB, hash)
-	if number == nil {
+	number, found := rawdb.ReadHeaderNumber(b.DB, hash)
+	if !found {
 		return &types.Receipt{}, nil
 	}
 
-	receipt := rawdb.ReadBorReceipt(b.DB, hash, *number, nil)
+	receipt := rawdb.ReadBorReceipt(b.DB, hash, number, nil)
 	if receipt == nil {
 		return &types.Receipt{}, nil
 	}
@@ -74,13 +74,13 @@ func (b *TestBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 
 	if blockNr == rpc.LatestBlockNumber {
 		hash = rawdb.ReadHeadBlockHash(b.DB)
-		number := rawdb.ReadHeaderNumber(b.DB, hash)
+		number, found := rawdb.ReadHeaderNumber(b.DB, hash)
 
-		if number == nil {
+		if !found {
 			return &types.Header{}, nil
 		}
 
-		num = *number
+		num = number
 	} else {
 		num = uint64(blockNr)
 		hash = rawdb.ReadCanonicalHash(b.DB, num)
@@ -90,18 +90,18 @@ func (b *TestBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 }
 
 func (b *TestBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
-	number := rawdb.ReadHeaderNumber(b.DB, hash)
-	if number == nil {
+	number, found := rawdb.ReadHeaderNumber(b.DB, hash)
+	if !found {
 		return &types.Header{}, nil
 	}
 
-	return rawdb.ReadHeader(b.DB, hash, *number), nil
+	return rawdb.ReadHeader(b.DB, hash, number), nil
 }
 
 func (b *TestBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
-	if number := rawdb.ReadHeaderNumber(b.DB, hash); number != nil {
-		block := rawdb.ReadBlock(b.DB, hash, *number)
-		return rawdb.ReadReceipts(b.DB, hash, *number, block.Time(), params.TestChainConfig), nil
+	if number, found := rawdb.ReadHeaderNumber(b.DB, hash); !found {
+		block := rawdb.ReadBlock(b.DB, hash, number)
+		return rawdb.ReadReceipts(b.DB, hash, number, block.Time(), params.TestChainConfig), nil
 	}
 
 	return nil, nil

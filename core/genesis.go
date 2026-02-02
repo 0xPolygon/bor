@@ -25,6 +25,8 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -40,7 +42,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
-	"github.com/holiman/uint256"
 )
 
 //go:generate go run github.com/fjl/gencodec -type Genesis -field-override genesisSpecMarshaling -out gen_genesis.go
@@ -168,7 +169,7 @@ func hashAlloc(ga *types.GenesisAlloc, isVerkle bool) (common.Hash, error) {
 		if account.Balance != nil {
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -195,7 +196,7 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database) (common.Hash, e
 			// already captures the allocations.
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -275,6 +276,8 @@ func (e *GenesisMismatchError) Error() string {
 // ChainOverrides contains the changes to chain config.
 type ChainOverrides struct {
 	OverrideOsaka  *big.Int
+	OverrideBPO1   *big.Int
+	OverrideBPO2   *big.Int
 	OverrideVerkle *big.Int
 }
 
@@ -541,6 +544,11 @@ func (g *Genesis) toBlockWithRoot(root common.Hash) *types.Block {
 			if head.BlobGasUsed == nil {
 				head.BlobGasUsed = new(uint64)
 			}
+		} else {
+			if g.ExcessBlobGas != nil {
+				log.Warn("Invalid genesis, unexpected ExcessBlobGas set before Cancun, allowing it for testing purposes")
+				head.ExcessBlobGas = g.ExcessBlobGas
+			}
 		}
 
 		// Polygon/bor: EIP-7685 not supported
@@ -739,23 +747,24 @@ func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 		BaseFee:    big.NewInt(params.InitialBaseFee),
 		Difficulty: big.NewInt(0),
 		Alloc: map[common.Address]types.Account{
-			common.BytesToAddress([]byte{0x01}): {Balance: big.NewInt(1)}, // ECRecover
-			common.BytesToAddress([]byte{0x02}): {Balance: big.NewInt(1)}, // SHA256
-			common.BytesToAddress([]byte{0x03}): {Balance: big.NewInt(1)}, // RIPEMD
-			common.BytesToAddress([]byte{0x04}): {Balance: big.NewInt(1)}, // Identity
-			common.BytesToAddress([]byte{0x05}): {Balance: big.NewInt(1)}, // ModExp
-			common.BytesToAddress([]byte{0x06}): {Balance: big.NewInt(1)}, // ECAdd
-			common.BytesToAddress([]byte{0x07}): {Balance: big.NewInt(1)}, // ECScalarMul
-			common.BytesToAddress([]byte{0x08}): {Balance: big.NewInt(1)}, // ECPairing
-			common.BytesToAddress([]byte{0x09}): {Balance: big.NewInt(1)}, // BLAKE2b
-			common.BytesToAddress([]byte{0x0a}): {Balance: big.NewInt(1)}, // KZGPointEval
-			common.BytesToAddress([]byte{0x0b}): {Balance: big.NewInt(1)}, // BLSG1Add
-			common.BytesToAddress([]byte{0x0c}): {Balance: big.NewInt(1)}, // BLSG1MultiExp
-			common.BytesToAddress([]byte{0x0d}): {Balance: big.NewInt(1)}, // BLSG2Add
-			common.BytesToAddress([]byte{0x0e}): {Balance: big.NewInt(1)}, // BLSG2MultiExp
-			common.BytesToAddress([]byte{0x0f}): {Balance: big.NewInt(1)}, // BLSG1Pairing
-			common.BytesToAddress([]byte{0x10}): {Balance: big.NewInt(1)}, // BLSG1MapG1
-			common.BytesToAddress([]byte{0x11}): {Balance: big.NewInt(1)}, // BLSG2MapG2
+			common.BytesToAddress([]byte{0x01}):    {Balance: big.NewInt(1)}, // ECRecover
+			common.BytesToAddress([]byte{0x02}):    {Balance: big.NewInt(1)}, // SHA256
+			common.BytesToAddress([]byte{0x03}):    {Balance: big.NewInt(1)}, // RIPEMD
+			common.BytesToAddress([]byte{0x04}):    {Balance: big.NewInt(1)}, // Identity
+			common.BytesToAddress([]byte{0x05}):    {Balance: big.NewInt(1)}, // ModExp
+			common.BytesToAddress([]byte{0x06}):    {Balance: big.NewInt(1)}, // ECAdd
+			common.BytesToAddress([]byte{0x07}):    {Balance: big.NewInt(1)}, // ECScalarMul
+			common.BytesToAddress([]byte{0x08}):    {Balance: big.NewInt(1)}, // ECPairing
+			common.BytesToAddress([]byte{0x09}):    {Balance: big.NewInt(1)}, // BLAKE2b
+			common.BytesToAddress([]byte{0x0a}):    {Balance: big.NewInt(1)}, // KZGPointEval
+			common.BytesToAddress([]byte{0x0b}):    {Balance: big.NewInt(1)}, // BLSG1Add
+			common.BytesToAddress([]byte{0x0c}):    {Balance: big.NewInt(1)}, // BLSG1MultiExp
+			common.BytesToAddress([]byte{0x0d}):    {Balance: big.NewInt(1)}, // BLSG2Add
+			common.BytesToAddress([]byte{0x0e}):    {Balance: big.NewInt(1)}, // BLSG2MultiExp
+			common.BytesToAddress([]byte{0x0f}):    {Balance: big.NewInt(1)}, // BLSG1Pairing
+			common.BytesToAddress([]byte{0x10}):    {Balance: big.NewInt(1)}, // BLSG1MapG1
+			common.BytesToAddress([]byte{0x11}):    {Balance: big.NewInt(1)}, // BLSG2MapG2
+			common.BytesToAddress([]byte{0x1, 00}): {Balance: big.NewInt(1)}, // P256Verify
 			// Pre-deploy system contracts
 			params.BeaconRootsAddress:        {Nonce: 1, Code: params.BeaconRootsCode, Balance: common.Big0},
 			params.HistoryStorageAddress:     {Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0},

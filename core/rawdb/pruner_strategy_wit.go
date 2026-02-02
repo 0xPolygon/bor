@@ -35,6 +35,13 @@ func (w *WitnessStrategy) WriteCursor(db ethdb.KeyValueWriter, cur uint64) {
 	WriteWitnessPruneCursor(db, cur)
 }
 
+func (w *WitnessStrategy) ReadPrunerHead(db ethdb.KeyValueReader) *uint64 {
+	return ReadWitnessPruneHead(db)
+}
+func (w *WitnessStrategy) WritePrunerHead(db ethdb.KeyValueWriter, cur uint64) {
+	WriteWitnessPruneHead(db, cur)
+}
+
 func (w *WitnessStrategy) FindEarliest(db ethdb.Database, cutoff uint64) (uint64, bool) {
 	// same as your findEarliestWitness
 	return findEarliestWitness(db, cutoff)

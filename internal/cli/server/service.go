@@ -331,7 +331,11 @@ func (s *Server) ChainWatch(req *proto.ChainWatchRequest, reply proto.Bor_ChainW
 	chain2HeadCh := make(chan core.Chain2HeadEvent, chain2HeadChanSize)
 
 	headSub := s.backend.APIBackend.SubscribeChain2HeadEvent(chain2HeadCh)
-	defer headSub.Unsubscribe()
+	defer func() {
+		if headSub != nil {
+			headSub.Unsubscribe()
+		}
+	}()
 
 	for {
 		msg := <-chain2HeadCh

@@ -170,9 +170,10 @@ func insertNewBlock(t *testing.T, chain *core.BlockChain, block *types.Block) {
 	}
 }
 
-type Option func(header *types.Header)
+type modifyHeaderFunc func(header *types.Header)
+type modifyBlockFunc func(block *types.Block, receipts []*types.Receipt) *types.Block
 
-func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, opts ...Option) *types.Header {
+func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, modifyHeader []modifyHeaderFunc) *types.Header {
 	t.Helper()
 
 	header := &types.Header{
@@ -265,18 +266,18 @@ func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block,
 		}
 	}
 
-	for _, opt := range opts {
-		opt(header)
+	for _, fn := range modifyHeader {
+		fn(header)
 	}
 
 	return header
 }
 
-func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, opts ...Option) *types.Block {
+func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, modifyHeader []modifyHeaderFunc, modifyBody []modifyBlockFunc) *types.Block {
 	t.Helper()
 
 	// Build a new header based on parent block
-	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, opts...)
+	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, modifyHeader)
 	state, err := chain.State()
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -294,6 +295,10 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 	}, b.receipts)
 	if err != nil {
 		panic(fmt.Sprintf("error finalizing block: %v", err))
+	}
+
+	for _, fn := range modifyBody {
+		block = fn(block, b.receipts)
 	}
 
 	// Write state changes to db
@@ -572,7 +577,13 @@ func InitGenesis(t *testing.T, faucets []*ecdsa.PrivateKey, fileLocation string,
 }
 
 func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
-	return InitMinerWithBlockTime(genesis, privKey, withoutHeimdall, 0)
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, 0, nil)
+}
+
+// InitMinerWithHeimdall creates a miner node with a mock HeimdallClient injected during initialization.
+// This is the preferred way to test with mock Heimdall clients as it avoids caching issues.
+func InitMinerWithHeimdall(genesis *core.Genesis, privKey *ecdsa.PrivateKey, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, false, 0, heimdallClient)
 }
 
 // DynamicGasLimitConfig holds configuration for dynamic gas limit testing
@@ -663,6 +674,11 @@ func InitMinerWithDynamicGasLimit(genesis *core.Genesis, privKey *ecdsa.PrivateK
 }
 
 func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, blockTime, nil)
+}
+
+// InitMinerWithOptions is the base function for creating miner nodes with various options.
+func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
 	if err != nil {
@@ -702,7 +718,8 @@ func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, wi
 			BlockTime:           blockTime,
 			CommitInterruptFlag: true,
 		},
-		WithoutHeimdall: withoutHeimdall,
+		WithoutHeimdall:        withoutHeimdall,
+		OverrideHeimdallClient: heimdallClient,
 	})
 
 	if err != nil {

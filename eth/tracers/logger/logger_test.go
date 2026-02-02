@@ -22,11 +22,12 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 type dummyStatedb struct {
@@ -37,6 +38,10 @@ func (*dummyStatedb) GetRefund() uint64                                    { ret
 func (*dummyStatedb) GetState(_ common.Address, _ common.Hash) common.Hash { return common.Hash{} }
 func (*dummyStatedb) SetState(_ common.Address, _ common.Hash, _ common.Hash) common.Hash {
 	return common.Hash{}
+}
+
+func (*dummyStatedb) GetStateAndCommittedState(_ common.Address, _ common.Hash) (common.Hash, common.Hash) {
+	return common.Hash{}, common.Hash{}
 }
 
 func TestStoreCapture(t *testing.T) {
@@ -50,7 +55,7 @@ func TestStoreCapture(t *testing.T) {
 
 	var index common.Hash
 	logger.OnTxStart(evm.GetVMContext(), nil, common.Address{})
-	_, err := evm.Interpreter().Run(contract, []byte{}, false, nil)
+	_, err := evm.Run(contract, []byte{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

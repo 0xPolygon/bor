@@ -23,7 +23,9 @@ import (
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
-	balance_tracing "github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/tracing"
+
+	ttlcache "github.com/jellydator/ttlcache/v3"
 
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
@@ -44,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
-	ttlcache "github.com/jellydator/ttlcache/v3"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -114,6 +115,13 @@ var (
 
 	errUncleDetected     = errors.New("uncles not allowed")
 	errUnknownValidators = errors.New("unknown validators")
+
+	// errReorgDuringRootComputation indicates a reorganization occurred while calculating the checkpoint root.
+	errReorgDuringRootComputation = errors.New("reorg occurred while computing checkpoint root")
+
+	// errNonContiguousHeaderRange is returned when the header range [start,end]
+	// is not contiguous in terms of parent-child relationships.
+	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -881,7 +889,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) && !isPartOfVeBlopSet(signer, header.Number.Uint64()) {
+	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1148,7 +1156,15 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
 		if len(body.Transactions) > 0 {
+			// Craft a state-sync tx to validate it against the tx in block body
+			stateSyncTx := types.NewTx(&types.StateSyncTx{
+				StateSyncData: stateSyncData,
+			})
 			lastTx := body.Transactions[len(body.Transactions)-1]
+			if stateSyncTx.Hash() != lastTx.Hash() {
+				log.Error("Invalid state-sync tx in block body", "got", lastTx.Hash(), "want", stateSyncTx.Hash())
+				return receipts
+			}
 			if lastTx.Type() == types.StateSyncTxType {
 				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
 			}
@@ -1224,11 +1240,10 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 			for addr, account := range allocs {
 				log.Info("change contract code", "address", addr)
-				state.SetCode(addr, account.Code)
+				state.SetCode(addr, account.Code, tracing.CodeChangeUnspecified)
 
 				if state.GetBalance(addr).Cmp(uint256.NewInt(0)) == 0 {
-					// todo: @anshalshukla - check tracing reason
-					state.SetBalance(addr, uint256.NewInt(account.Balance.Uint64()), balance_tracing.BalanceChangeUnspecified)
+					state.SetBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceChangeUnspecified)
 				}
 			}
 		}
@@ -1339,7 +1354,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Bail out if we're unauthorized to sign a block
-	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !isPartOfVeBlopSet(currentSigner.signer, header.Number.Uint64()) {
+	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !snap.isAllowedByValidatorSetOverride(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1497,7 +1512,7 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState := state.Inner().Copy()
 	tempState.ResetPrefetcher()
-	tempState.StartPrefetcher("bor", state.Witness())
+	tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
@@ -1642,7 +1657,7 @@ func (c *Bor) CommitStates(
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
 		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness())
+		tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
 		if err != nil {
@@ -1762,6 +1777,17 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.spanStore.setHeimdallClient(h)
 }
 
+// PurgeCache clears all cached snapshots and span data. This is useful in tests
+// when the mock heimdall client is changed and old cached data needs to be invalidated.
+func (c *Bor) PurgeCache() {
+	// Clear the recents cache (snapshots)
+	c.recents.DeleteAll()
+	// Clear the recent verified headers cache
+	c.recentVerifiedHeaders.DeleteAll()
+	// Clear the span store cache
+	c.spanStore.PurgeCache()
+}
+
 func (c *Bor) GetCurrentValidators(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error) {
 	return c.spanner.GetCurrentValidatorsByHash(ctx, headerHash, blockNumber)
 }
@@ -1863,16 +1889,4 @@ func countLogsFromReceipts(receipts []*types.Receipt) int {
 		}
 	}
 	return total
-}
-
-// TODO: hack - remove me later
-func isPartOfVeBlopSet(addr common.Address, blockNumber uint64) bool {
-	if blockNumber < 80440819 || blockNumber > 80443486 {
-		return false
-	}
-	a := addr.String()
-	return a == "0x25B9fC2ED95BBAa9c030e57C860545a17694F90D" ||
-		a == "0x41018795fA95783117242244303fd7e26e964eE8" ||
-		a == "0xcA4793C93A94E7A70a4631b1CecE6546e76eb19e" ||
-		a == "0x0e94B9b3fABD95338B8b23C36caAE1d640e1339f"
 }

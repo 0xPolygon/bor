@@ -51,18 +51,21 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		Preimages                            bool
 		TriesInMemory                        uint64
 		FilterLogCacheSize                   int
+		LogQueryLimit                        int
 		Miner                                miner.Config
 		TxPool                               legacypool.Config
 		BlobPool                             blobpool.Config
 		GPO                                  gasprice.Config
 		EnablePreimageRecording              bool
+		EnableWitnessStats                   bool
+		StatelessSelfValidation              bool
+		EnableStateSizeTracking              bool
 		VMTrace                              string
 		VMTraceJsonConfig                    string
 		RPCGasCap                            uint64
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
-		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		HeimdallURL                          string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
@@ -76,14 +79,17 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		WitnessProtocol                      bool
 		SyncWithWitnesses                    bool
 		SyncAndProduceWitnesses              bool
-		DevFakeAuthor                        bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
-		OverrideVerkle                       *big.Int `toml:",omitempty"`
+		DevFakeAuthor                        bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
 		WitnessPruneThreshold                uint64
 		WitnessPruneInterval                 time.Duration
 		EnableParallelStatelessImport        bool
 		EnableParallelStatelessImportWorkers int
+		OverrideVerkle                       *big.Int      `toml:",omitempty"`
+		OverrideOsaka                        *big.Int      `toml:",omitempty"`
+		TxSyncDefaultTimeout                 time.Duration `toml:",omitempty"`
+		TxSyncMaxTimeout                     time.Duration `toml:",omitempty"`
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -114,18 +120,21 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.Preimages = c.Preimages
 	enc.TriesInMemory = c.TriesInMemory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
+	enc.LogQueryLimit = c.LogQueryLimit
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
 	enc.GPO = c.GPO
 	enc.EnablePreimageRecording = c.EnablePreimageRecording
+	enc.EnableWitnessStats = c.EnableWitnessStats
+	enc.StatelessSelfValidation = c.StatelessSelfValidation
+	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
 	enc.RPCGasCap = c.RPCGasCap
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
-	enc.OverrideOsaka = c.OverrideOsaka
 	enc.HeimdallURL = c.HeimdallURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
@@ -140,6 +149,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.SyncWithWitnesses = c.SyncWithWitnesses
 	enc.SyncAndProduceWitnesses = c.SyncAndProduceWitnesses
 	enc.DevFakeAuthor = c.DevFakeAuthor
+	enc.OverrideOsaka = c.OverrideOsaka
 	enc.OverrideVerkle = c.OverrideVerkle
 	enc.EnableBlockTracking = c.EnableBlockTracking
 	enc.FastForwardThreshold = c.FastForwardThreshold
@@ -147,6 +157,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
 	enc.EnableParallelStatelessImport = c.EnableParallelStatelessImport
 	enc.EnableParallelStatelessImportWorkers = c.EnableParallelStatelessImportWorkers
+	enc.TxSyncDefaultTimeout = c.TxSyncDefaultTimeout
+	enc.TxSyncMaxTimeout = c.TxSyncMaxTimeout
 	return &enc, nil
 }
 
@@ -185,18 +197,21 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		Preimages                            *bool
 		TriesInMemory                        *uint64
 		FilterLogCacheSize                   *int
+		LogQueryLimit                        *int
 		Miner                                *miner.Config
 		TxPool                               *legacypool.Config
 		BlobPool                             *blobpool.Config
 		GPO                                  *gasprice.Config
 		EnablePreimageRecording              *bool
+		EnableWitnessStats                   *bool
+		StatelessSelfValidation              *bool
+		EnableStateSizeTracking              *bool
 		VMTrace                              *string
 		VMTraceJsonConfig                    *string
 		RPCGasCap                            *uint64
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
-		OverrideOsaka                        *big.Int `toml:",omitempty"`
 		HeimdallURL                          *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
@@ -210,14 +225,17 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		WitnessProtocol                      *bool
 		SyncWithWitnesses                    *bool
 		SyncAndProduceWitnesses              *bool
-		DevFakeAuthor                        *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
-		OverrideVerkle                       *big.Int `toml:",omitempty"`
+		DevFakeAuthor                        *bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
 		WitnessPruneThreshold                *uint64
 		WitnessPruneInterval                 *time.Duration
 		EnableParallelStatelessImport        *bool
 		EnableParallelStatelessImportWorkers *int
+		OverrideOsaka                        *big.Int       `toml:",omitempty"`
+		OverrideVerkle                       *big.Int       `toml:",omitempty"`
+		TxSyncDefaultTimeout                 *time.Duration `toml:",omitempty"`
+		TxSyncMaxTimeout                     *time.Duration `toml:",omitempty"`
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -307,6 +325,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.FilterLogCacheSize != nil {
 		c.FilterLogCacheSize = *dec.FilterLogCacheSize
 	}
+	if dec.LogQueryLimit != nil {
+		c.LogQueryLimit = *dec.LogQueryLimit
+	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
 	}
@@ -321,6 +342,15 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnablePreimageRecording != nil {
 		c.EnablePreimageRecording = *dec.EnablePreimageRecording
+	}
+	if dec.EnableWitnessStats != nil {
+		c.EnableWitnessStats = *dec.EnableWitnessStats
+	}
+	if dec.StatelessSelfValidation != nil {
+		c.StatelessSelfValidation = *dec.StatelessSelfValidation
+	}
+	if dec.EnableStateSizeTracking != nil {
+		c.EnableStateSizeTracking = *dec.EnableStateSizeTracking
 	}
 	if dec.VMTrace != nil {
 		c.VMTrace = *dec.VMTrace
@@ -339,9 +369,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.RPCTxFeeCap != nil {
 		c.RPCTxFeeCap = *dec.RPCTxFeeCap
-	}
-	if dec.OverrideOsaka != nil {
-		c.OverrideOsaka = dec.OverrideOsaka
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
@@ -385,6 +412,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.DevFakeAuthor != nil {
 		c.DevFakeAuthor = *dec.DevFakeAuthor
 	}
+	if dec.OverrideOsaka != nil {
+		c.OverrideOsaka = dec.OverrideOsaka
+	}
 	if dec.OverrideVerkle != nil {
 		c.OverrideVerkle = dec.OverrideVerkle
 	}
@@ -405,6 +435,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnableParallelStatelessImportWorkers != nil {
 		c.EnableParallelStatelessImportWorkers = *dec.EnableParallelStatelessImportWorkers
+	}
+	if dec.TxSyncDefaultTimeout != nil {
+		c.TxSyncDefaultTimeout = *dec.TxSyncDefaultTimeout
+	}
+	if dec.TxSyncMaxTimeout != nil {
+		c.TxSyncMaxTimeout = *dec.TxSyncMaxTimeout
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/VictoriaMetrics/fastcache"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
@@ -244,10 +245,7 @@ func BenchmarkSearch(b *testing.B) {
 	}
 
 	key := crypto.Keccak256Hash([]byte{0x13, 0x38})
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.AccountRLP(key)
 	}
 }
@@ -290,9 +288,7 @@ func BenchmarkSearchSlot(b *testing.B) {
 	for i := 0; i < 128; i++ {
 		layer = fill(layer)
 	}
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.Storage(accountKey, storageKey)
 	}
 }
@@ -325,12 +321,7 @@ func BenchmarkFlatten(b *testing.B) {
 		}
 		return newDiffLayer(parent, common.Hash{}, accounts, storage)
 	}
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-
+	for b.Loop() {
 		var layer snapshot
 
 		layer = emptyLayer()
@@ -386,9 +377,7 @@ func BenchmarkJournal(b *testing.B) {
 	for i := 1; i < 128; i++ {
 		layer = fill(layer)
 	}
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.Journal(new(bytes.Buffer))
 	}
 }

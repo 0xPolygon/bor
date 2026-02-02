@@ -20,27 +20,23 @@ import (
 	"math/big"
 	"sync"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 // ChainContext supports retrieving headers and consensus parameters from the
 // current blockchain to be used during transaction processing.
 type ChainContext interface {
+	consensus.ChainHeaderReader
+
 	// Engine retrieves the chain's consensus engine.
 	Engine() consensus.Engine
-
-	// GetHeader returns the header corresponding to the hash/number argument pair.
-	GetHeader(common.Hash, uint64) *types.Header
-
-	// Config returns the chain's configuration.
-	Config() *params.ChainConfig
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.

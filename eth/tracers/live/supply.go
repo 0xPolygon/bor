@@ -23,6 +23,8 @@ import (
 	"math/big"
 	"path/filepath"
 
+	"gopkg.in/natefinch/lumberjack.v2"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
@@ -32,7 +34,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func init() {
@@ -199,8 +200,7 @@ func (s *supplyTracer) onBalanceChange(a common.Address, prevBalance, newBalance
 
 	// NOTE: don't handle "BalanceIncreaseGenesisBalance" because it is handled in OnGenesisBlock
 	switch reason {
-	case tracing.BalanceIncreaseRewardMineUncle:
-	case tracing.BalanceIncreaseRewardMineBlock:
+	case tracing.BalanceIncreaseRewardMineBlock, tracing.BalanceIncreaseRewardMineUncle:
 		s.delta.Issuance.Reward.Add(s.delta.Issuance.Reward, diff)
 	case tracing.BalanceIncreaseWithdrawal:
 		s.delta.Issuance.Withdrawals.Add(s.delta.Issuance.Withdrawals, diff)

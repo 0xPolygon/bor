@@ -21,13 +21,14 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/holiman/uint256"
 )
 
 // OverrideAccount indicates the overriding fields of account during the execution
@@ -91,7 +92,7 @@ func (diff *StateOverride) Apply(statedb *state.StateDB, precompiles vm.Precompi
 		}
 		// Override account(contract) code.
 		if account.Code != nil {
-			statedb.SetCode(addr, *account.Code)
+			statedb.SetCode(addr, *account.Code, tracing.CodeChangeUnspecified)
 		}
 		// Override account balance.
 		if account.Balance != nil {

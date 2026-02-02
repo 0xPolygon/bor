@@ -5,6 +5,8 @@ import (
 	"context"
 	"math/big"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -13,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 var systemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
@@ -33,6 +34,22 @@ func (c ChainContext) GetHeader(hash common.Hash, number uint64) *types.Header {
 
 func (c ChainContext) Config() *params.ChainConfig {
 	return c.Chain.Config()
+}
+
+func (c ChainContext) CurrentHeader() *types.Header {
+	return c.Chain.CurrentHeader()
+}
+
+func (c ChainContext) GetHeaderByHash(hash common.Hash) *types.Header {
+	return c.Chain.GetHeaderByHash(hash)
+}
+
+func (c ChainContext) GetHeaderByNumber(number uint64) *types.Header {
+	return c.Chain.GetHeaderByNumber(number)
+}
+
+func (c ChainContext) GetTd(hash common.Hash, number uint64) *big.Int {
+	return c.Chain.GetTd(hash, number)
 }
 
 // callmsg implements core.Message to allow passing it as a transaction simulator.

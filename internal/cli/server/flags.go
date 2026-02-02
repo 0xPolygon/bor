@@ -455,6 +455,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.BaseFeeBuffer,
 		Group:   "Sealer",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasPercentage",
+		Usage:   "Target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks",
+		Value:   &c.cliConfig.Sealer.TargetGasPercentage,
+		Default: c.cliConfig.Sealer.TargetGasPercentage,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.baseFeeChangeDenominator",
+		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Dandeli blocks",
+		Value:   &c.cliConfig.Sealer.BaseFeeChangeDenominator,
+		Default: c.cliConfig.Sealer.BaseFeeChangeDenominator,
+		Group:   "Sealer",
+	})
 
 	// ethstats
 	f.StringFlag(&flagset.StringFlag{
@@ -661,6 +675,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.TxFeeCap,
 		Group:   "JsonRPC",
 	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.logquerylimit",
+		Usage:   "Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap)",
+		Value:   &c.cliConfig.JsonRPC.LogQueryLimit,
+		Default: c.cliConfig.JsonRPC.LogQueryLimit,
+		Group:   "JsonRPC",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "rpc.allow-unprotected-txs",
 		Usage:   "Allow for unprotected (non EIP155 signed) transactions to be submitted via RPC",
@@ -673,6 +694,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Enables the (deprecated) personal namespace",
 		Value:   &c.cliConfig.JsonRPC.EnablePersonal,
 		Default: c.cliConfig.JsonRPC.EnablePersonal,
+		Group:   "JsonRPC",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "rpc.txsync.defaulttimeout",
+		Usage:   "Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncDefaultTimeout,
+		Default: c.cliConfig.JsonRPC.TxSyncDefaultTimeout,
+		Group:   "JsonRPC",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "rpc.txsync.maxtimeout",
+		Usage:   "Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)",
+		Value:   &c.cliConfig.JsonRPC.TxSyncMaxTimeout,
+		Default: c.cliConfig.JsonRPC.TxSyncMaxTimeout,
 		Group:   "JsonRPC",
 	})
 	f.BoolFlag(&flagset.BoolFlag{

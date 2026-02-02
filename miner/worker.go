@@ -134,6 +134,7 @@ type environment struct {
 	signer   types.Signer
 	state    *state.StateDB // apply state changes here
 	tcount   int            // tx count in cycle
+	size     uint64         // size of the block we are building
 	gasPool  *core.GasPool  // available gas used to pack transactions
 	coinbase common.Address
 	evm      *vm.EVM
@@ -200,12 +201,22 @@ type task struct {
 	createdAt time.Time
 }
 
+// txFits reports whether the transaction fits into the block size limit.
+func (env *environment) txFitsSize(tx *types.Transaction) bool {
+	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
+}
+
 const (
 	commitInterruptNone int32 = iota
 	commitInterruptNewHead
 	commitInterruptResubmit
 	commitInterruptTimeout
 )
+
+// Block size is capped by the protocol at params.MaxBlockSize. When producing blocks, we
+// try to say below the size including a buffer zone, this is to avoid going over the
+// maximum size with auxiliary data added into the block.
+const maxBlockSizeBufferZone = 0
 
 // newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
 type newWorkReq struct {
@@ -1021,16 +1032,17 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle)
+		state.StartPrefetcher("miner", bundle, nil)
 	} else {
 		// todo: @anshalshukla - check if witness is required
-		state.StartPrefetcher("miner", nil)
+		state.StartPrefetcher("miner", nil, nil)
 	}
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
 		signer:         types.MakeSigner(w.chainConfig, header.Number, header.Time),
 		state:          state,
+		size:           uint64(header.Size()),
 		coinbase:       coinbase,
 		header:         header,
 		witness:        state.Witness(),
@@ -1218,7 +1230,11 @@ mainloop:
 				}
 			}
 		}
-
+		// if inclusion of the transaction would put the block size over the
+		// maximum we allow, don't add any more txs to the payload.
+		if !env.txFitsSize(tx) {
+			break
+		}
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance in the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -1574,10 +1590,15 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 
-	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
+	filter.BlobTxs = false
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
 
-	filter.OnlyPlainTxs, filter.OnlyBlobTxs = false, true
+	filter.BlobTxs = true
+	if w.chainConfig.IsOsaka(env.header.Number) {
+		filter.BlobVersion = types.BlobSidecarVersion1
+	} else {
+		filter.BlobVersion = types.BlobSidecarVersion0
+	}
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
 
 	// Split the pending transactions into locals and remotes.
@@ -1819,7 +1840,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	baseFee := eip1559.CalcBaseFee(w.chainConfig, parent)
 	number := new(big.Int).Add(parent.Number, common.Big1)
 	filter := w.buildDefaultFilter(baseFee, number)
-	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
+	filter.BlobTxs = false
 	header, _, err := w.makeHeader(genParams, false)
 	if err != nil {
 		return
@@ -2091,7 +2112,6 @@ func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
 	for i, tx := range block.Transactions() {
 		minerFee, _ := tx.EffectiveGasTip(block.BaseFee())
 		feesWei.Add(feesWei, new(big.Int).Mul(new(big.Int).SetUint64(receipts[i].GasUsed), minerFee))
-		// TODO (MariusVanDerWijden) add blob fees
 	}
 
 	return feesWei

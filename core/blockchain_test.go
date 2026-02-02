@@ -28,10 +28,14 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -51,8 +55,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/holiman/uint256"
-	"github.com/stretchr/testify/require"
 )
 
 // So we can deterministically seed different blockchains
@@ -220,7 +222,7 @@ func TestParallelBlockChainImport(t *testing.T) {
 
 func testParallelBlockChainImport(t *testing.T, scheme string, enforceParallelProcessor bool) {
 	db, _, blockchain, err := newCanonical(ethash.NewFaker(), 10, true, scheme)
-	blockchain.parallelProcessor = NewParallelStateProcessor(blockchain.chainConfig, blockchain, blockchain.engine)
+	blockchain.parallelProcessor = NewParallelStateProcessor(blockchain.hc, blockchain)
 
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
@@ -977,15 +979,15 @@ func testFastVsFullChains(t *testing.T, scheme string) {
 		}
 
 		// Check that hash-to-number mappings are present in all databases.
-		if m := rawdb.ReadHeaderNumber(fastDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(fastDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in fastdb: %v", num, hash, m)
 		}
 
-		if m := rawdb.ReadHeaderNumber(ancientDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(ancientDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in ancientdb: %v", num, hash, m)
 		}
 
-		if m := rawdb.ReadHeaderNumber(archiveDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(archiveDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in archivedb: %v", num, hash, m)
 		}
 	}
@@ -2121,6 +2123,7 @@ func TestInsertReceiptChainRollback(t *testing.T) {
 	testInsertReceiptChainRollback(t, rawdb.PathScheme)
 }
 
+//nolint:unused
 func testInsertReceiptChainRollback(t *testing.T, scheme string) {
 	// Generate forked chain. The returned BlockChain object is used to process the side chain blocks.
 	tmpChain, sideblocks, canonblocks, gspec, err := getLongAndShortChains(scheme)
@@ -4782,8 +4785,8 @@ func (m *mockChainValidator) GetMilestoneIDsList() []string { return nil }
 type mockFailingEngine struct {
 	*ethash.Ethash
 	shouldFailHeader      map[uint64]bool
-	allowInitialInsertion bool // Allow initial insertion to succeed
-	insertionComplete     bool // Track when insertion is complete
+	allowInitialInsertion bool        // Allow initial insertion to succeed
+	insertionComplete     atomic.Bool // Track when insertion is complete
 }
 
 func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
@@ -4798,7 +4801,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 				return
 			default:
 				// If we're allowing initial insertion and it's not complete yet, succeed
-				if m.allowInitialInsertion && !m.insertionComplete {
+				if m.allowInitialInsertion && !m.insertionComplete.Load() {
 					results <- nil
 				} else if m.shouldFailHeader != nil && m.shouldFailHeader[header.Number.Uint64()] {
 					results <- errors.New("mock header verification failure")
@@ -4813,7 +4816,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 }
 
 func (m *mockFailingEngine) markInsertionComplete() {
-	m.insertionComplete = true
+	m.insertionComplete.Store(true)
 }
 
 // TestHeaderVerificationLoop tests the background header verification functionality

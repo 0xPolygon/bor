@@ -20,6 +20,9 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum/go-verkle"
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -32,8 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/ethereum/go-verkle"
-	"github.com/holiman/uint256"
 )
 
 // BlockGen creates blocks for testing.
@@ -557,8 +558,10 @@ func GenerateVerkleChain(config *params.ChainConfig, parent *types.Block, engine
 		return block, b.receipts
 	}
 
+	sdb := state.NewDatabase(trdb, nil)
+
 	for i := 0; i < n; i++ {
-		statedb, err := state.New(parent.Root(), state.NewDatabase(trdb, nil))
+		statedb, err := state.New(parent.Root(), sdb)
 		if err != nil {
 			panic(err)
 		}

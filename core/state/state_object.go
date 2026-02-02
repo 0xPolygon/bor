@@ -24,13 +24,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/holiman/uint256"
 )
 
 type Storage map[common.Hash]common.Hash
@@ -343,7 +345,7 @@ func (s *stateObject) updateTrie() (Trie, error) {
 			continue
 		}
 		if !exist {
-			log.Error("Storage slot is not found in pending area", s.address, "slot", key)
+			log.Error("Storage slot is not found in pending area", "address", s.address, "slot", key)
 			continue
 		}
 		if (value != common.Hash{}) {
@@ -505,8 +507,20 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 		selfDestructed:     s.selfDestructed,
 		newContract:        s.newContract,
 	}
-	if s.trie != nil {
+
+	switch s.trie.(type) {
+	case *trie.VerkleTrie:
+		// Verkle uses only one tree, and the copy has already been
+		// made in mustCopyTrie.
+		obj.trie = db.trie
+	case *trie.TransitionTrie:
+		// Same thing for the transition tree, since the MPT is
+		// read-only.
+		obj.trie = db.trie
+	case *trie.StateTrie:
 		obj.trie = mustCopyTrie(s.trie)
+	case nil:
+		// do nothing
 	}
 	return obj
 }

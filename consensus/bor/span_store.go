@@ -6,12 +6,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
-	lru "github.com/hashicorp/golang-lru"
 
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 
@@ -357,6 +358,20 @@ func (s *SpanStore) estimateSpanId(blockNumber uint64) uint64 {
 // tests where mock heimdall client is set after creation of bor instance explicitly.
 func (s *SpanStore) setHeimdallClient(client IHeimdallClient) {
 	s.heimdallClient = client
+}
+
+// PurgeCache clears all cached spans and resets state. This is useful in tests
+// when the mock heimdall client is changed and old cached data needs to be invalidated.
+func (s *SpanStore) PurgeCache() {
+	// Create a new cache to replace the old one
+	newCache, _ := lru.NewARC(10)
+	s.store = newCache
+	// Clear the latest span cache
+	s.latestSpanCache.Store(nil)
+	// Clear the last used span
+	s.lastUsedSpan.Store(nil)
+	// Reset the latest known span ID
+	s.latestKnownSpanId.Store(0)
 }
 
 // getMockSpan0 constructs a mock span 0 by fetching validator set from genesis state. This should

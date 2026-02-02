@@ -121,7 +121,7 @@ func TestOneElementProof(t *testing.T) {
 		}
 
 		if !bytes.Equal(val, []byte("v")) {
-			t.Fatalf("prover %d: verified value mismatch: have %x, want 'k'", i, val)
+			t.Fatalf("prover %d: verified value mismatch: have %x, want 'v'", i, val)
 		}
 	}
 }

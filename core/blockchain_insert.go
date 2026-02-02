@@ -27,6 +27,7 @@ import (
 
 // insertStats tracks and reports on block insertion.
 type insertStats struct {
+	//nolint:unused
 	queued, processed, ignored int
 	usedGas                    uint64
 	startTime                  mclock.AbsTime

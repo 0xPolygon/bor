@@ -84,7 +84,7 @@ lint:
 
 lint-deps:
 	rm -f ./build/bin/golangci-lint
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./build/bin v2.6.2
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./build/bin v2.8.0
 
 .PHONY: vulncheck
 
@@ -230,7 +230,7 @@ release-dry-run:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v `pwd`:/go/src/$(PACKAGE_NAME) \
 		-w /go/src/$(PACKAGE_NAME) \
-		goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
+		mirror.gcr.io/goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
 		--clean --skip-validate --skip-publish
 
 .PHONY: release
@@ -247,5 +247,5 @@ release:
 		-v $(HOME)/.docker/config.json:/root/.docker/config.json \
 		-v `pwd`:/go/src/$(PACKAGE_NAME) \
 		-w /go/src/$(PACKAGE_NAME) \
-		goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
+		mirror.gcr.io/goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
 		--clean --skip-validate

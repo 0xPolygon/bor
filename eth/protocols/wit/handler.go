@@ -124,6 +124,15 @@ var wit0 = map[uint64]msgHandler{
 	NewWitnessHashesMsg: handleNewWitnessHashes,
 }
 
+var wit1 = map[uint64]msgHandler{
+	GetMsgWitness:         handleGetWitness,
+	MsgWitness:            handleWitness,
+	NewWitnessMsg:         handleNewWitness,
+	NewWitnessHashesMsg:   handleNewWitnessHashes,
+	GetWitnessMetadataMsg: handleGetWitnessMetadata,
+	WitnessMetadataMsg:    handleWitnessMetadata,
+}
+
 // HandleMessage is invoked whenever an inbound message is received from a
 // remote peer on the `wit` protocol. The remote connection is torn down upon
 // returning any error.
@@ -155,7 +164,18 @@ func handleMessage(backend Backend, peer *Peer) error {
 		}(start)
 	}
 
-	if handler := wit0[msg.Code]; handler != nil {
+	// Select the appropriate handler map based on protocol version
+	var handlers map[uint64]msgHandler
+	switch peer.Version() {
+	case WIT1:
+		handlers = wit1
+	case WIT0:
+		handlers = wit0
+	default:
+		handlers = wit0 // Fallback to WIT0
+	}
+
+	if handler := handlers[msg.Code]; handler != nil {
 		return handler(backend, msg, peer)
 	}
 

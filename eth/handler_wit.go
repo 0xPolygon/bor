@@ -63,6 +63,15 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 		// Reply using the retrieved RLP data
 		return peer.ReplyWitness(packet.RequestId, &response)
 
+	case *wit.GetWitnessMetadataPacket:
+		// Call handleGetWitnessMetadata which returns only metadata (page count)
+		response, err := h.handleGetWitnessMetadata(peer, packet)
+		if err != nil {
+			return fmt.Errorf("failed to handle GetWitnessMetadataPacket: %w", err)
+		}
+		// Reply with metadata
+		return peer.ReplyWitnessMetadata(packet.RequestId, response)
+
 	default:
 		return fmt.Errorf("unknown wit packet type %T", packet)
 	}
@@ -171,5 +180,46 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 
 	// Return the collected RLP data
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
+	return response, nil
+}
+
+// handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.
+// This is efficient for verification purposes where we don't need the actual witness data.
+func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnessMetadataPacket) ([]wit.WitnessMetadataResponse, error) {
+	log.Debug("handleGetWitnessMetadata processing request", "peer", peer.ID(), "reqID", req.RequestId, "hashes", len(req.Hashes))
+
+	var response []wit.WitnessMetadataResponse
+
+	for _, hash := range req.Hashes {
+		// Get witness size from database
+		size := rawdb.ReadWitnessSize(h.Chain().DB(), hash)
+		witnessSize := uint64(0)
+		available := false
+
+		if size != nil {
+			witnessSize = *size
+			available = true
+		}
+
+		// Calculate total pages
+		totalPages := (witnessSize + PageSize - 1) / PageSize // ceil(witnessSize/PageSize)
+
+		// Get block number from header
+		blockNumber := uint64(0)
+		header := h.Chain().GetHeaderByHash(hash)
+		if header != nil {
+			blockNumber = header.Number.Uint64()
+		}
+
+		response = append(response, wit.WitnessMetadataResponse{
+			Hash:        hash,
+			TotalPages:  totalPages,
+			WitnessSize: witnessSize,
+			BlockNumber: blockNumber,
+			Available:   available,
+		})
+	}
+
+	log.Debug("handleGetWitnessMetadata returning metadata", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
 }
