@@ -18,6 +18,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Test helpers
+
+// signHeader signs a header with the given private key
+func signHeader(t *testing.T, header *types.Header, key *ecdsa.PrivateKey, borCfg *params.BorConfig) {
+	header.Extra = make([]byte, types.ExtraVanityLength+types.ExtraSealLength)
+	sighash, err := crypto.Sign(SealHash(header, borCfg).Bytes(), key)
+	require.NoError(t, err)
+	copy(header.Extra[len(header.Extra)-types.ExtraSealLength:], sighash)
+}
+
+// chainSetupOptions configures test chain creation
+type chainSetupOptions struct {
+	validators   []*valset.Validator
+	sprint       uint64
+	period       uint64
+	rioBlock     *big.Int
+	bhilaiBlock  *big.Int
+	genesisTime  uint64
+	ethashEngine bool
+	beneficiary  common.Address
+}
+
+// defaultChainSetup returns default chain setup options
+func defaultChainSetup(signerAddr common.Address) chainSetupOptions {
+	return chainSetupOptions{
+		validators:  []*valset.Validator{{Address: signerAddr, VotingPower: 1}},
+		sprint:      64,
+		period:      2,
+		genesisTime: uint64(time.Now().Add(-10 * time.Minute).Unix()), // Past time to avoid future block errors
+	}
+}
+
+// setupTestChain creates a test blockchain with the given options
+func setupTestChain(t *testing.T, opts chainSetupOptions) (*core.BlockChain, *Bor) {
+	sp := &fakeSpanner{vals: opts.validators}
+	borCfg := &params.BorConfig{
+		Sprint:      map[string]uint64{"0": opts.sprint},
+		Period:      map[string]uint64{"0": opts.period},
+		RioBlock:    opts.rioBlock,
+		BhilaiBlock: opts.bhilaiBlock,
+	}
+	return newChainAndBorForTest(t, sp, borCfg, opts.ethashEngine, opts.beneficiary, opts.genesisTime)
+}
+
+// headerOptions configures test header creation
+type headerOptions struct {
+	number          *big.Int
+	parentHash      common.Hash
+	time            uint64
+	extra           []byte
+	difficulty      *big.Int
+	gasLimit        uint64
+	mixDigest       common.Hash
+	uncleHash       common.Hash
+	withdrawalsHash *common.Hash
+	requestsHash    *common.Hash
+	sign            bool
+}
+
+// newTestHeader creates a test header with the given options, using genesis as defaults
+func newTestHeader(genesis *types.Header, opts headerOptions) *types.Header {
+	header := &types.Header{
+		Number:          opts.number,
+		ParentHash:      opts.parentHash,
+		Time:            opts.time,
+		Extra:           opts.extra,
+		Difficulty:      opts.difficulty,
+		GasLimit:        opts.gasLimit,
+		MixDigest:       opts.mixDigest,
+		UncleHash:       opts.uncleHash,
+		WithdrawalsHash: opts.withdrawalsHash,
+		RequestsHash:    opts.requestsHash,
+	}
+
+	// Apply defaults from genesis if not specified
+	if header.GasLimit == 0 {
+		header.GasLimit = genesis.GasLimit
+	}
+
+	return header
+}
+
 // TestVerifyHeader tests the verifyHeader function with various scenarios
 func TestVerifyHeader(t *testing.T) {
 	t.Parallel()
@@ -26,14 +108,6 @@ func TestVerifyHeader(t *testing.T) {
 	privKey, err := crypto.GenerateKey()
 	require.NoError(t, err)
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
-
-	// Create a helper function to sign headers
-	signHeader := func(header *types.Header, key *ecdsa.PrivateKey, borCfg *params.BorConfig) {
-		header.Extra = make([]byte, types.ExtraVanityLength+types.ExtraSealLength)
-		sighash, err := crypto.Sign(SealHash(header, borCfg).Bytes(), key)
-		require.NoError(t, err)
-		copy(header.Extra[len(header.Extra)-types.ExtraSealLength:], sighash)
-	}
 
 	testCases := []struct {
 		name          string
@@ -45,13 +119,8 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "nil header number returns errUnknownBlock",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(addr1)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				return &types.Header{
@@ -64,158 +133,116 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "future block in Rio mode with parent in future",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint:   map[string]uint64{"0": 64},
-					Period:   map[string]uint64{"0": 2},
-					RioBlock: big.NewInt(0), // Enable Rio from genesis
-				}
-				// Set genesis time in the future
-				futureTime := uint64(time.Now().Add(10 * time.Second).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, futureTime)
+				opts := defaultChainSetup(signerAddr)
+				opts.rioBlock = big.NewInt(0) // Enable Rio from genesis
+				opts.genesisTime = uint64(time.Now().Add(10 * time.Second).Unix())
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-				}
-				return header
+				return newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+				})
 			},
 			expectedError: consensus.ErrFutureBlock,
 		},
 		{
 			name: "future block in Bhilai mode",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint:      map[string]uint64{"0": 64},
-					Period:      map[string]uint64{"0": 2},
-					BhilaiBlock: big.NewInt(0), // Enable Bhilai from genesis
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				opts.bhilaiBlock = big.NewInt(0) // Enable Bhilai from genesis
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				// Create a header way in the future
 				futureTime := uint64(time.Now().Add(1 * time.Hour).Unix())
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       futureTime,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-				}
-				return header
+				return newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       futureTime,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+				})
 			},
 			expectedError: consensus.ErrFutureBlock,
 		},
 		{
 			name: "future block in default mode",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-					// No Rio or Bhilai blocks, use default mode
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
 				futureTime := uint64(time.Now().Add(1 * time.Hour).Unix())
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       futureTime,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-				}
-				return header
+				return newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       futureTime,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+				})
 			},
 			expectedError: consensus.ErrFutureBlock,
 		},
 		{
 			name: "missing vanity in extra data",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				// Use past time to avoid "block in the future" errors
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(addr1)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				return &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, 10), // Too short, missing vanity
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-				}
+				return newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, 10), // Too short, missing vanity
+					difficulty: big.NewInt(1),
+				})
 			},
 			expectedError: errMissingVanity,
 		},
 		{
 			name: "missing signature in extra data",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(addr1)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				return &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+10), // Missing full signature
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-				}
+				return newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+10), // Missing full signature
+					difficulty: big.NewInt(1),
+				})
 			},
 			expectedError: errMissingSignature,
 		},
 		{
 			name: "invalid mix digest (non-zero)",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-					MixDigest:  common.HexToHash("0x1234"), // Should be zero
-					UncleHash:  uncleHash,
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+					mixDigest:  common.HexToHash("0x1234"), // Should be zero
+					uncleHash:  uncleHash,
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			expectedError: errInvalidMixDigest,
@@ -223,27 +250,21 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "invalid uncle hash",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   genesis.GasLimit,
-					MixDigest:  common.Hash{},
-					UncleHash:  common.HexToHash("0x5678"), // Invalid uncle hash
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+					mixDigest:  common.Hash{},
+					uncleHash:  common.HexToHash("0x5678"), // Invalid uncle hash
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			expectedError: errInvalidUncleHash,
@@ -251,27 +272,21 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "nil difficulty for block > 0",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: nil, // Nil difficulty
-					GasLimit:   genesis.GasLimit,
-					MixDigest:  common.Hash{},
-					UncleHash:  uncleHash,
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: nil, // Nil difficulty
+					mixDigest:  common.Hash{},
+					uncleHash:  uncleHash,
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			expectedError: errInvalidDifficulty,
@@ -279,27 +294,22 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "gas limit exceeds maximum",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
-				header := &types.Header{
-					Number:     big.NewInt(1),
-					ParentHash: genesis.Hash(),
-					Time:       genesis.Time + 2,
-					Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty: big.NewInt(1),
-					GasLimit:   0x8000000000000000, // Exceeds 2^63-1
-					MixDigest:  common.Hash{},
-					UncleHash:  uncleHash,
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:     big.NewInt(1),
+					parentHash: genesis.Hash(),
+					time:       genesis.Time + 2,
+					extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty: big.NewInt(1),
+					gasLimit:   0x8000000000000000, // Exceeds 2^63-1
+					mixDigest:  common.Hash{},
+					uncleHash:  uncleHash,
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			errorContains: "invalid gasLimit",
@@ -307,29 +317,23 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "unexpected withdrawals hash",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
 				withdrawalsHash := common.HexToHash("0xabcd")
-				header := &types.Header{
-					Number:          big.NewInt(1),
-					ParentHash:      genesis.Hash(),
-					Time:            genesis.Time + 2,
-					Extra:           make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty:      big.NewInt(1),
-					GasLimit:        genesis.GasLimit,
-					MixDigest:       common.Hash{},
-					UncleHash:       uncleHash,
-					WithdrawalsHash: &withdrawalsHash,
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:          big.NewInt(1),
+					parentHash:      genesis.Hash(),
+					time:            genesis.Time + 2,
+					extra:           make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty:      big.NewInt(1),
+					mixDigest:       common.Hash{},
+					uncleHash:       uncleHash,
+					withdrawalsHash: &withdrawalsHash,
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			expectedError: consensus.ErrUnexpectedWithdrawals,
@@ -337,29 +341,23 @@ func TestVerifyHeader(t *testing.T) {
 		{
 			name: "unexpected requests hash",
 			setupChain: func(t *testing.T) (*core.BlockChain, *Bor) {
-				sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-				borCfg := &params.BorConfig{
-					Sprint: map[string]uint64{"0": 64},
-					Period: map[string]uint64{"0": 2},
-				}
-				pastTime := uint64(time.Now().Add(-10 * time.Minute).Unix())
-				return newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, pastTime)
+				opts := defaultChainSetup(signerAddr)
+				return setupTestChain(t, opts)
 			},
 			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
 				genesis := chain.HeaderChain().GetHeaderByNumber(0)
 				requestsHash := common.HexToHash("0xef01")
-				header := &types.Header{
-					Number:       big.NewInt(1),
-					ParentHash:   genesis.Hash(),
-					Time:         genesis.Time + 2,
-					Extra:        make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
-					Difficulty:   big.NewInt(1),
-					GasLimit:     genesis.GasLimit,
-					MixDigest:    common.Hash{},
-					UncleHash:    uncleHash,
-					RequestsHash: &requestsHash,
-				}
-				signHeader(header, privKey, chain.Config().Bor)
+				header := newTestHeader(genesis, headerOptions{
+					number:       big.NewInt(1),
+					parentHash:   genesis.Hash(),
+					time:         genesis.Time + 2,
+					extra:        make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+					difficulty:   big.NewInt(1),
+					mixDigest:    common.Hash{},
+					uncleHash:    uncleHash,
+					requestsHash: &requestsHash,
+				})
+				signHeader(t, header, privKey, chain.Config().Bor)
 				return header
 			},
 			expectedError: consensus.ErrUnexpectedRequests,
@@ -395,13 +393,6 @@ func TestVerifyHeaders(t *testing.T) {
 	require.NoError(t, err)
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 
-	signHeader := func(header *types.Header, key *ecdsa.PrivateKey, borCfg *params.BorConfig) {
-		header.Extra = make([]byte, types.ExtraVanityLength+types.ExtraSealLength)
-		sighash, err := crypto.Sign(SealHash(header, borCfg).Bytes(), key)
-		require.NoError(t, err)
-		copy(header.Extra[len(header.Extra)-types.ExtraSealLength:], sighash)
-	}
-
 	t.Run("verifies multiple valid headers", func(t *testing.T) {
 		sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
 		borCfg := &params.BorConfig{
@@ -427,7 +418,7 @@ func TestVerifyHeaders(t *testing.T) {
 				MixDigest:  common.Hash{},
 				UncleHash:  uncleHash,
 			}
-			signHeader(headers[i], privKey, borCfg)
+			signHeader(t, headers[i], privKey, borCfg)
 		}
 
 		abort, results := bor.VerifyHeaders(chain.HeaderChain(), headers)
@@ -467,7 +458,7 @@ func TestVerifyHeaders(t *testing.T) {
 				MixDigest:  common.Hash{},
 				UncleHash:  uncleHash,
 			}
-			signHeader(headers[i], privKey, borCfg)
+			signHeader(t, headers[i], privKey, borCfg)
 		}
 
 		abort, results := bor.VerifyHeaders(chain.HeaderChain(), headers)
