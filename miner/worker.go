@@ -1483,7 +1483,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	header.ParentBeaconRoot = nil
 
 	// Run the consensus preparation with the default or customized consensus engine.
-	if err := w.engine.Prepare(w.chain, header); err != nil {
+	if err := w.engine.Prepare(w.chain, header, true); err != nil {
 		switch err.(type) {
 		case *bor.UnauthorizedSignerError:
 			log.Debug("Failed to prepare header for sealing", "err", err)

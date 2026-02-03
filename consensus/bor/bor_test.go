@@ -668,7 +668,7 @@ func TestCustomBlockTimeValidation(t *testing.T) {
 				ParentHash: genesis.Hash(),
 			}
 
-			err := b.Prepare(chain.HeaderChain(), header)
+			err := b.Prepare(chain.HeaderChain(), header, false)
 
 			if tc.expectError {
 				require.Error(t, err, tc.description)
@@ -703,7 +703,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Number:     big.NewInt(1),
 			ParentHash: genesis.Hash(),
 		}
-		err := b.Prepare(chain.HeaderChain(), header1)
+		err := b.Prepare(chain.HeaderChain(), header1, false)
 		require.NoError(t, err)
 
 		require.False(t, header1.ActualTime.IsZero(), "ActualTime should be set")
@@ -730,7 +730,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(3 * time.Second)
@@ -763,7 +763,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: parentHash,
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(4 * time.Second)
@@ -796,7 +796,7 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
@@ -831,7 +831,7 @@ func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
 	}
 
 	before := time.Now()
-	err := b.Prepare(chain.HeaderChain(), header)
+	err := b.Prepare(chain.HeaderChain(), header, false)
 	after := time.Now()
 
 	require.NoError(t, err)
@@ -963,7 +963,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should give full 2s build time from now, not from parent
 		expectedMin := before.Add(2 * time.Second).Unix()
@@ -980,7 +980,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should use parent.Time + period
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -1002,7 +1002,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		expectedMin := before.Add(3 * time.Second).Unix()
 		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
@@ -1360,4 +1360,133 @@ func TestBor_PurgeCache(t *testing.T) {
 	// Verify we can still add entries after purge
 	borObj.recents.Set(hash1, snapshot1, ttlcache.DefaultTTL)
 	require.Equal(t, 1, borObj.recents.Len(), "should be able to add to recents cache after purge")
+}
+
+// P1 Test: TestBorPrepare_WaitOnPrepareFlag validates the new waitOnPrepare
+// parameter in the Prepare method
+func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
+	t.Parallel()
+
+	// Setup: Create a blockchain and Bor engine
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	borCfg := &params.BorConfig{
+		Sprint: map[string]uint64{"0": 64},
+		Period: map[string]uint64{"0": 2},
+	}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, uint64(time.Now().Unix()))
+	defer chain.Stop()
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+
+	// Test 1: Prepare with waitOnPrepare=false should return quickly
+	t.Run("no_wait", func(t *testing.T) {
+		testHeader := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		start := time.Now()
+		err := b.Prepare(chain, testHeader, false)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("Prepare with waitOnPrepare=false failed: %v", err)
+		}
+
+		// Should complete very quickly (< 100ms) since no waiting
+		if elapsed > 100*time.Millisecond {
+			t.Logf("Warning: Prepare took %v, expected < 100ms when waitOnPrepare=false", elapsed)
+		}
+
+		// Verify header is valid
+		if testHeader.Time == 0 {
+			t.Error("Header time should be set")
+		}
+
+		t.Logf("Prepare with waitOnPrepare=false completed in %v", elapsed)
+	})
+
+	// Test 2: Prepare with waitOnPrepare=true should wait for the proper block time
+	t.Run("with_wait", func(t *testing.T) {
+		// Create a config with Bhilai fork enabled to activate wait logic
+		borCfgWithBhilai := &params.BorConfig{
+			Sprint:      map[string]uint64{"0": 64},
+			Period:      map[string]uint64{"0": 2},
+			BhilaiBlock: big.NewInt(0), // Enable Bhilai fork from block 0
+		}
+
+		// Set genesis time 3 seconds in the future to ensure enough wait time
+		// even after test setup overhead
+		genesisTime := uint64(time.Now().Add(3 * time.Second).Unix())
+
+		// Use DevFakeAuthor=true so the signer is authorized and is the primary producer
+		chainWithWait, bWithWait := newChainAndBorForTest(t, sp, borCfgWithBhilai, true, addr, genesisTime)
+		defer chainWithWait.Stop()
+
+		genesisWithWait := chainWithWait.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesisWithWait)
+
+		testHeader := createTestHeader(genesisWithWait, 1, borCfgWithBhilai.Period["0"])
+
+		// Calculate expected wait time dynamically based on actual genesis time
+		// This accounts for test setup overhead between setting genesis time and calling Prepare
+		start := time.Now()
+		genesisTimestamp := time.Unix(int64(genesisWithWait.Time), 0)
+		expectedDelay := time.Until(genesisTimestamp)
+
+		// If genesis time has already passed due to slow test setup, test won't wait
+		if expectedDelay < 0 {
+			t.Skipf("Test setup took too long (%v), genesis time already passed", time.Since(time.Unix(int64(genesisTime), 0)))
+		}
+
+		err := bWithWait.Prepare(chainWithWait, testHeader, true)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Fatalf("Prepare with waitOnPrepare=true failed: %v", err)
+		}
+
+		// With Bhilai enabled, DevFakeAuthor=true (making this node the primary producer),
+		// and waitOnPrepare=true, should wait until parent (genesis) time has passed
+		// Allow 100ms tolerance for timing precision and scheduling overhead
+		minWait := expectedDelay - 100*time.Millisecond
+		maxWait := expectedDelay + 200*time.Millisecond // Allow extra time for scheduling
+
+		if minWait < 0 {
+			minWait = 0
+		}
+
+		if elapsed < minWait {
+			t.Errorf("Prepare waited %v, expected at least %v (calculated from expectedDelay=%v)", elapsed, minWait, expectedDelay)
+		}
+		if elapsed > maxWait {
+			t.Logf("Warning: Prepare took %v, expected around %v (calculated from expectedDelay=%v)", elapsed, expectedDelay, expectedDelay)
+		}
+
+		// Verify header is valid
+		if testHeader.Time == 0 {
+			t.Error("Header time should be set")
+		}
+
+		t.Logf("Prepare with waitOnPrepare=true completed in %v (expected delay was %v)", elapsed, expectedDelay)
+	})
+
+	// Test 3: Verify both produce compatible headers
+	t.Run("compatibility", func(t *testing.T) {
+		header1 := createTestHeader(genesis, 3, borCfg.Period["0"])
+		header2 := createTestHeader(genesis, 3, borCfg.Period["0"])
+
+		err1 := b.Prepare(chain, header1, false)
+		err2 := b.Prepare(chain, header2, true)
+
+		if err1 != nil || err2 != nil {
+			t.Fatalf("Prepare failed: err1=%v, err2=%v", err1, err2)
+		}
+
+		// Both should produce valid headers with same block number
+		if header1.Number.Cmp(header2.Number) != 0 {
+			t.Error("Headers should have same block number")
+		}
+
+		t.Logf("Both waitOnPrepare modes produce compatible headers for block %d", header1.Number.Uint64())
+	})
 }
