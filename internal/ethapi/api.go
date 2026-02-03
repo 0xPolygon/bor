@@ -2253,7 +2253,6 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 		// Check tx status leaving a small delay for internal pool rearrangements
 		// TODO: try to have a better estimate for this or replace with a subscription
 		time.Sleep(100 * time.Millisecond)
-
 	}
 
 	txStatus := api.b.TxStatus(hash)
