@@ -144,7 +144,7 @@ jobs:
         run: bash kurtosis_stateless_test.sh
 
       - name: Test state syncs
-        uses: ./.github/actions/state-sync-test
+        uses: ./.github/actions/test-state-sync
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
 

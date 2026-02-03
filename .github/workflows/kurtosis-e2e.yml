@@ -129,7 +129,7 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Test state syncs
-        uses: ./.github/actions/state-sync-test
+        uses: ./.github/actions/test-state-sync
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
 
