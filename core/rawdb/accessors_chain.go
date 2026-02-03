@@ -1123,3 +1123,21 @@ func WriteBlockPruneCursor(db ethdb.KeyValueWriter, cursor uint64) {
 		log.Crit("Failed to store block cursor", "err", err)
 	}
 }
+
+func ReadBlockPruneHead(db ethdb.KeyValueReader) *uint64 {
+	log.Debug("ReadBlockHead")
+	data, err := db.Get(blockPruneHeadKey())
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
+	number := binary.BigEndian.Uint64(data)
+	return &number
+}
+
+func WriteBlockPruneHead(db ethdb.KeyValueWriter, head uint64) {
+	log.Debug("WriteBlockPruneHead", "head", head)
+	if err := db.Put(blockPruneHeadKey(), encodeBlockNumber(head)); err != nil {
+		log.Crit("Failed to store block head", "err", err)
+	}
+}

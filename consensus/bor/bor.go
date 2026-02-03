@@ -1196,7 +1196,7 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 			for addr, account := range allocs {
 				log.Info("change contract code", "address", addr)
-				state.SetCode(addr, account.Code, tracing.CodeChangeContractCreation)
+				state.SetCode(addr, account.Code, tracing.CodeChangeUnspecified)
 
 				if state.GetBalance(addr).Cmp(uint256.NewInt(0)) == 0 {
 					state.SetBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceChangeUnspecified)

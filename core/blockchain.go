@@ -674,7 +674,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 		return nil, err
 	}
 
-	bc.parallelProcessor = NewParallelStateProcessor(bc.chainConfig, bc, engine)
+	bc.parallelProcessor = NewParallelStateProcessor(bc.hc, bc)
 	bc.parallelSpeculativeProcesses = numprocs
 	bc.enforceParallelProcessor = enforce
 

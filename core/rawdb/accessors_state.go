@@ -429,3 +429,21 @@ func WriteTrienodeHistory(db ethdb.AncientWriter, id uint64, header []byte, keyS
 	})
 	return err
 }
+
+func ReadWitnessPruneHead(db ethdb.KeyValueReader) *uint64 {
+	log.Debug("ReadWitnessHead")
+	data, err := db.Get(witnessPruneHeadKey())
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
+	number := binary.BigEndian.Uint64(data)
+	return &number
+}
+
+func WriteWitnessPruneHead(db ethdb.KeyValueWriter, head uint64) {
+	log.Debug("WriteWitnessPruneHead", "head", head)
+	if err := db.Put(witnessPruneHeadKey(), encodeBlockNumber(head)); err != nil {
+		log.Crit("Failed to store witness Head", "err", err)
+	}
+}

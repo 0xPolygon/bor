@@ -1372,12 +1372,12 @@ func TestSpanStore_ConcurrentAccess(t *testing.T) {
 // TimeoutHeimdallClient simulates a heimdall client that times out or hangs on requests
 type TimeoutHeimdallClient struct {
 	timeout        time.Duration
-	shouldTimeout  bool
-	shouldHangSpan bool
+	shouldTimeout  atomic.Bool
+	shouldHangSpan atomic.Bool
 }
 
 func (h *TimeoutHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
-	if h.shouldTimeout {
+	if h.shouldTimeout.Load() {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -1418,7 +1418,7 @@ func (h *TimeoutHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*ty
 }
 
 func (h *TimeoutHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	if h.shouldHangSpan {
+	if h.shouldHangSpan.Load() {
 		// Simulate a hanging request that would block indefinitely
 		select {
 		case <-ctx.Done():
@@ -1431,7 +1431,7 @@ func (h *TimeoutHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span,
 }
 
 func (h *TimeoutHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	if h.shouldTimeout {
+	if h.shouldTimeout.Load() {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -1464,9 +1464,9 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	t.Run("heimdallStatus set to nil on FetchStatus error", func(t *testing.T) {
 		// Create a client that will fail on FetchStatus
 		mockClient := &TimeoutHeimdallClient{
-			shouldTimeout: true,
-			timeout:       10 * time.Millisecond, // Quick failure
+			timeout: 10 * time.Millisecond, // Quick failure
 		}
+		mockClient.shouldTimeout.Store(true)
 
 		spanStore := NewSpanStore(mockClient, nil, "1337")
 		defer spanStore.Close()
@@ -1491,9 +1491,9 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	t.Run("background goroutine sets heimdallStatus to nil on persistent errors", func(t *testing.T) {
 		// Create a client that starts working then fails
 		mockClient := &TimeoutHeimdallClient{
-			shouldTimeout: false,
-			timeout:       10 * time.Millisecond,
+			timeout: 10 * time.Millisecond,
 		}
+		mockClient.shouldTimeout.Store(false)
 
 		spanStore := NewSpanStore(mockClient, nil, "1337")
 		defer spanStore.Close()
@@ -1506,7 +1506,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.NotNil(t, status, "Status should be set initially")
 
 		// Now make FetchStatus fail
-		mockClient.shouldTimeout = true
+		mockClient.shouldTimeout.Store(true)
 
 		// Wait for the background goroutine to encounter the error
 		time.Sleep(500 * time.Millisecond)
@@ -1516,7 +1516,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.Nil(t, status, "heimdallStatus should be nil after FetchStatus starts failing")
 
 		// Now make it work again
-		mockClient.shouldTimeout = false
+		mockClient.shouldTimeout.Store(false)
 
 		// Wait for recovery
 		time.Sleep(500 * time.Millisecond)
