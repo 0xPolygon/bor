@@ -2245,11 +2245,15 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 		return nil, err
 	}
 
-	// No need to wait if tx is already known.
-	if !errors.Is(err, txpool.ErrAlreadyKnown) {
+	if errors.Is(err, txpool.ErrAlreadyKnown) {
+		// If the tx is already known, update the hash. Skip the wait
+		// to check the tx pool status.
+		hash = tx.Hash()
+	} else {
 		// Check tx status leaving a small delay for internal pool rearrangements
 		// TODO: try to have a better estimate for this or replace with a subscription
 		time.Sleep(100 * time.Millisecond)
+
 	}
 
 	txStatus := api.b.TxStatus(hash)
