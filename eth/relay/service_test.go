@@ -139,6 +139,10 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 			tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
 			err := service.SubmitTransactionForPreconf(tx)
 			require.NoError(t, err, "expected no error for task %d", i)
+			if i == 0 {
+				// Wait for a very small delay to allow first task to be consumed
+				time.Sleep(20 * time.Millisecond)
+			}
 		}
 
 		// Next submission should fail due to overflow
