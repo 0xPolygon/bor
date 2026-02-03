@@ -1075,10 +1075,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		header.ActualTime = actualNewBlockTime
 		delay = time.Until(parentActualBlockTime)
 	} else {
-		parentTime := time.Unix(int64(parent.Time), 0)
-		producerDelay := CalcProducerDelay(number, succession, c.config)
-		header.Time = parent.Time + producerDelay
-		delay = time.Until(parentTime)
+		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
