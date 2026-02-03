@@ -80,9 +80,9 @@ func (s *Service) SetTxGetter(getter TxGetter) {
 	s.txGetter = getter
 }
 
-// SubmitTransaction attempts to queue a transaction submission task for preconf / private tx
+// SubmitTransactionForPreconf attempts to queue a transaction submission task for preconf
 // and returns true if the task is successfully queued. It fails if either the rpc clients
-// are unavailable or the task queue is full.
+// are unavailable or if the task queue is full.
 func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 	if s.multiclient == nil {
 		log.Warn("[tx-relay] No rpc client available to submit transactions")
@@ -113,6 +113,122 @@ func (s *Service) SubmitTransactionForPreconf(tx *types.Transaction) error {
 	}
 }
 
+// processPreconfTasks continuously picks new tasks from the queue and
+// processes them. It rate limits the number of parallel tasks.
+func (s *Service) processPreconfTasks() {
+	for {
+		select {
+		case task := <-s.taskCh:
+			// Acquire semaphore to limit concurrent submissions
+			s.semaphore <- struct{}{}
+			go func(task TxTask) {
+				defer func() { <-s.semaphore }()
+				s.processPreconfTask(task)
+			}(task)
+		case <-s.closeCh:
+			return
+		}
+	}
+}
+
+// processPreconfTask submits the preconf transaction from the task to the block
+// producers via multiclient and updates the status in cache.
+func (s *Service) processPreconfTask(task TxTask) {
+	res, err := s.multiclient.submitPreconfTx(task.rawtx)
+	// It's possible that the calls succeeded but preconf was not offered in which
+	// case err would be nil. Update with a generic error as preconf wasn't offered.
+	if !res && err == nil {
+		err = errPreconfValidationFailed
+	}
+	if err != nil {
+		log.Warn("[tx-relay] failed to submit preconf tx", "err", err)
+	}
+	task.preconfirmed = res
+	task.err = err
+	// Note: We can purge the raw tx here to save memory. Keeping it
+	// incase we have some changes in the retry logic.
+
+	s.updateTaskInCache(task)
+}
+
+// updateTaskInCache safely updates or inserts a task in cache by acting as a
+// common gateway. A race condition can happen when the process task function
+// and check preconf status function try to update the same task concurrently.
+// It also ensures that a preconf status once marked is never reverted and
+// latest error is preserved. Returns the latest preconf status and error.
+func (s *Service) updateTaskInCache(newTask TxTask) (bool, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+
+	existingTask, exists := s.store[newTask.hash]
+	if !exists {
+		// Task doesn't exist, create it and update the cache
+		newTask.insertedAt = time.Now()
+		s.store[newTask.hash] = newTask
+		return newTask.preconfirmed, newTask.err
+	}
+
+	// If a task already exists and is preconfirmed, skip doing any updates. It
+	// is possible that first write tries to set preconfirmation status but second
+	// write contains an error thus making status false. We don't want to revert
+	// the status in that case.
+	if existingTask.preconfirmed {
+		return existingTask.preconfirmed, existingTask.err
+	}
+
+	existingTask.preconfirmed = newTask.preconfirmed
+	existingTask.err = newTask.err
+	s.store[newTask.hash] = existingTask
+	return existingTask.preconfirmed, existingTask.err
+}
+
+// CheckTxPreconfStatus checks whether a given transaction hash has been preconfirmed
+// or not. It checks things in following order:
+// - Checks the availability of preconf status of the task in cache
+// - Checks locally if the transaction is already included in a block
+// - Queries all block producers via multiclient to get the preconf status
+func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
+	s.storeMu.RLock()
+	task, exists := s.store[hash]
+	s.storeMu.RUnlock()
+
+	// If task exists in cache and is already preconfirmed, return immediately
+	if exists && task.preconfirmed {
+		return true, nil
+	}
+
+	// If task is not in cache or not preconfirmed, check locally if the tx
+	// was included in a block or not.
+	if s.txGetter != nil {
+		found, tx, _, _, _ := s.txGetter(hash)
+		if found && tx != nil {
+			s.updateTaskInCache(TxTask{hash: hash, preconfirmed: true, err: nil})
+			log.Debug("[tx-relay] Transaction found in local database", "hash", hash)
+			return true, nil
+		}
+	}
+
+	if s.multiclient == nil {
+		return false, errRpcClientUnavailable
+	}
+
+	// If tx not found locally, query block producers for status
+	res, err := s.multiclient.checkTxStatus(hash)
+	// It's possible that the calls succeeded but preconf was not offered in which
+	// case err would be nil. Update with a generic error as preconf wasn't offered.
+	if !res && err == nil {
+		err = errPreconfValidationFailed
+	}
+
+	// Update the task in cache and return the latest status
+	res, err = s.updateTaskInCache(TxTask{hash: hash, preconfirmed: res, err: err})
+	if err != nil {
+		log.Info("[tx-relay] Unable to validate tx status for preconf", "err", task.err)
+	}
+	return res, err
+}
+
+// SubmitPrivateTx attempts to submit a private transaction to all block producers
 func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 	if s.multiclient == nil {
 		log.Warn("[tx-relay] No rpc client available to submit transactions")
@@ -132,93 +248,6 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 	}
 
 	return nil
-}
-
-func (s *Service) processPreconfTask(task TxTask) {
-	res, err := s.multiclient.submitPreconfTx(task.rawtx)
-	if err != nil {
-		log.Warn("[tx-relay] failed to submit preconf tx", "err", err)
-	}
-	task.preconfirmed = res
-	task.err = err
-	task.insertedAt = time.Now()
-	// Note: We can purge the raw tx here to save memory. Keeping it
-	// incase we have some changes in the retry logic.
-
-	s.storeMu.Lock()
-	s.store[task.hash] = task
-	s.storeMu.Unlock()
-}
-
-func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
-	s.storeMu.RLock()
-	task, exists := s.store[hash]
-	s.storeMu.RUnlock()
-
-	// If task exists in cache and is already preconfirmed, return immediately
-	if exists && task.preconfirmed {
-		return true, nil
-	}
-
-	// If task is not in cache or not preconfirmed, check locally if the tx
-	// was included in a block or not.
-	if s.txGetter != nil {
-		found, tx, _, _, _ := s.txGetter(hash)
-		if found && tx != nil {
-			// Create a new task if there wasn't one earlier
-			if !exists {
-				task = TxTask{hash: hash, insertedAt: time.Now()}
-			}
-			task.preconfirmed = true
-			task.err = nil
-			s.storeMu.Lock()
-			s.store[hash] = task
-			s.storeMu.Unlock()
-			log.Debug("[tx-relay] Transaction found in local database", "hash", hash)
-			return true, nil
-		}
-	}
-
-	if s.multiclient == nil {
-		return false, errRpcClientUnavailable
-	}
-
-	// If tx not found locally, query block producers for status
-	res, err := s.multiclient.checkTxStatus(hash)
-	if !res && err == nil {
-		err = errPreconfValidationFailed
-	}
-	// Create a new task if there wasn't one earlier
-	if !exists {
-		task = TxTask{hash: hash, insertedAt: time.Now()}
-	}
-	task.preconfirmed = res
-	task.err = err
-	s.storeMu.Lock()
-	s.store[hash] = task
-	s.storeMu.Unlock()
-
-	if err != nil {
-		log.Info("[tx-relay] Unable to validate tx status for preconf", "err", err)
-	}
-
-	return task.preconfirmed, err
-}
-
-func (s *Service) processPreconfTasks() {
-	for {
-		select {
-		case task := <-s.taskCh:
-			// Acquire semaphore to limit concurrent submissions
-			s.semaphore <- struct{}{}
-			go func(task TxTask) {
-				defer func() { <-s.semaphore }()
-				s.processPreconfTask(task)
-			}(task)
-		case <-s.closeCh:
-			return
-		}
-	}
 }
 
 // cleanup is a periodic routine to delete old preconf results

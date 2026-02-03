@@ -96,6 +96,29 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 		require.True(t, task.preconfirmed, "expected task to be preconfirmed")
 	})
 
+	t.Run("queue invalid tx for preconf", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Mock the server to send no preconf but accept tx submission
+		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		err := service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Check task was stored
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored after processing")
+		require.False(t, task.preconfirmed, "expected task to be preconfirmed")
+		require.ErrorIs(t, task.err, errPreconfValidationFailed, "expected preconf validation failed error")
+	})
+
 	t.Run("queue overflow with burst submissions", func(t *testing.T) {
 		// Update the config to a reasonable size for testing
 		config := DefaultServiceConfig
@@ -825,6 +848,271 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Verify both were called
 		require.Equal(t, int32(1), txGetterCalled.Load(), "expected txGetter to be called")
 		require.Equal(t, int32(2), checkTxStatusCalled.Load(), "expected checkTxStatus to be called as fallback")
+	})
+}
+
+// TestTaskCacheOverride tests scenarios where the task cache is being updated
+// by multiple services - one being the main process task and other being the
+// check preconf status.
+func TestTaskCacheOverride(t *testing.T) {
+	t.Parallel()
+
+	// Create mock servers
+	var rpcServers []*mockRpcServer = make([]*mockRpcServer, 2)
+	var urls []string = make([]string, 2)
+	for i := 0; i < 2; i++ {
+		rpcServers[i] = newMockRpcServer()
+		urls[i] = rpcServers[i].server.URL
+	}
+	defer func() {
+		for _, s := range rpcServers {
+			s.close()
+		}
+	}()
+
+	t.Run("updateTaskInCache handles writing tasks to cache as expected", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		task := TxTask{
+			hash:         tx.Hash(),
+			preconfirmed: false,
+			err:          errPreconfValidationFailed,
+			insertedAt:   time.Now(),
+		}
+
+		service.updateTaskInCache(task)
+
+		// Check if the cache was updated
+		service.storeMu.RLock()
+		cachedTask, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to exist in cache")
+		require.Equal(t, task.preconfirmed, cachedTask.preconfirmed, "expected preconfirmed status to match")
+		require.Equal(t, task.err, cachedTask.err, "expected error to match")
+
+		// Update the error and try to write the task again
+		task.err = errRelayNotConfigured
+		service.updateTaskInCache(task)
+
+		// Check if the cache was updated with new error
+		service.storeMu.RLock()
+		cachedTask, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to exist in cache")
+		require.Equal(t, task.preconfirmed, cachedTask.preconfirmed, "expected preconfirmed status to match")
+		require.Equal(t, task.err, cachedTask.err, "expected error to be updated in cache")
+
+		// Update preconfirmed to true and error to nil
+		task.preconfirmed = true
+		task.err = nil
+		service.updateTaskInCache(task)
+
+		// Check if the cache was updated with new values
+		service.storeMu.RLock()
+		cachedTask, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to exist in cache")
+		require.Equal(t, task.preconfirmed, cachedTask.preconfirmed, "expected preconfirmed status to be updated in cache")
+		require.Equal(t, task.err, cachedTask.err, "expected error to be updated in cache")
+
+		// Try to change the preconf status which should fail
+		task.preconfirmed = false
+		task.err = errPreconfValidationFailed
+		service.updateTaskInCache(task)
+
+		// Check that the cache still has preconfirmed=true and err=nil
+		service.storeMu.RLock()
+		cachedTask, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to exist in cache")
+		require.True(t, cachedTask.preconfirmed, "expected preconfirmed status to remain true in cache")
+		require.NoError(t, cachedTask.err, "expected error to remain nil in cache")
+	})
+
+	t.Run("processPreconfTask suceeds and CheckTxPreconfStatus try to update same task", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		err := service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Ensure task was stored correctly
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored after processing")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed")
+		require.NoError(t, task.err, "expected no error in task")
+
+		// Now, simulate a scenario where CheckTxPreconfStatus tries to update the same task
+		// with a non-preconfirmed status. It won't be possible in reality as the task
+		// will be available in cache.
+		invalidTask := TxTask{
+			hash:         tx.Hash(),
+			preconfirmed: false,
+			err:          errPreconfValidationFailed,
+			insertedAt:   time.Now(),
+		}
+		service.updateTaskInCache(invalidTask)
+
+		// Verify that the original preconfirmed task remains unchanged
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still exist in cache")
+		require.True(t, task.preconfirmed, "expected preconfirmed status to remain true")
+		require.NoError(t, task.err, "expected error to remain nil")
+	})
+
+	t.Run("processPreconfTask fails and CheckTxPreconfStatus try to update same task", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		// Reject the preconf tx to simulate failure
+		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		err := service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Ensure task was stored correctly
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored after processing")
+		require.False(t, task.preconfirmed, "expected task to not be preconfirmed")
+		require.ErrorIs(t, task.err, errPreconfValidationFailed, "expected errPreconfValidationFailed in task")
+
+		// Now, CheckTxPreconfStatus tries to update the same task
+		res, err := service.CheckTxPreconfStatus(tx.Hash())
+		require.Equal(t, true, res, "expected valid preconf to be returned")
+		require.NoError(t, err, "expected no error from CheckTxPreconfStatus")
+
+		// Ensure the underlying task was updated to preconfirmed
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still exist in cache")
+		require.True(t, task.preconfirmed, "expected preconfirmed status to be updated to true")
+		require.NoError(t, task.err, "expected error to be updated to nil")
+
+		// Re-run `SubmitTransactionForPreconf` to force a write with invalid preconf
+		// status. It should not override the existing status.
+		err = service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task again")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify that the preconfirmed task remains unchanged
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still exist in cache")
+		require.True(t, task.preconfirmed, "expected preconfirmed status to remain true")
+		require.NoError(t, task.err, "expected error to remain nil")
+
+		// Reset handler
+		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+	})
+
+	t.Run("CheckTxPreconfStatus suceeds and processPreconfTask try to update same task", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+
+		// Check the preconf status directly
+		res, err := service.CheckTxPreconfStatus(tx.Hash())
+		require.Equal(t, true, res, "expected valid preconf to be returned")
+		require.NoError(t, err, "expected no error from CheckTxPreconfStatus")
+
+		// Ensure task was stored correctly in cache
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored after processing")
+		require.True(t, task.preconfirmed, "expected task to be preconfirmed")
+		require.NoError(t, task.err, "expected no error in task")
+
+		// Reject the preconf tx to simulate failure
+		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+
+		// Now, simulate a scenario where processPreconfTask tries to update the same task
+		// with a non-preconfirmed status.
+		err = service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify that the original preconfirmed task remains unchanged
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still exist in cache")
+		require.True(t, task.preconfirmed, "expected preconfirmed status to remain true")
+		require.NoError(t, task.err, "expected error to remain nil")
+
+		// Reset handler
+		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+	})
+
+	t.Run("CheckTxPreconfStatus fails and processPreconfTask try to update same task", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+
+		// Mock the rpc server to reject the tx status call
+		for i := range rpcServers {
+			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+				defaultSendError(w, id, -32603, "internal server error")
+			}
+		}
+
+		// Check the preconf status directly
+		res, err := service.CheckTxPreconfStatus(tx.Hash())
+		require.Equal(t, false, res, "expected an invalid preconf to be returned")
+		require.Error(t, err, "expected an error from CheckTxPreconfStatus")
+
+		// Ensure task was stored correctly in cache
+		service.storeMu.RLock()
+		task, exists := service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to be stored after processing")
+		require.False(t, task.preconfirmed, "expected preconfirmed to be false")
+		require.Error(t, task.err, "expected an error in task")
+
+		// Now, simulate a scenario where processPreconfTask tries to update the same task
+		// with a preconfirmed status.
+		err = service.SubmitTransactionForPreconf(tx)
+		require.NoError(t, err, "expected no error queuing task")
+
+		// Give some time to process
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify that the underlying task is now updated
+		service.storeMu.RLock()
+		task, exists = service.store[tx.Hash()]
+		service.storeMu.RUnlock()
+		require.True(t, exists, "expected task to still exist in cache")
+		require.True(t, task.preconfirmed, "expected preconfirmed status to be true")
+		require.NoError(t, task.err, "expected no error for the task")
+
+		// Ensure that preconf status will now return valid result from cache
+		res, err = service.CheckTxPreconfStatus(tx.Hash())
+		require.Equal(t, true, res, "expected valid preconf to be returned from cache")
+		require.NoError(t, err, "expected no error from CheckTxPreconfStatus")
 	})
 }
 
