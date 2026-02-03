@@ -931,7 +931,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		require.NoError(t, cachedTask.err, "expected error to remain nil in cache")
 	})
 
-	t.Run("processPreconfTask suceeds and CheckTxPreconfStatus try to update same task", func(t *testing.T) {
+	t.Run("processPreconfTask succeeds and CheckTxPreconfStatus try to update same task", func(t *testing.T) {
 		service := NewService(urls, nil)
 		defer service.close()
 
@@ -1025,7 +1025,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
 	})
 
-	t.Run("CheckTxPreconfStatus suceeds and processPreconfTask try to update same task", func(t *testing.T) {
+	t.Run("CheckTxPreconfStatus succeeds and processPreconfTask try to update same task", func(t *testing.T) {
 		service := NewService(urls, nil)
 		defer service.close()
 
