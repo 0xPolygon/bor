@@ -97,7 +97,7 @@ func (gc *GenesisContractsClient) CommitState(
 
 	log.Info("→ committing new state", "eventRecord", event.ID)
 
-	gasUsed, err := statefull.ApplyStateSyncMessage(context.Background(), msg, state, header, gc.chainConfig, chCtx, vmCfg, event.TxHash)
+	gasUsed, err := statefull.ApplyMessage(context.Background(), msg, state, header, gc.chainConfig, chCtx, vmCfg)
 
 	// Logging event log with time and individual gasUsed
 	log.Info("→ committed new state", "eventRecord", event.String(gasUsed))

@@ -329,7 +329,7 @@ func (c *ChainSpanner) CommitSpan(ctx context.Context, minimalSpan borTypes.Span
 	msg := statefull.GetSystemMessage(c.validatorContractAddress, data)
 
 	// apply message
-	_, err = statefull.ApplyCommitSpanMessage(ctx, msg, state, header, c.chainConfig, chainContext, vmCfg)
+	_, err = statefull.ApplyMessage(ctx, msg, state, header, c.chainConfig, chainContext, vmCfg)
 
 	return err
 }
