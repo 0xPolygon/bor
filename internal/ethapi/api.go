@@ -2240,13 +2240,17 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	}
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
-	if err != nil {
+	// If it's any error except `ErrAlreadyKnown`, return the error back.
+	if err != nil && !errors.Is(err, txpool.ErrAlreadyKnown) {
 		return nil, err
 	}
 
-	// Check tx status leaving a small delay for internal pool rearrangements
-	// TODO: try to have a better estimate for this or replace with a subscription
-	time.Sleep(100 * time.Millisecond)
+	// No need to wait if tx is already known.
+	if !errors.Is(err, txpool.ErrAlreadyKnown) {
+		// Check tx status leaving a small delay for internal pool rearrangements
+		// TODO: try to have a better estimate for this or replace with a subscription
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	txStatus := api.b.TxStatus(hash)
 	var txConfirmed bool
