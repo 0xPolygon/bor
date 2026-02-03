@@ -128,8 +128,6 @@ var (
 		utils.MinerEtherbaseFlag, // deprecated
 		utils.MinerExtraDataFlag,
 		utils.MinerRecommitIntervalFlag,
-		utils.MinerPrefetchFlag,
-		utils.MinerPrefetchGasLimitPercentFlag,
 		utils.MinerNewPayloadTimeoutFlag, // deprecated
 		utils.NATFlag,
 		utils.NoDiscoverFlag,
