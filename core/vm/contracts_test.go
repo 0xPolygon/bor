@@ -534,7 +534,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsVerkle",
 		"IsMadhugiri",
 		"IsMadhugiriPro",
-		"IsTBDHF",
+		"IsLisovo",
 	}
 
 	if len(actual) != len(expected) {
@@ -549,40 +549,40 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 	}
 }
 
-// TestTBDHFP256VerifyGasCost verifies P256 precompile gas cost changes at TBDHF.
-func TestTBDHFP256VerifyGasCost(t *testing.T) {
-	preTBDHF := &p256Verify{eip7951: false}
-	postTBDHF := &p256Verify{eip7951: true}
+// TestLisovoP256VerifyGasCost verifies P256 precompile gas cost changes at Lisovo.
+func TestLisovoP256VerifyGasCost(t *testing.T) {
+	preLisovo := &p256Verify{eip7951: false}
+	postLisovo := &p256Verify{eip7951: true}
 
-	preGas := preTBDHF.RequiredGas(nil)
-	postGas := postTBDHF.RequiredGas(nil)
+	preGas := preLisovo.RequiredGas(nil)
+	postGas := postLisovo.RequiredGas(nil)
 
 	if preGas != params.P256VerifyGas {
-		t.Errorf("pre-TBDHF gas: got %d, want %d", preGas, params.P256VerifyGas)
+		t.Errorf("pre-Lisovo gas: got %d, want %d", preGas, params.P256VerifyGas)
 	}
 	if postGas != params.P256VerifyGasEIP7951 {
-		t.Errorf("post-TBDHF gas: got %d, want %d", postGas, params.P256VerifyGasEIP7951)
+		t.Errorf("post-Lisovo gas: got %d, want %d", postGas, params.P256VerifyGasEIP7951)
 	}
 	if preGas >= postGas {
-		t.Errorf("post-TBDHF gas (%d) should be higher than pre-TBDHF (%d)", postGas, preGas)
+		t.Errorf("post-Lisovo gas (%d) should be higher than pre-Lisovo (%d)", postGas, preGas)
 	}
 }
 
-// TestTBDHFCLZOpcode verifies CLZ opcode availability at TBDHF.
-func TestTBDHFCLZOpcode(t *testing.T) {
-	preTBDHF := newPragueInstructionSet()
-	postTBDHF := newTBDHFInstructionSet()
+// TestLisovoCLZOpcode verifies CLZ opcode availability at Lisovo.
+func TestLisovoCLZOpcode(t *testing.T) {
+	preLisovo := newPragueInstructionSet()
+	postLisovo := newLisovoInstructionSet()
 
-	// Pre-TBDHF: CLZ should be undefined.
-	if preTBDHF[CLZ].execute != nil && preTBDHF[CLZ].constantGas != 0 {
-		t.Error("CLZ opcode should not be defined pre-TBDHF")
+	// Pre-Lisovo: CLZ should be undefined.
+	if preLisovo[CLZ].execute != nil && preLisovo[CLZ].constantGas != 0 {
+		t.Error("CLZ opcode should not be defined pre-Lisovo")
 	}
 
-	// Post-TBDHF: CLZ should be defined.
-	if postTBDHF[CLZ].execute == nil {
-		t.Error("CLZ opcode should be defined post-TBDHF")
+	// Post-Lisovo: CLZ should be defined.
+	if postLisovo[CLZ].execute == nil {
+		t.Error("CLZ opcode should be defined post-Lisovo")
 	}
-	if postTBDHF[CLZ].constantGas != GasFastStep {
-		t.Errorf("CLZ gas: got %d, want %d", postTBDHF[CLZ].constantGas, GasFastStep)
+	if postLisovo[CLZ].constantGas != GasFastStep {
+		t.Errorf("CLZ gas: got %d, want %d", postLisovo[CLZ].constantGas, GasFastStep)
 	}
 }

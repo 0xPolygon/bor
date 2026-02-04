@@ -28,8 +28,8 @@ func LookupInstructionSet(rules params.Rules) (JumpTable, error) {
 	switch {
 	// Note: geth only returns an error for the verkle-fork.
 	// Return nil for other forks.
-	case rules.IsTBDHF:
-		return newTBDHFInstructionSet(), nil
+	case rules.IsLisovo:
+		return newLisovoInstructionSet(), nil
 	case rules.IsMadhugiriPro:
 		return newPragueInstructionSet(), nil
 	case rules.IsMadhugiri:

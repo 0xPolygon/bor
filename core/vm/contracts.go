@@ -224,9 +224,9 @@ var PrecompiledContractsMadhugiriPro = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x01, 0x00}): &p256Verify{},
 }
 
-// PrecompiledContractsTBDHF contains the set of pre-compiled Ethereum
-// contracts used in the TBDHF release (bor HF).
-var PrecompiledContractsTBDHF = PrecompiledContracts{
+// PrecompiledContractsLisovo contains the set of pre-compiled Ethereum
+// contracts used in the Lisovo release (bor HF).
+var PrecompiledContractsLisovo = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x01}):       &ecrecover{},
 	common.BytesToAddress([]byte{0x02}):       &sha256hash{},
 	common.BytesToAddress([]byte{0x03}):       &ripemd160hash{},
@@ -248,7 +248,7 @@ var PrecompiledContractsTBDHF = PrecompiledContracts{
 }
 
 var (
-	PrecompiledAddressesTBDHF        []common.Address
+	PrecompiledAddressesLisovo       []common.Address
 	PrecompiledAddressesMadhugiriPro []common.Address
 	PrecompiledAddressesMadhugiri    []common.Address
 	PrecompiledAddressesOsaka        []common.Address
@@ -291,15 +291,15 @@ func init() {
 	for k := range PrecompiledContractsMadhugiriPro {
 		PrecompiledAddressesMadhugiriPro = append(PrecompiledAddressesMadhugiriPro, k)
 	}
-	for k := range PrecompiledContractsTBDHF {
-		PrecompiledAddressesTBDHF = append(PrecompiledAddressesTBDHF, k)
+	for k := range PrecompiledContractsLisovo {
+		PrecompiledAddressesLisovo = append(PrecompiledAddressesLisovo, k)
 	}
 }
 
 func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
 	switch {
-	case rules.IsTBDHF:
-		return PrecompiledContractsTBDHF
+	case rules.IsLisovo:
+		return PrecompiledContractsLisovo
 	case rules.IsMadhugiriPro:
 		return PrecompiledContractsMadhugiriPro
 	case rules.IsMadhugiri:
@@ -331,8 +331,8 @@ func ActivePrecompiledContracts(rules params.Rules) PrecompiledContracts {
 // ActivePrecompiles returns the precompile addresses enabled with the current configuration.
 func ActivePrecompiles(rules params.Rules) []common.Address {
 	switch {
-	case rules.IsTBDHF:
-		return PrecompiledAddressesTBDHF
+	case rules.IsLisovo:
+		return PrecompiledAddressesLisovo
 	case rules.IsMadhugiriPro:
 		return PrecompiledAddressesMadhugiriPro
 	case rules.IsMadhugiri:

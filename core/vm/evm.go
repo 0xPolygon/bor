@@ -150,8 +150,8 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
 
 	switch {
-	case evm.chainRules.IsTBDHF:
-		evm.table = &tbdhfInstructionSet
+	case evm.chainRules.IsLisovo:
+		evm.table = &lisovoInstructionSet
 	case evm.chainRules.IsOsaka:
 		evm.table = &osakaInstructionSet
 	case evm.chainRules.IsVerkle:
