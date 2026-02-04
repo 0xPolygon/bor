@@ -765,7 +765,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 	for _, tx := range txs {
 		// Skip gossip if transaction is marked as private
 		if h.privateTxGetter != nil && h.privateTxGetter.IsTxPrivate(tx.Hash()) {
-			log.Info("[tx-relay] skip tx broadcast for private tx", "hash", tx.Hash())
+			log.Debug("[tx-relay] skip tx broadcast for private tx", "hash", tx.Hash())
 			continue
 		}
 		var directSet map[*ethPeer]struct{}
