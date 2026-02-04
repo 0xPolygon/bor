@@ -77,6 +77,12 @@ func verifyBaseFeeWithinBoundaries(parent, header *types.Header) error {
 	maxAllowedChange := new(big.Int).Mul(parent.BaseFee, big.NewInt(MaxBaseFeeChangePercent))
 	maxAllowedChange.Div(maxAllowedChange, big.NewInt(100))
 
+	// Ensure minimum 1 wei cap to prevent unlimited growth at very low base fees.
+	// This matches the logic in CalcBaseFee.
+	if maxAllowedChange.Cmp(common.Big1) < 0 {
+		maxAllowedChange = new(big.Int).Set(common.Big1)
+	}
+
 	// Calculate the actual change in base fee
 	actualChange := new(big.Int)
 	if header.BaseFee.Cmp(parent.BaseFee) >= 0 {
@@ -122,6 +128,13 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 	if applyBoundaryCap {
 		maxAllowedChange = new(big.Int).Mul(parent.BaseFee, big.NewInt(MaxBaseFeeChangePercent))
 		maxAllowedChange.Div(maxAllowedChange, big.NewInt(100))
+
+		// Ensure minimum 1 wei cap to prevent unlimited growth at very low base fees.
+		// When percentage calculation rounds to 0 (baseFee < 20 wei), this ensures
+		// there's still an absolute cap of 1 wei per block.
+		if maxAllowedChange.Cmp(common.Big1) < 0 {
+			maxAllowedChange = new(big.Int).Set(common.Big1)
+		}
 	}
 
 	if parent.GasUsed > parentGasTarget {
