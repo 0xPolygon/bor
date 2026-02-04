@@ -135,18 +135,18 @@ jobs:
         with:
           go-version: 'stable'
 
-      - name: Test state syncs
-        uses: ./.github/actions/test-state-sync
-        with:
-          enclave_name: ${{ env.ENCLAVE_NAME }}
-          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
-
       - name: Run RPC tests
         working-directory: pos-workflows/tests/rpc_tests
         run: |
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
+
+      - name: Test state syncs
+        uses: ./.github/actions/test-state-sync
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
 
       - name: Install polycli
         run: |
