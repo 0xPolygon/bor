@@ -123,6 +123,13 @@ func (t *VerkleTrie) GetStorage(addr common.Address, key []byte) ([]byte, uint64
 	return common.TrimLeftZeroes(val), 0, nil
 }
 
+// GetStorageWithMeter retrieves a storage slot and invokes the meter for each
+// visited node if supported. Depth is not defined for Verkle tries; 0 is returned.
+func (t *VerkleTrie) GetStorageWithMeter(addr common.Address, key []byte, meter func(uint64) error) ([]byte, uint64, error) {
+	// No trie-node depth semantics for Verkle; ignore meter.
+	return t.GetStorage(addr, key)
+}
+
 // UpdateAccount implements state.Trie, writing the provided account into the tree.
 // If the tree is corrupted, an error will be returned.
 func (t *VerkleTrie) UpdateAccount(addr common.Address, acc *types.StateAccount, codeLen int) error {

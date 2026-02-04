@@ -750,6 +750,16 @@ func (s *StateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (comm
 	return res.value, res.depth
 }
 
+// GetStateWithMeter retrieves the value associated with the specific key and
+// charges per-node via the meter during trie traversal.
+func (s *StateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+	stateObject := s.getStateObject(addr)
+	if stateObject == nil {
+		return common.Hash{}, 0, nil
+	}
+	return stateObject.GetStateWithMeter(hash, meter)
+}
+
 // GetCommittedState retrieves the value associated with the specific key
 // without any mutations caused in the current execution.
 func (s *StateDB) GetCommittedState(addr common.Address, hash common.Hash) common.Hash {
@@ -899,6 +909,18 @@ func (s *StateDB) SetStateWithDepth(addr common.Address, key, value common.Hash)
 		return stateObject.SetStateWithDepth(key, value)
 	}
 	return common.Hash{}, 0
+}
+
+// SetStateWithMeter updates storage and returns the previous value along with
+// the lookup depth used to resolve the slot, charging per-node via the meter.
+func (s *StateDB) SetStateWithMeter(addr common.Address, key, value common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+	stateObject := s.getOrNewStateObject(addr)
+	if stateObject != nil {
+		stateObject = s.mvRecordWritten(stateObject)
+		MVWrite(s, blockstm.NewStateKey(addr, key))
+		return stateObject.SetStateWithMeter(key, value, meter)
+	}
+	return common.Hash{}, 0, nil
 }
 
 // SetStorage replaces the entire storage for the specified account with given

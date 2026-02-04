@@ -97,6 +97,10 @@ func (s *hookedStateDB) GetStateWithDepth(addr common.Address, hash common.Hash)
 	return s.inner.GetStateWithDepth(addr, hash)
 }
 
+func (s *hookedStateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+	return s.inner.GetStateWithMeter(addr, hash, meter)
+}
+
 func (s *hookedStateDB) GetStorageRoot(addr common.Address) common.Hash {
 	return s.inner.GetStorageRoot(addr)
 }
@@ -227,6 +231,17 @@ func (s *hookedStateDB) SetStateWithDepth(address common.Address, key common.Has
 		s.hooks.OnStorageChange(address, key, prev, value)
 	}
 	return prev, depth
+}
+
+func (s *hookedStateDB) SetStateWithMeter(address common.Address, key common.Hash, value common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+	prev, depth, err := s.inner.SetStateWithMeter(address, key, value, meter)
+	if err != nil {
+		return prev, depth, err
+	}
+	if s.hooks.OnStorageChange != nil && prev != value {
+		s.hooks.OnStorageChange(address, key, prev, value)
+	}
+	return prev, depth, nil
 }
 
 func (s *hookedStateDB) SelfDestruct(address common.Address) uint256.Int {

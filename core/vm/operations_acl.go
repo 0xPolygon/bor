@@ -41,18 +41,6 @@ const (
 	storageTrieDepthFreeLevels uint64 = 2
 )
 
-// storageTrieDepthSurcharge returns additional gas to charge based on how deep
-// in the storage trie a particular slot access traversed.
-func storageTrieDepthSurcharge(depth uint64) uint64 {
-	if storageTrieDepthStepGas == 0 {
-		return 0
-	}
-	if depth <= storageTrieDepthFreeLevels {
-		return 0
-	}
-	return (depth - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
-}
-
 func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 	return func(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 		// If we fail the minimum gas availability invariant, fail (0)

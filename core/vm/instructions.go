@@ -567,21 +567,21 @@ func opMstore8(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 func opSload(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	loc := scope.Stack.peek()
 	hash := common.Hash(loc.Bytes32())
-	val := common.Hash{}
-	depth := uint64(0)
-	if depthGetter, ok := interpreter.evm.StateDB.(interface{
-		GetStateWithDepth(common.Address, common.Hash) (common.Hash, uint64)
-	}); ok {
-		val, depth = depthGetter.GetStateWithDepth(scope.Contract.Address(), hash)
-	} else {
-		val = interpreter.evm.StateDB.GetState(scope.Contract.Address(), hash)
+	addr := scope.Contract.Address()
+	meter := func(nodeCount uint64) error {
+		if storageTrieDepthStepGas == 0 || nodeCount <= storageTrieDepthFreeLevels {
+			return nil
+		}
+		if !scope.Contract.UseGas(storageTrieDepthStepGas, interpreter.evm.Config.Tracer, tracing.GasChangeUnspecified) {
+			return ErrOutOfGas
+		}
+		return nil
+	}
+	val, _, err := interpreter.evm.StateDB.GetStateWithMeter(addr, hash, meter)
+	if err != nil {
+		return nil, err
 	}
 	loc.SetBytes(val.Bytes())
-	if extra := storageTrieDepthSurcharge(depth); extra != 0 {
-		if !scope.Contract.UseGas(extra, interpreter.evm.Config.Tracer, tracing.GasChangeUnspecified) {
-			return nil, ErrOutOfGas
-		}
-	}
 
 	return nil, nil
 }
@@ -595,11 +595,18 @@ func opSstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 	val := scope.Stack.pop()
 	addr := scope.Contract.Address()
 	slot := common.Hash(loc.Bytes32())
-	_, depth := interpreter.evm.StateDB.SetStateWithDepth(addr, slot, common.Hash(val.Bytes32()))
-	if extra := storageTrieDepthSurcharge(depth); extra != 0 {
-		if !scope.Contract.UseGas(extra, interpreter.evm.Config.Tracer, tracing.GasChangeUnspecified) {
-			return nil, ErrOutOfGas
+	meter := func(nodeCount uint64) error {
+		if storageTrieDepthStepGas == 0 || nodeCount <= storageTrieDepthFreeLevels {
+			return nil
 		}
+		if !scope.Contract.UseGas(storageTrieDepthStepGas, interpreter.evm.Config.Tracer, tracing.GasChangeUnspecified) {
+			return ErrOutOfGas
+		}
+		return nil
+	}
+	_, _, err := interpreter.evm.StateDB.SetStateWithMeter(addr, slot, common.Hash(val.Bytes32()), meter)
+	if err != nil {
+		return nil, err
 	}
 
 	return nil, nil

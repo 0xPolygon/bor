@@ -169,6 +169,22 @@ func (t *Trie) Get(key []byte) ([]byte, uint64, error) {
 	return value, depth, err
 }
 
+// GetWithMeter returns the value for key stored in the trie along with the
+// lookup-path node count. The meter callback is invoked once per decoded node
+// visited, with the current node count (1-based). If meter returns an error,
+// traversal stops and the error is returned.
+func (t *Trie) GetWithMeter(key []byte, meter func(uint64) error) ([]byte, uint64, error) {
+	// Short circuit if the trie is already committed and not usable.
+	if t.committed {
+		return nil, 0, ErrCommitted
+	}
+	value, newroot, didResolve, count, err := t.getWithMeter(t.root, keybytesToHex(key), 0, 0, meter)
+	if err == nil && didResolve {
+		t.root = newroot
+	}
+	return value, count, err
+}
+
 func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, depth uint64, err error) {
 	switch n := (origNode).(type) {
 	case nil:
@@ -203,6 +219,65 @@ func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode no
 		value, newnode, _, childDepth, err := t.get(child, key, pos)
 
 		return value, newnode, true, childDepth, err
+	default:
+		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
+	}
+}
+
+// getWithMeter retrieves the value for a given key from the trie while tracking
+// the number of nodes visited using the provided meter function.
+func (t *Trie) getWithMeter(origNode node, key []byte, pos int, count uint64, meter func(uint64) error) (value []byte, newnode node, didResolve bool, newCount uint64, err error) {
+	switch n := (origNode).(type) {
+	case nil:
+		return nil, nil, false, count, nil
+	case valueNode:
+		count++
+		if meter != nil {
+			if err := meter(count); err != nil {
+				return nil, n, false, count, err
+			}
+		}
+		return n, n, false, count, nil
+	case *shortNode:
+		count++
+		if meter != nil {
+			if err := meter(count); err != nil {
+				return nil, n, false, count, err
+			}
+		}
+		if !bytes.HasPrefix(key[pos:], n.Key) {
+			// key not found in trie
+			return nil, n, false, count, nil
+		}
+
+		value, newnode, didResolve, count, err = t.getWithMeter(n.Val, key, pos+len(n.Key), count, meter)
+		if err == nil && didResolve {
+			n.Val = newnode
+		}
+
+		return value, n, didResolve, count, err
+	case *fullNode:
+		count++
+		if meter != nil {
+			if err := meter(count); err != nil {
+				return nil, n, false, count, err
+			}
+		}
+		value, newnode, didResolve, count, err = t.getWithMeter(n.Children[key[pos]], key, pos+1, count, meter)
+		if err == nil && didResolve {
+			n.Children[key[pos]] = newnode
+		}
+
+		return value, n, didResolve, count, err
+	case hashNode:
+		child, err := t.resolveAndTrack(n, key[:pos])
+		if err != nil {
+			return nil, n, true, count, err
+		}
+
+		value, newnode, _, count, err := t.getWithMeter(child, key, pos, count, meter)
+
+		return value, newnode, true, count, err
 	default:
 		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
 	}

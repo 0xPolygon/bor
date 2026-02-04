@@ -64,7 +64,7 @@ func NewSecure(stateRoot common.Hash, owner common.Hash, root common.Hash, db da
 //
 // StateTrie is not safe for concurrent use.
 type StateTrie struct {
-	trie        Trie
+	trie        *Trie
 	db          database.NodeDatabase
 	preimages   preimageStore
 	secKeyCache map[common.Hash][]byte
@@ -84,8 +84,7 @@ func NewStateTrie(id *ID, db database.NodeDatabase) (*StateTrie, error) {
 		return nil, err
 	}
 	tr := &StateTrie{
-		//nolint:govet
-		trie:        *trie,
+		trie:        trie,
 		db:          db,
 		secKeyCache: make(map[common.Hash][]byte),
 	}
@@ -113,6 +112,17 @@ func (t *StateTrie) MustGet(key []byte) []byte {
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, uint64, error) {
 	enc, depth, err := t.trie.Get(crypto.Keccak256(key))
+	if err != nil || len(enc) == 0 {
+		return nil, depth, err
+	}
+	_, content, _, err := rlp.Split(enc)
+	return content, depth, err
+}
+
+// GetStorageWithMeter retrieves a storage slot and invokes the meter once per
+// decoded trie node visited during lookup.
+func (t *StateTrie) GetStorageWithMeter(_ common.Address, key []byte, meter func(uint64) error) ([]byte, uint64, error) {
+	enc, depth, err := t.trie.GetWithMeter(crypto.Keccak256(key), meter)
 	if err != nil || len(enc) == 0 {
 		return nil, depth, err
 	}
@@ -286,8 +296,12 @@ func (t *StateTrie) Hash() common.Hash {
 
 // Copy returns a copy of StateTrie.
 func (t *StateTrie) Copy() *StateTrie {
+	var copied *Trie
+	if t.trie != nil {
+		copied = t.trie.Copy()
+	}
 	return &StateTrie{
-		trie:        *t.trie.Copy(),
+		trie:        copied,
 		db:          t.db,
 		secKeyCache: make(map[common.Hash][]byte),
 		preimages:   t.preimages,
