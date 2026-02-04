@@ -18,6 +18,7 @@
 package pebble
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -279,9 +280,10 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	}
 
 	db := &Database{
-		fn:       file,
-		log:      logger,
-		quitChan: make(chan chan error),
+		fn:        file,
+		log:       logger,
+		quitChan:  make(chan chan error),
+		namespace: namespace,
 
 		// Use asynchronous write mode by default. Otherwise, the overhead of frequent fsync
 		// operations can be significant, especially on platforms with slow fsync performance
@@ -902,7 +904,7 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 					return err
 				}
 			} else {
-				return fmt.Errorf("ethdb.KeyValueWriter does not implement DeleteRange")
+				return errors.New("ethdb.KeyValueWriter does not implement DeleteRange")
 			}
 		} else {
 			return fmt.Errorf("unhandled operation, keytype: %v", kind)

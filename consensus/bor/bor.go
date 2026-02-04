@@ -23,7 +23,9 @@ import (
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
-	balance_tracing "github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/tracing"
+
+	ttlcache "github.com/jellydator/ttlcache/v3"
 
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
@@ -44,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
-	ttlcache "github.com/jellydator/ttlcache/v3"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
@@ -56,7 +57,7 @@ const (
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
-	veblopBlockTimeout = time.Second * 6 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
 )
 
 // Bor protocol constants.
@@ -114,6 +115,13 @@ var (
 
 	errUncleDetected     = errors.New("uncles not allowed")
 	errUnknownValidators = errors.New("unknown validators")
+
+	// errReorgDuringRootComputation indicates a reorganization occurred while calculating the checkpoint root.
+	errReorgDuringRootComputation = errors.New("reorg occurred while computing checkpoint root")
+
+	// errNonContiguousHeaderRange is returned when the header range [start,end]
+	// is not contiguous in terms of parent-child relationships.
+	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -853,7 +861,7 @@ func (c *Bor) verifySeal(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	if !snap.ValidatorSet.HasAddress(signer) {
+	if !snap.ValidatorSet.HasAddress(signer) && !snap.isAllowedByValidatorSetOverride(signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1041,9 +1049,13 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	now := time.Now()
 	if header.Time < uint64(now.Unix()) {
-		header.Time = uint64(now.Unix())
+		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
+		if c.blockTime > 0 {
+			additionalBlockTime = c.blockTime
+		}
+		header.Time = uint64(now.Add(additionalBlockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
-			header.ActualTime = now
+			header.ActualTime = now.Add(additionalBlockTime)
 		}
 	}
 
@@ -1100,7 +1112,15 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
 		if len(body.Transactions) > 0 {
+			// Craft a state-sync tx to validate it against the tx in block body
+			stateSyncTx := types.NewTx(&types.StateSyncTx{
+				StateSyncData: stateSyncData,
+			})
 			lastTx := body.Transactions[len(body.Transactions)-1]
+			if stateSyncTx.Hash() != lastTx.Hash() {
+				log.Error("Invalid state-sync tx in block body", "got", lastTx.Hash(), "want", stateSyncTx.Hash())
+				return receipts
+			}
 			if lastTx.Type() == types.StateSyncTxType {
 				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
 			}
@@ -1176,11 +1196,10 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 			for addr, account := range allocs {
 				log.Info("change contract code", "address", addr)
-				state.SetCode(addr, account.Code)
+				state.SetCode(addr, account.Code, tracing.CodeChangeUnspecified)
 
 				if state.GetBalance(addr).Cmp(uint256.NewInt(0)) == 0 {
-					// todo: @anshalshukla - check tracing reason
-					state.SetBalance(addr, uint256.NewInt(account.Balance.Uint64()), balance_tracing.BalanceChangeUnspecified)
+					state.SetBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceChangeUnspecified)
 				}
 			}
 		}
@@ -1191,13 +1210,13 @@ func (c *Bor) changeContractCodeIfNeeded(headerNumber uint64, state vm.StateDB) 
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
+func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
 	headerNumber := header.Number.Uint64()
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return nil, nil, consensus.ErrUnexpectedWithdrawals
+		return nil, nil, 0, consensus.ErrUnexpectedWithdrawals
 	}
 	if header.RequestsHash != nil {
-		return nil, nil, consensus.ErrUnexpectedRequests
+		return nil, nil, 0, consensus.ErrUnexpectedRequests
 	}
 
 	var (
@@ -1212,7 +1231,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		if !c.config.IsRio(header.Number) {
 			if err = c.checkAndCommitSpan(state, header, cx); err != nil {
 				log.Error("Error while committing span", "error", err)
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1221,18 +1240,20 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 			stateSyncData, err = c.CommitStates(state, header, cx)
 			if err != nil {
 				log.Error("Error while committing states", "error", err)
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
 		log.Error("Error changing contract code", "error", err)
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	// No block rewards in PoA, so the state remains as it is
+	start := time.Now()
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	commitTime := time.Since(start)
 
 	// Uncles are dropped
 	header.UncleHash = types.CalcUncleHash(nil)
@@ -1253,7 +1274,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
 
 	// return the final block for sealing
-	return block, receipts, nil
+	return block, receipts, commitTime, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -1289,7 +1310,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Bail out if we're unauthorized to sign a block
-	if !snap.ValidatorSet.HasAddress(currentSigner.signer) {
+	if !snap.ValidatorSet.HasAddress(currentSigner.signer) && !snap.isAllowedByValidatorSetOverride(currentSigner.signer, header.Number.Uint64()) {
 		// Check the UnauthorizedSignerError.Error() msg to see why we pass number-1
 		return &UnauthorizedSignerError{number, currentSigner.signer.Bytes(), snap.ValidatorSet.Validators}
 	}
@@ -1453,7 +1474,7 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState := state.Inner().Copy()
 	tempState.ResetPrefetcher()
-	tempState.StartPrefetcher("bor", state.Witness())
+	tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
@@ -1598,7 +1619,7 @@ func (c *Bor) CommitStates(
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
 		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness())
+		tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
 		if err != nil {
@@ -1716,6 +1737,17 @@ func (c *Bor) SetHeimdallClient(h IHeimdallClient) {
 	c.HeimdallClient = h
 	// Update the heimdall client in span store
 	c.spanStore.setHeimdallClient(h)
+}
+
+// PurgeCache clears all cached snapshots and span data. This is useful in tests
+// when the mock heimdall client is changed and old cached data needs to be invalidated.
+func (c *Bor) PurgeCache() {
+	// Clear the recents cache (snapshots)
+	c.recents.DeleteAll()
+	// Clear the recent verified headers cache
+	c.recentVerifiedHeaders.DeleteAll()
+	// Clear the span store cache
+	c.spanStore.PurgeCache()
 }
 
 func (c *Bor) GetCurrentValidators(ctx context.Context, headerHash common.Hash, blockNumber uint64) ([]*valset.Validator, error) {

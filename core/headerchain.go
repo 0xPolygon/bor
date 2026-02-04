@@ -108,17 +108,16 @@ func NewHeaderChain(chainDb ethdb.Database, config *params.ChainConfig, engine c
 
 // GetBlockNumber retrieves the block number belonging to the given hash
 // from the cache or database
-func (hc *HeaderChain) GetBlockNumber(hash common.Hash) *uint64 {
+func (hc *HeaderChain) GetBlockNumber(hash common.Hash) (uint64, bool) {
 	if cached, ok := hc.numberCache.Get(hash); ok {
-		return &cached
+		return cached, true
+	}
+	number, ok := rawdb.ReadHeaderNumber(hc.chainDb, hash)
+	if ok {
+		hc.numberCache.Add(hash, number)
 	}
 
-	number := rawdb.ReadHeaderNumber(hc.chainDb, hash)
-	if number != nil {
-		hc.numberCache.Add(hash, *number)
-	}
-
-	return number
+	return number, ok
 }
 
 type headerWriteResult struct {
@@ -342,12 +341,14 @@ func (hc *HeaderChain) writeHeadersAndSetHead(headers []*types.Header, forker *F
 	return result, nil
 }
 
+// ValidateHeaderChain verifies that the supplied header chain is contiguous
+// and conforms to consensus rules.
 func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header) (int, error) {
 	// Do a sanity check that the provided chain is actually ordered and linked
 	for i := 1; i < len(chain); i++ {
 		if chain[i].Number.Uint64() != chain[i-1].Number.Uint64()+1 {
-			hash := chain[i].Hash()
-			parentHash := chain[i-1].Hash()
+			hash, parentHash := chain[i].Hash(), chain[i-1].Hash()
+
 			// Chain broke ancestry, log a message (programming error) and skip insertion
 			log.Error("Non contiguous header insert", "number", chain[i].Number, "hash", hash,
 				"parent", chain[i].ParentHash, "prevnumber", chain[i-1].Number, "prevhash", parentHash)
@@ -501,12 +502,12 @@ func (hc *HeaderChain) GetHeader(hash common.Hash, number uint64) *types.Header 
 // GetHeaderByHash retrieves a block header from the database by hash, caching it if
 // found.
 func (hc *HeaderChain) GetHeaderByHash(hash common.Hash) *types.Header {
-	number := hc.GetBlockNumber(hash)
-	if number == nil {
+	number, ok := hc.GetBlockNumber(hash)
+	if !ok {
 		return nil
 	}
 
-	return hc.GetHeader(hash, *number)
+	return hc.GetHeader(hash, number)
 }
 
 // HasHeader checks if a block header is present in the database or not.

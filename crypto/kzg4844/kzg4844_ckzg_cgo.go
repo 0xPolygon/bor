@@ -25,6 +25,7 @@ import (
 
 	gokzg4844 "github.com/crate-crypto/go-eth-kzg"
 	ckzg4844 "github.com/ethereum/c-kzg-4844/v2/bindings/go"
+
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
@@ -150,7 +151,7 @@ func ckzgComputeCellProofs(blob *Blob) ([]Proof, error) {
 	return p, nil
 }
 
-// ckzgVerifyCellProofs verifies that the blob data corresponds to the provided commitment.
+// ckzgVerifyCellProofBatch verifies that the blob data corresponds to the provided commitment.
 func ckzgVerifyCellProofBatch(blobs []Blob, commitments []Commitment, cellProofs []Proof) error {
 	ckzgIniter.Do(ckzgInit)
 	var (

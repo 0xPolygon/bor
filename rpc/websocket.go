@@ -28,8 +28,9 @@ import (
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/gorilla/websocket"
+
+	"github.com/ethereum/go-ethereum/log"
 )
 
 const (
@@ -61,7 +62,7 @@ func (s *Server) WebsocketHandler(allowedOrigins []string) http.Handler {
 			log.Debug("WebSocket upgrade failed", "err", err)
 			return
 		}
-		codec := newWebsocketCodec(conn, r.Host, r.Header, wsDefaultReadLimit)
+		codec := newWebsocketCodec(conn, r.Host, r.Header, s.wsReadLimit)
 		s.ServeCodec(codec, 0)
 	})
 }

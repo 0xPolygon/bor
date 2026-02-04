@@ -30,6 +30,7 @@ func TestConfigLegacy(t *testing.T) {
 		testConfig.Sealer.Recommit = 20 * time.Second
 		testConfig.JsonRPC.RPCEVMTimeout = 5 * time.Second
 		testConfig.JsonRPC.TxFeeCap = 6.0
+		testConfig.JsonRPC.LogQueryLimit = 1000
 		testConfig.JsonRPC.Http.API = []string{"eth", "bor"}
 		testConfig.JsonRPC.Ws.API = []string{""}
 		testConfig.Gpo.MaxPrice = big.NewInt(5000000000000)

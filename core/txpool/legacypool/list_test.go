@@ -24,6 +24,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -31,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/holiman/uint256"
 )
 
 // Tests that transactions can be added to strict lists and list contents and

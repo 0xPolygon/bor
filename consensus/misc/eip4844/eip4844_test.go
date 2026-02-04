@@ -38,9 +38,10 @@ func TestCalcExcessBlobGas(t *testing.T) {
 				},
 			},
 		}
-		targetBlobs   = targetBlobsPerBlock(config, uint64(0))
+		targetBlobs   = config.BlobScheduleConfig.Cancun.Target
 		targetBlobGas = uint64(targetBlobs) * params.BlobTxBlobGasPerBlob
 	)
+
 	var tests = []struct {
 		excess uint64
 		blobs  int
@@ -100,6 +101,44 @@ func TestCalcBlobFee(t *testing.T) {
 	}
 }
 
+func TestCalcBlobFeePostOsaka(t *testing.T) {
+	zero := big.NewInt(0)
+
+	tests := []struct {
+		excessBlobGas uint64
+		blobGasUsed   uint64
+		blobfee       uint64
+		basefee       uint64
+		parenttime    uint64
+		headertime    uint64
+	}{
+		{5149252, 1310720, 5673540, 30, 1754904516, 1754904528},
+		{19251039, 2490368, 20954975, 50, 1755033204, 1755033216},
+	}
+	for i, tt := range tests {
+		config := &params.ChainConfig{
+			LondonBlock: big.NewInt(0),
+			CancunBlock: zero,
+			PragueBlock: zero,
+			OsakaBlock:  zero,
+			BlobScheduleConfig: &params.BlobScheduleConfig{
+				Cancun: params.DefaultCancunBlobConfig,
+				Prague: params.DefaultPragueBlobConfig,
+				Osaka:  params.DefaultOsakaBlobConfig,
+			}}
+		parent := &types.Header{
+			ExcessBlobGas: &tt.excessBlobGas,
+			BlobGasUsed:   &tt.blobGasUsed,
+			BaseFee:       big.NewInt(int64(tt.basefee)),
+			Time:          tt.parenttime,
+		}
+		have := CalcExcessBlobGas(config, parent, tt.headertime)
+		if have != tt.blobfee {
+			t.Errorf("test %d: blobfee mismatch: have %v want %v", i, have, tt.blobfee)
+		}
+	}
+}
+
 func TestFakeExponential(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +178,48 @@ func TestFakeExponential(t *testing.T) {
 
 		if original != later {
 			t.Errorf("test %d: fake exponential modified arguments: have\n%v\nwant\n%v", i, later, original)
+		}
+	}
+}
+
+func TestCalcExcessBlobGasEIP7918(t *testing.T) {
+	t.Skip("bor: not relevant")
+	var (
+		cfg           = params.MergedTestChainConfig
+		targetBlobs   = cfg.BlobScheduleConfig.Osaka.Target
+		blobGasTarget = uint64(targetBlobs) * params.BlobTxBlobGasPerBlob
+	)
+
+	makeHeader := func(parentExcess, parentBaseFee uint64, blobsUsed int) *types.Header {
+		blobGasUsed := uint64(blobsUsed) * params.BlobTxBlobGasPerBlob
+		return &types.Header{
+			BaseFee:       big.NewInt(int64(parentBaseFee)),
+			ExcessBlobGas: &parentExcess,
+			BlobGasUsed:   &blobGasUsed,
+		}
+	}
+
+	tests := []struct {
+		name          string
+		header        *types.Header
+		wantExcessGas uint64
+	}{
+		{
+			name:          "BelowReservePrice",
+			header:        makeHeader(0, 1_000_000_000, targetBlobs),
+			wantExcessGas: blobGasTarget * 3 / 9,
+		},
+		{
+			name:          "AboveReservePrice",
+			header:        makeHeader(0, 1, targetBlobs),
+			wantExcessGas: 0,
+		},
+	}
+	for _, tc := range tests {
+		got := CalcExcessBlobGas(cfg, tc.header, cfg.CancunBlock.Uint64())
+		if got != tc.wantExcessGas {
+			t.Fatalf("%s: excess-blob-gas mismatch – have %d, want %d",
+				tc.name, got, tc.wantExcessGas)
 		}
 	}
 }

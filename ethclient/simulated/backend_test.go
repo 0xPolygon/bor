@@ -25,13 +25,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 var _ bind.ContractBackend = (Client)(nil)
@@ -51,7 +52,7 @@ func simTestBackend(testAddr common.Address) *Backend {
 	)
 }
 
-func newBlobTx(sim *Backend, key *ecdsa.PrivateKey) (*types.Transaction, error) {
+func newBlobTx(sim *Backend, key *ecdsa.PrivateKey, nonce uint64) (*types.Transaction, error) {
 	client := sim.Client()
 
 	testBlob := &kzg4844.Blob{0x00}
@@ -66,12 +67,8 @@ func newBlobTx(sim *Backend, key *ecdsa.PrivateKey) (*types.Transaction, error) 
 
 	addr := crypto.PubkeyToAddress(key.PublicKey)
 	chainid, _ := client.ChainID(context.Background())
-	nonce, err := client.PendingNonceAt(context.Background(), addr)
-	if err != nil {
-		return nil, err
-	}
-
 	chainidU256, _ := uint256.FromBig(chainid)
+
 	tx := types.NewTx(&types.BlobTx{
 		ChainID:    chainidU256,
 		GasTipCap:  gasTipCapU256,
@@ -82,16 +79,12 @@ func newBlobTx(sim *Backend, key *ecdsa.PrivateKey) (*types.Transaction, error) 
 		To:         addr,
 		AccessList: nil,
 		BlobHashes: []common.Hash{testBlobVHash},
-		Sidecar: &types.BlobTxSidecar{
-			Blobs:       []kzg4844.Blob{*testBlob},
-			Commitments: []kzg4844.Commitment{testBlobCommit},
-			Proofs:      []kzg4844.Proof{testBlobProof},
-		},
+		Sidecar:    types.NewBlobTxSidecar(types.BlobSidecarVersion0, []kzg4844.Blob{*testBlob}, []kzg4844.Commitment{testBlobCommit}, []kzg4844.Proof{testBlobProof}),
 	})
 	return types.SignTx(tx, types.LatestSignerForChainID(chainid), key)
 }
 
-func newTx(sim *Backend, key *ecdsa.PrivateKey) (*types.Transaction, error) {
+func newTx(sim *Backend, key *ecdsa.PrivateKey, nonce uint64) (*types.Transaction, error) {
 	client := sim.Client()
 
 	// create a signed transaction to send
@@ -99,10 +92,7 @@ func newTx(sim *Backend, key *ecdsa.PrivateKey) (*types.Transaction, error) {
 	gasPrice := new(big.Int).Add(head.BaseFee, big.NewInt(params.GWei))
 	addr := crypto.PubkeyToAddress(key.PublicKey)
 	chainid, _ := client.ChainID(context.Background())
-	nonce, err := client.PendingNonceAt(context.Background(), addr)
-	if err != nil {
-		return nil, err
-	}
+
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   chainid,
 		Nonce:     nonce,
@@ -167,7 +157,7 @@ func TestSendTransaction(t *testing.T) {
 	client := sim.Client()
 	ctx := t.Context()
 
-	signedTx, err := newTx(sim, testKey)
+	signedTx, err := newTx(sim, testKey, 0)
 	if err != nil {
 		t.Errorf("could not create transaction: %v", err)
 	}
@@ -260,7 +250,7 @@ func TestForkResendTx(t *testing.T) {
 	parent, _ := client.HeaderByNumber(ctx, nil)
 
 	// 2.
-	tx, err := newTx(sim, testKey)
+	tx, err := newTx(sim, testKey, 0)
 	if err != nil {
 		t.Fatalf("could not create transaction: %v", err)
 	}
@@ -306,7 +296,7 @@ func TestCommitReturnValue(t *testing.T) {
 	}
 
 	// Create a block in the original chain (containing a transaction to force different block hashes)
-	tx, _ := newTx(sim, testKey)
+	tx, _ := newTx(sim, testKey, 0)
 	if err := client.SendTransaction(ctx, tx); err != nil {
 		t.Errorf("sending transaction: %v", err)
 	}

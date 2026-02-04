@@ -37,7 +37,7 @@ const (
 // syncTransactions starts sending all currently pending transactions to the given peer.
 func (h *handler) syncTransactions(p *eth.Peer) {
 	var hashes []common.Hash
-	for _, batch := range h.txpool.Pending(txpool.PendingFilter{OnlyPlainTxs: true}, nil) {
+	for _, batch := range h.txpool.Pending(txpool.PendingFilter{BlobTxs: false}, nil) {
 		for _, tx := range batch {
 			hashes = append(hashes, tx.Hash)
 		}

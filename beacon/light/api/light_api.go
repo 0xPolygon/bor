@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/donovanhide/eventsource"
+
 	"github.com/ethereum/go-ethereum/beacon/merkle"
 	"github.com/ethereum/go-ethereum/beacon/params"
 	"github.com/ethereum/go-ethereum/beacon/types"

@@ -64,6 +64,9 @@ type Config struct {
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
 
+	// Enable state size tracking
+	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
+
 	// DataDir is the directory to store the state in
 	DataDir string `hcl:"datadir,optional" toml:"datadir,optional"`
 
@@ -365,6 +368,20 @@ type TxPoolConfig struct {
 
 	// FilteredAddressesFile is the path to newline-separated list of addresses whose transactions will be filtered
 	FilteredAddressesFile string `hcl:"filtered-addresses,optional" toml:"filtered-addresses,optional"`
+
+	// Rebroadcast enables the stuck transaction rebroadcast mechanism
+	Rebroadcast bool `hcl:"rebroadcast,optional" toml:"rebroadcast,optional"`
+
+	// RebroadcastInterval is the interval between rebroadcast checks
+	RebroadcastInterval    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastIntervalRaw string        `hcl:"rebroadcast-interval,optional" toml:"rebroadcast-interval,optional"`
+
+	// RebroadcastMaxAge is the maximum age for rebroadcast eligibility
+	RebroadcastMaxAge    time.Duration `hcl:"-,optional" toml:"-"`
+	RebroadcastMaxAgeRaw string        `hcl:"rebroadcast-max-age,optional" toml:"rebroadcast-max-age,optional"`
+
+	// RebroadcastBatchSize is the maximum number of transactions per rebroadcast cycle
+	RebroadcastBatchSize int `hcl:"rebroadcast-batch-size,optional" toml:"rebroadcast-batch-size,optional"`
 }
 
 type SealerConfig struct {
@@ -383,6 +400,13 @@ type SealerConfig struct {
 	// GasCeil is the target gas ceiling for mined blocks.
 	GasCeil uint64 `hcl:"gaslimit,optional" toml:"gaslimit,optional"`
 
+	// Dynamic gas limit configuration
+	EnableDynamicGasLimit bool   `hcl:"enableDynamicGasLimit,optional" toml:"enableDynamicGasLimit,optional"`
+	GasLimitMin           uint64 `hcl:"gasLimitMin,optional" toml:"gasLimitMin,optional"`
+	GasLimitMax           uint64 `hcl:"gasLimitMax,optional" toml:"gasLimitMax,optional"`
+	TargetBaseFee         uint64 `hcl:"targetBaseFee,optional" toml:"targetBaseFee,optional"`
+	BaseFeeBuffer         uint64 `hcl:"baseFeeBuffer,optional" toml:"baseFeeBuffer,optional"`
+
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
 	GasPriceRaw string   `hcl:"gasprice,optional" toml:"gasprice,optional"`
@@ -396,6 +420,12 @@ type SealerConfig struct {
 	// BlockTime is the block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
+
+	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks
+	TargetGasPercentage uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
+
+	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Dandeli blocks
+	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -415,6 +445,9 @@ type JsonRPCConfig struct {
 	// TxFeeCap is the global transaction fee cap for send-transaction variants
 	TxFeeCap float64 `hcl:"txfeecap,optional" toml:"txfeecap,optional"`
 
+	// LogQueryLimit is the max number of addresses or topics allowed in filter criteria for eth_getLogs.
+	LogQueryLimit int `hcl:"logquerylimit,optional" toml:"logquerylimit,optional"`
+
 	// Http has the json-rpc http related settings
 	Http *APIConfig `hcl:"http,block" toml:"http,block"`
 
@@ -433,6 +466,14 @@ type JsonRPCConfig struct {
 
 	// EnablePersonal enables the deprecated personal namespace.
 	EnablePersonal bool `hcl:"enabledeprecatedpersonal,optional" toml:"enabledeprecatedpersonal,optional"`
+
+	// Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)
+	TxSyncDefaultTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	TxSyncDefaultTimeoutRaw string        `hcl:"txsync.defaulttimeout,optional" toml:"txsync.defaulttimeout,optional"`
+
+	// Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)
+	TxSyncMaxTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	TxSyncMaxTimeoutRaw string        `hcl:"txsync.maxtimeout,optional" toml:"txsync.maxtimeout,optional"`
 }
 
 type AUTHConfig struct {
@@ -499,6 +540,11 @@ type HttpTimeouts struct {
 	// ReadHeaderTimeout. It is valid to use them both.
 	ReadTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	ReadTimeoutRaw string        `hcl:"read,optional" toml:"read,optional"`
+
+	// ReadHeaderTimeout is the amount of time allowed to read
+	// request headers.
+	ReadHeaderTimeout    time.Duration `hcl:"-,optional" toml:"-"`
+	ReadHeaderTimeoutRaw string        `hcl:"readheader,optional" toml:"readheader,optional"`
 
 	// WriteTimeout is the maximum duration before timing out
 	// writes of the response. It is reset whenever a new
@@ -621,6 +667,9 @@ type CacheConfig struct {
 	TrieTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	TrieTimeoutRaw string        `hcl:"timeout,optional" toml:"timeout,optional"`
 
+	// Directory path to the journal used for persisting trie data across node restarts
+	TrieJournalDirectory string `hcl:"triejournaldirectory,optional" toml:"triejournaldirectory,optional"`
+
 	// Raise the open file descriptor resource limit (default = system fd limit)
 	FDLimit int `hcl:"fdlimit,optional" toml:"fdlimit,optional"`
 
@@ -685,7 +734,7 @@ type ParallelEVMConfig struct {
 }
 
 type WitnessConfig struct {
-	// Enable enables the wit/1 protocol
+	// Enable enables the wit protocol
 	Enable bool `hcl:"enable,optional" toml:"enable,optional"`
 
 	// SyncWithWitnesses enables syncing blocks with witnesses
@@ -715,6 +764,7 @@ func DefaultConfig() *Config {
 		Verbosity:                   3,
 		LogLevel:                    "",
 		EnablePreimageRecording:     false,
+		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
 		Ancient:                     "",
 		DBEngine:                    "pebble",
@@ -765,28 +815,39 @@ func DefaultConfig() *Config {
 		BorLogs:     false,
 
 		TxPool: &TxPoolConfig{
-			Locals:       []string{},
-			NoLocals:     false,
-			Journal:      "transactions.rlp",
-			Rejournal:    1 * time.Hour,
-			PriceLimit:   params.BorDefaultTxPoolPriceLimit, // bor's default
-			PriceBump:    10,
-			AccountSlots: 16,
-			GlobalSlots:  131072,
-			AccountQueue: 64,
-			GlobalQueue:  131072,
-			LifeTime:     3 * time.Hour,
+			Locals:               []string{},
+			NoLocals:             false,
+			Journal:              "transactions.rlp",
+			Rejournal:            1 * time.Hour,
+			PriceLimit:           params.BorDefaultTxPoolPriceLimit, // bor's default
+			PriceBump:            10,
+			AccountSlots:         16,
+			GlobalSlots:          131072,
+			AccountQueue:         64,
+			GlobalQueue:          131072,
+			LifeTime:             3 * time.Hour,
+			Rebroadcast:          true,
+			RebroadcastInterval:  30 * time.Second,
+			RebroadcastMaxAge:    10 * time.Minute,
+			RebroadcastBatchSize: 200,
 		},
 		Sealer: &SealerConfig{
-			Enabled:             false,
-			AllowGasTipOverride: false,
-			Etherbase:           "",
-			GasCeil:             miner.DefaultConfig.GasCeil,
-			GasPrice:            big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
-			ExtraData:           "",
-			Recommit:            125 * time.Second,
-			CommitInterruptFlag: true,
-			BlockTime:           0,
+			Enabled:                  false,
+			AllowGasTipOverride:      false,
+			Etherbase:                "",
+			GasCeil:                  miner.DefaultConfig.GasCeil,
+			EnableDynamicGasLimit:    miner.DefaultConfig.EnableDynamicGasLimit,
+			GasLimitMin:              miner.DefaultConfig.GasLimitMin,
+			GasLimitMax:              miner.DefaultConfig.GasLimitMax,
+			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
+			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
+			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
+			ExtraData:                "",
+			Recommit:                 125 * time.Second,
+			CommitInterruptFlag:      true,
+			BlockTime:                0,
+			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
+			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -797,13 +858,16 @@ func DefaultConfig() *Config {
 			IgnorePrice:      gasprice.DefaultIgnorePrice, // bor's default
 		},
 		JsonRPC: &JsonRPCConfig{
-			IPCDisable:          false,
-			IPCPath:             "",
-			GasCap:              ethconfig.Defaults.RPCGasCap,
-			TxFeeCap:            ethconfig.Defaults.RPCTxFeeCap,
-			RPCEVMTimeout:       ethconfig.Defaults.RPCEVMTimeout,
-			AllowUnprotectedTxs: false,
-			EnablePersonal:      false,
+			IPCDisable:           false,
+			IPCPath:              "",
+			GasCap:               ethconfig.Defaults.RPCGasCap,
+			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
+			LogQueryLimit:        ethconfig.Defaults.RPCLogQueryLimit,
+			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
+			AllowUnprotectedTxs:  false,
+			EnablePersonal:       false,
+			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
+			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
 			Http: &APIConfig{
 				Enabled:                     false,
 				Port:                        8545,
@@ -831,9 +895,10 @@ func DefaultConfig() *Config {
 				VHost:   []string{"localhost"},
 			},
 			HttpTimeout: &HttpTimeouts{
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 30 * time.Second,
-				IdleTimeout:  120 * time.Second,
+				ReadTimeout:       10 * time.Second,
+				ReadHeaderTimeout: 30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       120 * time.Second,
 			},
 			Auth: &AUTHConfig{
 				JWTSecret: "",
@@ -862,21 +927,22 @@ func DefaultConfig() *Config {
 			},
 		},
 		Cache: &CacheConfig{
-			Cache:              1024, // geth's default (suitable for mumbai)
-			PercDatabase:       50,
-			PercTrie:           15,
-			PercGc:             25,
-			PercSnapshot:       10,
-			NoPrefetch:         false,
-			Preimages:          false,
-			TxLookupLimit:      2350000,
-			TriesInMemory:      128,
-			FilterLogCacheSize: ethconfig.Defaults.FilterLogCacheSize,
-			TrieTimeout:        60 * time.Minute,
-			FDLimit:            0,
-			GoMemLimit:         "",  // Empty means no limit
-			GoGC:               100, // Go default is 100%
-			GoDebug:            "",  // Empty means no debug flags
+			Cache:                1024, // geth's default (suitable for mumbai)
+			PercDatabase:         50,
+			PercTrie:             15,
+			PercGc:               25,
+			PercSnapshot:         10,
+			NoPrefetch:           false,
+			Preimages:            false,
+			TxLookupLimit:        2350000,
+			TriesInMemory:        128,
+			FilterLogCacheSize:   ethconfig.Defaults.FilterLogCacheSize,
+			TrieTimeout:          60 * time.Minute,
+			TrieJournalDirectory: "", // Will be resolved to DATADIR/triedb in buildEth
+			FDLimit:              0,
+			GoMemLimit:           "",  // Empty means no limit
+			GoGC:                 100, // Go default is 100%
+			GoDebug:              "",  // Empty means no debug flags
 		},
 		ExtraDB: &ExtraDBConfig{
 			// These are LevelDB defaults, specifying here for clarity in code and in logging.
@@ -984,14 +1050,19 @@ func (c *Config) fillTimeDurations() error {
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
 		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
+		{"jsonrpc.timeouts.readheader", &c.JsonRPC.HttpTimeout.ReadHeaderTimeout, &c.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
 		{"jsonrpc.timeouts.idle", &c.JsonRPC.HttpTimeout.IdleTimeout, &c.JsonRPC.HttpTimeout.IdleTimeoutRaw},
 		{"jsonrpc.ws.ep-requesttimeout", &c.JsonRPC.Ws.ExecutionPoolRequestTimeout, &c.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw},
 		{"jsonrpc.http.ep-requesttimeout", &c.JsonRPC.Http.ExecutionPoolRequestTimeout, &c.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw},
 		{"txpool.lifetime", &c.TxPool.LifeTime, &c.TxPool.LifeTimeRaw},
 		{"txpool.rejournal", &c.TxPool.Rejournal, &c.TxPool.RejournalRaw},
+		{"txpool.rebroadcast-interval", &c.TxPool.RebroadcastInterval, &c.TxPool.RebroadcastIntervalRaw},
+		{"txpool.rebroadcast-max-age", &c.TxPool.RebroadcastMaxAge, &c.TxPool.RebroadcastMaxAgeRaw},
 		{"cache.timeout", &c.Cache.TrieTimeout, &c.Cache.TrieTimeoutRaw},
 		{"p2p.txarrivalwait", &c.P2P.TxArrivalWait, &c.P2P.TxArrivalWaitRaw},
+		{"rpc.txsync.defaulttimeout", &c.JsonRPC.TxSyncDefaultTimeout, &c.JsonRPC.TxSyncDefaultTimeoutRaw},
+		{"rpc.txsync.maxtimeout", &c.JsonRPC.TxSyncMaxTimeout, &c.JsonRPC.TxSyncMaxTimeoutRaw},
 	}
 
 	for _, x := range tds {
@@ -1094,6 +1165,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
+	n.EnableStateSizeTracking = c.StateSizeTracking
 
 	// txpool options
 	{
@@ -1114,6 +1186,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		} else {
 			n.TxPool.FilteredAddresses = filteredAddrs
 		}
+
+		// Rebroadcast options
+		n.TxPool.Rebroadcast = c.TxPool.Rebroadcast
+		n.TxPool.RebroadcastInterval = c.TxPool.RebroadcastInterval
+		n.TxPool.RebroadcastMaxAge = c.TxPool.RebroadcastMaxAge
+		n.TxPool.RebroadcastBatchSize = c.TxPool.RebroadcastBatchSize
 	}
 
 	// miner options
@@ -1127,12 +1205,46 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
 
+		// Dynamic gas limit configuration
+		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
+		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
+		n.Miner.GasLimitMax = c.Sealer.GasLimitMax
+		n.Miner.TargetBaseFee = c.Sealer.TargetBaseFee
+		n.Miner.BaseFeeBuffer = c.Sealer.BaseFeeBuffer
+
+		// Validate dynamic gas limit configuration
+		if c.Sealer.EnableDynamicGasLimit {
+			if c.Sealer.GasLimitMin >= c.Sealer.GasLimitMax {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be less than miner.gasLimitMax (%d)", c.Sealer.GasLimitMin, c.Sealer.GasLimitMax)
+			}
+			if c.Sealer.GasLimitMin < params.MinGasLimit {
+				return nil, fmt.Errorf("miner.gasLimitMin (%d) must be at least %d (protocol minimum)", c.Sealer.GasLimitMin, params.MinGasLimit)
+			}
+			if c.Sealer.TargetBaseFee == 0 {
+				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic gas limit is enabled")
+			}
+		}
+
 		if etherbase := c.Sealer.Etherbase; etherbase != "" {
 			if !common.IsHexAddress(etherbase) {
 				return nil, fmt.Errorf("etherbase is not an address: %s", etherbase)
 			}
 
 			n.Miner.Etherbase = common.HexToAddress(etherbase)
+		}
+	}
+
+	// Set runtime miner gas parameters in BorConfig (if not in developer mode and Bor chain)
+	if !c.Developer.Enabled && n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
+		// Only set if non-zero (0 means not set via CLI, use defaults from consensus)
+		if c.Sealer.TargetGasPercentage > 0 {
+			if c.Sealer.TargetGasPercentage > 100 {
+				return nil, fmt.Errorf("miner.targetGasPercentage must be between 1-100, got %d", c.Sealer.TargetGasPercentage)
+			}
+			n.Genesis.Config.Bor.TargetGasPercentage = &c.Sealer.TargetGasPercentage
+		}
+		if c.Sealer.BaseFeeChangeDenominator > 0 {
+			n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
 		}
 	}
 
@@ -1201,6 +1313,20 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		// update the parameters
 		n.NetworkId = c.chain.NetworkId
 		n.Genesis = c.chain.Genesis
+
+		// Set runtime miner gas parameters in BorConfig for developer mode
+		if n.Genesis != nil && n.Genesis.Config != nil && n.Genesis.Config.Bor != nil {
+			// Only set if non-zero (0 means not set via CLI, use defaults from consensus)
+			if c.Sealer.TargetGasPercentage > 0 {
+				if c.Sealer.TargetGasPercentage > 100 {
+					return nil, fmt.Errorf("miner.targetGasPercentage must be between 1-100, got %d", c.Sealer.TargetGasPercentage)
+				}
+				n.Genesis.Config.Bor.TargetGasPercentage = &c.Sealer.TargetGasPercentage
+			}
+			if c.Sealer.BaseFeeChangeDenominator > 0 {
+				n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
+			}
+		}
 
 		// Update cache
 		c.Cache.Cache = 1024
@@ -1337,8 +1463,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.RPCEVMTimeout = c.JsonRPC.RPCEVMTimeout
-
 	n.RPCTxFeeCap = c.JsonRPC.TxFeeCap
+	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
+	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
+
+	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
 
 	// Choose the sync mode. Only "full" or "stateless" sync is supported
 	switch c.SyncMode {
@@ -1544,9 +1673,9 @@ func ambiguousAddrRecovery(ks *keystore.KeyStore, err *keystore.AmbiguousAddrErr
 	return *match
 }
 
-// setNodeKey creates a node key from set command line flags, either loading it
+// getNodeKey creates a node key from set command line flags, either loading it
 // from a file or as a specified hex value. If neither flags were provided, this
-// method returns nil and an emphemeral key is to be generated.
+// method returns nil and an ephemeral key is to be generated.
 func getNodeKey(hex string, file string) *ecdsa.PrivateKey {
 	var (
 		key *ecdsa.PrivateKey
@@ -1612,9 +1741,10 @@ func (c *Config) buildNode() (*node.Config, error) {
 		GraphQLCors:         c.JsonRPC.Graphql.Cors,
 		GraphQLVirtualHosts: c.JsonRPC.Graphql.VHost,
 		HTTPTimeouts: rpc.HTTPTimeouts{
-			ReadTimeout:  c.JsonRPC.HttpTimeout.ReadTimeout,
-			WriteTimeout: c.JsonRPC.HttpTimeout.WriteTimeout,
-			IdleTimeout:  c.JsonRPC.HttpTimeout.IdleTimeout,
+			ReadTimeout:       c.JsonRPC.HttpTimeout.ReadTimeout,
+			ReadHeaderTimeout: c.JsonRPC.HttpTimeout.ReadHeaderTimeout,
+			WriteTimeout:      c.JsonRPC.HttpTimeout.WriteTimeout,
+			IdleTimeout:       c.JsonRPC.HttpTimeout.IdleTimeout,
 		},
 		JWTSecret:                              c.JsonRPC.Auth.JWTSecret,
 		AuthPort:                               int(c.JsonRPC.Auth.Port),

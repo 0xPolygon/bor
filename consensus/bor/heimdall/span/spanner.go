@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/bor/abi"

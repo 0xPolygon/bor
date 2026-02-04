@@ -7,11 +7,12 @@ package eth
 import (
 	reflect "reflect"
 
+	gomock "go.uber.org/mock/gomock"
+
 	common "github.com/ethereum/go-ethereum/common"
 	stateless "github.com/ethereum/go-ethereum/core/stateless"
 	wit "github.com/ethereum/go-ethereum/eth/protocols/wit"
 	log "github.com/ethereum/go-ethereum/log"
-	gomock "github.com/golang/mock/gomock"
 )
 
 // MockWitnessPeer is a mock of WitnessPeer interface.
@@ -196,6 +197,21 @@ func (m *MockWitnessPeer) RequestWitness(witnessPages []wit.WitnessPageRequest, 
 func (mr *MockWitnessPeerMockRecorder) RequestWitness(witnessPages, sink interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestWitness", reflect.TypeOf((*MockWitnessPeer)(nil).RequestWitness), witnessPages, sink)
+}
+
+// RequestWitnessMetadata mocks base method.
+func (m *MockWitnessPeer) RequestWitnessMetadata(hashes []common.Hash, sink chan *wit.Response) (*wit.Request, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RequestWitnessMetadata", hashes, sink)
+	ret0, _ := ret[0].(*wit.Request)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RequestWitnessMetadata indicates an expected call of RequestWitnessMetadata.
+func (mr *MockWitnessPeerMockRecorder) RequestWitnessMetadata(hashes, sink interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestWitnessMetadata", reflect.TypeOf((*MockWitnessPeer)(nil).RequestWitnessMetadata), hashes, sink)
 }
 
 // Version mocks base method.

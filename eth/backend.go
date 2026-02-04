@@ -263,25 +263,35 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
-	options := &core.BlockChainConfig{
-		TrieCleanLimit:    config.TrieCleanCache,
-		NoPrefetch:        config.NoPrefetch,
-		TrieDirtyLimit:    config.TrieDirtyCache,
-		ArchiveMode:       config.NoPruning,
-		TrieTimeLimit:     config.TrieTimeout,
-		SnapshotLimit:     config.SnapshotCache,
-		Preimages:         config.Preimages,
-		StateHistory:      config.StateHistory,
-		StateScheme:       scheme,
-		TriesInMemory:     config.TriesInMemory,
-		ChainHistoryMode:  config.HistoryMode,
-		TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
-		AddressCacheSizes: config.AddressCacheSizes,
-		VmConfig: vm.Config{
-			EnablePreimageRecording: config.EnablePreimageRecording,
-		},
-		Stateless: config.SyncMode == downloader.StatelessSync,
-	}
+	var (
+		options = &core.BlockChainConfig{
+			TrieCleanLimit:    config.TrieCleanCache,
+			NoPrefetch:        config.NoPrefetch,
+			TrieDirtyLimit:    config.TrieDirtyCache,
+			ArchiveMode:       config.NoPruning,
+			TrieTimeLimit:     config.TrieTimeout,
+			SnapshotLimit:     config.SnapshotCache,
+			Preimages:         config.Preimages,
+			StateHistory:      config.StateHistory,
+			StateScheme:       scheme,
+			TriesInMemory:     config.TriesInMemory,
+			ChainHistoryMode:  config.HistoryMode,
+			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
+			AddressCacheSizes: config.AddressCacheSizes,
+			VmConfig: vm.Config{
+				EnablePreimageRecording: config.EnablePreimageRecording,
+				EnableWitnessStats:      config.EnableWitnessStats,
+				StatelessSelfValidation: config.StatelessSelfValidation,
+			},
+			Stateless: config.SyncMode == downloader.StatelessSync,
+			// Enables file journaling for the trie database. The journal files will be stored
+			// within the data directory. The corresponding paths will be either:
+			// - DATADIR/triedb/merkle.journal
+			// - DATADIR/triedb/verkle.journal
+			TrieJournalDirectory: stack.ResolvePath("triedb"),
+			StateSizeTracking:    config.EnableStateSizeTracking,
+		}
+	)
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
@@ -307,6 +317,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	options.Overrides = &overrides
+	options.Checker = checker
 
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
@@ -367,6 +378,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		config.BlobPool.Datadir = stack.ResolvePath(config.BlobPool.Datadir)
 	}
 
+	// TxPool
 	if config.TxPool.Journal != "" {
 		config.TxPool.Journal = stack.ResolvePath(config.TxPool.Journal)
 	}
@@ -383,10 +395,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
 		eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
 	}
-
-	// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
-	// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
-	eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
 
 	if !config.TxPool.NoLocals {
 		rejournal := config.TxPool.Rejournal
@@ -411,6 +419,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		EventMux:                eth.eventMux,
 		RequiredBlocks:          config.RequiredBlocks,
 		EthAPI:                  blockChainAPI,
+		gasCeil:                 config.Miner.GasCeil,
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
@@ -418,6 +427,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
+		p2pServer:               eth.p2pServer,
 	}); err != nil {
 		return nil, err
 	}
@@ -695,7 +705,7 @@ func (s *Ethereum) Start() error {
 	// Regularly update shutdown marker
 	s.shutdownTracker.Start()
 
-	// Start the networking layer and the light server if requested
+	// Start the networking layer
 	s.handler.Start(s.p2pServer.MaxPeers)
 
 	// Start the connection manager
@@ -1021,6 +1031,7 @@ func (s *Ethereum) Stop() error {
 		s.miner.Close()
 	}
 	s.blockchain.Stop()
+	s.engine.Close()
 
 	// Clean shutdown marker as the last thing before closing db
 	s.shutdownTracker.Stop()

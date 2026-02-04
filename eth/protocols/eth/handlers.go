@@ -346,14 +346,14 @@ func ServiceGetReceiptsQuery69(chain *core.BlockChain, query GetReceiptsRequest)
 			break
 		}
 
-		number := rawdb.ReadHeaderNumber(chain.DB(), hash)
-		if number == nil {
+		number, ok := rawdb.ReadHeaderNumber(chain.DB(), hash)
+		if !ok {
 			continue
 		}
 
 		// If we're past the Madhugiri hardfork, state-sync receipts (if present) are stored
 		// with normal block receipts so no special handling needed.
-		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(*number))) {
+		if borCfg != nil && borCfg.IsMadhugiri(big.NewInt(int64(number))) {
 			allReceipts := chain.GetReceiptsRLP(hash)
 			if allReceipts == nil {
 				if header := chain.GetHeaderByHash(hash); header == nil || header.ReceiptHash != types.EmptyRootHash {
@@ -707,14 +707,20 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txs); err != nil {
 		return err
 	}
-
+	// Duplicate transactions are not allowed
+	seen := make(map[common.Hash]struct{})
 	for i, tx := range txs {
 		// Validate and mark the remote transaction
 		if tx == nil {
 			return fmt.Errorf("Transactions: transaction %d is nil", i)
 		}
 
-		peer.markTransaction(tx.Hash())
+		hash := tx.Hash()
+		if _, exists := seen[hash]; exists {
+			return fmt.Errorf("Transactions: multiple copies of the same hash %v", hash)
+		}
+		seen[hash] = struct{}{}
+		peer.markTransaction(hash)
 	}
 
 	return backend.Handle(peer, &txs)
@@ -730,13 +736,20 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txs); err != nil {
 		return err
 	}
+	// Duplicate transactions are not allowed
+	seen := make(map[common.Hash]struct{})
 	for i, tx := range txs.PooledTransactionsResponse {
 		// Validate and mark the remote transaction
 		if tx == nil {
 			return fmt.Errorf("PooledTransactions: transaction %d is nil", i)
 		}
 
-		peer.markTransaction(tx.Hash())
+		hash := tx.Hash()
+		if _, exists := seen[hash]; exists {
+			return fmt.Errorf("PooledTransactions: multiple copies of the same hash %v", hash)
+		}
+		seen[hash] = struct{}{}
+		peer.markTransaction(hash)
 	}
 
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)

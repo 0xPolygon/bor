@@ -36,6 +36,8 @@ import (
 
 	"strings"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -47,7 +49,6 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/holiman/uint256"
 )
 
 var (
@@ -187,7 +188,7 @@ func pricedSetCodeTx(nonce uint64, gaslimit uint64, gasFee, tip *uint256.Int, ke
 	var authList []types.SetCodeAuthorization
 	for _, u := range unsigned {
 		auth, _ := types.SignSetCode(u.key, types.SetCodeAuthorization{
-			ChainID: *uint256.MustFromBig(params.TestChainConfig.ChainID),
+			ChainID: *uint256.MustFromBig(params.MergedTestChainConfig.ChainID),
 			Address: common.Address{0x42},
 			Nonce:   u.nonce,
 		})
@@ -197,8 +198,8 @@ func pricedSetCodeTx(nonce uint64, gaslimit uint64, gasFee, tip *uint256.Int, ke
 }
 
 func pricedSetCodeTxWithAuth(nonce uint64, gaslimit uint64, gasFee, tip *uint256.Int, key *ecdsa.PrivateKey, authList []types.SetCodeAuthorization) *types.Transaction {
-	return types.MustSignNewTx(key, types.LatestSignerForChainID(params.TestChainConfig.ChainID), &types.SetCodeTx{
-		ChainID:    uint256.MustFromBig(params.TestChainConfig.ChainID),
+	return types.MustSignNewTx(key, types.LatestSignerForChainID(params.MergedTestChainConfig.ChainID), &types.SetCodeTx{
+		ChainID:    uint256.MustFromBig(params.MergedTestChainConfig.ChainID),
 		Nonce:      nonce,
 		GasTipCap:  tip,
 		GasFeeCap:  gasFee,
@@ -573,14 +574,11 @@ func TestQueue(t *testing.T) {
 
 	<-pool.requestPromoteExecutables(newAccountSet(pool.signer, from))
 
-	// pool.pendingMu.RLock()
 	if _, ok := pool.pending[from].txs.items[tx.Nonce()]; ok {
 		t.Error("expected transaction to be in tx pool")
 	}
-	// pool.pendingMu.RUnlock()
-
-	if len(pool.queue) > 0 {
-		t.Error("expected transaction queue to be empty. is", len(pool.queue))
+	if len(pool.queue.queued) > 0 {
+		t.Error("expected transaction queue to be empty. is", len(pool.queue.queued))
 	}
 }
 
@@ -603,14 +601,11 @@ func TestQueue2(t *testing.T) {
 
 	pool.promoteExecutables([]common.Address{from})
 
-	// pool.pendingMu.RLock()
 	if len(pool.pending) != 1 {
 		t.Error("expected pending length to be 1, got", len(pool.pending))
 	}
-	// pool.pendingMu.RUnlock()
-
-	if pool.queue[from].Len() != 2 {
-		t.Error("expected len(queue) == 2, got", pool.queue[from].Len())
+	if list, _ := pool.queue.get(from); list.Len() != 2 {
+		t.Error("expected len(queue) == 2, got", list.Len())
 	}
 }
 
@@ -766,14 +761,11 @@ func TestMissingNonce(t *testing.T) {
 		t.Error("didn't expect error", err)
 	}
 
-	// pool.pendingMu.RLock()
 	if len(pool.pending) != 0 {
 		t.Error("expected 0 pending transactions, got", len(pool.pending))
 	}
-	// pool.pendingMu.RUnlock()
-
-	if pool.queue[addr].Len() != 1 {
-		t.Error("expected 1 queued transaction, got", pool.queue[addr].Len())
+	if list, _ := pool.queue.get(addr); list.Len() != 1 {
+		t.Error("expected 1 queued transaction, got", list.Len())
 	}
 
 	if pool.all.Count() != 1 {
@@ -845,14 +837,11 @@ func TestDropping(t *testing.T) {
 	pool.enqueueTx(tx12.Hash(), tx12, true)
 
 	// Check that pre and post validations leave the pool as is
-	// pool.pendingMu.RLock()
 	if pool.pending[account].Len() != 3 {
 		t.Errorf("pending transaction mismatch: have %d, want %d", pool.pending[account].Len(), 3)
 	}
-	// pool.pendingMu.RUnlock()
-
-	if pool.queue[account].Len() != 3 {
-		t.Errorf("queued transaction mismatch: have %d, want %d", pool.queue[account].Len(), 3)
+	if list, _ := pool.queue.get(account); list.Len() != 3 {
+		t.Errorf("queued transaction mismatch: have %d, want %d", list.Len(), 3)
 	}
 
 	if pool.all.Count() != 6 {
@@ -861,14 +850,11 @@ func TestDropping(t *testing.T) {
 
 	<-pool.requestReset(nil, nil)
 
-	// pool.pendingMu.RLock()
 	if pool.pending[account].Len() != 3 {
 		t.Errorf("pending transaction mismatch: have %d, want %d", pool.pending[account].Len(), 3)
 	}
-	// pool.pendingMu.RUnlock()
-
-	if pool.queue[account].Len() != 3 {
-		t.Errorf("queued transaction mismatch: have %d, want %d", pool.queue[account].Len(), 3)
+	if list, _ := pool.queue.get(account); list.Len() != 3 {
+		t.Errorf("queued transaction mismatch: have %d, want %d", list.Len(), 3)
 	}
 
 	if pool.all.Count() != 6 {
@@ -878,7 +864,6 @@ func TestDropping(t *testing.T) {
 	testAddBalance(pool, account, big.NewInt(-650))
 	<-pool.requestReset(nil, nil)
 
-	// pool.pendingMu.RLock()
 	if _, ok := pool.pending[account].txs.items[tx0.Nonce()]; !ok {
 		t.Errorf("funded pending transaction missing: %v", tx0)
 	}
@@ -890,17 +875,14 @@ func TestDropping(t *testing.T) {
 	if _, ok := pool.pending[account].txs.items[tx2.Nonce()]; ok {
 		t.Errorf("out-of-fund pending transaction present: %v", tx1)
 	}
-	// pool.pendingMu.RUnlock()
-
-	if _, ok := pool.queue[account].txs.items[tx10.Nonce()]; !ok {
+	list, _ := pool.queue.get(account)
+	if _, ok := list.txs.items[tx10.Nonce()]; !ok {
 		t.Errorf("funded queued transaction missing: %v", tx10)
 	}
-
-	if _, ok := pool.queue[account].txs.items[tx11.Nonce()]; !ok {
+	if _, ok := list.txs.items[tx11.Nonce()]; !ok {
 		t.Errorf("funded queued transaction missing: %v", tx10)
 	}
-
-	if _, ok := pool.queue[account].txs.items[tx12.Nonce()]; ok {
+	if _, ok := list.txs.items[tx12.Nonce()]; ok {
 		t.Errorf("out-of-fund queued transaction present: %v", tx11)
 	}
 
@@ -911,7 +893,6 @@ func TestDropping(t *testing.T) {
 	pool.chain.(*testBlockChain).gasLimit.Store(100)
 	<-pool.requestReset(nil, nil)
 
-	// pool.pendingMu.RLock()
 	if _, ok := pool.pending[account].txs.items[tx0.Nonce()]; !ok {
 		t.Errorf("funded pending transaction missing: %v", tx0)
 	}
@@ -919,13 +900,11 @@ func TestDropping(t *testing.T) {
 	if _, ok := pool.pending[account].txs.items[tx1.Nonce()]; ok {
 		t.Errorf("over-gased pending transaction present: %v", tx1)
 	}
-	// pool.pendingMu.RUnlock()
-
-	if _, ok := pool.queue[account].txs.items[tx10.Nonce()]; !ok {
+	list, _ = pool.queue.get(account)
+	if _, ok := list.txs.items[tx10.Nonce()]; !ok {
 		t.Errorf("funded queued transaction missing: %v", tx10)
 	}
-
-	if _, ok := pool.queue[account].txs.items[tx11.Nonce()]; ok {
+	if _, ok := list.txs.items[tx11.Nonce()]; ok {
 		t.Errorf("over-gased queued transaction present: %v", tx11)
 	}
 
@@ -980,14 +959,11 @@ func TestPostponing(t *testing.T) {
 		}
 	}
 	// Check that pre and post validations leave the pool as is
-	// pool.pendingMu.RLock()
 	if pending := pool.pending[accs[0]].Len() + pool.pending[accs[1]].Len(); pending != len(txs) {
 		t.Errorf("pending transaction mismatch: have %d, want %d", pending, len(txs))
 	}
-	// pool.pendingMu.RUnlock()
-
-	if len(pool.queue) != 0 {
-		t.Errorf("queued accounts mismatch: have %d, want %d", len(pool.queue), 0)
+	if len(pool.queue.addresses()) != 0 {
+		t.Errorf("queued accounts mismatch: have %d, want %d", len(pool.queue.addresses()), 0)
 	}
 
 	if pool.all.Count() != len(txs) {
@@ -996,14 +972,11 @@ func TestPostponing(t *testing.T) {
 
 	<-pool.requestReset(nil, nil)
 
-	// pool.pendingMu.RLock()
 	if pending := pool.pending[accs[0]].Len() + pool.pending[accs[1]].Len(); pending != len(txs) {
 		t.Errorf("pending transaction mismatch: have %d, want %d", pending, len(txs))
 	}
-	// pool.pendingMu.RUnlock()
-
-	if len(pool.queue) != 0 {
-		t.Errorf("queued accounts mismatch: have %d, want %d", len(pool.queue), 0)
+	if len(pool.queue.addresses()) != 0 {
+		t.Errorf("queued accounts mismatch: have %d, want %d", len(pool.queue.addresses()), 0)
 	}
 
 	if pool.all.Count() != len(txs) {
@@ -1018,32 +991,27 @@ func TestPostponing(t *testing.T) {
 
 	// The first account's first transaction remains valid, check that subsequent
 	// ones are either filtered out, or queued up for later.
-	// pool.pendingMu.RLock()
 	if _, ok := pool.pending[accs[0]].txs.items[txs[0].Nonce()]; !ok {
 		t.Errorf("tx %d: valid and funded transaction missing from pending pool: %v", 0, txs[0])
 	}
-	// pool.pendingMu.RUnlock()
-
-	if _, ok := pool.queue[accs[0]].txs.items[txs[0].Nonce()]; ok {
+	list, _ := pool.queue.get(accs[0])
+	if _, ok := list.txs.items[txs[0].Nonce()]; ok {
 		t.Errorf("tx %d: valid and funded transaction present in future queue: %v", 0, txs[0])
 	}
 
-	// pool.pendingMu.RLock()
 	for i, tx := range txs[1:100] {
 		if i%2 == 1 {
 			if _, ok := pool.pending[accs[0]].txs.items[tx.Nonce()]; ok {
 				t.Errorf("tx %d: valid but future transaction present in pending pool: %v", i+1, tx)
 			}
-
-			if _, ok := pool.queue[accs[0]].txs.items[tx.Nonce()]; !ok {
+			if _, ok := list.txs.items[tx.Nonce()]; !ok {
 				t.Errorf("tx %d: valid but future transaction missing from future queue: %v", i+1, tx)
 			}
 		} else {
 			if _, ok := pool.pending[accs[0]].txs.items[tx.Nonce()]; ok {
 				t.Errorf("tx %d: out-of-fund transaction present in pending pool: %v", i+1, tx)
 			}
-
-			if _, ok := pool.queue[accs[0]].txs.items[tx.Nonce()]; ok {
+			if _, ok := list.txs.items[tx.Nonce()]; ok {
 				t.Errorf("tx %d: out-of-fund transaction present in future queue: %v", i+1, tx)
 			}
 		}
@@ -1056,15 +1024,14 @@ func TestPostponing(t *testing.T) {
 	if pool.pending[accs[1]] != nil {
 		t.Errorf("invalidated account still has pending transactions")
 	}
-	// pool.pendingMu.RUnlock()
-
+	list, _ = pool.queue.get(accs[1])
 	for i, tx := range txs[100:] {
 		if i%2 == 1 {
-			if _, ok := pool.queue[accs[1]].txs.items[tx.Nonce()]; !ok {
+			if _, ok := list.txs.items[tx.Nonce()]; !ok {
 				t.Errorf("tx %d: valid but future transaction missing from future queue: %v", 100+i, tx)
 			}
 		} else {
-			if _, ok := pool.queue[accs[1]].txs.items[tx.Nonce()]; ok {
+			if _, ok := list.txs.items[tx.Nonce()]; ok {
 				t.Errorf("tx %d: out-of-fund transaction present in future queue: %v", 100+i, tx)
 			}
 		}
@@ -1161,15 +1128,14 @@ func TestQueueAccountLimiting(t *testing.T) {
 		if len(pool.pending) != 0 {
 			t.Errorf("tx %d: pending pool size mismatch: have %d, want %d", i, len(pool.pending), 0)
 		}
-		// pool.pendingMu.RUnlock()
-
+		list, _ := pool.queue.get(account)
 		if i <= testTxPoolConfig.AccountQueue {
-			if pool.queue[account].Len() != int(i) {
-				t.Errorf("tx %d: queue size mismatch: have %d, want %d", i, pool.queue[account].Len(), i)
+			if list.Len() != int(i) {
+				t.Errorf("tx %d: queue size mismatch: have %d, want %d", i, list.Len(), i)
 			}
 		} else {
-			if pool.queue[account].Len() != int(testTxPoolConfig.AccountQueue) {
-				t.Errorf("tx %d: queue limit mismatch: have %d, want %d", i, pool.queue[account].Len(), testTxPoolConfig.AccountQueue)
+			if list.Len() != int(testTxPoolConfig.AccountQueue) {
+				t.Errorf("tx %d: queue limit mismatch: have %d, want %d", i, list.Len(), testTxPoolConfig.AccountQueue)
 			}
 		}
 	}
@@ -1268,8 +1234,7 @@ func TestQueueGlobalLimiting(t *testing.T) {
 	pool.addRemotesSync(txs)
 
 	queued := 0
-
-	for addr, list := range pool.queue {
+	for addr, list := range pool.queue.queued {
 		if list.Len() > int(config.AccountQueue) {
 			t.Errorf("addr %x: queued accounts overflown allowance: %d > %d", addr, list.Len(), config.AccountQueue)
 		}
@@ -1433,10 +1398,8 @@ func TestPendingLimiting(t *testing.T) {
 		if pool.pending[account].Len() != int(i)+1 {
 			t.Errorf("tx %d: pending pool size mismatch: have %d, want %d", i, pool.pending[account].Len(), i+1)
 		}
-		// pool.pendingMu.RUnlock()
-
-		if len(pool.queue) != 0 {
-			t.Errorf("tx %d: queue size mismatch: have %d, want %d", i, pool.queue[account].Len(), 0)
+		if len(pool.queue.addresses()) != 0 {
+			t.Errorf("tx %d: queue size mismatch: have %d, want %d", i, len(pool.queue.addresses()), 0)
 		}
 	}
 
@@ -2639,8 +2602,8 @@ func TestSetCodeTransactions(t *testing.T) {
 			pending: 1,
 			run: func(name string) {
 				aa := common.Address{0xaa, 0xaa}
-				statedb.SetCode(addrA, append(types.DelegationPrefix, aa.Bytes()...))
-				statedb.SetCode(aa, []byte{byte(vm.ADDRESS), byte(vm.PUSH0), byte(vm.SSTORE)})
+				statedb.SetCode(addrA, append(types.DelegationPrefix, aa.Bytes()...), tracing.CodeChangeUnspecified)
+				statedb.SetCode(aa, []byte{byte(vm.ADDRESS), byte(vm.PUSH0), byte(vm.SSTORE)}, tracing.CodeChangeUnspecified)
 
 				// Send gapped transaction, it should be rejected.
 				if err := pool.addRemoteSync(pricedTransaction(2, 100000, big.NewInt(1), keyA)); !errors.Is(err, ErrOutOfOrderTxFromDelegated) {
@@ -2664,7 +2627,7 @@ func TestSetCodeTransactions(t *testing.T) {
 				}
 
 				// Reset the delegation, avoid leaking state into the other tests
-				statedb.SetCode(addrA, nil)
+				statedb.SetCode(addrA, nil, tracing.CodeChangeUnspecified)
 			},
 		},
 		{
@@ -2777,7 +2740,7 @@ func TestSetCodeTransactions(t *testing.T) {
 			},
 		},
 		{
-			// This test is analogous to the previous one, but the the replaced
+			// This test is analogous to the previous one, but the replaced
 			// transaction is self-sponsored.
 			name:    "allow-tx-from-replaced-self-sponsor-authority",
 			pending: 3,
@@ -2920,7 +2883,7 @@ func TestSetCodeTransactionsReorg(t *testing.T) {
 	// Send an authorization for 0x42
 	var authList []types.SetCodeAuthorization
 	auth, _ := types.SignSetCode(keyA, types.SetCodeAuthorization{
-		ChainID: *uint256.MustFromBig(params.TestChainConfig.ChainID),
+		ChainID: *uint256.MustFromBig(params.MergedTestChainConfig.ChainID),
 		Address: common.Address{0x42},
 		Nonce:   0,
 	})
@@ -2930,11 +2893,11 @@ func TestSetCodeTransactionsReorg(t *testing.T) {
 	}
 	// Simulate the chain moving
 	blockchain.statedb.SetNonce(addrA, 1, tracing.NonceChangeAuthorization)
-	blockchain.statedb.SetCode(addrA, types.AddressToDelegation(auth.Address))
+	blockchain.statedb.SetCode(addrA, types.AddressToDelegation(auth.Address), tracing.CodeChangeUnspecified)
 	<-pool.requestReset(nil, nil)
 	// Set an authorization for 0x00
 	auth, _ = types.SignSetCode(keyA, types.SetCodeAuthorization{
-		ChainID: *uint256.MustFromBig(params.TestChainConfig.ChainID),
+		ChainID: *uint256.MustFromBig(params.MergedTestChainConfig.ChainID),
 		Address: common.Address{},
 		Nonce:   0,
 	})
@@ -2948,7 +2911,7 @@ func TestSetCodeTransactionsReorg(t *testing.T) {
 	}
 	// Simulate the chain moving
 	blockchain.statedb.SetNonce(addrA, 2, tracing.NonceChangeAuthorization)
-	blockchain.statedb.SetCode(addrA, nil)
+	blockchain.statedb.SetCode(addrA, nil, tracing.CodeChangeUnspecified)
 	<-pool.requestReset(nil, nil)
 	// Now send two transactions from addrA
 	if err := pool.addRemoteSync(pricedTransaction(2, 100000, big.NewInt(1000), keyA)); err != nil {
@@ -5018,4 +4981,610 @@ func TestTxFiltering(t *testing.T) {
 			t.Errorf("transaction should be accepted with non-existent file, got %v", err)
 		}
 	})
+}
+
+// setupRebroadcastTest creates a pool with rebroadcast config and adds a transaction.
+// Returns the pool, key, sender address, and the added transaction.
+func setupRebroadcastTest(t *testing.T, interval, maxAge time.Duration, batchSize int) (*LegacyPool, *ecdsa.PrivateKey, common.Address, *types.Transaction) {
+	t.Helper()
+	config := testTxPoolConfig
+	config.RebroadcastInterval = interval
+	config.RebroadcastMaxAge = maxAge
+	config.RebroadcastBatchSize = batchSize
+
+	pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+		pool.config = config
+	})
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(1000000000000000000))
+	tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+	if err := pool.addRemoteSync(tx); err != nil {
+		pool.Close()
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	return pool, key, from, tx
+}
+
+// setTxAge sets the time of all pending transactions for the given address.
+// Must be called with pool.mu held.
+func setTxAge(pool *LegacyPool, from common.Address, age time.Duration) {
+	if list := pool.pending[from]; list != nil {
+		for _, tx := range list.Flatten() {
+			tx.SetTime(time.Now().Add(-age))
+		}
+	}
+}
+
+// TestIdentifyStuckTransactions tests the identifyStuckTransactions method
+func TestIdentifyStuckTransactions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("TooYoungTransactions", func(t *testing.T) {
+		// Transactions younger than RebroadcastInterval should not be identified as stuck
+		pool, _, _, _ := setupRebroadcastTest(t, 1*time.Second, 10*time.Second, 100)
+		defer pool.Close()
+
+		// Transaction has current timestamp, so it's too young
+		pool.mu.RLock()
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.RUnlock()
+
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for young tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("TooOldTransactions", func(t *testing.T) {
+		// Transactions older than RebroadcastMaxAge that have been rebroadcast before
+		// should not be identified again (to prevent infinite rebroadcasting)
+		pool, _, from, _ := setupRebroadcastTest(t, 1*time.Second, 5*time.Second, 100)
+		defer pool.Close()
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 10*time.Second) // older than maxAge of 5s
+		// Mark as previously rebroadcast
+		for _, tx := range pool.pending[from].Flatten() {
+			pool.lastRebroadcast[tx.Hash()] = time.Now().Add(-6 * time.Second)
+		}
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for old previously-rebroadcast tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("OldTransactionsNeverRebroadcast", func(t *testing.T) {
+		// Old transactions that have NEVER been rebroadcast should still be identified
+		// (e.g., a transaction that just became executable after base fee dropped)
+		pool, _, from, _ := setupRebroadcastTest(t, 1*time.Second, 5*time.Second, 100)
+		defer pool.Close()
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 10*time.Second) // older than maxAge, but never rebroadcast
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 1 {
+			t.Errorf("expected 1 stuck transaction for old never-rebroadcast tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("EligibleTransactions", func(t *testing.T) {
+		// Transactions within the age range should be identified as stuck
+		pool, _, from, _ := setupRebroadcastTest(t, 1*time.Second, 10*time.Second, 100)
+		defer pool.Close()
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second) // between interval and maxAge
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 1 {
+			t.Errorf("expected 1 stuck transaction, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("RecentlyRebroadcast", func(t *testing.T) {
+		// Transactions that were recently rebroadcast should not be identified again
+		pool, _, from, _ := setupRebroadcastTest(t, 1*time.Second, 10*time.Second, 100)
+		defer pool.Close()
+
+		// First identification should find the tx
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		stuckTxs1 := pool.identifyStuckTransactions()
+		if len(stuckTxs1) != 1 {
+			pool.mu.Unlock()
+			t.Fatalf("expected 1 stuck transaction on first call, got %d", len(stuckTxs1))
+		}
+
+		// Mark as rebroadcast
+		for _, tx := range stuckTxs1 {
+			pool.lastRebroadcast[tx.Hash()] = time.Now()
+		}
+		pool.mu.Unlock()
+
+		// Immediately calling again should not find it (recently rebroadcast)
+		pool.mu.RLock()
+		stuckTxs2 := pool.identifyStuckTransactions()
+		pool.mu.RUnlock()
+
+		if len(stuckTxs2) != 0 {
+			t.Errorf("expected 0 stuck transactions after recent rebroadcast, got %d", len(stuckTxs2))
+		}
+	})
+
+	t.Run("BatchSizeLimit", func(t *testing.T) {
+		// Only RebroadcastBatchSize transactions should be returned
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 3
+
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		balance, _ := new(big.Int).SetString("100000000000000000000", 10) // 100 ETH
+		testAddBalance(pool, from, balance)
+
+		// Add 5 transactions
+		for i := range 5 {
+			tx := pricedTransaction(uint64(i), 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+			if err := pool.addRemoteSync(tx); err != nil {
+				t.Fatalf("failed to add transaction %d: %v", i, err)
+			}
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		if len(stuckTxs) != 3 {
+			t.Errorf("expected batch size limit of 3, got %d", len(stuckTxs))
+		}
+	})
+}
+
+// TestRebroadcastCleanup tests that lastRebroadcast entries are cleaned up when txs are removed
+func TestRebroadcastCleanup(t *testing.T) {
+	t.Parallel()
+
+	pool, _, from, tx := setupRebroadcastTest(t, 1*time.Second, 10*time.Second, 100)
+	defer pool.Close()
+
+	hash := tx.Hash()
+
+	// Make it eligible and identify it
+	pool.mu.Lock()
+	setTxAge(pool, from, 3*time.Second)
+	stuckTxs := pool.identifyStuckTransactions()
+
+	// Mark as rebroadcast
+	for _, stuckTx := range stuckTxs {
+		pool.lastRebroadcast[stuckTx.Hash()] = time.Now()
+	}
+
+	// Verify it's tracked
+	if _, ok := pool.lastRebroadcast[hash]; !ok {
+		pool.mu.Unlock()
+		t.Fatal("transaction should be tracked in lastRebroadcast")
+	}
+
+	// Remove the transaction
+	pool.removeTx(hash, true, true)
+
+	// Verify cleanup
+	_, stillTracked := pool.lastRebroadcast[hash]
+	pool.mu.Unlock()
+
+	if stillTracked {
+		t.Error("transaction should be removed from lastRebroadcast after removal")
+	}
+}
+
+// TestRebroadcastCleanupAllPaths tests that lastRebroadcast entries are cleaned up
+// when transactions are removed through various code paths (not just removeTx)
+func TestRebroadcastCleanupAllPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PendingReplacement", func(t *testing.T) {
+		t.Parallel()
+		// Test that replacing a pending transaction cleans up lastRebroadcast
+		pool, key := setupPoolWithConfig(params.TestChainConfig)
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add original transaction
+		tx1 := pricedTransaction(0, 100000, big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx1); err != nil {
+			t.Fatalf("failed to add original transaction: %v", err)
+		}
+
+		// Manually mark it as rebroadcast and record size
+		pool.mu.Lock()
+		pool.lastRebroadcast[tx1.Hash()] = time.Now()
+		sizeBefore := len(pool.lastRebroadcast)
+		pool.mu.Unlock()
+
+		// Replace with higher price transaction
+		tx2 := pricedTransaction(0, 100000, big.NewInt(2), key)
+		if err := pool.addRemoteSync(tx2); err != nil {
+			t.Fatalf("failed to replace transaction: %v", err)
+		}
+
+		// Verify old tx is cleaned up and map size decreased
+		pool.mu.RLock()
+		_, stillTracked := pool.lastRebroadcast[tx1.Hash()]
+		sizeAfter := len(pool.lastRebroadcast)
+		pool.mu.RUnlock()
+
+		if stillTracked {
+			t.Error("replaced pending transaction should be removed from lastRebroadcast")
+		}
+		if sizeAfter >= sizeBefore {
+			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+	})
+
+	t.Run("QueuedReplacement", func(t *testing.T) {
+		t.Parallel()
+		// Test that replacing a queued transaction cleans up lastRebroadcast
+		pool, key := setupPoolWithConfig(params.TestChainConfig)
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a queued transaction (nonce gap)
+		tx1 := pricedTransaction(5, 100000, big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx1); err != nil {
+			t.Fatalf("failed to add original queued transaction: %v", err)
+		}
+
+		// Manually mark it as rebroadcast and record size
+		pool.mu.Lock()
+		pool.lastRebroadcast[tx1.Hash()] = time.Now()
+		sizeBefore := len(pool.lastRebroadcast)
+		pool.mu.Unlock()
+
+		// Replace with higher price transaction
+		tx2 := pricedTransaction(5, 100000, big.NewInt(2), key)
+		if err := pool.addRemoteSync(tx2); err != nil {
+			t.Fatalf("failed to replace queued transaction: %v", err)
+		}
+
+		// Verify old tx is cleaned up and map size decreased
+		pool.mu.RLock()
+		_, stillTracked := pool.lastRebroadcast[tx1.Hash()]
+		sizeAfter := len(pool.lastRebroadcast)
+		pool.mu.RUnlock()
+
+		if stillTracked {
+			t.Error("replaced queued transaction should be removed from lastRebroadcast")
+		}
+		if sizeAfter >= sizeBefore {
+			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+	})
+
+	t.Run("DemoteUnexecutables", func(t *testing.T) {
+		t.Parallel()
+		// Test that demoting transactions (when nonce advances externally) cleans up lastRebroadcast
+		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		blockchain := newTestBlockChain(params.TestChainConfig, 1000000, statedb, new(event.Feed))
+
+		pool := New(testTxPoolConfig, blockchain)
+		pool.Init(testTxPoolConfig.PriceLimit, blockchain.CurrentBlock(), newReserver())
+		defer pool.Close()
+
+		key, _ := crypto.GenerateKey()
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a pending transaction at nonce 0
+		tx := pricedTransaction(0, 100000, big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// Manually mark it as rebroadcast and record size
+		pool.mu.Lock()
+		pool.lastRebroadcast[tx.Hash()] = time.Now()
+		sizeBefore := len(pool.lastRebroadcast)
+		pool.mu.Unlock()
+
+		// Simulate external nonce advancement (e.g., tx included in block)
+		statedb.SetNonce(from, 1, tracing.NonceChangeUnspecified)
+
+		// Trigger reset which calls demoteUnexecutables
+		<-pool.requestReset(nil, nil)
+
+		// Verify old tx is cleaned up and map size decreased
+		pool.mu.RLock()
+		_, stillTracked := pool.lastRebroadcast[tx.Hash()]
+		sizeAfter := len(pool.lastRebroadcast)
+		pool.mu.RUnlock()
+
+		if stillTracked {
+			t.Error("demoted transaction should be removed from lastRebroadcast")
+		}
+		if sizeAfter >= sizeBefore {
+			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+	})
+
+	t.Run("PromoteExecutablesDropsOld", func(t *testing.T) {
+		t.Parallel()
+		// Test that promoting executables cleans up old queued txs from lastRebroadcast
+		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		blockchain := newTestBlockChain(params.TestChainConfig, 1000000, statedb, new(event.Feed))
+
+		pool := New(testTxPoolConfig, blockchain)
+		pool.Init(testTxPoolConfig.PriceLimit, blockchain.CurrentBlock(), newReserver())
+		defer pool.Close()
+
+		key, _ := crypto.GenerateKey()
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a queued transaction at nonce 5 (future nonce)
+		tx := pricedTransaction(5, 100000, big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add queued transaction: %v", err)
+		}
+
+		// Manually mark it as rebroadcast and record size
+		pool.mu.Lock()
+		pool.lastRebroadcast[tx.Hash()] = time.Now()
+		sizeBefore := len(pool.lastRebroadcast)
+		pool.mu.Unlock()
+
+		// Advance the nonce past the queued tx (simulating txs 0-5 being included)
+		statedb.SetNonce(from, 6, tracing.NonceChangeUnspecified)
+
+		// Trigger reset which calls promoteExecutables and drops old queued txs
+		<-pool.requestReset(nil, nil)
+
+		// Verify old tx is cleaned up and map size decreased
+		pool.mu.RLock()
+		_, stillTracked := pool.lastRebroadcast[tx.Hash()]
+		sizeAfter := len(pool.lastRebroadcast)
+		pool.mu.RUnlock()
+
+		if stillTracked {
+			t.Error("dropped queued transaction should be removed from lastRebroadcast")
+		}
+		if sizeAfter >= sizeBefore {
+			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+	})
+}
+
+// TestSubscribeRebroadcastTransactions tests the subscription mechanism
+func TestSubscribeRebroadcastTransactions(t *testing.T) {
+	t.Parallel()
+
+	pool, _ := setupPoolWithConfig(params.TestChainConfig)
+	defer pool.Close()
+
+	ch := make(chan core.StuckTxsEvent, 1)
+	sub := pool.SubscribeRebroadcastTransactions(ch)
+	defer sub.Unsubscribe()
+
+	// The subscription should be valid
+	if sub == nil {
+		t.Error("subscription should not be nil")
+	}
+}
+
+// TestIdentifyStuckTransactionsWithBaseFee tests rebroadcast with EIP-1559 base fee filtering
+func TestIdentifyStuckTransactionsWithBaseFee(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NilHead", func(t *testing.T) {
+		// When currentHead is nil, should return nil
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Set currentHead to nil
+		pool.currentHead.Store(nil)
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should return nil when head is nil
+		if stuckTxs != nil {
+			t.Errorf("expected nil for nil head, got %d transactions", len(stuckTxs))
+		}
+	})
+
+	t.Run("LowGasFeeCap", func(t *testing.T) {
+		// Transactions with gas fee cap below base fee should not be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with low gas fee cap
+		tx := dynamicFeeTx(0, 100000, big.NewInt(100), big.NewInt(1), key) // fee cap = 100 wei
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		// Set the current head to have a high base fee to trigger filtering
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Inject a header with BaseFee higher than the tx's gas fee cap
+		pool.currentHead.Store(&types.Header{
+			Number:  big.NewInt(1),
+			BaseFee: big.NewInt(1000000000), // 1 gwei, higher than tx's 100 wei fee cap
+		})
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should NOT be identified because gas fee cap is below base fee
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for low fee cap tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("LowGasTip", func(t *testing.T) {
+		// Transactions with gas tip below minimum should not be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with low tip (tip = 1 wei)
+		tx := dynamicFeeTx(0, 100000, big.NewInt(10000000000), big.NewInt(1), key)
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Directly set a high gasTip without calling SetGasTip (which would remove the tx)
+		pool.gasTip.Store(uint256.NewInt(1000000000)) // 1 gwei, higher than tx's 1 wei tip
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should NOT be identified because gas tip is below minimum
+		if len(stuckTxs) != 0 {
+			t.Errorf("expected 0 stuck transactions for low tip tx, got %d", len(stuckTxs))
+		}
+	})
+
+	t.Run("ValidEIP1559Transaction", func(t *testing.T) {
+		// Valid EIP-1559 transactions with sufficient fee cap and tip should be identified
+		config := testTxPoolConfig
+		config.RebroadcastInterval = 1 * time.Second
+		config.RebroadcastMaxAge = 10 * time.Second
+		config.RebroadcastBatchSize = 100
+
+		pool, key := setupPoolWithConfig(eip1559Config, func(pool *LegacyPool) {
+			pool.config = config
+		})
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		// Add a dynamic fee tx with sufficient fee cap and tip
+		tx := dynamicFeeTx(0, 100000, big.NewInt(10000000000), big.NewInt(1000000000), key) // 10 gwei fee cap, 1 gwei tip
+		if err := pool.addRemoteSync(tx); err != nil {
+			t.Fatalf("failed to add transaction: %v", err)
+		}
+
+		pool.mu.Lock()
+		setTxAge(pool, from, 3*time.Second)
+		// Inject a header with BaseFee lower than the tx's gas fee cap
+		pool.currentHead.Store(&types.Header{
+			Number:  big.NewInt(1),
+			BaseFee: big.NewInt(1000000000), // 1 gwei, lower than tx's 10 gwei fee cap
+		})
+		stuckTxs := pool.identifyStuckTransactions()
+		pool.mu.Unlock()
+
+		// Should be identified because fee cap and tip are sufficient
+		if len(stuckTxs) != 1 {
+			t.Errorf("expected 1 stuck transaction for valid EIP-1559 tx, got %d", len(stuckTxs))
+		}
+	})
+}
+
+// TestRebroadcastLoopIntegration tests the actual rebroadcast loop sending events
+func TestRebroadcastLoopIntegration(t *testing.T) {
+	t.Parallel()
+
+	config := testTxPoolConfig
+	config.RebroadcastInterval = 100 * time.Millisecond // Short interval for testing
+	config.RebroadcastMaxAge = 10 * time.Second
+	config.RebroadcastBatchSize = 100
+
+	pool, key := setupPoolWithConfig(params.TestChainConfig, func(pool *LegacyPool) {
+		pool.config = config
+	})
+	defer pool.Close()
+
+	// Subscribe to rebroadcast events
+	ch := make(chan core.StuckTxsEvent, 10)
+	sub := pool.SubscribeRebroadcastTransactions(ch)
+	defer sub.Unsubscribe()
+
+	from := crypto.PubkeyToAddress(key.PublicKey)
+	testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+	// Add a transaction
+	tx := pricedTransaction(0, 100000, big.NewInt(params.BorDefaultTxPoolPriceLimit), key)
+	if err := pool.addRemoteSync(tx); err != nil {
+		t.Fatalf("failed to add transaction: %v", err)
+	}
+
+	// Manually set the transaction time to make it eligible for rebroadcast
+	pool.mu.Lock()
+	setTxAge(pool, from, 200*time.Millisecond)
+	pool.mu.Unlock()
+
+	// Wait for the rebroadcast loop to trigger
+	select {
+	case event := <-ch:
+		if len(event.Txs) != 1 {
+			t.Errorf("expected 1 transaction in rebroadcast event, got %d", len(event.Txs))
+		}
+		if event.Txs[0].Hash() != tx.Hash() {
+			t.Errorf("wrong transaction hash in rebroadcast event")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("timeout waiting for rebroadcast event")
+	}
+
+	// Verify lastRebroadcast was updated
+	pool.mu.RLock()
+	_, tracked := pool.lastRebroadcast[tx.Hash()]
+	pool.mu.RUnlock()
+
+	if !tracked {
+		t.Error("transaction should be tracked in lastRebroadcast after rebroadcast")
+	}
 }

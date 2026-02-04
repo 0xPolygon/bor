@@ -22,19 +22,42 @@ import (
 // requests to the mock heimdal server for specific functions. Add more handlers
 // according to requirements.
 type HttpHandlerFake struct {
+	mu                    sync.RWMutex
 	handleFetchCheckpoint http.HandlerFunc
 	handleFetchMilestone  http.HandlerFunc
 }
 
+func (h *HttpHandlerFake) SetCheckpointHandler(handler http.HandlerFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.handleFetchCheckpoint = handler
+}
+
+func (h *HttpHandlerFake) SetMilestoneHandler(handler http.HandlerFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.handleFetchMilestone = handler
+}
+
 func (h *HttpHandlerFake) GetCheckpointHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.handleFetchCheckpoint.ServeHTTP(w, r)
+		h.mu.RLock()
+		handler := h.handleFetchCheckpoint
+		h.mu.RUnlock()
+		if handler != nil {
+			handler.ServeHTTP(w, r)
+		}
 	}
 }
 
 func (h *HttpHandlerFake) GetMilestoneHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.handleFetchMilestone.ServeHTTP(w, r)
+		h.mu.RLock()
+		handler := h.handleFetchMilestone
+		h.mu.RUnlock()
+		if handler != nil {
+			handler.ServeHTTP(w, r)
+		}
 	}
 }
 
@@ -97,7 +120,7 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 	}
 
 	handler := &HttpHandlerFake{}
-	handler.handleFetchCheckpoint = func(w http.ResponseWriter, _ *http.Request) {
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, _ *http.Request) {
 		err := json.NewEncoder(w).Encode(gRPCGatewayCheckpointResponseV2{
 			Result: gRPCGatewayCheckpointV2{
 				Proposer:   common.Address{},
@@ -112,7 +135,7 @@ func TestFetchCheckpointFromMockHeimdall(t *testing.T) {
 		if err != nil {
 			w.WriteHeader(500) // Return 500 Internal Server Error.
 		}
-	}
+	})
 
 	// Fetch available port
 	port, listener, err := network.FindAvailablePort()
@@ -165,7 +188,7 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 	}
 
 	handler := &HttpHandlerFake{}
-	handler.handleFetchMilestone = func(w http.ResponseWriter, _ *http.Request) {
+	handler.SetMilestoneHandler(func(w http.ResponseWriter, _ *http.Request) {
 		err := json.NewEncoder(w).Encode(gRPCGatewayMilestoneResponseV2{
 			Result: gRPCGatewayMilestoneV2{
 				Proposer:        common.Address{},
@@ -181,7 +204,7 @@ func TestFetchMilestoneFromMockHeimdall(t *testing.T) {
 		if err != nil {
 			w.WriteHeader(500) // Return 500 Internal Server Error.
 		}
-	}
+	})
 
 	// Fetch available port
 	port, listener, err := network.FindAvailablePort()
@@ -222,7 +245,7 @@ func TestFetchShutdown(t *testing.T) {
 	// Case1 - Testing context timeout: Create delay in serving requests for simulating timeout. Add delay slightly
 	// greater than `retryDelay`. This should cause the request to timeout and trigger shutdown
 	// due to `ctx.Done()`. Expect context timeout error.
-	handler.handleFetchCheckpoint = func(w http.ResponseWriter, _ *http.Request) {
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 
 		err := json.NewEncoder(w).Encode(checkpoint.CheckpointResponse{
@@ -239,7 +262,7 @@ func TestFetchShutdown(t *testing.T) {
 		if err != nil {
 			w.WriteHeader(500) // Return 500 Internal Server Error.
 		}
-	}
+	})
 
 	// Fetch available port
 	port, listener, err := network.FindAvailablePort()
@@ -264,10 +287,10 @@ func TestFetchShutdown(t *testing.T) {
 	// Case2 - Testing context cancellation. Pass a context with timeout to the request and
 	// cancel it before timeout. This should cause the request to timeout and trigger shutdown
 	// due to `ctx.Done()`. Expect context cancellation error.
-	handler.handleFetchCheckpoint = func(w http.ResponseWriter, _ *http.Request) {
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(500) // Return 500 Internal Server Error.
-	}
+	})
 
 	ctx, cancel = context.WithTimeout(t.Context(), 50*time.Millisecond) // Use some high value for timeout
 
@@ -285,9 +308,9 @@ func TestFetchShutdown(t *testing.T) {
 	// Case3 - Testing interrupt: Closing the `closeCh` in heimdall client simulating interrupt. This
 	// should cause the request to fail and throw an error due to `<-closeCh` in fetchWithRetry.
 	// Expect shutdown detected error.
-	handler.handleFetchCheckpoint = func(w http.ResponseWriter, _ *http.Request) {
+	handler.SetCheckpointHandler(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500) // Return 500 Internal Server Error.
-	}
+	})
 
 	// Close the channel after a delay until we make request
 	go func() {

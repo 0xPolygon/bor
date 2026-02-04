@@ -21,12 +21,13 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
-	"golang.org/x/sync/errgroup"
 )
 
 // statePrefetcher is a basic Prefetcher that executes transactions from a block
@@ -111,12 +112,6 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
-			// Pre-load trie nodes for the intermediate root.
-			//
-			// This operation incurs significant memory allocations due to
-			// trie hashing and node decoding. TODO(rjl493456442): investigate
-			// ways to mitigate this overhead.
-			stateCpy.IntermediateRoot(true)
 			return nil
 		})
 	}

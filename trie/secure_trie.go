@@ -156,6 +156,26 @@ func (t *StateTrie) GetAccountByHash(addrHash common.Hash) (*types.StateAccount,
 	return ret, err
 }
 
+// PrefetchAccount attempts to resolve specific accounts from the database
+// to accelerate subsequent trie operations.
+func (t *StateTrie) PrefetchAccount(addresses []common.Address) error {
+	var keys [][]byte
+	for _, addr := range addresses {
+		keys = append(keys, crypto.Keccak256(addr.Bytes()))
+	}
+	return t.trie.Prefetch(keys)
+}
+
+// PrefetchStorage attempts to resolve specific storage slots from the database
+// to accelerate subsequent trie operations.
+func (t *StateTrie) PrefetchStorage(_ common.Address, keys [][]byte) error {
+	var keylist [][]byte
+	for _, key := range keys {
+		keylist = append(keylist, crypto.Keccak256(key))
+	}
+	return t.trie.Prefetch(keylist)
+}
+
 // GetNode attempts to retrieve a trie node by compact-encoded path. It is not
 // possible to use keybyte-encoding as the path might contain odd nibbles.
 // If the specified trie node is not in the trie, nil will be returned.
@@ -265,7 +285,7 @@ func (t *StateTrie) GetKey(shaKey []byte) []byte {
 }
 
 // Witness returns a set containing all trie nodes that have been accessed.
-func (t *StateTrie) Witness() map[string]struct{} {
+func (t *StateTrie) Witness() map[string][]byte {
 	return t.trie.Witness()
 }
 

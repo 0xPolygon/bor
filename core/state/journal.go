@@ -22,10 +22,11 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/holiman/uint256"
 )
 
 type revision struct {

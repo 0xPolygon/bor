@@ -27,14 +27,15 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/ethereum/go-ethereum/internal/flags"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
-	"github.com/ethereum/go-ethereum/metrics/exp"
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/natefinch/lumberjack.v2"
+
+	"github.com/ethereum/go-ethereum/internal/flags"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/metrics/exp"
 )
 
 var (
@@ -55,13 +56,13 @@ var (
 		Usage:    "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
 		Value:    "",
 		Hidden:   true,
-		Category: flags.LoggingCategory,
+		Category: flags.DeprecatedCategory,
 	}
 	logjsonFlag = &cli.BoolFlag{
 		Name:     "log.json",
 		Usage:    "Format logs with JSON",
 		Hidden:   true,
-		Category: flags.LoggingCategory,
+		Category: flags.DeprecatedCategory,
 	}
 	logFormatFlag = &cli.StringFlag{
 		Name:     "log.format",

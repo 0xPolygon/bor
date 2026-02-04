@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set/v2"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -519,4 +520,17 @@ func (k *knownCache) Contains(hash common.Hash) bool {
 // Cardinality returns the number of elements in the set.
 func (k *knownCache) Cardinality() int {
 	return k.hashes.Cardinality()
+}
+
+// Remove removes a list of elements from the set.
+func (k *knownCache) Remove(hashes ...common.Hash) {
+	for _, hash := range hashes {
+		k.hashes.Remove(hash)
+	}
+}
+
+// ForgetTransactions removes the given transaction hashes from the peer's
+// known transaction set, allowing them to be re-broadcast to this peer.
+func (p *Peer) ForgetTransactions(hashes []common.Hash) {
+	p.knownTxs.Remove(hashes...)
 }

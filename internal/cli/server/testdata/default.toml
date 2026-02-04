@@ -84,6 +84,7 @@ devfakeauthor = false
   gascap = 50000000
   evmtimeout = "5s"
   txfeecap = 1.0
+  logquerylimit = 1000
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
   [jsonrpc.http]

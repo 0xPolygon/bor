@@ -25,8 +25,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/log"
 	stunV2 "github.com/pion/stun/v2"
+
+	"github.com/ethereum/go-ethereum/log"
 )
 
 //go:embed stun-list.txt

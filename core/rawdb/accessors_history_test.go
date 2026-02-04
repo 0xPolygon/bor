@@ -3,12 +3,13 @@ package rawdb
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/stretchr/testify/require"
 )
 
-// TestDeleteStateHistoryIndex_WithoutBorReceipts tests if the the deletion of all
+// TestDeleteStateHistoryIndex_WithoutBorReceipts tests if the deletion of all
 // history indexing data works and bor receipts aren't deleted despite having same
 // prefix for deletion.
 func TestDeleteStateHistoryIndex_WithoutBorReceipts(t *testing.T) {

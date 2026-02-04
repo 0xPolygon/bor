@@ -20,6 +20,9 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum/go-verkle"
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -32,8 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
-	"github.com/ethereum/go-verkle"
-	"github.com/holiman/uint256"
 )
 
 // BlockGen creates blocks for testing.
@@ -424,7 +425,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 		body := types.Body{Transactions: b.txs, Uncles: b.uncles, Withdrawals: b.withdrawals}
 		var block *types.Block
 		var err error
-		block, b.receipts, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, &body, b.receipts)
+		block, b.receipts, _, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, &body, b.receipts)
 		if err != nil {
 			panic(err)
 		}
@@ -464,7 +465,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			txs = txs[:len(receipts)]
 		}
 		var blobGasPrice *big.Int
-		if block.ExcessBlobGas() != nil {
+		if block.ExcessBlobGas() != nil && cm.config.BlobScheduleConfig != nil {
 			blobGasPrice = eip4844.CalcBlobFee(cm.config, block.Header())
 		}
 		if err := receipts.DeriveFields(config, block.Hash(), block.NumberU64(), block.Time(), block.BaseFee(), blobGasPrice, txs); err != nil {
@@ -537,7 +538,7 @@ func GenerateVerkleChain(config *params.ChainConfig, parent *types.Block, engine
 		}
 		var block *types.Block
 		var err error
-		block, b.receipts, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, body, b.receipts)
+		block, b.receipts, _, err = b.engine.FinalizeAndAssemble(cm, b.header, statedb, body, b.receipts)
 		if err != nil {
 			panic(err)
 		}
@@ -557,8 +558,10 @@ func GenerateVerkleChain(config *params.ChainConfig, parent *types.Block, engine
 		return block, b.receipts
 	}
 
+	sdb := state.NewDatabase(trdb, nil)
+
 	for i := 0; i < n; i++ {
-		statedb, err := state.New(parent.Root(), state.NewDatabase(trdb, nil))
+		statedb, err := state.New(parent.Root(), sdb)
 		if err != nil {
 			panic(err)
 		}
@@ -577,7 +580,7 @@ func GenerateVerkleChain(config *params.ChainConfig, parent *types.Block, engine
 			txs = txs[:len(receipts)]
 		}
 		var blobGasPrice *big.Int
-		if block.ExcessBlobGas() != nil {
+		if block.ExcessBlobGas() != nil && cm.config.BlobScheduleConfig != nil {
 			blobGasPrice = eip4844.CalcBlobFee(cm.config, block.Header())
 		}
 		if err := receipts.DeriveFields(config, block.Hash(), block.NumberU64(), block.Time(), block.BaseFee(), blobGasPrice, txs); err != nil {

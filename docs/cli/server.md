@@ -314,6 +314,20 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
 
+- ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
+
+- ```miner.gasLimitMin```: Minimum gas limit when dynamic gas limit is enabled (default: 0)
+
+- ```miner.gasLimitMax```: Maximum gas limit when dynamic gas limit is enabled (default: 0)
+
+- ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 0)
+
+- ```miner.baseFeeBuffer```: Buffer around target base fee in wei (no adjustment when within buffer) (default: 0)
+
+- ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks (default: 0)
+
+- ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Dandeli blocks (default: 0)
+
 ### Telemetry Options
 
 - ```metrics```: Enable metrics collection and reporting (default: false)

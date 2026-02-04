@@ -17,7 +17,9 @@
 package common
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -25,10 +27,7 @@ import (
 // FileExist checks if a file exists at filePath.
 func FileExist(filePath string) bool {
 	_, err := os.Stat(filePath)
-	if err != nil && os.IsNotExist(err) {
-		return false
-	}
-	return true
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // AbsolutePath returns datadir + filename, or filename if it is absolute.
@@ -38,6 +37,20 @@ func AbsolutePath(datadir string, filename string) string {
 	}
 
 	return filepath.Join(datadir, filename)
+}
+
+// IsNonEmptyDir checks if a directory exists and is non-empty.
+func IsNonEmptyDir(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	if err != nil {
+		return false
+	}
+	return len(names) > 0
 }
 
 // VerifyPath sanitizes the path to avoid Path Traversal vulnerability

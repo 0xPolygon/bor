@@ -23,6 +23,9 @@ import (
 	"time"
 
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/holiman/uint256"
+	"golang.org/x/crypto/sha3"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -34,8 +37,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/holiman/uint256"
-	"golang.org/x/crypto/sha3"
 )
 
 // Ethash proof-of-work protocol constants.
@@ -513,18 +514,20 @@ func (ethash *Ethash) Finalize(chain consensus.ChainHeaderReader, header *types.
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
 // uncle rewards, setting the final state and assembling the block.
-func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
+func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, []*types.Receipt, time.Duration, error) {
 	if len(body.Withdrawals) > 0 {
-		return nil, nil, errors.New("ethash does not support withdrawals")
+		return nil, nil, 0, errors.New("ethash does not support withdrawals")
 	}
 	// Finalize block
 	ethash.Finalize(chain, header, state, body, receipts)
 
 	// Assign the final state root to header.
+	start := time.Now()
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	commitTime := time.Since(start)
 
 	// Header seems complete, assemble into a block and return
-	return types.NewBlock(header, &types.Body{Transactions: body.Transactions, Uncles: body.Uncles, Withdrawals: body.Withdrawals}, receipts, trie.NewStackTrie(nil)), receipts, nil
+	return types.NewBlock(header, &types.Body{Transactions: body.Transactions, Uncles: body.Uncles, Withdrawals: body.Withdrawals}, receipts, trie.NewStackTrie(nil)), receipts, commitTime, nil
 }
 
 // SealHash returns the hash of a block prior to it being sealed.

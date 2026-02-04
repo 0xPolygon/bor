@@ -195,3 +195,15 @@ func createTestLegacyTxInner() *LegacyTx {
 		Data:     nil,
 	}
 }
+
+// TODO(raneet10): We probably do not need this benchmark.
+// func Benchmark_modernSigner_Equal(b *testing.B) {
+// 	signer1 := newModernSigner(big.NewInt(1), forks.Amsterdam)
+// 	signer2 := newModernSigner(big.NewInt(1), forks.Amsterdam)
+
+// 	for b.Loop() {
+// 		if !signer1.Equal(signer2) {
+// 			b.Fatal("expected signers to be equal")
+// 		}
+// 	}
+// }

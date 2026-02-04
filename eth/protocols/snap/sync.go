@@ -29,8 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/crypto/sha3"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -105,7 +103,7 @@ var (
 	// to allow concurrent retrievals.
 	accountConcurrency = 16
 
-	// storageConcurrency is the number of chunks to split the a large contract
+	// storageConcurrency is the number of chunks to split a large contract
 	// storage trie into to allow concurrent retrievals.
 	storageConcurrency = 16
 )
@@ -505,8 +503,10 @@ type Syncer struct {
 	storageHealed      uint64             // Number of storage slots downloaded during the healing stage
 	storageHealedBytes common.StorageSize // Number of raw storage bytes persisted to disk during the healing stage
 
-	startTime time.Time // Time instance when snapshot sync started
-	logTime   time.Time // Time instance when status was last reported
+	startTime     time.Time // Time instance when snapshot sync started
+	healStartTime time.Time // Time instance when the state healing started
+	syncTimeOnce  sync.Once // Ensure that the state sync time is uploaded only once
+	logTime       time.Time // Time instance when status was last reported
 
 	pend sync.WaitGroup // Tracks network request goroutines for graceful shutdown
 	lock sync.RWMutex   // Protects fields that can change outside of sync (peers, reqs, root)
@@ -631,7 +631,7 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 	s.statelessPeers = make(map[string]struct{})
 	s.lock.Unlock()
 
-	if s.startTime == (time.Time{}) {
+	if s.startTime.IsZero() {
 		s.startTime = time.Now()
 	}
 	// Retrieve the previous sync status from LevelDB and abort if already synced
@@ -708,6 +708,14 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.cleanAccountTasks()
 
 		if len(s.tasks) == 0 && s.healer.scheduler.Pending() == 0 {
+			// State healing phase completed, record the elapsed time in metrics.
+			// Note: healing may be rerun in subsequent cycles to fill gaps between
+			// pivot states (e.g., if chain sync takes longer).
+			if !s.healStartTime.IsZero() {
+				stateHealTimeGauge.Inc(int64(time.Since(s.healStartTime)))
+				log.Info("State healing phase is completed", "elapsed", common.PrettyDuration(time.Since(s.healStartTime)))
+				s.healStartTime = time.Time{}
+			}
 			return nil
 		}
 
@@ -717,7 +725,17 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		s.assignStorageTasks(storageResps, storageReqFails, cancel)
 
 		if len(s.tasks) == 0 {
-			// Sync phase done, run heal phase
+			// State sync phase completed, record the elapsed time in metrics.
+			// Note: the initial state sync runs only once, regardless of whether
+			// a new cycle is started later. Any state differences in subsequent
+			// cycles will be handled by the state healer.
+			s.syncTimeOnce.Do(func() {
+				stateSyncTimeGauge.Update(int64(time.Since(s.startTime)))
+				log.Info("State sync phase is completed", "elapsed", common.PrettyDuration(time.Since(s.startTime)))
+			})
+			if s.healStartTime.IsZero() {
+				s.healStartTime = time.Now()
+			}
 			s.assignTrienodeHealTasks(trienodeHealResps, trienodeHealReqFails, cancel)
 			s.assignBytecodeHealTasks(bytecodeHealResps, bytecodeHealReqFails, cancel)
 		}
@@ -894,6 +912,7 @@ func (s *Syncer) loadSyncStatus() {
 			stateCompleted: make(map[common.Hash]struct{}),
 			genTrie:        tr,
 		})
+		log.Debug("Created account sync task", "from", next, "last", last)
 
 		next = common.BigToHash(new(big.Int).Add(last.Big(), common.Big1))
 	}
@@ -2124,10 +2143,7 @@ func (s *Syncer) processAccountResponse(res *accountResponse) {
 func (s *Syncer) processBytecodeResponse(res *bytecodeResponse) {
 	batch := s.db.NewBatch()
 
-	var (
-		codes uint64
-	)
-
+	var codes uint64
 	for i, hash := range res.hashes {
 		code := res.codes[i]
 
@@ -2516,7 +2532,7 @@ func (s *Syncer) commitHealer(force bool) {
 
 	batch := s.db.NewBatch()
 	if err := s.healer.scheduler.Commit(batch); err != nil {
-		log.Error("Failed to commit healing data", "err", err)
+		log.Crit("Failed to commit healing data", "err", err)
 	}
 
 	if err := batch.Write(); err != nil {
@@ -2850,9 +2866,9 @@ func (s *Syncer) onByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) error
 	}
 	s.lock.Unlock()
 
-	// Cross reference the requested bytecodes with the response to find gaps
+	// Cross-reference the requested bytecodes with the response to find gaps
 	// that the serving node is missing
-	hasher := sha3.NewLegacyKeccak256().(crypto.KeccakState)
+	hasher := crypto.NewKeccakState()
 	hash := make([]byte, 32)
 
 	codes := make([][]byte, len(req.hashes))
@@ -3128,7 +3144,7 @@ func (s *Syncer) OnTrieNodes(peer SyncPeer, id uint64, trienodes [][]byte) error
 	// Cross-reference the requested trie-nodes with the response to find gaps
 	// that the serving node is missing
 	var (
-		hasher = sha3.NewLegacyKeccak256().(crypto.KeccakState)
+		hasher = crypto.NewKeccakState()
 		hash   = make([]byte, 32)
 		nodes  = make([][]byte, len(req.hashes))
 		fills  uint64
@@ -3244,9 +3260,9 @@ func (s *Syncer) onHealByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) e
 	}
 	s.lock.Unlock()
 
-	// Cross reference the requested bytecodes with the response to find gaps
+	// Cross-reference the requested bytecodes with the response to find gaps
 	// that the serving node is missing
-	hasher := sha3.NewLegacyKeccak256().(crypto.KeccakState)
+	hasher := crypto.NewKeccakState()
 	hash := make([]byte, 32)
 
 	codes := make([][]byte, len(req.hashes))
@@ -3368,6 +3384,10 @@ func (s *Syncer) reportSyncProgress(force bool) {
 	// Don't report anything until we have a meaningful progress
 	if estBytes < 1.0 {
 		return
+	}
+	// Cap the estimated state size using the synced size to avoid negative values
+	if estBytes < float64(synced) {
+		estBytes = float64(synced)
 	}
 
 	elapsed := time.Since(s.startTime)

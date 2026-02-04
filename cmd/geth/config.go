@@ -29,6 +29,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/naoina/toml"
+	"github.com/urfave/cli/v2"
+
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/external"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -48,8 +51,6 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/naoina/toml"
-	"github.com/urfave/cli/v2"
 )
 
 var (
@@ -264,14 +265,16 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 	if cfg.Ethstats.URL != "" {
 		utils.RegisterEthStatsService(stack, backend, cfg.Ethstats.URL)
 	}
-	// Configure full-sync tester service if requested
+	// Configure synchronization override service
+	var synctarget common.Hash
 	if ctx.IsSet(utils.SyncTargetFlag.Name) {
 		hex := hexutil.MustDecode(ctx.String(utils.SyncTargetFlag.Name))
 		if len(hex) != common.HashLength {
 			utils.Fatalf("invalid sync target length: have %d, want %d", len(hex), common.HashLength)
 		}
-		utils.RegisterFullSyncTester(stack, eth, common.BytesToHash(hex))
+		synctarget = common.BytesToHash(hex)
 	}
+	utils.RegisterSyncOverrideService(stack, eth, synctarget, ctx.Bool(utils.ExitWhenSyncedFlag.Name))
 
 	if ctx.IsSet(utils.DeveloperFlag.Name) {
 		// Start dev mode.

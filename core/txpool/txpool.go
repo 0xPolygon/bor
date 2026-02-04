@@ -66,7 +66,6 @@ type BlockChain interface {
 type TxPool struct {
 	subpools []SubPool // List of subpools for specialized transaction handling
 	chain    BlockChain
-	signer   types.Signer
 
 	stateLock sync.RWMutex   // The lock for protecting state instance
 	state     *state.StateDB // Current state at the blockchain head
@@ -99,7 +98,6 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 	pool := &TxPool{
 		subpools: subpools,
 		chain:    chain,
-		signer:   types.LatestSigner(chain.Config()),
 		state:    statedb,
 		quit:     make(chan chan error),
 		term:     make(chan struct{}),
@@ -158,7 +156,11 @@ func (p *TxPool) loop(head *types.Header) {
 		newHeadCh  = make(chan core.ChainHeadEvent)
 		newHeadSub = p.chain.SubscribeChainHeadEvent(newHeadCh)
 	)
-	defer newHeadSub.Unsubscribe()
+	defer func() {
+		if newHeadSub != nil {
+			newHeadSub.Unsubscribe()
+		}
+	}()
 
 	// Track the previous and current head to feed to an idle reset
 	var (
@@ -300,6 +302,9 @@ func (p *TxPool) Get(hash common.Hash) *types.Transaction {
 
 // GetRLP returns a RLP-encoded transaction if it is contained in the pool.
 func (p *TxPool) GetRLP(hash common.Hash) []byte {
+	if p == nil {
+		return nil
+	}
 	for _, subpool := range p.subpools {
 		encoded := subpool.GetRLP(hash)
 		if len(encoded) != 0 {
@@ -312,6 +317,9 @@ func (p *TxPool) GetRLP(hash common.Hash) []byte {
 // GetMetadata returns the transaction type and transaction size with the given
 // hash.
 func (p *TxPool) GetMetadata(hash common.Hash) *TxMetadata {
+	if p == nil {
+		return nil
+	}
 	for _, subpool := range p.subpools {
 		if meta := subpool.GetMetadata(hash); meta != nil {
 			return meta
@@ -407,6 +415,22 @@ func (p *TxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) 
 	return p.subs.Track(event.JoinSubscriptions(subs...))
 }
 
+// SubscribeRebroadcastTransactions registers a subscription for stuck transaction
+// rebroadcast events from all subpools.
+func (p *TxPool) SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription {
+	if p == nil {
+		return event.NewSubscription(func(quit <-chan struct{}) error {
+			<-quit
+			return nil
+		})
+	}
+	subs := make([]event.Subscription, len(p.subpools))
+	for i, subpool := range p.subpools {
+		subs[i] = subpool.SubscribeRebroadcastTransactions(ch)
+	}
+	return p.subs.Track(event.JoinSubscriptions(subs...))
+}
+
 // PoolNonce returns the next nonce of an account, with all transactions executable
 // by the pool already applied on top.
 func (p *TxPool) PoolNonce(addr common.Address) uint64 {
@@ -425,6 +449,9 @@ func (p *TxPool) PoolNonce(addr common.Address) uint64 {
 // Nonce returns the next nonce of an account at the current chain head. Unlike
 // PoolNonce, this function does not account for pending executable transactions.
 func (p *TxPool) Nonce(addr common.Address) uint64 {
+	if p == nil {
+		return 0
+	}
 	p.stateLock.RLock()
 	defer p.stateLock.RUnlock()
 
@@ -450,6 +477,9 @@ func (p *TxPool) Stats() (int, int) {
 // Content retrieves the data content of the transaction pool, returning all the
 // pending as well as queued transactions, grouped by account and sorted by nonce.
 func (p *TxPool) Content() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction) {
+	if p == nil {
+		return make(map[common.Address][]*types.Transaction), make(map[common.Address][]*types.Transaction)
+	}
 	var (
 		runnable = make(map[common.Address][]*types.Transaction)
 		blocked  = make(map[common.Address][]*types.Transaction)
@@ -470,6 +500,9 @@ func (p *TxPool) Content() (map[common.Address][]*types.Transaction, map[common.
 // ContentFrom retrieves the data content of the transaction pool, returning the
 // pending as well as queued transactions of this address, grouped by nonce.
 func (p *TxPool) ContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
+	if p == nil {
+		return []*types.Transaction{}, []*types.Transaction{}
+	}
 	for _, subpool := range p.subpools {
 		run, block := subpool.ContentFrom(addr)
 		if len(run) != 0 || len(block) != 0 {

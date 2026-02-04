@@ -23,6 +23,8 @@ import (
 	"math/big"
 	"sync/atomic"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -30,7 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 // ExecutionResult includes all output after executing given evm
@@ -408,6 +409,9 @@ func (st *stateTransition) preCheck() error {
 		if len(msg.BlobHashes) == 0 {
 			return ErrMissingBlobHashes
 		}
+		if isOsaka && len(msg.BlobHashes) > params.BlobTxMaxBlobs {
+			return ErrTooManyBlobs
+		}
 		for i, hash := range msg.BlobHashes {
 			if !kzg4844.IsValidVersionedHash(hash[:]) {
 				return fmt.Errorf("blob %d has invalid hash version", i)
@@ -704,12 +708,12 @@ func (st *stateTransition) applyAuthorization(auth *types.SetCodeAuthorization) 
 	st.state.SetNonce(authority, auth.Nonce+1, tracing.NonceChangeAuthorization)
 	if auth.Address == (common.Address{}) {
 		// Delegation to zero address means clear.
-		st.state.SetCode(authority, nil)
+		st.state.SetCode(authority, nil, tracing.CodeChangeAuthorizationClear)
 		return nil
 	}
 
 	// Otherwise install delegation to auth.Address.
-	st.state.SetCode(authority, types.AddressToDelegation(auth.Address))
+	st.state.SetCode(authority, types.AddressToDelegation(auth.Address), tracing.CodeChangeAuthorization)
 
 	return nil
 }
