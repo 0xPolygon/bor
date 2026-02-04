@@ -17,6 +17,7 @@ concurrency:
 
 env:
   ENCLAVE_NAME: kurtosis-e2e
+  POLYCLI_VERSION: v0.1.102
 
 jobs:
   build-bor:
@@ -83,7 +84,7 @@ jobs:
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
-        uses: ./.github/actions/kurtosis-pre-run
+        uses: ./.github/actions/setup
         with:
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
@@ -129,9 +130,10 @@ jobs:
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       - name: Test state syncs
-        uses: ./.github/actions/state-sync-test
+        uses: ./.github/actions/test-state-sync
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
+          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
 
       - name: Install Go
         uses: actions/setup-go@v6
@@ -145,13 +147,22 @@ jobs:
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
 
-      - name: Run smoke tests (Checkpoints and Milestones)
+      - name: Install polycli
+        run: |
+          tmp_dir=$(mktemp -d)
+          curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
+          mv "$tmp_dir"/* /usr/local/bin/polycli
+          rm -rf "$tmp_dir"
+          sudo chmod +x /usr/local/bin/polycli
+          polycli version
+
+      - name: Run smoke tests
         working-directory: pos-workflows/tests
         run: bash ./kurtosis_smoke_test.sh
 
       # Clean up
       - name: Post kurtosis run
         if: always()
-        uses: ./.github/actions/kurtosis-post-run
+        uses: ./.github/actions/cleanup
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}

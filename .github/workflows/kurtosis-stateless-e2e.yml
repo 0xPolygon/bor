@@ -1,4 +1,4 @@
-name: Stateless Sync E2E Tests
+name: Kurtosis Stateless E2E Tests
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
     types: [opened, synchronize]
 
 concurrency:
-  group: stateless-sync-${{ github.event.pull_request.number || github.ref }}
+  group: kurtosis-stateless-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -84,7 +84,7 @@ jobs:
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
-        uses: ./.github/actions/kurtosis-pre-run
+        uses: ./.github/actions/setup
         with:
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
@@ -139,18 +139,19 @@ jobs:
           sudo chmod +x /usr/local/bin/polycli
           polycli version
 
-      - name: Run stateless sync tests
+      - name: Run stateless e2e tests
         working-directory: pos-workflows/tests/stateless_tests
         run: bash kurtosis_stateless_test.sh
 
       - name: Test state syncs
-        uses: ./.github/actions/state-sync-test
+        uses: ./.github/actions/test-state-sync
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
+          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
 
       # Clean up
       - name: Post kurtosis run
         if: always()
-        uses: ./.github/actions/kurtosis-post-run
+        uses: ./.github/actions/cleanup
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
