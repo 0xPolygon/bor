@@ -28,6 +28,7 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4784,8 +4785,8 @@ func (m *mockChainValidator) GetMilestoneIDsList() []string { return nil }
 type mockFailingEngine struct {
 	*ethash.Ethash
 	shouldFailHeader      map[uint64]bool
-	allowInitialInsertion bool // Allow initial insertion to succeed
-	insertionComplete     bool // Track when insertion is complete
+	allowInitialInsertion bool        // Allow initial insertion to succeed
+	insertionComplete     atomic.Bool // Track when insertion is complete
 }
 
 func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
@@ -4800,7 +4801,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 				return
 			default:
 				// If we're allowing initial insertion and it's not complete yet, succeed
-				if m.allowInitialInsertion && !m.insertionComplete {
+				if m.allowInitialInsertion && !m.insertionComplete.Load() {
 					results <- nil
 				} else if m.shouldFailHeader != nil && m.shouldFailHeader[header.Number.Uint64()] {
 					results <- errors.New("mock header verification failure")
@@ -4815,7 +4816,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 }
 
 func (m *mockFailingEngine) markInsertionComplete() {
-	m.insertionComplete = true
+	m.insertionComplete.Store(true)
 }
 
 // TestHeaderVerificationLoop tests the background header verification functionality
