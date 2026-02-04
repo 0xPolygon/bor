@@ -148,6 +148,7 @@ jobs:
         uses: ./.github/actions/state-sync-test
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
+          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
 
       # Clean up
       - name: Post kurtosis run
