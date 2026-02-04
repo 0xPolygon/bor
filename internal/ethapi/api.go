@@ -2245,25 +2245,48 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 		return nil, err
 	}
 
-	if errors.Is(err, txpool.ErrAlreadyKnown) {
-		// If the tx is already known, update the hash. Skip the wait
-		// to check the tx pool status.
-		hash = tx.Hash()
-	} else {
-		// Check tx status leaving a small delay for internal pool rearrangements
-		// TODO: try to have a better estimate for this or replace with a subscription
-		time.Sleep(100 * time.Millisecond)
-	}
+	ch := make(chan core.NewTxsEvent, 1024)
+	sub := api.b.SubscribeNewTxsEvent(ch)
+	defer sub.Unsubscribe()
 
-	txStatus := api.b.TxStatus(hash)
-	var txConfirmed bool
-	if txStatus == txpool.TxStatusPending {
-		txConfirmed = true
+	// make it configurable in future if needed
+	var preconfTimeout = time.Second
+	var preconfirmed bool
+
+	if errors.Is(err, txpool.ErrAlreadyKnown) {
+		// If the tx is already known, check the status in pool immediately.
+		txStatus := api.b.TxStatus(tx.Hash())
+		if txStatus == txpool.TxStatusPending {
+			preconfirmed = true
+		}
+	} else {
+		// Wait for the transaction to be included in pending pool
+	outer:
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					break outer
+				}
+				for _, tx := range ev.Txs {
+					if tx.Hash() == hash {
+						preconfirmed = true
+						break outer
+					}
+				}
+			case _, ok := <-sub.Err():
+				if !ok {
+					break outer
+				}
+			case <-time.After(preconfTimeout):
+				break outer
+			}
+		}
 	}
 
 	return map[string]interface{}{
 		"hash":         hash,
-		"preconfirmed": txConfirmed,
+		"preconfirmed": preconfirmed,
 	}, nil
 }
 
