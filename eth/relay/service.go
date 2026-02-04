@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 var (
@@ -15,6 +16,22 @@ var (
 	errQueueOverflow             = errors.New("relay task queue overflow")
 	errPreconfValidationFailed   = errors.New("failed to validate transaction inclusion status for issuing preconf")
 	errPrivateTxSubmissionFailed = errors.New("private tx submission failed partially, background retry scheduled")
+)
+
+var (
+	preconfSubmitTimer   = metrics.NewRegisteredTimer("preconfs/submit", nil)
+	checkTxStatusTimer   = metrics.NewRegisteredTimer("preconfs/checkstatus", nil)
+	privateTxSubmitTimer = metrics.NewRegisteredTimer("privatetx/submit", nil)
+
+	uniquePreconfsTaskMeter     = metrics.NewRegisteredMeter("preconfs/tasks", nil)
+	validPreconfsMeter          = metrics.NewRegisteredMeter("preconfs/valid", nil)
+	invalidPreconfsMeter        = metrics.NewRegisteredMeter("preconfs/invalid", nil)
+	invalidToValidPreconfsMeter = metrics.NewRegisteredMeter("preconfs/invalidtovalid", nil)
+	txInDbMeter                 = metrics.NewRegisteredMeter("preconfs/txindb", nil)
+
+	uniquePrivateTxRequestMeter     = metrics.NewRegisteredMeter("privatetx/request", nil)
+	privateTxSubmissionSuccessMeter = metrics.NewRegisteredMeter("privatetx/success", nil)
+	privateTxSubmissionFailureMeter = metrics.NewRegisteredMeter("privatetx/failure", nil)
 )
 
 // TxGetter defines a function that retrieves a transaction by its hash from local database.
@@ -134,7 +151,11 @@ func (s *Service) processPreconfTasks() {
 // processPreconfTask submits the preconf transaction from the task to the block
 // producers via multiclient and updates the status in cache.
 func (s *Service) processPreconfTask(task TxTask) {
+	// Capture some metrics
+	uniquePreconfsTaskMeter.Mark(1)
+	start := time.Now()
 	res, err := s.multiclient.submitPreconfTx(task.rawtx)
+	preconfSubmitTimer.UpdateSince(start)
 	// It's possible that the calls succeeded but preconf was not offered in which
 	// case err would be nil. Update with a generic error as preconf wasn't offered.
 	if !res && err == nil {
@@ -164,6 +185,11 @@ func (s *Service) updateTaskInCache(newTask TxTask) (bool, error) {
 	if !exists {
 		// Task doesn't exist, create it and update the cache
 		newTask.insertedAt = time.Now()
+		if newTask.preconfirmed {
+			validPreconfsMeter.Mark(1)
+		} else {
+			invalidPreconfsMeter.Mark(1)
+		}
 		s.store[newTask.hash] = newTask
 		return newTask.preconfirmed, newTask.err
 	}
@@ -176,6 +202,7 @@ func (s *Service) updateTaskInCache(newTask TxTask) (bool, error) {
 		return existingTask.preconfirmed, existingTask.err
 	}
 
+	invalidToValidPreconfsMeter.Mark(1)
 	existingTask.preconfirmed = newTask.preconfirmed
 	existingTask.err = newTask.err
 	s.store[newTask.hash] = existingTask
@@ -202,6 +229,7 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	if s.txGetter != nil {
 		found, tx, _, _, _ := s.txGetter(hash)
 		if found && tx != nil {
+			txInDbMeter.Mark(1)
 			s.updateTaskInCache(TxTask{hash: hash, preconfirmed: true, err: nil})
 			log.Debug("[tx-relay] Transaction found in local database", "hash", hash)
 			return true, nil
@@ -213,7 +241,9 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	}
 
 	// If tx not found locally, query block producers for status
+	start := time.Now()
 	res, err := s.multiclient.checkTxStatus(hash)
+	checkTxStatusTimer.UpdateSince(start)
 	// It's possible that the calls succeeded but preconf was not offered in which
 	// case err would be nil. Update with a generic error as preconf wasn't offered.
 	if !res && err == nil {
@@ -241,12 +271,17 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 		return err
 	}
 
+	uniquePrivateTxRequestMeter.Mark(1)
+	start := time.Now()
 	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry, s.txGetter)
+	privateTxSubmitTimer.UpdateSince(start)
 	if err != nil {
+		privateTxSubmissionFailureMeter.Mark(1)
 		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "err", err)
 		return errPrivateTxSubmissionFailed
 	}
 
+	privateTxSubmissionSuccessMeter.Mark(1)
 	return nil
 }
 

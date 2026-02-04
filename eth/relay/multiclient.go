@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -18,6 +19,14 @@ const (
 	rpcTimeout             = 2 * time.Second
 	privateTxRetryInterval = 2 * time.Second
 	privateTxMaxRetries    = 5
+)
+
+var (
+	rpcCallsSuccessMeter       = metrics.NewRegisteredMeter("preconfs/rpc/success", nil)
+	rpcCallsFailureMeter       = metrics.NewRegisteredMeter("preconfs/rpc/failure", nil)
+	rpcErrorInPreconfMeter     = metrics.NewRegisteredMeter("preconfs/rpcerror", nil)
+	belowThresholdPreconfMeter = metrics.NewRegisteredMeter("preconfs/belowthreshold", nil)
+	alreadyKnownErrMeter       = metrics.NewRegisteredMeter("relay/txalreadyknown", nil)
 )
 
 // isAlreadyKnownError checks if the error indicates the transaction is already known to the node
@@ -108,14 +117,17 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 			err := client.CallContext(ctx, &preconfResponse, "eth_sendRawTransactionForPreconf", hexutil.Encode(rawTx))
 			cancel()
 			if err != nil {
+				rpcCallsFailureMeter.Mark(1)
 				// If the tx is already known, treat it as preconfirmed for this node
 				if isAlreadyKnownError(err) {
+					alreadyKnownErrMeter.Mark(1)
 					preconfOfferedCount.Add(1)
 					return
 				}
 				lastErr = err
 				return
 			}
+			rpcCallsSuccessMeter.Mark(1)
 			if preconfResponse.Preconfirmed {
 				preconfOfferedCount.Add(1)
 			}
@@ -127,6 +139,12 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 	// Only offer a preconf if the tx was accepted by all block producers
 	if preconfOfferedCount.Load() == uint64(len(mc.clients)) {
 		return true, nil
+	}
+
+	if lastErr != nil {
+		rpcErrorInPreconfMeter.Mark(1)
+	} else {
+		belowThresholdPreconfMeter.Mark(1)
 	}
 
 	return false, lastErr
@@ -156,8 +174,10 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
+				rpcCallsFailureMeter.Mark(1)
 				// If the tx is already known, treat it as successful submission
 				if isAlreadyKnownError(err) {
+					alreadyKnownErrMeter.Mark(1)
 					successfulIndices = append(successfulIndices, index)
 					return
 				}
@@ -165,6 +185,7 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 				failedIndices = append(failedIndices, index)
 				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash)
 			} else {
+				rpcCallsSuccessMeter.Mark(1)
 				successfulIndices = append(successfulIndices, index)
 			}
 		}(client, i)
@@ -230,13 +251,17 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 				cancel()
 
 				if err != nil {
+					rpcCallsFailureMeter.Mark(1)
 					// If the tx is already known, treat it as successful submission
 					if isAlreadyKnownError(err) {
+						alreadyKnownErrMeter.Mark(1)
 						return
 					}
 					mu.Lock()
 					newFailedIndices = append(newFailedIndices, idx)
 					mu.Unlock()
+				} else {
+					rpcCallsSuccessMeter.Mark(1)
 				}
 			}(mc.clients[index], index)
 		}
@@ -269,9 +294,11 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 			err := client.CallContext(ctx, &txStatus, "txpool_txStatus", hash)
 			cancel()
 			if err != nil {
+				rpcCallsFailureMeter.Mark(1)
 				lastErr = err
 				return
 			}
+			rpcCallsSuccessMeter.Mark(1)
 			if txStatus == txpool.TxStatusPending {
 				preconfOfferedCount.Add(1)
 			}
@@ -282,6 +309,12 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 	// Only offer a preconf if the tx was accepted by all block producers
 	if preconfOfferedCount.Load() == uint64(len(mc.clients)) {
 		return true, nil
+	}
+
+	if lastErr != nil {
+		rpcErrorInPreconfMeter.Mark(1)
+	} else {
+		belowThresholdPreconfMeter.Mark(1)
 	}
 
 	return false, lastErr
