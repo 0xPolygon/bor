@@ -10,7 +10,10 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
+
+var totalPrivateTxsMeter = metrics.NewRegisteredMeter("privatetxs/count", nil)
 
 type PrivateTxGetter interface {
 	IsTxPrivate(hash common.Hash) bool
@@ -129,6 +132,7 @@ func (s *PrivateTxStore) report() {
 			s.mu.RLock()
 			storeSize := len(s.txs)
 			s.mu.RUnlock()
+			totalPrivateTxsMeter.Mark(int64(storeSize))
 			log.Info("[private-tx-store] stats", "len", storeSize, "added", s.txsAdded.Load(), "purged", s.txsPurged.Load(), "deleted", s.txsDeleted.Load())
 			s.txsAdded.Store(0)
 			s.txsPurged.Store(0)
