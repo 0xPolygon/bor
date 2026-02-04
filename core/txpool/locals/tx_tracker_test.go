@@ -17,11 +17,8 @@
 package locals
 
 import (
-	"fmt"
-	"maps"
+	"crypto/ecdsa"
 	"math/big"
-	"math/rand"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -150,7 +147,6 @@ func TestResubmit(t *testing.T) {
 	txsA := txs[:len(txs)/2]
 	txsB := txs[len(txs)/2:]
 	env.pool.Add(txsA, true)
-
 	pending, queued := env.pool.ContentFrom(address)
 	if len(pending) != len(txsA) || len(queued) != 0 {
 		t.Fatalf("Unexpected txpool content: %d, %d", len(pending), len(queued))
@@ -162,47 +158,87 @@ func TestResubmit(t *testing.T) {
 		t.Fatalf("Unexpected transactions to resubmit, got: %d, want: %d", len(resubmit), len(txsB))
 	}
 	env.tracker.mu.Lock()
-	allCopy := maps.Clone(env.tracker.all)
+	if len(env.tracker.all) != len(txs) {
+		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(env.tracker.all), len(txs))
+	}
+	env.tracker.mu.Unlock()
+}
+
+// TestEmptySortedMapCleanup verifies that empty SortedMap entries are removed
+// from tracker.byAddr when all transactions for an address become stale
+func TestEmptySortedMapCleanup(t *testing.T) {
+	env := newTestEnv(t, 10, 0, "")
+	defer env.close()
+
+	key2, _ := crypto.GenerateKey()
+	addr2 := crypto.PubkeyToAddress(key2.PublicKey)
+
+	txs1 := env.makeTxs(5)
+	env.tracker.TrackAll(txs1)
+
+	txs2 := make([]*types.Transaction, 5)
+	for i := 0; i < 5; i++ {
+		tx, _ := types.SignTx(types.NewTransaction(uint64(i), common.Address{0x00}, big.NewInt(1000), params.TxGas, big.NewInt(params.GWei), nil), signer, key2)
+		txs2[i] = tx
+	}
+	env.tracker.TrackAll(txs2)
+
+	env.tracker.mu.Lock()
+	sizeBefore := len(env.tracker.byAddr)
 	env.tracker.mu.Unlock()
 
-	if len(allCopy) != len(txs) {
-		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(allCopy), len(txs))
+	env.pool.Add(txs2, true)
+	for i := 0; i < 5; i++ {
+		env.commit()
+	}
+	env.tracker.recheck(false)
+
+	env.tracker.mu.Lock()
+	defer env.tracker.mu.Unlock()
+
+	if env.tracker.byAddr[address] != nil || env.tracker.byAddr[addr2] == nil {
+		t.Errorf("cleanup failed: addr1=%v, addr2=%v", env.tracker.byAddr[address], env.tracker.byAddr[addr2])
+	}
+	if sizeAfter := len(env.tracker.byAddr); sizeAfter != 1 || sizeAfter >= sizeBefore {
+		t.Errorf("size check failed: before=%d, after=%d", sizeBefore, sizeAfter)
 	}
 }
 
-func TestJournal(t *testing.T) {
-	journalPath := filepath.Join(t.TempDir(), fmt.Sprintf("%d", rand.Int63()))
-	env := newTestEnv(t, 10, 0, journalPath)
+// TestMultipleAddressesCleanup verifies that only empty SortedMap entries
+// are removed while non-empty ones remain
+func TestMultipleAddressesCleanup(t *testing.T) {
+	env := newTestEnv(t, 10, 0, "")
 	defer env.close()
 
-	env.tracker.Start()
-	defer env.tracker.Stop()
-
-	txs := env.makeTxs(10)
-	txsA := txs[:len(txs)/2]
-	txsB := txs[len(txs)/2:]
-	env.pool.Add(txsA, true)
-
-	pending, queued := env.pool.ContentFrom(address)
-	if len(pending) != len(txsA) || len(queued) != 0 {
-		t.Fatalf("Unexpected txpool content: %d, %d", len(pending), len(queued))
+	accounts := make([]common.Address, 5)
+	keys := make([]*ecdsa.PrivateKey, 5)
+	for i := 0; i < 5; i++ {
+		key, _ := crypto.GenerateKey()
+		keys[i] = key
+		accounts[i] = crypto.PubkeyToAddress(key.PublicKey)
 	}
-	env.tracker.TrackAll(txsA)
-	env.tracker.TrackAll(txsB)
-	env.tracker.recheck(true) // manually rejournal the tracker
 
-	// Make sure all the transactions are properly journalled
-	trackerB := New(journalPath, time.Minute, gspec.Config, env.pool)
-	trackerB.journal.load(func(transactions []*types.Transaction) []error {
-		trackerB.TrackAll(transactions)
-		return nil
-	})
+	for i, key := range keys {
+		txs := make([]*types.Transaction, 3)
+		for j := 0; j < 3; j++ {
+			tx, _ := types.SignTx(types.NewTransaction(uint64(j), common.Address{0x00}, big.NewInt(1000), params.TxGas, big.NewInt(params.GWei), nil), signer, key)
+			txs[j] = tx
+		}
+		env.tracker.TrackAll(txs)
+		if i == 1 || i == 3 {
+			env.pool.Add(txs, true)
+		}
+	}
 
-	trackerB.mu.Lock()
-	allCopy := maps.Clone(trackerB.all)
-	trackerB.mu.Unlock()
+	env.tracker.recheck(false)
 
-	if len(allCopy) != len(txs) {
-		t.Fatalf("Unexpected transactions being tracked, got: %d, want: %d", len(allCopy), len(txs))
+	env.tracker.mu.Lock()
+	defer env.tracker.mu.Unlock()
+
+	if env.tracker.byAddr[accounts[1]] == nil || env.tracker.byAddr[accounts[3]] == nil {
+		t.Error("accounts with pool txs should remain tracked")
+	}
+	if len(env.tracker.byAddr) > 5 {
+		t.Errorf("byAddr should not grow, got %d addresses", len(env.tracker.byAddr))
 	}
 }

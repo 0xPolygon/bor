@@ -139,6 +139,11 @@ func (tracker *TxTracker) recheck(journalCheck bool) []*types.Transaction {
 			}
 			resubmits = append(resubmits, tx)
 		}
+
+		// Remove empty SortedMap to prevent memory accumulation
+		if txs.Len() == 0 {
+			delete(tracker.byAddr, sender)
+		}
 	}
 
 	if journalCheck { // rejournal
