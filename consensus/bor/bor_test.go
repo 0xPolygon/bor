@@ -50,7 +50,7 @@ func (s *fakeSpanner) CommitSpan(ctx context.Context, _ borTypes.Span, _ []stake
 }
 
 // newChainAndBorForTest centralizes common Bor + HeaderChain initialization for tests
-func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, devFake bool, signerAddr common.Address) (*core.BlockChain, *Bor) {
+func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, devFake bool, signerAddr common.Address, genesisTime uint64) (*core.BlockChain, *Bor) {
 	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}
 
 	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: devFake}
@@ -76,8 +76,9 @@ func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, d
 	if devFake && signerAddr != (common.Address{}) {
 		b.authorizedSigner.Store(&signer{signer: signerAddr})
 	}
+	b.parentActualTimeCache, _ = lru.New(10)
 
-	genspec := &core.Genesis{Config: cfg}
+	genspec := &core.Genesis{Config: cfg, Timestamp: genesisTime}
 	db := rawdb.NewMemoryDatabase()
 	_ = genspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
@@ -392,7 +393,7 @@ func TestPerformSpanCheck(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr2, VotingPower: 1}}}
 			borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
-			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{})
+			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 			var parents []*types.Header
 			var parentHash common.Hash
@@ -469,7 +470,7 @@ func TestGetVeBlopSnapshot(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			sp := &fakeSpanner{vals: c.spVals}
 			borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: big.NewInt(0)}
-			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{})
+			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 			h := &types.Header{Number: big.NewInt(int64(c.targetNum))}
 			snap, err := b.getVeBlopSnapshot(chain.HeaderChain(), h, nil, c.checkNewSpan)
 			require.NoError(t, err)
@@ -516,7 +517,7 @@ func TestSnapshot(t *testing.T) {
 			sp := &fakeSpanner{vals: c.spVals}
 			// Configure RioBlock far in the future so IsRio(header.Number) == false
 			borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}, RioBlock: big.NewInt(1_000_000)}
-			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{})
+			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 			gen := chain.HeaderChain().GetHeaderByNumber(0)
 			require.NotNil(t, gen)
 			target := &types.Header{Number: big.NewInt(1), ParentHash: gen.Hash()}
@@ -590,7 +591,7 @@ func TestCustomBlockTimeValidation(t *testing.T) {
 				Period:   map[string]uint64{"0": tc.consensusPeriod},
 				RioBlock: big.NewInt(0), // Enable Rio from genesis
 			}
-			chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+			chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 			b.blockTime = tc.blockTime
 
 			// Get genesis block as parent
@@ -626,7 +627,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Period:   map[string]uint64{"0": 2},
 			RioBlock: big.NewInt(0),
 		}
-		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 		b.blockTime = 5 * time.Second
 
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -652,7 +653,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Period:   map[string]uint64{"0": 2},
 			RioBlock: big.NewInt(0),
 		}
-		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 		b.blockTime = 3 * time.Second
 
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -678,22 +679,23 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Period:   map[string]uint64{"0": 2},
 			RioBlock: big.NewInt(0),
 		}
-		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 		b.blockTime = 4 * time.Second
 
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
 		require.NotNil(t, genesis)
 		baseTime := genesis.Time
+		parentHash := genesis.Hash()
 
 		if baseTime > 10 {
-			b.lastMinedBlockTime = time.Unix(int64(baseTime-10), 0)
+			b.parentActualTimeCache.Add(parentHash, time.Unix(int64(baseTime-10), 0))
 		} else {
-			b.lastMinedBlockTime = time.Unix(0, 0)
+			b.parentActualTimeCache.Add(parentHash, time.Unix(0, 0))
 		}
 
 		header := &types.Header{
 			Number:     big.NewInt(1),
-			ParentHash: genesis.Hash(),
+			ParentHash: parentHash,
 		}
 
 		err := b.Prepare(chain.HeaderChain(), header)
@@ -718,7 +720,7 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 			BackupMultiplier: map[string]uint64{"0": 2},
 			RioBlock:         big.NewInt(0),
 		}
-		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1)
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 		b.blockTime = 0
 
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -734,6 +736,53 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 
 		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
 	})
+}
+
+func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	// Force parent time far in the past so that after adding blockTime, header.Time is still < now
+	// and the "clamp to now" block triggers.
+	pastParentTime := time.Now().Add(-10 * time.Minute).Unix()
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	borCfg := &params.BorConfig{
+		Sprint:   map[string]uint64{"0": 64},
+		Period:   map[string]uint64{"0": 2},
+		RioBlock: big.NewInt(0), // Rio enabled from genesis
+	}
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(pastParentTime))
+
+	// Enable custom block time (must be >= Period to avoid validation error)
+	b.blockTime = 5 * time.Second
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, genesis)
+
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		ParentHash: genesis.Hash(),
+	}
+
+	before := time.Now()
+	err := b.Prepare(chain.HeaderChain(), header)
+	after := time.Now()
+
+	require.NoError(t, err)
+
+	// Validate the clamp happened: header.Time should be "now-ish", not the past-derived time.
+	require.GreaterOrEqual(t, int64(header.Time), before.Unix(), "header.Time should be clamped up to now")
+	require.LessOrEqual(t, int64(header.Time), after.Unix()+1, "header.Time should be close to now")
+
+	// Critical regression assertion:
+	// When custom blockTime is enabled for Rio, clamping header.Time to now must also set ActualTime = now.
+	require.False(t, header.ActualTime.IsZero(), "ActualTime should be set when blockTime > 0 and Rio is enabled")
+	require.GreaterOrEqual(t, header.ActualTime.Unix(), before.Unix(), "ActualTime should be updated to now when clamping occurs")
+	require.LessOrEqual(t, header.ActualTime.Unix(), after.Unix()+1, "ActualTime should be close to now when clamping occurs")
+
+	// Optional: since clamping sets both from the same `now`, they should match on Unix seconds.
+	require.Equal(t, int64(header.Time), header.ActualTime.Unix(), "header.Time and ActualTime should align after clamping")
 }
 
 func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
@@ -757,7 +806,7 @@ func TestVerifySealRejectsOversizedDifficulty(t *testing.T) {
 	}
 
 	// devFake=false, we need real signatures for the sake of this test
-	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{})
+	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	parent := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, parent)

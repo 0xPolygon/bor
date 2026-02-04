@@ -252,7 +252,8 @@ type Bor struct {
 	// The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	blockTime time.Duration
 
-	lastMinedBlockTime time.Time
+	// Cache to store the actual times of the parent blocks
+	parentActualTimeCache *lru.Cache
 
 	quit      chan struct{}
 	closeOnce sync.Once
@@ -325,6 +326,8 @@ func New(
 			return nil, &UnauthorizedSignerError{0, common.Address{}.Bytes(), []*valset.Validator{}}
 		},
 	})
+
+	c.parentActualTimeCache, _ = lru.New(10)
 
 	// make sure we can decode all the GenesisAlloc in the BorConfig.
 	for key, genesisAlloc := range c.config.BlockAlloc {
@@ -1017,29 +1020,30 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
-		parentActualTime := c.lastMinedBlockTime
-		if parentActualTime.IsZero() || parentActualTime.Before(time.Unix(int64(parent.Time), 0)) {
-			parentActualTime = time.Unix(int64(parent.Time), 0)
+
+		parentBlockTime := time.Unix(int64(parent.Time), 0)
+		// Default to parent block timestamp
+		parentActualBlockTime := parentBlockTime
+		// If we have the parent's ActualTime locally (by parent hash), prefer it
+		if c.parentActualTimeCache != nil {
+			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
+				if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
+					parentActualBlockTime = at
+				}
+			}
 		}
-		actualNewBlockTime := parentActualTime.Add(c.blockTime)
-		c.lastMinedBlockTime = actualNewBlockTime
+		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
 	}
 
-	if header.Time < uint64(time.Now().Unix()) {
-		header.Time = uint64(time.Now().Unix())
-	} else {
-		// For primary validators, wait until the current block production window
-		// starts. This prevents bor from starting to build next block before time
-		// as we'd like to wait for new transactions. Although this change doesn't
-		// need a check for hard fork as it doesn't change any consensus rules, we
-		// still keep it for safety and testing.
-		if c.config.IsBhilai(big.NewInt(int64(number))) && succession == 0 {
-			startTime := header.GetActualTime().Add(-time.Duration(c.config.CalculatePeriod(number)) * time.Second)
-			time.Sleep(time.Until(startTime))
+	now := time.Now()
+	if header.Time < uint64(now.Unix()) {
+		header.Time = uint64(now.Unix())
+		if c.blockTime > 0 && c.config.IsRio(header.Number) {
+			header.ActualTime = now
 		}
 	}
 
@@ -1317,6 +1321,10 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	err = Sign(currentSigner.signFn, currentSigner.signer, header, c.config)
 	if err != nil {
 		return err
+	}
+
+	if c.parentActualTimeCache != nil && !header.ActualTime.IsZero() {
+		c.parentActualTimeCache.Add(header.Hash(), header.ActualTime)
 	}
 
 	// Wait until sealing is terminated or delay timeout.
