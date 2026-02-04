@@ -86,6 +86,7 @@ jobs:
       - name: Pre kurtosis run
         uses: ./.github/actions/kurtosis-pre-run
         with:
+          main_branch: develop
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
@@ -153,4 +154,5 @@ jobs:
         if: always()
         uses: ./.github/actions/kurtosis-post-run
         with:
+          main_branch: develop
           enclave_name: ${{ env.ENCLAVE_NAME }}

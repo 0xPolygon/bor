@@ -40,6 +40,7 @@ var mainnetBor = &Chain{
 				MadhugiriBlock:    big.NewInt(80084800),
 				MadhugiriProBlock: big.NewInt(80084800),
 				DandeliBlock:      big.NewInt(81424000),
+				TBDHFBlock:        nil,
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},

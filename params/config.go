@@ -729,6 +729,7 @@ var (
 			MadhugiriBlock:    big.NewInt(0),
 			MadhugiriProBlock: big.NewInt(0),
 			DandeliBlock:      big.NewInt(0),
+			TBDHFBlock:        big.NewInt(0),
 		},
 	}
 
@@ -928,6 +929,7 @@ type BorConfig struct {
 	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	TBDHFBlock                 *big.Int          `json:"tbdhfBlock"`                 // TBDHF switch block (nil = no fork, 0 = already on tbdhf)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -989,6 +991,10 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 
 func (c *BorConfig) IsDandeli(number *big.Int) bool {
 	return isBlockForked(c.DandeliBlock, number)
+}
+
+func (c *BorConfig) IsTBDHF(number *big.Int) bool {
+	return isBlockForked(c.TBDHFBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1123,6 +1129,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.DandeliBlock != nil {
 			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		if c.Bor.TBDHFBlock != nil {
+			banner += fmt.Sprintf(" - TBDHF:                       #%-8v\n", c.Bor.TBDHFBlock)
 		}
 		return banner
 	}
@@ -1760,6 +1769,7 @@ type Rules struct {
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
+	IsTBDHF                                                 bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1793,5 +1803,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
+		IsTBDHF:          c.Bor != nil && c.Bor.IsTBDHF(num),
 	}
 }

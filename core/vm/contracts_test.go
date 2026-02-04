@@ -530,10 +530,11 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsShanghai",
 		"IsCancun",
 		"IsPrague",
-		"IsOsaka",
 		"IsVerkle",
+		"IsOsaka",
 		"IsMadhugiri",
 		"IsMadhugiriPro",
+		"IsTBDHF",
 	}
 
 	if len(actual) != len(expected) {
@@ -545,5 +546,43 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		if actual[i] != expected[i] {
 			t.Fatalf("A new hardfork were detected. Please read and follow the instruction on the comment section of this test")
 		}
+	}
+}
+
+// TestTBDHFP256VerifyGasCost verifies P256 precompile gas cost changes at TBDHF.
+func TestTBDHFP256VerifyGasCost(t *testing.T) {
+	preTBDHF := &p256Verify{eip7951: false}
+	postTBDHF := &p256Verify{eip7951: true}
+
+	preGas := preTBDHF.RequiredGas(nil)
+	postGas := postTBDHF.RequiredGas(nil)
+
+	if preGas != params.P256VerifyGas {
+		t.Errorf("pre-TBDHF gas: got %d, want %d", preGas, params.P256VerifyGas)
+	}
+	if postGas != params.P256VerifyGasEIP7951 {
+		t.Errorf("post-TBDHF gas: got %d, want %d", postGas, params.P256VerifyGasEIP7951)
+	}
+	if preGas >= postGas {
+		t.Errorf("post-TBDHF gas (%d) should be higher than pre-TBDHF (%d)", postGas, preGas)
+	}
+}
+
+// TestTBDHFCLZOpcode verifies CLZ opcode availability at TBDHF.
+func TestTBDHFCLZOpcode(t *testing.T) {
+	preTBDHF := newPragueInstructionSet()
+	postTBDHF := newTBDHFInstructionSet()
+
+	// Pre-TBDHF: CLZ should be undefined.
+	if preTBDHF[CLZ].execute != nil && preTBDHF[CLZ].constantGas != 0 {
+		t.Error("CLZ opcode should not be defined pre-TBDHF")
+	}
+
+	// Post-TBDHF: CLZ should be defined.
+	if postTBDHF[CLZ].execute == nil {
+		t.Error("CLZ opcode should be defined post-TBDHF")
+	}
+	if postTBDHF[CLZ].constantGas != GasFastStep {
+		t.Errorf("CLZ gas: got %d, want %d", postTBDHF[CLZ].constantGas, GasFastStep)
 	}
 }
