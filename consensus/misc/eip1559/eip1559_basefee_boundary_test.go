@@ -27,12 +27,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBaseFeeBoundary tests the MaxBaseFeeChangePercent base fee change limit post-Dandeli.
+// TestBaseFeeBoundary tests the MaxBaseFeeChangePercent base fee change limit post-Lisovo.
 // It verifies both the CalcBaseFee capping and VerifyEIP1559Header validation.
 func TestBaseFeeBoundary(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -141,8 +142,8 @@ func TestBaseFeeBoundary(t *testing.T) {
 	}
 }
 
-// TestBaseFeeBoundaryPreDandeli tests that pre-Dandeli blocks still use strict validation
-func TestBaseFeeBoundaryPreDandeli(t *testing.T) {
+// TestBaseFeeBoundaryPreLisovo tests that pre-Lisovo blocks still use strict validation
+func TestBaseFeeBoundaryPreLisovo(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
@@ -204,11 +205,12 @@ func TestBaseFeeBoundaryPreDandeli(t *testing.T) {
 }
 
 // TestAggressiveParametersExceedBoundary tests that aggressive parameter configurations
-// (low denominators) are properly capped at MaxBaseFeeChangePercent by CalcBaseFee post-Dandeli
+// (low denominators) are properly capped at MaxBaseFeeChangePercent by CalcBaseFee post-Lisovo
 func TestAggressiveParametersExceedBoundary(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -320,8 +322,8 @@ func TestAggressiveParametersExceedBoundary(t *testing.T) {
 	}
 }
 
-// TestDefaultParametersWithinBoundary documents and verifies that default post-Dandeli
-// parameters stay well within the MaxBaseFeeChangePercent boundary at all gas usage levels
+// TestDefaultParametersWithinBoundary documents and verifies that default post-Dandeli parameters
+// (65% gas target) stay well within the MaxBaseFeeChangePercent boundary post-Lisovo at all gas usage levels
 func TestDefaultParametersWithinBoundary(t *testing.T) {
 	t.Parallel()
 
