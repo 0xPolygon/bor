@@ -358,8 +358,8 @@ func TestPreloadRateLimitConfig(t *testing.T) {
 		ethConfig, err := config.buildEth(nil, nil)
 		assert.NoError(t, err)
 
-		// Default should be 500KB/s
-		assert.Equal(t, int64(500*1024), ethConfig.PreloadRateLimit)
+		// Default should be 1MB/s
+		assert.Equal(t, int64(1024*1024), ethConfig.PreloadRateLimit)
 	})
 
 	t.Run("Custom value 1MB", func(t *testing.T) {
@@ -395,8 +395,8 @@ func TestPreloadRateLimitConfig(t *testing.T) {
 		ethConfig, err := config.buildEth(nil, nil)
 		assert.NoError(t, err)
 
-		// Should fall back to default 500KB/s
-		assert.Equal(t, int64(500*1024), ethConfig.PreloadRateLimit)
+		// Should fall back to default 1MB/s
+		assert.Equal(t, int64(1024*1024), ethConfig.PreloadRateLimit)
 	})
 
 	t.Run("Various valid formats", func(t *testing.T) {

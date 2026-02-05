@@ -679,9 +679,9 @@ type CacheConfig struct {
 	AddressCacheSizesRaw string            `hcl:"addresscachesizes,optional" toml:"addresscachesizes,optional"`
 	AddressCacheSizes    map[string]string `hcl:"-,optional" toml:"-"`
 
-	// PreloadRateLimit limits cache preload I/O in bytes per second.
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
 	// This prevents preloading from overwhelming the disk during sync.
-	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 500KB/s
+	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
 	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
 	// GC settings
@@ -1442,18 +1442,18 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 		}
 
-		// Parse preload rate limit (default: 500KB/s)
+		// Parse preload rate limit (default: 1MB/s per address)
 		if c.Cache.PreloadRateLimit != "" {
 			rateLimitBytes, err := parseByteSize(c.Cache.PreloadRateLimit)
 			if err != nil {
-				log.Warn("Failed to parse preload rate limit, using default 500KB/s", "error", err)
-				n.PreloadRateLimit = 500 * 1024
+				log.Warn("Failed to parse preload rate limit, using default 1MB/s per address", "error", err)
+				n.PreloadRateLimit = 1024 * 1024
 			} else {
 				n.PreloadRateLimit = rateLimitBytes
 			}
 		} else {
-			// Default to 500KB/s if not specified
-			n.PreloadRateLimit = 500 * 1024
+			// Default to 1MB/s per address if not specified
+			n.PreloadRateLimit = 1024 * 1024
 		}
 	}
 

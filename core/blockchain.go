@@ -198,9 +198,9 @@ type BlockChainConfig struct {
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
 
-	// PreloadRateLimit limits cache preload I/O in bytes per second.
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
 	// This prevents preloading from overwhelming the disk during sync.
-	// 0 = unlimited (legacy behavior), default = 5MB/s
+	// 0 = unlimited (legacy behavior), default = 1MB/s
 	PreloadRateLimit int64
 
 	// State snapshot related options
