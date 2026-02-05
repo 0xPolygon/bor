@@ -106,12 +106,11 @@ func (t *StateTrie) MustGet(key []byte) []byte {
 }
 
 // GetStorage attempts to retrieve a storage slot with provided account address
-// and slot key along with the depth (number of nodes traversed).
-// The value bytes must not be modified by the caller.
+// and slot key. The value bytes must not be modified by the caller.
 // If the specified storage slot is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
-	enc, _, err := t.trie.Get(crypto.Keccak256(key))
+	enc, err := t.trie.Get(crypto.Keccak256(key))
 	if err != nil || len(enc) == 0 {
 		return nil, err
 	}
@@ -134,7 +133,7 @@ func (t *StateTrie) GetStorageWithMeter(_ common.Address, key []byte, meter func
 // If the specified account is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
 func (t *StateTrie) GetAccount(address common.Address) (*types.StateAccount, error) {
-	res, _, err := t.trie.Get(crypto.Keccak256(address.Bytes()))
+	res, err := t.trie.Get(crypto.Keccak256(address.Bytes()))
 	if res == nil || err != nil {
 		return nil, err
 	}
@@ -147,7 +146,7 @@ func (t *StateTrie) GetAccount(address common.Address) (*types.StateAccount, err
 // account hash that is the hash of address. This constitutes an abstraction
 // leak, since the client code needs to know the key format.
 func (t *StateTrie) GetAccountByHash(addrHash common.Hash) (*types.StateAccount, error) {
-	res, _, err := t.trie.Get(addrHash.Bytes())
+	res, err := t.trie.Get(addrHash.Bytes())
 	if res == nil || err != nil {
 		return nil, err
 	}
