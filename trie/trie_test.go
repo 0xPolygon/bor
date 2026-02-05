@@ -1569,7 +1569,7 @@ func testTrieCopyNewTrie(t *testing.T, entries []kv) {
 	// Traverse the original tree, the changes made on the copy one shouldn't
 	// affect the old one
 	for _, entry := range entries {
-		d, _, _ := trCpy.Get(entry.k)
+		d, _ := trCpy.Get(entry.k)
 		if !bytes.Equal(d, entry.v) {
 			t.Errorf("Unexpected data, key: %v, want: %v, got: %v", entry.k, entry.v, d)
 		}
