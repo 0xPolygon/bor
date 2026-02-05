@@ -856,7 +856,6 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.LisovoBlock = big.NewInt(20)
-	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	parent := &types.Header{
