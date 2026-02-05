@@ -85,11 +85,10 @@ type Trie interface {
 	// to accelerate subsequent trie operations.
 	PrefetchAccount([]common.Address) error
 	
-	// GetStorage returns the value for key stored in the trie along with the depth
-	// (number of nodes traversed) used to resolve it. The value bytes must not be
-	// modified by the caller. If a node was not found in the database, a
+	// GetStorage returns the value for key stored in the trie. The value bytes must
+	// not be modified by the caller. If a node was not found in the database, a
 	// trie.MissingNodeError is returned.
-	GetStorage(addr common.Address, key []byte) ([]byte, uint64, error)
+	GetStorage(addr common.Address, key []byte) ([]byte, error)
 
 	// PrefetchStorage attempts to resolve specific storage slots from the database
 	// to accelerate subsequent trie operations.

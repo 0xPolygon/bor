@@ -123,30 +123,27 @@ func (t *VerkleTrie) PrefetchAccount(addresses []common.Address) error {
 // GetStorage implements state.Trie, retrieving the storage slot with the specified
 // account address and storage key. If the specified slot is not in the verkle tree,
 // nil will be returned. If the tree is corrupted, an error will be returned.
-//
-// Depth is not defined for Verkle tries; 0 is returned.
-func (t *VerkleTrie) GetStorage(addr common.Address, key []byte) ([]byte, uint64, error) {
+func (t *VerkleTrie) GetStorage(addr common.Address, key []byte) ([]byte, error) {
 	k := utils.StorageSlotKeyWithEvaluatedAddress(t.cache.Get(addr.Bytes()), key)
 	val, err := t.root.Get(k, t.nodeResolver)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return common.TrimLeftZeroes(val), 0, nil
+	return common.TrimLeftZeroes(val), nil
 }
 
 // GetStorageWithMeter retrieves a storage slot and invokes the meter for each
 // visited node if supported. Depth is not defined for Verkle tries.
 func (t *VerkleTrie) GetStorageWithMeter(addr common.Address, key []byte, meter func(uint64) error) ([]byte, error) {
 	// No trie-node depth semantics for Verkle; ignore meter.
-	val, _, err := t.GetStorage(addr, key)
-	return val, err
+	return t.GetStorage(addr, key)
 }
 
 // PrefetchStorage attempts to resolve specific storage slots from the database
 // to accelerate subsequent trie operations.
 func (t *VerkleTrie) PrefetchStorage(addr common.Address, keys [][]byte) error {
 	for _, key := range keys {
-		if _, _, err := t.GetStorage(addr, key); err != nil {
+		if _, err := t.GetStorage(addr, key); err != nil {
 			return err
 		}
 	}

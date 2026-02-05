@@ -110,13 +110,13 @@ func (t *StateTrie) MustGet(key []byte) []byte {
 // The value bytes must not be modified by the caller.
 // If the specified storage slot is not in the trie, nil will be returned.
 // If a trie node is not found in the database, a MissingNodeError is returned.
-func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, uint64, error) {
-	enc, depth, err := t.trie.Get(crypto.Keccak256(key))
+func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, error) {
+	enc, _, err := t.trie.Get(crypto.Keccak256(key))
 	if err != nil || len(enc) == 0 {
-		return nil, depth, err
+		return nil, err
 	}
 	_, content, _, err := rlp.Split(enc)
-	return content, depth, err
+	return content, err
 }
 
 // GetStorageWithMeter retrieves a storage slot and invokes the meter once per

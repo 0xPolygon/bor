@@ -228,7 +228,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	s.db.StorageLoaded++
 
 	start := time.Now()
-	value, _, err := s.resolveStorageWithDepth(key)
+	value, err := s.resolveStorage(key)
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}
@@ -292,18 +292,18 @@ func (s *stateObject) GetCommittedStateWithMeter(key common.Hash, meter func(uin
 	return value, nil
 }
 
-func (s *stateObject) resolveStorageWithDepth(key common.Hash) (common.Hash, uint64, error) {
+func (s *stateObject) resolveStorage(key common.Hash) (common.Hash, error) {
 	tr, err := s.getTrie()
 	if err != nil {
-		return common.Hash{}, 0, err
+		return common.Hash{}, err
 	}
-	ret, depth, err := tr.GetStorage(s.address, key.Bytes())
+	ret, err := tr.GetStorage(s.address, key.Bytes())
 	if err != nil {
-		return common.Hash{}, 0, err
+		return common.Hash{}, err
 	}
 	var value common.Hash
 	value.SetBytes(ret)
-	return value, depth, nil
+	return value, nil
 }
 
 func (s *stateObject) resolveStorageWithMeter(key common.Hash, meter func(uint64) error) (common.Hash, error) {
@@ -323,8 +323,7 @@ func (s *stateObject) resolveStorageWithMeter(key common.Hash, meter func(uint64
 		return value, nil
 	}
 	// Fallback to non-metered lookup
-	value, _, err := s.resolveStorageWithDepth(key)
-	return value, err
+	return s.resolveStorage(key)
 }
 
 // SetState updates a value in account storage.

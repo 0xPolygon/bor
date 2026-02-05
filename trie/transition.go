@@ -67,13 +67,13 @@ func (t *TransitionTrie) GetKey(key []byte) []byte {
 
 // GetStorage returns the value for key stored in the trie. The value bytes must
 // not be modified by the caller.
-func (t *TransitionTrie) GetStorage(addr common.Address, key []byte) ([]byte, uint64, error) {
-	val, depth, err := t.overlay.GetStorage(addr, key)
+func (t *TransitionTrie) GetStorage(addr common.Address, key []byte) ([]byte, error) {
+	val, err := t.overlay.GetStorage(addr, key)
 	if err != nil {
-		return nil, depth, fmt.Errorf("get storage from overlay: %s", err)
+		return nil, fmt.Errorf("get storage from overlay: %s", err)
 	}
 	if len(val) != 0 {
-		return val, depth, nil
+		return val, nil
 	}
 	// TODO also insert value into overlay
 	return t.base.GetStorage(addr, key)
@@ -83,7 +83,7 @@ func (t *TransitionTrie) GetStorage(addr common.Address, key []byte) ([]byte, ui
 // to accelerate subsequent trie operations.
 func (t *TransitionTrie) PrefetchStorage(addr common.Address, keys [][]byte) error {
 	for _, key := range keys {
-		if _, _, err := t.GetStorage(addr, key); err != nil {
+		if _, err := t.GetStorage(addr, key); err != nil {
 			return err
 		}
 	}
