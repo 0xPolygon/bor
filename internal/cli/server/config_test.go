@@ -349,79 +349,34 @@ func TestParseByteSize(t *testing.T) {
 
 // TestPreloadRateLimitConfig tests the preload rate limit configuration parsing.
 func TestPreloadRateLimitConfig(t *testing.T) {
-	t.Run("Default value (empty string)", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Cache.PreloadRateLimit = ""
+	tests := []struct {
+		name     string
+		input    string
+		expected int64
+	}{
+		{"empty string defaults to 1MB/s", "", 1024 * 1024},
+		{"explicit 1MB", "1MB", 1024 * 1024},
+		{"unlimited (0)", "0", 0},
+		{"invalid falls back to 1MB/s", "invalid", 1024 * 1024},
+		{"500KB", "500KB", 500 * 1024},
+		{"2MB", "2MB", 2 * 1024 * 1024},
+		{"lowercase 100kb", "100kb", 100 * 1024},
+		{"lowercase 10mb", "10mb", 10 * 1024 * 1024},
+	}
 
-		assert.NoError(t, config.loadChain())
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-
-		// Default should be 1MB/s
-		assert.Equal(t, int64(1024*1024), ethConfig.PreloadRateLimit)
-	})
-
-	t.Run("Custom value 1MB", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Cache.PreloadRateLimit = "1MB"
-
-		assert.NoError(t, config.loadChain())
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-
-		assert.Equal(t, int64(1024*1024), ethConfig.PreloadRateLimit)
-	})
-
-	t.Run("Unlimited (0)", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Cache.PreloadRateLimit = "0"
-
-		assert.NoError(t, config.loadChain())
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-
-		assert.Equal(t, int64(0), ethConfig.PreloadRateLimit)
-	})
-
-	t.Run("Invalid value falls back to default", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Cache.PreloadRateLimit = "invalid"
-
-		assert.NoError(t, config.loadChain())
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-
-		// Should fall back to default 1MB/s
-		assert.Equal(t, int64(1024*1024), ethConfig.PreloadRateLimit)
-	})
-
-	t.Run("Various valid formats", func(t *testing.T) {
-		testCases := []struct {
-			input    string
-			expected int64
-		}{
-			{"500KB", 500 * 1024},
-			{"2MB", 2 * 1024 * 1024},
-			{"100kb", 100 * 1024},
-			{"10mb", 10 * 1024 * 1024},
-		}
-
-		for _, tc := range testCases {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			config := DefaultConfig()
-			config.Cache.PreloadRateLimit = tc.input
+			config.Cache.PreloadRateLimit = tt.input
 
 			assert.NoError(t, config.loadChain())
 
 			ethConfig, err := config.buildEth(nil, nil)
 			assert.NoError(t, err)
 
-			assert.Equal(t, tc.expected, ethConfig.PreloadRateLimit, "failed for input: %s", tc.input)
-		}
-	})
+			assert.Equal(t, tt.expected, ethConfig.PreloadRateLimit, "input: %s", tt.input)
+		})
+	}
 }
 
 // TestDeveloperModeGasParameters tests the developer mode specific code path
