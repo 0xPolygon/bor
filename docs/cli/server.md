@@ -324,9 +324,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.baseFeeBuffer```: Buffer around target base fee in wei (no adjustment when within buffer) (default: 0)
 
-- ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks (default: 0)
+- ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks (default: 0)
 
-- ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Dandeli blocks (default: 0)
+- ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks (default: 0)
 
 ### Telemetry Options
 

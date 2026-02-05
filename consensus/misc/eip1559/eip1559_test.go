@@ -72,6 +72,7 @@ func copyConfig(original *params.ChainConfig) *params.ChainConfig {
 			MadhugiriBlock:                  original.Bor.MadhugiriBlock,
 			MadhugiriProBlock:               original.Bor.MadhugiriProBlock,
 			DandeliBlock:                    original.Bor.DandeliBlock,
+			LisovoBlock:                     original.Bor.LisovoBlock,
 		}
 	}
 	return config
@@ -238,6 +239,7 @@ func TestCalcParentGasTarget(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	defaultGasLimit := uint64(60_000_000)
@@ -332,6 +334,7 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	// Case 1: Create pre-dandeli cases where HF is defined in future. Validate
@@ -445,12 +448,13 @@ func TestCalcBaseFeeDandeli(t *testing.T) {
 }
 
 // TestDynamicTargetGasPercentage verifies that the TargetGasPercentage parameter
-// can be dynamically set after Dandeli HF and affects base fee calculations correctly
+// can be dynamically set after Lisovo HF and affects base fee calculations correctly
 func TestDynamicTargetGasPercentage(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	// Test with 70% target gas percentage
@@ -530,12 +534,13 @@ func TestDynamicTargetGasPercentage(t *testing.T) {
 }
 
 // TestDynamicBaseFeeChangeDenominator verifies that the BaseFeeChangeDenominator parameter
-// can be dynamically set after Dandeli HF and affects the rate of base fee change correctly
+// can be dynamically set after Lisovo HF and affects the rate of base fee change correctly
 func TestDynamicBaseFeeChangeDenominator(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	gasLimit := uint64(60_000_000)
@@ -615,12 +620,13 @@ func TestDynamicBaseFeeChangeDenominator(t *testing.T) {
 	})
 }
 
-// TestVerifyEIP1559HeaderNoBaseFeeValidation tests post-Dandeli boundary validation
+// TestVerifyEIP1559HeaderNoBaseFeeValidation tests post-Lisovo boundary validation
 // instead of strict validation. Base fees must be within MaxBaseFeeChangePercent boundary.
 func TestVerifyEIP1559HeaderNoBaseFeeValidation(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -716,6 +722,7 @@ func TestInvalidTargetGasPercentage(t *testing.T) {
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	gasLimit := uint64(60_000_000)
@@ -793,6 +800,7 @@ func TestInvalidBaseFeeChangeDenominator(t *testing.T) {
 
 	testConfig := copyConfig(config())
 	testConfig.Bor.BhilaiBlock = big.NewInt(8)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	gasLimit := uint64(60_000_000)
@@ -847,6 +855,8 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
+	testConfig.Bor.LisovoBlock = big.NewInt(20)
 	testConfig.Bor.DandeliBlock = big.NewInt(20)
 
 	parent := &types.Header{
@@ -888,7 +898,7 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 
 	t.Run("post-Dandeli: accepts base fee within boundary", func(t *testing.T) {
 		parent := &types.Header{
-			Number:   big.NewInt(20), // Post-Dandeli
+			Number:   big.NewInt(25), // Post-Lisovo (boundary validation active)
 			GasLimit: 30_000_000,
 			GasUsed:  15_000_000,
 			BaseFee:  big.NewInt(1_000_000_000),
@@ -900,7 +910,7 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 		baseFeeWithinBoundary.Div(baseFeeWithinBoundary, big.NewInt(100))
 
 		header := &types.Header{
-			Number:   big.NewInt(21),
+			Number:   big.NewInt(26),
 			GasLimit: 30_000_000,
 			GasUsed:  20_000_000,
 			BaseFee:  baseFeeWithinBoundary, // Within boundary
@@ -912,11 +922,12 @@ func TestBaseFeeValidationPreDandeli(t *testing.T) {
 }
 
 // TestCalcBaseFeeVeryLowFeesCapping tests that base fee changes are capped
-// even at very low base fees (1-20 wei) post-Dandeli
+// even at very low base fees (1-20 wei) post-Lisovo
 func TestCalcBaseFeeVeryLowFeesCapping(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -989,6 +1000,7 @@ func TestVerifyBaseFeeWithinBoundariesLowFees(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -1104,6 +1116,7 @@ func TestLowBaseFeeEdgeCases(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 
@@ -1258,8 +1271,8 @@ func TestLowBaseFeeEdgeCases(t *testing.T) {
 	})
 }
 
-// TestLowBaseFeesPreDandeli tests that pre-Dandeli strict validation still works at low fees
-func TestLowBaseFeesPreDandeli(t *testing.T) {
+// TestLowBaseFeesPreLisovo tests that pre-Lisovo strict validation still works at low fees
+func TestLowBaseFeesPreLisovo(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
@@ -1318,6 +1331,7 @@ func TestLowBaseFeeIntegrationWithExistingBoundary(t *testing.T) {
 	t.Parallel()
 
 	testConfig := copyConfig(config())
+	testConfig.Bor.LisovoBlock = big.NewInt(15)
 	testConfig.Bor.DandeliBlock = big.NewInt(10)
 	testConfig.Bor.BhilaiBlock = big.NewInt(5)
 

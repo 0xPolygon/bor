@@ -246,15 +246,15 @@ var (
 // - Pre-Delhi: 8 (default)
 // - Post-Delhi: 16
 // - Post-Bhilai: 64
-// - Post-Dandeli: Configurable via BorConfig.BaseFeeChangeDenominator (validated, falls back to Bhilai default if invalid)
+// - Post-Lisovo: Configurable via BorConfig.BaseFeeChangeDenominator (validated, falls back to Bhilai default if invalid)
 // If borConfig is nil, returns the default value of 8.
 func BaseFeeChangeDenominator(borConfig *BorConfig, number *big.Int) uint64 {
 	// Handle cases where bor consensus isn't available to avoid panic
 	if borConfig == nil {
 		return DefaultBaseFeeChangeDenominator
 	}
-	// If Dandeli is active and custom value is set, validate and use it
-	if borConfig.IsDandeli(number) && borConfig.BaseFeeChangeDenominator != nil {
+	// If Lisovo is active and custom value is set, validate and use it
+	if borConfig.IsLisovo(number) && borConfig.BaseFeeChangeDenominator != nil {
 		val := *borConfig.BaseFeeChangeDenominator
 		// Validate: must be non-zero to prevent division by zero
 		if val > 0 {

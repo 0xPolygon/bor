@@ -421,10 +421,10 @@ type SealerConfig struct {
 	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
 
-	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks
+	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks
 	TargetGasPercentage uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
 
-	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Dandeli blocks
+	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Lisovo blocks
 	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
 }
 
