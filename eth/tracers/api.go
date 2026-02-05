@@ -383,11 +383,13 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 
 					var err error
 
+					// Make a copy of config for this transaction to avoid race conditions
+					txConfig := *config
 					if stateSyncPresent && i == len(txs)-1 && includeStateSyncTx {
-						config.BorTx = newBoolPtr(true)
+						txConfig.BorTx = newBoolPtr(true)
 					}
 
-					res, err = api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, config, nil)
+					res, err = api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, &txConfig, nil)
 					if err != nil {
 						task.results[i] = &txTraceResult{TxHash: txHash, Error: err.Error()}
 						log.Warn("Tracing failed", "hash", txHash, "block", task.block.NumberU64(), "err", err)
@@ -863,11 +865,13 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 				var err error
 
+				// Make a copy of config for this transaction to avoid race conditions
+				txConfig := *config
 				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
 				if stateSyncPresent && task.index == len(txs)-1 {
 					isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
 					if isMadhugiri || *config.BorTraceEnabled {
-						config.BorTx = newBoolPtr(true)
+						txConfig.BorTx = newBoolPtr(true)
 					}
 				}
 
@@ -876,7 +880,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 				// concurrent use.
 				// See: https://github.com/ethereum/go-ethereum/issues/29114
 				blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-				res, err = api.traceTx(ctx, txs[task.index], msg, txctx, blockCtx, task.statedb, config, nil)
+				res, err = api.traceTx(ctx, txs[task.index], msg, txctx, blockCtx, task.statedb, &txConfig, nil)
 				if err != nil {
 					results[task.index] = &txTraceResult{TxHash: txHash, Error: err.Error()}
 					continue

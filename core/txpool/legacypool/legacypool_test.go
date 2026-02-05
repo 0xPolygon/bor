@@ -278,7 +278,10 @@ func validatePoolInternals(pool *LegacyPool) error {
 	}
 
 	pool.priced.Reheap()
-	priced, remote := pool.priced.urgent.Len()+pool.priced.floating.Len(), pool.all.Count()
+	pool.priced.reheapMu.Lock()
+	priced := pool.priced.urgent.Len() + pool.priced.floating.Len()
+	pool.priced.reheapMu.Unlock()
+	remote := pool.all.Count()
 	if priced != remote {
 		return fmt.Errorf("total priced transaction count %d != %d", priced, remote)
 	}

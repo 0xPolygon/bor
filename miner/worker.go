@@ -276,7 +276,8 @@ type worker struct {
 
 	wg sync.WaitGroup
 
-	current *environment // An environment for current running cycle.
+	currentMu sync.RWMutex // The lock used to protect the current environment
+	current   *environment // An environment for current running cycle.
 
 	mu       sync.RWMutex // The lock used to protect the coinbase and extra fields
 	coinbase common.Address
@@ -497,6 +498,20 @@ func (w *worker) setGasTip(tip *big.Int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.tip = uint256.MustFromBig(tip)
+}
+
+// setPrio sets the list of addresses to prioritize for transaction inclusion.
+func (w *worker) setPrio(prio []common.Address) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.prio = prio
+}
+
+// getCurrent returns the current environment safely for testing.
+func (w *worker) getCurrent() *environment {
+	w.currentMu.RLock()
+	defer w.currentMu.RUnlock()
+	return w.current
 }
 
 // setRecommitInterval updates the interval for miner sealing work recommitting.
@@ -724,9 +739,11 @@ func (w *worker) mainLoop() {
 	defer w.txsSub.Unsubscribe()
 	defer w.chainHeadSub.Unsubscribe()
 	defer func() {
+		w.currentMu.Lock()
 		if w.current != nil {
 			w.current.discard()
 		}
+		w.currentMu.Unlock()
 	}()
 
 	bor, isBor := w.engine.(*bor.Bor)
@@ -1751,11 +1768,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
+	w.currentMu.Lock()
 	if w.current != nil {
 		w.current.discard()
 	}
-
 	w.current = work
+	w.currentMu.Unlock()
 }
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
