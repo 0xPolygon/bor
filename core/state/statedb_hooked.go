@@ -90,15 +90,15 @@ func (s *hookedStateDB) GetStateAndCommittedState(addr common.Address, hash comm
 	return s.inner.GetStateAndCommittedState(addr, hash)
 }
 
+func (s *hookedStateDB) GetStateAndCommittedStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, common.Hash, error) {
+	return s.inner.GetStateAndCommittedStateWithMeter(addr, hash, meter)
+}
+
 func (s *hookedStateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	return s.inner.GetState(addr, hash)
 }
 
-func (s *hookedStateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (common.Hash, uint64) {
-	return s.inner.GetStateWithDepth(addr, hash)
-}
-
-func (s *hookedStateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+func (s *hookedStateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, error) {
 	return s.inner.GetStateWithMeter(addr, hash, meter)
 }
 
@@ -233,23 +233,15 @@ func (s *hookedStateDB) SetState(address common.Address, key common.Hash, value 
 	return prev
 }
 
-func (s *hookedStateDB) SetStateWithDepth(address common.Address, key common.Hash, value common.Hash) (common.Hash, uint64) {
-	prev, depth := s.inner.SetStateWithDepth(address, key, value)
-	if s.hooks.OnStorageChange != nil && prev != value {
-		s.hooks.OnStorageChange(address, key, prev, value)
-	}
-	return prev, depth
-}
-
-func (s *hookedStateDB) SetStateWithMeter(address common.Address, key common.Hash, value common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
-	prev, depth, err := s.inner.SetStateWithMeter(address, key, value, meter)
+func (s *hookedStateDB) SetStateWithMeter(address common.Address, key common.Hash, value common.Hash, meter func(uint64) error) (common.Hash, error) {
+	prev, err := s.inner.SetStateWithMeter(address, key, value, meter)
 	if err != nil {
-		return prev, depth, err
+		return prev, err
 	}
 	if s.hooks.OnStorageChange != nil && prev != value {
 		s.hooks.OnStorageChange(address, key, prev, value)
 	}
-	return prev, depth, nil
+	return prev, nil
 }
 
 func (s *hookedStateDB) SelfDestruct(address common.Address) uint256.Int {

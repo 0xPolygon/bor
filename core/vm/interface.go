@@ -53,12 +53,11 @@ type StateDB interface {
 	GetRefund() uint64
 
 	GetStateAndCommittedState(common.Address, common.Hash) (common.Hash, common.Hash)
+	GetStateAndCommittedStateWithMeter(common.Address, common.Hash, func(uint64) error) (common.Hash, common.Hash, error)
 	GetState(common.Address, common.Hash) common.Hash
-	GetStateWithDepth(common.Address, common.Hash) (common.Hash, uint64)
-	GetStateWithMeter(common.Address, common.Hash, func(uint64) error) (common.Hash, uint64, error)
+	GetStateWithMeter(common.Address, common.Hash, func(uint64) error) (common.Hash, error)
 	SetState(common.Address, common.Hash, common.Hash) common.Hash
-	SetStateWithDepth(common.Address, common.Hash, common.Hash) (common.Hash, uint64)
-	SetStateWithMeter(common.Address, common.Hash, common.Hash, func(uint64) error) (common.Hash, uint64, error)
+	SetStateWithMeter(common.Address, common.Hash, common.Hash, func(uint64) error) (common.Hash, error)
 	GetStorageRoot(addr common.Address) common.Hash
 
 	GetTransientState(addr common.Address, key common.Hash) common.Hash

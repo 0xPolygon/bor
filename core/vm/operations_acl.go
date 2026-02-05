@@ -49,11 +49,22 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
-			y, x              = stack.Back(1), stack.peek()
-			slot              = common.Hash(x.Bytes32())
-			current, original = evm.StateDB.GetStateAndCommittedState(contract.Address(), slot)
-			cost              = uint64(0)
+			y, x     = stack.Back(1), stack.peek()
+			slot     = common.Hash(x.Bytes32())
+			depthGas = uint64(0)
+			cost     = uint64(0)
 		)
+		// Meter callback to charge per-node during trie traversal.
+		meter := func(nodeCount uint64) error {
+			if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
+				depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+			}
+			return nil
+		}
+		current, original, err := evm.StateDB.GetStateAndCommittedStateWithMeter(contract.Address(), slot, meter)
+		if err != nil {
+			return 0, err
+		}
 		// Check slot presence in the access list
 		if _, slotPresent := evm.StateDB.SlotInAccessList(contract.Address(), slot); !slotPresent {
 			cost = params.ColdSloadCostEIP2929
@@ -66,11 +77,11 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		if current == value { // noop (1)
 			// EIP 2200 original clause:
 			//		return params.SloadGasEIP2200, nil
-			return cost + params.WarmStorageReadCostEIP2929, nil // SLOAD_GAS
+			return cost + depthGas + params.WarmStorageReadCostEIP2929, nil // SLOAD_GAS
 		}
 		if original == current {
 			if original == (common.Hash{}) { // create slot (2.1.1)
-				return cost + params.SstoreSetGasEIP2200, nil
+				return cost + depthGas + params.SstoreSetGasEIP2200, nil
 			}
 
 			if value == (common.Hash{}) { // delete slot (2.1.2b)
@@ -78,7 +89,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			}
 			// EIP-2200 original clause:
 			//		return params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
-			return cost + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929), nil // write existing slot (2.1.2)
+			return cost + depthGas + (params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929), nil // write existing slot (2.1.2)
 		}
 
 		if original != (common.Hash{}) {
@@ -105,7 +116,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 		// EIP-2200 original clause:
 		//return params.SloadGasEIP2200, nil // dirty update (2.2)
-		return cost + params.WarmStorageReadCostEIP2929, nil // dirty update (2.2)
+		return cost + depthGas + params.WarmStorageReadCostEIP2929, nil // dirty update (2.2)
 	}
 }
 

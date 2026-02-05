@@ -101,9 +101,20 @@ var (
 
 func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	var (
-		y, x              = stack.Back(1), stack.Back(0)
-		current, original = evm.StateDB.GetStateAndCommittedState(contract.Address(), x.Bytes32())
+		y, x     = stack.Back(1), stack.Back(0)
+		depthGas = uint64(0)
 	)
+	// Meter callback to charge per-node during trie traversal.
+	meter := func(nodeCount uint64) error {
+		if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
+			depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+		}
+		return nil
+	}
+	current, original, err := evm.StateDB.GetStateAndCommittedStateWithMeter(contract.Address(), x.Bytes32(), meter)
+	if err != nil {
+		return 0, err
+	}
 	// The legacy gas metering only takes into consideration the current state
 	// Legacy rules should be applied if we are in Petersburg (removal of EIP-1283)
 	// OR Constantinople is not active
@@ -115,12 +126,12 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		// 3. From a non-zero to a non-zero                         (CHANGE)
 		switch {
 		case current == (common.Hash{}) && y.Sign() != 0: // 0 => non 0
-			return params.SstoreSetGas, nil
+			return depthGas + params.SstoreSetGas, nil
 		case current != (common.Hash{}) && y.Sign() == 0: // non 0 => 0
 			evm.StateDB.AddRefund(params.SstoreRefundGas)
-			return params.SstoreClearGas, nil
+			return depthGas + params.SstoreClearGas, nil
 		default: // non 0 => non 0 (or 0 => 0)
-			return params.SstoreResetGas, nil
+			return depthGas + params.SstoreResetGas, nil
 		}
 	}
 
@@ -140,18 +151,18 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 	//			(2.2.2.2.) Otherwise, add 4800 gas to refund counter.
 	value := common.Hash(y.Bytes32())
 	if current == value { // noop (1)
-		return params.NetSstoreNoopGas, nil
+		return depthGas + params.NetSstoreNoopGas, nil
 	}
 	if original == current {
 		if original == (common.Hash{}) { // create slot (2.1.1)
-			return params.NetSstoreInitGas, nil
+			return depthGas + params.NetSstoreInitGas, nil
 		}
 
 		if value == (common.Hash{}) { // delete slot (2.1.2b)
 			evm.StateDB.AddRefund(params.NetSstoreClearRefund)
 		}
 
-		return params.NetSstoreCleanGas, nil // write existing slot (2.1.2)
+		return depthGas + params.NetSstoreCleanGas, nil // write existing slot (2.1.2)
 	}
 
 	if original != (common.Hash{}) {
@@ -170,7 +181,7 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		}
 	}
 
-	return params.NetSstoreDirtyGas, nil
+	return depthGas + params.NetSstoreDirtyGas, nil
 }
 
 // Here come the EIP2200 rules:
@@ -195,25 +206,36 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 	}
 	// Gas sentry honoured, do the actual gas calculation based on the stored value
 	var (
-		y, x              = stack.Back(1), stack.Back(0)
-		current, original = evm.StateDB.GetStateAndCommittedState(contract.Address(), x.Bytes32())
+		y, x     = stack.Back(1), stack.Back(0)
+		depthGas = uint64(0)
 	)
+	// Meter callback to charge per-node during trie traversal.
+	meter := func(nodeCount uint64) error {
+		if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
+			depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+		}
+		return nil
+	}
+	current, original, err := evm.StateDB.GetStateAndCommittedStateWithMeter(contract.Address(), x.Bytes32(), meter)
+	if err != nil {
+		return 0, err
+	}
 
 	value := common.Hash(y.Bytes32())
 
 	if current == value { // noop (1)
-		return params.SloadGasEIP2200, nil
+		return depthGas + params.SloadGasEIP2200, nil
 	}
 	if original == current {
 		if original == (common.Hash{}) { // create slot (2.1.1)
-			return params.SstoreSetGasEIP2200, nil
+			return depthGas + params.SstoreSetGasEIP2200, nil
 		}
 
 		if value == (common.Hash{}) { // delete slot (2.1.2b)
 			evm.StateDB.AddRefund(params.SstoreClearsScheduleRefundEIP2200)
 		}
 
-		return params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
+		return depthGas + params.SstoreResetGasEIP2200, nil // write existing slot (2.1.2)
 	}
 
 	if original != (common.Hash{}) {
@@ -232,7 +254,7 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 		}
 	}
 
-	return params.SloadGasEIP2200, nil // dirty update (2.2)
+	return depthGas + params.SloadGasEIP2200, nil // dirty update (2.2)
 }
 
 func makeGasLog(n uint64) gasFunc {

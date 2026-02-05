@@ -135,10 +135,11 @@ func (t *VerkleTrie) GetStorage(addr common.Address, key []byte) ([]byte, uint64
 }
 
 // GetStorageWithMeter retrieves a storage slot and invokes the meter for each
-// visited node if supported. Depth is not defined for Verkle tries; 0 is returned.
-func (t *VerkleTrie) GetStorageWithMeter(addr common.Address, key []byte, meter func(uint64) error) ([]byte, uint64, error) {
+// visited node if supported. Depth is not defined for Verkle tries.
+func (t *VerkleTrie) GetStorageWithMeter(addr common.Address, key []byte, meter func(uint64) error) ([]byte, error) {
 	// No trie-node depth semantics for Verkle; ignore meter.
-	return t.GetStorage(addr, key)
+	val, _, err := t.GetStorage(addr, key)
+	return val, err
 }
 
 // PrefetchStorage attempts to resolve specific storage slots from the database

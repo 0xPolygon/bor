@@ -568,7 +568,7 @@ func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		}
 		return nil
 	}
-	val, _, err := evm.StateDB.GetStateWithMeter(scope.Contract.Address(), hash, meter)
+	val, err := evm.StateDB.GetStateWithMeter(scope.Contract.Address(), hash, meter)
 	if err != nil {
 		return nil, err
 	}
@@ -584,19 +584,9 @@ func opSstore(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 
 	loc := scope.Stack.pop()
 	val := scope.Stack.pop()
-	meter := func(nodeCount uint64) error {
-		if storageTrieDepthStepGas == 0 || nodeCount <= storageTrieDepthFreeLevels {
-			return nil
-		}
-		if !scope.Contract.UseGas(storageTrieDepthStepGas, evm.Config.Tracer, tracing.GasChangeUnspecified) {
-			return ErrOutOfGas
-		}
-		return nil
-	}
-	_, _, err := evm.StateDB.SetStateWithMeter(scope.Contract.Address(), loc.Bytes32(), val.Bytes32(), meter)
-	if err != nil {
-		return nil, err
-	}
+	// Note: depth-based gas is charged during gas calculation phase in makeGasSStoreFunc/gasSStoreEIP2200,
+	// so we use the non-metered SetState here.
+	evm.StateDB.SetState(scope.Contract.Address(), loc.Bytes32(), val.Bytes32())
 
 	return nil, nil
 }

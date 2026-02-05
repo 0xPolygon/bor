@@ -300,11 +300,6 @@ type StorageVal[T any] struct {
 	Value *T
 }
 
-type stateWithDepth struct {
-	value common.Hash
-	depth uint64
-}
-
 func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *StateDB) T) (v T) {
 	if s.mvHashmap == nil {
 		return readStorage(s)
@@ -730,35 +725,19 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 	return MVRead(s, blockstm.NewStateKey(addr, hash), common.Hash{}, func(s *StateDB) common.Hash {
 		stateObject := s.getStateObject(addr)
 		if stateObject != nil {
-			value, _ := stateObject.GetStateWithDepth(hash)
-			return value
+			return stateObject.GetState(hash)
 		}
 
 		return common.Hash{}
 	})
 }
 
-// GetStateWithDepth retrieves the value associated with the specific key along
-// with the depth (number of nodes traversed) used to resolve it.
-func (s *StateDB) GetStateWithDepth(addr common.Address, hash common.Hash) (common.Hash, uint64) {
-	res := MVRead(s, blockstm.NewStateKey(addr, hash), stateWithDepth{}, func(s *StateDB) stateWithDepth {
-		stateObject := s.getStateObject(addr)
-		if stateObject != nil {
-			value, depth := stateObject.GetStateWithDepth(hash)
-			return stateWithDepth{value: value, depth: depth}
-		}
-
-		return stateWithDepth{}
-	})
-	return res.value, res.depth
-}
-
 // GetStateWithMeter retrieves the value associated with the specific key and
 // charges per-node via the meter during trie traversal.
-func (s *StateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+func (s *StateDB) GetStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, error) {
 	stateObject := s.getStateObject(addr)
 	if stateObject == nil {
-		return common.Hash{}, 0, nil
+		return common.Hash{}, nil
 	}
 	return stateObject.GetStateWithMeter(hash, meter)
 }
@@ -783,6 +762,16 @@ func (s *StateDB) GetStateAndCommittedState(addr common.Address, hash common.Has
 		return stateObject.getState(hash)
 	}
 	return common.Hash{}, common.Hash{}
+}
+
+// GetStateAndCommittedStateWithMeter returns the current value and the original value,
+// charging the meter during trie traversal.
+func (s *StateDB) GetStateAndCommittedStateWithMeter(addr common.Address, hash common.Hash, meter func(uint64) error) (common.Hash, common.Hash, error) {
+	stateObject := s.getStateObject(addr)
+	if stateObject != nil {
+		return stateObject.getStateWithMeter(hash, meter)
+	}
+	return common.Hash{}, common.Hash{}, nil
 }
 
 // Database retrieves the low level database supporting the lower level trie ops.
@@ -911,28 +900,16 @@ func (s *StateDB) SetState(addr common.Address, key, value common.Hash) common.H
 	return common.Hash{}
 }
 
-// SetStateWithDepth updates storage and returns the previous value along with
-// the lookup depth used to resolve the slot.
-func (s *StateDB) SetStateWithDepth(addr common.Address, key, value common.Hash) (common.Hash, uint64) {
-	stateObject := s.getOrNewStateObject(addr)
-	if stateObject != nil {
-		stateObject = s.mvRecordWritten(stateObject)
-		MVWrite(s, blockstm.NewStateKey(addr, key))
-		return stateObject.SetStateWithDepth(key, value)
-	}
-	return common.Hash{}, 0
-}
-
-// SetStateWithMeter updates storage and returns the previous value along with
-// the lookup depth used to resolve the slot, charging per-node via the meter.
-func (s *StateDB) SetStateWithMeter(addr common.Address, key, value common.Hash, meter func(uint64) error) (common.Hash, uint64, error) {
+// SetStateWithMeter updates storage and returns the previous value,
+// charging per-node via the meter during trie traversal.
+func (s *StateDB) SetStateWithMeter(addr common.Address, key, value common.Hash, meter func(uint64) error) (common.Hash, error) {
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject != nil {
 		stateObject = s.mvRecordWritten(stateObject)
 		MVWrite(s, blockstm.NewStateKey(addr, key))
 		return stateObject.SetStateWithMeter(key, value, meter)
 	}
-	return common.Hash{}, 0, nil
+	return common.Hash{}, nil
 }
 
 // SetStorage replaces the entire storage for the specified account with given

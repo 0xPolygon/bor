@@ -121,13 +121,13 @@ func (t *StateTrie) GetStorage(_ common.Address, key []byte) ([]byte, uint64, er
 
 // GetStorageWithMeter retrieves a storage slot and invokes the meter once per
 // decoded trie node visited during lookup.
-func (t *StateTrie) GetStorageWithMeter(_ common.Address, key []byte, meter func(uint64) error) ([]byte, uint64, error) {
-	enc, depth, err := t.trie.GetWithMeter(crypto.Keccak256(key), meter)
+func (t *StateTrie) GetStorageWithMeter(_ common.Address, key []byte, meter func(uint64) error) ([]byte, error) {
+	enc, err := t.trie.GetWithMeter(crypto.Keccak256(key), meter)
 	if err != nil || len(enc) == 0 {
-		return nil, depth, err
+		return nil, err
 	}
 	_, content, _, err := rlp.Split(enc)
-	return content, depth, err
+	return content, err
 }
 
 // GetAccount attempts to retrieve an account with provided account address.

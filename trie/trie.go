@@ -203,20 +203,20 @@ func (t *Trie) Get(key []byte) ([]byte, uint64, error) {
 	return value, depth, err
 }
 
-// GetWithMeter returns the value for key stored in the trie along with the
-// lookup-path node count. The meter callback is invoked once per decoded node
-// visited, with the current node count (1-based). If meter returns an error,
-// traversal stops and the error is returned.
-func (t *Trie) GetWithMeter(key []byte, meter func(uint64) error) ([]byte, uint64, error) {
+// GetWithMeter returns the value for key stored in the trie. The meter
+// callback is invoked once per decoded node visited, with the current node
+// count (1-based). If meter returns an error, traversal stops and the error
+// is returned.
+func (t *Trie) GetWithMeter(key []byte, meter func(uint64) error) ([]byte, error) {
 	// Short circuit if the trie is already committed and not usable.
 	if t.committed {
-		return nil, 0, ErrCommitted
+		return nil, ErrCommitted
 	}
-	value, newroot, didResolve, count, err := t.getWithMeter(t.root, keybytesToHex(key), 0, 0, meter)
+	value, newroot, didResolve, _, err := t.getWithMeter(t.root, keybytesToHex(key), 0, 0, meter)
 	if err == nil && didResolve {
 		t.root = newroot
 	}
-	return value, count, err
+	return value, err
 }
 
 func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, depth uint64, err error) {

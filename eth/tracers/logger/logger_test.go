@@ -44,6 +44,10 @@ func (*dummyStatedb) GetStateAndCommittedState(_ common.Address, _ common.Hash) 
 	return common.Hash{}, common.Hash{}
 }
 
+func (*dummyStatedb) GetStateAndCommittedStateWithMeter(_ common.Address, _ common.Hash, _ func(uint64) error) (common.Hash, common.Hash, error) {
+	return common.Hash{}, common.Hash{}, nil
+}
+
 func TestStoreCapture(t *testing.T) {
 	var (
 		logger   = NewStructLogger(nil)
