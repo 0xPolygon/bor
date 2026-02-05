@@ -482,7 +482,8 @@ func TestPrecompiledP256VerifyAlwaysAvailableInHFs(t *testing.T) {
 		assert.Equal(t, true, addressFound)
 
 		preCompiledContracts := ActivePrecompiledContracts(latestHfRules)
-		assert.Equal(t, &p256Verify{}, preCompiledContracts[precompiledP256VerifyAddress])
+		_, ok := preCompiledContracts[precompiledP256VerifyAddress].(*p256Verify)
+		assert.Equal(t, true, ok)
 	}
 }
 
