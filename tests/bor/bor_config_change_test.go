@@ -47,8 +47,8 @@ func TestBorConfigParameterChange(t *testing.T) {
 	genesis.Config.Bor.DandeliBlock = dandeliBlock
 
 	// Set custom BaseFeeChangeDenominator and TargetGasPercentage that will take effect at Dandeli
-	customBaseFeeChangeDenominator := uint64(32)  // Different from default (64)
-	customTargetGasPercentage := uint64(70)        // Different from default (65)
+	customBaseFeeChangeDenominator := uint64(32) // Different from default (64)
+	customTargetGasPercentage := uint64(70)      // Different from default (65)
 	genesis.Config.Bor.BaseFeeChangeDenominator = &customBaseFeeChangeDenominator
 	genesis.Config.Bor.TargetGasPercentage = &customTargetGasPercentage
 
@@ -314,7 +314,7 @@ func TestBorConfigParameterDivergence(t *testing.T) {
 
 	// Validator uses DIFFERENT parameters (simulating a "second change")
 	validatorBaseFeeChangeDenominator := uint64(128) // Much larger denominator
-	validatorTargetGasPercentage := uint64(80)        // Higher target percentage
+	validatorTargetGasPercentage := uint64(80)       // Higher target percentage
 	genesisValidator.Config.Bor.BaseFeeChangeDenominator = &validatorBaseFeeChangeDenominator
 	genesisValidator.Config.Bor.TargetGasPercentage = &validatorTargetGasPercentage
 

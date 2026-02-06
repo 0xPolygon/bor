@@ -84,7 +84,7 @@ type Trie interface {
 	// PrefetchAccount attempts to resolve specific accounts from the database
 	// to accelerate subsequent trie operations.
 	PrefetchAccount([]common.Address) error
-	
+
 	// GetStorage returns the value for key stored in the trie. The value bytes must
 	// not be modified by the caller. If a node was not found in the database, a
 	// trie.MissingNodeError is returned.
