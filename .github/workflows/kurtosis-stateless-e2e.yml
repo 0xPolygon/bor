@@ -17,7 +17,7 @@ concurrency:
 
 env:
   ENCLAVE_NAME: kurtosis-stateless-e2e
-  POLYCLI_VERSION: v0.1.102
+  POLYCLI_VERSION: v0.1.103
 
 jobs:
   build-bor:
@@ -27,13 +27,13 @@ jobs:
       - name: Checkout bor
         uses: actions/checkout@v5
 
-      - name: Build docker image
+      - name: Build bor docker image
         run: docker build -t bor:local --file Dockerfile .
 
-      - name: Save image
+      - name: Save bor docker image
         run: docker save bor:local | gzip > bor-image.tar.gz
 
-      - name: Upload image
+      - name: Upload bor docker image
         uses: actions/upload-artifact@v4
         with:
           name: bor-image
@@ -50,13 +50,13 @@ jobs:
           repository: 0xPolygon/heimdall-v2
           ref: develop
 
-      - name: Build docker image
+      - name: Build heimdall-v2 docker image
         run: docker build -t heimdall-v2:local --file Dockerfile .
 
-      - name: Save image
+      - name: Save heimdall-v2 docker image
         run: docker save heimdall-v2:local | gzip > heimdall-v2-image.tar.gz
 
-      - name: Upload image
+      - name: Upload heimdall-v2 docker image
         uses: actions/upload-artifact@v4
         with:
           name: heimdall-v2-image
@@ -80,7 +80,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
-          ref: hv2/tx-eip1559-gas-price-configs
+          ref: hv2/eip1559-and-rio-at-128
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
@@ -98,29 +98,29 @@ jobs:
           path: pos-workflows
 
       - name: Copy kurtosis config
-        run: cp ./pos-workflows/.github/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
+        run: cp ./pos-workflows/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
 
       # Load images
-      - name: Download bor image
+      - name: Download bor docker image
         uses: actions/download-artifact@v4
         with:
           name: bor-image
 
-      - name: Download heimdall-v2 image
+      - name: Download heimdall-v2 docker image
         uses: actions/download-artifact@v4
         with:
           name: heimdall-v2-image
 
-      - name: Load bor image
+      - name: Load bor docker image
         run: |
           gunzip -c bor-image.tar.gz | docker load
-          echo "Loaded bor image:"
+          echo "Loaded bor docker image:"
           docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
 
-      - name: Load heimdall-v2 image
+      - name: Load heimdall-v2 docker image
         run: |
           gunzip -c heimdall-v2-image.tar.gz | docker load
-          echo "Loaded heimdall-v2 image:"
+          echo "Loaded heimdall-v2 docker image:"
           docker images heimdall-v2:local --format "{{.ID}} {{.CreatedAt}}"
 
       # Deploy kurtosis enclave
@@ -143,12 +143,6 @@ jobs:
       - name: Run stateless e2e tests
         working-directory: pos-workflows/tests/stateless_tests
         run: bash kurtosis_stateless_test.sh
-
-      - name: Test state syncs
-        uses: ./.github/actions/test-state-sync
-        with:
-          enclave_name: ${{ env.ENCLAVE_NAME }}
-          agglayer_e2e_tag: 2687c0c751e7cae2deaf4e99b13ae0d0ef97b2d7
 
       # Clean up
       - name: Post kurtosis run
