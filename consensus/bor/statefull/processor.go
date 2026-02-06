@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-var systemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
+var SystemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
 
 type ChainContext struct {
 	Chain consensus.ChainHeaderReader
@@ -70,7 +70,7 @@ func (m Callmsg) Data() []byte         { return m.CallMsg.Data }
 func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	return Callmsg{
 		ethereum.CallMsg{
-			From:     systemAddress,
+			From:     SystemAddress,
 			Gas:      params.MaxTxGas, // should be more than enough for state-sync related syscalls
 			GasPrice: big.NewInt(0),
 			Value:    big.NewInt(0),
@@ -88,6 +88,7 @@ func ApplyMessage(
 	header *types.Header,
 	chainConfig *params.ChainConfig,
 	chainContext core.ChainContext,
+	vmConfig vm.Config,
 ) (uint64, error) {
 	initialGas := msg.Gas()
 
@@ -96,7 +97,7 @@ func ApplyMessage(
 
 	// Create a new environment which holds all relevant information
 	// about the transaction and calling mechanisms.
-	vmenv := vm.NewEVM(blockContext, state, chainConfig, vm.Config{})
+	vmenv := vm.NewEVM(blockContext, state, chainConfig, vmConfig)
 
 	// nolint : contextcheck
 	// Apply the transaction to the current state (included in the env)

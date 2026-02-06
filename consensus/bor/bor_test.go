@@ -62,7 +62,7 @@ func (s *fakeSpanner) GetCurrentValidatorsByHash(ctx context.Context, headerHash
 func (s *fakeSpanner) GetCurrentValidatorsByBlockNrOrHash(ctx context.Context, _ rpc.BlockNumberOrHash, _ uint64) ([]*valset.Validator, error) {
 	return s.vals, nil
 }
-func (s *fakeSpanner) CommitSpan(ctx context.Context, _ borTypes.Span, _ []stakeTypes.MinimalVal, _ []stakeTypes.MinimalVal, _ vm.StateDB, _ *types.Header, _ core.ChainContext) error {
+func (s *fakeSpanner) CommitSpan(ctx context.Context, _ borTypes.Span, _ []stakeTypes.MinimalVal, _ []stakeTypes.MinimalVal, _ vm.StateDB, _ *types.Header, _ core.ChainContext, _ vm.Config) error {
 	if s.shouldFailCommit {
 		return errors.New("span commit failed")
 	}
