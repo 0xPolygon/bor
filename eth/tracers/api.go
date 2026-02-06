@@ -222,6 +222,26 @@ type TraceConfig struct {
 	BorTx           *bool
 }
 
+// deepCopyTraceConfig returns a deep copy of the given TraceConfig so that
+// each goroutine can safely mutate its own copy without racing.
+func deepCopyTraceConfig(config *TraceConfig) TraceConfig {
+	cpy := *config
+	if config.Config != nil {
+		loggerCfg := *config.Config
+		cpy.Config = &loggerCfg
+	}
+	if config.BorTx != nil {
+		cpy.BorTx = newBoolPtr(*config.BorTx)
+	}
+	if config.BorTraceEnabled != nil {
+		cpy.BorTraceEnabled = newBoolPtr(*config.BorTraceEnabled)
+	}
+	if config.TracerConfig != nil {
+		cpy.TracerConfig = append(json.RawMessage{}, config.TracerConfig...)
+	}
+	return cpy
+}
+
 // TraceCallConfig is the config for traceCall API. It holds one more
 // field to override the state for tracing.
 type TraceCallConfig struct {
@@ -383,8 +403,8 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 
 					var err error
 
-					// Make a copy of config for this transaction to avoid race conditions
-					txConfig := *config
+					// Deep copy config for this transaction to avoid race conditions
+					txConfig := deepCopyTraceConfig(config)
 					if stateSyncPresent && i == len(txs)-1 && includeStateSyncTx {
 						txConfig.BorTx = newBoolPtr(true)
 					}
@@ -865,8 +885,8 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 				var err error
 
-				// Make a copy of config for this transaction to avoid race conditions
-				txConfig := *config
+				// Deep copy config for this transaction to avoid race conditions
+				txConfig := deepCopyTraceConfig(config)
 				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
 				if stateSyncPresent && task.index == len(txs)-1 {
 					isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
