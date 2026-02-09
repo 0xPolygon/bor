@@ -23,6 +23,7 @@ import (
 	"fmt"
 	mrand "math/rand"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -33,7 +34,10 @@ import (
 
 // Prng is a pseudo random number generator seeded by strong randomness.
 // The randomness is printed on startup in order to make failures reproducible.
-var prng = initRnd()
+var (
+	prng   = initRnd()
+	prngMu sync.Mutex
+)
 
 func initRnd() *mrand.Rand {
 	var seed [8]byte
@@ -47,7 +51,9 @@ func initRnd() *mrand.Rand {
 
 func randBytes(n int) []byte {
 	r := make([]byte, n)
+	prngMu.Lock()
 	prng.Read(r)
+	prngMu.Unlock()
 
 	return r
 }

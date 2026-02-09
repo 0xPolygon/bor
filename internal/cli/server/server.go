@@ -72,8 +72,6 @@ type Server struct {
 
 type serverOption func(srv *Server, config *Config) error
 
-var glogger *log.GlogHandler
-
 func init() {
 	handler := log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, false)
 	log.SetDefault(log.NewLogger(handler))
@@ -493,28 +491,29 @@ func (s *Server) loggingServerInterceptor(ctx context.Context, req interface{}, 
 func setupLogger(logLevel int, loggingInfo LoggingConfig) {
 	output := io.Writer(os.Stderr)
 
+	var handler *log.GlogHandler
 	if loggingInfo.Json {
-		glogger = log.NewGlogHandler(log.JSONHandler(os.Stderr))
+		handler = log.NewGlogHandler(log.JSONHandler(os.Stderr))
 	} else {
 		usecolor := (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) && os.Getenv("TERM") != "dumb"
 		if usecolor {
 			output = colorable.NewColorableStderr()
 		}
 
-		glogger = log.NewGlogHandler(log.NewTerminalHandler(output, usecolor))
+		handler = log.NewGlogHandler(log.NewTerminalHandler(output, usecolor))
 	}
 
 	// logging
 	lvl := log.FromLegacyLevel(logLevel)
-	glogger.Verbosity(lvl)
+	handler.Verbosity(lvl)
 
 	if loggingInfo.Vmodule != "" {
-		if err := glogger.Vmodule(loggingInfo.Vmodule); err != nil {
+		if err := handler.Vmodule(loggingInfo.Vmodule); err != nil {
 			log.Error("failed to set Vmodule", "err", err)
 		}
 	}
 
-	log.SetDefault(log.NewLogger(glogger))
+	log.SetDefault(log.NewLogger(handler))
 }
 
 func (s *Server) GetLatestBlockNumber() *big.Int {

@@ -443,14 +443,14 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "miner.targetGasPercentage",
-		Usage:   "Target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks",
+		Usage:   "Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks",
 		Value:   &c.cliConfig.Sealer.TargetGasPercentage,
 		Default: c.cliConfig.Sealer.TargetGasPercentage,
 		Group:   "Sealer",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "miner.baseFeeChangeDenominator",
-		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Dandeli blocks",
+		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks",
 		Value:   &c.cliConfig.Sealer.BaseFeeChangeDenominator,
 		Default: c.cliConfig.Sealer.BaseFeeChangeDenominator,
 		Group:   "Sealer",

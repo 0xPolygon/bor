@@ -42,11 +42,15 @@ func TestBorConfigParameterChange(t *testing.T) {
 	genesis.Config.LondonBlock = common.Big0
 	genesis.Config.Bor.JaipurBlock = common.Big0
 
-	// Enable Dandeli fork at block 20 - this is where we'll change the parameters
-	dandeliBlock := big.NewInt(20)
+	// Enable Dandeli fork at block 15 for percentage-based calculation
+	dandeliBlock := big.NewInt(15)
 	genesis.Config.Bor.DandeliBlock = dandeliBlock
 
-	// Set custom BaseFeeChangeDenominator and TargetGasPercentage that will take effect at Dandeli
+	// Enable Lisovo fork at block 20 - this is where configurable parameters take effect
+	lisovoBlock := big.NewInt(20)
+	genesis.Config.Bor.LisovoBlock = lisovoBlock
+
+	// Set custom BaseFeeChangeDenominator and TargetGasPercentage that will take effect at Lisovo
 	customBaseFeeChangeDenominator := uint64(32)  // Different from default (64)
 	customTargetGasPercentage := uint64(70)        // Different from default (65)
 	genesis.Config.Bor.BaseFeeChangeDenominator = &customBaseFeeChangeDenominator
@@ -68,8 +72,8 @@ func TestBorConfigParameterChange(t *testing.T) {
 		}
 	}
 
-	// Wait for blocks to be mined beyond the Dandeli fork block
-	targetBlockNum := dandeliBlock.Uint64() + 10 // Mine 10 blocks after the fork
+	// Wait for blocks to be mined beyond the Lisovo fork block
+	targetBlockNum := lisovoBlock.Uint64() + 10 // Mine 10 blocks after the fork
 	timeout := time.After(120 * time.Second)
 
 	for {
@@ -97,13 +101,13 @@ checkResults:
 	require.Equal(t, chain0.CurrentHeader().Number.Uint64(), chain1.CurrentHeader().Number.Uint64(),
 		"Both nodes should be at the same block height")
 
-	// Verify blocks around the Dandeli fork
-	preDandeliBlock := dandeliBlock.Uint64() - 1
-	atDandeliBlock := dandeliBlock.Uint64()
-	postDandeliBlock := dandeliBlock.Uint64() + 5
+	// Verify blocks around the Lisovo fork (where configurable parameters activate)
+	preLisovoBlock := lisovoBlock.Uint64() - 1
+	atLisovoBlock := lisovoBlock.Uint64()
+	postLisovoBlock := lisovoBlock.Uint64() + 5
 
 	// Check block hashes match between nodes (validator accepted producer's blocks)
-	for _, blockNum := range []uint64{preDandeliBlock, atDandeliBlock, postDandeliBlock} {
+	for _, blockNum := range []uint64{preLisovoBlock, atLisovoBlock, postLisovoBlock} {
 		header0 := chain0.GetHeaderByNumber(blockNum)
 		header1 := chain1.GetHeaderByNumber(blockNum)
 
@@ -118,50 +122,50 @@ checkResults:
 	}
 
 	// Verify that the BaseFeeChangeDenominator and TargetGasPercentage are being used correctly
-	// by checking the base fee calculation before and after Dandeli fork
+	// by checking the base fee calculation before and after Lisovo fork (configurable parameters)
 
-	// Pre-Dandeli block: should use default parameters
-	preHeader := chain0.GetHeaderByNumber(preDandeliBlock)
-	preParentHeader := chain0.GetHeaderByNumber(preDandeliBlock - 1)
+	// Pre-Lisovo block: should use default parameters
+	preHeader := chain0.GetHeaderByNumber(preLisovoBlock)
+	preParentHeader := chain0.GetHeaderByNumber(preLisovoBlock - 1)
 
 	if preParentHeader != nil && preHeader != nil {
-		// Calculate expected base fee using pre-Dandeli parameters
+		// Calculate expected base fee using pre-Lisovo parameters (default 65%)
 		expectedPreBaseFee := eip1559.CalcBaseFee(genesis.Config, preParentHeader)
-		t.Logf("Pre-Dandeli block %d: Expected BaseFee=%s, Actual BaseFee=%s",
-			preDandeliBlock, expectedPreBaseFee.String(), preHeader.BaseFee.String())
+		t.Logf("Pre-Lisovo block %d: Expected BaseFee=%s, Actual BaseFee=%s",
+			preLisovoBlock, expectedPreBaseFee.String(), preHeader.BaseFee.String())
 		// Note: We don't assert equality here because the block producer might have chosen different gas usage
 	}
 
-	// Post-Dandeli block: should use custom parameters
-	postHeader := chain0.GetHeaderByNumber(postDandeliBlock)
-	postParentHeader := chain0.GetHeaderByNumber(postDandeliBlock - 1)
+	// Post-Lisovo block: should use custom parameters
+	postHeader := chain0.GetHeaderByNumber(postLisovoBlock)
+	postParentHeader := chain0.GetHeaderByNumber(postLisovoBlock - 1)
 
 	if postParentHeader != nil && postHeader != nil {
-		// Calculate expected base fee using post-Dandeli parameters
+		// Calculate expected base fee using post-Lisovo parameters
 		expectedPostBaseFee := eip1559.CalcBaseFee(genesis.Config, postParentHeader)
-		t.Logf("Post-Dandeli block %d: Expected BaseFee=%s, Actual BaseFee=%s",
-			postDandeliBlock, expectedPostBaseFee.String(), postHeader.BaseFee.String())
+		t.Logf("Post-Lisovo block %d: Expected BaseFee=%s, Actual BaseFee=%s",
+			postLisovoBlock, expectedPostBaseFee.String(), postHeader.BaseFee.String())
 
-		// After Dandeli, base fee validation is skipped to allow dynamic configuration
-		// But we can verify that the calculation uses the new parameters by checking the target gas
+		// After Lisovo, configurable parameters take effect
+		// Verify that the calculation uses the custom parameters by checking the target gas
 		targetPercentage := genesis.Config.Bor.GetTargetGasPercentage(postParentHeader.Number)
 		expectedTargetGas := postParentHeader.GasLimit * targetPercentage / 100
-		t.Logf("Post-Dandeli target gas calculation: TargetPercentage=%d, GasLimit=%d, Expected TargetGas=%d",
+		t.Logf("Post-Lisovo target gas calculation: TargetPercentage=%d, GasLimit=%d, Expected TargetGas=%d",
 			targetPercentage, postParentHeader.GasLimit, expectedTargetGas)
 
 		// Verify the custom target percentage is being used
 		assert.Equal(t, customTargetGasPercentage, targetPercentage,
-			"Custom TargetGasPercentage should be used after Dandeli fork")
+			"Custom TargetGasPercentage should be used after Lisovo fork")
 
 		// Verify the custom base fee change denominator is being used
 		baseFeeChangeDenom := params.BaseFeeChangeDenominator(genesis.Config.Bor, postParentHeader.Number)
 		assert.Equal(t, customBaseFeeChangeDenominator, baseFeeChangeDenom,
-			"Custom BaseFeeChangeDenominator should be used after Dandeli fork")
+			"Custom BaseFeeChangeDenominator should be used after Lisovo fork")
 	}
 
 	// Verify both nodes successfully validated the blocks with new parameters
 	// by checking that the validator node has the same blocks as the producer
-	for blockNum := atDandeliBlock; blockNum <= postDandeliBlock; blockNum++ {
+	for blockNum := atLisovoBlock; blockNum <= postLisovoBlock; blockNum++ {
 		header0 := chain0.GetHeaderByNumber(blockNum)
 		header1 := chain1.GetHeaderByNumber(blockNum)
 
@@ -200,9 +204,13 @@ func TestBorConfigParameterChangeVerification(t *testing.T) {
 	genesis.Config.LondonBlock = common.Big0
 	genesis.Config.Bor.JaipurBlock = common.Big0
 
-	// Enable Dandeli fork at block 10
-	dandeliBlock := big.NewInt(10)
+	// Enable Dandeli fork at block 5 (percentage-based calculation)
+	dandeliBlock := big.NewInt(5)
 	genesis.Config.Bor.DandeliBlock = dandeliBlock
+
+	// Enable Lisovo fork at block 10 (configurable parameters)
+	lisovoBlock := big.NewInt(10)
+	genesis.Config.Bor.LisovoBlock = lisovoBlock
 
 	// Set custom parameters
 	customBaseFeeChangeDenominator := uint64(128) // Very different from default
@@ -219,8 +227,8 @@ func TestBorConfigParameterChangeVerification(t *testing.T) {
 	err = ethBackend.StartMining()
 	require.NoError(t, err)
 
-	// Wait for blocks to be mined beyond the Dandeli fork
-	targetBlockNum := dandeliBlock.Uint64() + 5
+	// Wait for blocks to be mined beyond the Lisovo fork
+	targetBlockNum := lisovoBlock.Uint64() + 5
 	timeout := time.After(60 * time.Second)
 
 	for {
@@ -250,8 +258,8 @@ verifyHeaders:
 		require.NoError(t, err, "Header %d should be valid", blockNum)
 
 		// Check which parameters are in effect
-		if blockNum >= dandeliBlock.Uint64() {
-			// Post-Dandeli: custom parameters should be used
+		if blockNum >= lisovoBlock.Uint64() {
+			// Post-Lisovo: custom parameters should be used
 			targetPercentage := genesis.Config.Bor.GetTargetGasPercentage(header.Number)
 			baseFeeChangeDenom := params.BaseFeeChangeDenominator(genesis.Config.Bor, header.Number)
 
@@ -260,18 +268,18 @@ verifyHeaders:
 			assert.Equal(t, customBaseFeeChangeDenominator, baseFeeChangeDenom,
 				"Block %d should use custom BaseFeeChangeDenominator", blockNum)
 
-			t.Logf("Block %d (Post-Dandeli): TargetGasPercentage=%d, BaseFeeChangeDenominator=%d, BaseFee=%s",
+			t.Logf("Block %d (Post-Lisovo): TargetGasPercentage=%d, BaseFeeChangeDenominator=%d, BaseFee=%s",
 				blockNum, targetPercentage, baseFeeChangeDenom, header.BaseFee.String())
 		} else {
-			// Pre-Dandeli: default parameters should be used
+			// Pre-Lisovo: default parameters should be used
 			targetPercentage := genesis.Config.Bor.GetTargetGasPercentage(header.Number)
 			baseFeeChangeDenom := params.BaseFeeChangeDenominator(genesis.Config.Bor, header.Number)
 
-			// Pre-Dandeli should use pre-Dandeli defaults (not our custom values)
+			// Pre-Lisovo should use default parameters (not our custom values)
 			assert.NotEqual(t, customTargetGasPercentage, targetPercentage,
 				"Block %d should NOT use custom TargetGasPercentage", blockNum)
 
-			t.Logf("Block %d (Pre-Dandeli): TargetGasPercentage=%d, BaseFeeChangeDenominator=%d, BaseFee=%s",
+			t.Logf("Block %d (Pre-Lisovo): TargetGasPercentage=%d, BaseFeeChangeDenominator=%d, BaseFee=%s",
 				blockNum, targetPercentage, baseFeeChangeDenom, header.BaseFee.String())
 		}
 	}
@@ -298,7 +306,8 @@ func TestBorConfigParameterDivergence(t *testing.T) {
 	genesisProducer := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesisProducer.Config.LondonBlock = common.Big0
 	genesisProducer.Config.Bor.JaipurBlock = common.Big0
-	genesisProducer.Config.Bor.DandeliBlock = big.NewInt(10) // Enable Dandeli early
+	genesisProducer.Config.Bor.DandeliBlock = big.NewInt(5)  // Enable Dandeli early (percentage-based calc)
+	genesisProducer.Config.Bor.LisovoBlock = big.NewInt(10) // Enable Lisovo (configurable params)
 
 	// Producer uses first set of parameters
 	producerBaseFeeChangeDenominator := uint64(32)
@@ -310,7 +319,8 @@ func TestBorConfigParameterDivergence(t *testing.T) {
 	genesisValidator := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesisValidator.Config.LondonBlock = common.Big0
 	genesisValidator.Config.Bor.JaipurBlock = common.Big0
-	genesisValidator.Config.Bor.DandeliBlock = big.NewInt(10) // Same Dandeli activation
+	genesisValidator.Config.Bor.DandeliBlock = big.NewInt(5)  // Same Dandeli activation
+	genesisValidator.Config.Bor.LisovoBlock = big.NewInt(10) // Same Lisovo activation
 
 	// Validator uses DIFFERENT parameters (simulating a "second change")
 	validatorBaseFeeChangeDenominator := uint64(128) // Much larger denominator
@@ -379,9 +389,9 @@ checkDivergence:
 	t.Logf("Producer current block: %d", chainProducer.CurrentHeader().Number.Uint64())
 	t.Logf("Validator current block: %d", chainValidator.CurrentHeader().Number.Uint64())
 
-	// Verify blocks at key positions
-	dandeliBlock := uint64(10)
-	checkBlocks := []uint64{dandeliBlock, dandeliBlock + 5, dandeliBlock + 10}
+	// Verify blocks at key positions (focus on post-Lisovo where configurable params apply)
+	lisovoBlock := uint64(10)
+	checkBlocks := []uint64{lisovoBlock, lisovoBlock + 5, lisovoBlock + 10}
 
 	for _, blockNum := range checkBlocks {
 		producerHeader := chainProducer.GetHeaderByNumber(blockNum)
@@ -410,8 +420,8 @@ checkDivergence:
 		t.Logf("  Block BaseFee=%s, GasLimit=%d, GasUsed=%d",
 			producerHeader.BaseFee.String(), producerHeader.GasLimit, producerHeader.GasUsed)
 
-		// Post-Dandeli: verify nodes are using their respective different configs
-		if blockNum >= dandeliBlock {
+		// Post-Lisovo: verify nodes are using their respective different configs
+		if blockNum >= lisovoBlock {
 			assert.Equal(t, producerTargetGasPercentage, producerTargetPct,
 				"Producer should use its own TargetGasPercentage")
 			assert.Equal(t, producerBaseFeeChangeDenominator, producerDenom,
@@ -430,7 +440,7 @@ checkDivergence:
 
 	// Verify validator explicitly accepts producer's headers despite config divergence
 	engineValidator := nodeValidator.Engine().(*bor.Bor)
-	for blockNum := dandeliBlock; blockNum <= dandeliBlock+10; blockNum++ {
+	for blockNum := lisovoBlock; blockNum <= lisovoBlock+10; blockNum++ {
 		producerHeader := chainProducer.GetHeaderByNumber(blockNum)
 		if producerHeader == nil {
 			continue
@@ -445,7 +455,7 @@ checkDivergence:
 	}
 
 	t.Log("Test completed successfully: Validator accepted blocks from producer despite divergent BorConfig parameters")
-	t.Log("This demonstrates that post-Dandeli base fee validation skip allows for flexible parameter updates")
+	t.Log("This demonstrates that post-Lisovo boundary validation allows for flexible parameter updates")
 }
 
 // TestBorConfigMultipleParameterChanges tests a scenario where parameters are conceptually
@@ -463,11 +473,12 @@ func TestBorConfigMultipleParameterChanges(t *testing.T) {
 		faucets[i], _ = crypto.GenerateKey()
 	}
 
-	// Initialize genesis with Dandeli fork at block 10
+	// Initialize genesis with Dandeli fork at block 5 and Lisovo fork at block 10
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesis.Config.LondonBlock = common.Big0
 	genesis.Config.Bor.JaipurBlock = common.Big0
-	genesis.Config.Bor.DandeliBlock = big.NewInt(10)
+	genesis.Config.Bor.DandeliBlock = big.NewInt(5)  // Percentage-based calculation
+	genesis.Config.Bor.LisovoBlock = big.NewInt(10)  // Configurable parameters
 
 	// Start with first set of parameters (will be used from block 10 onward)
 	firstBaseFeeChangeDenominator := uint64(32)

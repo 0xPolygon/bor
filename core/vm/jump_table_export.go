@@ -26,14 +26,18 @@ import (
 // the rules.
 func LookupInstructionSet(rules params.Rules) (JumpTable, error) {
 	switch {
-	case rules.IsVerkle:
-		return newCancunInstructionSet(), errors.New("verkle-fork not defined yet")
+	// Note: geth only returns an error for the verkle-fork.
+	// Return nil for other forks.
+	case rules.IsLisovo:
+		return newLisovoInstructionSet(), nil
 	case rules.IsMadhugiriPro:
-		return newPragueInstructionSet(), errors.New("madhugiriPro-fork not defined yet")
+		return newPragueInstructionSet(), nil
 	case rules.IsMadhugiri:
-		return newPragueInstructionSet(), errors.New("madhugiri-fork not defined yet")
+		return newPragueInstructionSet(), nil
 	case rules.IsOsaka:
 		return newOsakaInstructionSet(), nil
+	case rules.IsVerkle:
+		return newCancunInstructionSet(), errors.New("verkle-fork not defined yet")
 	case rules.IsPrague:
 		return newPragueInstructionSet(), nil
 	case rules.IsCancun:

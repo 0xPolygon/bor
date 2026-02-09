@@ -880,7 +880,8 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 					// Wait until the mining window (2s) is almost reaching leaving
 					// a very small time (~100ms) to try to commit transaction before timing out.
-					delay := time.Until(time.Unix(int64(w.current.header.Time), 0))
+					current := w.getCurrent()
+					delay := time.Until(time.Unix(int64(current.header.Time), 0))
 					delay -= 100 * time.Millisecond
 					<-time.After(delay)
 				}
@@ -895,13 +896,14 @@ func TestCommitInterruptExperimentBor_NewTxFlow(t *testing.T) {
 
 	// Ensure that the last block was 3 and only 2/3 transactions are mined because
 	// of the 500ms timeout and 1s block time.
-	// Access w.current safely
-	if w.current == nil || w.current.header == nil {
+	// Access w.current safely using getCurrent()
+	current := w.getCurrent()
+	if current == nil || current.header == nil {
 		t.Fatal("worker current state is not initialized")
 	}
-	assert.Equal(t, w.current.header.Number.Uint64(), uint64(3))
-	assert.Equal(t, w.current.tcount, 2)
-	assert.Equal(t, len(w.current.txs), 2)
+	assert.Equal(t, current.header.Number.Uint64(), uint64(3))
+	assert.Equal(t, current.tcount, 2)
+	assert.Equal(t, len(current.txs), 2)
 }
 
 // nolint:paralleltest

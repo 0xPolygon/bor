@@ -9,27 +9,25 @@ package metrics
 import (
 	"runtime/metrics"
 	"runtime/pprof"
+	"sync/atomic"
 	"time"
 )
 
 var (
-	metricsEnabled = false
+	metricsEnabled atomic.Bool
 )
 
 // Enabled is checked by functions that are deemed 'expensive', e.g. if a
 // meter-type does locking and/or non-trivial math operations during update.
 func Enabled() bool {
-	return metricsEnabled
+	return metricsEnabled.Load()
 }
 
 // Enable enables the metrics system.
 // The Enabled-flag is expected to be set, once, during startup, but toggling off and on
 // is not supported.
-//
-// Enable is not safe to call concurrently. You need to call this as early as possible in
-// the program, before any metrics collection will happen.
 func Enable() {
-	metricsEnabled = true
+	metricsEnabled.Store(true)
 	startMeterTickerLoop()
 }
 
@@ -108,7 +106,7 @@ func readRuntimeStats(v *runtimeStats) {
 // CollectProcessMetrics periodically collects various metrics about the running process.
 func CollectProcessMetrics(refresh time.Duration) {
 	// Short circuit if the metrics system is disabled
-	if !metricsEnabled {
+	if !metricsEnabled.Load() {
 		return
 	}
 
