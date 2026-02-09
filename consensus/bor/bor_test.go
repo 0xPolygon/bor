@@ -1852,11 +1852,19 @@ func TestClose_Idempotent(t *testing.T) {
 	require.NoError(t, b.Close()) // second call should also succeed
 }
 
-func TestGetSpanner(t *testing.T) {
-	t.Parallel()
-	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
+func newBorWithSingleValidator(t *testing.T, addr common.Address) (*Bor, *fakeSpanner) {
+	t.Helper()
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
 	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+
+	return b, sp
+}
+
+func TestGetSpanner(t *testing.T) {
+	t.Parallel()
+	b, sp := newBorWithSingleValidator(t, common.HexToAddress("0x1"))
 
 	result := b.GetSpanner()
 	require.Equal(t, sp, result)
@@ -1865,9 +1873,7 @@ func TestGetSpanner(t *testing.T) {
 func TestSetSpanner(t *testing.T) {
 	t.Parallel()
 
-	sp1 := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
-	_, b := newChainAndBorForTest(t, sp1, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b, _ := newBorWithSingleValidator(t, common.HexToAddress("0x1"))
 
 	sp2 := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x2"), VotingPower: 1}}}
 	b.SetSpanner(sp2)
@@ -1877,9 +1883,7 @@ func TestSetSpanner(t *testing.T) {
 
 func TestSetHeimdallClient(t *testing.T) {
 	t.Parallel()
-	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
-	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b, _ := newBorWithSingleValidator(t, common.HexToAddress("0x1"))
 
 	client := &failingHeimdallClient{}
 	b.SetHeimdallClient(client)
@@ -1889,9 +1893,7 @@ func TestSetHeimdallClient(t *testing.T) {
 func TestGetCurrentValidators_DelegatesToSpanner(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
-	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b, _ := newBorWithSingleValidator(t, addr1)
 
 	vals, err := b.GetCurrentValidators(context.Background(), common.Hash{}, 1)
 	require.NoError(t, err)

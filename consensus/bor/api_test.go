@@ -234,12 +234,17 @@ func TestAPI_GetCurrentValidators(t *testing.T) {
 	require.True(t, found)
 }
 
+func newAPIWithUnknownCurrentHeader() *API {
+	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
+	chain := newRawDBChain(rawdb.NewMemoryDatabase(), cfg, nil, nil, nil)
+
+	return &API{chain: chain, bor: &Bor{}}
+}
+
 func TestAPI_GetCurrentProposer_UnknownBlock(t *testing.T) {
 	t.Parallel()
 
-	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
-	chain := newRawDBChain(rawdb.NewMemoryDatabase(), cfg, nil, nil, nil)
-	api := &API{chain: chain, bor: &Bor{}}
+	api := newAPIWithUnknownCurrentHeader()
 
 	proposer, err := api.GetCurrentProposer()
 	require.ErrorIs(t, err, errUnknownBlock)
@@ -249,9 +254,7 @@ func TestAPI_GetCurrentProposer_UnknownBlock(t *testing.T) {
 func TestAPI_GetCurrentValidators_UnknownBlock(t *testing.T) {
 	t.Parallel()
 
-	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
-	chain := newRawDBChain(rawdb.NewMemoryDatabase(), cfg, nil, nil, nil)
-	api := &API{chain: chain, bor: &Bor{}}
+	api := newAPIWithUnknownCurrentHeader()
 
 	validators, err := api.GetCurrentValidators()
 	require.ErrorIs(t, err, errUnknownBlock)
