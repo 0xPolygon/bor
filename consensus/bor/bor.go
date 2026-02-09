@@ -1091,14 +1091,21 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		}
 	}
 
-	successionNumber, err := snap.GetSignerSuccessionNumber(currentSigner.signer)
-	if err != nil {
-		return err
-	}
-
 	// Wait before start the block production if needed (previsously this wait was on Seal)
-	if c.config.IsBhilai(header.Number) && successionNumber == 0 && waitOnPrepare {
-		<-time.After(delay)
+	if c.config.IsBhilai(header.Number) && waitOnPrepare {
+		var successionNumber int
+		// if signer is not empty (RPC nodes have empty signer)
+		if currentSigner.signer != (common.Address{}) {
+			var err error
+			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
+			if err != nil {
+				return err
+			}
+		}
+
+		if successionNumber == 0 {
+			<-time.After(delay)
+		}
 	}
 
 	return nil
