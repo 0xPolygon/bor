@@ -549,8 +549,8 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller 
 	bucket.lock.RLock()
 	slots, ok := bucket.storages[addr]
 	if ok {
-		ent, ok2 := slots[slot]
-		if ok2 {
+		ent, ok := slots[slot]
+		if ok {
 			// Map values are returned by value (copy). Returning a pointer to the local copy is
 			// OK for reading attribution fields (origin), but not for mutating fields.
 			bucket.lock.RUnlock()
@@ -605,15 +605,15 @@ type readerWithCacheStats struct {
 	storageHit  atomic.Int64
 	storageMiss atomic.Int64
 
-	// New: attribute PROCESS hits that were served by PREFETCH-origin entries.
+	// attribute PROCESS hits that were served by PREFETCH-origin entries.
 	accountHitFromPrefetch atomic.Int64
 	storageHitFromPrefetch atomic.Int64
 
-	// New: count unique inserts by PREFETCH (how much it warmed).
+	// count unique inserts by PREFETCH (how much it warmed).
 	accountInsert atomic.Int64
 	storageInsert atomic.Int64
 
-	// New: count unique prefetched keys that PROCESS actually used (precision) for accounts only.
+	// count unique prefetched keys that PROCESS actually used (precision) for accounts only.
 	prefetchAccountUsedByProcessUnique atomic.Int64
 }
 
