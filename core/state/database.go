@@ -18,6 +18,7 @@ package state
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -160,6 +161,7 @@ type CachingDB struct {
 	codeCache       *lru.SizeConstrainedCache[common.Hash, []byte]
 	codeSizeCache   *lru.Cache[common.Hash, int]
 	pointCache      *utils.PointCache
+	snapMu          sync.RWMutex // Protects useSnapInReader
 	useSnapInReader bool
 
 	// Transition-specific fields
@@ -181,11 +183,15 @@ func NewDatabase(triedb *triedb.Database, snap *snapshot.Tree) *CachingDB {
 }
 
 func (db *CachingDB) DisableSnapInReader() {
+	db.snapMu.Lock()
 	db.useSnapInReader = false
+	db.snapMu.Unlock()
 }
 
 func (db *CachingDB) EnableSnapInReader() {
+	db.snapMu.Lock()
 	db.useSnapInReader = true
+	db.snapMu.Unlock()
 }
 
 // NewDatabaseForTesting is similar to NewDatabase, but it initializes the caching
@@ -201,7 +207,10 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	// Configure the state reader using the standalone snapshot in hash mode.
 	// This reader offers improved performance but is optional and only
 	// partially useful if the snapshot is not fully generated.
-	if db.TrieDB().Scheme() == rawdb.HashScheme && db.snap != nil && db.useSnapInReader {
+	db.snapMu.RLock()
+	useSnap := db.useSnapInReader
+	db.snapMu.RUnlock()
+	if db.TrieDB().Scheme() == rawdb.HashScheme && db.snap != nil && useSnap {
 		snap := db.snap.Snapshot(stateRoot)
 		if snap != nil {
 			readers = append(readers, newFlatReader(snap))

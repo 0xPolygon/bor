@@ -940,10 +940,18 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 				t.Errorf("test %d, mid state: served headers mismatch: have %d, want %d", i, served, tt.midserve)
 			}
 
+			// Wait for expected peer drops (may happen asynchronously after subchain state updates)
 			var drops uint64
-
-			for _, peer := range tt.peers {
-				drops += peer.dropped.Load()
+			waitStart = time.Now()
+			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
+				drops = 0
+				for _, peer := range tt.peers {
+					drops += peer.dropped.Load()
+				}
+				if drops >= tt.middrop {
+					break
+				}
+				time.Sleep(waitTime)
 			}
 
 			if drops != tt.middrop {
@@ -1010,18 +1018,25 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 				t.Errorf("test %d, end state: served headers mismatch: have %d, want %d", i, served, tt.endserve)
 			}
 
-			drops := uint64(0)
-
-			for _, peer := range tt.peers {
-				drops += peer.dropped.Load()
-			}
-
-			if tt.newPeer != nil {
-				drops += tt.newPeer.dropped.Load()
+			// Wait for expected peer drops (may happen asynchronously after subchain state updates)
+			var drops uint64
+			waitStart = time.Now()
+			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
+				drops = 0
+				for _, peer := range tt.peers {
+					drops += peer.dropped.Load()
+				}
+				if tt.newPeer != nil {
+					drops += tt.newPeer.dropped.Load()
+				}
+				if drops >= tt.enddrop {
+					break
+				}
+				time.Sleep(waitTime)
 			}
 
 			if drops != tt.enddrop {
-				t.Errorf("test %d, end state: dropped peers mismatch: have %d, want %d", i, drops, tt.middrop)
+				t.Errorf("test %d, end state: dropped peers mismatch: have %d, want %d", i, drops, tt.enddrop)
 			}
 		}
 		// Clean up any leftover skeleton sync resources
