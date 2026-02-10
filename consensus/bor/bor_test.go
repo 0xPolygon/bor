@@ -2883,7 +2883,7 @@ func TestPrepare_NonSprintBlock(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(setup.chain.HeaderChain(), h)
+	err := b.Prepare(setup.chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 	require.NotNil(t, h.Difficulty)
 	require.True(t, h.Difficulty.Uint64() > 0)
@@ -3822,7 +3822,7 @@ func TestPrepare_UnknownParent(t *testing.T) {
 		GasLimit:   8_000_000,
 	}
 
-	err := b.Prepare(setup.chain.HeaderChain(), h)
+	err := b.Prepare(setup.chain.HeaderChain(), h, false)
 	require.Error(t, err)
 }
 func TestSeal_SignError(t *testing.T) {
@@ -3951,7 +3951,7 @@ func TestPrepare_ValidatorsByHashError(t *testing.T) {
 	// When GetCurrentValidatorsByHash returns nil values (fakeSpanner with empty vals)
 	sp.vals = nil
 
-	err := b.Prepare(chain, h)
+	err := b.Prepare(chain, h, false)
 	// Should get errUnknownValidators since GetCurrentValidatorsByHash returns empty/nil
 	require.Error(t, err)
 }
