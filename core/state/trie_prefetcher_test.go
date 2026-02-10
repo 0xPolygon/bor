@@ -215,8 +215,8 @@ func TestConcurrentUsedParallelism(t *testing.T) {
 		t.Skip("skipping parallelism test in short mode")
 	}
 
-	const N = 50         // number of subfetchers / goroutines
-	const M = 5000       // iterations per goroutine
+	const N = 50          // number of subfetchers / goroutines
+	const M = 5000        // iterations per goroutine
 	const batchSize = 100 // addresses per used() call
 
 	type fetcherKey struct {
