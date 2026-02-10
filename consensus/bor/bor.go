@@ -1101,11 +1101,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			if err != nil {
 				return err
 			}
+			if successionNumber == 0 {
+				<-time.After(delay)
+			}
 		}
 
-		if successionNumber == 0 {
-			<-time.After(delay)
-		}
 	}
 
 	return nil
