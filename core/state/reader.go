@@ -101,7 +101,7 @@ type PrefetchStats struct {
 	AccountInsert int64
 	StorageInsert int64
 	// Unique prefetched account keys that PROCESS actually used.
-	PrefetchAccountUsedByProcessUnique int64
+	AccountHitFromPrefetchUnique int64
 }
 
 // ReaderWithStats wraps the additional method to retrieve the reader statistics from.
@@ -614,7 +614,7 @@ type readerWithCacheStats struct {
 	storageInsert atomic.Int64
 
 	// count unique prefetched keys that PROCESS actually used (precision) for accounts only.
-	prefetchAccountUsedByProcessUnique atomic.Int64
+	accountHitFromPrefetchUnique atomic.Int64
 }
 
 // newReaderWithCacheStats constructs the reader with additional statistics tracked.
@@ -641,7 +641,7 @@ func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount
 			r.accountHitFromPrefetch.Add(1)
 			// Flip usedByProcess only once per entry.
 			if atomic.CompareAndSwapUint32(&ent.usedByProcess, 0, 1) {
-				r.prefetchAccountUsedByProcessUnique.Add(1)
+				r.accountHitFromPrefetchUnique.Add(1)
 			}
 		}
 	} else {
@@ -695,10 +695,10 @@ func (r *readerWithCacheStats) GetStats() ReaderStats {
 // GetPrefetchStats returns attribution statistics for evaluating prefetch effectiveness.
 func (r *readerWithCacheStats) GetPrefetchStats() PrefetchStats {
 	return PrefetchStats{
-		AccountHitFromPrefetch:             r.accountHitFromPrefetch.Load(),
-		StorageHitFromPrefetch:             r.storageHitFromPrefetch.Load(),
-		AccountInsert:                      r.accountInsert.Load(),
-		StorageInsert:                      r.storageInsert.Load(),
-		PrefetchAccountUsedByProcessUnique: r.prefetchAccountUsedByProcessUnique.Load(),
+		AccountHitFromPrefetch:       r.accountHitFromPrefetch.Load(),
+		StorageHitFromPrefetch:       r.storageHitFromPrefetch.Load(),
+		AccountInsert:                r.accountInsert.Load(),
+		StorageInsert:                r.storageInsert.Load(),
+		AccountHitFromPrefetchUnique: r.accountHitFromPrefetchUnique.Load(),
 	}
 }

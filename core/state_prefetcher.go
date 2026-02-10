@@ -57,7 +57,7 @@ type PrefetchResult struct {
 // Prefetch processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb, but any changes are discarded. The
 // only goal is to warm the state caches.
-func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) *PrefetchResult {
+func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, intermediateRootPrefetch bool, interrupt *atomic.Bool) *PrefetchResult {
 	var (
 		fails         atomic.Int64
 		totalGasUsed  atomic.Uint64
@@ -123,6 +123,11 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
+
+			if intermediateRootPrefetch {
+				stateCpy.IntermediateRoot(true)
+			}
+
 			// Track gas used and successful transaction
 			totalGasUsed.Add(result.UsedGas)
 			txsMutex.Lock()

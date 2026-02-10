@@ -120,12 +120,12 @@ var (
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/miss", nil)
 
 	// Additional prefetch attribution metrics
-	accountHitFromPrefetchMeter             = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit_from_prefetch", nil)
-	storageHitFromPrefetchMeter             = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit_from_prefetch", nil)
-	accountInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/insert", nil)
-	storageInsertPrefetchMeter              = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/insert", nil)
-	prefetchAccountUsedByProcessUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
-	prefetchPanicMeter                      = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
+	accountHitFromPrefetchMeter       = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter       = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter        = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter        = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/insert", nil)
+	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
+	prefetchPanicMeter                = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
 
 	// prefetchCoverageHistogram tracks percentage of block transactions that were prefetched.
 	// Values range 0-100. High percentiles indicate effective prefetching.
@@ -1950,7 +1950,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 		}
 
 		block := types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil))
-		result := prefetcher.Prefetch(block, throwaway, vm.Config{}, interruptPrefetch)
+		result := prefetcher.Prefetch(block, throwaway, vm.Config{}, true, interruptPrefetch)
 
 		// Use the actual gas used from prefetch result and mark successful transactions
 		if result != nil {
@@ -2037,7 +2037,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			processAttribStats := env.processReader.GetPrefetchStats()
 			accountHitFromPrefetchMeter.Mark(processAttribStats.AccountHitFromPrefetch)
 			storageHitFromPrefetchMeter.Mark(processAttribStats.StorageHitFromPrefetch)
-			prefetchAccountUsedByProcessUniqueMeter.Mark(processAttribStats.PrefetchAccountUsedByProcessUnique)
+			accountHitFromPrefetchUniqueMeter.Mark(processAttribStats.AccountHitFromPrefetchUnique)
 
 			// Report prefetch coverage percentage
 			if len(env.txs) > 0 && genParams != nil && genParams.prefetchedTxHashes != nil {

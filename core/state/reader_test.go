@@ -159,9 +159,9 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	}
 
 	// Verify unique usage tracking
-	if processAttribStats.PrefetchAccountUsedByProcessUnique < 2 {
+	if processAttribStats.AccountHitFromPrefetchUnique < 2 {
 		t.Errorf("Expected at least 2 unique prefetch accounts used by process, got %d",
-			processAttribStats.PrefetchAccountUsedByProcessUnique)
+			processAttribStats.AccountHitFromPrefetchUnique)
 	}
 
 	t.Logf("Prefetch stats: AccountMiss=%d, AccountInsert=%d, StorageInsert=%d",
@@ -171,7 +171,7 @@ func TestCacheAttribution_PrefetchToProcess(t *testing.T) {
 	t.Logf("Attribution stats: AccountHitFromPrefetch=%d, StorageHitFromPrefetch=%d, UniqueUsed=%d",
 		processAttribStats.AccountHitFromPrefetch,
 		processAttribStats.StorageHitFromPrefetch,
-		processAttribStats.PrefetchAccountUsedByProcessUnique)
+		processAttribStats.AccountHitFromPrefetchUnique)
 }
 
 // TestCacheAttribution_UniqueUsageTracking validates that the usedByProcess
@@ -227,9 +227,9 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 		t.Errorf("Expected 1 account hit from prefetch after first read, got %d",
 			processStats1.AccountHitFromPrefetch)
 	}
-	if processStats1.PrefetchAccountUsedByProcessUnique != 1 {
+	if processStats1.AccountHitFromPrefetchUnique != 1 {
 		t.Errorf("Expected unique counter = 1 after first read, got %d",
-			processStats1.PrefetchAccountUsedByProcessUnique)
+			processStats1.AccountHitFromPrefetchUnique)
 	}
 
 	// PROCESS: Read account SECOND time (should increment hit counter but NOT unique counter)
@@ -243,9 +243,9 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 		t.Errorf("Expected 2 account hits from prefetch after second read, got %d",
 			processStats2.AccountHitFromPrefetch)
 	}
-	if processStats2.PrefetchAccountUsedByProcessUnique != 1 {
+	if processStats2.AccountHitFromPrefetchUnique != 1 {
 		t.Errorf("Expected unique counter to stay at 1 after second read, got %d",
-			processStats2.PrefetchAccountUsedByProcessUnique)
+			processStats2.AccountHitFromPrefetchUnique)
 	}
 
 	// PROCESS: Read account THIRD time (verify unique counter still doesn't increment)
@@ -259,20 +259,20 @@ func TestCacheAttribution_UniqueUsageTracking(t *testing.T) {
 		t.Errorf("Expected 3 account hits from prefetch after third read, got %d",
 			processStats3.AccountHitFromPrefetch)
 	}
-	if processStats3.PrefetchAccountUsedByProcessUnique != 1 {
+	if processStats3.AccountHitFromPrefetchUnique != 1 {
 		t.Errorf("Expected unique counter to stay at 1 after third read, got %d",
-			processStats3.PrefetchAccountUsedByProcessUnique)
+			processStats3.AccountHitFromPrefetchUnique)
 	}
 
-	t.Logf("After 3 reads: AccountHitFromPrefetch=%d, PrefetchAccountUsedByProcessUnique=%d",
+	t.Logf("After 3 reads: AccountHitFromPrefetch=%d, AccountHitFromPrefetchUnique=%d",
 		processStats3.AccountHitFromPrefetch,
-		processStats3.PrefetchAccountUsedByProcessUnique)
+		processStats3.AccountHitFromPrefetchUnique)
 
 	// Verify: Hit counter increased 3 times, unique counter only once
 	if processStats3.AccountHitFromPrefetch != 3 {
 		t.Error("Hit counter should increment on every read")
 	}
-	if processStats3.PrefetchAccountUsedByProcessUnique != 1 {
+	if processStats3.AccountHitFromPrefetchUnique != 1 {
 		t.Error("Unique counter should only increment once (atomic CAS ensures this)")
 	}
 }
