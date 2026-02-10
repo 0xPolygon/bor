@@ -115,9 +115,64 @@ func (f *failingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncIn
 	return nil, errors.New("fetch status failed")
 }
 
-// newChainAndBorForTest centralizes common Bor + HeaderChain initialization for tests
-func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, devFake bool, signerAddr common.Address, genesisTime uint64) (*core.BlockChain, *Bor) {
-	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}
+// newStateDBForTest creates a fresh state database for testing.
+func newStateDBForTest(t *testing.T, root common.Hash) *state.StateDB {
+	t.Helper()
+	db := rawdb.NewMemoryDatabase()
+	statedb, err := state.New(root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
+	require.NoError(t, err)
+	return statedb
+}
+
+// defaultBorConfig returns the most commonly used BorConfig for tests (sprint=64, period=2).
+func defaultBorConfig() *params.BorConfig {
+	return &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+}
+
+// borConfigWithDelays returns a BorConfig with ProducerDelay and BackupMultiplier set.
+func borConfigWithDelays(sprint uint64) *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:           map[string]uint64{"0": sprint},
+		Period:           map[string]uint64{"0": 2},
+		ProducerDelay:    map[string]uint64{"0": 4},
+		BackupMultiplier: map[string]uint64{"0": 2},
+	}
+}
+
+// indoreBorConfig returns a BorConfig for tests requiring Indore state-sync features.
+func indoreBorConfig() *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:                     map[string]uint64{"0": 16},
+		Period:                     map[string]uint64{"0": 2},
+		IndoreBlock:                big.NewInt(0),
+		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
+		RioBlock:                   big.NewInt(1000000),
+	}
+}
+
+// newAllForksChainConfig returns a ChainConfig with all hard forks enabled at genesis.
+func newAllForksChainConfig(borCfg *params.BorConfig) *params.ChainConfig {
+	return &params.ChainConfig{
+		ChainID:             big.NewInt(1),
+		Bor:                 borCfg,
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+	}
+}
+
+// newChainAndBorForTestWithConfig centralizes Bor + HeaderChain initialization with a full ChainConfig.
+// Optional genOpts callbacks can modify the genesis spec before chain creation.
+func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.ChainConfig, devFake bool, signerAddr common.Address, genesisTime uint64, genOpts ...func(*core.Genesis)) (*core.BlockChain, *Bor) {
+	t.Helper()
 
 	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: devFake}
 	b.db = rawdb.NewMemoryDatabase()
@@ -146,11 +201,20 @@ func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, d
 	b.parentActualTimeCache, _ = lru.New(10)
 
 	genspec := &core.Genesis{Config: cfg, Timestamp: genesisTime}
+	for _, opt := range genOpts {
+		opt(genspec)
+	}
 	db := rawdb.NewMemoryDatabase()
 	_ = genspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
 	require.NoError(t, err)
 	return chain, b
+}
+
+// newChainAndBorForTest is a convenience wrapper that creates a minimal ChainConfig from borCfg.
+func newChainAndBorForTest(t *testing.T, sp Spanner, borCfg *params.BorConfig, devFake bool, signerAddr common.Address, genesisTime uint64) (*core.BlockChain, *Bor) {
+	t.Helper()
+	return newChainAndBorForTestWithConfig(t, sp, &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}, devFake, signerAddr, genesisTime)
 }
 
 func TestGenesisContractChange(t *testing.T) {
@@ -459,7 +523,7 @@ func TestPerformSpanCheck(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr2, VotingPower: 1}}}
-			borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+			borCfg := defaultBorConfig()
 			chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 			var parents []*types.Header
@@ -1021,9 +1085,7 @@ func setupFinalizeTest(t *testing.T, borCfg *params.BorConfig, addr common.Addre
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis)
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	return chain, b, genesis, statedb
 }
@@ -1514,7 +1576,7 @@ func TestValidateHeaderExtraField(t *testing.T) {
 func TestVerifyHeader_NilNumber(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{Number: nil}
@@ -1525,7 +1587,7 @@ func TestVerifyHeader_NilNumber(t *testing.T) {
 func TestVerifyHeader_FutureBlock(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1540,7 +1602,7 @@ func TestVerifyHeader_FutureBlock(t *testing.T) {
 func TestVerifyHeader_InvalidMixDigest(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1556,7 +1618,7 @@ func TestVerifyHeader_InvalidMixDigest(t *testing.T) {
 func TestVerifyHeader_InvalidUncleHash(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1572,7 +1634,7 @@ func TestVerifyHeader_InvalidUncleHash(t *testing.T) {
 func TestVerifyHeader_InvalidDifficulty(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1588,7 +1650,7 @@ func TestVerifyHeader_InvalidDifficulty(t *testing.T) {
 func TestVerifyHeader_GasLimitOverflow(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1607,7 +1669,7 @@ func TestVerifyHeader_GasLimitOverflow(t *testing.T) {
 func TestVerifyHeader_WithdrawalsHash(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	wHash := common.Hash{0x01}
@@ -1627,7 +1689,7 @@ func TestVerifyHeader_WithdrawalsHash(t *testing.T) {
 func TestVerifyHeader_RequestsHash(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	rHash := common.Hash{0x02}
@@ -1647,7 +1709,7 @@ func TestVerifyHeader_RequestsHash(t *testing.T) {
 func TestVerifyCascadingFields_Genesis(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{Number: big.NewInt(0)}
@@ -1658,7 +1720,7 @@ func TestVerifyCascadingFields_Genesis(t *testing.T) {
 func TestVerifyCascadingFields_UnknownParent(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1672,7 +1734,7 @@ func TestVerifyCascadingFields_UnknownParent(t *testing.T) {
 func TestVerifyCascadingFields_GasUsedExceedsLimit(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -1693,7 +1755,7 @@ func TestVerifyCascadingFields_GasUsedExceedsLimit(t *testing.T) {
 func TestVerifyHeaders_Batch(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	// Submit two invalid headers
@@ -1712,7 +1774,7 @@ func TestVerifyHeaders_Batch(t *testing.T) {
 func TestVerifyHeaders_Abort(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	headers := make([]*types.Header, 100)
@@ -1743,7 +1805,7 @@ func TestVerifyUncles_WithUncles(t *testing.T) {
 func TestAuthorize(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	addr := common.HexToAddress("0xdeadbeef")
@@ -1782,7 +1844,7 @@ func TestSign(t *testing.T) {
 func TestSealHash_Method(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{
@@ -1799,7 +1861,7 @@ func TestSealHash_Method(t *testing.T) {
 func TestSeal_GenesisBlock(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, common.HexToAddress("0x1"), uint64(time.Now().Unix()))
 
 	genesisBlock := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(0)})
@@ -1832,7 +1894,7 @@ func TestSeal_ZeroPeriodEmptyBlock(t *testing.T) {
 func TestAPIs_ReturnsBorNamespace(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	apis := b.APIs(chain.HeaderChain())
@@ -1844,7 +1906,7 @@ func TestAPIs_ReturnsBorNamespace(t *testing.T) {
 func TestClose_Idempotent(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 	b.quit = make(chan struct{})
 
@@ -1856,7 +1918,7 @@ func newBorWithSingleValidator(t *testing.T, addr common.Address) (*Bor, *fakeSp
 	t.Helper()
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	return b, sp
@@ -1903,7 +1965,7 @@ func TestGetCurrentValidators_DelegatesToSpanner(t *testing.T) {
 func TestNeedToCommitSpan(t *testing.T) {
 	t.Parallel()
 
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	b := &Bor{config: borCfg}
 
 	t.Run("nil span", func(t *testing.T) {
@@ -1935,7 +1997,7 @@ func TestNeedToCommitSpan(t *testing.T) {
 func TestVerifySeal_GenesisBlock(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	h := &types.Header{Number: big.NewInt(0)}
@@ -2013,12 +2075,7 @@ func (m *mockStateDB) Inner() *state.StateDB {
 }
 func TestIsBlockEarly(t *testing.T) {
 	t.Parallel()
-	borCfg := &params.BorConfig{
-		Period:           map[string]uint64{"0": 2},
-		Sprint:           map[string]uint64{"0": 64},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(64)
 
 	t.Run("parent is nil", func(t *testing.T) {
 		h := &types.Header{Time: 100}
@@ -2111,15 +2168,13 @@ func TestEcrecover_MissingSignature(t *testing.T) {
 func TestFinalize_WithdrawalsRejection(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, common.HexToAddress("0x1"), uint64(time.Now().Unix()))
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	h := &types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash()}
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	body := &types.Body{Withdrawals: []*types.Withdrawal{{Validator: 1}}}
 	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
@@ -2129,16 +2184,14 @@ func TestFinalize_WithdrawalsRejection(t *testing.T) {
 func TestFinalize_RequestsHashRejection(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, common.HexToAddress("0x1"), uint64(time.Now().Unix()))
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	rHash := common.Hash{0x01}
 	h := &types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash(), RequestsHash: &rHash}
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	body := &types.Body{}
 	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
@@ -2246,12 +2299,7 @@ func newSignedChainSetup(t *testing.T) *signedChainSetup {
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(64)
 	// Use a genesis time far enough in the past so child block times don't fall in the future
 	genesisTime := uint64(time.Now().Unix()) - 100
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, signerAddr, genesisTime)
@@ -2471,7 +2519,7 @@ func TestSeal_UnauthorizedSigner(t *testing.T) {
 	addr1 := common.HexToAddress("0x1")
 	unauthorizedAddr := common.HexToAddress("0xdeadbeef")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	// devFake=false so DevFakeAuthor doesn't override the validator set
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, addr1, uint64(time.Now().Unix())-100)
 
@@ -2509,9 +2557,7 @@ func TestFinalize_NonSprintBlock(t *testing.T) {
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	// Block 5 is not a sprint start (5 % 64 != 0)
 	h := &types.Header{Number: big.NewInt(5), ParentHash: genesis.Hash(), Time: genesis.Time + 10, GasLimit: genesis.GasLimit}
@@ -2532,9 +2578,7 @@ func TestFinalize_SprintBlockWithoutHeimdall(t *testing.T) {
 	// No Heimdall client is configured, so CommitStates is skipped.
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	// Block 16 is a sprint start (16 % 16 == 0)
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32, GasLimit: genesis.GasLimit}
@@ -2547,11 +2591,11 @@ func TestFetchAndCommitSpan_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	// Use SetHeimdallClient so the spanStore also gets the client
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id:         1,
 			StartBlock: 256,
@@ -2569,13 +2613,11 @@ func TestFetchAndCommitSpan_WithHeimdallClient(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err = b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 }
 
@@ -2583,11 +2625,11 @@ func TestFetchAndCommitSpan_ChainIDMismatch(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
 	// Use SetHeimdallClient so the spanStore also gets the client
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id:         1,
 			StartBlock: 256,
@@ -2605,13 +2647,11 @@ func TestFetchAndCommitSpan_ChainIDMismatch(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err = b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "doesn't match")
 }
@@ -2620,58 +2660,20 @@ func TestFetchAndCommitSpan_NilResponse(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{span: nil})
+	b.SetHeimdallClient(&mockHeimdallClient{span: nil})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err = b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.Error(t, err)
 }
 
-// mockHeimdallClientForSpan is a minimal HeimdallClient that returns a specific span
-type mockHeimdallClientForSpan struct {
-	span *borTypes.Span
-}
-
-func (m *mockHeimdallClientForSpan) Close() {}
-func (m *mockHeimdallClientForSpan) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
-}
-func (m *mockHeimdallClientForSpan) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
-	if m.span == nil {
-		return nil, errors.New("span not found")
-	}
-	return m.span, nil
-}
-func (m *mockHeimdallClientForSpan) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
-	if m.span == nil {
-		return nil, errors.New("no span")
-	}
-	return m.span, nil
-}
-func (m *mockHeimdallClientForSpan) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
-	return nil, nil
-}
-func (m *mockHeimdallClientForSpan) FetchCheckpointCount(ctx context.Context) (int64, error) {
-	return 0, nil
-}
-func (m *mockHeimdallClientForSpan) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
-	return nil, nil
-}
-func (m *mockHeimdallClientForSpan) FetchMilestoneCount(ctx context.Context) (int64, error) {
-	return 0, nil
-}
-func (m *mockHeimdallClientForSpan) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	return &ctypes.SyncInfo{CatchingUp: false}, nil
-}
 func TestCommitStates_NoHeimdallClient(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
@@ -2697,7 +2699,7 @@ func TestCommitStates_WithOverrideSkip(t *testing.T) {
 	}
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -2708,9 +2710,7 @@ func TestCommitStates_WithOverrideSkip(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32}
 
@@ -2725,18 +2725,13 @@ func TestCommitStates_WithIndore(t *testing.T) {
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
 
-	mockGC := &mockGenesisContractForCommitStates{lastStateID: big.NewInt(0)}
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0), // Indore enabled from start
-		StateSyncConfirmationDelay: map[string]uint64{"0": 5},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
+	borCfg := indoreBorConfig()
+	borCfg.StateSyncConfirmationDelay = map[string]uint64{"0": 5}
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 	b.GenesisContractsClient = mockGC
 
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -2748,9 +2743,7 @@ func TestCommitStates_WithIndore(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32}
 
@@ -2764,20 +2757,14 @@ func TestCommitStates_WithEvents(t *testing.T) {
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
 
-	mockGC := &mockGenesisContractForCommitStates{lastStateID: big.NewInt(0)}
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 	b.GenesisContractsClient = mockGC
 
 	now := time.Now()
 	eventTime := now.Add(-10 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -2799,9 +2786,7 @@ func TestCommitStates_WithEvents(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
 
@@ -2811,48 +2796,46 @@ func TestCommitStates_WithEvents(t *testing.T) {
 	require.Equal(t, uint64(1), result[0].ID)
 }
 
-// mockGenesisContractForCommitStates returns configured lastStateID and records gas
-type mockGenesisContractForCommitStates struct {
-	lastStateID *big.Int
+// mockHeimdallClient is a configurable mock for IHeimdallClient.
+// It supports span, events, and optional function overrides for error injection.
+type mockHeimdallClient struct {
+	span             *borTypes.Span
+	events           []*clerk.EventRecordWithTime
+	stateSyncEventFn func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
 }
 
-func (m *mockGenesisContractForCommitStates) CommitState(event *clerk.EventRecordWithTime, st vm.StateDB, header *types.Header, chCtx statefull.ChainContext) (uint64, error) {
-	return 0, nil
-}
-
-func (m *mockGenesisContractForCommitStates) LastStateId(st *state.StateDB, number uint64, hash common.Hash) (*big.Int, error) {
-	return m.lastStateID, nil
-}
-
-// mockHeimdallClientForCommitStates supports both GetSpan and StateSyncEvents
-type mockHeimdallClientForCommitStates struct {
-	span   *borTypes.Span
-	events []*clerk.EventRecordWithTime
-}
-
-func (m *mockHeimdallClientForCommitStates) Close() {}
-func (m *mockHeimdallClientForCommitStates) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+func (m *mockHeimdallClient) Close() {}
+func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+	if m.stateSyncEventFn != nil {
+		return m.stateSyncEventFn(ctx, fromID, to)
+	}
 	return m.events, nil
 }
-func (m *mockHeimdallClientForCommitStates) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
+func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*borTypes.Span, error) {
+	if m.span == nil {
+		return nil, errors.New("span not found")
+	}
 	return m.span, nil
 }
-func (m *mockHeimdallClientForCommitStates) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
+func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*borTypes.Span, error) {
+	if m.span == nil {
+		return nil, errors.New("no span")
+	}
 	return m.span, nil
 }
-func (m *mockHeimdallClientForCommitStates) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
 	return nil, nil
 }
-func (m *mockHeimdallClientForCommitStates) FetchCheckpointCount(ctx context.Context) (int64, error) {
+func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
 	return 0, nil
 }
-func (m *mockHeimdallClientForCommitStates) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
 	return nil, nil
 }
-func (m *mockHeimdallClientForCommitStates) FetchMilestoneCount(ctx context.Context) (int64, error) {
+func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
 	return 0, nil
 }
-func (m *mockHeimdallClientForCommitStates) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
@@ -2876,7 +2859,7 @@ func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
 func TestClose_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
 	b.quit = make(chan struct{})
 
@@ -2912,12 +2895,7 @@ func TestPrepare_SprintStartBlock(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -2939,16 +2917,11 @@ func TestSnapshot_NonDevFakeAuthor_GenesisCheckpoint(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1000}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(64)
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix())-100)
 
 	// Set up heimdall client so spanStore can serve span 0
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3040,13 +3013,8 @@ func TestVerifyHeader_BhilaiEarlyBlock(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-		BhilaiBlock:      big.NewInt(0), // Bhilai enabled from genesis
-	}
+	borCfg := borConfigWithDelays(64)
+	borCfg.BhilaiBlock = big.NewInt(0) // Bhilai enabled from genesis
 	_, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-100)
 
 	// Create a block far in the future that exceeds Bhilai's early block check
@@ -3067,18 +3035,11 @@ func TestFinalize_SprintBlockWithCommitSpan(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-100)
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16), // sprint start
@@ -3105,7 +3066,7 @@ func TestCalcDifficulty_WithSnapshot(t *testing.T) {
 }
 func TestSign_ErrorPath(t *testing.T) {
 	t.Parallel()
-	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	borCfg := defaultBorConfig()
 	h := &types.Header{
 		Number:     big.NewInt(1),
 		Extra:      make([]byte, 32+65),
@@ -3184,7 +3145,7 @@ func TestSnapshotApply_SprintEndValidatorChange(t *testing.T) {
 		config:      borCfg,
 		spanStore:   NewSpanStore(nil, sp, "1"),
 	}
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3219,19 +3180,13 @@ func TestCommitStates_WithIndore_EventProcessing(t *testing.T) {
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
 	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: 100}
 
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 	b.GenesisContractsClient = mockGC
 
 	now := time.Now()
 	eventTime := now.Add(-60 * time.Second) // well in the past
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3262,9 +3217,7 @@ func TestCommitStates_WithIndore_EventProcessing(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	// Use a time in the past so events pass the time filter
 	h := &types.Header{
@@ -3297,7 +3250,7 @@ func TestCommitStates_NonIndore(t *testing.T) {
 	// Non-Indore path: to = time.Unix(genesis.Time, 0) (header at block 16-16=0)
 	// Event time must be BEFORE genesis time
 	eventTime := time.Unix(int64(genesisTime)-10, 0)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3319,9 +3272,7 @@ func TestCommitStates_NonIndore(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -3362,18 +3313,11 @@ func TestFinalize_NonSprintBlockNoStateSync(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-100)
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	// Block 5 is NOT a sprint start
 	h := &types.Header{
@@ -3397,18 +3341,13 @@ func TestVerifySeal_BhilaiNonPrimaryFutureBlock(t *testing.T) {
 		{Address: signerAddr, VotingPower: 1},
 		{Address: proposerAddr, VotingPower: 2}, // higher power = proposer
 	}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-		BhilaiBlock:      big.NewInt(0),
-	}
+	borCfg := borConfigWithDelays(64)
+	borCfg.BhilaiBlock = big.NewInt(0)
 	// devFake=false so we use the actual validator set from fakeSpanner
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix())-100)
 
 	// Set up heimdall client so spanStore can serve span 0
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3497,56 +3436,12 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
-	cfg := &params.ChainConfig{
-		ChainID:             big.NewInt(1),
-		Bor:                 borCfg,
-		HomesteadBlock:      big.NewInt(0),
-		EIP150Block:         big.NewInt(0),
-		EIP155Block:         big.NewInt(0),
-		EIP158Block:         big.NewInt(0),
-		ByzantiumBlock:      big.NewInt(0),
-		ConstantinopleBlock: big.NewInt(0),
-		PetersburgBlock:     big.NewInt(0),
-		IstanbulBlock:       big.NewInt(0),
-		MuirGlacierBlock:    big.NewInt(0),
-		BerlinBlock:         big.NewInt(0),
-		LondonBlock:         big.NewInt(0),
-		ShanghaiBlock:       big.NewInt(0),
-		CancunBlock:         big.NewInt(0),
-	}
+	borCfg := borConfigWithDelays(16)
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
 
-	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: true}
-	b.db = rawdb.NewMemoryDatabase()
-	b.recents = ttlcache.New(
-		ttlcache.WithTTL[common.Hash, *Snapshot](veblopBlockTimeout),
-		ttlcache.WithCapacity[common.Hash, *Snapshot](inmemorySnapshots),
-		ttlcache.WithDisableTouchOnHit[common.Hash, *Snapshot](),
-	)
-	sig, _ := lru.NewARC(inmemorySignatures)
-	b.signatures = sig
-	b.recentVerifiedHeaders = ttlcache.New[common.Hash, *types.Header](
-		ttlcache.WithTTL[common.Hash, *types.Header](veblopBlockTimeout),
-		ttlcache.WithCapacity[common.Hash, *types.Header](inmemorySignatures),
-		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
-	)
-	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String())
-	b.SetSpanner(sp)
-	b.authorizedSigner.Store(&signer{signer: addr1})
-	b.parentActualTimeCache, _ = lru.New(10)
-
-	genesisTime := uint64(time.Now().Unix()) - 200
-	genspec := &core.Genesis{Config: cfg, Timestamp: genesisTime}
-	db := rawdb.NewMemoryDatabase()
-	_ = genspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
-	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
-	require.NoError(t, err)
-
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 
 	// Block 15 = sprint-end (IsSprintStart(16, 16)=true) - should add validator bytes w/Cancun encoding
@@ -3557,7 +3452,7 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err = b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h)
 	require.NoError(t, err)
 	// Extra should contain vanity + RLP-encoded BlockExtraData + seal
 	require.True(t, len(h.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
@@ -3579,19 +3474,13 @@ func TestFinalize_SprintWithHeimdallCommitStates(t *testing.T) {
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
 	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: 100}
 
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 	b.GenesisContractsClient = mockGC
 
 	now := time.Now()
 	eventTime := now.Add(-60 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3610,9 +3499,7 @@ func TestFinalize_SprintWithHeimdallCommitStates(t *testing.T) {
 	})
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -3632,15 +3519,10 @@ func TestSnapshot_HeaderTraversal(t *testing.T) {
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(64)
 	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix())-200)
 
-	b.SetHeimdallClient(&mockHeimdallClientForSpan{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3700,60 +3582,19 @@ func TestVerifyCascadingFields_EIP1559(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-		JaipurBlock:      big.NewInt(0),
-	}
-	cfg := &params.ChainConfig{
-		ChainID:             big.NewInt(1),
-		Bor:                 borCfg,
-		HomesteadBlock:      big.NewInt(0),
-		EIP150Block:         big.NewInt(0),
-		EIP155Block:         big.NewInt(0),
-		EIP158Block:         big.NewInt(0),
-		ByzantiumBlock:      big.NewInt(0),
-		ConstantinopleBlock: big.NewInt(0),
-		PetersburgBlock:     big.NewInt(0),
-		IstanbulBlock:       big.NewInt(0),
-		MuirGlacierBlock:    big.NewInt(0),
-		BerlinBlock:         big.NewInt(0),
-		LondonBlock:         big.NewInt(0),
-	}
+	borCfg := borConfigWithDelays(64)
+	borCfg.JaipurBlock = big.NewInt(0)
+	cfg := newAllForksChainConfig(borCfg)
 
-	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: true, fakeDiff: true}
-	b.db = rawdb.NewMemoryDatabase()
-	b.recents = ttlcache.New(
-		ttlcache.WithTTL[common.Hash, *Snapshot](veblopBlockTimeout),
-		ttlcache.WithCapacity[common.Hash, *Snapshot](inmemorySnapshots),
-		ttlcache.WithDisableTouchOnHit[common.Hash, *Snapshot](),
-	)
-	sigCache, _ := lru.NewARC(inmemorySignatures)
-	b.signatures = sigCache
-	b.recentVerifiedHeaders = ttlcache.New[common.Hash, *types.Header](
-		ttlcache.WithTTL[common.Hash, *types.Header](veblopBlockTimeout),
-		ttlcache.WithCapacity[common.Hash, *types.Header](inmemorySignatures),
-		ttlcache.WithDisableTouchOnHit[common.Hash, *types.Header](),
-	)
-	b.spanStore = NewSpanStore(nil, sp, cfg.ChainID.String())
-	b.SetSpanner(sp)
-	b.authorizedSigner.Store(&signer{signer: addr1})
-	b.parentActualTimeCache, _ = lru.New(10)
-
-	genesisTime := uint64(time.Now().Unix()) - 200
-	genspec := &core.Genesis{Config: cfg, Timestamp: genesisTime, BaseFee: big.NewInt(1000000000)}
-	db := rawdb.NewMemoryDatabase()
-	_ = genspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
-	chain, err := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, b, core.DefaultConfig())
-	require.NoError(t, err)
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200, func(g *core.Genesis) {
+		g.BaseFee = big.NewInt(1000000000)
+	})
+	b.fakeDiff = true
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis.BaseFee)
 
-	// Create a key whose address matches addr1 is impractical, so use DevFakeAuthor
-	// which allows any signer. We just need a valid signature for ecrecover.
+	// Use DevFakeAuthor which allows any signer. We just need a valid signature for ecrecover.
 	privKey, _ := crypto.GenerateKey()
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 	b.authorizedSigner.Store(&signer{signer: signerAddr})
@@ -3774,7 +3615,7 @@ func TestVerifyCascadingFields_EIP1559(t *testing.T) {
 	require.NoError(t, signErr)
 	copy(h.Extra[len(h.Extra)-65:], sig)
 
-	err = b.verifyCascadingFields(chain.HeaderChain(), h, []*types.Header{genesis})
+	err := b.verifyCascadingFields(chain.HeaderChain(), h, []*types.Header{genesis})
 	// May succeed or fail on base fee - the important thing is it exercises the EIP-1559 path
 	if err != nil {
 		require.Contains(t, err.Error(), "base fee")
@@ -3782,20 +3623,12 @@ func TestVerifyCascadingFields_EIP1559(t *testing.T) {
 }
 func TestNew_WithHeimdallClient(t *testing.T) {
 	t.Parallel()
-	cfg := &params.ChainConfig{
-		ChainID: big.NewInt(1),
-		Bor: &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			ProducerDelay:    map[string]uint64{"0": 4},
-			BackupMultiplier: map[string]uint64{"0": 2},
-		},
-	}
+	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borConfigWithDelays(64)}
 
 	db := rawdb.NewMemoryDatabase()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
 	gc := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
-	hc := &mockHeimdallClientForSpan{span: nil}
+	hc := &mockHeimdallClient{span: nil}
 
 	bor := New(cfg, db, nil, sp, hc, nil, gc, false, 0)
 	require.NotNil(t, bor)
@@ -3811,12 +3644,7 @@ func TestVerifyCascadingFields_SprintStartValidatorCheck(t *testing.T) {
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 
 	_, b := newChainAndBorForTest(t, sp, borCfg, false, signerAddr, uint64(time.Now().Unix())-200)
 
@@ -3941,14 +3769,8 @@ func TestAPI_GetRootHash_MaxCheckpointExceeded(t *testing.T) {
 func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-		OverrideStateSyncRecords:   map[string]int{"16": 0},
-	}
+	borCfg := indoreBorConfig()
+	borCfg.OverrideStateSyncRecords = map[string]int{"16": 0}
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -3958,7 +3780,7 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 	b.GenesisContractsClient = mockGC
 
 	eventTime := time.Now().Add(-60 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -3974,9 +3796,7 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 		},
 	})
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -4034,12 +3854,7 @@ func TestVerifyHeader_InvalidSprintEndValidatorBytes(t *testing.T) {
 	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1}}}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 
 	_, b := newChainAndBorForTest(t, sp, borCfg, true, signerAddr, uint64(time.Now().Unix())-200)
 
@@ -4105,12 +3920,7 @@ func TestPrepare_ValidatorsByHashError(t *testing.T) {
 		vals:             []*valset.Validator{{Address: addr1, VotingPower: 1}},
 		shouldFailCommit: false,
 	}
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-	}
+	borCfg := borConfigWithDelays(16)
 
 	_, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
@@ -4184,17 +3994,12 @@ func TestVerifySeal_BhilaiErrorPaths(t *testing.T) {
 func TestFinalize_WithBlockAlloc(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 64},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-		BlockAlloc: map[string]interface{}{
-			"1": map[string]interface{}{
-				"0x0000000000000000000000000000000000001001": map[string]interface{}{
-					"code":    "0x608060",
-					"balance": "0",
-				},
+	borCfg := borConfigWithDelays(64)
+	borCfg.BlockAlloc = map[string]interface{}{
+		"1": map[string]interface{}{
+			"0x0000000000000000000000000000000000001001": map[string]interface{}{
+				"code":    "0x608060",
+				"balance": "0",
 			},
 		},
 	}
@@ -4203,9 +4008,7 @@ func TestFinalize_WithBlockAlloc(t *testing.T) {
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis)
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(1),
@@ -4224,15 +4027,9 @@ func TestFinalize_WithBlockAlloc(t *testing.T) {
 func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-		OverrideStateSyncRecordsInRange: []params.BlockRangeOverride{
-			{StartBlock: 0, EndBlock: 100, Value: 0},
-		},
+	borCfg := indoreBorConfig()
+	borCfg.OverrideStateSyncRecordsInRange = []params.BlockRangeOverride{
+		{StartBlock: 0, EndBlock: 100, Value: 0},
 	}
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
@@ -4243,7 +4040,7 @@ func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 	b.GenesisContractsClient = mockGC
 
 	eventTime := time.Now().Add(-60 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -4259,9 +4056,7 @@ func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 		},
 	})
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -4275,25 +4070,10 @@ func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 	require.Empty(t, data) // truncated to 0 by range override
 }
 
-// heimdallClientStateSyncError returns error from StateSyncEvents
-type heimdallClientStateSyncError struct {
-	mockHeimdallClientForCommitStates
-}
-
-func (h *heimdallClientStateSyncError) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, errors.New("state sync fetch failed")
-}
-
 func TestCommitStates_StateSyncEventsError(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -4302,21 +4082,20 @@ func TestCommitStates_StateSyncEventsError(t *testing.T) {
 	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: 100}
 	b.GenesisContractsClient = mockGC
 
-	b.SetHeimdallClient(&heimdallClientStateSyncError{
-		mockHeimdallClientForCommitStates: mockHeimdallClientForCommitStates{
-			span: &borTypes.Span{
-				Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
-				ValidatorSet: stakeTypes.ValidatorSet{
-					Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
-				},
-				SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+	b.SetHeimdallClient(&mockHeimdallClient{
+		span: &borTypes.Span{
+			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+			ValidatorSet: stakeTypes.ValidatorSet{
+				Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
 			},
+			SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+		},
+		stateSyncEventFn: func(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, errors.New("state sync fetch failed")
 		},
 	})
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -4332,13 +4111,7 @@ func TestCommitStates_StateSyncEventsError(t *testing.T) {
 func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -4352,7 +4125,7 @@ func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 	// header.Time = genesis.Time + 16*2 = (now-200) + 32 = now - 168
 	// So event time must be before now - 168
 	eventTime := time.Now().Add(-250 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -4372,9 +4145,7 @@ func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 		},
 	})
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -4392,13 +4163,7 @@ func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 func TestCommitStates_EventValidationError(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:                     map[string]uint64{"0": 16},
-		Period:                     map[string]uint64{"0": 2},
-		IndoreBlock:                big.NewInt(0),
-		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
-		RioBlock:                   big.NewInt(1000000),
-	}
+	borCfg := indoreBorConfig()
 	chain, b := newChainAndBorForTest(t, &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}, borCfg, true, addr1, uint64(time.Now().Unix())-200)
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -4408,7 +4173,7 @@ func TestCommitStates_EventValidationError(t *testing.T) {
 	b.GenesisContractsClient = mockGC
 
 	eventTime := time.Now().Add(-60 * time.Second)
-	b.SetHeimdallClient(&mockHeimdallClientForCommitStates{
+	b.SetHeimdallClient(&mockHeimdallClient{
 		span: &borTypes.Span{
 			Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
 			ValidatorSet: stakeTypes.ValidatorSet{
@@ -4429,9 +4194,7 @@ func TestCommitStates_EventValidationError(t *testing.T) {
 		},
 	})
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	h := &types.Header{
 		Number:     big.NewInt(16),
@@ -4447,13 +4210,8 @@ func TestCommitStates_EventValidationError(t *testing.T) {
 func TestFinalize_CheckAndCommitSpanError(t *testing.T) {
 	t.Parallel()
 	addr1 := common.HexToAddress("0x1")
-	borCfg := &params.BorConfig{
-		Sprint:           map[string]uint64{"0": 16},
-		Period:           map[string]uint64{"0": 2},
-		ProducerDelay:    map[string]uint64{"0": 4},
-		BackupMultiplier: map[string]uint64{"0": 2},
-		RioBlock:         big.NewInt(1000000),
-	}
+	borCfg := borConfigWithDelays(16)
+	borCfg.RioBlock = big.NewInt(1000000)
 
 	// Use span with EndBlock=31 and ID=1 so that block 16 triggers needToCommitSpan
 	// (31 - 16 + 1 = 16) and shouldFailCommit causes CommitSpan to fail
@@ -4468,9 +4226,7 @@ func TestFinalize_CheckAndCommitSpanError(t *testing.T) {
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis)
 
-	db := rawdb.NewMemoryDatabase()
-	statedb, err := state.New(genesis.Root, state.NewDatabase(triedb.NewDatabase(db, triedb.HashDefaults), nil))
-	require.NoError(t, err)
+	statedb := newStateDBForTest(t, genesis.Root)
 
 	// Sprint start block (16) - triggers checkAndCommitSpan, which calls FetchAndCommitSpan
 	h := &types.Header{
