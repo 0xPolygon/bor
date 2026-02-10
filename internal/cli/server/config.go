@@ -679,6 +679,11 @@ type CacheConfig struct {
 	AddressCacheSizesRaw string            `hcl:"addresscachesizes,optional" toml:"addresscachesizes,optional"`
 	AddressCacheSizes    map[string]string `hcl:"-,optional" toml:"-"`
 
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
+	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -1436,6 +1441,20 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 				n.AddressCacheSizes = addressCacheSizes
 			}
 		}
+
+		// Parse preload rate limit (default: 1MB/s per address)
+		if c.Cache.PreloadRateLimit != "" {
+			rateLimitBytes, err := parseByteSize(c.Cache.PreloadRateLimit)
+			if err != nil {
+				log.Warn("Failed to parse preload rate limit, using default 1MB/s per address", "error", err)
+				n.PreloadRateLimit = 1024 * 1024
+			} else {
+				n.PreloadRateLimit = rateLimitBytes
+			}
+		} else {
+			// Default to 1MB/s per address if not specified
+			n.PreloadRateLimit = 1024 * 1024
+		}
 	}
 
 	// History
@@ -1596,6 +1615,46 @@ func parseAddressCacheSizes(input string) (map[common.Address]int, error) {
 	}
 
 	return result, nil
+}
+
+// parseByteSize parses a byte size string like "5MB", "10MB", "1GB", or "0" (for unlimited)
+// Returns the size in bytes. Supported suffixes: B, KB, MB, GB (case insensitive)
+func parseByteSize(input string) (int64, error) {
+	input = strings.TrimSpace(input)
+	if input == "" || input == "0" {
+		return 0, nil
+	}
+
+	input = strings.ToUpper(input)
+
+	var multiplier int64 = 1
+	var numStr string
+
+	switch {
+	case strings.HasSuffix(input, "GB"):
+		multiplier = 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(input, "GB")
+	case strings.HasSuffix(input, "MB"):
+		multiplier = 1024 * 1024
+		numStr = strings.TrimSuffix(input, "MB")
+	case strings.HasSuffix(input, "KB"):
+		multiplier = 1024
+		numStr = strings.TrimSuffix(input, "KB")
+	case strings.HasSuffix(input, "B"):
+		multiplier = 1
+		numStr = strings.TrimSuffix(input, "B")
+	default:
+		// Assume bytes if no suffix
+		numStr = input
+	}
+
+	numStr = strings.TrimSpace(numStr)
+	num, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte size: %s", input)
+	}
+
+	return num * multiplier, nil
 }
 
 var (

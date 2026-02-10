@@ -292,6 +292,93 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 	})
 }
 
+// TestParseByteSize tests the parseByteSize helper function for parsing
+// human-readable byte size strings (e.g., "500KB", "5MB", "1GB").
+func TestParseByteSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int64
+		wantErr  bool
+	}{
+		// Valid inputs with different suffixes
+		{"bytes", "1024B", 1024, false},
+		{"kilobytes", "500KB", 500 * 1024, false},
+		{"megabytes", "5MB", 5 * 1024 * 1024, false},
+		{"gigabytes", "1GB", 1 * 1024 * 1024 * 1024, false},
+
+		// Case insensitivity
+		{"lowercase kb", "500kb", 500 * 1024, false},
+		{"lowercase mb", "5mb", 5 * 1024 * 1024, false},
+		{"mixed case", "5Mb", 5 * 1024 * 1024, false},
+
+		// No suffix (assumes bytes)
+		{"no suffix", "1024", 1024, false},
+
+		// Zero and empty
+		{"zero string", "0", 0, false},
+		{"empty string", "", 0, false},
+
+		// Whitespace handling
+		{"leading space", "  500KB", 500 * 1024, false},
+		{"trailing space", "500KB  ", 500 * 1024, false},
+		{"space before suffix", "500 KB", 500 * 1024, false},
+
+		// Invalid inputs
+		{"invalid suffix", "500XB", 0, true},
+		{"non-numeric", "abcMB", 0, true},
+		{"float", "5.5MB", 0, true},
+
+		// Note: negative values are technically parsed by ParseInt,
+		// but produce negative results which are invalid for byte sizes.
+		// The calling code should validate the result is non-negative.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseByteSize(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err, "expected error for input: %s", tt.input)
+			} else {
+				assert.NoError(t, err, "unexpected error for input: %s", tt.input)
+				assert.Equal(t, tt.expected, result, "unexpected result for input: %s", tt.input)
+			}
+		})
+	}
+}
+
+// TestPreloadRateLimitConfig tests the preload rate limit configuration parsing.
+func TestPreloadRateLimitConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int64
+	}{
+		{"empty string defaults to 1MB/s", "", 1024 * 1024},
+		{"explicit 1MB", "1MB", 1024 * 1024},
+		{"unlimited (0)", "0", 0},
+		{"invalid falls back to 1MB/s", "invalid", 1024 * 1024},
+		{"500KB", "500KB", 500 * 1024},
+		{"2MB", "2MB", 2 * 1024 * 1024},
+		{"lowercase 100kb", "100kb", 100 * 1024},
+		{"lowercase 10mb", "10mb", 10 * 1024 * 1024},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			config.Cache.PreloadRateLimit = tt.input
+
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+
+			assert.Equal(t, tt.expected, ethConfig.PreloadRateLimit, "input: %s", tt.input)
+		})
+	}
+}
+
 // TestDeveloperModeGasParameters tests the developer mode specific code path
 // for setting TargetGasPercentage and BaseFeeChangeDenominator (lines 1293-1304 in config.go).
 // The default config uses mainnet which has Bor config, so these tests actually execute lines 1293-1304.
