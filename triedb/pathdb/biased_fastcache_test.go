@@ -690,7 +690,7 @@ func TestAddressBiasedCache_RateLimitInterruption(t *testing.T) {
 
 // TestAddressBiasedCache_ShutdownDuringRateLimitWait specifically tests the scenario
 // where the preload goroutine is blocked in limiter.WaitN() when shutdown occurs.
-// This covers the "Preload interrupted during rate limit wait" log path.
+// This covers the "Preload interrupted during shutdown" log path.
 func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
@@ -746,6 +746,64 @@ func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 	retrieved := cache.Get(testKey)
 	if string(retrieved) != "post-shutdown-value" {
 		t.Errorf("Cache should work after shutdown, got: %s", string(retrieved))
+	}
+}
+
+// TestAddressBiasedCache_BurstExceeded tests the scenario where a single node
+// exceeds the rate limiter's burst size. The oversized node should be skipped
+// and preloading should continue with subsequent nodes.
+func TestAddressBiasedCache_BurstExceeded(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+
+	// Burst is 64KB. Create a node larger than that so WaitN returns an error immediately.
+	oversizedData := make([]byte, 65*1024) // 65KB > 64KB burst
+	for i := range oversizedData {
+		oversizedData[i] = byte(i % 256)
+	}
+
+	// Write a small root node so traversal proceeds to the child
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, []byte("root"))
+
+	// Write an oversized child node that should be skipped
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0x00}, oversizedData)
+
+	// Write another small child after the oversized one
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0x01}, []byte("small node after oversized"))
+
+	addressCacheSizes := map[common.Address]int{
+		addr: 1024 * 1024, // 1MB cache
+	}
+
+	// Use a rate limit so the limiter is created (burst = 64KB)
+	rateLimit := int64(1024 * 1024) // 1MB/s - fast enough that small nodes pass
+
+	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, rateLimit)
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	// Wait for preload to process all nodes
+	time.Sleep(500 * time.Millisecond)
+
+	// The root node (small) should have been loaded
+	rootKey := append(accountHash.Bytes(), []byte(nil)...)
+	if got := cache.Get(rootKey); got == nil {
+		t.Error("Root node should have been cached")
+	}
+
+	// The oversized node should NOT be cached (it was skipped)
+	oversizedKey := append(accountHash.Bytes(), []byte{0x00}...)
+	if got := cache.Get(oversizedKey); got != nil {
+		t.Error("Oversized node should have been skipped, not cached")
+	}
+
+	// The small node after the oversized one SHOULD be cached (preload continued)
+	afterKey := append(accountHash.Bytes(), []byte{0x01}...)
+	if got := cache.Get(afterKey); got == nil {
+		t.Error("Node after oversized entry should be cached, preload should have continued")
 	}
 }
 

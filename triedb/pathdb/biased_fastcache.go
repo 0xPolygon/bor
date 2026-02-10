@@ -177,13 +177,21 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		// Apply rate limiting after reading, based on actual bytes read
 		if limiter != nil {
 			if err := limiter.WaitN(c.ctx, len(nodeData)); err != nil {
-				log.Info("Preload interrupted during rate limit wait",
+				if c.ctx.Err() != nil {
+					log.Info("Preload interrupted during shutdown",
+						"account hash", accountHash.Hex(),
+						"entries", entriesLoaded,
+						"max depth", maxDepthReached,
+						"size", common.StorageSize(totalBytesLoaded).String(),
+						"elapsed", time.Since(startTime))
+					return
+				}
+				// Node exceeds burst size — skip it and continue preloading
+				log.Warn("Preload skipping oversized node",
 					"account hash", accountHash.Hex(),
-					"entries", entriesLoaded,
-					"max depth", maxDepthReached,
-					"size", common.StorageSize(totalBytesLoaded).String(),
-					"elapsed", time.Since(startTime))
-				return
+					"node size", len(nodeData),
+					"burst", limiter.Burst())
+				continue
 			}
 		}
 
