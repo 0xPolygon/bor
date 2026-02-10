@@ -208,6 +208,9 @@ type Config struct {
 	// URL to connect to Heimdall node
 	HeimdallURL string
 
+	// URL to connect to a secondary Heimdall node for failover
+	HeimdallSecondaryURL string
+
 	// timeout in heimdall requests
 	HeimdallTimeout time.Duration
 
@@ -338,6 +341,13 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				}
 			} else {
 				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+			}
+
+			if ethConfig.HeimdallSecondaryURL != "" {
+				secondaryClient := heimdall.NewHeimdallClient(ethConfig.HeimdallSecondaryURL, ethConfig.HeimdallTimeout)
+				heimdallClient = heimdall.NewFailoverHeimdallClient(heimdallClient, secondaryClient)
+
+				log.Info("Heimdall failover enabled", "primary", ethConfig.HeimdallURL, "secondary", ethConfig.HeimdallSecondaryURL)
 			}
 
 			var heimdallWSClient bor.IHeimdallWSClient

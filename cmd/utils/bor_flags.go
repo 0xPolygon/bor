@@ -23,6 +23,13 @@ var (
 		Value: "http://localhost:1317",
 	}
 
+	// HeimdallSecondaryURLFlag flag for secondary heimdall url (failover)
+	HeimdallSecondaryURLFlag = &cli.StringFlag{
+		Name:  "bor.heimdall.secondary",
+		Usage: "URL of a secondary Heimdall service for failover",
+		Value: "",
+	}
+
 	// HeimdallTimeoutFlag flag for heimdall timeout
 	HeimdallTimeoutFlag = &cli.DurationFlag{
 		Name:  "bor.heimdalltimeout",
@@ -71,6 +78,7 @@ var (
 	// BorFlags all bor related flags
 	BorFlags = []cli.Flag{
 		HeimdallURLFlag,
+		HeimdallSecondaryURLFlag,
 		HeimdallTimeoutFlag,
 		WithoutHeimdallFlag,
 		HeimdallgRPCAddressFlag,
@@ -84,6 +92,7 @@ var (
 // SetBorConfig sets bor config
 func SetBorConfig(ctx *cli.Context, cfg *eth.Config) {
 	cfg.HeimdallURL = ctx.String(HeimdallURLFlag.Name)
+	cfg.HeimdallSecondaryURL = ctx.String(HeimdallSecondaryURLFlag.Name)
 	cfg.HeimdallTimeout = ctx.Duration(HeimdallTimeoutFlag.Name)
 	cfg.WithoutHeimdall = ctx.Bool(WithoutHeimdallFlag.Name)
 	cfg.HeimdallgRPCAddress = ctx.String(HeimdallgRPCAddressFlag.Name)

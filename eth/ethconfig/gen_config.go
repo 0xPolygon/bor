@@ -67,6 +67,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
 		HeimdallURL                          string
+		HeimdallSecondaryURL                 string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
 		HeimdallgRPCAddress                  string
@@ -136,6 +137,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
 	enc.HeimdallURL = c.HeimdallURL
+	enc.HeimdallSecondaryURL = c.HeimdallSecondaryURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
 	enc.HeimdallgRPCAddress = c.HeimdallgRPCAddress
@@ -213,6 +215,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
 		HeimdallURL                          *string
+		HeimdallSecondaryURL                 *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
 		HeimdallgRPCAddress                  *string
@@ -372,6 +375,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
+	}
+	if dec.HeimdallSecondaryURL != nil {
+		c.HeimdallSecondaryURL = *dec.HeimdallSecondaryURL
 	}
 	if dec.HeimdallTimeout != nil {
 		c.HeimdallTimeout = *dec.HeimdallTimeout
