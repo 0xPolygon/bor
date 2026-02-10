@@ -131,6 +131,8 @@ type EVM struct {
 
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
+
+	depthLog *depthLogger
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -148,6 +150,7 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 		hasher:      crypto.NewKeccakState(),
 	}
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
+	initDepthLogger(evm)
 
 	switch {
 	case evm.chainRules.IsOsaka:

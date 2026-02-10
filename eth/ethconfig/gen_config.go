@@ -62,6 +62,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		EnableStateSizeTracking              bool
 		VMTrace                              string
 		VMTraceJsonConfig                    string
+		VMDepthLogPath                       string
 		RPCGasCap                            uint64
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
@@ -131,6 +132,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
+	enc.VMDepthLogPath = c.VMDepthLogPath
 	enc.RPCGasCap = c.RPCGasCap
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
@@ -208,6 +210,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		EnableStateSizeTracking              *bool
 		VMTrace                              *string
 		VMTraceJsonConfig                    *string
+		VMDepthLogPath                       *string
 		RPCGasCap                            *uint64
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
@@ -357,6 +360,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.VMTraceJsonConfig != nil {
 		c.VMTraceJsonConfig = *dec.VMTraceJsonConfig
+	}
+	if dec.VMDepthLogPath != nil {
+		c.VMDepthLogPath = *dec.VMDepthLogPath
 	}
 	if dec.RPCGasCap != nil {
 		c.RPCGasCap = *dec.RPCGasCap

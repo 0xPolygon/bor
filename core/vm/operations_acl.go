@@ -49,15 +49,20 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
-			y, x     = stack.Back(1), stack.peek()
-			slot     = common.Hash(x.Bytes32())
-			depthGas = uint64(0)
-			cost     = uint64(0)
+			y, x            = stack.Back(1), stack.peek()
+			slot            = common.Hash(x.Bytes32())
+			depthGas        = uint64(0)
+			resultDepth     uint64
+			cost            = uint64(0)
 		)
 		// Meter callback to charge per-node during trie traversal.
-		meter := func(nodeCount uint64) error {
-			if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
-				depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+		meter := func(depth uint64) error {
+			resultDepth = depth
+			if evm.depthLog != nil {
+				return nil
+			}
+			if storageTrieDepthStepGas > 0 && depth > storageTrieDepthFreeLevels {
+				depthGas += (depth - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
 			}
 			return nil
 		}
@@ -73,6 +78,14 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 
 		value := common.Hash(y.Bytes32())
+		if evm.depthLog != nil {
+			valueBytes := 0
+			if value != (common.Hash{}) {
+				valueBytes = len(value.Bytes())
+			}
+			keyDepth := uint64(len(slot.Bytes()) * 2)
+			evm.depthLog.logStorage("SSTORE", contract.Address(), slot, resultDepth, keyDepth, valueBytes)
+		}
 
 		if current == value { // noop (1)
 			// EIP 2200 original clause:

@@ -188,6 +188,9 @@ type Config struct {
 	VMTrace           string
 	VMTraceJsonConfig string
 
+	// Enables depth logging for SLOAD/SSTORE (build-tag gated)
+	VMDepthLogPath string
+
 	// RPCGasCap is the global gas cap for eth-call variants.
 	RPCGasCap uint64
 

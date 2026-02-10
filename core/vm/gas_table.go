@@ -101,16 +101,9 @@ var (
 
 func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	var (
-		y, x     = stack.Back(1), stack.Back(0)
-		depthGas = uint64(0)
+		y, x = stack.Back(1), stack.Back(0)
 	)
-	// Meter callback to charge per-node during trie traversal.
-	meter := func(nodeCount uint64) error {
-		if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
-			depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
-		}
-		return nil
-	}
+
 	current, original, err := evm.StateDB.GetStateAndCommittedStateWithMeter(contract.Address(), x.Bytes32(), meter)
 	if err != nil {
 		return 0, err
@@ -126,12 +119,12 @@ func gasSStore(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySi
 		// 3. From a non-zero to a non-zero                         (CHANGE)
 		switch {
 		case current == (common.Hash{}) && y.Sign() != 0: // 0 => non 0
-			return depthGas + params.SstoreSetGas, nil
+			return params.SstoreSetGas, nil
 		case current != (common.Hash{}) && y.Sign() == 0: // non 0 => 0
 			evm.StateDB.AddRefund(params.SstoreRefundGas)
-			return depthGas + params.SstoreClearGas, nil
+			return params.SstoreClearGas, nil
 		default: // non 0 => non 0 (or 0 => 0)
-			return depthGas + params.SstoreResetGas, nil
+			return params.SstoreResetGas, nil
 		}
 	}
 
@@ -210,9 +203,12 @@ func gasSStoreEIP2200(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 		depthGas = uint64(0)
 	)
 	// Meter callback to charge per-node during trie traversal.
-	meter := func(nodeCount uint64) error {
-		if storageTrieDepthStepGas > 0 && nodeCount > storageTrieDepthFreeLevels {
-			depthGas += (nodeCount - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
+	meter := func(depth uint64) error {
+		if evm.depthLog != nil {
+			return nil
+		}
+		if storageTrieDepthStepGas > 0 && depth > storageTrieDepthFreeLevels {
+			depthGas += (depth - storageTrieDepthFreeLevels) * storageTrieDepthStepGas
 		}
 		return nil
 	}

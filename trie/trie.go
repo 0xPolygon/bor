@@ -203,9 +203,9 @@ func (t *Trie) Get(key []byte) ([]byte, error) {
 }
 
 // GetWithMeter returns the value for key stored in the trie. The meter
-// callback is invoked once per decoded node visited, with the current node
-// count (1-based). If meter returns an error, traversal stops and the error
-// is returned.
+// callback is invoked once per decoded node visited, with the current depth
+// (1-based). If meter returns an error, traversal stops and the error is
+// returned.
 func (t *Trie) GetWithMeter(key []byte, meter func(uint64) error) ([]byte, error) {
 	// Short circuit if the trie is already committed and not usable.
 	if t.committed {
@@ -258,59 +258,59 @@ func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode no
 }
 
 // getWithMeter retrieves the value for a given key from the trie while tracking
-// the number of nodes visited using the provided meter function.
-func (t *Trie) getWithMeter(origNode node, key []byte, pos int, count uint64, meter func(uint64) error) (value []byte, newnode node, didResolve bool, newCount uint64, err error) {
+// the current depth using the provided meter function.
+func (t *Trie) getWithMeter(origNode node, key []byte, pos int, depth uint64, meter func(uint64) error) (value []byte, newnode node, didResolve bool, newDepth uint64, err error) {
 	switch n := (origNode).(type) {
 	case nil:
-		return nil, nil, false, count, nil
+		return nil, nil, false, depth, nil
 	case valueNode:
-		count++
+		depth++
 		if meter != nil {
-			if err := meter(count); err != nil {
-				return nil, n, false, count, err
+			if err := meter(depth); err != nil {
+				return nil, n, false, depth, err
 			}
 		}
-		return n, n, false, count, nil
+		return n, n, false, depth, nil
 	case *shortNode:
-		count++
+		depth++
 		if meter != nil {
-			if err := meter(count); err != nil {
-				return nil, n, false, count, err
+			if err := meter(depth); err != nil {
+				return nil, n, false, depth, err
 			}
 		}
 		if !bytes.HasPrefix(key[pos:], n.Key) {
 			// key not found in trie
-			return nil, n, false, count, nil
+			return nil, n, false, depth, nil
 		}
 
-		value, newnode, didResolve, count, err = t.getWithMeter(n.Val, key, pos+len(n.Key), count, meter)
+		value, newnode, didResolve, depth, err = t.getWithMeter(n.Val, key, pos+len(n.Key), depth, meter)
 		if err == nil && didResolve {
 			n.Val = newnode
 		}
 
-		return value, n, didResolve, count, err
+		return value, n, didResolve, depth, err
 	case *fullNode:
-		count++
+		depth++
 		if meter != nil {
-			if err := meter(count); err != nil {
-				return nil, n, false, count, err
+			if err := meter(depth); err != nil {
+				return nil, n, false, depth, err
 			}
 		}
-		value, newnode, didResolve, count, err = t.getWithMeter(n.Children[key[pos]], key, pos+1, count, meter)
+		value, newnode, didResolve, depth, err = t.getWithMeter(n.Children[key[pos]], key, pos+1, depth, meter)
 		if err == nil && didResolve {
 			n.Children[key[pos]] = newnode
 		}
 
-		return value, n, didResolve, count, err
+		return value, n, didResolve, depth, err
 	case hashNode:
 		child, err := t.resolveAndTrack(n, key[:pos])
 		if err != nil {
-			return nil, n, true, count, err
+			return nil, n, true, depth, err
 		}
 
-		value, newnode, _, count, err := t.getWithMeter(child, key, pos, count, meter)
+		value, newnode, _, depth, err := t.getWithMeter(child, key, pos, depth, meter)
 
-		return value, newnode, true, count, err
+		return value, newnode, true, depth, err
 	default:
 		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
 	}

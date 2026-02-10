@@ -559,8 +559,13 @@ func opMstore8(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	loc := scope.Stack.peek()
 	hash := common.Hash(loc.Bytes32())
-	meter := func(nodeCount uint64) error {
-		if storageTrieDepthStepGas == 0 || nodeCount <= storageTrieDepthFreeLevels {
+	var depth uint64
+	meter := func(depthValue uint64) error {
+		depth = depthValue
+		if evm.depthLog != nil {
+			return nil
+		}
+		if storageTrieDepthStepGas == 0 || depthValue <= storageTrieDepthFreeLevels {
 			return nil
 		}
 		if !scope.Contract.UseGas(storageTrieDepthStepGas, evm.Config.Tracer, tracing.GasChangeUnspecified) {
@@ -571,6 +576,14 @@ func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	val, err := evm.StateDB.GetStateWithMeter(scope.Contract.Address(), hash, meter)
 	if err != nil {
 		return nil, err
+	}
+	if evm.depthLog != nil {
+		valueBytes := 0
+		if val != (common.Hash{}) {
+			valueBytes = len(val.Bytes())
+		}
+		keyDepth := uint64(len(hash.Bytes()) * 2)
+		evm.depthLog.logStorage("SLOAD", scope.Contract.Address(), hash, depth, keyDepth, valueBytes)
 	}
 	loc.SetBytes(val.Bytes())
 
