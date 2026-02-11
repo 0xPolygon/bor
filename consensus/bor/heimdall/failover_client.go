@@ -145,6 +145,10 @@ func callWithFailover[T any](f *FailoverHeimdallClient, ctx context.Context, fn 
 
 		log.Debug("Heimdall failover: primary still down after probe, staying on secondary", "err", err)
 
+		// Secondary calls use the caller's ctx directly (no sub-timeout).
+		// The timeout is only needed on primary to bound the failover decision.
+		// Once on secondary there is no further fallback, so the caller's
+		// context (which always has a cancellation path in Bor) governs lifetime.
 		return fn(ctx, f.clients[1])
 	}
 
