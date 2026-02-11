@@ -10,6 +10,7 @@ import (
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -86,6 +87,24 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 
 	_, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
+}
+
+func TestCreateConsensusEngine_HeimdallSecondaryURL(t *testing.T) {
+	t.Parallel()
+	ethConfig := &Config{
+		OverrideHeimdallClient: &mockHeimdallClient{},
+		HeimdallSecondaryURL:   "http://secondary:1317",
+	}
+
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	require.NoError(t, err)
+	defer engine.Close()
+
+	borEngine, ok := engine.(*bor.Bor)
+	require.True(t, ok, "Expected Bor consensus engine")
+
+	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
+	require.True(t, ok, "Expected HeimdallClient to be wrapped in FailoverHeimdallClient")
 }
 
 func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
