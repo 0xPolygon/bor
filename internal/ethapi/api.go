@@ -2022,21 +2022,6 @@ func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction) (c
 		log.Info("Submitted transaction", "hash", tx.Hash().Hex(), "from", from, "nonce", tx.Nonce(), "recipient", tx.To(), "value", tx.Value())
 	}
 
-	// If preconf / private tx is enabled, submit tx directly to BP
-	if b.PreconfEnabled() {
-		// Preconf processing mostly happens in background so don't float the error back to user
-		if err := b.SubmitTxForPreconf(tx); err != nil {
-			log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
-		}
-	} else if b.PrivateTxEnabled() {
-		// Return an error here to inform user that private tx submission failed as it is critical.
-		// Note that it will be retried in background.
-		if err := b.SubmitPrivateTx(tx); err != nil {
-			log.Error("Private tx accepted locally but submission failed", "err", err)
-			return tx.Hash(), fmt.Errorf("private tx accepted locally, submission failed. reason: %w", err)
-		}
-	}
-
 	return tx.Hash(), nil
 }
 
@@ -2127,7 +2112,17 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 		}
 	}
 
-	return SubmitTransaction(ctx, api.b, tx)
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+
+	// If preconf is enabled, submit tx directly to BP
+	if api.b.PreconfEnabled() {
+		// Preconf processing mostly happens in background so don't float the error back to user
+		if err := api.b.SubmitTxForPreconf(tx); err != nil {
+			log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
+		}
+	}
+
+	return hash, err
 }
 
 // SendRawTransactionSync will add the signed transaction to the transaction pool
@@ -2270,7 +2265,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 // SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure
 // that the transaction is not gossiped over public network.
 func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
-	if !api.b.AcceptPrivateTxs() {
+	if !api.b.AcceptPrivateTxs() && !api.b.PrivateTxEnabled() {
 		return common.Hash{}, errors.New("private transactions are not accepted on this node")
 	}
 
@@ -2286,6 +2281,17 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 	if err != nil {
 		// Purge tx from private tx tracker if submission failed
 		api.b.PurgePrivateTx(tx.Hash())
+		return hash, err
+	}
+
+	// Submit the private transaction directly to BPs
+	if api.b.PrivateTxEnabled() {
+		// Return an error here to inform user that private tx submission failed as it is critical.
+		// Note that it will be retried in background.
+		if err := api.b.SubmitPrivateTx(tx); err != nil {
+			log.Error("Private tx accepted locally but submission to bp failed", "err", err)
+			return tx.Hash(), fmt.Errorf("private tx accepted locally, submission failed. reason: %w", err)
+		}
 	}
 
 	return hash, err

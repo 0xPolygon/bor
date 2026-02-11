@@ -39,7 +39,7 @@ func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool,
 		acceptPrivateTx: acceptPrivateTx,
 	}
 	var privateTxStore *PrivateTxStore
-	if acceptPrivateTx {
+	if enablePrivateTx || acceptPrivateTx {
 		privateTxStore = NewPrivateTxStore()
 	}
 	var txRelay *Service
