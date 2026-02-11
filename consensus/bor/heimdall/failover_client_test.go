@@ -23,16 +23,16 @@ import (
 
 // mockHeimdallClient is a configurable mock implementing the heimdallClient interface.
 type mockHeimdallClient struct {
-	getSpanFn           func(ctx context.Context, spanID uint64) (*types.Span, error)
-	getLatestSpanFn     func(ctx context.Context) (*types.Span, error)
-	stateSyncEventsFn   func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
-	fetchCheckpointFn   func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
+	getSpanFn            func(ctx context.Context, spanID uint64) (*types.Span, error)
+	getLatestSpanFn      func(ctx context.Context) (*types.Span, error)
+	stateSyncEventsFn    func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
+	fetchCheckpointFn    func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
 	fetchCheckpointCntFn func(ctx context.Context) (int64, error)
-	fetchMilestoneFn    func(ctx context.Context) (*milestone.Milestone, error)
-	fetchMilestoneCntFn func(ctx context.Context) (int64, error)
-	fetchStatusFn       func(ctx context.Context) (*ctypes.SyncInfo, error)
-	closeFn             func()
-	hits                atomic.Int32
+	fetchMilestoneFn     func(ctx context.Context) (*milestone.Milestone, error)
+	fetchMilestoneCntFn  func(ctx context.Context) (int64, error)
+	fetchStatusFn        func(ctx context.Context) (*ctypes.SyncInfo, error)
+	closeFn              func()
+	hits                 atomic.Int32
 }
 
 func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
@@ -520,45 +520,42 @@ func TestFailover_ProbeBackNonFailoverError(t *testing.T) {
 	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should not fall back to secondary on non-failover error during probe")
 }
 
-func TestFailover_SwitchOnPrimaryDeadlineExceeded(t *testing.T) {
-	primary := &mockHeimdallClient{
-		getSpanFn: func(ctx context.Context, _ uint64) (*types.Span, error) {
-			// Block until the sub-context deadline expires
-			<-ctx.Done()
-			return nil, ctx.Err()
+func TestFailover_SwitchOnPrimarySubContextError(t *testing.T) {
+	tests := []struct {
+		name      string
+		primaryFn func(ctx context.Context, _ uint64) (*types.Span, error)
+	}{
+		{
+			name: "DeadlineExceeded",
+			primaryFn: func(ctx context.Context, _ uint64) (*types.Span, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		},
+		{
+			name: "Canceled",
+			primaryFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+				return nil, context.Canceled
+			},
 		},
 	}
-	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
-	fc.attemptTimeout = 100 * time.Millisecond
-	defer fc.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			primary := &mockHeimdallClient{getSpanFn: tt.primaryFn}
+			secondary := &mockHeimdallClient{}
 
-	span, err := fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
-	require.NotNil(t, span)
-	assert.Equal(t, int32(1), primary.hits.Load(), "primary should have been tried")
-	assert.Equal(t, int32(1), secondary.hits.Load(), "should failover on sub-context deadline exceeded")
-}
+			fc := NewFailoverHeimdallClient(primary, secondary)
+			fc.attemptTimeout = 100 * time.Millisecond
+			defer fc.Close()
 
-func TestFailover_SwitchOnPrimaryContextCanceled(t *testing.T) {
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			// Return context.Canceled as if a sub-context was canceled
-			return nil, context.Canceled
-		},
+			span, err := fc.GetSpan(context.Background(), 1)
+			require.NoError(t, err)
+			require.NotNil(t, span)
+			assert.Equal(t, int32(1), primary.hits.Load(), "primary should have been tried")
+			assert.Equal(t, int32(1), secondary.hits.Load(), "should failover on sub-context error")
+		})
 	}
-	secondary := &mockHeimdallClient{}
-
-	fc := NewFailoverHeimdallClient(primary, secondary)
-	fc.attemptTimeout = 100 * time.Millisecond
-	defer fc.Close()
-
-	span, err := fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
-	require.NotNil(t, span)
-	assert.Equal(t, int32(1), primary.hits.Load(), "primary should have been tried")
-	assert.Equal(t, int32(1), secondary.hits.Load(), "should failover on sub-context canceled")
 }
 
 func TestIsFailoverError(t *testing.T) {
