@@ -5597,6 +5597,298 @@ func TestBorGetHeaderByHash(t *testing.T) {
 	})
 }
 
+func TestBorGetBlockReceiptsByBlockHash(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(3)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether * 2)},
+				accs[1].addr: {Balance: big.NewInt(params.Ether)},
+				accs[2].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create blocks with transactions to generate receipts
+	genBlocks := 5
+	signer := types.LatestSignerForChainID(params.TestChainConfig.ChainID)
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i == 0 {
+			tx, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[0].addr), accs[1].addr, big.NewInt(1000), 21000, big.NewInt(params.GWei), nil), signer, accs[0].key)
+			b.AddTx(tx)
+		}
+		if i == 1 {
+			tx1, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[0].addr), accs[1].addr, big.NewInt(2000), 21000, big.NewInt(params.GWei), nil), signer, accs[0].key)
+			tx2, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[1].addr), accs[2].addr, big.NewInt(500), 21000, big.NewInt(params.GWei), nil), signer, accs[1].key)
+			b.AddTx(tx1)
+			b.AddTx(tx2)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get receipts for a block with one transaction
+	t.Run("block_with_one_tx", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockReceiptsByBlockHash() returned nil")
+		}
+		// Should have 1 receipt
+		if len(result) != 1 {
+			t.Errorf("GetBlockReceiptsByBlockHash() returned %d receipts, want 1", len(result))
+		}
+		// Verify receipt structure
+		if len(result) > 0 {
+			receipt := result[0]
+			if _, ok := receipt["blockHash"]; !ok {
+				t.Error("Receipt missing 'blockHash' field")
+			}
+			if _, ok := receipt["transactionHash"]; !ok {
+				t.Error("Receipt missing 'transactionHash' field")
+			}
+			if _, ok := receipt["gasUsed"]; !ok {
+				t.Error("Receipt missing 'gasUsed' field")
+			}
+		}
+	})
+
+	// Test 2: Get receipts for block with multiple transactions
+	t.Run("block_with_multiple_txs", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(2)
+		if block == nil {
+			t.Fatal("Could not get block 2")
+		}
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockReceiptsByBlockHash() returned nil")
+		}
+		// Should have 2 receipts
+		if len(result) != 2 {
+			t.Errorf("GetBlockReceiptsByBlockHash() returned %d receipts, want 2", len(result))
+		}
+	})
+
+	// Test 3: Get receipts for a block with no transactions
+	t.Run("block_with_no_txs", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(3)
+		if block == nil {
+			t.Fatal("Could not get block 3")
+		}
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+		// Empty block should return an empty array
+		if result == nil {
+			result = []map[string]interface{}{}
+		}
+		if len(result) != 0 {
+			t.Errorf("GetBlockReceiptsByBlockHash() returned %d receipts for empty block, want 0", len(result))
+		}
+	})
+
+	// Test 4: Non-existent block hash returns an error
+	t.Run("non_existent_hash_returns_error", func(t *testing.T) {
+		fakeHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), fakeHash)
+		// Should return error for missing block
+		if err == nil {
+			t.Error("GetBlockReceiptsByBlockHash(fake) expected error, got nil")
+		}
+		if result != nil {
+			t.Errorf("GetBlockReceiptsByBlockHash(fake) = %v, want nil", result)
+		}
+		// Verify error message
+		expectedErr := fmt.Sprintf("block not found %x", fakeHash)
+		if err.Error() != expectedErr {
+			t.Errorf("Error message = %q, want %q", err.Error(), expectedErr)
+		}
+	})
+
+	// Test 5: The return type is []map[string]interface{}
+	t.Run("returns_slice_of_maps", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+		var _ []map[string]interface{} = result
+	})
+
+	// Test 6: Verify receipt fields match transaction
+	t.Run("receipt_fields_match_transaction", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+		if len(result) == 0 {
+			t.Fatal("GetBlockReceiptsByBlockHash() returned no receipts")
+		}
+
+		// Verify the first receipt matches the first transaction
+		receipt := result[0]
+		tx := block.Transactions()[0]
+
+		// Block hash should match
+		if blockHash, ok := receipt["blockHash"].(common.Hash); ok {
+			if blockHash != block.Hash() {
+				t.Errorf("Receipt blockHash = %s, want %s", blockHash, block.Hash())
+			}
+		}
+
+		// Transaction hash should match
+		if txHash, ok := receipt["transactionHash"].(common.Hash); ok {
+			if txHash != tx.Hash() {
+				t.Errorf("Receipt transactionHash = %s, want %s", txHash, tx.Hash())
+			}
+		}
+	})
+
+	// Test 7: Non-canonical hash returns a specific error
+	t.Run("non_canonical_hash_returns_specific_error", func(t *testing.T) {
+		// Get a canonical block
+		canonicalBlock := backend.chain.GetBlockByNumber(1)
+		if canonicalBlock == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		// Create a fake block with the same number but a different hash
+		fakeHeader := &types.Header{
+			Number:     canonicalBlock.Number(),
+			Time:       canonicalBlock.Time(),
+			ParentHash: common.HexToHash("0xfafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafa"),
+			Root:       canonicalBlock.Root(),
+			TxHash:     types.EmptyTxsHash,
+			Difficulty: canonicalBlock.Difficulty(),
+			GasLimit:   canonicalBlock.GasLimit(),
+		}
+		fakeBlock := types.NewBlockWithHeader(fakeHeader).WithBody(types.Body{
+			Transactions: []*types.Transaction{},
+		})
+
+		// Write the fake block to the database
+		rawdb.WriteBlock(backend.chain.DB(), fakeBlock)
+		rawdb.WriteReceipts(backend.chain.DB(), fakeBlock.Hash(), fakeBlock.NumberU64(), types.Receipts{})
+
+		// Try to get receipts for non-canonical hash
+		result, err := api.GetBlockReceiptsByBlockHash(context.Background(), fakeBlock.Hash())
+
+		// Should return a specific error
+		if err == nil {
+			t.Error("GetBlockReceiptsByBlockHash(non-canonical) expected error, got nil")
+		}
+		if result != nil {
+			t.Errorf("GetBlockReceiptsByBlockHash(non-canonical) = %v, want nil", result)
+		}
+
+		// Verify the error message matches for non-canonical blocks
+		expectedErrMsg := fmt.Sprintf("the hash %s is not cannonical", fakeBlock.Hash().String())
+		if err.Error() != expectedErrMsg {
+			t.Errorf("Error message = %q, want %q", err.Error(), expectedErrMsg)
+		}
+	})
+
+	// Test 8: Bor state-sync receipt gets appended
+	t.Run("bor_state_sync_receipt_appended", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+		normalCount := len(block.Transactions())
+
+		// Derive Bor transaction hash
+		borTxHash := types.GetDerivedBorTxHash(types.BorReceiptKey(block.NumberU64(), block.Hash()))
+
+		// Create a mock Bor state-sync receipt
+		borReceipt := &types.Receipt{
+			Type:              types.LegacyTxType,
+			Status:            types.ReceiptStatusSuccessful,
+			CumulativeGasUsed: 0,
+			Logs:              []*types.Log{},
+			TxHash:            borTxHash,
+		}
+
+		// Write Bor tx lookup entry using the block hash
+		rawdb.WriteBorTxLookupEntry(backend.chain.DB(), block.Hash(), block.NumberU64())
+
+		// Create backend with Bor receipt
+		backendWithBor := &testBackendWithBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		}
+		apiWithBor := NewBorAPI(backendWithBor)
+
+		// Get receipts should append the state-sync receipt
+		result, err := apiWithBor.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetBlockReceiptsByBlockHash() error = %v", err)
+		}
+
+		// Should have normal receipts plus the bor state-sync receipt
+		expectedCount := normalCount + 1
+		if len(result) != expectedCount {
+			t.Errorf("GetBlockReceiptsByBlockHash() returned %d receipts, want %d (txs + bor)", len(result), expectedCount)
+		}
+
+		if len(result) <= normalCount {
+			t.Error("Bor state-sync receipt was NOT appended")
+		}
+
+		// The last receipt should be the bor receipt
+		if len(result) > normalCount {
+			lastReceipt := result[len(result)-1]
+			if txHash, ok := lastReceipt["transactionHash"].(common.Hash); ok {
+				if txHash != borTxHash {
+					t.Errorf("Last receipt transactionHash = %s, want Bor receipt %s", txHash, borTxHash)
+				}
+			} else {
+				t.Error("Last receipt missing transactionHash field")
+			}
+		}
+	})
+}
+
+// testBackendWithBorReceipt wraps testBackend and overrides GetBorBlockReceipt
+type testBackendWithBorReceipt struct {
+	*testBackend
+	borReceipt *types.Receipt
+}
+
+func (b *testBackendWithBorReceipt) GetBorBlockReceipt(_ context.Context, _ common.Hash) (*types.Receipt, error) {
+	// Return mock Bor receipt
+	return b.borReceipt, nil
+}
+
+func (b *testBackendWithBorReceipt) ChainConfig() *params.ChainConfig {
+	// Return config without Bor to simulate pre-Madhugiri
+	return params.TestChainConfig
+}
+
 // testBackendWithCoinbase wraps testBackend and overrides Etherbase
 type testBackendWithCoinbase struct {
 	*testBackend

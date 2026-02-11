@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -156,6 +158,73 @@ func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrH
 		return nil, err
 	}
 	return RPCMarshalWitness(witness), nil
+}
+
+// GetBlockReceiptsByBlockHash returns all transaction receipts for a block by hash.
+//
+// Parameters:
+//   - blockHash: canonical block hash
+//
+// Returns an array of marshaled receipts, or error if the block is not found
+func (api *BorAPI) GetBlockReceiptsByBlockHash(ctx context.Context, blockHash common.Hash) ([]map[string]interface{}, error) {
+	// Get the block by hash
+	block, err := api.b.BlockByHash(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block not found %x", blockHash)
+	}
+
+	// Verify that the block is canonical
+	blockNumber := block.Number().Uint64()
+	canonicalHash := rawdb.ReadCanonicalHash(api.b.ChainDb(), blockNumber)
+	if canonicalHash != blockHash {
+		return nil, fmt.Errorf("the hash %s is not cannonical", blockHash.String())
+	}
+
+	// Get receipts for this block
+	receipts, err := api.b.GetReceipts(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+	if receipts == nil {
+		return nil, nil
+	}
+
+	chainConfig := api.b.ChainConfig()
+	txs := block.Transactions()
+
+	// Validate receipt/transaction count match
+	if len(txs) != len(receipts) {
+		return nil, fmt.Errorf("receipts length mismatch: %d vs %d", len(txs), len(receipts))
+	}
+
+	signer := types.MakeSigner(chainConfig, block.Number(), block.Time())
+
+	// Marshal each receipt
+	result := make([]map[string]interface{}, 0, len(receipts))
+	for i, receipt := range receipts {
+		marshaled := marshalReceipt(receipt, blockHash, blockNumber, signer, txs[i], i, false)
+		result = append(result, marshaled)
+	}
+
+	// Handle state-sync receipts post Madhuguri HF
+	if chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(block.Number()) {
+		return result, nil
+	}
+
+	// Pre-Madhugiri: fetch state-sync receipt separately
+	stateSyncReceipt, err := api.b.GetBorBlockReceipt(ctx, blockHash)
+	if err != nil && !errors.Is(err, ethereum.NotFound) {
+		return nil, err
+	}
+	if stateSyncReceipt != nil {
+		tx, _, _, _ := rawdb.ReadBorTransaction(api.b.ChainDb(), stateSyncReceipt.TxHash)
+		result = append(result, marshalReceipt(stateSyncReceipt, blockHash, blockNumber, signer, tx, len(result), true))
+	}
+
+	return result, nil
 }
 
 // GetHeaderByHash returns a block's header by hash.
