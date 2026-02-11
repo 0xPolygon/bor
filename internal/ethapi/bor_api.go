@@ -158,6 +158,27 @@ func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrH
 	return RPCMarshalWitness(witness), nil
 }
 
+// GetHeaderByHash returns a block's header by hash.
+// It retrieves the header without transactions.
+//
+// Parameters:
+//   - hash: Block hash
+//
+// Returns the block header or error if not found
+func (api *BorAPI) GetHeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	// Get the header for the specified block hash
+	header, err := api.b.HeaderByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil {
+		// Return error for missing header
+		return nil, fmt.Errorf("block header not found: %s", hash.String())
+	}
+
+	return header, nil
+}
+
 // GetHeaderByNumber returns a block's header by number.
 // It retrieves the header, without transactions.
 //

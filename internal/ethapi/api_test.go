@@ -5443,6 +5443,160 @@ func TestBorGetHeaderByNumber(t *testing.T) {
 	})
 }
 
+func TestBorGetHeaderByHash(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 20
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get header by valid hash
+	t.Run("valid_block_hash", func(t *testing.T) {
+		// Get a known block first
+		block := backend.chain.GetBlockByNumber(10)
+		if block == nil {
+			t.Fatal("Could not get block 10")
+		}
+		hash := block.Hash()
+
+		// Get header by hash
+		result, err := api.GetHeaderByHash(context.Background(), hash)
+		if err != nil {
+			t.Fatalf("GetHeaderByHash() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByHash() returned nil")
+		}
+		// Verify it's the correct block
+		if result.Number.Uint64() != 10 {
+			t.Errorf("GetHeaderByHash() number = %d, want 10", result.Number.Uint64())
+		}
+		if result.Hash() != hash {
+			t.Errorf("GetHeaderByHash() hash = %s, want %s", result.Hash(), hash)
+		}
+	})
+
+	// Test 2: Get the genesis block's header by hash
+	t.Run("genesis_block_hash", func(t *testing.T) {
+		// Get genesis block
+		block := backend.chain.GetBlockByNumber(0)
+		if block == nil {
+			t.Fatal("Could not get genesis block")
+		}
+		hash := block.Hash()
+
+		// Get header by hash
+		result, err := api.GetHeaderByHash(context.Background(), hash)
+		if err != nil {
+			t.Fatalf("GetHeaderByHash(genesis) error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByHash(genesis) returned nil")
+		}
+		// Verify it's block 0
+		if result.Number.Uint64() != 0 {
+			t.Errorf("GetHeaderByHash(genesis) number = %d, want 0", result.Number.Uint64())
+		}
+	})
+
+	// Test 3: Get the latest block header by hash
+	t.Run("latest_block_hash", func(t *testing.T) {
+		// Get the latest block
+		block := backend.chain.CurrentBlock()
+		if block == nil {
+			t.Fatal("Could not get current block")
+		}
+		hash := block.Hash()
+
+		// Get header by hash
+		result, err := api.GetHeaderByHash(context.Background(), hash)
+		if err != nil {
+			t.Fatalf("GetHeaderByHash(latest) error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByHash(latest) returned nil")
+		}
+		// Verify it matches the current block
+		if result.Hash() != hash {
+			t.Errorf("GetHeaderByHash(latest) hash = %s, want %s", result.Hash(), hash)
+		}
+	})
+
+	// Test 4: Non-existent hash returns error
+	t.Run("non_existent_hash_returns_error", func(t *testing.T) {
+		// Use a random hash that doesn't exist
+		fakeHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+
+		result, err := api.GetHeaderByHash(context.Background(), fakeHash)
+		// Should return error for missing header
+		if err == nil {
+			t.Error("GetHeaderByHash(fake) expected error, got nil")
+		}
+		if result != nil {
+			t.Errorf("GetHeaderByHash(fake) = %v, want nil", result)
+		}
+		// Verify error message
+		expectedErr := fmt.Sprintf("block header not found: %s", fakeHash.String())
+		if err.Error() != expectedErr {
+			t.Errorf("Error message = %q, want %q", err.Error(), expectedErr)
+		}
+	})
+
+	// Test 5: The return type is *types.Header
+	t.Run("returns_types_header", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(10)
+		if block == nil {
+			t.Fatal("Could not get block 10")
+		}
+
+		result, err := api.GetHeaderByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetHeaderByHash() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByHash() returned nil")
+		}
+		// Verify it's the correct type
+		var _ *types.Header = result
+	})
+
+	// Test 6: Verify header fields are populated
+	t.Run("header_fields_populated", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(10)
+		if block == nil {
+			t.Fatal("Could not get block 10")
+		}
+
+		result, err := api.GetHeaderByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetHeaderByHash() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByHash() returned nil")
+		}
+		// Verify standard fields are populated
+		if result.Number == nil {
+			t.Error("Header missing Number field")
+		}
+		if result.ParentHash == (common.Hash{}) {
+			t.Error("Header missing ParentHash field")
+		}
+		if result.Time == 0 {
+			t.Error("Header missing Time field")
+		}
+	})
+}
+
 // testBackendWithCoinbase wraps testBackend and overrides Etherbase
 type testBackendWithCoinbase struct {
 	*testBackend
