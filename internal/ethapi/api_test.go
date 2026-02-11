@@ -5012,7 +5012,15 @@ func TestAccountAt(t *testing.T) {
 
 	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
 		// Create a transaction that changes the account state
-		tx, _ := types.SignTx(types.NewTransaction(b.TxNonce(addr), common.Address{0x01}, big.NewInt(1000), 21000, b.BaseFee(), nil), signer, key)
+		toAddr := common.Address{0x01}
+		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+			Nonce:    b.TxNonce(addr),
+			To:       &toAddr,
+			Value:    big.NewInt(1000),
+			Gas:      21000,
+			GasPrice: b.BaseFee(),
+			Data:     nil,
+		}), signer, key)
 		b.AddTx(tx)
 	})
 	api := NewDebugAPI(backend)
@@ -5617,12 +5625,33 @@ func TestBorGetBlockReceiptsByBlockHash(t *testing.T) {
 	signer := types.LatestSignerForChainID(params.TestChainConfig.ChainID)
 	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
 		if i == 0 {
-			tx, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[0].addr), accs[1].addr, big.NewInt(1000), 21000, big.NewInt(params.GWei), nil), signer, accs[0].key)
+			tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(accs[0].addr),
+				To:       &accs[1].addr,
+				Value:    big.NewInt(1000),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+				Data:     nil,
+			}), signer, accs[0].key)
 			b.AddTx(tx)
 		}
 		if i == 1 {
-			tx1, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[0].addr), accs[1].addr, big.NewInt(2000), 21000, big.NewInt(params.GWei), nil), signer, accs[0].key)
-			tx2, _ := types.SignTx(types.NewTransaction(b.TxNonce(accs[1].addr), accs[2].addr, big.NewInt(500), 21000, big.NewInt(params.GWei), nil), signer, accs[1].key)
+			tx1, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(accs[0].addr),
+				To:       &accs[1].addr,
+				Value:    big.NewInt(2000),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+				Data:     nil,
+			}), signer, accs[0].key)
+			tx2, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(accs[1].addr),
+				To:       &accs[2].addr,
+				Value:    big.NewInt(500),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+				Data:     nil,
+			}), signer, accs[1].key)
 			b.AddTx(tx1)
 			b.AddTx(tx2)
 		}
@@ -6200,6 +6229,429 @@ func TestBorForks(t *testing.T) {
 		}
 		if !strings.Contains(jsonStr, `"timeForks":null`) {
 			t.Errorf("JSON should contain '\"timeForks\":null', got: %s", jsonStr)
+		}
+	})
+}
+
+func TestBorGetLogsByHash(t *testing.T) {
+	t.Parallel()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(params.Ether)
+		config  = *params.TestChainConfig
+	)
+
+	genesis := &core.Genesis{
+		Config: &config,
+		Alloc: types.GenesisAlloc{
+			address: {Balance: funds},
+		},
+	}
+
+	backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		// Create transactions
+		if i == 1 {
+			// Simple value transfer (no logs)
+			toAddr := common.HexToAddress("0x1111")
+			tx := types.NewTx(&types.LegacyTx{
+				Nonce:    0,
+				To:       &toAddr,
+				Value:    big.NewInt(100),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.InitialBaseFee),
+				Data:     nil,
+			})
+			tx, _ = types.SignTx(tx, types.LatestSigner(&config), key)
+			b.AddTx(tx)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get logs for block with transactions
+	t.Run("block_with_transaction", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(2)
+		if block == nil {
+			t.Fatal("Could not get block 2")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// Should return an array (one entry per transaction)
+		if result == nil {
+			t.Fatal("GetLogsByHash() returned nil")
+		}
+
+		// Verify it's the correct type
+		var _ [][]*types.Log = result
+	})
+
+	// Test 2: Get logs for empty block
+	t.Run("empty_block", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(5)
+		if block == nil {
+			t.Fatal("Could not get block 5")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// Empty block should return an empty array
+		if result == nil {
+			t.Fatal("GetLogsByHash() returned nil for empty block")
+		}
+		if len(result) != 0 {
+			t.Errorf("GetLogsByHash() returned %d log arrays for empty block, want 0", len(result))
+		}
+	})
+
+	// Test 3: Non-existent block hash returns nil
+	t.Run("non_existent_hash_returns_nil", func(t *testing.T) {
+		fakeHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+
+		result, err := api.GetLogsByHash(context.Background(), fakeHash)
+		// Should return nil for non-existent block
+		if err != nil {
+			t.Errorf("GetLogsByHash(fake) unexpected error = %v", err)
+		}
+		if result != nil {
+			t.Errorf("GetLogsByHash(fake) = %v, want nil", result)
+		}
+	})
+
+	// Test 4: Verify array structure (one log array per transaction)
+	t.Run("array_structure_per_transaction", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(2)
+		if block == nil {
+			t.Fatal("Could not get block 2")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// The number of log arrays should match the number of transactions
+		txCount := len(block.Transactions())
+		if len(result) != txCount {
+			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (one per transaction)", len(result), txCount)
+		}
+	})
+
+	// Test 5: Genesis block
+	t.Run("genesis_block", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(0)
+		if block == nil {
+			t.Fatal("Could not get genesis block")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash(genesis) error = %v", err)
+		}
+
+		// Genesis should return an empty array (no transactions)
+		if result == nil {
+			t.Fatal("GetLogsByHash(genesis) returned nil")
+		}
+		if len(result) != 0 {
+			t.Errorf("GetLogsByHash(genesis) returned %d log arrays, want 0", len(result))
+		}
+	})
+}
+
+// testBackendWithPreMadhuguriBorReceipt wraps testBackend and simulates pre-Madhugiri with Bor receipts
+type testBackendWithPreMadhuguriBorReceipt struct {
+	*testBackend
+	borReceipt *types.Receipt
+}
+
+func (b *testBackendWithPreMadhuguriBorReceipt) GetBorBlockReceipt(_ context.Context, _ common.Hash) (*types.Receipt, error) {
+	return b.borReceipt, nil
+}
+
+func (b *testBackendWithPreMadhuguriBorReceipt) ChainConfig() *params.ChainConfig {
+	// Return config with Bor but MadhugiriBlock unset (nil) for pre-Madhuguri behavior
+	cfg := *params.AllEthashProtocolChanges
+	if cfg.Bor == nil {
+		cfg.Bor = &params.BorConfig{}
+	}
+	// Ensure MadhugiriBlock is nil so IsMadhugiri returns false
+	cfg.Bor.MadhugiriBlock = nil
+	return &cfg
+}
+
+func TestBorGetLogsByHashWithLogs(t *testing.T) {
+	t.Parallel()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = new(big.Int).Mul(big.NewInt(10), big.NewInt(params.Ether))
+		config  = *params.AllEthashProtocolChanges // Use config without Bor to avoid system transactions
+	)
+
+	// Simple contract that emits a log when called
+	// contract Logger { event TestEvent(uint256 value); function log(uint256 x) public { emit TestEvent(x); } }
+	// Compiled bytecode for the above contract
+	contractBytecode := common.Hex2Bytes("608060405234801561000f575f80fd5b506101438061001d5f395ff3fe608060405234801561000f575f80fd5b5060043610610029575f3560e01c8063c598d71c1461002d575b5f80fd5b610047600480360381019061004291906100c4565b610049565b005b7f1440c4dd67b4344ea1905ec0318995133b550f168b4ee959a0da6b503d7d2414816040516100789190610100565b60405180910390a150565b5f80fd5b5f819050919050565b61009a81610088565b81146100a4575f80fd5b50565b5f813590506100b581610091565b92915050565b5f602082840312156100d0576100cf610084565b5b5f6100dd848285016100a7565b91505092915050565b6100ef81610088565b82525050565b5f6020820190506101085f8301846100e6565b9291505056fea2646970667358221220abcdef1234567890abcdef1234567890abcdef1234567890abcdef123456789064736f6c63430008110033")
+	contractAddr := crypto.CreateAddress(address, 0) // Nonce 0 for first contract deployment
+
+	genesis := &core.Genesis{
+		Config: &config,
+		Alloc: types.GenesisAlloc{
+			address: {Balance: funds},
+		},
+	}
+
+	backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i == 1 {
+			// Deploy contract
+			deployTx := types.NewContractCreation(
+				b.TxNonce(address),
+				big.NewInt(0),
+				300000,
+				big.NewInt(params.InitialBaseFee),
+				contractBytecode,
+			)
+			deployTx, _ = types.SignTx(deployTx, types.LatestSigner(&config), key)
+			b.AddTx(deployTx)
+		}
+		if i == 2 {
+			// Call contract to emit log
+			// Function signature: log(uint256) -> 0xc598d71c
+			callData := common.Hex2Bytes("c598d71c0000000000000000000000000000000000000000000000000000000000000029") // log(41)
+			callTx := types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(address),
+				To:       &contractAddr,
+				Value:    big.NewInt(0),
+				Gas:      100000,
+				GasPrice: big.NewInt(params.InitialBaseFee),
+				Data:     callData,
+			})
+			callTx, _ = types.SignTx(callTx, types.LatestSigner(&config), key)
+			b.AddTx(callTx)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test: Block with transaction that emits logs
+	t.Run("transaction_with_actual_logs", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(3)
+		if block == nil {
+			t.Fatal("Could not get block 3")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		if result == nil {
+			t.Fatal("GetLogsByHash() returned nil")
+		}
+
+		// Should have logs (may include Bor system logs and contract logs)
+		if len(result) == 0 {
+			t.Fatal("GetLogsByHash() returned empty array, expected logs")
+		}
+
+		// Verify at least one log array has logs
+		foundLogs := false
+		for _, txLogs := range result {
+			if len(txLogs) > 0 {
+				foundLogs = true
+				// Verify log structure - all logs should have proper fields
+				for _, log := range txLogs {
+					if log.Address == (common.Address{}) {
+						t.Error("Log has zero address")
+					}
+				}
+				break
+			}
+		}
+
+		if !foundLogs {
+			t.Fatal("No logs found in any transaction")
+		}
+	})
+
+	// Test: Block with contract deployment
+	t.Run("contract_deployment_logs", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(2)
+		if block == nil {
+			t.Fatal("Could not get block 2")
+		}
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		if result == nil {
+			t.Fatal("GetLogsByHash() returned nil")
+		}
+
+		// Should have at least one entry (deployment tx, possibly with Bor system logs)
+		if len(result) == 0 {
+			t.Error("GetLogsByHash() returned empty array for block with deployment")
+		}
+	})
+}
+
+func TestBorGetLogsByHashPreMadhugiri(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create a test block with 2 regular transactions
+	backend := newTestBackend(t, 1, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i == 0 {
+			// Add 2 transactions to the block
+			tx1, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[0].addr),
+					To:       &accs[0].addr,
+					Value:    big.NewInt(1000),
+					Gas:      params.TxGas,
+					GasPrice: big.NewInt(params.InitialBaseFee),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), accs[0].key,
+			)
+			b.AddTx(tx1)
+
+			tx2, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[0].addr),
+					To:       &accs[0].addr,
+					Value:    big.NewInt(2000),
+					Gas:      params.TxGas,
+					GasPrice: big.NewInt(params.InitialBaseFee),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), accs[0].key,
+			)
+			b.AddTx(tx2)
+		}
+	})
+
+	block := backend.chain.GetBlockByNumber(1)
+	if block == nil {
+		t.Fatal("Could not get block 1")
+	}
+
+	// Test 1: Pre-Madhugiri block with state-sync receipt that has EMPTY logs
+	t.Run("pre_madhugiri_empty_state_sync_logs", func(t *testing.T) {
+		// Create a state-sync receipt with no logs
+		borReceipt := &types.Receipt{
+			Type:   types.StateSyncTxType,
+			Status: types.ReceiptStatusSuccessful,
+			Logs:   []*types.Log{}, // Empty logs
+		}
+
+		backendWithBor := &testBackendWithPreMadhuguriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		}
+		api := NewBorAPI(backendWithBor)
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// Should have 3 entries: 2 regular txs + 1 state-sync (even though state-sync has no logs)
+		expectedLen := 3
+		if len(result) != expectedLen {
+			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (2 regular + 1 state-sync with empty logs)", len(result), expectedLen)
+		}
+
+		// Verify the state-sync exists as last entry
+		if len(result) > 0 {
+			stateSyncLogs := result[len(result)-1]
+			if len(stateSyncLogs) != 0 {
+				t.Errorf("State-sync logs array has %d entries, want 0 (empty but present)", len(stateSyncLogs))
+			}
+		}
+	})
+
+	// Test 2: Pre-Madhugiri block with state-sync receipt that has NON-EMPTY logs
+	t.Run("pre_madhugiri_nonempty_state_sync_logs", func(t *testing.T) {
+		// Create a state-sync receipt with logs
+		stateSyncAddr := common.HexToAddress("0x0000000000000000000000000000000000001010")
+		borReceipt := &types.Receipt{
+			Type:   types.StateSyncTxType,
+			Status: types.ReceiptStatusSuccessful,
+			Logs: []*types.Log{
+				{
+					Address: stateSyncAddr,
+					Topics:  []common.Hash{common.HexToHash("0x1234")},
+					Data:    []byte{1, 2, 3, 4},
+				},
+			},
+		}
+
+		backendWithBor := &testBackendWithPreMadhuguriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		}
+		api := NewBorAPI(backendWithBor)
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// Should have 3 entries: 2 regular txs + 1 state-sync with logs
+		expectedLen := 3
+		if len(result) != expectedLen {
+			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (2 regular + 1 state-sync)", len(result), expectedLen)
+		}
+
+		// Verify the state-sync entry exists and has logs (last entry)
+		if len(result) > 0 {
+			stateSyncLogs := result[len(result)-1]
+			if len(stateSyncLogs) != 1 {
+				t.Errorf("State-sync logs array has %d entries, want 1", len(stateSyncLogs))
+			}
+			if len(stateSyncLogs) > 0 && stateSyncLogs[0].Address != stateSyncAddr {
+				t.Errorf("State-sync log address = %s, want %s", stateSyncLogs[0].Address, stateSyncAddr)
+			}
+		}
+	})
+
+	// Test 3: Pre-Madhugiri block with no state-sync receipt
+	t.Run("pre_madhugiri_no_state_sync_receipt", func(t *testing.T) {
+		backendWithBor := &testBackendWithPreMadhuguriBorReceipt{
+			testBackend: backend,
+			borReceipt:  nil, // No state-sync receipt
+		}
+		api := NewBorAPI(backendWithBor)
+
+		result, err := api.GetLogsByHash(context.Background(), block.Hash())
+		if err != nil {
+			t.Fatalf("GetLogsByHash() error = %v", err)
+		}
+
+		// Should have 2 entries: only the 2 regular txs, no state-sync
+		expectedLen := 2
+		if len(result) != expectedLen {
+			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (2 regular, no state-sync)", len(result), expectedLen)
 		}
 	})
 }
