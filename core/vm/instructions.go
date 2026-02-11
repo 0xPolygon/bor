@@ -24,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -579,7 +578,6 @@ func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		return nil, err
 	}
 	if evm.depthLog != nil {
-		log.Error("SLOAD depthlog enabled", "contract", scope.Contract.Address(), "slot", hash, "depth", depth)
 		valueBytes := 0
 		if val != (common.Hash{}) {
 			valueBytes = len(val.Bytes())
@@ -588,8 +586,6 @@ func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		txHash, txIndex := evm.depthLogTxMeta()
 		blockHash, blockNumber := evm.depthLogBlockMeta()
 		evm.depthLog.logStorage("SLOAD", scope.Contract.Address(), hash, depth, keyDepth, valueBytes, txHash, txIndex, blockHash, blockNumber)
-	} else {
-		log.Error("SLOAD depthlog disabled", "contract", scope.Contract.Address(), "slot", hash, "depth", depth)
 	}
 	loc.SetBytes(val.Bytes())
 

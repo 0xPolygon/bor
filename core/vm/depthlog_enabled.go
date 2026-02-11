@@ -19,9 +19,9 @@ type depthLogger struct {
 }
 
 var (
-	depthLogOnce      sync.Once
-	depthLogInst      *depthLogger
-	depthLogDiagOnce  sync.Once
+	depthLogOnce     sync.Once
+	depthLogInst     *depthLogger
+	depthLogDiagOnce sync.Once
 )
 
 func initDepthLogger(evm *EVM) {
@@ -29,23 +29,23 @@ func initDepthLogger(evm *EVM) {
 		return
 	}
 	depthLogDiagOnce.Do(func() {
-		log.Error("[depthlog] initDepthLogger first call", "DepthLogPath", evm.Config.DepthLogPath)
+		log.Info("[depthlog] initDepthLogger first call", "DepthLogPath", evm.Config.DepthLogPath)
 	})
 	if evm.Config.DepthLogPath == "" {
 		return
 	}
 	depthLogOnce.Do(func() {
-		log.Error("Initializing depth logger", "path", evm.Config.DepthLogPath)
+		log.Info("Initializing depth logger", "path", evm.Config.DepthLogPath)
 		file, err := os.OpenFile(evm.Config.DepthLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			log.Error("Failed to open depth log file", "path", evm.Config.DepthLogPath, "err", err)
 			return
 		}
 		depthLogInst = &depthLogger{f: file, w: bufio.NewWriter(file)}
-		log.Error("Depth logger initialized successfully", "path", evm.Config.DepthLogPath)
+		log.Info("Depth logger initialized successfully", "path", evm.Config.DepthLogPath)
 	})
 	if depthLogInst == nil {
-		log.Error("Depth logger not available (file open failed?)", "path", evm.Config.DepthLogPath)
+		log.Info("Depth logger not available (file open failed?)", "path", evm.Config.DepthLogPath)
 	}
 	evm.depthLog = depthLogInst
 }

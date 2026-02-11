@@ -23,7 +23,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -80,7 +79,6 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 
 		value := common.Hash(y.Bytes32())
 		if evm.depthLog != nil {
-			log.Error("SSTORE depthlog enabled", "contract", contract.Address(), "slot", slot, "resultDepth", resultDepth)
 			valueBytes := 0
 			if value != (common.Hash{}) {
 				valueBytes = len(value.Bytes())
@@ -89,8 +87,6 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			txHash, txIndex := evm.depthLogTxMeta()
 			blockHash, blockNumber := evm.depthLogBlockMeta()
 			evm.depthLog.logStorage("SSTORE", contract.Address(), slot, resultDepth, keyDepth, valueBytes, txHash, txIndex, blockHash, blockNumber)
-		} else {
-			log.Error("SSTORE depthlog disabled", "contract", contract.Address(), "slot", slot, "resultDepth", resultDepth)
 		}
 
 		if current == value { // noop (1)
