@@ -153,7 +153,6 @@ jobs:
         id: rpc-tests
         working-directory: pos-workflows/tests/rpc_tests
         run: |
-          exit 1
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
