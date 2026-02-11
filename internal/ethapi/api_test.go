@@ -1161,7 +1161,7 @@ func TestCall(t *testing.T) {
 					Balance: big.NewInt(params.Ether),
 					Nonce:   1,
 					Storage: map[common.Hash]common.Hash{
-						common.Hash{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+						{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
 					},
 				},
 			},
@@ -4458,7 +4458,7 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 				Balance: (*hexutil.Big)(big.NewInt(1000000000000000000)),
 				Nonce:   &nonce,
 				State: map[common.Hash]common.Hash{
-					common.Hash{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
+					{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
 				},
 			},
 		}
@@ -4586,8 +4586,68 @@ func (b *testBackend) RPCTxSyncMaxTimeout() time.Duration {
 	}
 	return 5 * time.Minute
 }
+
 func (b *backendMock) RPCTxSyncDefaultTimeout() time.Duration { return 2 * time.Second }
 func (b *backendMock) RPCTxSyncMaxTimeout() time.Duration     { return 5 * time.Minute }
+
+func (b *testBackend) Etherbase() (common.Address, error) {
+	return common.Address{}, nil
+}
+
+func (b *testBackend) Hashrate() (uint64, error) {
+	return 0, nil
+}
+
+func (b *testBackend) Mining() (bool, error) {
+	return false, nil
+}
+
+func (b *testBackend) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *testBackend) GetWork() ([4]string, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) Etherbase() (common.Address, error) {
+	return common.Address{}, nil
+}
+
+func (b *backendMock) Hashrate() (uint64, error) {
+	return 0, nil
+}
+
+func (b *backendMock) Mining() (bool, error) {
+	return false, nil
+}
+
+func (b *backendMock) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *backendMock) GetWork() ([4]string, error) {
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
 
 func makeSignedRaw(t *testing.T, api *TransactionAPI, from, to common.Address, value *big.Int) (hexutil.Bytes, *types.Transaction) {
 	t.Helper()
@@ -4678,4 +4738,409 @@ func TestSendRawTransactionSync_Timeout(t *testing.T) {
 	if got, want := de.ErrorData(), tx.Hash().Hex(); got != want {
 		t.Fatalf("expected ErrorData=%s, got %v", want, got)
 	}
+}
+
+func TestCoinbase(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks        = 5
+		expectedCoinbase = common.HexToAddress("0x1234567890123456789012345678901234567890")
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Etherbase to return our expected address
+	customBackend := &testBackendWithCoinbase{
+		testBackend: backend,
+		coinbase:    expectedCoinbase,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	coinbase, err := api.Coinbase()
+	if err != nil {
+		t.Fatalf("Coinbase() failed: %v", err)
+	}
+
+	if coinbase != expectedCoinbase {
+		t.Errorf("Coinbase() = %v, want %v", coinbase, expectedCoinbase)
+	}
+}
+
+func TestHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks               = 5
+		expectedHashrate uint64 = 12345678
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Hashrate to return our expected value
+	customBackend := &testBackendWithHashrate{
+		testBackend: backend,
+		hashrate:    expectedHashrate,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	hashrate, err := api.Hashrate()
+	if err != nil {
+		t.Fatalf("Hashrate() error = %v", err)
+	}
+
+	if uint64(hashrate) != expectedHashrate {
+		t.Errorf("Hashrate() = %v, want %v", hashrate, expectedHashrate)
+	}
+}
+
+func TestMining(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	// test "node not mining"
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithMining{
+		testBackend: backend,
+		mining:      false,
+	}
+	api := NewEthereumAPI(customBackend)
+
+	mining, err := api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != false {
+		t.Errorf("Mining() = %v, want false", mining)
+	}
+
+	// test "node mining"
+	customBackend.mining = true
+	mining, err = api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != true {
+		t.Errorf("Mining() = %v, want true", mining)
+	}
+}
+
+func TestProtocolVersion(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+		// Expected protocol version (ETH69)
+		expectedVersion uint = 69
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithProtocolVersion{
+		testBackend:     backend,
+		protocolVersion: expectedVersion,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	version := api.ProtocolVersion()
+
+	if uint(version) != expectedVersion {
+		t.Errorf("ProtocolVersion() = %v, want %v", version, expectedVersion)
+	}
+}
+
+func TestGetWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// ethash.NewFaker() is a PoW engine, but Bor's mining backend doesn't implement GetWork
+	work, err := api.GetWork()
+	if err == nil {
+		t.Errorf("GetWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("GetWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if work != [4]string{} {
+		t.Errorf("GetWork() work = %v, want empty array", work)
+	}
+}
+
+func TestSubmitWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitWork with PoW consensus (bor doesn't implement mining work)
+	nonce := types.BlockNonce{}
+	hash := common.Hash{}
+	digest := common.Hash{}
+
+	result, err := api.SubmitWork(nonce, hash, digest)
+	if err == nil {
+		t.Errorf("SubmitWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitWork() = %v, want false", result)
+	}
+}
+
+func TestSubmitHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitHashrate with PoW consensus (bor doesn't implement mining work)
+	rate := hexutil.Uint64(123456)
+	id := common.Hash{}
+
+	result, err := api.SubmitHashrate(rate, id)
+	if err == nil {
+		t.Errorf("SubmitHashrate() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitHashrate() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitHashrate() = %v, want false", result)
+	}
+}
+
+func TestAccountAt(t *testing.T) {
+	t.Parallel()
+
+	// Setup backend with some blocks
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr    = crypto.PubkeyToAddress(key.PublicKey)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: core.GenesisAlloc{
+				addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		signer = types.LatestSigner(genesis.Config)
+	)
+
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		// Create a transaction that changes the account state
+		tx, _ := types.SignTx(types.NewTransaction(b.TxNonce(addr), common.Address{0x01}, big.NewInt(1000), 21000, b.BaseFee(), nil), signer, key)
+		b.AddTx(tx)
+	})
+	api := NewDebugAPI(backend)
+
+	// Get the block 1 hash
+	block, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(1))
+	if err != nil {
+		t.Fatalf("Failed to get block: %v", err)
+	}
+	blockHash := block.Hash()
+
+	t.Run("valid block and transaction", func(t *testing.T) {
+		// Query account state after the first transaction
+		result, err := api.AccountAt(context.Background(), blockHash, 0, addr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+
+		// Check that nonce increased
+		if result.Nonce != 1 {
+			t.Errorf("Expected nonce 1, got %d", result.Nonce)
+		}
+
+		// Check that the balance decreased
+		expectedBalance := new(big.Int).Sub(big.NewInt(params.Ether), big.NewInt(1000))
+		gasUsed := new(big.Int).Mul(big.NewInt(21000), block.BaseFee())
+		expectedBalance.Sub(expectedBalance, gasUsed)
+
+		if result.Balance.ToInt().Cmp(expectedBalance) != 0 {
+			t.Logf("Expected balance %s, got %s", expectedBalance.String(), result.Balance.ToInt().String())
+		}
+
+		// Check that code is empty (not a contract)
+		if len(result.Code) != 0 {
+			t.Errorf("Expected empty code, got %d bytes", len(result.Code))
+		}
+	})
+
+	t.Run("non-existent block", func(t *testing.T) {
+		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		result, err := api.AccountAt(context.Background(), nonExistentHash, 0, addr)
+		if err != nil {
+			t.Fatalf("Expected no error for non-existent block, got: %v", err)
+		}
+		if result != nil {
+			t.Error("Expected nil result for non-existent block")
+		}
+	})
+
+	t.Run("invalid transaction index", func(t *testing.T) {
+		// Query with an out-of-bounds index
+		resultOutOfBounds, err := api.AccountAt(context.Background(), blockHash, 999, addr)
+		if err != nil {
+			t.Fatalf("AccountAt with out-of-bounds index failed: %v", err)
+		}
+		if resultOutOfBounds == nil {
+			t.Fatal("Expected non-nil result even for out-of-range txIndex")
+		}
+
+		// Get the last transaction index (block has at least 1 tx)
+		lastTxIdx := uint64(len(block.Transactions()) - 1)
+		resultAtLast, err := api.AccountAt(context.Background(), blockHash, lastTxIdx, addr)
+		if err != nil {
+			t.Fatalf("AccountAt at last tx index failed: %v", err)
+		}
+
+		// Both queries should return the same state
+		if resultOutOfBounds.Balance.ToInt().Cmp(resultAtLast.Balance.ToInt()) != 0 {
+			t.Errorf("Out-of-bounds query balance mismatch: got %v, want %v",
+				resultOutOfBounds.Balance.ToInt(), resultAtLast.Balance.ToInt())
+		}
+		if resultOutOfBounds.Nonce != resultAtLast.Nonce {
+			t.Errorf("Out-of-bounds query nonce mismatch: got %v, want %v",
+				resultOutOfBounds.Nonce, resultAtLast.Nonce)
+		}
+	})
+
+	t.Run("non-existent account", func(t *testing.T) {
+		// Query account that doesn't exist
+		nonExistentAddr := common.HexToAddress("0x0000000000000000000000000000000000000099")
+		result, err := api.AccountAt(context.Background(), blockHash, 0, nonExistentAddr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result even for non-existent account")
+		}
+
+		// Non-existent account should have zero balance and nonce
+		if result.Balance.ToInt().Cmp(big.NewInt(0)) != 0 {
+			t.Errorf("Expected zero balance for non-existent account, got %s", result.Balance.ToInt().String())
+		}
+		if result.Nonce != 0 {
+			t.Errorf("Expected zero nonce for non-existent account, got %d", result.Nonce)
+		}
+	})
+}
+
+// testBackendWithCoinbase wraps testBackend and overrides Etherbase
+type testBackendWithCoinbase struct {
+	*testBackend
+	coinbase common.Address
+}
+
+func (b *testBackendWithCoinbase) Etherbase() (common.Address, error) {
+	return b.coinbase, nil
+}
+
+// testBackendWithHashrate wraps testBackend and overrides Hashrate
+type testBackendWithHashrate struct {
+	*testBackend
+	hashrate uint64
+}
+
+func (b *testBackendWithHashrate) Hashrate() (uint64, error) {
+	return b.hashrate, nil
+}
+
+// testBackendWithMining wraps testBackend and overrides Mining
+type testBackendWithMining struct {
+	*testBackend
+	mining bool
+}
+
+func (b *testBackendWithMining) Mining() (bool, error) {
+	return b.mining, nil
+}
+
+// testBackendWithProtocolVersion wraps testBackend and overrides ProtocolVersion
+type testBackendWithProtocolVersion struct {
+	*testBackend
+	protocolVersion uint
+}
+
+func (b *testBackendWithProtocolVersion) ProtocolVersion() uint {
+	return b.protocolVersion
 }

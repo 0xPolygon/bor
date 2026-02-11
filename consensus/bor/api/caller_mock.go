@@ -8,14 +8,13 @@ import (
 	context "context"
 	reflect "reflect"
 
-	gomock "go.uber.org/mock/gomock"
-
 	common "github.com/ethereum/go-ethereum/common"
 	hexutil "github.com/ethereum/go-ethereum/common/hexutil"
 	state "github.com/ethereum/go-ethereum/core/state"
 	ethapi "github.com/ethereum/go-ethereum/internal/ethapi"
 	override "github.com/ethereum/go-ethereum/internal/ethapi/override"
 	rpc "github.com/ethereum/go-ethereum/rpc"
+	gomock "github.com/golang/mock/gomock"
 )
 
 // MockCaller is a mock of Caller interface.

@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
@@ -45,6 +46,7 @@ import (
 type Backend interface {
 	// General Ethereum API
 	SyncProgress(ctx context.Context) ethereum.SyncProgress
+	ProtocolVersion() uint
 
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, []*big.Int, []float64, error)
@@ -136,6 +138,14 @@ type Backend interface {
 	// TODO: remove once we stop relying on previous headers for state sync
 	// IsParallelImportActive returns true if parallel stateless import is currently active
 	IsParallelImportActive() bool
+
+	// Mining related APIs
+	Etherbase() (common.Address, error)
+	Hashrate() (uint64, error)
+	Mining() (bool, error)
+	GetWork() ([4]string, error)
+	SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) (bool, error)
+	SubmitHashrate(rate hexutil.Uint64, id common.Hash) (bool, error)
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {

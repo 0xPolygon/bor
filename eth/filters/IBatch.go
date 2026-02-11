@@ -8,7 +8,7 @@ import (
 	reflect "reflect"
 
 	ethdb "github.com/ethereum/go-ethereum/ethdb"
-	gomock "go.uber.org/mock/gomock"
+	gomock "github.com/golang/mock/gomock"
 )
 
 // MockBatch is a mock of Batch interface.
