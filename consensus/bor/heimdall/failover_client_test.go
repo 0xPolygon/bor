@@ -23,13 +23,26 @@ import (
 
 // mockHeimdallClient is a configurable mock implementing the heimdallClient interface.
 type mockHeimdallClient struct {
-	getSpanFn func(ctx context.Context, spanID uint64) (*types.Span, error)
-	closeFn   func()
-	hits      atomic.Int32
+	getSpanFn           func(ctx context.Context, spanID uint64) (*types.Span, error)
+	getLatestSpanFn     func(ctx context.Context) (*types.Span, error)
+	stateSyncEventsFn   func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
+	fetchCheckpointFn   func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
+	fetchCheckpointCntFn func(ctx context.Context) (int64, error)
+	fetchMilestoneFn    func(ctx context.Context) (*milestone.Milestone, error)
+	fetchMilestoneCntFn func(ctx context.Context) (int64, error)
+	fetchStatusFn       func(ctx context.Context) (*ctypes.SyncInfo, error)
+	closeFn             func()
+	hits                atomic.Int32
 }
 
-func (m *mockHeimdallClient) StateSyncEvents(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
+func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+	m.hits.Add(1)
+
+	if m.stateSyncEventsFn != nil {
+		return m.stateSyncEventsFn(ctx, fromID, to)
+	}
+
+	return []*clerk.EventRecordWithTime{}, nil
 }
 
 func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
@@ -42,28 +55,64 @@ func (m *mockHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types
 	return &types.Span{Id: spanID}, nil
 }
 
-func (m *mockHeimdallClient) GetLatestSpan(_ context.Context) (*types.Span, error) {
-	return nil, nil
+func (m *mockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
+	m.hits.Add(1)
+
+	if m.getLatestSpanFn != nil {
+		return m.getLatestSpanFn(ctx)
+	}
+
+	return &types.Span{Id: 99}, nil
 }
 
-func (m *mockHeimdallClient) FetchCheckpoint(_ context.Context, _ int64) (*checkpoint.Checkpoint, error) {
-	return nil, nil
+func (m *mockHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
+	m.hits.Add(1)
+
+	if m.fetchCheckpointFn != nil {
+		return m.fetchCheckpointFn(ctx, number)
+	}
+
+	return &checkpoint.Checkpoint{}, nil
 }
 
-func (m *mockHeimdallClient) FetchCheckpointCount(_ context.Context) (int64, error) {
-	return 0, nil
+func (m *mockHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
+	m.hits.Add(1)
+
+	if m.fetchCheckpointCntFn != nil {
+		return m.fetchCheckpointCntFn(ctx)
+	}
+
+	return 10, nil
 }
 
-func (m *mockHeimdallClient) FetchMilestone(_ context.Context) (*milestone.Milestone, error) {
-	return nil, nil
+func (m *mockHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
+	m.hits.Add(1)
+
+	if m.fetchMilestoneFn != nil {
+		return m.fetchMilestoneFn(ctx)
+	}
+
+	return &milestone.Milestone{}, nil
 }
 
-func (m *mockHeimdallClient) FetchMilestoneCount(_ context.Context) (int64, error) {
-	return 0, nil
+func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
+	m.hits.Add(1)
+
+	if m.fetchMilestoneCntFn != nil {
+		return m.fetchMilestoneCntFn(ctx)
+	}
+
+	return 5, nil
 }
 
-func (m *mockHeimdallClient) FetchStatus(_ context.Context) (*ctypes.SyncInfo, error) {
-	return nil, nil
+func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
+	m.hits.Add(1)
+
+	if m.fetchStatusFn != nil {
+		return m.fetchStatusFn(ctx)
+	}
+
+	return &ctypes.SyncInfo{}, nil
 }
 
 func (m *mockHeimdallClient) Close() {
@@ -308,6 +357,210 @@ func TestFailover_Integration_ServiceUnavailable(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
 }
 
+func TestFailover_StateSyncEvents(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsFn: func(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsFn: func(_ context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
+			return []*clerk.EventRecordWithTime{{EventRecord: clerk.EventRecord{ID: fromID}}}, nil
+		},
+	}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	events, err := fc.StateSyncEvents(context.Background(), 42, 100)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, uint64(42), events[0].ID)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_GetLatestSpan(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getLatestSpanFn: func(_ context.Context) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getLatestSpanFn: func(_ context.Context) (*types.Span, error) {
+			return &types.Span{Id: 77}, nil
+		},
+	}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	span, err := fc.GetLatestSpan(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint64(77), span.Id)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_FetchCheckpoint(t *testing.T) {
+	primary := &mockHeimdallClient{
+		fetchCheckpointFn: func(_ context.Context, _ int64) (*checkpoint.Checkpoint, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	cp, err := fc.FetchCheckpoint(context.Background(), 5)
+	require.NoError(t, err)
+	require.NotNil(t, cp)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_FetchCheckpointCount(t *testing.T) {
+	primary := &mockHeimdallClient{
+		fetchCheckpointCntFn: func(_ context.Context) (int64, error) {
+			return 0, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	count, err := fc.FetchCheckpointCount(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(10), count)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_FetchMilestone(t *testing.T) {
+	primary := &mockHeimdallClient{
+		fetchMilestoneFn: func(_ context.Context) (*milestone.Milestone, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	ms, err := fc.FetchMilestone(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, ms)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_FetchMilestoneCount(t *testing.T) {
+	primary := &mockHeimdallClient{
+		fetchMilestoneCntFn: func(_ context.Context) (int64, error) {
+			return 0, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	count, err := fc.FetchMilestoneCount(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), count)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_FetchStatus(t *testing.T) {
+	primary := &mockHeimdallClient{
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	status, err := fc.FetchStatus(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, int32(1), secondary.hits.Load())
+}
+
+func TestFailover_ProbeBackNonFailoverError(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, ErrShutdownDetected
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Force onto secondary
+	fc.mu.Lock()
+	fc.active = 1
+	fc.lastSwitch = time.Now().Add(-time.Hour) // cooldown already elapsed
+	fc.mu.Unlock()
+
+	// Probe primary → gets ErrShutdownDetected (non-failover error)
+	// Should return the error directly, NOT fall back to secondary
+	secondaryBefore := secondary.hits.Load()
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrShutdownDetected))
+	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should not fall back to secondary on non-failover error during probe")
+}
+
+func TestFailover_SwitchOnPrimaryDeadlineExceeded(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(ctx context.Context, _ uint64) (*types.Span, error) {
+			// Block until the sub-context deadline expires
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	span, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, span)
+	assert.Equal(t, int32(1), primary.hits.Load(), "primary should have been tried")
+	assert.Equal(t, int32(1), secondary.hits.Load(), "should failover on sub-context deadline exceeded")
+}
+
+func TestFailover_SwitchOnPrimaryContextCanceled(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			// Return context.Canceled as if a sub-context was canceled
+			return nil, context.Canceled
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	span, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, span)
+	assert.Equal(t, int32(1), primary.hits.Load(), "primary should have been tried")
+	assert.Equal(t, int32(1), secondary.hits.Load(), "should failover on sub-context canceled")
+}
+
 func TestIsFailoverError(t *testing.T) {
 	ctx := context.Background()
 
@@ -323,6 +576,9 @@ func TestIsFailoverError(t *testing.T) {
 
 	// DeadlineExceeded with live caller ctx should trigger failover
 	assert.True(t, isFailoverError(context.DeadlineExceeded, ctx), "DeadlineExceeded should trigger failover when caller ctx is alive")
+
+	// Canceled with live caller ctx should trigger failover (sub-context was canceled, not the caller)
+	assert.True(t, isFailoverError(context.Canceled, ctx), "Canceled should trigger failover when caller ctx is alive")
 
 	// ErrShutdownDetected should NOT trigger failover
 	assert.False(t, isFailoverError(ErrShutdownDetected, ctx), "ErrShutdownDetected should not trigger failover")
