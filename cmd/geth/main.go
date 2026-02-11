@@ -149,6 +149,7 @@ var (
 		utils.VMTraceJsonConfigFlag,
 		utils.VMWitnessStatsFlag,
 		utils.VMStatelessSelfValidationFlag,
+		utils.VMDepthLogFlag,
 		utils.NetworkIdFlag,
 		utils.EthStatsURLFlag,
 		utils.GpoBlocksFlag,

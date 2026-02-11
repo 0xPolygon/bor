@@ -1215,6 +1215,14 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Witness.FastForwardThreshold,
 	})
 
+	// VM depth logging
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vm.depthlog",
+		Usage:   "Write SLOAD/SSTORE depth log to file (requires depthlog build tag)",
+		Value:   &c.cliConfig.VMDepthLogPath,
+		Default: c.cliConfig.VMDepthLogPath,
+	})
+
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "dev.gaslimit",
 		Usage:   "Initial block gas limit",

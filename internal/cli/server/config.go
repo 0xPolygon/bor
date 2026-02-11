@@ -67,6 +67,9 @@ type Config struct {
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
+	// VMDepthLogPath enables SLOAD/SSTORE depth logging to a file (requires depthlog build tag)
+	VMDepthLogPath string `hcl:"vm.depthlog,optional" toml:"vm.depthlog,optional"`
+
 	// DataDir is the directory to store the state in
 	DataDir string `hcl:"datadir,optional" toml:"datadir,optional"`
 
@@ -1166,6 +1169,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
 	n.EnableStateSizeTracking = c.StateSizeTracking
+	n.VMDepthLogPath = c.VMDepthLogPath
 
 	// txpool options
 	{
