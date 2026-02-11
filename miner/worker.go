@@ -1782,8 +1782,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 				}
 			}()
 			w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+			// Goroutine exits naturally after prefetch completes.
+			// Go's GC keeps throwaway StateDB alive while this goroutine references it.
+			// When the goroutine exits, the reference is released and GC can collect it.
 		}()
 	}
+
 	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
 }
 
@@ -1869,8 +1873,14 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	number := new(big.Int).Add(parent.Number, common.Big1)
 	filter := w.buildDefaultFilter(baseFee, number)
 	filter.BlobTxs = false
+
+	// Acquire read lock to safely access w.extra in makeHeader
+	w.mu.RLock()
 	header, _, err := w.makeHeader(genParams, false)
+	w.mu.RUnlock()
+
 	if err != nil {
+		log.Warn("Prefetch failed to create header", "err", err)
 		return
 	}
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)

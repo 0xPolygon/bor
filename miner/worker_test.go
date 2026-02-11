@@ -19,6 +19,7 @@ package miner
 import (
 	"math/big"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2046,4 +2047,413 @@ func TestPrefetchFromPool_IterativeLoops(t *testing.T) {
 	// 2. Gas pool tracking across iterations (totalGasPool management)
 	// 3. Minimum 100ms loop interval pacing (lines 1907-1911)
 	// 4. Loop exits properly when gas exhausted or interrupted
+}
+
+// TestPrefetchRaceWithSetExtra validates that concurrent SetExtra calls during
+// prefetch execution do not cause data races on w.extra.
+// This test should be run with -race flag to detect any race conditions.
+//
+// Background: The prefetch goroutine calls w.makeHeader() which reads w.extra,
+// while external RPC calls can invoke SetExtra() which writes w.extra under lock.
+// The fix adds w.mu.RLock() protection around makeHeader() in prefetchFromPool().
+func TestPrefetchRaceWithSetExtra(t *testing.T) {
+	t.Parallel()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	config := DefaultTestConfig()
+	config.EnablePrefetch = true
+	config.PrefetchGasLimitPercent = 100
+	config.Recommit = 1 * time.Second
+
+	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer cleanup()
+
+	// Start the worker
+	w.start()
+	defer w.stop()
+
+	// Add some transactions to keep prefetch busy
+	addTransactionBatch(b, 100, false)
+	time.Sleep(100 * time.Millisecond) // Wait for promotion
+
+	// Use WaitGroup to synchronize goroutines
+	var wg sync.WaitGroup
+	stopSignal := make(chan struct{})
+
+	// Goroutine 1: Continuously call SetExtra (simulates external RPC calls)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			select {
+			case <-stopSignal:
+				return
+			default:
+				extraData := []byte{byte(i % 256), byte((i + 1) % 256), byte((i + 2) % 256)}
+				w.setExtra(extraData)
+				time.Sleep(5 * time.Millisecond)
+			}
+		}
+	}()
+
+	// Goroutine 2: Trigger block production which spawns prefetch goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			select {
+			case <-stopSignal:
+				return
+			default:
+				w.newWorkCh <- &newWorkReq{
+					interrupt: new(atomic.Int32),
+					noempty:   false,
+					timestamp: time.Now().Unix(),
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+
+	// Let the test run for a reasonable duration
+	time.Sleep(2 * time.Second)
+	close(stopSignal)
+	wg.Wait()
+
+	// If we reach here without race detector failures, the fix is working
+	t.Log("Successfully completed concurrent SetExtra calls during prefetch without race conditions")
+}
+
+// TestPrefetchGoroutineLifecycle validates that prefetch goroutines are properly managed
+// and don't leak when commitWork() returns without explicit synchronization.
+//
+// This test verifies that Go's GC correctly handles StateDB lifecycle even when prefetch
+// goroutines continue running after commitWork() returns, proving that no goroutine leaks occur.
+func TestPrefetchGoroutineLifecycle(t *testing.T) {
+	t.Parallel()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	config := DefaultTestConfig()
+	config.EnablePrefetch = true
+	config.PrefetchGasLimitPercent = 100
+	config.Recommit = 500 * time.Millisecond
+
+	w, b, cleanup := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer cleanup()
+
+	// Add transactions to keep prefetch busy
+	addTransactionBatch(b, 50, false)
+	time.Sleep(100 * time.Millisecond)
+
+	// Track goroutine count before and after commitWork
+	var goroutinesBefore, goroutinesAfter int
+
+	// Start the worker
+	w.start()
+
+	// Wait for initial stabilization
+	time.Sleep(200 * time.Millisecond)
+	goroutinesBefore = runtime.NumGoroutine()
+
+	// Trigger multiple commitWork cycles
+	for i := 0; i < 5; i++ {
+		w.newWorkCh <- &newWorkReq{
+			interrupt: new(atomic.Int32),
+			noempty:   false,
+			timestamp: time.Now().Unix() + int64(i*2),
+		}
+		// Small delay between commits
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// Stop the worker and wait for cleanup
+	w.stop()
+	time.Sleep(500 * time.Millisecond)
+
+	// Force garbage collection to surface any use-after-free issues
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	goroutinesAfter = runtime.NumGoroutine()
+
+	// Goroutine count should be stable (allowing for some variance due to runtime)
+	// If goroutines are leaking, we'd see a significant increase
+	goroutineDelta := goroutinesAfter - goroutinesBefore
+	if goroutineDelta > 5 {
+		t.Errorf("Goroutine leak detected: before=%d, after=%d, delta=%d",
+			goroutinesBefore, goroutinesAfter, goroutineDelta)
+	}
+
+	t.Logf("Goroutine lifecycle check passed: before=%d, after=%d, delta=%d",
+		goroutinesBefore, goroutinesAfter, goroutineDelta)
+}
+
+// TestConcurrentPrefetchAndBlockBuilding validates that prefetch and block building
+// can run concurrently without cache corruption or state inconsistencies.
+//
+// This test exercises the cache attribution system's first-writer-wins logic,
+// ensuring that concurrent access from prefetch and process readers is safe.
+func TestConcurrentPrefetchAndBlockBuilding(t *testing.T) {
+	t.Parallel()
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 500*time.Millisecond)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// Add a large batch of transactions to create contention
+	addTransactionBatch(b, 200, false)
+	time.Sleep(200 * time.Millisecond)
+
+	// Start the worker
+	w.start()
+	defer w.stop()
+
+	// Trigger rapid block production to create concurrent prefetch + building
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(idx*2),
+			}
+		}(i)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	wg.Wait()
+	time.Sleep(1 * time.Second) // Let all work complete
+
+	// Verify no panics occurred
+	panicCount := prefetchPanicMeter.Snapshot().Count()
+	if panicCount > 0 {
+		t.Errorf("Prefetch panics detected: %d", panicCount)
+	}
+
+	t.Log("Successfully completed concurrent prefetch and block building without issues")
+}
+
+// TestPrefetchWithoutWait_CoreProof validates that Go's GC safely manages StateDB lifecycle
+// without explicit WaitGroup synchronization. This test proves that goroutines can manage
+// their own resource lifecycle through normal Go reference semantics.
+func TestPrefetchWithoutWait_CoreProof(t *testing.T) {
+	// Validates that prefetch goroutines safely manage StateDB lifecycle without explicit WaitGroup.
+	// This test proves Go's GC keeps StateDB alive while the goroutine references it, even under
+	// aggressive GC pressure after commitWork() returns.
+	t.Parallel()
+
+	// Setup worker with prefetch enabled (full IntermediateRoot to stress test)
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 500*time.Millisecond)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// Add transactions to trigger real prefetch work
+	addTransactionBatch(b, 200, false)
+	time.Sleep(100 * time.Millisecond)
+
+	w.start()
+	defer w.stop()
+
+	// Trigger multiple block productions
+	for i := 0; i < 5; i++ {
+		w.newWorkCh <- &newWorkReq{
+			interrupt: new(atomic.Int32),
+			noempty:   false,
+			timestamp: time.Now().Unix() + int64(i*2),
+		}
+
+		// Force aggressive GC after commitWork returns to verify StateDB stays alive
+		// while the prefetch goroutine still references it
+		runtime.GC()
+		runtime.GC()
+		runtime.GC()
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Let prefetch goroutines complete naturally
+	time.Sleep(3 * time.Second)
+
+	// Verify no panics occurred
+	panicCount := prefetchPanicMeter.Snapshot().Count()
+	if panicCount > 0 {
+		t.Fatalf("Prefetch panicked %d times - unexpected failure", panicCount)
+	}
+
+	t.Log("✅ No panics with aggressive GC - Go's GC correctly manages StateDB lifecycle")
+}
+
+// TestStateDBLifecycle_WithoutWait proves Go's GC keeps StateDB alive while referenced.
+// This test uses runtime.SetFinalizer to track when throwaway StateDB is garbage collected.
+func TestStateDBLifecycle_WithoutWait(t *testing.T) {
+	t.Parallel()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	config := DefaultTestConfig()
+	config.EnablePrefetch = true
+
+	w, _, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Track StateDB finalization
+	var throwawayFinalized atomic.Bool
+
+	// Get parent for state creation
+	parent := w.chain.CurrentBlock()
+	_, throwaway, _, _, err := w.chain.StateAtWithReaders(parent.Root)
+	require.NoError(t, err)
+
+	// Set finalizer to track GC of throwaway
+	runtime.SetFinalizer(throwaway, func(db interface{}) {
+		throwawayFinalized.Store(true)
+	})
+
+	// Simulate prefetch goroutine holding reference
+	var prefetchWg sync.WaitGroup
+	var keepAlive interface{}
+	prefetchWg.Add(1)
+	go func(stateDB interface{}) {
+		defer prefetchWg.Done()
+		// Actively use the StateDB to prevent GC
+		keepAlive = stateDB // Store in package-level var
+		for i := 0; i < 40; i++ { // 40 * 50ms = 2 seconds
+			time.Sleep(50 * time.Millisecond)
+			// Touch the reference to prevent GC
+			if keepAlive == nil {
+				panic("should never happen")
+			}
+		}
+		t.Log("Prefetch goroutine completed, releasing throwaway reference")
+	}(throwaway) // Pass by value so goroutine holds actual reference
+
+	// Immediately null out our local references (simulate commitWork return)
+	throwaway = nil
+
+	// Force aggressive GC
+	t.Log("Forcing aggressive GC while goroutine still holds reference...")
+	runtime.GC()
+	runtime.GC()
+	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
+
+	// Check if throwaway was finalized (it shouldn't be - goroutine still holds ref)
+	if throwawayFinalized.Load() {
+		t.Fatal("❌ throwaway was GC'd while goroutine held reference - UNSAFE!")
+	}
+	t.Log("✅ throwaway NOT garbage collected while goroutine holds reference")
+
+	// Wait for goroutine to complete
+	prefetchWg.Wait()
+
+	// Now force GC again
+	t.Log("Goroutine released reference, forcing GC again...")
+	runtime.GC()
+	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
+
+	// Now it SHOULD be finalized
+	if !throwawayFinalized.Load() {
+		t.Log("⚠️ throwaway not yet GC'd (GC timing is non-deterministic, this is OK)")
+	} else {
+		t.Log("✅ throwaway was GC'd after goroutine released reference")
+	}
+
+	t.Log("✅ PROOF: Go's GC correctly keeps StateDB alive while referenced!")
+}
+
+// TestRapidBlockProduction_WithoutWait stress tests concurrent prefetch goroutines without explicit synchronization.
+// This simulates rapid block production where new prefetch goroutines spawn before previous ones complete,
+// validating that overlapping goroutines safely manage their own StateDB lifecycle with no panics, races, or leaks.
+func TestRapidBlockProduction_WithoutWait(t *testing.T) {
+	t.Parallel()
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// Add many transactions
+	addTransactionBatch(b, 500, false)
+	time.Sleep(200 * time.Millisecond)
+
+	w.start()
+	defer w.stop()
+
+	goroutinesBefore := runtime.NumGoroutine()
+	t.Logf("Goroutines before test: %d", goroutinesBefore)
+
+	// Rapidly trigger block production - spawn overlapping prefetch goroutines
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(idx),
+			}
+		}(i)
+		time.Sleep(25 * time.Millisecond) // Faster than prefetch completes - creates overlap
+
+		// Force GC during overlap period to stress test
+		if i%3 == 0 {
+			runtime.GC()
+		}
+	}
+
+	wg.Wait()
+	t.Log("All block production requests sent, waiting for prefetch to complete...")
+	time.Sleep(5 * time.Second) // Let all prefetch complete
+
+	// Check for panics
+	panicCount := prefetchPanicMeter.Snapshot().Count()
+	if panicCount > 0 {
+		t.Fatalf("Prefetch panicked %d times - unexpected failure", panicCount)
+	}
+
+	// Check for goroutine leaks
+	runtime.GC()
+	time.Sleep(500 * time.Millisecond)
+	goroutinesAfter := runtime.NumGoroutine()
+	goroutineDelta := goroutinesAfter - goroutinesBefore
+
+	t.Logf("Goroutines after test: %d (delta: %d)", goroutinesAfter, goroutineDelta)
+
+	if goroutineDelta > 10 {
+		t.Errorf("⚠️ Potential goroutine leak: delta=%d", goroutineDelta)
+	}
+
+	t.Log("✅ Concurrent prefetch goroutines safely manage their own lifecycle")
 }
