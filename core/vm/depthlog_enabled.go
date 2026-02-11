@@ -12,10 +12,14 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+const depthLogMaxBytes = 10 * 1024 * 1024 * 1024 // 10 GB
+
 type depthLogger struct {
-	mu sync.Mutex
-	f  *os.File
-	w  *bufio.Writer
+	mu           sync.Mutex
+	f            *os.File
+	w            *bufio.Writer
+	bytesWritten int64
+	stopped      bool
 }
 
 var (
@@ -41,8 +45,12 @@ func initDepthLogger(evm *EVM) {
 			log.Error("Failed to open depth log file", "path", evm.Config.DepthLogPath, "err", err)
 			return
 		}
-		depthLogInst = &depthLogger{f: file, w: bufio.NewWriter(file)}
-		log.Info("Depth logger initialized successfully", "path", evm.Config.DepthLogPath)
+		var initialSize int64
+		if info, serr := file.Stat(); serr == nil {
+			initialSize = info.Size()
+		}
+		depthLogInst = &depthLogger{f: file, w: bufio.NewWriter(file), bytesWritten: initialSize}
+		log.Info("Depth logger initialized successfully", "path", evm.Config.DepthLogPath, "existingBytes", initialSize)
 	})
 	if depthLogInst == nil {
 		log.Info("Depth logger not available (file open failed?)", "path", evm.Config.DepthLogPath)
@@ -56,17 +64,28 @@ func (l *depthLogger) logStorage(op string, addr common.Address, slot common.Has
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.stopped {
+		return
+	}
+	if l.bytesWritten >= depthLogMaxBytes {
+		l.stopped = true
+		_ = l.w.Flush()
+		log.Warn("Depth log file size limit reached, stopping logging", "limit", depthLogMaxBytes, "bytesWritten", l.bytesWritten)
+		return
+	}
+	var n int
 	switch {
 	case txHash != (common.Hash{}) && txIndex >= 0 && blockHash != (common.Hash{}) && blockNumber > 0:
-		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d,\"bh\":\"%s\",\"bn\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex, blockHash.Hex(), blockNumber)
+		n, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d,\"bh\":\"%s\",\"bn\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex, blockHash.Hex(), blockNumber)
 	case txHash != (common.Hash{}) && txIndex >= 0:
-		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex)
+		n, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex)
 	case txHash != (common.Hash{}):
-		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\"}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex())
+		n, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\"}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex())
 	case txIndex >= 0:
-		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txIndex)
+		n, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txIndex)
 	default:
-		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes)
+		n, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes)
 	}
+	l.bytesWritten += int64(n)
 	_ = l.w.Flush()
 }
