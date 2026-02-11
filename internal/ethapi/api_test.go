@@ -5889,6 +5889,321 @@ func (b *testBackendWithBorReceipt) ChainConfig() *params.ChainConfig {
 	return params.TestChainConfig
 }
 
+func TestBorForks(t *testing.T) {
+	t.Parallel()
+
+	// Test 1: Basic fork retrieval with TestChainConfig
+	t.Run("basic_forks_retrieval", func(t *testing.T) {
+		var (
+			accs    = newAccounts(1)
+			genesis = &core.Genesis{
+				Config: params.TestChainConfig,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify genesis hash is set
+		genesisBlock := backend.chain.GetBlockByNumber(0)
+		if result.GenesisHash != genesisBlock.Hash() {
+			t.Errorf("GenesisHash = %s, want %s", result.GenesisHash, genesisBlock.Hash())
+		}
+
+		// TestChainConfig has all forks at block 0, which get filtered
+		// So, HeightForks should be nil
+		if result.HeightForks != nil {
+			t.Errorf("HeightForks should be nil when all forks are at block 0, got %v", result.HeightForks)
+		}
+	})
+
+	// Test 2: Verify forks are sorted
+	t.Run("forks_are_sorted", func(t *testing.T) {
+		var (
+			accs = newAccounts(1)
+			// Create config with multiple forks at different blocks
+			config = &params.ChainConfig{
+				ChainID:             big.NewInt(1337),
+				HomesteadBlock:      big.NewInt(0),
+				EIP150Block:         big.NewInt(5),
+				EIP155Block:         big.NewInt(5),
+				EIP158Block:         big.NewInt(5),
+				ByzantiumBlock:      big.NewInt(20),
+				ConstantinopleBlock: big.NewInt(30),
+				PetersburgBlock:     big.NewInt(30),
+				IstanbulBlock:       big.NewInt(40),
+				BerlinBlock:         big.NewInt(50),
+				LondonBlock:         big.NewInt(60),
+			}
+			genesis = &core.Genesis{
+				Config: config,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify HeightForks are sorted in ascending order
+		for i := 1; i < len(result.HeightForks); i++ {
+			if result.HeightForks[i] < result.HeightForks[i-1] {
+				t.Errorf("HeightForks not sorted: %v at index %d is less than %v at index %d",
+					result.HeightForks[i], i, result.HeightForks[i-1], i-1)
+			}
+		}
+
+		// Verify no forks at block 0 (genesis)
+		if len(result.HeightForks) > 0 && result.HeightForks[0] == 0 {
+			t.Error("HeightForks contains block 0 (genesis), which should be filtered out")
+		}
+	})
+
+	// Test 3: Verify forks are deduplicated
+	t.Run("forks_are_deduplicated", func(t *testing.T) {
+		var (
+			accs = newAccounts(1)
+			// Create config with duplicate fork blocks
+			config = &params.ChainConfig{
+				ChainID:        big.NewInt(1337),
+				HomesteadBlock: big.NewInt(0),
+				EIP150Block:    big.NewInt(10),
+				EIP155Block:    big.NewInt(10), // Same block as EIP150
+				EIP158Block:    big.NewInt(10), // Same block as EIP155
+				ByzantiumBlock: big.NewInt(20),
+			}
+			genesis = &core.Genesis{
+				Config: config,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify no duplicates in HeightForks
+		seen := make(map[uint64]bool)
+		for _, fork := range result.HeightForks {
+			if seen[fork] {
+				t.Errorf("Duplicate fork found at block %d", fork)
+			}
+			seen[fork] = true
+		}
+	})
+
+	// Test 4: Bor-specific forks are included
+	t.Run("bor_forks_included", func(t *testing.T) {
+		var (
+			accs = newAccounts(1)
+			// Use a minimal config with just Bor forks to test their inclusion
+			config = &params.ChainConfig{
+				ChainID:             big.NewInt(137), // Polygon mainnet
+				HomesteadBlock:      big.NewInt(0),
+				EIP150Block:         big.NewInt(0),
+				EIP155Block:         big.NewInt(0),
+				EIP158Block:         big.NewInt(0),
+				ByzantiumBlock:      big.NewInt(0),
+				ConstantinopleBlock: big.NewInt(0),
+				PetersburgBlock:     big.NewInt(0),
+				IstanbulBlock:       big.NewInt(0),
+				BerlinBlock:         big.NewInt(0),
+				Bor: &params.BorConfig{
+					JaipurBlock:    big.NewInt(50),
+					DelhiBlock:     big.NewInt(60),
+					IndoreBlock:    big.NewInt(70),
+					MadhugiriBlock: big.NewInt(80),
+				},
+			}
+			genesis = &core.Genesis{
+				Config: config,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify Bor forks are present
+		expectedBorForks := []uint64{50, 60, 70, 80}
+		for _, expected := range expectedBorForks {
+			found := false
+			for _, fork := range result.HeightForks {
+				if fork == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Expected Bor fork at block %d not found in HeightForks", expected)
+			}
+		}
+	})
+
+	// Test 5: Return type verification
+	t.Run("returns_forks_struct", func(t *testing.T) {
+		var (
+			accs    = newAccounts(1)
+			genesis = &core.Genesis{
+				Config: params.TestChainConfig,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify it's the correct type
+		var _ Forks = result
+
+		// Verify struct fields are accessible
+		_ = result.GenesisHash
+		_ = result.HeightForks
+		_ = result.TimeForks
+	})
+
+	// Test 6: JSON marshaling
+	t.Run("json_output", func(t *testing.T) {
+		var (
+			accs = newAccounts(1)
+			// Config with height forks but no time forks
+			config = &params.ChainConfig{
+				ChainID:        big.NewInt(1337),
+				HomesteadBlock: big.NewInt(0),
+				EIP150Block:    big.NewInt(10),
+				EIP155Block:    big.NewInt(10),
+				EIP158Block:    big.NewInt(10),
+			}
+			genesis = &core.Genesis{
+				Config: config,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// Verify HeightForks is non-nil (has forks)
+		if result.HeightForks == nil {
+			t.Error("HeightForks should not be nil when forks exist")
+		}
+
+		// Verify TimeForks is nil (no time-based forks)
+		// This ensures JSON marshaling outputs "timeForks":null instead of "timeForks":[]
+		if result.TimeForks != nil {
+			t.Errorf("TimeForks should be nil when no time-based forks exist, got %v", result.TimeForks)
+		}
+
+		// Marshal to JSON to verify the format
+		jsonBytes, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("JSON marshal error = %v", err)
+		}
+
+		// Verify JSON contains "timeForks":null (not "timeForks":[])
+		jsonStr := string(jsonBytes)
+		if !strings.Contains(jsonStr, `"timeForks":null`) {
+			t.Errorf("JSON should contain '\"timeForks\":null', got: %s", jsonStr)
+		}
+	})
+
+	// Test 7: Edge case - all forks at block 0 get filtered to nil
+	t.Run("all_genesis_forks_filtered_to_null", func(t *testing.T) {
+		var (
+			accs = newAccounts(1)
+			// Config with all forks at block 0 (genesis)
+			config = &params.ChainConfig{
+				ChainID:             big.NewInt(1337),
+				HomesteadBlock:      big.NewInt(0),
+				EIP150Block:         big.NewInt(0),
+				EIP155Block:         big.NewInt(0),
+				EIP158Block:         big.NewInt(0),
+				ByzantiumBlock:      big.NewInt(0),
+				ConstantinopleBlock: big.NewInt(0),
+				PetersburgBlock:     big.NewInt(0),
+				IstanbulBlock:       big.NewInt(0),
+				BerlinBlock:         big.NewInt(0),
+				LondonBlock:         big.NewInt(0),
+			}
+			genesis = &core.Genesis{
+				Config: config,
+				Alloc: types.GenesisAlloc{
+					accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		result, err := api.Forks(context.Background())
+		if err != nil {
+			t.Fatalf("Forks() error = %v", err)
+		}
+
+		// All forks at block 0 should be filtered out, leaving nil
+		if result.HeightForks != nil {
+			t.Errorf("HeightForks should be nil when all forks are at block 0, got %v", result.HeightForks)
+		}
+
+		// Marshal to JSON to verify both are null
+		jsonBytes, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("JSON marshal error = %v", err)
+		}
+
+		jsonStr := string(jsonBytes)
+		// Both should be null, not []
+		if !strings.Contains(jsonStr, `"heightForks":null`) {
+			t.Errorf("JSON should contain '\"heightForks\":null', got: %s", jsonStr)
+		}
+		if !strings.Contains(jsonStr, `"timeForks":null`) {
+			t.Errorf("JSON should contain '\"timeForks\":null', got: %s", jsonStr)
+		}
+	})
+}
+
 // testBackendWithCoinbase wraps testBackend and overrides Etherbase
 type testBackendWithCoinbase struct {
 	*testBackend

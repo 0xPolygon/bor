@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -342,4 +343,43 @@ func (api *BorAPI) BlockNumber(ctx context.Context, blockNrPtr *rpc.BlockNumber)
 	}
 
 	return hexutil.Uint64(blockNum), nil
+}
+
+// Forks is a data type to record a list of forks
+type Forks struct {
+	GenesisHash common.Hash `json:"genesis"`
+	HeightForks []uint64    `json:"heightForks"`
+	TimeForks   []uint64    `json:"timeForks"`
+}
+
+// Forks implements bor_forks. Returns the genesis block hash and a sorted list of all forks block numbers.
+//
+// Returns:
+//   - GenesisHash: The hash of the genesis block
+//   - HeightForks: Sorted list of all block number forks
+//   - TimeForks: Sorted list of all timestamp forks
+func (api *BorAPI) Forks(ctx context.Context) (Forks, error) {
+	// Get genesis block
+	genesis, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(0))
+	if err != nil {
+		return Forks{}, err
+	}
+	if genesis == nil {
+		return Forks{}, errors.New("genesis block not found")
+	}
+
+	// Get chain config
+	chainConfig := api.b.ChainConfig()
+	if chainConfig == nil {
+		return Forks{}, errors.New("chain config not found")
+	}
+
+	// Gather forks from chain config
+	heightForks, timeForks := forkid.GatherForks(chainConfig, genesis.Time())
+
+	return Forks{
+		GenesisHash: genesis.Hash(),
+		HeightForks: heightForks,
+		TimeForks:   timeForks,
+	}, nil
 }
