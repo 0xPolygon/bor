@@ -141,8 +141,16 @@ jobs:
           polycli version
 
       - name: Run stateless e2e tests
+        id: stateless-tests
         working-directory: pos-workflows/tests/stateless_tests
         run: bash kurtosis_stateless_test.sh
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: always() && steps.stateless-tests.outcome == 'failure'
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
 
       # Clean up
       - name: Post kurtosis run
