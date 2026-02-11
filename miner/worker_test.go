@@ -2140,7 +2140,8 @@ func TestPrefetchRaceWithSetExtra(t *testing.T) {
 // This test verifies that Go's GC correctly handles StateDB lifecycle even when prefetch
 // goroutines continue running after commitWork() returns, proving that no goroutine leaks occur.
 func TestPrefetchGoroutineLifecycle(t *testing.T) {
-	t.Parallel()
+	// Note: t.Parallel() removed - this test measures global goroutine count
+	// and must run serially to avoid interference from other parallel tests
 
 	var (
 		engine      consensus.Engine
@@ -2396,7 +2397,8 @@ func TestStateDBLifecycle_WithoutWait(t *testing.T) {
 // This simulates rapid block production where new prefetch goroutines spawn before previous ones complete,
 // validating that overlapping goroutines safely manage their own StateDB lifecycle with no panics, races, or leaks.
 func TestRapidBlockProduction_WithoutWait(t *testing.T) {
-	t.Parallel()
+	// Note: t.Parallel() removed - this test measures global goroutine count
+	// and must run serially to avoid interference from other parallel tests
 
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 200*time.Millisecond)
 	defer engine.Close()
@@ -2462,7 +2464,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 // This integration test covers metrics tracking, cache effectiveness, and ensures no goroutine leaks
 // occur during normal block production with prefetch enabled.
 func TestPrefetchE2E(t *testing.T) {
-	t.Parallel()
+	// Note: t.Parallel() removed - this test measures global goroutine count
+	// and must run serially to avoid interference from other parallel tests
 
 	// Setup worker with prefetch enabled
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
@@ -2599,7 +2602,8 @@ func TestReorgDuringPrefetch(t *testing.T) {
 // This test produces 10 consecutive blocks with prefetch enabled, monitoring for
 // goroutine leaks, memory accumulation, and consistent prefetch behavior.
 func TestPrefetchMultiBlock(t *testing.T) {
-	t.Parallel()
+	// Note: t.Parallel() removed - this test measures global goroutine count
+	// and must run serially to avoid interference from other parallel tests
 
 	// Setup worker with prefetch enabled
 	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
