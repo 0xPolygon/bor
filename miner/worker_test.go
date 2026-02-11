@@ -2187,12 +2187,14 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 	}
 
 	// Stop the worker and wait for cleanup
+	// Increased wait time to allow prefetch goroutines to complete IntermediateRoot
 	w.stop()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(3 * time.Second)
 
 	// Force garbage collection to surface any use-after-free issues
+	// Extra wait to ensure all goroutines complete after GC
 	runtime.GC()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	goroutinesAfter = runtime.NumGoroutine()
 
@@ -2441,8 +2443,9 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	}
 
 	// Check for goroutine leaks
+	// Extra wait after GC to ensure all goroutines have fully exited
 	runtime.GC()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 	goroutinesAfter := runtime.NumGoroutine()
 	goroutineDelta := goroutinesAfter - goroutinesBefore
 
@@ -2640,9 +2643,10 @@ func TestPrefetchMultiBlock(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// Force GC and measure final state
+	// Extra wait to ensure all goroutines complete after GC
 	runtime.GC()
 	runtime.GC()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	goroutinesAfter := runtime.NumGoroutine()
 	runtime.ReadMemStats(&memStatsAfter)

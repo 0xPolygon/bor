@@ -1974,10 +1974,22 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 			}
 		}
 		// Calculate elapsed time and wait if necessary to ensure minimum 100ms interval
+		// Check interrupt flag every 10ms during wait for responsive shutdown
 		elapsed := time.Since(loopStart)
 		if elapsed < minLoopInterval {
-			waitTime := minLoopInterval - elapsed
-			<-time.After(waitTime)
+			checkInterval := 10 * time.Millisecond
+
+			for remaining := minLoopInterval - elapsed; remaining > 0; remaining = minLoopInterval - time.Since(loopStart) {
+				if interruptPrefetch.Load() {
+					return
+				}
+
+				sleepDuration := checkInterval
+				if remaining < checkInterval {
+					sleepDuration = remaining
+				}
+				time.Sleep(sleepDuration)
+			}
 		}
 	}
 }
