@@ -2675,3 +2675,182 @@ func TestPrefetchMultiBlock(t *testing.T) {
 
 	t.Log("✅ Prefetch remained stable over multiple block productions")
 }
+
+// BenchmarkBlockProductionLatency compares block production latency with and without prefetch.
+// This benchmark measures the time to produce blocks to understand the impact of prefetch.
+func BenchmarkBlockProductionLatency(b *testing.B) {
+	b.Run("WithPrefetch", func(b *testing.B) {
+		var (
+			engine      consensus.Engine
+			chainConfig = params.BorUnittestChainConfig
+			db          = rawdb.NewMemoryDatabase()
+			ctrl        *gomock.Controller
+		)
+
+		engine, ctrl = getFakeBorFromConfig(&testing.T{}, chainConfig)
+		defer engine.Close()
+		defer ctrl.Finish()
+
+		config := DefaultTestConfig()
+		config.EnablePrefetch = true
+		config.PrefetchGasLimitPercent = 100
+		config.Recommit = 500 * time.Millisecond
+
+		w, backend, _ := newTestWorker(&testing.T{}, config, chainConfig, engine, db, false, 0)
+		defer w.close()
+
+		addTransactionBatch(backend, 200, false)
+		time.Sleep(100 * time.Millisecond)
+
+		w.start()
+		defer w.stop()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(i),
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	})
+
+	b.Run("WithoutPrefetch", func(b *testing.B) {
+		var (
+			engine      consensus.Engine
+			chainConfig = params.BorUnittestChainConfig
+			db          = rawdb.NewMemoryDatabase()
+			ctrl        *gomock.Controller
+		)
+
+		engine, ctrl = getFakeBorFromConfig(&testing.T{}, chainConfig)
+		defer engine.Close()
+		defer ctrl.Finish()
+
+		config := DefaultTestConfig()
+		config.EnablePrefetch = false
+		config.Recommit = 500 * time.Millisecond
+
+		w, backend, _ := newTestWorker(&testing.T{}, config, chainConfig, engine, db, false, 0)
+		defer w.close()
+
+		addTransactionBatch(backend, 200, false)
+		time.Sleep(100 * time.Millisecond)
+
+		w.start()
+		defer w.stop()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(i),
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	})
+}
+
+// BenchmarkPrefetchMemoryOverhead measures memory overhead of prefetch.
+func BenchmarkPrefetchMemoryOverhead(b *testing.B) {
+	b.Run("WithPrefetch", func(b *testing.B) {
+		var (
+			engine      consensus.Engine
+			chainConfig = params.BorUnittestChainConfig
+			db          = rawdb.NewMemoryDatabase()
+			ctrl        *gomock.Controller
+		)
+
+		engine, ctrl = getFakeBorFromConfig(&testing.T{}, chainConfig)
+		defer engine.Close()
+		defer ctrl.Finish()
+
+		config := DefaultTestConfig()
+		config.EnablePrefetch = true
+		config.PrefetchGasLimitPercent = 100
+		config.Recommit = 1 * time.Second
+
+		w, backend, _ := newTestWorker(&testing.T{}, config, chainConfig, engine, db, false, 0)
+		defer w.close()
+
+		addTransactionBatch(backend, 250, false)
+		time.Sleep(200 * time.Millisecond)
+
+		w.start()
+		defer w.stop()
+
+		runtime.GC()
+		var m1 runtime.MemStats
+		runtime.ReadMemStats(&m1)
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(i),
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		b.StopTimer()
+		runtime.GC()
+		var m2 runtime.MemStats
+		runtime.ReadMemStats(&m2)
+
+		b.ReportMetric(float64(m2.HeapAlloc-m1.HeapAlloc)/float64(b.N)/1024, "KB/op")
+	})
+
+	b.Run("WithoutPrefetch", func(b *testing.B) {
+		var (
+			engine      consensus.Engine
+			chainConfig = params.BorUnittestChainConfig
+			db          = rawdb.NewMemoryDatabase()
+			ctrl        *gomock.Controller
+		)
+
+		engine, ctrl = getFakeBorFromConfig(&testing.T{}, chainConfig)
+		defer engine.Close()
+		defer ctrl.Finish()
+
+		config := DefaultTestConfig()
+		config.EnablePrefetch = false
+		config.Recommit = 1 * time.Second
+
+		w, backend, _ := newTestWorker(&testing.T{}, config, chainConfig, engine, db, false, 0)
+		defer w.close()
+
+		addTransactionBatch(backend, 250, false)
+		time.Sleep(200 * time.Millisecond)
+
+		w.start()
+		defer w.stop()
+
+		runtime.GC()
+		var m1 runtime.MemStats
+		runtime.ReadMemStats(&m1)
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix() + int64(i),
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		b.StopTimer()
+		runtime.GC()
+		var m2 runtime.MemStats
+		runtime.ReadMemStats(&m2)
+
+		b.ReportMetric(float64(m2.HeapAlloc-m1.HeapAlloc)/float64(b.N)/1024, "KB/op")
+	})
+}
