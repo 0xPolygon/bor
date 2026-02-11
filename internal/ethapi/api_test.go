@@ -5269,14 +5269,13 @@ func TestBorBlockNumber(t *testing.T) {
 	})
 
 	// Test 10: Pending also returns executed (falls through to default)
-	t.Run("pending_returns_executed_matches_erigon", func(t *testing.T) {
+	t.Run("pending_returns_executed", func(t *testing.T) {
 		pending := rpc.PendingBlockNumber
 		result, err := api.BlockNumber(context.Background(), &pending)
 		if err != nil {
 			t.Fatalf("BlockNumber(pending) error = %v", err)
 		}
-		// In Erigon's erigon_blockNumber, pending is not a special case and falls through
-		// to default, returning the latest executed.
+		// pending falls through to default, returning the latest executed.
 		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
 		if uint64(result) != expectedExecuted {
 			t.Errorf("BlockNumber(pending) = %d, want executed block %d", result, expectedExecuted)
@@ -5295,6 +5294,152 @@ func TestBorBlockNumber(t *testing.T) {
 		if uint64(result) != expectedExecuted {
 			t.Errorf("BlockNumber(unknown) = %d, want latest executed %d", result, expectedExecuted)
 		}
+	})
+}
+
+func TestBorGetHeaderByNumber(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 20
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get the latest block header
+	t.Run("latest_block_header", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.LatestBlockNumber)
+		if err != nil {
+			t.Fatalf("GetHeaderByNumber(latest) error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByNumber(latest) returned nil")
+		}
+		// Verify it's a *types.Header with expected fields
+		if result.Number == nil {
+			t.Error("Header missing Number field")
+		}
+		if result.ParentHash == (common.Hash{}) {
+			t.Error("Header missing ParentHash field")
+		}
+	})
+
+	// Test 2: Get the earliest block header
+	t.Run("earliest_block_header", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.EarliestBlockNumber)
+		if err != nil {
+			// Test backend may not support the earliest tag
+			t.Skipf("Earliest block not available: %v", err)
+		}
+		if result == nil {
+			t.Skip("GetHeaderByNumber(earliest) returned nil")
+		}
+		// Verify it's block 0 (genesis)
+		if result.Number.Uint64() != 0 {
+			t.Errorf("GetHeaderByNumber(earliest) number = %d, want 0", result.Number.Uint64())
+		}
+	})
+
+	// Test 3: Get the pending block header
+	t.Run("pending_block_header_no_transformation", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.PendingBlockNumber)
+		if err != nil {
+			t.Fatalf("GetHeaderByNumber(pending) error = %v", err)
+		}
+		// Pending may return nil if no pending block exists
+		if result == nil {
+			t.Skip("No pending block available (expected in test environment)")
+		}
+		// Verify it returns *types.Header
+		if result.Number == nil {
+			t.Error("Pending header should have Number field")
+		}
+	})
+
+	// Test 4: Get the specific block header
+	t.Run("specific_block_header", func(t *testing.T) {
+		blockNum := rpc.BlockNumber(10)
+		result, err := api.GetHeaderByNumber(context.Background(), blockNum)
+		if err != nil {
+			t.Fatalf("GetHeaderByNumber(10) error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByNumber(10) returned nil")
+		}
+		// Verify it is block 10
+		if result.Number.Uint64() != 10 {
+			t.Errorf("GetHeaderByNumber(10) number = %d, want 10", result.Number.Uint64())
+		}
+	})
+
+	// Test 5: Get the safe block header
+	t.Run("safe_block_header", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.SafeBlockNumber)
+		// Safe block may not be available in tests
+		if err != nil {
+			t.Skipf("Safe block not available: %v", err)
+		}
+		if result == nil {
+			t.Skip("Safe block returned nil (may not be available)")
+		}
+		// If available, should have standard header fields
+		if result.Number == nil {
+			t.Error("Safe header missing Number field")
+		}
+	})
+
+	// Test 6: Get the finalized block header
+	t.Run("finalized_block_header", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.FinalizedBlockNumber)
+		if err != nil {
+			// Backend may not have finalized state in the test environment
+			t.Skipf("Finalized block not available: %v", err)
+		}
+		if result == nil {
+			t.Skip("Finalized block returned nil (backend may not have finalized state in test)")
+		}
+		// Should have standard header fields
+		if result.Number == nil {
+			t.Error("Finalized header missing Number field")
+		}
+	})
+
+	// Test 7: Non-existent block returns error
+	t.Run("non_existent_block_returns_error", func(t *testing.T) {
+		blockNum := rpc.BlockNumber(999999)
+		result, err := api.GetHeaderByNumber(context.Background(), blockNum)
+		// Should return error for missing header
+		if err == nil {
+			t.Error("GetHeaderByNumber(999999) expected error, got nil")
+		}
+		if result != nil {
+			t.Errorf("GetHeaderByNumber(999999) = %v, want nil", result)
+		}
+		// Verify error message
+		expectedErr := "block header not found: 999999"
+		if err.Error() != expectedErr {
+			t.Errorf("Error message = %q, want %q", err.Error(), expectedErr)
+		}
+	})
+
+	// Test 8: The return type is *types.Header
+	t.Run("returns_types_header", func(t *testing.T) {
+		result, err := api.GetHeaderByNumber(context.Background(), rpc.LatestBlockNumber)
+		if err != nil {
+			t.Fatalf("GetHeaderByNumber(latest) error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetHeaderByNumber(latest) returned nil")
+		}
+		var _ *types.Header = result
 	})
 }
 

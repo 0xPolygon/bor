@@ -119,7 +119,7 @@ func (api *EthereumAPI) ProtocolVersion() hexutil.Uint {
 //	result[2] - 32 bytes hex encoded boundary condition ("target"), 2^256/difficulty
 //	result[3] - hex encoded block number
 //
-// Returns JSON-RPC error -32000 if mining is not supported (semantic parity with Erigon)
+// Returns JSON-RPC error -32000 if mining is not supported
 func (api *EthereumAPI) GetWork() ([4]string, error) {
 	work, err := api.b.GetWork()
 	if err != nil {
@@ -130,7 +130,7 @@ func (api *EthereumAPI) GetWork() ([4]string, error) {
 
 // SubmitWork can be used by external miners to submit their POW solution.
 // It returns an indication if the work was accepted.
-// Returns JSON-RPC error -32000 if mining not supported (semantic parity with Erigon)
+// Returns JSON-RPC error -32000 if mining not supported
 func (api *EthereumAPI) SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) (bool, error) {
 	ok, err := api.b.SubmitWork(nonce, hash, digest)
 	if err != nil {
@@ -140,7 +140,7 @@ func (api *EthereumAPI) SubmitWork(nonce types.BlockNonce, hash, digest common.H
 }
 
 // SubmitHashrate can be used for remote miners to submit their hash rate.
-// Returns JSON-RPC error -32000 if mining not supported (semantic parity with Erigon)
+// Returns JSON-RPC error -32000 if mining not supported
 func (api *EthereumAPI) SubmitHashrate(rate hexutil.Uint64, id common.Hash) (bool, error) {
 	ok, err := api.b.SubmitHashrate(rate, id)
 	if err != nil {

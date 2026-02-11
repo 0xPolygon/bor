@@ -3,6 +3,7 @@ package ethapi
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -157,7 +158,38 @@ func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrH
 	return RPCMarshalWitness(witness), nil
 }
 
-// BlockNumber returns the block number for the given block tag (matching Erigon's GetBlockNumber behavior):
+// GetHeaderByNumber returns a block's header by number.
+// It retrieves the header, without transactions.
+//
+// Parameters:
+//   - blockNumber: Block number tag (latest, earliest, pending, safe, finalized, or numeric)
+//
+// Returns the block header or error if not found
+func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockNumber) (*types.Header, error) {
+	// Pending block is only known by the miner/builder
+	if blockNumber == rpc.PendingBlockNumber {
+		block, _, _ := api.b.Pending()
+		if block == nil {
+			return nil, nil
+		}
+		// Return header directly
+		return block.Header(), nil
+	}
+
+	// Get the header for the specified block number
+	header, err := api.b.HeaderByNumber(ctx, blockNumber)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil {
+		// Return error for missing header
+		return nil, fmt.Errorf("block header not found: %d", blockNumber)
+	}
+
+	return header, nil
+}
+
+// BlockNumber returns the block number for the given block tag:
 // - nil input → latest executed (CurrentBlock)
 // - "latest" → latest head (CurrentHeader) via GetLatestBlockNumber
 // - "pending" → falls through to default (latest executed)
