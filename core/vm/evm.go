@@ -40,6 +40,14 @@ type (
 	// GetHashFunc returns the n'th block hash in the blockchain
 	// and is used by the BLOCKHASH EVM op code.
 	GetHashFunc func(uint64) common.Hash
+
+	txHashReader interface {
+		TxHash() common.Hash
+	}
+
+	txIndexReader interface {
+		TxIndex() int
+	}
 )
 
 func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
@@ -236,6 +244,34 @@ func (evm *EVM) Cancelled() bool {
 
 func isSystemCall(caller common.Address) bool {
 	return caller == params.SystemAddress
+}
+
+func (evm *EVM) depthLogTxMeta() (common.Hash, int) {
+	if evm == nil || evm.StateDB == nil {
+		return common.Hash{}, -1
+	}
+	var hash common.Hash
+	index := -1
+	if r, ok := evm.StateDB.(txHashReader); ok {
+		hash = r.TxHash()
+	}
+	if r, ok := evm.StateDB.(txIndexReader); ok {
+		index = r.TxIndex()
+	}
+	return hash, index
+}
+
+func (evm *EVM) depthLogBlockMeta() (common.Hash, uint64) {
+	if evm == nil || evm.Context.BlockNumber == nil {
+		return common.Hash{}, 0
+	}
+	blockNumber := evm.Context.BlockNumber.Uint64()
+	if blockNumber == 0 {
+		return common.Hash{}, 0
+	}
+	// Current block hash is not in BlockContext; GetHash provides historic hashes.
+	// Use parent hash as stable block context metadata for logging.
+	return evm.Context.GetHash(blockNumber - 1), blockNumber
 }
 
 // Call executes the contract associated with the addr with the given input as

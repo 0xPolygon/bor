@@ -106,6 +106,14 @@ func (s *hookedStateDB) GetStorageRoot(addr common.Address) common.Hash {
 	return s.inner.GetStorageRoot(addr)
 }
 
+func (s *hookedStateDB) TxHash() common.Hash {
+	return s.inner.TxHash()
+}
+
+func (s *hookedStateDB) TxIndex() int {
+	return s.inner.TxIndex()
+}
+
 func (s *hookedStateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
 	return s.inner.GetTransientState(addr, key)
 }

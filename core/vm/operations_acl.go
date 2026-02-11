@@ -84,7 +84,9 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 				valueBytes = len(value.Bytes())
 			}
 			keyDepth := uint64(len(slot.Bytes()) * 2)
-			evm.depthLog.logStorage("SSTORE", contract.Address(), slot, resultDepth, keyDepth, valueBytes)
+			txHash, txIndex := evm.depthLogTxMeta()
+			blockHash, blockNumber := evm.depthLogBlockMeta()
+			evm.depthLog.logStorage("SSTORE", contract.Address(), slot, resultDepth, keyDepth, valueBytes, txHash, txIndex, blockHash, blockNumber)
 		}
 
 		if current == value { // noop (1)

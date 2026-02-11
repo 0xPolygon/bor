@@ -583,7 +583,9 @@ func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 			valueBytes = len(val.Bytes())
 		}
 		keyDepth := uint64(len(hash.Bytes()) * 2)
-		evm.depthLog.logStorage("SLOAD", scope.Contract.Address(), hash, depth, keyDepth, valueBytes)
+		txHash, txIndex := evm.depthLogTxMeta()
+		blockHash, blockNumber := evm.depthLogBlockMeta()
+		evm.depthLog.logStorage("SLOAD", scope.Contract.Address(), hash, depth, keyDepth, valueBytes, txHash, txIndex, blockHash, blockNumber)
 	}
 	loc.SetBytes(val.Bytes())
 

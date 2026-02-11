@@ -39,12 +39,23 @@ func initDepthLogger(evm *EVM) {
 	evm.depthLog = depthLogInst
 }
 
-func (l *depthLogger) logStorage(op string, addr common.Address, slot common.Hash, depth uint64, keyDepth uint64, valueBytes int) {
+func (l *depthLogger) logStorage(op string, addr common.Address, slot common.Hash, depth uint64, keyDepth uint64, valueBytes int, txHash common.Hash, txIndex int, blockHash common.Hash, blockNumber uint64) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes)
+	switch {
+	case txHash != (common.Hash{}) && txIndex >= 0 && blockHash != (common.Hash{}) && blockNumber > 0:
+		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d,\"bh\":\"%s\",\"bn\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex, blockHash.Hex(), blockNumber)
+	case txHash != (common.Hash{}) && txIndex >= 0:
+		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\",\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex(), txIndex)
+	case txHash != (common.Hash{}):
+		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"th\":\"%s\"}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txHash.Hex())
+	case txIndex >= 0:
+		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d,\"ti\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes, txIndex)
+	default:
+		_, _ = fmt.Fprintf(l.w, "{\"a\":\"%s\",\"k\":\"%s\",\"o\":\"%s\",\"d\":%d,\"p\":%d,\"b\":%d}\n", addr.Hex(), slot.Hex(), op, depth, keyDepth, valueBytes)
+	}
 	_ = l.w.Flush()
 }

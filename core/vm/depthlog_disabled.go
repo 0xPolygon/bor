@@ -8,5 +8,5 @@ type depthLogger struct{}
 
 func initDepthLogger(_ *EVM) {}
 
-func (l *depthLogger) logStorage(_ string, _ common.Address, _ common.Hash, _ uint64, _ uint64, _ int) {
+func (l *depthLogger) logStorage(_ string, _ common.Address, _ common.Hash, _ uint64, _ uint64, _ int, _ common.Hash, _ int, _ common.Hash, _ uint64) {
 }
