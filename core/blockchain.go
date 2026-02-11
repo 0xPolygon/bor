@@ -91,6 +91,13 @@ var (
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 
+	// Additional prefetch attribution metrics
+	accountHitFromPrefetchMeter       = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter       = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter        = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter        = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/insert", nil)
+	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/prefetch_used_unique", nil)
+
 	accountReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
 	storageReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
@@ -198,6 +205,11 @@ type BlockChainConfig struct {
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
 
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// 0 = unlimited (legacy behavior), default = 1MB/s
+	PreloadRateLimit int64
+
 	// State snapshot related options
 	SnapshotLimit   int  // Memory allowance (MB) to use for caching snapshot entries in memory
 	SnapshotNoBuild bool // Whether the background generation is allowed
@@ -302,6 +314,7 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			WriteBufferSize:   cfg.TrieDirtyLimit * 1024 * 1024,
 			NoAsyncFlush:      cfg.TrieNoAsyncFlush,
 			AddressCacheSizes: cfg.AddressCacheSizes,
+			PreloadRateLimit:  cfg.PreloadRateLimit,
 		}
 	}
 	return config
@@ -464,7 +477,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 
 	bc.statedb = state.NewDatabase(bc.triedb, nil)
 	bc.validator = NewBlockValidator(chainConfig, bc)
-	bc.prefetcher = newStatePrefetcher(chainConfig, bc.hc)
+	bc.prefetcher = NewStatePrefetcher(chainConfig, bc.hc)
 	bc.processor = NewStateProcessor(bc.hc)
 
 	genesisHeader := bc.GetHeaderByNumber(0)
@@ -736,13 +749,23 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
 		storageCacheMissMeter.Mark(stats.StorageMiss)
+
+		// Report additional prefetch attribution metrics
+		prefetchStats := prefetch.GetPrefetchStats()
+		accountInsertPrefetchMeter.Mark(prefetchStats.AccountInsert)
+		storageInsertPrefetchMeter.Mark(prefetchStats.StorageInsert)
+
+		processStats := process.GetPrefetchStats()
+		accountHitFromPrefetchMeter.Mark(processStats.AccountHitFromPrefetch)
+		storageHitFromPrefetchMeter.Mark(processStats.StorageHitFromPrefetch)
+		accountHitFromPrefetchUniqueMeter.Mark(processStats.AccountHitFromPrefetchUnique)
 	}()
 
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
 		// Disable tracing for prefetcher executions.
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
 
 		blockPrefetchExecuteTimer.Update(time.Since(start))
 		if followupInterrupt.Load() {

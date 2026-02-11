@@ -140,6 +140,7 @@ jobs:
           polycli version
 
       - name: Run smoke tests
+        id: smoke-tests
         working-directory: pos-workflows/tests
         run: bash kurtosis_smoke_test.sh
 
@@ -149,11 +150,22 @@ jobs:
           go-version: 'stable'
 
       - name: Run RPC tests
+        id: rpc-tests
         working-directory: pos-workflows/tests/rpc_tests
         run: |
           export RPC_URL=$(kurtosis port print ${{ env.ENCLAVE_NAME }} l2-el-1-bor-heimdall-v2-validator rpc)
           export PRIV_KEY="0xd40311b5a5ca5eaeb48dfba5403bde4993ece8eccf4190e98e19fcd4754260ea"
           go run . --priv-key "$PRIV_KEY" --rpc-url "$RPC_URL" --log-req-res true
+
+      # Collect diagnostics on failure
+      - name: Collect network diagnostics and state dump
+        if: >-
+          always() && (
+          steps.smoke-tests.outcome == 'failure' ||
+          steps.rpc-tests.outcome == 'failure')
+        uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
+        with:
+          enclave_name: ${{ env.ENCLAVE_NAME }}
 
       # Clean up
       - name: Post kurtosis run

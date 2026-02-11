@@ -243,14 +243,13 @@ func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 
 // ReadersWithCacheStats creates a pair of state readers sharing the same internal cache and
 // same backing Reader, but exposing separate statistics.
-// and statistics.
 func (db *CachingDB) ReadersWithCacheStats(stateRoot common.Hash) (ReaderWithStats, ReaderWithStats, error) {
 	reader, err := db.Reader(stateRoot)
 	if err != nil {
 		return nil, nil, err
 	}
 	shared := newReaderWithCache(reader)
-	return newReaderWithCacheStats(shared), newReaderWithCacheStats(shared), nil
+	return newReaderWithCacheStats(shared, rolePrefetch), newReaderWithCacheStats(shared, roleProcess), nil
 }
 
 // OpenTrie opens the main account trie at a specific root hash.

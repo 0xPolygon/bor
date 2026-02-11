@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	unique "github.com/ethereum/go-ethereum/common/set"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -165,7 +166,9 @@ func TestGetSignerSuccessionNumber_WithValidatorOverride(t *testing.T) {
 				assertUnauthorizedSignerError(t, err, tt.block, overrideValidator)
 			} else {
 				require.NoError(t, err)
-				require.GreaterOrEqual(t, succession, -1)
+				proposerIndex, _ := snap.ValidatorSet.GetByAddress(snap.ValidatorSet.GetProposer().Address)
+				expectedSuccession := len(snap.ValidatorSet.Validators) - 1 - proposerIndex
+				require.Equal(t, expectedSuccession, succession)
 			}
 		})
 	}
@@ -708,4 +711,114 @@ func TestSnapshot_Apply_UnauthorizedSigner(t *testing.T) {
 	require.Equal(t, uint64(1), authErr.Number)
 	require.Equal(t, setup.signer.Bytes(), authErr.Signer)
 	require.Equal(t, setup.validatorSet.Validators, authErr.AllowedSigners)
+}
+
+func TestSnapshot_Signers(t *testing.T) {
+	t.Parallel()
+	vals := buildRandomValidatorSet(5)
+	vs := valset.NewValidatorSet(vals)
+	snap := &Snapshot{ValidatorSet: vs}
+
+	signers := snap.signers()
+	require.Len(t, signers, 5)
+	// Should contain all validator addresses
+	for _, v := range vs.Validators {
+		require.Contains(t, signers, v.Address)
+	}
+}
+
+func TestSnapshot_LoadAndStore(t *testing.T) {
+	t.Parallel()
+	db := rawdb.NewMemoryDatabase()
+	sigcache, err := lru.NewARC(10)
+	require.NoError(t, err)
+
+	vals := []*valset.Validator{
+		{Address: common.HexToAddress("0x1"), VotingPower: 10},
+		{Address: common.HexToAddress("0x2"), VotingPower: 20},
+	}
+	chainCfg := &params.ChainConfig{
+		ChainID: big.NewInt(1),
+		Bor: &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+		},
+	}
+
+	hash := common.HexToHash("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+	snap := newSnapshot(chainCfg, sigcache, 42, hash, vals)
+	snap.Recents[40] = common.HexToAddress("0x1")
+
+	// Store
+	require.NoError(t, snap.store(db))
+
+	// Load
+	loaded, err := loadSnapshot(chainCfg, chainCfg.Bor, sigcache, db, hash)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.Equal(t, uint64(42), loaded.Number)
+	require.Equal(t, hash, loaded.Hash)
+	require.Len(t, loaded.ValidatorSet.Validators, 2)
+}
+
+func TestSnapshot_LoadNotFound(t *testing.T) {
+	t.Parallel()
+	db := rawdb.NewMemoryDatabase()
+	sigcache, _ := lru.NewARC(10)
+	chainCfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
+
+	_, err := loadSnapshot(chainCfg, chainCfg.Bor, sigcache, db, common.Hash{0xde, 0xad})
+	require.Error(t, err)
+}
+
+func TestSnapshot_Copy(t *testing.T) {
+	t.Parallel()
+	sigcache, _ := lru.NewARC(10)
+	vals := []*valset.Validator{
+		{Address: common.HexToAddress("0x1"), VotingPower: 10},
+	}
+	chainCfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
+
+	snap := newSnapshot(chainCfg, sigcache, 10, common.Hash{}, vals)
+	snap.Recents[5] = common.HexToAddress("0x1")
+
+	cpy := snap.copy()
+	require.Equal(t, snap.Number, cpy.Number)
+	require.Equal(t, snap.Hash, cpy.Hash)
+	require.Len(t, cpy.Recents, 1)
+
+	// Mutations don't affect original
+	cpy.Number = 999
+	cpy.Recents[99] = common.HexToAddress("0x99")
+	require.Equal(t, uint64(10), snap.Number)
+	require.Len(t, snap.Recents, 1)
+}
+
+func TestSnapshot_Apply_EmptyHeaders(t *testing.T) {
+	t.Parallel()
+	setup := setupApplyTest(t, 0, nil)
+	result, err := setup.snapshot.apply([]*types.Header{}, setup.bor)
+	require.NoError(t, err)
+	require.Equal(t, setup.snapshot, result) // same snapshot returned
+}
+
+func TestSnapshot_Apply_NonContiguousHeaders(t *testing.T) {
+	t.Parallel()
+	setup := setupApplyTest(t, 0, nil)
+	headers := []*types.Header{
+		{Number: big.NewInt(1)},
+		{Number: big.NewInt(3)}, // gap
+	}
+	_, err := setup.snapshot.apply(headers, setup.bor)
+	require.Equal(t, errOutOfRangeChain, err)
+}
+
+func TestSnapshot_Apply_WrongStartNumber(t *testing.T) {
+	t.Parallel()
+	setup := setupApplyTest(t, 0, nil)
+	headers := []*types.Header{
+		{Number: big.NewInt(5)}, // should be 1 (snapshot.Number + 1)
+	}
+	_, err := setup.snapshot.apply(headers, setup.bor)
+	require.Equal(t, errOutOfRangeChain, err)
 }

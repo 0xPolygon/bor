@@ -413,6 +413,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.prefetch",
+		Usage:   "Enable transaction prefetching from the pool during block building",
+		Value:   &c.cliConfig.Sealer.EnablePrefetch,
+		Default: c.cliConfig.Sealer.EnablePrefetch,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.prefetch.gaslimit.percent",
+		Usage:   "Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)",
+		Value:   &c.cliConfig.Sealer.PrefetchGasLimitPercent,
+		Default: c.cliConfig.Sealer.PrefetchGasLimitPercent,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
 		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,
@@ -563,6 +577,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Address-specific cache sizes for biased caching in MB (format: address=sizeMB,address=sizeMB, e.g. 0x1234...=1024,0x5678...=512)",
 		Value:   &c.cliConfig.Cache.AddressCacheSizesRaw,
 		Default: c.cliConfig.Cache.AddressCacheSizesRaw,
+		Group:   "Cache",
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "cache.preloadratelimit",
+		Usage:   "Rate limit per address for cache preloading (e.g. 500KB, 1MB, 0 for unlimited). Limits I/O during sync. Default: 1MB",
+		Value:   &c.cliConfig.Cache.PreloadRateLimit,
+		Default: c.cliConfig.Cache.PreloadRateLimit,
 		Group:   "Cache",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{

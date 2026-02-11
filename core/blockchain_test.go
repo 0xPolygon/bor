@@ -6135,7 +6135,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// Test that prefetch and process readers are independent
 	t.Run("independent readers", func(t *testing.T) {
 		block := blocks[0]
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
 		if err != nil {
 			t.Fatalf("StateAtWithReaders failed: %v", err)
 		}
@@ -6171,7 +6171,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// implementation. It's kept for API compatibility and future-proofing.
 	t.Run("error from invalid root", func(t *testing.T) {
 		invalidRoot := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
 
 		if err == nil {
 			t.Fatal("expected error when using invalid root hash")
@@ -6184,5 +6184,45 @@ func TestStateAtWithReaders(t *testing.T) {
 		}
 
 		t.Logf("Got expected error for invalid root: %v", err)
+	})
+
+	// P1 Test: Verify prefetch and process readers maintain independence
+	// when one modifies state
+	t.Run("prefetch process independence", func(t *testing.T) {
+		block := blocks[1]
+		statedb, throwaway, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		if err != nil {
+			t.Fatalf("StateAtWithReaders failed: %v", err)
+		}
+
+		// Get initial balance
+		originalBalance := statedb.GetBalance(address)
+
+		// Use throwaway state (prefetch) to modify account
+		// This simulates what prefetchFromPool does
+		throwaway.SetBalance(address, uint256.NewInt(999999), 0)
+
+		// Verify main statedb (process) is unaffected
+		processBalance := statedb.GetBalance(address)
+		if processBalance.Cmp(originalBalance) != 0 {
+			t.Errorf("Process statedb should be unaffected by throwaway modifications, got %v, want %v",
+				processBalance, originalBalance)
+		}
+
+		// Verify both readers can track stats independently
+		processStats := processReader.GetStats()
+		prefetchStats := prefetchReader.GetStats()
+
+		// Both should have some activity
+		if processStats.AccountHit+processStats.AccountMiss == 0 {
+			t.Error("Process reader should have tracked account reads")
+		}
+
+		t.Logf("Independence test - Process stats: %d hits/%d misses, Prefetch stats: %d hits/%d misses",
+			processStats.AccountHit, processStats.AccountMiss,
+			prefetchStats.AccountHit, prefetchStats.AccountMiss)
+
+		// The key validation: throwaway state modifications don't affect main state
+		// This ensures prefetch speculation doesn't corrupt the actual block building state
 	})
 }
