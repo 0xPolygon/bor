@@ -524,8 +524,17 @@ func (b testBackend) HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc
 	panic("unknown type rpc.BlockNumberOrHash")
 }
 
-func (b testBackend) CurrentHeader() *types.Header { return b.chain.CurrentHeader() }
-func (b testBackend) CurrentBlock() *types.Header  { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentHeader() *types.Header    { return b.chain.CurrentHeader() }
+func (b testBackend) CurrentBlock() *types.Header     { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentSafeBlock() *types.Header { return b.chain.CurrentSafeBlock() }
+func (b testBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	// For tests, return a fixed finalized block number
+	current := b.chain.CurrentBlock().Number.Uint64()
+	if current < 10 {
+		return 0, nil
+	}
+	return current - 10, nil
+}
 func (b testBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	if number == rpc.LatestBlockNumber {
 		head := b.chain.CurrentBlock()
@@ -5101,6 +5110,190 @@ func TestAccountAt(t *testing.T) {
 		}
 		if result.Nonce != 0 {
 			t.Errorf("Expected zero nonce for non-existent account, got %d", result.Nonce)
+		}
+	})
+}
+
+func TestBorBlockNumber(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 20
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewBorAPI(backend)
+
+	// Test 1: No parameter (should return the latest executed block)
+	t.Run("no_parameter_returns_latest_executed", func(t *testing.T) {
+		result, err := api.BlockNumber(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BlockNumber(nil) error = %v", err)
+		}
+		// Nil returns latest executed (CurrentBlock)
+		expected := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) != expected {
+			t.Errorf("BlockNumber(nil) = %d, want %d", result, expected)
+		}
+	})
+
+	// Test 2: Explicit latest returns latest head
+	t.Run("latest_returns_latest_head", func(t *testing.T) {
+		latest := rpc.LatestBlockNumber
+		result, err := api.BlockNumber(context.Background(), &latest)
+		if err != nil {
+			t.Fatalf("BlockNumber(latest) error = %v", err)
+		}
+		// Explicit "latest" returns the latest head (CurrentHeader)
+		expected := backend.chain.CurrentHeader().Number.Uint64()
+		if uint64(result) != expected {
+			t.Errorf("BlockNumber(latest) = %d, want %d", result, expected)
+		}
+	})
+
+	// Test 3: Earliest block number
+	t.Run("earliest_block_number", func(t *testing.T) {
+		earliest := rpc.EarliestBlockNumber
+		result, err := api.BlockNumber(context.Background(), &earliest)
+		if err != nil {
+			t.Fatalf("BlockNumber(earliest) error = %v", err)
+		}
+		if uint64(result) != 0 {
+			t.Errorf("BlockNumber(earliest) = %d, want 0", result)
+		}
+	})
+
+	// Test 4: Safe block number
+	t.Run("safe_block_number", func(t *testing.T) {
+		safe := rpc.SafeBlockNumber
+		result, err := api.BlockNumber(context.Background(), &safe)
+		// Safe block may not be available in the test environment
+		if err != nil {
+			// Expected behavior when safe block is not available
+			if err.Error() == "safe block not found" {
+				t.Skip("Safe block not available in test environment (expected)")
+			}
+			t.Fatalf("BlockNumber(safe) unexpected error = %v", err)
+		}
+		// If available, the safe block should be less than or equal to the latest
+		latest := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) > latest {
+			t.Errorf("BlockNumber(safe) = %d, should be <= latest %d", result, latest)
+		}
+	})
+
+	// Test 5: Finalized block number
+	t.Run("finalized_block_number", func(t *testing.T) {
+		finalized := rpc.FinalizedBlockNumber
+		result, err := api.BlockNumber(context.Background(), &finalized)
+		if err != nil {
+			t.Fatalf("BlockNumber(finalized) error = %v", err)
+		}
+		// Finalized block should be less than or equal to the latest
+		latest := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) > latest {
+			t.Errorf("BlockNumber(finalized) = %d, should be <= latest %d", result, latest)
+		}
+	})
+
+	// Test 6: Pending block number (falls through to default, returns latest executed)
+	t.Run("pending_block_number", func(t *testing.T) {
+		pending := rpc.PendingBlockNumber
+		result, err := api.BlockNumber(context.Background(), &pending)
+		if err != nil {
+			t.Fatalf("BlockNumber(pending) error = %v", err)
+		}
+		// Pending falls through to the default case and returns latest executed
+		expected := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) != expected {
+			t.Errorf("BlockNumber(pending) = %d, want %d", result, expected)
+		}
+	})
+
+	// Test 7: Numeric block number input returns latest executed (default behavior)
+	t.Run("numeric_input_returns_latest_executed", func(t *testing.T) {
+		blockNum := rpc.BlockNumber(10)
+		result, err := api.BlockNumber(context.Background(), &blockNum)
+		if err != nil {
+			t.Fatalf("BlockNumber(10) error = %v", err)
+		}
+		// Should return the latest executed block, not the input number
+		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) != expectedExecuted {
+			t.Errorf("BlockNumber(10) = %d, want latest executed %d", result, expectedExecuted)
+		}
+	})
+
+	// Test 8: Assert that return type is hexutil.Uint64
+	t.Run("returns_hexutil_uint64", func(t *testing.T) {
+		result, err := api.BlockNumber(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BlockNumber() error = %v", err)
+		}
+		// Verify it's the correct type
+		var _ hexutil.Uint64 = result
+	})
+
+	// Test 9: Explicit latest returns header (latest head), nil returns executed
+	t.Run("latest_vs_nil_distinction", func(t *testing.T) {
+		// Explicit latest should return CurrentHeader (the latest head)
+		latest := rpc.LatestBlockNumber
+		resultLatest, err := api.BlockNumber(context.Background(), &latest)
+		if err != nil {
+			t.Fatalf("BlockNumber(latest) error = %v", err)
+		}
+		expectedHeader := backend.chain.CurrentHeader().Number.Uint64()
+		if uint64(resultLatest) != expectedHeader {
+			t.Errorf("BlockNumber(latest) = %d, want header %d", resultLatest, expectedHeader)
+		}
+
+		// Nil should return CurrentBlock (latest executed)
+		resultNil, err := api.BlockNumber(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BlockNumber(nil) error = %v", err)
+		}
+		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(resultNil) != expectedExecuted {
+			t.Errorf("BlockNumber(nil) = %d, want executed %d", resultNil, expectedExecuted)
+		}
+
+		// Note that this test backend has CurrentHeader == CurrentBlock, so both return
+		// the same value. In production during sync, CurrentHeader can be ahead of CurrentBlock
+	})
+
+	// Test 10: Pending also returns executed (falls through to default)
+	t.Run("pending_returns_executed_matches_erigon", func(t *testing.T) {
+		pending := rpc.PendingBlockNumber
+		result, err := api.BlockNumber(context.Background(), &pending)
+		if err != nil {
+			t.Fatalf("BlockNumber(pending) error = %v", err)
+		}
+		// In Erigon's erigon_blockNumber, pending is not a special case and falls through
+		// to default, returning the latest executed.
+		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) != expectedExecuted {
+			t.Errorf("BlockNumber(pending) = %d, want executed block %d", result, expectedExecuted)
+		}
+	})
+
+	// Test 11: Unknown/custom block tag returns the latest executed (default behavior)
+	t.Run("unknown_tag_returns_latest_executed", func(t *testing.T) {
+		unknownTag := rpc.BlockNumber(999999)
+		result, err := api.BlockNumber(context.Background(), &unknownTag)
+		if err != nil {
+			t.Fatalf("BlockNumber(unknown) error = %v", err)
+		}
+		// Should return the latest executed block
+		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
+		if uint64(result) != expectedExecuted {
+			t.Errorf("BlockNumber(unknown) = %d, want latest executed %d", result, expectedExecuted)
 		}
 	})
 }

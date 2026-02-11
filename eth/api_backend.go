@@ -67,6 +67,14 @@ func (b *EthAPIBackend) CurrentBlock() *types.Header {
 	return b.eth.blockchain.CurrentBlock()
 }
 
+func (b *EthAPIBackend) CurrentSafeBlock() *types.Header {
+	return b.eth.blockchain.CurrentSafeBlock()
+}
+
+func (b *EthAPIBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	return getFinalizedBlockNumber(b.eth)
+}
+
 func (b *EthAPIBackend) SetHead(number uint64) {
 	b.eth.handler.downloader.Cancel()
 	b.eth.blockchain.SetHead(number)

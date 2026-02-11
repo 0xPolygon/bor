@@ -180,6 +180,20 @@ func (mr *MockBackendMockRecorder) CurrentHeader() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentHeader", reflect.TypeOf((*MockBackend)(nil).CurrentHeader))
 }
 
+// CurrentSafeBlock mocks base method.
+func (m *MockBackend) CurrentSafeBlock() *types.Header {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentSafeBlock")
+	ret0, _ := ret[0].(*types.Header)
+	return ret0
+}
+
+// CurrentSafeBlock indicates an expected call of CurrentSafeBlock.
+func (mr *MockBackendMockRecorder) CurrentSafeBlock() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentSafeBlock", reflect.TypeOf((*MockBackend)(nil).CurrentSafeBlock))
+}
+
 // CurrentView mocks base method.
 func (m *MockBackend) CurrentView() *filtermaps.ChainView {
 	m.ctrl.T.Helper()
@@ -383,6 +397,21 @@ func (m *MockBackend) GetEVM(arg0 context.Context, arg1 *state.StateDB, arg2 *ty
 func (mr *MockBackendMockRecorder) GetEVM(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEVM", reflect.TypeOf((*MockBackend)(nil).GetEVM), arg0, arg1, arg2, arg3, arg4)
+}
+
+// GetFinalizedBlockNumber mocks base method.
+func (m *MockBackend) GetFinalizedBlockNumber(arg0 context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFinalizedBlockNumber", arg0)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFinalizedBlockNumber indicates an expected call of GetFinalizedBlockNumber.
+func (mr *MockBackendMockRecorder) GetFinalizedBlockNumber(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFinalizedBlockNumber", reflect.TypeOf((*MockBackend)(nil).GetFinalizedBlockNumber), arg0)
 }
 
 // GetLogs mocks base method.

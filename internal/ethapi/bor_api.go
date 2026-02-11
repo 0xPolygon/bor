@@ -2,6 +2,7 @@ package ethapi
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -154,4 +155,69 @@ func (api *BorAPI) GetWitnessByBlockNumberOrHash(ctx context.Context, blockNrOrH
 		return nil, err
 	}
 	return RPCMarshalWitness(witness), nil
+}
+
+// BlockNumber returns the block number for the given block tag (matching Erigon's GetBlockNumber behavior):
+// - nil input → latest executed (CurrentBlock)
+// - "latest" → latest head (CurrentHeader) via GetLatestBlockNumber
+// - "pending" → falls through to default (latest executed)
+// - unknown/numeric → latest executed (CurrentBlock)
+//
+// Parameters:
+//   - blockNrPtr: Optional block tag (latest, earliest, safe, finalized, pending)
+//     If nil, returns the latest executed block number
+//
+// Returns the block number as hexutil.Uint64
+func (api *BorAPI) BlockNumber(ctx context.Context, blockNrPtr *rpc.BlockNumber) (hexutil.Uint64, error) {
+	// Handle nil input separately, returns the latest executed block
+	if blockNrPtr == nil {
+		block := api.b.CurrentBlock()
+		if block == nil {
+			return 0, errors.New("current block not found")
+		}
+		return hexutil.Uint64(block.Number.Uint64()), nil
+	}
+
+	blockNr := *blockNrPtr
+
+	// Get the appropriate block number based on the tag
+	var blockNum uint64
+	switch blockNr {
+	case rpc.LatestBlockNumber:
+		// "latest" returns the latest head (forkchoice head), not the executed one
+		header := api.b.CurrentHeader()
+		if header == nil {
+			return 0, errors.New("current header not found")
+		}
+		blockNum = header.Number.Uint64()
+
+	case rpc.EarliestBlockNumber:
+		blockNum = 0
+
+	case rpc.SafeBlockNumber:
+		// Get the safe block from the blockchain
+		header := api.b.CurrentSafeBlock()
+		if header == nil {
+			return 0, errors.New("safe block not found")
+		}
+		blockNum = header.Number.Uint64()
+
+	case rpc.FinalizedBlockNumber:
+		// Get the finalized block using Heimdall's logic (milestone/checkpoint)
+		finalNum, err := api.b.GetFinalizedBlockNumber(ctx)
+		if err != nil {
+			return 0, err
+		}
+		blockNum = finalNum
+
+	default:
+		// For unrecognized/custom block tags (including pending), return the latest executed block
+		block := api.b.CurrentBlock()
+		if block == nil {
+			return 0, errors.New("current block not found")
+		}
+		blockNum = block.Number.Uint64()
+	}
+
+	return hexutil.Uint64(blockNum), nil
 }
