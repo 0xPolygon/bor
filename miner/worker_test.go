@@ -2347,7 +2347,7 @@ func TestStateDBLifecycle_WithoutWait(t *testing.T) {
 	go func(stateDB interface{}) {
 		defer prefetchWg.Done()
 		// Actively use the StateDB to prevent GC
-		keepAlive = stateDB // Store in package-level var
+		keepAlive = stateDB       // Store in package-level var
 		for i := 0; i < 40; i++ { // 40 * 50ms = 2 seconds
 			time.Sleep(50 * time.Millisecond)
 			// Touch the reference to prevent GC
@@ -2357,9 +2357,6 @@ func TestStateDBLifecycle_WithoutWait(t *testing.T) {
 		}
 		t.Log("Prefetch goroutine completed, releasing throwaway reference")
 	}(throwaway) // Pass by value so goroutine holds actual reference
-
-	// Immediately null out our local references (simulate commitWork return)
-	throwaway = nil
 
 	// Force aggressive GC
 	t.Log("Forcing aggressive GC while goroutine still holds reference...")

@@ -1105,7 +1105,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				<-time.After(delay)
 			}
 		}
-
 	}
 
 	return nil
