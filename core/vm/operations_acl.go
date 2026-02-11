@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -49,11 +50,11 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 		}
 		// Gas sentry honoured, do the actual gas calculation based on the stored value
 		var (
-			y, x            = stack.Back(1), stack.peek()
-			slot            = common.Hash(x.Bytes32())
-			depthGas        = uint64(0)
-			resultDepth     uint64
-			cost            = uint64(0)
+			y, x        = stack.Back(1), stack.peek()
+			slot        = common.Hash(x.Bytes32())
+			depthGas    = uint64(0)
+			resultDepth uint64
+			cost        = uint64(0)
 		)
 		// Meter callback to charge per-node during trie traversal.
 		meter := func(depth uint64) error {
@@ -79,6 +80,7 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 
 		value := common.Hash(y.Bytes32())
 		if evm.depthLog != nil {
+			log.Error("SSTORE depthlog enabled", "contract", contract.Address(), "slot", slot, "resultDepth", resultDepth)
 			valueBytes := 0
 			if value != (common.Hash{}) {
 				valueBytes = len(value.Bytes())
@@ -87,6 +89,8 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			txHash, txIndex := evm.depthLogTxMeta()
 			blockHash, blockNumber := evm.depthLogBlockMeta()
 			evm.depthLog.logStorage("SSTORE", contract.Address(), slot, resultDepth, keyDepth, valueBytes, txHash, txIndex, blockHash, blockNumber)
+		} else {
+			log.Error("SSTORE depthlog disabled", "contract", contract.Address(), "slot", slot, "resultDepth", resultDepth)
 		}
 
 		if current == value { // noop (1)
