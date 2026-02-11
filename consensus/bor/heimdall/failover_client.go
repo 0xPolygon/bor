@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultAttemptTimeout    = 30 * time.Second
-	defaultSecondaryCooldown = 5 * time.Minute
+	defaultSecondaryCooldown = 2 * time.Minute
 )
 
 // heimdallClient is a local interface matching bor.IHeimdallClient to avoid
