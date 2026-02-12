@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -481,6 +482,231 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 	}
 
 	return RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb()), nil
+}
+
+// GetBalanceChangesInBlock returns balance changes for accounts affected by the block.
+// This method uses a heuristic approach to discover changed accounts by examining:
+//   - Transaction senders and recipients
+//   - Contract creation addresses
+//   - Miner/coinbase address
+//   - Addresses appearing in transaction logs
+//
+// Unlike Erigon's temporal-database approach that scans account history changes for the
+// block's transaction range, this may miss some accounts with balance changes from:
+//   - Internal CALL value transfers to addresses not emitting logs
+//   - SELFDESTRUCT operations to recipients not otherwise tracked
+//   - Other EVM operations that modify balances without explicit tracking
+//
+// Parameters:
+//   - blockNrOrHash: Block number, hash, or tag (latest, earliest, pending, safe, finalized)
+//
+// Returns a map of addresses to their post-block balances (only for discovered accounts).
+func (api *BorAPI) GetBalanceChangesInBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (map[common.Address]*hexutil.Big, error) {
+	// Resolve block number, hash, and canonical requirement
+	blockNumber, hash, hasHash, requireCanonical, err := resolveBlockNumberOrHashWithCanonical(blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle pending block
+	if !hasHash && blockNumber == rpc.PendingBlockNumber {
+		return api.getBalanceChangesForPending(ctx)
+	}
+
+	// Resolve latest to actual block number
+	if !hasHash && blockNumber == rpc.LatestBlockNumber {
+		currentHeader := api.b.CurrentHeader()
+		if currentHeader != nil {
+			blockNumber = rpc.BlockNumber(currentHeader.Number.Int64())
+		}
+	}
+
+	// Get the specific block by hash or number
+	var block *types.Block
+	if hasHash {
+		block, err = api.b.BlockByHash(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+		if block == nil {
+			return nil, fmt.Errorf("block not found")
+		}
+		blockNumber = rpc.BlockNumber(block.NumberU64())
+
+		// Check canonicality if required
+		if requireCanonical {
+			canonicalBlock, err := api.b.BlockByNumber(ctx, blockNumber)
+			if err != nil {
+				return nil, err
+			}
+			if canonicalBlock == nil || canonicalBlock.Hash() != hash {
+				return nil, fmt.Errorf("hash %x is not currently canonical", hash)
+			}
+		}
+	} else {
+		block, err = api.b.BlockByNumber(ctx, blockNumber)
+		if err != nil {
+			return nil, err
+		}
+		if block == nil {
+			return nil, fmt.Errorf("block not found")
+		}
+	}
+
+	// Genesis block has no balance changes
+	if blockNumber == 0 || blockNumber == rpc.EarliestBlockNumber {
+		return make(map[common.Address]*hexutil.Big), nil
+	}
+
+	// Get parent state and current state for comparison
+	parentState, _, err := api.b.StateAndHeaderByNumber(ctx, rpc.BlockNumber(block.NumberU64()-1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent state: %w", err)
+	}
+	if parentState == nil {
+		return nil, fmt.Errorf("parent state not found")
+	}
+
+	currentState, _, err := api.b.StateAndHeaderByNumber(ctx, rpc.BlockNumber(block.NumberU64()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current state: %w", err)
+	}
+	if currentState == nil {
+		return nil, fmt.Errorf("current state not found")
+	}
+
+	// Collect all potentially modified addresses
+	modifiedAddresses := make(map[common.Address]bool)
+
+	// Add miner
+	modifiedAddresses[block.Coinbase()] = true
+
+	// Process all transactions to collect explicit addresses
+	signer := types.MakeSigner(api.b.ChainConfig(), block.Number(), block.Time())
+	for _, tx := range block.Transactions() {
+		// Add sender
+		if sender, err := types.Sender(signer, tx); err == nil {
+			modifiedAddresses[sender] = true
+		}
+
+		// Add the recipient or contract creation address
+		if tx.To() != nil {
+			modifiedAddresses[*tx.To()] = true
+		} else {
+			// Contract creation
+			if sender, err := types.Sender(signer, tx); err == nil {
+				contractAddr := crypto.CreateAddress(sender, tx.Nonce())
+				modifiedAddresses[contractAddr] = true
+			}
+		}
+	}
+
+	// heuristic: check receipts for contract addresses in logs
+	receipts, err := api.b.GetReceipts(ctx, block.Hash())
+	if err == nil && receipts != nil {
+		for _, receipt := range receipts {
+			// Add the contract address if it exists
+			if receipt.ContractAddress != (common.Address{}) {
+				modifiedAddresses[receipt.ContractAddress] = true
+			}
+			// Add addresses from logs
+			for _, log := range receipt.Logs {
+				modifiedAddresses[log.Address] = true
+			}
+		}
+	}
+
+	// Compare balances for all identified addresses
+	balanceChanges := make(map[common.Address]*hexutil.Big)
+	for addr := range modifiedAddresses {
+		oldBalance := parentState.GetBalance(addr)
+		newBalance := currentState.GetBalance(addr)
+
+		// Include it only if the balance changed
+		if oldBalance.Cmp(newBalance) != 0 {
+			balanceChanges[addr] = (*hexutil.Big)(newBalance.ToBig())
+		}
+	}
+
+	return balanceChanges, nil
+}
+
+// resolveBlockNumberOrHashWithCanonical resolves a BlockNumberOrHash including canonical requirement
+func resolveBlockNumberOrHashWithCanonical(blockNrOrHash rpc.BlockNumberOrHash) (rpc.BlockNumber, common.Hash, bool, bool, error) {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		return blockNr, common.Hash{}, false, false, nil
+	}
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		requireCanonical := blockNrOrHash.RequireCanonical
+		return 0, hash, true, requireCanonical, nil
+	}
+	return 0, common.Hash{}, false, false, fmt.Errorf("invalid block number or hash")
+}
+
+// getBalanceChangesForPending returns balance changes for the pending block
+func (api *BorAPI) getBalanceChangesForPending(ctx context.Context) (map[common.Address]*hexutil.Big, error) {
+	// Get pending block and state
+	pendingBlock, pendingReceipts, pendingState := api.b.Pending()
+	if pendingBlock == nil || pendingState == nil {
+		return nil, fmt.Errorf("pending state not available")
+	}
+
+	// Get parent state (current confirmed state)
+	parentNumber := rpc.BlockNumber(pendingBlock.NumberU64() - 1)
+	parentState, _, err := api.b.StateAndHeaderByNumber(ctx, parentNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent state: %w", err)
+	}
+	if parentState == nil {
+		return nil, fmt.Errorf("parent state not found")
+	}
+
+	// Collect modified addresses from pending transactions
+	modifiedAddresses := make(map[common.Address]bool)
+
+	// Add miner
+	modifiedAddresses[pendingBlock.Coinbase()] = true
+
+	// Process all pending transactions
+	signer := types.MakeSigner(api.b.ChainConfig(), pendingBlock.Number(), pendingBlock.Time())
+	for _, tx := range pendingBlock.Transactions() {
+		if sender, err := types.Sender(signer, tx); err == nil {
+			modifiedAddresses[sender] = true
+		}
+		if tx.To() != nil {
+			modifiedAddresses[*tx.To()] = true
+		} else {
+			if sender, err := types.Sender(signer, tx); err == nil {
+				contractAddr := crypto.CreateAddress(sender, tx.Nonce())
+				modifiedAddresses[contractAddr] = true
+			}
+		}
+	}
+
+	// Add addresses from pending receipts if available
+	if pendingReceipts != nil {
+		for _, receipt := range pendingReceipts {
+			if receipt.ContractAddress != (common.Address{}) {
+				modifiedAddresses[receipt.ContractAddress] = true
+			}
+			for _, log := range receipt.Logs {
+				modifiedAddresses[log.Address] = true
+			}
+		}
+	}
+
+	// Compare balances
+	balanceChanges := make(map[common.Address]*hexutil.Big)
+	for addr := range modifiedAddresses {
+		oldBalance := parentState.GetBalance(addr)
+		newBalance := pendingState.GetBalance(addr)
+
+		if oldBalance.Cmp(newBalance) != 0 {
+			balanceChanges[addr] = (*hexutil.Big)(newBalance.ToBig())
+		}
+	}
+
+	return balanceChanges, nil
 }
 
 // GetLogsByHash returns the logs generated by the transactions by the block's hash.

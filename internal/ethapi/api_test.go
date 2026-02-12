@@ -6875,6 +6875,336 @@ func TestBorGetBlockByTimestamp(t *testing.T) {
 	})
 }
 
+func TestBorGetBalanceChangesInBlock(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(3)
+		miner   = common.HexToAddress("0xdeadbeef")
+		genesis = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+				accs[1].addr: {Balance: big.NewInt(params.Ether)},
+				accs[2].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create blocks with transactions
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		b.SetCoinbase(miner) // Set miner address
+
+		if i == 0 {
+			// Block 1: Single transfer
+			tx, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[0].addr),
+					To:       &accs[1].addr,
+					Value:    big.NewInt(1000),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), accs[0].key,
+			)
+			b.AddTx(tx)
+		}
+		if i == 1 {
+			// Block 2: Two transfers
+			tx1, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[0].addr),
+					To:       &accs[2].addr,
+					Value:    big.NewInt(2000),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), accs[0].key,
+			)
+			b.AddTx(tx1)
+
+			tx2, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[1].addr),
+					To:       &accs[2].addr,
+					Value:    big.NewInt(500),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), accs[1].key,
+			)
+			b.AddTx(tx2)
+		}
+		// Block 3: No transactions
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Block with a single transaction
+	t.Run("single_transfer_block", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(1)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Should have 3 addresses: sender (accs[0]), recipient (accs[1]), and miner
+		if len(result) != 3 {
+			t.Errorf("Expected 3 balance changes, got %d", len(result))
+		}
+
+		// Verify sender balance decreased
+		if bal, ok := result[accs[0].addr]; !ok {
+			t.Error("Sender address not in result")
+		} else if bal.ToInt().Cmp(big.NewInt(params.Ether)) >= 0 {
+			t.Error("Sender balance should have decreased")
+		}
+
+		// Verify recipient balance increased
+		if bal, ok := result[accs[1].addr]; !ok {
+			t.Error("Recipient address not in result")
+		} else if bal.ToInt().Cmp(big.NewInt(params.Ether)) <= 0 {
+			t.Error("Recipient balance should have increased")
+		}
+
+		// Verify miner received fees
+		if bal, ok := result[miner]; !ok {
+			t.Error("Miner address not in result")
+		} else if bal.ToInt().Sign() <= 0 {
+			t.Error("Miner balance should be positive")
+		}
+	})
+
+	// Test 2: Block with multiple transactions
+	t.Run("multiple_transfers_block", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(2)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Should have 4 addresses: 2 senders, 1 recipient, and miner
+		if len(result) != 4 {
+			t.Errorf("Expected 4 balance changes, got %d", len(result))
+		}
+
+		// Verify accs[2] balance increased
+		if bal, ok := result[accs[2].addr]; !ok {
+			t.Error("Recipient address not in result")
+		} else {
+			// Should have received 2000 + 500 = 2500 wei
+			increase := new(big.Int).Sub(bal.ToInt(), big.NewInt(params.Ether))
+			if increase.Cmp(big.NewInt(2500)) != 0 {
+				t.Errorf("Expected recipient to gain 2500 wei, got %s", increase.String())
+			}
+		}
+	})
+
+	// Test 3: Empty block
+	t.Run("empty_block", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(3)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Only miner should have balance change
+		if len(result) != 1 {
+			t.Errorf("Expected 1 balance change (miner), got %d", len(result))
+		}
+
+		// Verify miner received the reward
+		if bal, ok := result[miner]; !ok {
+			t.Error("Miner address not in result")
+		} else if bal.ToInt().Sign() <= 0 {
+			t.Error("Miner balance should be positive")
+		}
+	})
+
+	// Test 4: Genesis block
+	t.Run("genesis_block", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(0)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Genesis block should have no balance changes from execution
+		if len(result) != 0 {
+			t.Errorf("Expected 0 balance changes for genesis, got %d", len(result))
+		}
+	})
+
+	// Test 5: Non-existent block
+	t.Run("non_existent_block", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(9999)
+		_, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err == nil {
+			t.Error("Expected error for non-existent block, got nil")
+		}
+	})
+
+	// Test 6: Query by hash
+	t.Run("query_by_hash", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		blockNrOrHash := rpc.BlockNumberOrHashWithHash(block.Hash(), false)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Should have the same result as querying by number
+		if len(result) != 3 {
+			t.Errorf("Expected 3 balance changes, got %d. Addresses: %v", len(result), result)
+		}
+	})
+
+	// Test 7: Contract creation
+	t.Run("contract_creation", func(t *testing.T) {
+		// Create a block with a contract deployment
+		backendWithContract := newTestBackend(t, 1, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+			b.SetCoinbase(miner)
+			if i == 0 {
+				// Deploy a simple contract (empty bytecode)
+				contractData := common.Hex2Bytes("6000")
+				tx, _ := types.SignTx(
+					types.NewTx(&types.LegacyTx{
+						Nonce:    b.TxNonce(accs[0].addr),
+						To:       nil, // Contract creation
+						Value:    big.NewInt(100),
+						Gas:      100000,
+						GasPrice: big.NewInt(params.GWei),
+						Data:     contractData,
+					}),
+					types.LatestSigner(genesis.Config), accs[0].key,
+				)
+				b.AddTx(tx)
+			}
+		})
+		apiWithContract := NewBorAPI(backendWithContract)
+
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(1)
+		result, err := apiWithContract.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() error = %v", err)
+		}
+
+		// Should track sender, contract address, and miner
+		if len(result) < 3 {
+			t.Errorf("Expected at least 3 balance changes (sender, contract, miner), got %d", len(result))
+		}
+
+		// Verify sender paid for contract creation
+		if bal, ok := result[accs[0].addr]; !ok {
+			t.Error("Sender address not in result")
+		} else if bal.ToInt().Cmp(big.NewInt(params.Ether)) >= 0 {
+			t.Error("Sender balance should have decreased")
+		}
+	})
+
+	// Test 8: Pending block not available
+	t.Run("pending_block_not_available", func(t *testing.T) {
+		blockNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
+		_, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		// Should error because testBackend doesn't provide pending state
+		if err == nil {
+			t.Error("Expected error for pending block when not available, got nil")
+		}
+		if err != nil && err.Error() != "pending state not available" {
+			t.Errorf("Expected 'pending state not available' error, got: %v", err)
+		}
+	})
+
+	// Test 9: requireCanonical=true with canonical hash
+	t.Run("require_canonical_with_canonical_hash", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		// Query with requireCanonical=true for canonical hash
+		blockNrOrHash := rpc.BlockNumberOrHashWithHash(block.Hash(), true)
+		result, err := api.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+		if err != nil {
+			t.Fatalf("GetBalanceChangesInBlock() with requireCanonical=true error = %v", err)
+		}
+
+		// Should return a valid result (3 addresses for block 1)
+		if len(result) != 3 {
+			t.Errorf("Expected 3 balance changes, got %d", len(result))
+		}
+	})
+
+	// Test 10: requireCanonical=true with non-canonical hash
+	t.Run("require_canonical_with_non_canonical_hash", func(t *testing.T) {
+		// Create a backend with a non-canonical block at height 1
+		canonicalBlock := backend.chain.GetBlockByNumber(1)
+		if canonicalBlock == nil {
+			t.Fatal("Could not get canonical block 1")
+		}
+
+		// Create a non-canonical block with the same number but different hash
+		nonCanonicalBlock := types.NewBlock(
+			&types.Header{
+				Number:     canonicalBlock.Number(),
+				Time:       canonicalBlock.Time() + 1, // Different timestamp
+				ParentHash: canonicalBlock.ParentHash(),
+				Root:       canonicalBlock.Root(),
+				Difficulty: canonicalBlock.Difficulty(),
+				Extra:      []byte("non-canonical"),
+			},
+			nil, nil, nil,
+		)
+
+		// Wrap backend to return a non-canonical block by hash
+		wrappedBackend := &testBackendWithNonCanonicalBlock{
+			testBackend:       backend,
+			nonCanonicalBlock: nonCanonicalBlock,
+			canonicalBlock:    canonicalBlock,
+		}
+		wrappedAPI := NewBorAPI(wrappedBackend)
+
+		// Query with requireCanonical=true using non-canonical hash
+		blockNrOrHash := rpc.BlockNumberOrHashWithHash(nonCanonicalBlock.Hash(), true)
+		_, err := wrappedAPI.GetBalanceChangesInBlock(context.Background(), blockNrOrHash)
+
+		// Should error with a specific message
+		if err == nil {
+			t.Error("Expected error for non-canonical hash with requireCanonical=true, got nil")
+		}
+		expectedErr := fmt.Sprintf("hash %x is not currently canonical", nonCanonicalBlock.Hash())
+		if err != nil && err.Error() != expectedErr {
+			t.Errorf("Expected '%s' error, got: %v", expectedErr, err)
+		}
+	})
+}
+
+// testBackendWithNonCanonicalBlock wraps testBackend to simulate non-canonical blocks
+type testBackendWithNonCanonicalBlock struct {
+	*testBackend
+	nonCanonicalBlock *types.Block
+	canonicalBlock    *types.Block
+}
+
+func (b *testBackendWithNonCanonicalBlock) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
+	// Return a non-canonical block if its hash is queried
+	if hash == b.nonCanonicalBlock.Hash() {
+		return b.nonCanonicalBlock, nil
+	}
+	return b.testBackend.BlockByHash(ctx, hash)
+}
+
+func (b *testBackendWithNonCanonicalBlock) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
+	// Always return canonical block by number
+	return b.testBackend.BlockByNumber(ctx, number)
+}
+
 // testBackendWithCoinbase wraps testBackend and overrides Etherbase
 type testBackendWithCoinbase struct {
 	*testBackend
