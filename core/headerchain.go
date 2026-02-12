@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -71,6 +72,7 @@ type HeaderChain struct {
 	procInterrupt func() bool
 	engine        consensus.Engine
 
+	vmConfig      *vm.Config             // VM configuration (propagated from BlockChain)
 	stateSyncData []*types.StateSyncData // State sync data
 }
 
@@ -104,6 +106,11 @@ func NewHeaderChain(chainDb ethdb.Database, config *params.ChainConfig, engine c
 	headHeaderGauge.Update(hc.CurrentHeader().Number.Int64())
 
 	return hc, nil
+}
+
+// GetVMConfig returns the VM config propagated from BlockChain, or nil if not set.
+func (hc *HeaderChain) GetVMConfig() *vm.Config {
+	return hc.vmConfig
 }
 
 // GetBlockNumber retrieves the block number belonging to the given hash

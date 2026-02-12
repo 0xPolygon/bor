@@ -1069,6 +1069,10 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	if bc, ok := chain.(*core.BlockChain); ok {
 		vmCfg = *bc.GetVMConfig()
+	} else if hc, ok := chain.(*core.HeaderChain); ok {
+		if cfg := hc.GetVMConfig(); cfg != nil {
+			vmCfg = *cfg
+		}
 	}
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
@@ -1237,6 +1241,10 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	if bc, ok := chain.(*core.BlockChain); ok {
 		vmCfg = *bc.GetVMConfig()
+	} else if hc, ok := chain.(*core.HeaderChain); ok {
+		if cfg := hc.GetVMConfig(); cfg != nil {
+			vmCfg = *cfg
+		}
 	}
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
