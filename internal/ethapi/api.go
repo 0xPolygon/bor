@@ -2278,8 +2278,9 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 	api.b.RecordPrivateTx(tx.Hash())
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
-	if err != nil {
-		// Purge tx from private tx tracker if submission failed
+	// Purge tx from private tx tracker if submission failed. Don't purge
+	// if `ErrAlreadyKnown` is being returned.
+	if err != nil && !errors.Is(err, txpool.ErrAlreadyKnown) {
 		api.b.PurgePrivateTx(tx.Hash())
 		return hash, err
 	}

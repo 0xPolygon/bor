@@ -202,7 +202,10 @@ func (s *Service) updateTaskInCache(newTask TxTask) (bool, error) {
 		return existingTask.preconfirmed, existingTask.err
 	}
 
-	invalidToValidPreconfsMeter.Mark(1)
+	// Update the metric if status was false earlier and is being set to true now
+	if newTask.preconfirmed {
+		invalidToValidPreconfsMeter.Mark(1)
+	}
 	existingTask.preconfirmed = newTask.preconfirmed
 	existingTask.err = newTask.err
 	s.store[newTask.hash] = existingTask
@@ -253,7 +256,7 @@ func (s *Service) CheckTxPreconfStatus(hash common.Hash) (bool, error) {
 	// Update the task in cache and return the latest status
 	res, err = s.updateTaskInCache(TxTask{hash: hash, preconfirmed: res, err: err})
 	if err != nil {
-		log.Info("[tx-relay] Unable to validate tx status for preconf", "err", task.err)
+		log.Info("[tx-relay] Unable to validate tx status for preconf", "err", err)
 	}
 	return res, err
 }

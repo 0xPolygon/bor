@@ -78,7 +78,11 @@ func (s *PrivateTxStore) cleanupLoop() {
 	for {
 		if err := s.cleanup(); err != nil {
 			log.Debug("Error cleaning up private tx store, restarting", "err", err)
-			time.Sleep(time.Second)
+			select {
+			case <-s.closeCh:
+				return
+			case <-time.After(time.Second):
+			}
 		} else {
 			break
 		}

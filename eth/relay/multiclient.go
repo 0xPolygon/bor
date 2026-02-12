@@ -104,9 +104,12 @@ type SendTxForPreconfResponse struct {
 
 func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 	// Submit tx to all block producers in parallel
-	var lastErr error
-	var preconfOfferedCount atomic.Uint64
-	var wg sync.WaitGroup
+	var (
+		firstErr            error
+		wg                  sync.WaitGroup
+		setError            sync.Once
+		preconfOfferedCount atomic.Uint64
+	)
 	for i, client := range mc.clients {
 		wg.Add(1)
 		go func(client *rpc.Client, index int) {
@@ -124,7 +127,9 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 					preconfOfferedCount.Add(1)
 					return
 				}
-				lastErr = err
+				setError.Do(func() {
+					firstErr = err
+				})
 				return
 			}
 			rpcCallsSuccessMeter.Mark(1)
@@ -141,23 +146,25 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 		return true, nil
 	}
 
-	if lastErr != nil {
+	if firstErr != nil {
 		rpcErrorInPreconfMeter.Mark(1)
 	} else {
 		belowThresholdPreconfMeter.Mark(1)
 	}
 
-	return false, lastErr
+	return false, firstErr
 }
 
 func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool, txGetter TxGetter) error {
 	// Submit tx to all block producers in parallel (initial attempt)
 	hexTx := hexutil.Encode(rawTx)
 
-	var lastErr error
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
+	var (
+		firstErr error
+		setError sync.Once
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+	)
 	failedIndices := make([]int, 0)
 	successfulIndices := make([]int, 0)
 
@@ -181,7 +188,9 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 					successfulIndices = append(successfulIndices, index)
 					return
 				}
-				lastErr = err
+				setError.Do(func() {
+					firstErr = err
+				})
 				failedIndices = append(failedIndices, index)
 				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash)
 			} else {
@@ -200,13 +209,13 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 
 	// Some submissions failed, start background retry
 	log.Debug("[tx-relay] Failed to submit private tx to one or more block producers, starting retry",
-		"err", lastErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
+		"err", firstErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
 
 	if retry {
 		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, txGetter)
 	}
 
-	return lastErr
+	return firstErr
 }
 
 // retryPrivateTxSubmission runs in background to retry private tx submission to producers
@@ -281,9 +290,12 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 
 func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 	// Submit tx to all block producers in parallel
-	var lastErr error
-	var preconfOfferedCount atomic.Uint64
-	var wg sync.WaitGroup
+	var (
+		firstErr            error
+		setError            sync.Once
+		wg                  sync.WaitGroup
+		preconfOfferedCount atomic.Uint64
+	)
 	for i, client := range mc.clients {
 		wg.Add(1)
 		go func(client *rpc.Client, index int) {
@@ -295,7 +307,9 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 			cancel()
 			if err != nil {
 				rpcCallsFailureMeter.Mark(1)
-				lastErr = err
+				setError.Do(func() {
+					firstErr = err
+				})
 				return
 			}
 			rpcCallsSuccessMeter.Mark(1)
@@ -311,13 +325,13 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 		return true, nil
 	}
 
-	if lastErr != nil {
+	if firstErr != nil {
 		rpcErrorInPreconfMeter.Mark(1)
 	} else {
 		belowThresholdPreconfMeter.Mark(1)
 	}
 
-	return false, lastErr
+	return false, firstErr
 }
 
 // Close closes all rpc client connections

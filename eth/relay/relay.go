@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
@@ -44,6 +45,9 @@ func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool,
 	}
 	var txRelay *Service
 	if enablePreconf || enablePrivateTx {
+		if len(blockProducerURLs) == 0 {
+			log.Warn("Relay service enabled but no block producer URLs provided; relay will be non-functional")
+		}
 		txRelay = NewService(blockProducerURLs, nil)
 	}
 	return &RelayService{
