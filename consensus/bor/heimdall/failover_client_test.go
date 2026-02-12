@@ -21,7 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 )
 
-// mockHeimdallClient is a configurable mock implementing the heimdallClient interface.
+// mockHeimdallClient is a configurable mock implementing the Endpoint interface.
 type mockHeimdallClient struct {
 	getSpanFn            func(ctx context.Context, spanID uint64) (*types.Span, error)
 	getLatestSpanFn      func(ctx context.Context) (*types.Span, error)
@@ -590,4 +590,115 @@ func TestIsFailoverError(t *testing.T) {
 
 	// nil error should not trigger failover
 	assert.False(t, isFailoverError(nil, ctx), "nil error should not trigger failover")
+}
+
+func TestFailover_ThreeClients_CascadeToTertiary(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	span, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, span)
+
+	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been tried")
+	assert.Equal(t, int32(1), tertiary.hits.Load(), "tertiary should have been called once")
+}
+
+func TestFailover_AllClientsFail(t *testing.T) {
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	tertiary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	defer fc.Close()
+
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.Error(t, err)
+}
+
+func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
+	primaryDown := atomic.Bool{}
+	primaryDown.Store(true)
+
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
+			if primaryDown.Load() {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &types.Span{Id: spanID}, nil
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Trigger cascade to tertiary
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	// Wait for cooldown
+	time.Sleep(100 * time.Millisecond)
+
+	// Bring primary back
+	primaryDown.Store(false)
+	primaryBefore := primary.hits.Load()
+
+	// Next call should probe primary and succeed
+	_, err = fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Greater(t, primary.hits.Load(), primaryBefore, "primary should have been probed")
+
+	// Verify we're back on primary
+	tertiaryBefore := tertiary.hits.Load()
+	_, err = fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Equal(t, tertiaryBefore, tertiary.hits.Load(), "should be back on primary now")
+}
+
+func TestFailover_ClosesAllClients(t *testing.T) {
+	var closed [3]atomic.Bool
+
+	clients := make([]Endpoint, 3)
+	for i := range clients {
+		idx := i
+		clients[i] = &mockHeimdallClient{closeFn: func() { closed[idx].Store(true) }}
+	}
+
+	fc := NewFailoverHeimdallClient(clients...)
+	fc.Close()
+
+	for i := range closed {
+		assert.True(t, closed[i].Load(), "client %d should be closed", i)
+	}
 }

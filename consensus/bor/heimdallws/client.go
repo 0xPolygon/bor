@@ -3,6 +3,7 @@ package heimdallws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -45,16 +46,26 @@ type HeimdallWSClient struct {
 }
 
 // NewHeimdallWSClient creates a new WS client for Heimdall with optional failover.
-// If secondaryURL is empty, the client operates with a single URL (existing behavior).
-func NewHeimdallWSClient(primaryURL string, secondaryURL string) (*HeimdallWSClient, error) {
-	urls := []string{primaryURL}
-	if secondaryURL != "" {
-		urls = append(urls, secondaryURL)
+// The first URL is primary; additional URLs are failover candidates in priority order.
+func NewHeimdallWSClient(urls ...string) (*HeimdallWSClient, error) {
+	if len(urls) == 0 {
+		return nil, errors.New("at least one WS URL required")
+	}
+
+	var filtered []string
+	for _, u := range urls {
+		if u != "" {
+			filtered = append(filtered, u)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return nil, errors.New("at least one non-empty WS URL required")
 	}
 
 	return &HeimdallWSClient{
 		conn:            nil,
-		urls:            urls,
+		urls:            filtered,
 		events:          make(chan *milestone.Milestone),
 		done:            make(chan struct{}),
 		primaryAttempts: defaultPrimaryAttempts,
@@ -95,8 +106,8 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		default:
 		}
 
-		// If on secondary and cooldown has elapsed, probe primary first.
-		if c.activeURL == 1 && !c.lastFailover.IsZero() && time.Since(c.lastFailover) >= c.wsCooldown {
+		// If on a non-primary URL and cooldown has elapsed, probe primary first.
+		if c.activeURL != 0 && !c.lastFailover.IsZero() && time.Since(c.lastFailover) >= c.wsCooldown {
 			log.Info("WS cooldown elapsed, probing primary", "url", c.urls[0])
 			c.activeURL = 0
 			primaryAttempts = 0
@@ -108,17 +119,16 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		if err != nil {
 			log.Error("failed to dial websocket on heimdall ws subscription", "url", url, "err", err)
 
-			// Count failures on primary; switch to secondary after threshold.
-			if c.activeURL == 0 {
-				primaryAttempts++
+			// Count failures on current URL; advance to next after threshold.
+			primaryAttempts++
 
-				if len(c.urls) > 1 && primaryAttempts >= c.primaryAttempts {
-					log.Warn("Primary WS failed, switching to secondary",
-						"primary", c.urls[0], "secondary", c.urls[1], "attempts", primaryAttempts)
-					c.activeURL = 1
-					c.lastFailover = time.Now()
-					primaryAttempts = 0
-				}
+			if len(c.urls) > 1 && primaryAttempts >= c.primaryAttempts {
+				next := (c.activeURL + 1) % len(c.urls)
+				log.Warn("WS URL failed, switching to next",
+					"from", c.urls[c.activeURL], "to", c.urls[next], "attempts", primaryAttempts)
+				c.activeURL = next
+				c.lastFailover = time.Now()
+				primaryAttempts = 0
 			}
 
 			continue

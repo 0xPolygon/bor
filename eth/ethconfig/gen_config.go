@@ -67,13 +67,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
 		HeimdallURL                          string
-		HeimdallSecondaryURL                 string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
 		HeimdallgRPCAddress                  string
-		HeimdallgRPCSecondaryAddress         string
 		HeimdallWSAddress                    string
-		HeimdallWSSecondaryAddress           string
 		RunHeimdall                          bool
 		RunHeimdallArgs                      string
 		UseHeimdallApp                       bool
@@ -139,13 +136,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
 	enc.HeimdallURL = c.HeimdallURL
-	enc.HeimdallSecondaryURL = c.HeimdallSecondaryURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
 	enc.HeimdallgRPCAddress = c.HeimdallgRPCAddress
-	enc.HeimdallgRPCSecondaryAddress = c.HeimdallgRPCSecondaryAddress
 	enc.HeimdallWSAddress = c.HeimdallWSAddress
-	enc.HeimdallWSSecondaryAddress = c.HeimdallWSSecondaryAddress
 	enc.RunHeimdall = c.RunHeimdall
 	enc.RunHeimdallArgs = c.RunHeimdallArgs
 	enc.UseHeimdallApp = c.UseHeimdallApp
@@ -219,13 +213,10 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
 		HeimdallURL                          *string
-		HeimdallSecondaryURL                 *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
 		HeimdallgRPCAddress                  *string
-		HeimdallgRPCSecondaryAddress         *string
 		HeimdallWSAddress                    *string
-		HeimdallWSSecondaryAddress           *string
 		RunHeimdall                          *bool
 		RunHeimdallArgs                      *string
 		UseHeimdallApp                       *bool
@@ -382,9 +373,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
 	}
-	if dec.HeimdallSecondaryURL != nil {
-		c.HeimdallSecondaryURL = *dec.HeimdallSecondaryURL
-	}
 	if dec.HeimdallTimeout != nil {
 		c.HeimdallTimeout = *dec.HeimdallTimeout
 	}
@@ -394,14 +382,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.HeimdallgRPCAddress != nil {
 		c.HeimdallgRPCAddress = *dec.HeimdallgRPCAddress
 	}
-	if dec.HeimdallgRPCSecondaryAddress != nil {
-		c.HeimdallgRPCSecondaryAddress = *dec.HeimdallgRPCSecondaryAddress
-	}
 	if dec.HeimdallWSAddress != nil {
 		c.HeimdallWSAddress = *dec.HeimdallWSAddress
-	}
-	if dec.HeimdallWSSecondaryAddress != nil {
-		c.HeimdallWSSecondaryAddress = *dec.HeimdallWSSecondaryAddress
 	}
 	if dec.RunHeimdall != nil {
 		c.RunHeimdall = *dec.RunHeimdall

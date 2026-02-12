@@ -306,28 +306,19 @@ type P2PDiscovery struct {
 }
 
 type HeimdallConfig struct {
-	// URL is the url of the heimdall server
+	// URL is the url of the heimdall server (comma-separated for failover: "url1,url2,url3")
 	URL string `hcl:"url,optional" toml:"url,optional"`
-
-	// SecondaryURL is the url of a secondary heimdall server used for failover
-	SecondaryURL string `hcl:"secondary-url,optional" toml:"secondary-url,optional"`
 
 	Timeout time.Duration `hcl:"timeout,optional" toml:"timeout,optional"`
 
 	// Without is used to disable remote heimdall during testing
 	Without bool `hcl:"bor.without,optional" toml:"bor.without,optional"`
 
-	// GRPCAddress is the address of the heimdall grpc server
+	// GRPCAddress is the address of the heimdall grpc server (comma-separated for failover: "addr1,addr2")
 	GRPCAddress string `hcl:"grpc-address,optional" toml:"grpc-address,optional"`
 
-	// GRPCSecondaryAddress is the address of a secondary heimdall grpc server for failover
-	GRPCSecondaryAddress string `hcl:"grpc-secondary-address,optional" toml:"grpc-secondary-address,optional"`
-
-	// WSAddress is the address of the heimdall ws subscription server
+	// WSAddress is the address of the heimdall ws subscription server (comma-separated for failover: "addr1,addr2")
 	WSAddress string `hcl:"ws-address,optional" toml:"ws-address,optional"`
-
-	// WSSecondaryAddress is the address of a secondary heimdall ws subscription server for failover
-	WSSecondaryAddress string `hcl:"ws-secondary-address,optional" toml:"ws-secondary-address,optional"`
 
 	// RunHeimdall is used to run heimdall as a child process
 	RunHeimdall bool `hcl:"bor.runheimdall,optional" toml:"bor.runheimdall,optional"`
@@ -822,14 +813,11 @@ func DefaultConfig() *Config {
 			},
 		},
 		Heimdall: &HeimdallConfig{
-			URL:                  "http://localhost:1317",
-			SecondaryURL:         "",
-			Timeout:              5 * time.Second,
-			Without:              false,
-			GRPCAddress:          "",
-			GRPCSecondaryAddress: "",
-			WSAddress:            "",
-			WSSecondaryAddress:   "",
+			URL:         "http://localhost:1317",
+			Timeout:     5 * time.Second,
+			Without:     false,
+			GRPCAddress: "",
+			WSAddress:   "",
 		},
 		SyncMode:    "full",
 		GcMode:      "full",
@@ -1165,13 +1153,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.HeimdallURL = c.Heimdall.URL
-	n.HeimdallSecondaryURL = c.Heimdall.SecondaryURL
 	n.HeimdallTimeout = c.Heimdall.Timeout
 	n.WithoutHeimdall = c.Heimdall.Without
 	n.HeimdallgRPCAddress = c.Heimdall.GRPCAddress
-	n.HeimdallgRPCSecondaryAddress = c.Heimdall.GRPCSecondaryAddress
 	n.HeimdallWSAddress = c.Heimdall.WSAddress
-	n.HeimdallWSSecondaryAddress = c.Heimdall.WSSecondaryAddress
 	n.RunHeimdall = c.Heimdall.RunHeimdall
 	n.RunHeimdallArgs = c.Heimdall.RunHeimdallArgs
 	n.UseHeimdallApp = c.Heimdall.UseHeimdallApp

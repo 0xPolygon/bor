@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdallws"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,11 +91,10 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 	require.True(t, ok, "Expected Bor consensus engine")
 }
 
-func TestCreateConsensusEngine_HeimdallSecondaryURL(t *testing.T) {
+func TestCreateConsensusEngine_CommaSeparatedHeimdallURL(t *testing.T) {
 	t.Parallel()
 	ethConfig := &Config{
-		OverrideHeimdallClient: &mockHeimdallClient{},
-		HeimdallSecondaryURL:   "http://secondary:1317",
+		HeimdallURL: "http://primary:1317,http://secondary:1317",
 	}
 
 	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
@@ -106,6 +106,24 @@ func TestCreateConsensusEngine_HeimdallSecondaryURL(t *testing.T) {
 
 	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
 	require.True(t, ok, "Expected HeimdallClient to be wrapped in FailoverHeimdallClient")
+}
+
+func TestCreateConsensusEngine_SingleHeimdallURL(t *testing.T) {
+	t.Parallel()
+	ethConfig := &Config{
+		HeimdallURL: "http://primary:1317",
+	}
+
+	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+	require.NoError(t, err)
+	defer engine.Close()
+
+	borEngine, ok := engine.(*bor.Bor)
+	require.True(t, ok, "Expected Bor consensus engine")
+
+	// Single URL should NOT produce a FailoverHeimdallClient
+	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
+	require.False(t, ok, "Expected no FailoverHeimdallClient for single URL")
 }
 
 func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
@@ -120,13 +138,11 @@ func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
 	require.True(t, ok, "Expected Bor consensus engine")
 }
 
-func TestCreateConsensusEngine_GRPCSecondaryFailover(t *testing.T) {
+func TestCreateConsensusEngine_CommaSeparatedGRPC(t *testing.T) {
 	t.Parallel()
-
 	ethConfig := &Config{
-		OverrideHeimdallClient:       &mockHeimdallClient{},
-		HeimdallgRPCSecondaryAddress: "localhost:50051",
-		HeimdallURL:                  "http://localhost:1317",
+		HeimdallURL:         "http://primary:1317,http://secondary:1317",
+		HeimdallgRPCAddress: "localhost:50051,localhost:50052",
 	}
 
 	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
@@ -136,19 +152,16 @@ func TestCreateConsensusEngine_GRPCSecondaryFailover(t *testing.T) {
 	borEngine, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 
-	// Primary mock gets wrapped in FailoverHeimdallClient with gRPC secondary
 	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.True(t, ok, "Expected HeimdallClient to be wrapped in FailoverHeimdallClient")
+	require.True(t, ok, "Expected FailoverHeimdallClient with multiple gRPC endpoints")
 }
 
-func TestCreateConsensusEngine_GRPCSecondaryError_FallsBackToHTTP(t *testing.T) {
+func TestCreateConsensusEngine_WSCommaSeparated(t *testing.T) {
 	t.Parallel()
 
 	ethConfig := &Config{
 		OverrideHeimdallClient: &mockHeimdallClient{},
-		// Invalid scheme causes NewHeimdallGRPCClient to fail
-		HeimdallgRPCSecondaryAddress: "ftp://localhost:50051",
-		HeimdallSecondaryURL:         "http://secondary:1317",
+		HeimdallWSAddress:      "ws://localhost:26657,ws://secondary:26657",
 	}
 
 	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
@@ -158,73 +171,6 @@ func TestCreateConsensusEngine_GRPCSecondaryError_FallsBackToHTTP(t *testing.T) 
 	borEngine, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 
-	// gRPC secondary failed, but HTTP secondary kicks in
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.True(t, ok, "Expected FailoverHeimdallClient with HTTP fallback after gRPC failure")
-}
-
-func TestCreateConsensusEngine_GRPCSecondaryError_NoHTTPFallback(t *testing.T) {
-	t.Parallel()
-
-	ethConfig := &Config{
-		OverrideHeimdallClient: &mockHeimdallClient{},
-		// Invalid scheme causes NewHeimdallGRPCClient to fail
-		HeimdallgRPCSecondaryAddress: "ftp://localhost:50051",
-		// No HeimdallSecondaryURL — no fallback available
-	}
-
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
-	require.NoError(t, err)
-	defer engine.Close()
-
-	borEngine, ok := engine.(*bor.Bor)
-	require.True(t, ok, "Expected Bor consensus engine")
-
-	// No secondary available, so no failover wrapper
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.False(t, ok, "Expected no FailoverHeimdallClient when both gRPC and HTTP secondary fail/absent")
-}
-
-func TestCreateConsensusEngine_GRPCSecondaryUsesSecondaryHTTPURL(t *testing.T) {
-	t.Parallel()
-
-	ethConfig := &Config{
-		OverrideHeimdallClient:       &mockHeimdallClient{},
-		HeimdallURL:                  "http://primary:1317",
-		HeimdallSecondaryURL:         "http://secondary:1317",
-		HeimdallgRPCSecondaryAddress: "localhost:50051",
-	}
-
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
-	require.NoError(t, err)
-	defer engine.Close()
-
-	borEngine, ok := engine.(*bor.Bor)
-	require.True(t, ok, "Expected Bor consensus engine")
-
-	// gRPC secondary should be created successfully and wrap in failover.
-	// gRPC takes priority over HTTP secondary when both are available.
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.True(t, ok, "Expected FailoverHeimdallClient (gRPC secondary takes priority over HTTP)")
-}
-
-func TestCreateConsensusEngine_WSWithSecondary(t *testing.T) {
-	t.Parallel()
-
-	ethConfig := &Config{
-		OverrideHeimdallClient:     &mockHeimdallClient{},
-		HeimdallWSAddress:          "ws://localhost:26657",
-		HeimdallWSSecondaryAddress: "ws://secondary:26657",
-	}
-
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
-	require.NoError(t, err)
-	defer engine.Close()
-
-	borEngine, ok := engine.(*bor.Bor)
-	require.True(t, ok, "Expected Bor consensus engine")
-
-	// WS client should be created
 	require.NotNil(t, borEngine.HeimdallWSClient, "Expected non-nil HeimdallWSClient")
 
 	_, ok = borEngine.HeimdallWSClient.(*heimdallws.HeimdallWSClient)
@@ -268,4 +214,32 @@ func TestCreateConsensusEngine_NoWSAddress(t *testing.T) {
 	require.True(t, ok, "Expected Bor consensus engine")
 
 	require.Nil(t, borEngine.HeimdallWSClient, "Expected nil HeimdallWSClient when no WS address configured")
+}
+
+func TestParseURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"empty string", "", nil},
+		{"single URL", "http://localhost:1317", []string{"http://localhost:1317"}},
+		{"two URLs", "http://a:1317,http://b:1317", []string{"http://a:1317", "http://b:1317"}},
+		{"three URLs", "http://a:1317,http://b:1317,http://c:1317", []string{"http://a:1317", "http://b:1317", "http://c:1317"}},
+		{"whitespace trimmed", " http://a:1317 , http://b:1317 ", []string{"http://a:1317", "http://b:1317"}},
+		{"trailing comma", "http://a:1317,", []string{"http://a:1317"}},
+		{"leading comma", ",http://a:1317", []string{"http://a:1317"}},
+		{"empty entries filtered", "http://a:1317,,http://b:1317", []string{"http://a:1317", "http://b:1317"}},
+		{"only commas", ",,,", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := parseURLs(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

@@ -175,15 +175,9 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// heimdall
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdall",
-		Usage:   "URL of Heimdall service",
+		Usage:   "URL of Heimdall service (comma-separated for failover: \"url1,url2\")",
 		Value:   &c.cliConfig.Heimdall.URL,
 		Default: c.cliConfig.Heimdall.URL,
-	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "bor.heimdall.secondary",
-		Usage:   "URL of a secondary Heimdall service for failover",
-		Value:   &c.cliConfig.Heimdall.SecondaryURL,
-		Default: c.cliConfig.Heimdall.SecondaryURL,
 	})
 	f.DurationFlag(&flagset.DurationFlag{
 		Name:    "bor.heimdalltimeout",
@@ -205,27 +199,15 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallgRPC",
-		Usage:   "Address of Heimdall gRPC service",
+		Usage:   "Address of Heimdall gRPC service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.GRPCAddress,
 		Default: c.cliConfig.Heimdall.GRPCAddress,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "bor.heimdallgRPC.secondary",
-		Usage:   "Address of a secondary Heimdall gRPC service for failover",
-		Value:   &c.cliConfig.Heimdall.GRPCSecondaryAddress,
-		Default: c.cliConfig.Heimdall.GRPCSecondaryAddress,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallWS",
-		Usage:   "Address of Heimdall ws subscription service",
+		Usage:   "Address of Heimdall WS subscription service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.WSAddress,
 		Default: c.cliConfig.Heimdall.WSAddress,
-	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "bor.heimdallWS.secondary",
-		Usage:   "Address of a secondary Heimdall WS subscription service for failover",
-		Value:   &c.cliConfig.Heimdall.WSSecondaryAddress,
-		Default: c.cliConfig.Heimdall.WSSecondaryAddress,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "bor.runheimdall",

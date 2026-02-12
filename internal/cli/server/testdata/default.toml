@@ -50,12 +50,9 @@ devfakeauthor = false
 
 [heimdall]
   url = "http://localhost:1317"
-  secondary-url = ""
   "bor.without" = false
   grpc-address = ""
-  grpc-secondary-address = ""
   ws-address = ""
-  ws-secondary-address = ""
   "bor.runheimdall" = false
   "bor.runheimdallargs" = ""
   "bor.useheimdallapp" = false

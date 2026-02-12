@@ -21,9 +21,10 @@ const (
 	defaultSecondaryCooldown = 2 * time.Minute
 )
 
-// heimdallClient is a local interface matching bor.IHeimdallClient to avoid
-// an import cycle with the consensus/bor package.
-type heimdallClient interface {
+// Endpoint matches bor.IHeimdallClient. It is exported so that external
+// packages can build []Endpoint slices for NewFailoverHeimdallClient without
+// running into Go's covariant-slice restriction.
+type Endpoint interface {
 	StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
 	GetSpan(ctx context.Context, spanID uint64) (*types.Span, error)
 	GetLatestSpan(ctx context.Context) (*types.Span, error)
@@ -35,89 +36,90 @@ type heimdallClient interface {
 	Close()
 }
 
-// FailoverHeimdallClient wraps two heimdall clients (primary + secondary) and
-// transparently fails over from primary to secondary when the primary is
+// FailoverHeimdallClient wraps N heimdall clients (primary at index 0, failovers
+// at 1..N-1) and transparently cascades through them when the active client is
 // unreachable. After a cooldown period it probes the primary again.
 type FailoverHeimdallClient struct {
-	clients        [2]heimdallClient
+	clients        []Endpoint
 	mu             sync.Mutex
-	active         int       // 0 = primary, 1 = secondary
-	lastSwitch     time.Time // when we last switched to secondary
+	active         int       // 0 = primary, >0 = failover
+	lastSwitch     time.Time // when we last switched away from primary
 	attemptTimeout time.Duration
 	cooldown       time.Duration
 }
 
-func NewFailoverHeimdallClient(primary, secondary heimdallClient) *FailoverHeimdallClient {
+func NewFailoverHeimdallClient(clients ...Endpoint) *FailoverHeimdallClient {
 	return &FailoverHeimdallClient{
-		clients:        [2]heimdallClient{primary, secondary},
+		clients:        clients,
 		attemptTimeout: defaultAttemptTimeout,
 		cooldown:       defaultSecondaryCooldown,
 	}
 }
 
 func (f *FailoverHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) ([]*clerk.EventRecordWithTime, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
 		return c.StateSyncEvents(ctx, fromID, to)
 	})
 }
 
 func (f *FailoverHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (*types.Span, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*types.Span, error) {
 		return c.GetSpan(ctx, spanID)
 	})
 }
 
 func (f *FailoverHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (*types.Span, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*types.Span, error) {
 		return c.GetLatestSpan(ctx)
 	})
 }
 
 func (f *FailoverHeimdallClient) FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (*checkpoint.Checkpoint, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*checkpoint.Checkpoint, error) {
 		return c.FetchCheckpoint(ctx, number)
 	})
 }
 
 func (f *FailoverHeimdallClient) FetchCheckpointCount(ctx context.Context) (int64, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (int64, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (int64, error) {
 		return c.FetchCheckpointCount(ctx)
 	})
 }
 
 func (f *FailoverHeimdallClient) FetchMilestone(ctx context.Context) (*milestone.Milestone, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (*milestone.Milestone, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*milestone.Milestone, error) {
 		return c.FetchMilestone(ctx)
 	})
 }
 
 func (f *FailoverHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (int64, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (int64, error) {
 		return c.FetchMilestoneCount(ctx)
 	})
 }
 
 func (f *FailoverHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	return callWithFailover(f, ctx, func(ctx context.Context, c heimdallClient) (*ctypes.SyncInfo, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*ctypes.SyncInfo, error) {
 		return c.FetchStatus(ctx)
 	})
 }
 
 func (f *FailoverHeimdallClient) Close() {
-	f.clients[0].Close()
-	f.clients[1].Close()
+	for _, c := range f.clients {
+		c.Close()
+	}
 }
 
 // callWithFailover executes fn against the active client. If the active client
-// is primary and the call fails with a failover-eligible error, it retries on
-// the secondary. If on secondary past the cooldown, it probes the primary first.
-func callWithFailover[T any](f *FailoverHeimdallClient, ctx context.Context, fn func(context.Context, heimdallClient) (T, error)) (T, error) {
+// fails with a failover-eligible error, it cascades through remaining clients.
+// If on a non-primary client past the cooldown, it probes the primary first.
+func callWithFailover[T any](f *FailoverHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error)) (T, error) {
 	f.mu.Lock()
 	active := f.active
-	shouldProbe := active == 1 && time.Since(f.lastSwitch) >= f.cooldown
+	shouldProbe := active != 0 && time.Since(f.lastSwitch) >= f.cooldown
 	f.mu.Unlock()
 
-	// If on secondary and cooldown has elapsed, probe primary
+	// If on a non-primary client and cooldown has elapsed, probe primary
 	if shouldProbe {
 		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
 		result, err := fn(subCtx, f.clients[0])
@@ -138,23 +140,40 @@ func callWithFailover[T any](f *FailoverHeimdallClient, ctx context.Context, fn 
 			return zero, err
 		}
 
-		// Primary still down, stay on secondary
+		// Primary still down, stay on current client
 		f.mu.Lock()
 		f.lastSwitch = time.Now()
 		f.mu.Unlock()
 
-		log.Debug("Heimdall failover: primary still down after probe, staying on secondary", "err", err)
+		log.Debug("Heimdall failover: primary still down after probe, staying on current", "active", active, "err", err)
 
-		// Secondary calls use the caller's ctx directly (no sub-timeout).
-		// The timeout is only needed on primary to bound the failover decision.
-		// Once on secondary there is no further fallback, so the caller's
-		// context (which always has a cancellation path in Bor) governs lifetime.
-		return fn(ctx, f.clients[1])
+		// Try current client, then cascade through remaining on failure
+		result, err = fn(ctx, f.clients[active])
+		if err == nil {
+			return result, nil
+		}
+
+		if !isFailoverError(err, ctx) {
+			var zero T
+			return zero, err
+		}
+
+		return cascadeClients(f, ctx, fn, active, err)
 	}
 
-	if active == 1 {
-		// On secondary, not yet time to probe: use secondary directly
-		return fn(ctx, f.clients[1])
+	if active != 0 {
+		// On a non-primary client, not yet time to probe: use current directly
+		result, err := fn(ctx, f.clients[active])
+		if err == nil {
+			return result, nil
+		}
+
+		if !isFailoverError(err, ctx) {
+			var zero T
+			return zero, err
+		}
+
+		return cascadeClients(f, ctx, fn, active, err)
 	}
 
 	// Active is primary: try with timeout
@@ -171,15 +190,38 @@ func callWithFailover[T any](f *FailoverHeimdallClient, ctx context.Context, fn 
 		return zero, err
 	}
 
-	// Failover to secondary
-	f.mu.Lock()
-	f.active = 1
-	f.lastSwitch = time.Now()
-	f.mu.Unlock()
+	// Cascade through clients [1, 2, ..., N-1]
+	log.Warn("Heimdall failover: primary failed, cascading to next client", "err", err)
 
-	log.Warn("Heimdall failover: primary failed, switching to secondary", "err", err)
+	return cascadeClients(f, ctx, fn, 0, err)
+}
 
-	return fn(ctx, f.clients[1])
+// cascadeClients tries clients after the given index. On first success it
+// switches the active client and returns. If all fail, returns the last error.
+func cascadeClients[T any](f *FailoverHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error), after int, lastErr error) (T, error) {
+	for i := after + 1; i < len(f.clients); i++ {
+		result, err := fn(ctx, f.clients[i])
+		if err == nil {
+			f.mu.Lock()
+			f.active = i
+			f.lastSwitch = time.Now()
+			f.mu.Unlock()
+
+			log.Warn("Heimdall failover: switched to client", "index", i)
+
+			return result, nil
+		}
+
+		lastErr = err
+
+		if !isFailoverError(err, ctx) {
+			var zero T
+			return zero, err
+		}
+	}
+
+	var zero T
+	return zero, lastErr
 }
 
 // isFailoverError returns true if the error warrants trying the secondary.

@@ -16,18 +16,11 @@ var (
 	// Bor Specific flags
 	//
 
-	// HeimdallURLFlag flag for heimdall url
+	// HeimdallURLFlag flag for heimdall url (comma-separated for failover)
 	HeimdallURLFlag = &cli.StringFlag{
 		Name:  "bor.heimdall",
-		Usage: "URL of Heimdall service",
+		Usage: "URL of Heimdall service (comma-separated for failover: \"url1,url2\")",
 		Value: "http://localhost:1317",
-	}
-
-	// HeimdallSecondaryURLFlag flag for secondary heimdall url (failover)
-	HeimdallSecondaryURLFlag = &cli.StringFlag{
-		Name:  "bor.heimdall.secondary",
-		Usage: "URL of a secondary Heimdall service for failover",
-		Value: "",
 	}
 
 	// HeimdallTimeoutFlag flag for heimdall timeout
@@ -43,31 +36,17 @@ var (
 		Usage: "Run without Heimdall service (for testing purpose)",
 	}
 
-	// HeimdallgRPCAddressFlag flag for heimdall gRPC address
+	// HeimdallgRPCAddressFlag flag for heimdall gRPC address (comma-separated for failover)
 	HeimdallgRPCAddressFlag = &cli.StringFlag{
 		Name:  "bor.heimdallgRPC",
-		Usage: "Address of Heimdall gRPC service",
+		Usage: "Address of Heimdall gRPC service (comma-separated for failover: \"addr1,addr2\")",
 		Value: "",
 	}
 
-	// HeimdallgRPCSecondaryAddressFlag flag for secondary heimdall gRPC address (failover)
-	HeimdallgRPCSecondaryAddressFlag = &cli.StringFlag{
-		Name:  "bor.heimdallgRPC.secondary",
-		Usage: "Address of a secondary Heimdall gRPC service for failover",
-		Value: "",
-	}
-
-	// HeimdallWSAddressFlag flag for heimdall websocket subscription service
+	// HeimdallWSAddressFlag flag for heimdall websocket subscription service (comma-separated for failover)
 	HeimdallWSAddressFlag = &cli.StringFlag{
 		Name:  "bor.heimdallWS",
-		Usage: "Address of Heimdall WS Subscription service",
-		Value: "",
-	}
-
-	// HeimdallWSSecondaryAddressFlag flag for secondary heimdall WS address (failover)
-	HeimdallWSSecondaryAddressFlag = &cli.StringFlag{
-		Name:  "bor.heimdallWS.secondary",
-		Usage: "Address of a secondary Heimdall WS Subscription service for failover",
+		Usage: "Address of Heimdall WS Subscription service (comma-separated for failover: \"addr1,addr2\")",
 		Value: "",
 	}
 
@@ -92,13 +71,10 @@ var (
 	// BorFlags all bor related flags
 	BorFlags = []cli.Flag{
 		HeimdallURLFlag,
-		HeimdallSecondaryURLFlag,
 		HeimdallTimeoutFlag,
 		WithoutHeimdallFlag,
 		HeimdallgRPCAddressFlag,
-		HeimdallgRPCSecondaryAddressFlag,
 		HeimdallWSAddressFlag,
-		HeimdallWSSecondaryAddressFlag,
 		RunHeimdallFlag,
 		RunHeimdallArgsFlag,
 		UseHeimdallAppFlag,
@@ -108,13 +84,10 @@ var (
 // SetBorConfig sets bor config
 func SetBorConfig(ctx *cli.Context, cfg *eth.Config) {
 	cfg.HeimdallURL = ctx.String(HeimdallURLFlag.Name)
-	cfg.HeimdallSecondaryURL = ctx.String(HeimdallSecondaryURLFlag.Name)
 	cfg.HeimdallTimeout = ctx.Duration(HeimdallTimeoutFlag.Name)
 	cfg.WithoutHeimdall = ctx.Bool(WithoutHeimdallFlag.Name)
 	cfg.HeimdallgRPCAddress = ctx.String(HeimdallgRPCAddressFlag.Name)
-	cfg.HeimdallgRPCSecondaryAddress = ctx.String(HeimdallgRPCSecondaryAddressFlag.Name)
 	cfg.HeimdallWSAddress = ctx.String(HeimdallWSAddressFlag.Name)
-	cfg.HeimdallWSSecondaryAddress = ctx.String(HeimdallWSSecondaryAddressFlag.Name)
 	cfg.RunHeimdall = ctx.Bool(RunHeimdallFlag.Name)
 	cfg.RunHeimdallArgs = ctx.String(RunHeimdallArgsFlag.Name)
 	cfg.UseHeimdallApp = ctx.Bool(UseHeimdallAppFlag.Name)

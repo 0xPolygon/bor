@@ -130,27 +130,46 @@ func wsURL(httpURL string) string {
 }
 
 func TestWSClient_ConstructorSingleURL(t *testing.T) {
-	client, err := NewHeimdallWSClient("ws://localhost:1234", "")
+	client, err := NewHeimdallWSClient("ws://localhost:1234")
 	require.NoError(t, err)
 	assert.Len(t, client.urls, 1)
 	assert.Equal(t, "ws://localhost:1234", client.urls[0])
 	assert.Equal(t, 0, client.activeURL)
 }
 
-func TestWSClient_ConstructorDualURL(t *testing.T) {
-	client, err := NewHeimdallWSClient("ws://primary:1234", "ws://secondary:5678")
+func TestWSClient_ConstructorMultipleURLs(t *testing.T) {
+	client, err := NewHeimdallWSClient("ws://primary:1234", "ws://secondary:5678", "ws://tertiary:9999")
+	require.NoError(t, err)
+	assert.Len(t, client.urls, 3)
+	assert.Equal(t, "ws://primary:1234", client.urls[0])
+	assert.Equal(t, "ws://secondary:5678", client.urls[1])
+	assert.Equal(t, "ws://tertiary:9999", client.urls[2])
+	assert.Equal(t, 0, client.activeURL)
+}
+
+func TestWSClient_ConstructorFiltersEmpty(t *testing.T) {
+	client, err := NewHeimdallWSClient("ws://primary:1234", "", "ws://tertiary:9999")
 	require.NoError(t, err)
 	assert.Len(t, client.urls, 2)
 	assert.Equal(t, "ws://primary:1234", client.urls[0])
-	assert.Equal(t, "ws://secondary:5678", client.urls[1])
-	assert.Equal(t, 0, client.activeURL)
+	assert.Equal(t, "ws://tertiary:9999", client.urls[1])
+}
+
+func TestWSClient_ConstructorNoURLs(t *testing.T) {
+	_, err := NewHeimdallWSClient()
+	require.Error(t, err)
+}
+
+func TestWSClient_ConstructorAllEmpty(t *testing.T) {
+	_, err := NewHeimdallWSClient("", "")
+	require.Error(t, err)
 }
 
 func TestWSClient_SingleURL_ConnectsSuccessfully(t *testing.T) {
 	server := newTestWSServerWithMilestone(t)
 	defer server.Close()
 
-	client, err := NewHeimdallWSClient(wsURL(server.URL), "")
+	client, err := NewHeimdallWSClient(wsURL(server.URL))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -202,6 +221,42 @@ func TestWSClient_DualURL_FailoverToSecondary(t *testing.T) {
 		assert.Equal(t, 1, client.activeURL)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for milestone event via failover")
+	}
+
+	require.NoError(t, client.Unsubscribe(ctx))
+}
+
+func TestWSClient_ThreeURL_CascadeToTertiary(t *testing.T) {
+	// Primary and secondary always reject.
+	primary := newTestWSServer(t, true)
+	defer primary.Close()
+
+	secondary := newTestWSServer(t, true)
+	defer secondary.Close()
+
+	// Tertiary accepts and sends a milestone.
+	tertiary := newTestWSServerWithMilestone(t)
+	defer tertiary.Close()
+
+	client, err := NewHeimdallWSClient(wsURL(primary.URL), wsURL(secondary.URL), wsURL(tertiary.URL))
+	require.NoError(t, err)
+
+	client.reconnectDelay = 100 * time.Millisecond
+	client.primaryAttempts = 2
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	events := client.SubscribeMilestoneEvents(ctx)
+
+	select {
+	case m := <-events:
+		require.NotNil(t, m)
+		assert.Equal(t, uint64(100), m.StartBlock)
+		// Verify we ended up on tertiary.
+		assert.Equal(t, 2, client.activeURL)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for milestone event via cascade")
 	}
 
 	require.NoError(t, client.Unsubscribe(ctx))
