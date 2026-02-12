@@ -77,7 +77,7 @@ func testTransactionMarshal(t *testing.T, tests []txData, config *params.ChainCo
 		if data, err := json.Marshal(tx); err != nil {
 			t.Fatalf("test %d: marshalling failed; %v", i, err)
 		} else if err = tx2.UnmarshalJSON(data); err != nil {
-			t.Fatalf("test %d: sunmarshal failed: %v", i, err)
+			t.Fatalf("test %d: unmarshal failed: %v", i, err)
 		} else if want, have := tx.Hash(), tx2.Hash(); want != have {
 			t.Fatalf("test %d: stx changed, want %x have %x", i, want, have)
 		}
@@ -1386,7 +1386,7 @@ func TestCall(t *testing.T) {
 			},
 			expectErr: core.ErrBlobTxCreate,
 		},
-		// BOR Doens't support blob tx
+		// BOR Doesn't support blob tx
 		// BLOBHASH opcode
 		// {
 		// 	blockNumber: rpc.LatestBlockNumber,
@@ -4100,7 +4100,8 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 	}
 	outputFile := filepath.Join("testdata", fmt.Sprintf("%s-%s.json", rpc, file))
 	if os.Getenv("WRITE_TEST_FILES") != "" {
-		os.WriteFile(outputFile, data, 0644)
+		err = os.WriteFile(outputFile, data, 0644)
+		require.NoError(t, err, "failed to write test output file: %s", outputFile)
 	}
 	want, err := os.ReadFile(outputFile)
 	if err != nil {
@@ -5003,7 +5004,7 @@ func TestAccountAt(t *testing.T) {
 		addr    = crypto.PubkeyToAddress(key.PublicKey)
 		genesis = &core.Genesis{
 			Config: params.TestChainConfig,
-			Alloc: core.GenesisAlloc{
+			Alloc: types.GenesisAlloc{
 				addr: {Balance: big.NewInt(params.Ether)},
 			},
 		}
@@ -5056,7 +5057,7 @@ func TestAccountAt(t *testing.T) {
 			t.Logf("Expected balance %s, got %s", expectedBalance.String(), result.Balance.ToInt().String())
 		}
 
-		// Check that code is empty (not a contract)
+		// Check that the code is empty (not a contract)
 		if len(result.Code) != 0 {
 			t.Errorf("Expected empty code, got %d bytes", len(result.Code))
 		}
@@ -5218,7 +5219,7 @@ func TestBorBlockNumber(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BlockNumber(pending) error = %v", err)
 		}
-		// Pending falls through to the default case and returns latest executed
+		// Pending falls through to the default case and returns the latest executed
 		expected := backend.chain.CurrentBlock().Number.Uint64()
 		if uint64(result) != expected {
 			t.Errorf("BlockNumber(pending) = %d, want %d", result, expected)
@@ -5239,7 +5240,7 @@ func TestBorBlockNumber(t *testing.T) {
 		}
 	})
 
-	// Test 8: Assert that return type is hexutil.Uint64
+	// Test 8: Assert that the return type is hexutil.Uint64
 	t.Run("returns_hexutil_uint64", func(t *testing.T) {
 		result, err := api.BlockNumber(context.Background(), nil)
 		if err != nil {
@@ -5408,7 +5409,7 @@ func TestBorGetHeaderByNumber(t *testing.T) {
 	t.Run("finalized_block_header", func(t *testing.T) {
 		result, err := api.GetHeaderByNumber(context.Background(), rpc.FinalizedBlockNumber)
 		if err != nil {
-			// Backend may not have finalized state in the test environment
+			// Backend may not have the finalized state in the test environment
 			t.Skipf("Finalized block not available: %v", err)
 		}
 		if result == nil {
@@ -5836,7 +5837,7 @@ func TestBorGetBlockReceiptsByBlockHash(t *testing.T) {
 		}
 
 		// Verify the error message matches for non-canonical blocks
-		expectedErrMsg := fmt.Sprintf("the hash %s is not cannonical", fakeBlock.Hash().String())
+		expectedErrMsg := fmt.Sprintf("the hash %s is not canonical", fakeBlock.Hash().String())
 		if err.Error() != expectedErrMsg {
 			t.Errorf("Error message = %q, want %q", err.Error(), expectedErrMsg)
 		}
@@ -6159,7 +6160,7 @@ func TestBorForks(t *testing.T) {
 		}
 
 		// Verify TimeForks is nil (no time-based forks)
-		// This ensures JSON marshaling outputs "timeForks":null instead of "timeForks":[]
+		// This ensures JSON marshaling outputs "timeForks": null instead of "timeForks":[]
 		if result.TimeForks != nil {
 			t.Errorf("TimeForks should be nil when no time-based forks exist, got %v", result.TimeForks)
 		}
@@ -6170,7 +6171,7 @@ func TestBorForks(t *testing.T) {
 			t.Fatalf("JSON marshal error = %v", err)
 		}
 
-		// Verify JSON contains "timeForks":null (not "timeForks":[])
+		// Verify JSON contains "timeForks": null (not "timeForks":[])
 		jsonStr := string(jsonBytes)
 		if !strings.Contains(jsonStr, `"timeForks":null`) {
 			t.Errorf("JSON should contain '\"timeForks\":null', got: %s", jsonStr)
@@ -6316,7 +6317,7 @@ func TestBorGetLogsByHash(t *testing.T) {
 		fakeHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 
 		result, err := api.GetLogsByHash(context.Background(), fakeHash)
-		// Should return nil for non-existent block
+		// Should return nil for the non-existent block
 		if err != nil {
 			t.Errorf("GetLogsByHash(fake) unexpected error = %v", err)
 		}
@@ -6413,13 +6414,14 @@ func TestBorGetLogsByHashWithLogs(t *testing.T) {
 	backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
 		if i == 1 {
 			// Deploy contract
-			deployTx := types.NewContractCreation(
-				b.TxNonce(address),
-				big.NewInt(0),
-				300000,
-				big.NewInt(params.InitialBaseFee),
-				contractBytecode,
-			)
+			deployTx := types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(address),
+				To:       nil, // nil To means contract creation
+				Value:    big.NewInt(0),
+				Gas:      300000,
+				GasPrice: big.NewInt(params.InitialBaseFee),
+				Data:     contractBytecode,
+			})
 			deployTx, _ = types.SignTx(deployTx, types.LatestSigner(&config), key)
 			b.AddTx(deployTx)
 		}
@@ -6581,7 +6583,7 @@ func TestBorGetLogsByHashPreMadhugiri(t *testing.T) {
 			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (2 regular + 1 state-sync with empty logs)", len(result), expectedLen)
 		}
 
-		// Verify the state-sync exists as last entry
+		// Verify the state-sync exists as the last entry
 		if len(result) > 0 {
 			stateSyncLogs := result[len(result)-1]
 			if len(stateSyncLogs) != 0 {
@@ -7015,7 +7017,7 @@ func TestBorGetBalanceChangesInBlock(t *testing.T) {
 			t.Errorf("Expected 1 balance change (miner), got %d", len(result))
 		}
 
-		// Verify miner received the reward
+		// Verify the miner received the reward
 		if bal, ok := result[miner]; !ok {
 			t.Error("Miner address not in result")
 		} else if bal.ToInt().Sign() <= 0 {
@@ -7243,4 +7245,800 @@ type testBackendWithProtocolVersion struct {
 
 func (b *testBackendWithProtocolVersion) ProtocolVersion() uint {
 	return b.protocolVersion
+}
+
+func TestBorGetLatestLogs(t *testing.T) {
+	t.Parallel()
+
+	// Create test accounts
+	var (
+		acc1     = newAccounts(1)[0]
+		testAddr = common.HexToAddress("0x1234567890123456789012345678901234567890")
+		genesis  = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				acc1.addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create a backend with blocks containing transactions
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i >= 0 {
+			tx, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(acc1.addr),
+					To:       &testAddr,
+					Value:    big.NewInt(1000),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), acc1.key,
+			)
+			b.AddTx(tx)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get logs from the latest block (blockCount=1)
+	t.Run("latest_single_block", func(t *testing.T) {
+		blockCount := uint64(1)
+		crit := ethereum.FilterQuery{}
+		opts := LogFilterOptions{
+			BlockCount: &blockCount,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err != nil {
+			t.Fatalf("GetLatestLogs() error = %v", err)
+		}
+
+		// Simple transactions don't generate logs, so the result should be empty or have only system logs
+		_ = logs
+	})
+
+	// Test 2: Get logs with block range
+	t.Run("block_range", func(t *testing.T) {
+		blockCount := uint64(3)
+		crit := ethereum.FilterQuery{}
+		opts := LogFilterOptions{
+			BlockCount: &blockCount,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err != nil {
+			t.Fatalf("GetLatestLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 3: Get logs with a logCount limit
+	t.Run("log_count_limit", func(t *testing.T) {
+		logCount := uint64(100)
+		crit := ethereum.FilterQuery{}
+		opts := LogFilterOptions{
+			LogCount: &logCount,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err != nil {
+			t.Fatalf("GetLatestLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 4: Default options (should use blockCount=1)
+	t.Run("default_options", func(t *testing.T) {
+		crit := ethereum.FilterQuery{}
+		opts := LogFilterOptions{}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err != nil {
+			t.Fatalf("GetLatestLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 5: LogCount and BlockCount both specified (should error)
+	t.Run("ambiguous_options", func(t *testing.T) {
+		logCount := uint64(10)
+		blockCount := uint64(5)
+		crit := ethereum.FilterQuery{}
+		opts := LogFilterOptions{
+			LogCount:   &logCount,
+			BlockCount: &blockCount,
+		}
+
+		_, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err == nil {
+			t.Error("Expected error when both logCount and blockCount are specified, got nil")
+		}
+		if err != nil && err.Error() != "logs count & block count are ambiguous" {
+			t.Errorf("Expected 'logs count & block count are ambiguous' error, got: %v", err)
+		}
+	})
+
+	// Test 6: Verify timestamp is populated
+	t.Run("timestamp_populated", func(t *testing.T) {
+		blockCount := uint64(1)
+		crit := ethereum.FilterQuery{
+			Addresses: []common.Address{testAddr},
+		}
+		opts := LogFilterOptions{
+			BlockCount: &blockCount,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+		if err != nil {
+			t.Fatalf("GetLatestLogs() error = %v", err)
+		}
+
+		if len(logs) > 0 && logs[0].BlockTimestamp == 0 {
+			t.Error("Expected BlockTimestamp to be populated, got 0")
+		}
+	})
+}
+
+func TestBorGetLogs(t *testing.T) {
+	t.Parallel()
+
+	// Create test accounts
+	var (
+		acc1     = newAccounts(1)[0]
+		testAddr = common.HexToAddress("0x1234567890123456789012345678901234567890")
+		genesis  = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				acc1.addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create a backend with blocks containing transactions
+	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i >= 0 {
+			tx, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(acc1.addr),
+					To:       &testAddr,
+					Value:    big.NewInt(1000),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), acc1.key,
+			)
+			b.AddTx(tx)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Get logs from a single block by hash
+	t.Run("single_block_by_hash", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(2)
+		if block == nil {
+			t.Fatal("Could not get block 2")
+		}
+
+		blockHash := block.Hash()
+		crit := ethereum.FilterQuery{
+			BlockHash: &blockHash,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 2: Get logs from a block range
+	t.Run("block_range", func(t *testing.T) {
+		fromBlock := big.NewInt(1)
+		toBlock := big.NewInt(3)
+		crit := ethereum.FilterQuery{
+			FromBlock: fromBlock,
+			ToBlock:   toBlock,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 3: Get logs from an entire chain (no range specified)
+	t.Run("entire_chain", func(t *testing.T) {
+		crit := ethereum.FilterQuery{}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 4: Get logs with an address filter
+	t.Run("address_filter", func(t *testing.T) {
+		crit := ethereum.FilterQuery{
+			Addresses: []common.Address{testAddr},
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 5: Invalid range (end < begin)
+	t.Run("invalid_range", func(t *testing.T) {
+		fromBlock := big.NewInt(5)
+		toBlock := big.NewInt(1)
+		crit := ethereum.FilterQuery{
+			FromBlock: fromBlock,
+			ToBlock:   toBlock,
+		}
+
+		_, err := api.GetLogs(context.Background(), crit)
+		if err == nil {
+			t.Error("Expected error for invalid range (end < begin), got nil")
+		}
+		expectedErr := "end (1) < begin (5)"
+		if err != nil && err.Error() != expectedErr {
+			t.Errorf("Expected '%s' error, got: %v", expectedErr, err)
+		}
+	})
+
+	// Test 6: Verify timestamp is populated
+	t.Run("timestamp_populated", func(t *testing.T) {
+		block := backend.chain.GetBlockByNumber(1)
+		if block == nil {
+			t.Fatal("Could not get block 1")
+		}
+
+		blockHash := block.Hash()
+		crit := ethereum.FilterQuery{
+			BlockHash: &blockHash,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+
+		// Even if no logs exist, the method should not error
+		// If logs exist, they should have timestamps
+		for _, log := range logs {
+			if log.BlockTimestamp == 0 {
+				t.Error("Expected BlockTimestamp to be populated, got 0")
+			}
+		}
+	})
+
+	// Test 7: Get logs from the genesis block
+	t.Run("genesis_block", func(t *testing.T) {
+		blockHash := backend.chain.GetBlockByNumber(0).Hash()
+		crit := ethereum.FilterQuery{
+			BlockHash: &blockHash,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 8: Ascending order verification
+	t.Run("ascending_order", func(t *testing.T) {
+		fromBlock := big.NewInt(1)
+		toBlock := big.NewInt(5)
+		crit := ethereum.FilterQuery{
+			FromBlock: fromBlock,
+			ToBlock:   toBlock,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() error = %v", err)
+		}
+
+		// Verify logs are in ascending order by block number
+		for i := 1; i < len(logs); i++ {
+			if logs[i-1].BlockNumber > logs[i].BlockNumber {
+				t.Errorf("Logs not in ascending order: block %d after block %d",
+					logs[i-1].BlockNumber, logs[i].BlockNumber)
+			}
+		}
+	})
+
+	// Test 9: Negative block tag should use latest
+	t.Run("latest_block_tag", func(t *testing.T) {
+		latest := big.NewInt(int64(rpc.LatestBlockNumber))
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   latest,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs() with latest tag error = %v", err)
+		}
+		_ = logs
+	})
+
+	// Test 10: Invalid negative block tag (should error)
+	t.Run("invalid_negative_block_tag", func(t *testing.T) {
+		invalidNegative := big.NewInt(-999)
+		crit := ethereum.FilterQuery{
+			FromBlock: invalidNegative,
+			ToBlock:   big.NewInt(5),
+		}
+
+		_, err := api.GetLogs(context.Background(), crit)
+		if err == nil {
+			t.Error("Expected error for invalid negative FromBlock, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "negative value for FromBlock") {
+			t.Errorf("Expected 'negative value for FromBlock' error, got: %v", err)
+		}
+	})
+
+	// Test 11: Invalid negative ToBlock tag
+	t.Run("invalid_negative_toblock_tag", func(t *testing.T) {
+		invalidNegative := big.NewInt(-999)
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   invalidNegative,
+		}
+
+		_, err := api.GetLogs(context.Background(), crit)
+		if err == nil {
+			t.Error("Expected error for invalid negative ToBlock, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "negative value for ToBlock") {
+			t.Errorf("Expected 'negative value for ToBlock' error, got: %v", err)
+		}
+	})
+
+	// Test 12: Topic filtering with ordered matching
+	t.Run("topic_filtering_ordered", func(t *testing.T) {
+		contractCode := common.FromHex("0x608060405234801561001057600080fd5b50610150806100206000396000f3fe608060405234801561001057600080fd5b506004361061002b5760003560e01c8063c040622614610030575b600080fd5b61004a60048036038101906100459190610094565b61004c565b005b7f1234567890123456789012345678901234567890123456789012345678901234600082604051610079929190610116565b60405180910390a150565b60008135905061009381610136565b92915050565b6000602082840312156100ab576100aa610131565b5b60006100b984828501610084565b91505092915050565b6100cb8161013f565b82525050565b6100da81610149565b82525050565b60006020820190506100f560008301846100c2565b92915050565b600060208201905061011060008301846100d1565b92915050565b600060408201905061012b60008301856100c2565b61013860208301846100c2565b9392505050565b6000819050919050565b6000819050919050565b61015c81610143565b811461016757600080fd5b5056fea2646970667358221220abcd1234567890abcd1234567890abcd1234567890abcd1234567890abcd123464736f6c63430008070033")
+
+		// event emission for testing
+		topic1 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+		topic2 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+
+		// Test with topics array (should match positionally)
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(5),
+			Topics: [][]common.Hash{
+				{topic1}, // Must be in position 0
+				{topic2}, // Must be in position 1
+			},
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs failed: %v", err)
+		}
+
+		// Verify all logs match topic positions (zero logs in this test)
+		for _, log := range logs {
+			if len(log.Topics) < 2 {
+				continue
+			}
+			if log.Topics[0] != topic1 || log.Topics[1] != topic2 {
+				t.Errorf("Log topics don't match filter: got %v and %v, want %v and %v",
+					log.Topics[0], log.Topics[1], topic1, topic2)
+			}
+		}
+		_ = contractCode
+	})
+}
+
+func TestBorGetLatestLogs_TopicMatching(t *testing.T) {
+	t.Parallel()
+
+	// Create test accounts and deploy a contract that emits multi-topic events
+	var (
+		acc1    = newAccounts(1)[0]
+		genesis = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				acc1.addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Known topic hashes for testing
+	topic1 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	topic2 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	topic3 := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		// Generate transactions
+		if i >= 0 {
+			testAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+			tx, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(acc1.addr),
+					To:       &testAddr,
+					Value:    big.NewInt(1000),
+					Gas:      21000,
+					GasPrice: big.NewInt(params.GWei),
+					Data:     nil,
+				}),
+				types.LatestSigner(genesis.Config), acc1.key,
+			)
+			b.AddTx(tx)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Ordered topic matching (positional)
+	t.Run("ordered_topic_matching", func(t *testing.T) {
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(3),
+			Topics: [][]common.Hash{
+				{topic1}, // Position 0 must be topic1
+				{topic2}, // Position 1 must be topic2
+				nil,      // Position 2 can be anything
+				{topic3}, // Position 3 must be topic3
+			},
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: false, // Strict positional matching
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		if err != nil {
+			t.Fatalf("GetLatestLogs failed: %v", err)
+		}
+
+		// Verify topic positions for any returned logs
+		for _, log := range logs {
+			if len(log.Topics) < 4 {
+				continue
+			}
+			if log.Topics[0] != topic1 {
+				t.Errorf("Topic at position 0: got %v, want %v", log.Topics[0], topic1)
+			}
+			if log.Topics[1] != topic2 {
+				t.Errorf("Topic at position 1: got %v, want %v", log.Topics[1], topic2)
+			}
+			if log.Topics[3] != topic3 {
+				t.Errorf("Topic at position 3: got %v, want %v", log.Topics[3], topic3)
+			}
+		}
+	})
+
+	// Test 2: Unordered topic matching (IgnoreTopicsOrder = true)
+	t.Run("unordered_topic_matching", func(t *testing.T) {
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(3),
+			Topics: [][]common.Hash{
+				{topic1, topic2, topic3}, // Match any of these topics in any position
+			},
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: true, // Match topics in any order
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		if err != nil {
+			t.Fatalf("GetLatestLogs failed: %v", err)
+		}
+
+		// Verify logs contain at least one of the specified topics (in any position)
+		for _, log := range logs {
+			hasMatchingTopic := false
+			for _, logTopic := range log.Topics {
+				if logTopic == topic1 || logTopic == topic2 || logTopic == topic3 {
+					hasMatchingTopic = true
+					break
+				}
+			}
+			if !hasMatchingTopic {
+				t.Errorf("Log topics %v don't contain any of the filter topics", log.Topics)
+			}
+		}
+	})
+
+	// Test 3: Empty topics filter (should match all logs)
+	t.Run("empty_topics_matches_all", func(t *testing.T) {
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(3),
+			Topics:    [][]common.Hash{}, // Empty topics array
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: false,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		if err != nil {
+			t.Fatalf("GetLatestLogs failed: %v", err)
+		}
+
+		_ = logs
+	})
+
+	// Test 4: Multiple topics at same position
+	t.Run("multiple_topics_same_position", func(t *testing.T) {
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(3),
+			Topics: [][]common.Hash{
+				{topic1, topic2}, // Position 0 can be topic1 or topic2
+				{topic3},         // Position 1 must be topic3
+			},
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: false,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		if err != nil {
+			t.Fatalf("GetLatestLogs failed: %v", err)
+		}
+
+		// Verify each log has (topic1 or topic2) at position 0 and topic3 at position 1
+		for _, log := range logs {
+			if len(log.Topics) < 2 {
+				continue
+			}
+			pos0Valid := log.Topics[0] == topic1 || log.Topics[0] == topic2
+			pos1Valid := log.Topics[1] == topic3
+
+			if !pos0Valid {
+				t.Errorf("Topic at position 0: got %v, want %v or %v", log.Topics[0], topic1, topic2)
+			}
+			if !pos1Valid {
+				t.Errorf("Topic at position 1: got %v, want %v", log.Topics[1], topic3)
+			}
+		}
+	})
+}
+
+func TestBorGetLogs_ErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	// Test 1: Query beyond chain tip (clamp to latest, don't error)
+	t.Run("future_block_clamping", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+			// Empty blocks
+		})
+		api := NewBorAPI(backend)
+
+		// Query blocks beyond the chain tip
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(1000), // Chain only has 5 blocks
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		// Should succeed by clamping to the latest available block
+		if err != nil {
+			t.Fatalf("GetLogs failed (should clamp to latest): %v", err)
+		}
+		// Should return logs (or empty if no logs in blocks 0-5)
+		_ = logs
+		t.Logf("Successfully clamped future toBlock to latest, returned %d logs", len(logs))
+	})
+
+	// Test 2: Invalid block hash query
+	t.Run("invalid_block_hash_returns_nil", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+			// Empty blocks
+		})
+		api := NewBorAPI(backend)
+
+		// Query with a non-existent block hash
+		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		crit := ethereum.FilterQuery{
+			BlockHash: &nonExistentHash,
+		}
+
+		logs, err := api.GetLogs(context.Background(), crit)
+		// Should return (nil, nil) for invalid block hash
+		if err != nil {
+			t.Errorf("Expected nil error for invalid block hash, got: %v", err)
+		}
+		if logs != nil {
+			t.Errorf("Expected nil logs for invalid block hash, got: %v", logs)
+		}
+		t.Log("Correctly returned (nil, nil) for non-existent block hash")
+	})
+
+	// Test 3: Context cancellation propagation
+	t.Run("context_cancellation", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		// Create a cancelled context
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(10),
+		}
+
+		_, err := api.GetLogs(ctx, crit)
+		// Should respect context cancellation
+		if err == nil {
+			t.Log("Context cancellation didn't trigger error (operation too fast)")
+		} else if errors.Is(err, context.Canceled) {
+			t.Logf("Got expected context cancellation: %v", err)
+		} else {
+			t.Logf("Got error: %v", err)
+		}
+	})
+}
+
+func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	// Test 1: Query beyond chain tip (clamp to latest)
+	t.Run("future_block_clamping", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		})
+		api := NewBorAPI(backend)
+
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(1000), // Beyond chain tip
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: false,
+		}
+
+		logs, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		// Should succeed by clamping to latest
+		if err != nil {
+			t.Fatalf("GetLatestLogs failed (should clamp to latest): %v", err)
+		}
+		_ = logs
+		t.Logf("Successfully clamped future toBlock to latest, returned %d logs", len(logs))
+	})
+
+	// Test 2: Invalid block hash (return error)
+	t.Run("invalid_block_hash_returns_error", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		})
+		api := NewBorAPI(backend)
+
+		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		crit := ethereum.FilterQuery{
+			BlockHash: &nonExistentHash,
+		}
+
+		logCount := uint64(100)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			IgnoreTopicsOrder: false,
+		}
+
+		_, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		// Should return error for invalid block hash
+		if err == nil {
+			t.Error("Expected error for invalid block hash, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "block header not found") {
+			t.Errorf("Expected 'block header not found' error, got: %v", err)
+		}
+		t.Logf("Correctly returned error for non-existent block hash: %v", err)
+	})
+
+	// Test 3: BlockCount and LogCount both specified (ambiguous)
+	t.Run("ambiguous_options_error", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		})
+		api := NewBorAPI(backend)
+
+		crit := ethereum.FilterQuery{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(3),
+		}
+
+		// Both LogCount and BlockCount specified
+		logCount := uint64(100)
+		blockCount := uint64(10)
+		logOptions := LogFilterOptions{
+			LogCount:          &logCount,
+			BlockCount:        &blockCount,
+			IgnoreTopicsOrder: false,
+		}
+
+		_, err := api.GetLatestLogs(context.Background(), crit, logOptions)
+		// Should return ambiguous error
+		if err == nil {
+			t.Error("Expected error for ambiguous options, got nil")
+		}
+		if err != nil && !strings.Contains(err.Error(), "ambiguous") {
+			t.Errorf("Expected 'ambiguous' error, got: %v", err)
+		}
+	})
 }

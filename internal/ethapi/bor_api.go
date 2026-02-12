@@ -17,6 +17,25 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+const ErrHeaderNotFound = "current header not found"
+
+// errInvalidBlockHash is a sentinel error for invalid block hash queries
+var errInvalidBlockHash = errors.New("invalid block hash")
+
+// LogFilterOptions specifies options for GetLatestLogs
+type LogFilterOptions struct {
+	LogCount          *uint64 `json:"logCount,omitempty"`          // Max number of logs to return
+	BlockCount        *uint64 `json:"blockCount,omitempty"`        // Max number of blocks to scan
+	IgnoreTopicsOrder bool    `json:"ignoreTopicsOrder,omitempty"` // Match topics in any order
+}
+
+const (
+	// GetLatestLogMaxLogCount is the maximum number of logs that can be retrieved
+	GetLatestLogMaxLogCount = 30000
+	// GetLatestLogMaxBlockCount is the maximum number of blocks that can be scanned
+	GetLatestLogMaxBlockCount = 1000
+)
+
 // isBorSystemTx checks if the tx is for bor genesis contract addresses or not
 func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
 	if borCfg == nil {
@@ -35,9 +54,9 @@ func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
 	return false
 }
 
-// GetRootHash returns root hash for given start and end block
-func (s *BlockChainAPI) GetRootHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64) (string, error) {
-	root, err := s.b.GetRootHash(ctx, starBlockNr, endBlockNr)
+// GetRootHash returns root hash for a given start and end block
+func (api *BlockChainAPI) GetRootHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64) (string, error) {
+	root, err := api.b.GetRootHash(ctx, starBlockNr, endBlockNr)
 	if err != nil {
 		return "", err
 	}
@@ -45,30 +64,30 @@ func (s *BlockChainAPI) GetRootHash(ctx context.Context, starBlockNr uint64, end
 	return root, nil
 }
 
-func (s *BlockChainAPI) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	return s.b.GetBorBlockReceipt(ctx, hash)
+func (api *BlockChainAPI) GetBorBlockReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	return api.b.GetBorBlockReceipt(ctx, hash)
 }
 
-func (s *BlockChainAPI) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
-	return s.b.GetVoteOnHash(ctx, starBlockNr, endBlockNr, hash, milestoneId)
+func (api *BlockChainAPI) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
+	return api.b.GetVoteOnHash(ctx, starBlockNr, endBlockNr, hash, milestoneId)
 }
 
 //
 // Bor transaction utils
 //
 
-func (s *BlockChainAPI) appendRPCMarshalBorTransaction(ctx context.Context, block *types.Block, fields map[string]interface{}, fullTx bool) map[string]interface{} {
+func (api *BlockChainAPI) appendRPCMarshalBorTransaction(ctx context.Context, block *types.Block, fields map[string]interface{}, fullTx bool) map[string]interface{} {
 	if block != nil {
 		txHash := types.GetDerivedBorTxHash(types.BorReceiptKey(block.Number().Uint64(), block.Hash()))
 
-		borTx, blockHash, blockNumber, txIndex, _ := s.b.GetBorBlockTransactionWithBlockHash(ctx, txHash, block.Hash())
+		borTx, blockHash, blockNumber, txIndex, _ := api.b.GetBorBlockTransactionWithBlockHash(ctx, txHash, block.Hash())
 		if borTx != nil {
 			formattedTxs := fields["transactions"].([]interface{})
 
 			if fullTx {
-				marshalledTx := newRPCTransaction(borTx, blockHash, blockNumber, block.Time(), txIndex, block.BaseFee(), s.b.ChainConfig())
+				marshalledTx := newRPCTransaction(borTx, blockHash, blockNumber, block.Time(), txIndex, block.BaseFee(), api.b.ChainConfig())
 				// newRPCTransaction calculates hash based on RLP of the transaction data.
-				// In case of bor block tx, we need simple derived tx hash (same as function argument) instead of RLP hash
+				// In the case of bor block tx, we need simple derived tx hash (same as function argument) instead of RLP hash
 				marshalledTx.Hash = txHash
 				marshalledTx.ChainID = nil
 				fields["transactions"] = append(formattedTxs, marshalledTx)
@@ -126,7 +145,7 @@ func (api *BorAPI) SendRawTransactionConditional(ctx context.Context, input hexu
 		return common.Hash{}, &rpc.OptionsValidateError{Message: "storage error. err: " + err.Error()}
 	}
 
-	// put options data in Tx, to use it later while block building
+	// put options data in Tx to use it later while block building
 	tx.PutOptions(&options)
 
 	return SubmitTransaction(ctx, api.b, tx)
@@ -183,7 +202,7 @@ func (api *BorAPI) GetBlockReceiptsByBlockHash(ctx context.Context, blockHash co
 	blockNumber := block.Number().Uint64()
 	canonicalHash := rawdb.ReadCanonicalHash(api.b.ChainDb(), blockNumber)
 	if canonicalHash != blockHash {
-		return nil, fmt.Errorf("the hash %s is not cannonical", blockHash.String())
+		return nil, fmt.Errorf("the hash %s is not canonical", blockHash.String())
 	}
 
 	// Get receipts for this block
@@ -284,7 +303,7 @@ func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockN
 
 // BlockNumber returns the block number for the given block tag:
 // - nil input → latest executed (CurrentBlock)
-// - "latest" → latest head (CurrentHeader) via GetLatestBlockNumber
+// - "latest" → the latest head (CurrentHeader) via GetLatestBlockNumber
 // - "pending" → falls through to default (latest executed)
 // - unknown/numeric → latest executed (CurrentBlock)
 //
@@ -312,7 +331,7 @@ func (api *BorAPI) BlockNumber(ctx context.Context, blockNrPtr *rpc.BlockNumber)
 		// "latest" returns the latest head (forkchoice head), not the executed one
 		header := api.b.CurrentHeader()
 		if header == nil {
-			return 0, errors.New("current header not found")
+			return 0, errors.New(ErrHeaderNotFound)
 		}
 		blockNum = header.Number.Uint64()
 
@@ -398,7 +417,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 	// Get current header
 	currentHeader := api.b.CurrentHeader()
 	if currentHeader == nil {
-		return nil, errors.New("current header not found")
+		return nil, errors.New(ErrHeaderNotFound)
 	}
 
 	// If the current block's time <= timestamp, return the latest block
@@ -761,4 +780,309 @@ func (api *BorAPI) GetLogsByHash(ctx context.Context, hash common.Hash) ([][]*ty
 	}
 
 	return logs, nil
+}
+
+// GetLogs returns all logs matching the filter criteria.
+//
+// Parameters:
+//   - crit: Standard log filter criteria (addresses, topics, from/to blocks, or specific block hash)
+//
+// Returns logs in ascending order (earliest first) with BlockTimestamp populated.
+// Note that Bor returns []*types.Log with the "blockTimestamp" field, whilst Erigon returns ErigonLogs with the "timestamp" field
+func (api *BorAPI) GetLogs(ctx context.Context, crit ethereum.FilterQuery) ([]*types.Log, error) {
+	// Determine block range
+	begin, end, err := api.determineBlockRange(ctx, crit)
+	if err != nil {
+		// Special case: invalid BlockHash returns (nil, nil) for getLogs (Erigon behavior)
+		if errors.Is(err, errInvalidBlockHash) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// Collect logs in ascending order
+	var result []*types.Log
+
+	// Iterate blocks from the beginning to the end
+	for blockNum := begin; blockNum <= end; blockNum++ {
+		block, receipts, err := api.getBlockAndReceipts(ctx, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if block == nil {
+			// Block not available (e.g., reorged out)
+			break
+		}
+
+		// Extract logs from receipts
+		for _, receipt := range receipts {
+			for _, log := range receipt.Logs {
+				// Apply filter
+				if api.matchesFilter(log, crit.Addresses, crit.Topics, false) {
+					// Populate timestamp
+					log.BlockTimestamp = block.Time()
+					result = append(result, log)
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// GetLatestLogs returns the latest N logs matching the filter criteria in descending order.
+//
+// Parameters:
+//   - crit: Standard log filter criteria (addresses, topics, from/to blocks)
+//   - logOptions: Pagination and filtering options
+//   - LogCount: Max number of logs to return
+//   - BlockCount: Max number of blocks to scan
+//   - IgnoreTopicsOrder: Match topics in any order instead of positional matching
+//
+// Note: LogCount and BlockCount are mutually exclusive. If both are 0, defaults to BlockCount=1.
+//
+// Returns logs in descending order (latest first) with BlockTimestamp populated.
+func (api *BorAPI) GetLatestLogs(ctx context.Context, crit ethereum.FilterQuery, logOptions LogFilterOptions) ([]*types.Log, error) {
+	// Validate that LogCount and BlockCount are not both specified
+	if logOptions.LogCount != nil && *logOptions.LogCount != 0 && logOptions.BlockCount != nil && *logOptions.BlockCount != 0 {
+		return nil, errors.New("logs count & block count are ambiguous")
+	}
+
+	// Set defaults if both are 0
+	logCount := uint64(0)
+	blockCount := uint64(1) // Default to 1 block
+	if logOptions.LogCount != nil {
+		logCount = *logOptions.LogCount
+		blockCount = 0
+	}
+	if logOptions.BlockCount != nil {
+		blockCount = *logOptions.BlockCount
+		logCount = 0
+	}
+
+	// Apply max limits
+	if logCount > GetLatestLogMaxLogCount {
+		logCount = GetLatestLogMaxLogCount
+	}
+	if blockCount > GetLatestLogMaxBlockCount {
+		blockCount = GetLatestLogMaxBlockCount
+	}
+
+	// Determine block range
+	begin, end, err := api.determineBlockRange(ctx, crit)
+	if err != nil {
+		if errors.Is(err, errInvalidBlockHash) {
+			return nil, fmt.Errorf("block header not found %x", *crit.BlockHash)
+		}
+		return nil, err
+	}
+
+	// Collect logs in descending order
+	var result []*types.Log
+	var blocksScanned uint64
+
+	// Iterate blocks from the end to the beginning
+	for blockNum := end; blockNum >= begin && blockNum <= end; blockNum-- {
+		// Check block count
+		if blockCount > 0 && blocksScanned >= blockCount {
+			break
+		}
+		blocksScanned++
+
+		block, receipts, err := api.getBlockAndReceipts(ctx, blockNum)
+		if err != nil {
+			return nil, err
+		}
+		if block == nil {
+			// Block not available (e.g., reorged out)
+			break
+		}
+
+		// Extract logs from receipts
+		for _, receipt := range receipts {
+			for _, log := range receipt.Logs {
+				// Apply filter
+				if api.matchesFilter(log, crit.Addresses, crit.Topics, logOptions.IgnoreTopicsOrder) {
+					// Add timestamp
+					log.BlockTimestamp = block.Time()
+					result = append(result, log)
+
+					// Check log count
+					if logCount > 0 && uint64(len(result)) >= logCount {
+						return result, nil
+					}
+				}
+			}
+		}
+
+		// Stop at genesis
+		if blockNum == 0 {
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// matchesFilter checks if a log matches the filter criteria
+func (api *BorAPI) matchesFilter(log *types.Log, addresses []common.Address, topics [][]common.Hash, ignoreTopicsOrder bool) bool {
+	// Check address filter
+	if len(addresses) > 0 {
+		match := false
+		for _, addr := range addresses {
+			if log.Address == addr {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+
+	// Check topics filter
+	if len(topics) > 0 {
+		if ignoreTopicsOrder {
+			// Match topics in any order
+			return api.matchesTopicsUnordered(log.Topics, topics)
+		}
+
+		// Match topics positionally
+		return api.matchesTopicsOrdered(log.Topics, topics)
+	}
+
+	return true
+}
+
+// matchesTopicsOrdered checks if log topics match filter topics positionally
+func (api *BorAPI) matchesTopicsOrdered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
+	// Filter topics length cannot exceed log topics
+	if len(filterTopics) > len(logTopics) {
+		return false
+	}
+
+	for i, filterTopic := range filterTopics {
+		if len(filterTopic) == 0 {
+			// Empty filter means "match any"
+			continue
+		}
+
+		match := false
+		for _, topic := range filterTopic {
+			if logTopics[i] == topic {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+
+	return true
+}
+
+// matchesTopicsUnordered checks if log topics contain all filter topics in any order
+func (api *BorAPI) matchesTopicsUnordered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
+	// Build the set of log topics
+	logTopicSet := make(map[common.Hash]bool)
+	for _, topic := range logTopics {
+		logTopicSet[topic] = true
+	}
+
+	// Check if all filter topics are present
+	for _, filterTopic := range filterTopics {
+		if len(filterTopic) == 0 {
+			continue
+		}
+
+		match := false
+		for _, topic := range filterTopic {
+			if logTopicSet[topic] {
+				match = true
+				break
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+
+	return true
+}
+
+// determineBlockRange determines the start and end block numbers for a log query.
+// It handles both BlockHash and FromBlock/ToBlock queries, with proper validation
+// and clamping to the latest available block.
+func (api *BorAPI) determineBlockRange(ctx context.Context, crit ethereum.FilterQuery) (begin, end uint64, err error) {
+	if crit.BlockHash != nil {
+		// Query a specific block by hash
+		header, err := api.b.HeaderByHash(ctx, *crit.BlockHash)
+		if err != nil {
+			return 0, 0, err
+		}
+		if header == nil {
+			// Return sentinel error for invalid block hash (caller handles differently for getLogs vs getLatestLogs)
+			return 0, 0, errInvalidBlockHash
+		}
+		return header.Number.Uint64(), header.Number.Uint64(), nil
+	}
+
+	// Determine range from block numbers
+	currentHeader := api.b.CurrentHeader()
+	if currentHeader == nil {
+		return 0, 0, errors.New(ErrHeaderNotFound)
+	}
+	latest := currentHeader.Number.Uint64()
+
+	begin = 0
+	if crit.FromBlock != nil {
+		if crit.FromBlock.Sign() >= 0 {
+			begin = crit.FromBlock.Uint64()
+		} else if !crit.FromBlock.IsInt64() || crit.FromBlock.Int64() != int64(rpc.LatestBlockNumber) {
+			return 0, 0, fmt.Errorf("negative value for FromBlock: %v", crit.FromBlock)
+		}
+	}
+
+	end = latest
+	if crit.ToBlock != nil {
+		if crit.ToBlock.Sign() >= 0 {
+			requestedEnd := crit.ToBlock.Uint64()
+			// Clamp to the latest available block (don't error on future blocks)
+			if requestedEnd > latest {
+				end = latest
+			} else {
+				end = requestedEnd
+			}
+		} else if !crit.ToBlock.IsInt64() || crit.ToBlock.Int64() != int64(rpc.LatestBlockNumber) {
+			return 0, 0, fmt.Errorf("negative value for ToBlock: %v", crit.ToBlock)
+		}
+	}
+
+	// Validate range
+	if end < begin {
+		return 0, 0, fmt.Errorf("end (%d) < begin (%d)", end, begin)
+	}
+
+	return begin, end, nil
+}
+
+// getBlockAndReceipts fetches a block and its receipts for the given block number.
+// Returns nil block (without error) if the block is not available (e.g., reorg).
+func (api *BorAPI) getBlockAndReceipts(ctx context.Context, blockNum uint64) (*types.Block, types.Receipts, error) {
+	block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(blockNum))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get block %d: %w", blockNum, err)
+	}
+	if block == nil {
+		// Block not available (e.g., reorged out)
+		return nil, nil, nil
+	}
+
+	receipts, err := api.b.GetReceipts(ctx, block.Hash())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get receipts for block %d: %w", blockNum, err)
+	}
+
+	return block, receipts, nil
 }
