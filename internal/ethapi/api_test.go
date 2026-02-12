@@ -6656,6 +6656,225 @@ func TestBorGetLogsByHashPreMadhugiri(t *testing.T) {
 	})
 }
 
+func TestBorGetBlockByTimestamp(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	// Create blocks with specific timestamps
+	// Genesis: timestamp 0
+	// Block 1: timestamp 100
+	// Block 2: timestamp 200
+	// Block 3: timestamp 300
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		switch i {
+		case 0:
+			b.OffsetTime(100)
+		case 1:
+			b.OffsetTime(200)
+		case 2:
+			b.OffsetTime(300)
+		}
+	})
+	api := NewBorAPI(backend)
+
+	// Test 1: Timestamp before genesis
+	t.Run("timestamp_before_genesis", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 0, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockByTimestamp() returned nil")
+		}
+
+		// Should return genesis block (block 0)
+		blockNum, ok := result["number"].(*hexutil.Big)
+		if !ok {
+			t.Fatal("Block number not found or wrong type")
+		}
+		if blockNum.ToInt().Uint64() != 0 {
+			t.Errorf("Expected block 0, got %d", blockNum.ToInt().Uint64())
+		}
+	})
+
+	// Test 2: Timestamp matching exact block
+	t.Run("timestamp_exact_match", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 200, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockByTimestamp() returned nil")
+		}
+
+		// Should return block 2
+		blockNum, ok := result["number"].(*hexutil.Big)
+		if !ok {
+			t.Fatal("Block number not found or wrong type")
+		}
+		if blockNum.ToInt().Uint64() != 2 {
+			t.Errorf("Expected block 2, got %d", blockNum.ToInt().Uint64())
+		}
+	})
+
+	// Test 3: Timestamp between blocks (should return the closest block with time >= timestamp)
+	t.Run("timestamp_between_blocks", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 150, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockByTimestamp() returned nil")
+		}
+
+		// Should return block 2 (first block with time >= 150)
+		blockNum, ok := result["number"].(*hexutil.Big)
+		if !ok {
+			t.Fatal("Block number not found or wrong type")
+		}
+		if blockNum.ToInt().Uint64() != 2 {
+			t.Errorf("Expected block 2, got %d", blockNum.ToInt().Uint64())
+		}
+	})
+
+	// Test 4: Timestamp after all blocks (should return latest)
+	t.Run("timestamp_after_latest", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 400, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockByTimestamp() returned nil")
+		}
+
+		// Should return block 3 (latest)
+		blockNum, ok := result["number"].(*hexutil.Big)
+		if !ok {
+			t.Fatal("Block number not found or wrong type")
+		}
+		if blockNum.ToInt().Uint64() != 3 {
+			t.Errorf("Expected block 3, got %d", blockNum.ToInt().Uint64())
+		}
+	})
+
+	// Test 5: fullTx parameter (should include full transaction objects)
+	t.Run("fullTx_parameter", func(t *testing.T) {
+		// Add a transaction to block 1
+		backendWithTx := newTestBackend(t, 1, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+			if i == 0 {
+				b.OffsetTime(100)
+				tx, _ := types.SignTx(
+					types.NewTx(&types.LegacyTx{
+						Nonce:    b.TxNonce(accs[0].addr),
+						To:       &accs[0].addr,
+						Value:    big.NewInt(1000),
+						Gas:      21000,
+						GasPrice: big.NewInt(params.GWei),
+						Data:     nil,
+					}),
+					types.LatestSigner(genesis.Config), accs[0].key,
+				)
+				b.AddTx(tx)
+			}
+		})
+		apiWithTx := NewBorAPI(backendWithTx)
+
+		// Test with fullTx=false (only hashes)
+		resultNoTx, err := apiWithTx.GetBlockByTimestamp(context.Background(), 100, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp(fullTx=false) error = %v", err)
+		}
+		if resultNoTx == nil {
+			t.Fatal("GetBlockByTimestamp(fullTx=false) returned nil")
+		}
+
+		txs, ok := resultNoTx["transactions"].([]interface{})
+		if !ok {
+			t.Fatal("Transactions field not found or wrong type")
+		}
+		if len(txs) == 0 {
+			t.Fatal("Expected transactions in block")
+		}
+
+		// With fullTx=false, transactions should be hashes
+		if _, ok := txs[0].(common.Hash); !ok {
+			t.Errorf("Expected transaction hash (common.Hash) with fullTx=false, got %T", txs[0])
+		}
+
+		// Test with fullTx=true (full objects)
+		resultWithTx, err := apiWithTx.GetBlockByTimestamp(context.Background(), 100, true)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp(fullTx=true) error = %v", err)
+		}
+		if resultWithTx == nil {
+			t.Fatal("GetBlockByTimestamp(fullTx=true) returned nil")
+		}
+
+		txsFull, ok := resultWithTx["transactions"].([]interface{})
+		if !ok {
+			t.Fatal("Transactions field not found or wrong type")
+		}
+		if len(txsFull) == 0 {
+			t.Fatal("Expected transactions in block")
+		}
+
+		// With fullTx=true, transactions should be RPC transaction objects
+		if txsFull[0] == nil {
+			t.Error("Expected transaction object with fullTx=true, got nil")
+		}
+		// Verify it's not just a hash
+		if _, ok := txsFull[0].(common.Hash); ok {
+			t.Error("Expected transaction object with fullTx=true, got hash")
+		}
+	})
+
+	// Test 6: Multiple blocks with the same timestamps (should return the earliest)
+	t.Run("repeated_timestamp_returns_earliest", func(t *testing.T) {
+		// Create blocks where blocks 2, 3, and 4 all have timestamp 200
+		backendWithRepeated := newTestBackend(t, 5, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+			switch i {
+			case 0:
+				b.OffsetTime(100) // Block 1 at t=100
+			case 1:
+				b.OffsetTime(200) // Block 2 at t=200
+			case 2:
+				b.OffsetTime(200) // Block 3 at t=200 (same as block 2)
+			case 3:
+				b.OffsetTime(200) // Block 4 at t=200 (same as block 2 and 3)
+			case 4:
+				b.OffsetTime(300) // Block 5 at t=300
+			}
+		})
+		apiWithRepeated := NewBorAPI(backendWithRepeated)
+
+		result, err := apiWithRepeated.GetBlockByTimestamp(context.Background(), 200, false)
+		if err != nil {
+			t.Fatalf("GetBlockByTimestamp() error = %v", err)
+		}
+		if result == nil {
+			t.Fatal("GetBlockByTimestamp() returned nil")
+		}
+
+		// Should return block 2 (the earliest block with timestamp 200)
+		blockNum, ok := result["number"].(*hexutil.Big)
+		if !ok {
+			t.Fatal("Block number not found or wrong type")
+		}
+		if blockNum.ToInt().Uint64() != 2 {
+			t.Errorf("Expected block 2 (earliest with timestamp 200), got %d", blockNum.ToInt().Uint64())
+		}
+	})
+}
+
 // testBackendWithCoinbase wraps testBackend and overrides Etherbase
 type testBackendWithCoinbase struct {
 	*testBackend
