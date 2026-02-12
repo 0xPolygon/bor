@@ -156,6 +156,53 @@ func TestCreateConsensusEngine_CommaSeparatedGRPC(t *testing.T) {
 	require.True(t, ok, "Expected FailoverHeimdallClient with multiple gRPC endpoints")
 }
 
+func TestCreateConsensusEngine_GRPCInitFailsFallsBackToHTTP(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with HTTP URL available", func(t *testing.T) {
+		t.Parallel()
+
+		// gRPC uses unsupported scheme → NewHeimdallGRPCClient fails.
+		// Fallback appends HTTP client for httpURLs[0]; httpURLs[1] also
+		// gets an HTTP client via the else-if branch → 2 clients → failover.
+		ethConfig := &Config{
+			HeimdallURL:         "http://a:1317,http://b:1317",
+			HeimdallgRPCAddress: "ftp://invalid:50051",
+		}
+
+		engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+		require.NoError(t, err)
+		defer engine.Close()
+
+		borEngine, ok := engine.(*bor.Bor)
+		require.True(t, ok, "Expected Bor consensus engine")
+
+		_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
+		require.True(t, ok, "Expected FailoverHeimdallClient after gRPC fallback to HTTP")
+	})
+
+	t.Run("without HTTP URL at that index", func(t *testing.T) {
+		t.Parallel()
+
+		// gRPC[0] succeeds (localhost is allowed), gRPC[1] fails (bad scheme).
+		// i=1 >= len(httpURLs)=1 so no HTTP fallback is added → only 1 client.
+		ethConfig := &Config{
+			HeimdallURL:         "http://a:1317",
+			HeimdallgRPCAddress: "localhost:50051,ftp://invalid:50052",
+		}
+
+		engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+		require.NoError(t, err)
+		defer engine.Close()
+
+		borEngine, ok := engine.(*bor.Bor)
+		require.True(t, ok, "Expected Bor consensus engine")
+
+		_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
+		require.False(t, ok, "Expected no FailoverHeimdallClient when second gRPC fails with no HTTP fallback")
+	})
+}
+
 func TestCreateConsensusEngine_WSAddress(t *testing.T) {
 	t.Parallel()
 

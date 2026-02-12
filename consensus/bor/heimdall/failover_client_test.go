@@ -686,6 +686,138 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 	assert.Equal(t, tertiaryBefore, tertiary.hits.Load(), "should be back on primary now")
 }
 
+// Tests for the shouldProbe path (lines 156-161): probe primary fails with
+// failover error, then current (non-primary) client also fails.
+func TestFailover_ProbeCurrentNonFailoverError(t *testing.T) {
+	// Probe primary → failover error, current (secondary) → non-failover error.
+	// Should return the non-failover error without cascading to tertiary.
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, ErrShutdownDetected
+		},
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Force onto secondary with cooldown elapsed so probe triggers.
+	fc.mu.Lock()
+	fc.active = 1
+	fc.lastSwitch = time.Now().Add(-time.Hour)
+	fc.mu.Unlock()
+
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrShutdownDetected))
+	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
+}
+
+func TestFailover_ProbeCurrentFailoverError_CascadesToNext(t *testing.T) {
+	// Probe primary → failover error, current (secondary) → failover error.
+	// Should cascade to tertiary.
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Force onto secondary with cooldown elapsed so probe triggers.
+	fc.mu.Lock()
+	fc.active = 1
+	fc.lastSwitch = time.Now().Add(-time.Hour)
+	fc.mu.Unlock()
+
+	span, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, span)
+	assert.Equal(t, int32(1), tertiary.hits.Load(), "should cascade to tertiary")
+
+	fc.mu.Lock()
+	assert.Equal(t, 2, fc.active, "active should switch to tertiary")
+	fc.mu.Unlock()
+}
+
+// Tests for the active != 0 no-probe path (lines 171-176): on a non-primary
+// client with cooldown not elapsed, the current client fails.
+func TestFailover_StickyNonFailoverError(t *testing.T) {
+	// Sticky on secondary (cooldown not elapsed), secondary returns non-failover error.
+	// Should return error without cascading to tertiary.
+	primary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, ErrShutdownDetected
+		},
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 1 * time.Hour // very long — no probe
+	defer fc.Close()
+
+	// Force onto secondary with recent switch (cooldown not elapsed).
+	fc.mu.Lock()
+	fc.active = 1
+	fc.lastSwitch = time.Now()
+	fc.mu.Unlock()
+
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrShutdownDetected))
+	assert.Equal(t, int32(0), primary.hits.Load(), "should not probe primary")
+	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
+}
+
+func TestFailover_StickyFailoverError_CascadesToNext(t *testing.T) {
+	// Sticky on secondary (cooldown not elapsed), secondary returns failover error.
+	// Should cascade to tertiary.
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.cooldown = 1 * time.Hour // very long — no probe
+	defer fc.Close()
+
+	// Force onto secondary with recent switch (cooldown not elapsed).
+	fc.mu.Lock()
+	fc.active = 1
+	fc.lastSwitch = time.Now()
+	fc.mu.Unlock()
+
+	span, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, span)
+	assert.Equal(t, int32(0), primary.hits.Load(), "should not probe primary")
+	assert.Equal(t, int32(1), tertiary.hits.Load(), "should cascade to tertiary")
+
+	fc.mu.Lock()
+	assert.Equal(t, 2, fc.active, "active should switch to tertiary")
+	fc.mu.Unlock()
+}
+
 func TestFailover_ClosesAllClients(t *testing.T) {
 	var closed [3]atomic.Bool
 
