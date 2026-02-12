@@ -464,6 +464,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	if err != nil {
 		return nil, err
 	}
+	bc.hc.vmConfig = &bc.cfg.VmConfig
 	bc.flushInterval.Store(int64(cfg.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, cfg.ShouldPreserve, cfg.Checker)
 
