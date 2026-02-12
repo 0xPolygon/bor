@@ -156,46 +156,39 @@ func TestCreateConsensusEngine_CommaSeparatedGRPC(t *testing.T) {
 	require.True(t, ok, "Expected FailoverHeimdallClient with multiple gRPC endpoints")
 }
 
-func TestCreateConsensusEngine_WSCommaSeparated(t *testing.T) {
+func TestCreateConsensusEngine_WSAddress(t *testing.T) {
 	t.Parallel()
 
-	ethConfig := &Config{
-		OverrideHeimdallClient: &mockHeimdallClient{},
-		HeimdallWSAddress:      "ws://localhost:26657,ws://secondary:26657",
+	tests := []struct {
+		name string
+		addr string
+	}{
+		{"comma-separated", "ws://localhost:26657,ws://secondary:26657"},
+		{"primary only", "ws://localhost:26657"},
 	}
 
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
-	require.NoError(t, err)
-	defer engine.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	borEngine, ok := engine.(*bor.Bor)
-	require.True(t, ok, "Expected Bor consensus engine")
+			ethConfig := &Config{
+				OverrideHeimdallClient: &mockHeimdallClient{},
+				HeimdallWSAddress:      tt.addr,
+			}
 
-	require.NotNil(t, borEngine.HeimdallWSClient, "Expected non-nil HeimdallWSClient")
+			engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
+			require.NoError(t, err)
+			defer engine.Close()
 
-	_, ok = borEngine.HeimdallWSClient.(*heimdallws.HeimdallWSClient)
-	require.True(t, ok, "Expected HeimdallWSClient type")
-}
+			borEngine, ok := engine.(*bor.Bor)
+			require.True(t, ok, "Expected Bor consensus engine")
 
-func TestCreateConsensusEngine_WSPrimaryOnly(t *testing.T) {
-	t.Parallel()
+			require.NotNil(t, borEngine.HeimdallWSClient, "Expected non-nil HeimdallWSClient")
 
-	ethConfig := &Config{
-		OverrideHeimdallClient: &mockHeimdallClient{},
-		HeimdallWSAddress:      "ws://localhost:26657",
+			_, ok = borEngine.HeimdallWSClient.(*heimdallws.HeimdallWSClient)
+			require.True(t, ok, "Expected HeimdallWSClient type")
+		})
 	}
-
-	engine, err := CreateConsensusEngine(newTestBorChainConfig(), ethConfig, rawdb.NewMemoryDatabase(), nil)
-	require.NoError(t, err)
-	defer engine.Close()
-
-	borEngine, ok := engine.(*bor.Bor)
-	require.True(t, ok, "Expected Bor consensus engine")
-
-	require.NotNil(t, borEngine.HeimdallWSClient, "Expected non-nil HeimdallWSClient")
-
-	_, ok = borEngine.HeimdallWSClient.(*heimdallws.HeimdallWSClient)
-	require.True(t, ok, "Expected HeimdallWSClient type")
 }
 
 func TestCreateConsensusEngine_NoWSAddress(t *testing.T) {
