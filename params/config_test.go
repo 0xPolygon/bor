@@ -813,7 +813,7 @@ func TestGetTargetGasPercentage(t *testing.T) {
 		}
 	})
 
-	t.Run("Post-Dandeli with valid custom values", func(t *testing.T) {
+	t.Run("Post-Lisovo with valid custom values", func(t *testing.T) {
 		testCases := []struct {
 			customValue uint64
 			description string
@@ -829,12 +829,13 @@ func TestGetTargetGasPercentage(t *testing.T) {
 				val := tc.customValue
 				config := &BorConfig{
 					DandeliBlock:        big.NewInt(1000),
+					LisovoBlock:         big.NewInt(1000), // Configurable params require Lisovo
 					TargetGasPercentage: &val,
 				}
 
 				result := config.GetTargetGasPercentage(big.NewInt(1000))
 				if result != tc.customValue {
-					t.Errorf("Post-Dandeli with custom value %d: expected %d, got %d",
+					t.Errorf("Post-Lisovo with custom value %d: expected %d, got %d",
 						tc.customValue, tc.customValue, result)
 				}
 			})
@@ -948,28 +949,29 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 		}
 	})
 
-	t.Run("Post-Dandeli with nil custom value falls back to Bhilai default", func(t *testing.T) {
+	t.Run("Post-Lisovo with nil custom value falls back to Bhilai default", func(t *testing.T) {
 		config := &BorConfig{
 			DelhiBlock:               big.NewInt(1000),
 			BhilaiBlock:              big.NewInt(2000),
 			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
 			BaseFeeChangeDenominator: nil,
 		}
 
 		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
-			t.Errorf("Post-Dandeli with nil custom value: expected %d, got %d",
+			t.Errorf("Post-Lisovo with nil custom value: expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 
 		result = BaseFeeChangeDenominator(config, big.NewInt(4000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
-			t.Errorf("Post-Dandeli with nil custom value (block 4000): expected %d, got %d",
+			t.Errorf("Post-Lisovo with nil custom value (block 4000): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 	})
 
-	t.Run("Post-Dandeli with valid custom value", func(t *testing.T) {
+	t.Run("Post-Lisovo with valid custom value", func(t *testing.T) {
 		testCases := []uint64{1, 8, 16, 32, 64, 128}
 
 		for _, customVal := range testCases {
@@ -979,47 +981,50 @@ func TestGetBaseFeeChangeDenominator(t *testing.T) {
 					DelhiBlock:               big.NewInt(1000),
 					BhilaiBlock:              big.NewInt(2000),
 					DandeliBlock:             big.NewInt(3000),
+					LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
 					BaseFeeChangeDenominator: &val,
 				}
 
 				result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 				if result != customVal {
-					t.Errorf("Post-Dandeli with custom value %d: expected %d, got %d",
+					t.Errorf("Post-Lisovo with custom value %d: expected %d, got %d",
 						customVal, customVal, result)
 				}
 			})
 		}
 	})
 
-	t.Run("Post-Dandeli with invalid value 0 falls back to Bhilai default", func(t *testing.T) {
+	t.Run("Post-Lisovo with invalid value 0 falls back to Bhilai default", func(t *testing.T) {
 		invalidVal := uint64(0)
 		config := &BorConfig{
 			DelhiBlock:               big.NewInt(1000),
 			BhilaiBlock:              big.NewInt(2000),
 			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
 			BaseFeeChangeDenominator: &invalidVal,
 		}
 
 		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
 		if result != BaseFeeChangeDenominatorPostBhilai {
-			t.Errorf("Post-Dandeli with invalid value 0: expected %d, got %d",
+			t.Errorf("Post-Lisovo with invalid value 0: expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 	})
 
-	t.Run("Pre-Dandeli with custom value ignores it", func(t *testing.T) {
+	t.Run("Pre-Lisovo with custom value ignores it", func(t *testing.T) {
 		customVal := uint64(999)
 		config := &BorConfig{
 			DelhiBlock:               big.NewInt(1000),
 			BhilaiBlock:              big.NewInt(2000),
 			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(4000), // Lisovo after Dandeli
 			BaseFeeChangeDenominator: &customVal,
 		}
 
-		// Before Dandeli, custom value should be ignored
-		result := BaseFeeChangeDenominator(config, big.NewInt(2500))
+		// Before Lisovo, custom value should be ignored
+		result := BaseFeeChangeDenominator(config, big.NewInt(3500))
 		if result != BaseFeeChangeDenominatorPostBhilai {
-			t.Errorf("Pre-Dandeli with custom value (block 2500): expected %d, got %d",
+			t.Errorf("Pre-Lisovo with custom value (block 3500): expected %d, got %d",
 				BaseFeeChangeDenominatorPostBhilai, result)
 		}
 	})

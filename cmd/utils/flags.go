@@ -598,7 +598,6 @@ var (
 		Usage:    "0x prefixed public address for the pending block producer (not used for actual block production)",
 		Category: flags.MinerCategory,
 	}
-
 	// Account settings
 	PasswordFileFlag = &cli.PathFlag{
 		Name:      "password",

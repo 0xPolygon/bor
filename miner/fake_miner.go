@@ -149,6 +149,12 @@ func NewDBForFakes(t TensingObject) (ethdb.Database, *core.Genesis, *params.Chai
 		t.Fatalf("can't create new chain config: %v", err)
 	}
 
+	// Make a copy of BorConfig to avoid race conditions with parallel tests
+	if chainConfig.Bor != nil {
+		borCopy := *chainConfig.Bor
+		chainConfig.Bor = &borCopy
+	}
+
 	chainConfig.Bor.Period = map[string]uint64{
 		"0": 1,
 	}

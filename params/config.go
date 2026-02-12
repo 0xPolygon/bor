@@ -343,6 +343,7 @@ var (
 			MadhugiriBlock:    big.NewInt(28899616),
 			MadhugiriProBlock: big.NewInt(29287400),
 			DandeliBlock:      big.NewInt(31890000),
+			LisovoBlock:       big.NewInt(33634700),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -729,6 +730,7 @@ var (
 			MadhugiriBlock:    big.NewInt(0),
 			MadhugiriProBlock: big.NewInt(0),
 			DandeliBlock:      big.NewInt(0),
+			LisovoBlock:       big.NewInt(0),
 		},
 	}
 
@@ -915,8 +917,8 @@ type BorConfig struct {
 
 	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
 	// These affect consensus gas pricing but are configurable per-node for operational flexibility
-	TargetGasPercentage      *uint64 `json:"-"` // Post-Dandeli: target gas as % of gas limit (1-100, default 65). Set via --miner.target-gas-percentage
-	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Dandeli: base fee change rate (must be >0, default 64). Set via --miner.base-fee-change-denominator
+	TargetGasPercentage      *uint64 `json:"-"` // Post-Lisovo: target gas as % of gas limit (configurable post-Lisovo, default 65% post-Dandeli). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Lisovo: base fee change rate (configurable post-Lisovo, must be >0, default 64). Set via --miner.base-fee-change-denominator
 
 	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
@@ -928,6 +930,7 @@ type BorConfig struct {
 	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
 	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -991,8 +994,12 @@ func (c *BorConfig) IsDandeli(number *big.Int) bool {
 	return isBlockForked(c.DandeliBlock, number)
 }
 
+func (c *BorConfig) IsLisovo(number *big.Int) bool {
+	return isBlockForked(c.LisovoBlock, number)
+}
+
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
-// After Dandeli hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// After Lisovo hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
 // It validates the configured value and falls back to defaults if invalid or nil.
 // Valid range: 1-100 (percentage).
 func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
@@ -1002,7 +1009,7 @@ func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
 	}
 
 	// If custom value is set, validate it
-	if c.TargetGasPercentage != nil {
+	if c.TargetGasPercentage != nil && c.IsLisovo(number) {
 		val := *c.TargetGasPercentage
 		// Validate: must be between 1 and 100
 		if val > 0 && val <= 100 {
@@ -1123,6 +1130,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.DandeliBlock != nil {
 			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		if c.Bor.LisovoBlock != nil {
+			banner += fmt.Sprintf(" - Lisovo:                      #%-8v\n", c.Bor.LisovoBlock)
 		}
 		return banner
 	}
@@ -1760,6 +1770,7 @@ type Rules struct {
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
+	IsLisovo                                                bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1793,5 +1804,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
+		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
 	}
 }

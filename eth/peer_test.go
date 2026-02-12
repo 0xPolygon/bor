@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1137,14 +1138,14 @@ func TestRequestWitnessesWithVerification_InconsistentTotalPages(t *testing.T) {
 		jailCalled = true
 	}
 
-	callCount := 0
+	var callCount atomic.Int32
 	// Mock RequestWitness to return pages with inconsistent TotalPages
 	mockWitPeer.EXPECT().
 		RequestWitness(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
 			go func() {
-				callCount++
-				if callCount == 1 {
+				count := callCount.Add(1)
+				if count == 1 {
 					// First page: TotalPages = 10
 					ch <- &wit.Response{
 						Res: &wit.WitnessPacketRLPPacket{
@@ -1277,20 +1278,20 @@ func TestRequestWitnessesWithVerification_MorePagesThanTotalPages(t *testing.T) 
 		jailCalled = true
 	}
 
-	callCount := 0
+	var callCount atomic.Int32
 	// Mock RequestWitness to return pages that exceed TotalPages
 	// First page sets TotalPages=2, then we send 3 pages total to trigger the check
 	mockWitPeer.EXPECT().
 		RequestWitness(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
 			go func() {
-				callCount++
+				count := callCount.Add(1)
 				// Send pages: first sets TotalPages=2, then we send page 0, 1, and 2 (3 pages total)
 				// This will trigger len(receivedWitPages) > currentTotalPages check
 				ch <- &wit.Response{
 					Res: &wit.WitnessPacketRLPPacket{
 						WitnessPacketResponse: []wit.WitnessPageResponse{{
-							Page:       uint64(callCount - 1),
+							Page:       uint64(count - 1),
 							TotalPages: 2, // Only 2 pages allowed, but we'll send 3
 							Hash:       hash,
 							Data:       []byte{0x01, 0x02},

@@ -427,11 +427,17 @@ type SealerConfig struct {
 	BlockTime    time.Duration `hcl:"-,optional" toml:"-"`
 	BlockTimeRaw string        `hcl:"blocktime,optional" toml:"blocktime,optional"`
 
-	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Dandeli blocks
+	// TargetGasPercentage is the target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks
 	TargetGasPercentage uint64 `hcl:"target-gas-percentage,optional" toml:"target-gas-percentage,optional"`
 
-	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Dandeli blocks
+	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Lisovo blocks
 	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
+
+	// EnablePrefetch enables transaction prefetching from pool during block building
+	EnablePrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
+
+	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -691,6 +697,11 @@ type CacheConfig struct {
 	AddressCacheSizesRaw string            `hcl:"addresscachesizes,optional" toml:"addresscachesizes,optional"`
 	AddressCacheSizes    map[string]string `hcl:"-,optional" toml:"-"`
 
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
+	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
+
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
 	GoMemLimit string `hcl:"gomemlimit,optional" toml:"gomemlimit,optional"`
@@ -870,6 +881,8 @@ func DefaultConfig() *Config {
 			Recommit:                 125 * time.Second,
 			CommitInterruptFlag:      true,
 			BlockTime:                0,
+			EnablePrefetch:           false, // Disabled by default, requires explicit opt-in
+			PrefetchGasLimitPercent:  100,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 		},
@@ -878,8 +891,8 @@ func DefaultConfig() *Config {
 			Percentile:       60,
 			MaxHeaderHistory: 1024,
 			MaxBlockHistory:  1024,
-			MaxPrice:         gasprice.DefaultMaxPrice,
-			IgnorePrice:      gasprice.DefaultIgnorePrice, // bor's default
+			MaxPrice:         new(big.Int).Set(gasprice.DefaultMaxPrice),
+			IgnorePrice:      new(big.Int).Set(gasprice.DefaultIgnorePrice), // bor's default
 		},
 		JsonRPC: &JsonRPCConfig{
 			IPCDisable:           false,
@@ -1235,6 +1248,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
+		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+
+		// Validate prefetch gas limit percentage
+		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {
+			return nil, fmt.Errorf("miner.prefetch-gaslimit-percent (%d) must not exceed 150%%", c.Sealer.PrefetchGasLimitPercent)
+		}
 
 		// Dynamic gas limit configuration
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
@@ -1467,6 +1487,20 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 				n.AddressCacheSizes = addressCacheSizes
 			}
 		}
+
+		// Parse preload rate limit (default: 1MB/s per address)
+		if c.Cache.PreloadRateLimit != "" {
+			rateLimitBytes, err := parseByteSize(c.Cache.PreloadRateLimit)
+			if err != nil {
+				log.Warn("Failed to parse preload rate limit, using default 1MB/s per address", "error", err)
+				n.PreloadRateLimit = 1024 * 1024
+			} else {
+				n.PreloadRateLimit = rateLimitBytes
+			}
+		} else {
+			// Default to 1MB/s per address if not specified
+			n.PreloadRateLimit = 1024 * 1024
+		}
 	}
 
 	// History
@@ -1636,6 +1670,46 @@ func parseAddressCacheSizes(input string) (map[common.Address]int, error) {
 	}
 
 	return result, nil
+}
+
+// parseByteSize parses a byte size string like "5MB", "10MB", "1GB", or "0" (for unlimited)
+// Returns the size in bytes. Supported suffixes: B, KB, MB, GB (case insensitive)
+func parseByteSize(input string) (int64, error) {
+	input = strings.TrimSpace(input)
+	if input == "" || input == "0" {
+		return 0, nil
+	}
+
+	input = strings.ToUpper(input)
+
+	var multiplier int64 = 1
+	var numStr string
+
+	switch {
+	case strings.HasSuffix(input, "GB"):
+		multiplier = 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(input, "GB")
+	case strings.HasSuffix(input, "MB"):
+		multiplier = 1024 * 1024
+		numStr = strings.TrimSuffix(input, "MB")
+	case strings.HasSuffix(input, "KB"):
+		multiplier = 1024
+		numStr = strings.TrimSuffix(input, "KB")
+	case strings.HasSuffix(input, "B"):
+		multiplier = 1
+		numStr = strings.TrimSuffix(input, "B")
+	default:
+		// Assume bytes if no suffix
+		numStr = input
+	}
+
+	numStr = strings.TrimSpace(numStr)
+	num, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte size: %s", input)
+	}
+
+	return num * multiplier, nil
 }
 
 var (
