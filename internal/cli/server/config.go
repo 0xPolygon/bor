@@ -320,8 +320,14 @@ type HeimdallConfig struct {
 	// GRPCAddress is the address of the heimdall grpc server
 	GRPCAddress string `hcl:"grpc-address,optional" toml:"grpc-address,optional"`
 
+	// GRPCSecondaryAddress is the address of a secondary heimdall grpc server for failover
+	GRPCSecondaryAddress string `hcl:"grpc-secondary-address,optional" toml:"grpc-secondary-address,optional"`
+
 	// WSAddress is the address of the heimdall ws subscription server
 	WSAddress string `hcl:"ws-address,optional" toml:"ws-address,optional"`
+
+	// WSSecondaryAddress is the address of a secondary heimdall ws subscription server for failover
+	WSSecondaryAddress string `hcl:"ws-secondary-address,optional" toml:"ws-secondary-address,optional"`
 
 	// RunHeimdall is used to run heimdall as a child process
 	RunHeimdall bool `hcl:"bor.runheimdall,optional" toml:"bor.runheimdall,optional"`
@@ -816,12 +822,14 @@ func DefaultConfig() *Config {
 			},
 		},
 		Heimdall: &HeimdallConfig{
-			URL:          "http://localhost:1317",
-			SecondaryURL: "",
-			Timeout:      5 * time.Second,
-			Without:      false,
-			GRPCAddress:  "",
-			WSAddress:    "",
+			URL:                  "http://localhost:1317",
+			SecondaryURL:         "",
+			Timeout:              5 * time.Second,
+			Without:              false,
+			GRPCAddress:          "",
+			GRPCSecondaryAddress: "",
+			WSAddress:            "",
+			WSSecondaryAddress:   "",
 		},
 		SyncMode:    "full",
 		GcMode:      "full",
@@ -1161,7 +1169,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.HeimdallTimeout = c.Heimdall.Timeout
 	n.WithoutHeimdall = c.Heimdall.Without
 	n.HeimdallgRPCAddress = c.Heimdall.GRPCAddress
+	n.HeimdallgRPCSecondaryAddress = c.Heimdall.GRPCSecondaryAddress
 	n.HeimdallWSAddress = c.Heimdall.WSAddress
+	n.HeimdallWSSecondaryAddress = c.Heimdall.WSSecondaryAddress
 	n.RunHeimdall = c.Heimdall.RunHeimdall
 	n.RunHeimdallArgs = c.Heimdall.RunHeimdallArgs
 	n.UseHeimdallApp = c.Heimdall.UseHeimdallApp

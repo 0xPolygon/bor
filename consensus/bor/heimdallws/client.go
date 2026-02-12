@@ -14,22 +14,52 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// HeimdallWSClient represents a websocket client with auto-reconnection.
+const (
+	// defaultPrimaryAttempts is the number of consecutive failures on the primary URL
+	// before switching to the secondary (~30s at 10s/attempt).
+	defaultPrimaryAttempts = 3
+
+	// defaultReconnectDelay is the backoff between reconnection attempts.
+	defaultReconnectDelay = 10 * time.Second
+
+	// defaultWSCooldown is how long to stay on secondary before probing primary again.
+	defaultWSCooldown = 2 * time.Minute
+)
+
+// HeimdallWSClient represents a websocket client with auto-reconnection and failover support.
 type HeimdallWSClient struct {
-	conn   *websocket.Conn
-	url    string // store the URL for reconnection
-	events chan *milestone.Milestone
-	done   chan struct{}
-	mu     sync.Mutex
+	conn      *websocket.Conn
+	urls      []string // primary at [0], secondary at [1] (if configured)
+	activeURL int      // index into urls
+	events    chan *milestone.Milestone
+	done      chan struct{}
+	mu        sync.Mutex
+
+	// lastFailover tracks when the client last switched to secondary
+	lastFailover time.Time
+
+	// Configurable parameters (defaults set in constructor, overridable for testing)
+	primaryAttempts int
+	reconnectDelay  time.Duration
+	wsCooldown      time.Duration
 }
 
-// NewHeimdallWSClient creates a new WS client for Heimdall.
-func NewHeimdallWSClient(url string) (*HeimdallWSClient, error) {
+// NewHeimdallWSClient creates a new WS client for Heimdall with optional failover.
+// If secondaryURL is empty, the client operates with a single URL (existing behavior).
+func NewHeimdallWSClient(primaryURL string, secondaryURL string) (*HeimdallWSClient, error) {
+	urls := []string{primaryURL}
+	if secondaryURL != "" {
+		urls = append(urls, secondaryURL)
+	}
+
 	return &HeimdallWSClient{
-		conn:   nil,
-		url:    url,
-		events: make(chan *milestone.Milestone),
-		done:   make(chan struct{}),
+		conn:            nil,
+		urls:            urls,
+		events:          make(chan *milestone.Milestone),
+		done:            make(chan struct{}),
+		primaryAttempts: defaultPrimaryAttempts,
+		reconnectDelay:  defaultReconnectDelay,
+		wsCooldown:      defaultWSCooldown,
 	}, nil
 }
 
@@ -43,16 +73,18 @@ func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan 
 	return c.events
 }
 
-// retry until subscribe
+// tryUntilSubscribeMilestoneEvents retries connecting and subscribing until success,
+// with failover to secondary URL after defaultPrimaryAttempts failures on primary.
 func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context) {
+	primaryAttempts := 0
 	firstTime := true
 	for {
 		if !firstTime {
-			time.Sleep(10 * time.Second)
+			time.Sleep(c.reconnectDelay)
 		}
 		firstTime = false
 
-		// Check for context cancellation.
+		// Check for context cancellation or unsubscribe.
 		select {
 		case <-ctx.Done():
 			log.Info("Context cancelled during reconnection")
@@ -63,9 +95,32 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		default:
 		}
 
-		conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
+		// If on secondary and cooldown has elapsed, probe primary first.
+		if c.activeURL == 1 && !c.lastFailover.IsZero() && time.Since(c.lastFailover) >= c.wsCooldown {
+			log.Info("WS cooldown elapsed, probing primary", "url", c.urls[0])
+			c.activeURL = 0
+			primaryAttempts = 0
+		}
+
+		url := c.urls[c.activeURL]
+
+		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
-			log.Error("failed to dial websocket on heimdall ws subscription", "err", err)
+			log.Error("failed to dial websocket on heimdall ws subscription", "url", url, "err", err)
+
+			// Count failures on primary; switch to secondary after threshold.
+			if c.activeURL == 0 {
+				primaryAttempts++
+
+				if len(c.urls) > 1 && primaryAttempts >= c.primaryAttempts {
+					log.Warn("Primary WS failed, switching to secondary",
+						"primary", c.urls[0], "secondary", c.urls[1], "attempts", primaryAttempts)
+					c.activeURL = 1
+					c.lastFailover = time.Now()
+					primaryAttempts = 0
+				}
+			}
+
 			continue
 		}
 		c.mu.Lock()
@@ -81,10 +136,10 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		req.Params.Query = "tm.event='NewBlock' AND milestone.number>0"
 
 		if err := c.conn.WriteJSON(req); err != nil {
-			log.Error("failed to send subscription request on heimdall ws subscription", "err", err)
+			log.Error("failed to send subscription request on heimdall ws subscription", "url", url, "err", err)
 			continue
 		}
-		log.Info("Successfully connected on heimdall ws subscription")
+		log.Info("successfully connected on heimdall ws subscription", "url", url)
 		return
 	}
 }

@@ -225,8 +225,14 @@ type Config struct {
 	// Address to connect to Heimdall gRPC server
 	HeimdallgRPCAddress string
 
+	// Address to connect to a secondary Heimdall gRPC server for failover
+	HeimdallgRPCSecondaryAddress string
+
 	// Address to connect to Heimdall WS subscription server
 	HeimdallWSAddress string
+
+	// Address to connect to a secondary Heimdall WS subscription server for failover
+	HeimdallWSSecondaryAddress string
 
 	// Run heimdall service as a child process
 	RunHeimdall bool
@@ -348,19 +354,54 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			}
 
-			if ethConfig.HeimdallSecondaryURL != "" {
-				secondaryClient := heimdall.NewHeimdallClient(ethConfig.HeimdallSecondaryURL, ethConfig.HeimdallTimeout)
-				heimdallClient = heimdall.NewFailoverHeimdallClient(heimdallClient, secondaryClient)
+			// Build secondary client for failover.
+			var secondaryHeimdallClient bor.IHeimdallClient
 
-				log.Info("Heimdall failover enabled", "primary", ethConfig.HeimdallURL, "secondary", ethConfig.HeimdallSecondaryURL)
+			if ethConfig.HeimdallgRPCSecondaryAddress != "" {
+				// For secondary gRPC's FetchStatus (uses HTTP internally),
+				// prefer secondary HTTP URL if set, otherwise primary.
+				secondaryHTTPURL := ethConfig.HeimdallSecondaryURL
+				if secondaryHTTPURL == "" {
+					secondaryHTTPURL = ethConfig.HeimdallURL
+				}
+
+				grpcSecondary, grpcErr := heimdallgrpc.NewHeimdallGRPCClient(
+					ethConfig.HeimdallgRPCSecondaryAddress,
+					secondaryHTTPURL,
+					ethConfig.HeimdallTimeout,
+				)
+				if grpcErr != nil {
+					log.Error("Failed to initialize secondary Heimdall gRPC client",
+						"address", ethConfig.HeimdallgRPCSecondaryAddress, "err", grpcErr)
+				} else {
+					secondaryHeimdallClient = grpcSecondary
+				}
+			}
+
+			if secondaryHeimdallClient == nil && ethConfig.HeimdallSecondaryURL != "" {
+				secondaryHeimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallSecondaryURL, ethConfig.HeimdallTimeout)
+			}
+
+			if secondaryHeimdallClient != nil {
+				heimdallClient = heimdall.NewFailoverHeimdallClient(heimdallClient, secondaryHeimdallClient)
+				log.Info("Heimdall failover enabled")
 			}
 
 			var heimdallWSClient bor.IHeimdallWSClient
 			var err error
 			if ethConfig.HeimdallWSAddress != "" {
-				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(ethConfig.HeimdallWSAddress)
+				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(
+					ethConfig.HeimdallWSAddress,
+					ethConfig.HeimdallWSSecondaryAddress,
+				)
 				if err != nil {
 					return nil, err
+				}
+
+				if ethConfig.HeimdallWSSecondaryAddress != "" {
+					log.Info("Heimdall WS failover enabled",
+						"primary", ethConfig.HeimdallWSAddress,
+						"secondary", ethConfig.HeimdallWSSecondaryAddress)
 				}
 			}
 

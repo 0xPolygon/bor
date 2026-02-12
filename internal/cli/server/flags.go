@@ -210,10 +210,22 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Heimdall.GRPCAddress,
 	})
 	f.StringFlag(&flagset.StringFlag{
+		Name:    "bor.heimdallgRPC.secondary",
+		Usage:   "Address of a secondary Heimdall gRPC service for failover",
+		Value:   &c.cliConfig.Heimdall.GRPCSecondaryAddress,
+		Default: c.cliConfig.Heimdall.GRPCSecondaryAddress,
+	})
+	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallWS",
 		Usage:   "Address of Heimdall ws subscription service",
 		Value:   &c.cliConfig.Heimdall.WSAddress,
 		Default: c.cliConfig.Heimdall.WSAddress,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "bor.heimdallWS.secondary",
+		Usage:   "Address of a secondary Heimdall WS subscription service for failover",
+		Value:   &c.cliConfig.Heimdall.WSSecondaryAddress,
+		Default: c.cliConfig.Heimdall.WSSecondaryAddress,
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "bor.runheimdall",
