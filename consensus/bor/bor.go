@@ -1081,15 +1081,12 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			lastTx := body.Transactions[len(body.Transactions)-1]
 			if lastTx.Type() == types.StateSyncTxType {
 				stateSyncTx = lastTx
-				hasTracer := vmCfg.Tracer != nil
-				log.Info("[DEBUG] StateSyncTx found in Finalize", "block", headerNumber, "txHash", lastTx.Hash(), "hasTracer", hasTracer)
 				if hooks := vmCfg.Tracer; hooks != nil && hooks.OnTxStart != nil {
 					// todo(milando12): check how much overhead this adds, if it does we can initialize it earlier and pass down to ApplyMessage()
 					vmenv := vm.NewEVM(
 						core.NewEVMBlockContext(header, cx, &header.Coinbase),
 						wrappedState, c.chainConfig, vmCfg,
 					)
-					log.Info("[DEBUG] StateSyncTx OnTxStart", "block", headerNumber, "txHash", stateSyncTx.Hash())
 					hooks.OnTxStart(vmenv.GetVMContext(), stateSyncTx, statefull.SystemAddress)
 				}
 			}
@@ -1110,10 +1107,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 				log.Error("Error while committing states", "error", err)
 				return nil
 			}
-			if len(stateSyncData) > 0 {
-				log.Info("[DEBUG] StateSyncTx CommitStates completed", "block", headerNumber, "eventCount", len(stateSyncData))
 			}
-		}
 		// Get the underlying state for updating consensus time
 		state := wrappedState.Inner()
 		state.BorConsensusTime = time.Since(start)
@@ -1178,7 +1172,6 @@ func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transactio
 
 	// End tracing for StateSyncTx
 	if hooks := vmConfig.Tracer; hooks != nil && hooks.OnTxEnd != nil {
-		log.Info("[DEBUG] StateSyncTx OnTxEnd", "block", header.Number, "txHash", stateSyncTx.Hash(), "logCount", len(stateSyncLogs), "status", stateSyncReceipt.Status)
 		hooks.OnTxEnd(stateSyncReceipt, nil)
 	}
 
