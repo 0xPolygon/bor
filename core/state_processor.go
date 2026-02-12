@@ -150,7 +150,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.chain.engine.Finalize(p.chain, header, statedb, block.Body(), receipts)
+	receipts = p.chain.engine.Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
 
 	// apply state sync logs
 	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
