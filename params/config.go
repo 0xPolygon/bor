@@ -344,6 +344,7 @@ var (
 			MadhugiriProBlock: big.NewInt(29287400),
 			DandeliBlock:      big.NewInt(31890000),
 			LisovoBlock:       big.NewInt(33634700),
+			LisovoProBlock:    big.NewInt(34062000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -731,6 +732,7 @@ var (
 			MadhugiriProBlock: big.NewInt(0),
 			DandeliBlock:      big.NewInt(0),
 			LisovoBlock:       big.NewInt(0),
+			LisovoProBlock:    big.NewInt(0),
 		},
 	}
 
@@ -931,6 +933,7 @@ type BorConfig struct {
 	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
+	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -996,6 +999,10 @@ func (c *BorConfig) IsDandeli(number *big.Int) bool {
 
 func (c *BorConfig) IsLisovo(number *big.Int) bool {
 	return isBlockForked(c.LisovoBlock, number)
+}
+
+func (c *BorConfig) IsLisovoPro(number *big.Int) bool {
+	return isBlockForked(c.LisovoProBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1133,6 +1140,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.LisovoBlock != nil {
 			banner += fmt.Sprintf(" - Lisovo:                      #%-8v\n", c.Bor.LisovoBlock)
+		}
+		if c.Bor.LisovoProBlock != nil {
+			banner += fmt.Sprintf(" - Lisovo Pro:                      #%-8v\n", c.Bor.LisovoProBlock)
 		}
 		return banner
 	}
@@ -1771,6 +1781,7 @@ type Rules struct {
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
 	IsLisovo                                                bool
+	IsLisovoPro                                             bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1805,5 +1816,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
 		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
+		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
 	}
 }
