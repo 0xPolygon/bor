@@ -130,7 +130,7 @@ func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -152,7 +152,7 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 5 * time.Second // longer than caller's ctx
 	defer fc.Close()
 
@@ -172,7 +172,7 @@ func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -190,7 +190,7 @@ func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -208,7 +208,7 @@ func TestFailover_StickyBehavior(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 1 * time.Hour // very long cooldown
 	defer fc.Close()
@@ -244,7 +244,7 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -281,7 +281,7 @@ func TestFailover_ProbeBackFails(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -306,7 +306,7 @@ func TestFailover_ClosesBothClients(t *testing.T) {
 	primary := &mockHeimdallClient{closeFn: func() { primaryClosed.Store(true) }}
 	secondary := &mockHeimdallClient{closeFn: func() { secondaryClosed.Store(true) }}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.Close()
 
 	assert.True(t, primaryClosed.Load(), "primary should be closed")
@@ -317,7 +317,7 @@ func TestFailover_PassthroughWhenPrimaryHealthy(t *testing.T) {
 	primary := &mockHeimdallClient{}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 5 * time.Second
 	defer fc.Close()
 
@@ -345,7 +345,7 @@ func TestFailover_Integration_ServiceUnavailable(t *testing.T) {
 	primaryClient := NewHeimdallClient(primary.URL, 5*time.Second)
 	secondaryClient := NewHeimdallClient(secondary.URL, 5*time.Second)
 
-	fc := NewFailoverHeimdallClient(primaryClient, secondaryClient)
+	fc := NewMultiHeimdallClient(primaryClient, secondaryClient)
 	fc.attemptTimeout = 2 * time.Second
 	defer fc.Close()
 
@@ -369,7 +369,7 @@ func TestFailover_StateSyncEvents(t *testing.T) {
 		},
 	}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -392,7 +392,7 @@ func TestFailover_GetLatestSpan(t *testing.T) {
 		},
 	}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -410,7 +410,7 @@ func TestFailover_FetchCheckpoint(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -428,7 +428,7 @@ func TestFailover_FetchCheckpointCount(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -446,7 +446,7 @@ func TestFailover_FetchMilestone(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -464,7 +464,7 @@ func TestFailover_FetchMilestoneCount(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -482,7 +482,7 @@ func TestFailover_FetchStatus(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -500,7 +500,7 @@ func TestFailover_ProbeBackNonFailoverError(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary)
+	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -545,7 +545,7 @@ func TestFailover_SwitchOnPrimarySubContextError(t *testing.T) {
 			primary := &mockHeimdallClient{getSpanFn: tt.primaryFn}
 			secondary := &mockHeimdallClient{}
 
-			fc := NewFailoverHeimdallClient(primary, secondary)
+			fc := NewMultiHeimdallClient(primary, secondary)
 			fc.attemptTimeout = 100 * time.Millisecond
 			defer fc.Close()
 
@@ -605,7 +605,7 @@ func TestFailover_ThreeClients_CascadeToTertiary(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -631,7 +631,7 @@ func TestFailover_AllClientsFail(t *testing.T) {
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
 	}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	defer fc.Close()
 
@@ -658,7 +658,7 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -703,7 +703,7 @@ func TestFailover_ProbeCurrentNonFailoverError(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -733,7 +733,7 @@ func TestFailover_ProbeCurrentFailoverError_CascadesToNext(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 50 * time.Millisecond
 	defer fc.Close()
@@ -767,7 +767,7 @@ func TestFailover_StickyNonFailoverError(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 1 * time.Hour // very long — no probe
 	defer fc.Close()
@@ -796,7 +796,7 @@ func TestFailover_StickyFailoverError_CascadesToNext(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewFailoverHeimdallClient(primary, secondary, tertiary)
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
 	fc.cooldown = 1 * time.Hour // very long — no probe
 	defer fc.Close()
@@ -827,7 +827,7 @@ func TestFailover_ClosesAllClients(t *testing.T) {
 		clients[i] = &mockHeimdallClient{closeFn: func() { closed[idx].Store(true) }}
 	}
 
-	fc := NewFailoverHeimdallClient(clients...)
+	fc := NewMultiHeimdallClient(clients...)
 	fc.Close()
 
 	for i := range closed {

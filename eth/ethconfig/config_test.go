@@ -104,8 +104,8 @@ func TestCreateConsensusEngine_CommaSeparatedHeimdallURL(t *testing.T) {
 	borEngine, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.True(t, ok, "Expected HeimdallClient to be wrapped in FailoverHeimdallClient")
+	_, ok = borEngine.HeimdallClient.(*heimdall.MultiHeimdallClient)
+	require.True(t, ok, "Expected HeimdallClient to be wrapped in MultiHeimdallClient")
 }
 
 func TestCreateConsensusEngine_SingleHeimdallURL(t *testing.T) {
@@ -121,9 +121,9 @@ func TestCreateConsensusEngine_SingleHeimdallURL(t *testing.T) {
 	borEngine, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 
-	// Single URL should NOT produce a FailoverHeimdallClient
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.False(t, ok, "Expected no FailoverHeimdallClient for single URL")
+	// Single URL should NOT produce a MultiHeimdallClient
+	_, ok = borEngine.HeimdallClient.(*heimdall.MultiHeimdallClient)
+	require.False(t, ok, "Expected no MultiHeimdallClient for single URL")
 }
 
 func TestCreateConsensusEngine_WithoutHeimdall(t *testing.T) {
@@ -152,8 +152,8 @@ func TestCreateConsensusEngine_CommaSeparatedGRPC(t *testing.T) {
 	borEngine, ok := engine.(*bor.Bor)
 	require.True(t, ok, "Expected Bor consensus engine")
 
-	_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
-	require.True(t, ok, "Expected FailoverHeimdallClient with multiple gRPC endpoints")
+	_, ok = borEngine.HeimdallClient.(*heimdall.MultiHeimdallClient)
+	require.True(t, ok, "Expected MultiHeimdallClient with multiple gRPC endpoints")
 }
 
 func TestCreateConsensusEngine_GRPCInitFailsFallsBackToHTTP(t *testing.T) {
@@ -200,7 +200,7 @@ func TestCreateConsensusEngine_GRPCInitFailsFallsBackToHTTP(t *testing.T) {
 			borEngine, ok := engine.(*bor.Bor)
 			require.True(t, ok, "Expected Bor consensus engine")
 
-			_, ok = borEngine.HeimdallClient.(*heimdall.FailoverHeimdallClient)
+			_, ok = borEngine.HeimdallClient.(*heimdall.MultiHeimdallClient)
 			require.Equal(t, tt.expectFailover, ok)
 		})
 	}

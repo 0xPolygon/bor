@@ -381,7 +381,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				} else if len(heimdallClients) == 1 {
 					heimdallClient = heimdallClients[0]
 				} else {
-					heimdallClient = heimdall.NewFailoverHeimdallClient(heimdallClients...)
+					heimdallClient = heimdall.NewMultiHeimdallClient(heimdallClients...)
 					log.Info("Heimdall failover enabled", "endpoints", len(heimdallClients))
 				}
 			}
