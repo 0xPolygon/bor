@@ -1448,7 +1448,9 @@ func (c *Bor) runMilestoneFetcher() {
 		select {
 		case <-ticker.C:
 			if c.HeimdallClient != nil {
-				milestone, err := c.HeimdallClient.FetchMilestone(context.Background())
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				milestone, err := c.HeimdallClient.FetchMilestone(ctx)
+				cancel()
 				if err != nil {
 					log.Warn("Error while fetching milestone", "error", err)
 					continue

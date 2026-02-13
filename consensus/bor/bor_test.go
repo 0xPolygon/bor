@@ -36,6 +36,8 @@ import (
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	"github.com/ethereum/go-ethereum/tests/bor/mocks"
+	"go.uber.org/mock/gomock"
 )
 
 // fakeSpanner implements Spanner for tests
@@ -1360,4 +1362,127 @@ func TestBor_PurgeCache(t *testing.T) {
 	// Verify we can still add entries after purge
 	borObj.recents.Set(hash1, snapshot1, ttlcache.DefaultTTL)
 	require.Equal(t, 1, borObj.recents.Len(), "should be able to add to recents cache after purge")
+}
+
+func newBorForMilestoneFetcherTest(t *testing.T) *Bor {
+	t.Helper()
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
+	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b.quit = make(chan struct{})
+	return b
+}
+
+func TestRunMilestoneFetcher_ContextHasDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	gotDeadline := make(chan bool, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		_, ok := ctx.Deadline()
+		gotDeadline <- ok
+		return nil, errors.New("not available")
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	select {
+	case hasDeadline := <-gotDeadline:
+		require.True(t, hasDeadline, "context passed to FetchMilestone must have a deadline")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for FetchMilestone to be called")
+	}
+}
+
+func TestRunMilestoneFetcher_StoresMilestoneBlock(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{EndBlock: 12345}, nil).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	require.Eventually(t, func() bool {
+		return b.latestMilestoneBlock.Load() == 12345
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestRunMilestoneFetcher_ErrorDoesNotUpdateBlock(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	called := make(chan struct{}, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		return nil, errors.New("heimdall unreachable")
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for FetchMilestone to be called")
+	}
+
+	// Give an extra tick to ensure no late update
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, uint64(0), b.latestMilestoneBlock.Load())
+}
+
+func TestRunMilestoneFetcher_BlockingCallRespectsTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	callReturned := make(chan struct{}, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		// Simulate unreachable Heimdall: block until context is cancelled
+		<-ctx.Done()
+		select {
+		case callReturned <- struct{}{}:
+		default:
+		}
+		return nil, ctx.Err()
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	// The context timeout is 30s; the blocked call should eventually return.
+	// We use a generous test timeout but this verifies the call doesn't block forever.
+	select {
+	case <-callReturned:
+		// Success: the blocking FetchMilestone returned because the context timed out
+	case <-time.After(35 * time.Second):
+		t.Fatal("FetchMilestone blocked beyond the context timeout; goroutine would leak without the fix")
+	}
 }
