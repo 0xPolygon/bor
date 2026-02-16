@@ -67,7 +67,8 @@ type Service struct {
 	multiclient *multiClient
 	store       map[common.Hash]TxTask
 	storeMu     sync.RWMutex
-	taskCh      chan TxTask // channel to queue new tasks
+	wg          sync.WaitGroup // tracks all active goroutines for clean shutdown
+	taskCh      chan TxTask    // channel to queue new tasks
 	semaphore   chan struct{}
 	closeCh     chan struct{} // to limit concurrent tasks
 
@@ -87,8 +88,9 @@ func NewService(urls []string, config *ServiceConfig) *Service {
 		semaphore:   make(chan struct{}, config.maxConcurrentTasks),
 		closeCh:     make(chan struct{}),
 	}
-	go s.processPreconfTasks()
-	go s.cleanup()
+	s.wg.Add(2)
+	go func() { defer s.wg.Done(); s.processPreconfTasks() }()
+	go func() { defer s.wg.Done(); s.cleanup() }()
 	return s
 }
 
@@ -138,7 +140,9 @@ func (s *Service) processPreconfTasks() {
 		case task := <-s.taskCh:
 			// Acquire semaphore to limit concurrent submissions
 			s.semaphore <- struct{}{}
+			s.wg.Add(1)
 			go func(task TxTask) {
+				defer s.wg.Done()
 				defer func() { <-s.semaphore }()
 				s.processPreconfTask(task)
 			}(task)
@@ -320,4 +324,6 @@ func (s *Service) close() {
 	if s.multiclient != nil {
 		s.multiclient.close()
 	}
+	// Wait for all go routines to finish for clean shutdown
+	s.wg.Wait()
 }

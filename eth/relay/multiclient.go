@@ -41,6 +41,7 @@ func isAlreadyKnownError(err error) bool {
 // to perform certain queries across all of them and make a unified decision.
 type multiClient struct {
 	clients []*rpc.Client // rpc client instances dialed to each block producer
+	closed  atomic.Bool
 }
 
 func newMultiClient(urls []string) *multiClient {
@@ -207,11 +208,10 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 		return nil
 	}
 
-	// Some submissions failed, start background retry
-	log.Debug("[tx-relay] Failed to submit private tx to one or more block producers, starting retry",
-		"err", firstErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
-
-	if retry {
+	if retry && !mc.closed.Load() {
+		// Some submissions failed, start background retry
+		log.Debug("[tx-relay] Failed to submit private tx to one or more block producers, starting retry",
+			"err", firstErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
 		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, txGetter)
 	}
 
@@ -224,6 +224,10 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 	currentFailedIndices := failedIndices
 
 	for retry := 0; retry < privateTxMaxRetries; retry++ {
+		if mc.closed.Load() {
+			return
+		}
+
 		// If no more failed producers, we're done
 		if len(currentFailedIndices) == 0 {
 			return
@@ -336,6 +340,7 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 
 // Close closes all rpc client connections
 func (mc *multiClient) close() {
+	mc.closed.Store(true)
 	for _, client := range mc.clients {
 		client.Close()
 	}
