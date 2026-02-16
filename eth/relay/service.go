@@ -139,7 +139,12 @@ func (s *Service) processPreconfTasks() {
 		select {
 		case task := <-s.taskCh:
 			// Acquire semaphore to limit concurrent submissions
-			s.semaphore <- struct{}{}
+			select {
+			case s.semaphore <- struct{}{}:
+			case <-s.closeCh:
+				log.Info("[tx-relay] Stopping preconf task processing, service closing")
+				return
+			}
 			s.wg.Add(1)
 			go func(task TxTask) {
 				defer s.wg.Done()
