@@ -574,11 +574,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 			}
 		}
 	}
-	// The first thing the node will do is reconstruct the verification data for
-	// the head block (ethash cache or clique voting snapshot). Might as well do
-	// it in advance.
-	// BOR - commented out intentionally
-	// bc.engine.VerifyHeader(bc, bc.CurrentHeader())
 
 	// Check the current state of the block hashes and make sure that we do not have any of the bad blocks in our chain
 	for hash := range BadHashes {
@@ -4233,6 +4228,8 @@ func (bc *BlockChain) startHeaderVerificationLoop() {
 // verifyPendingHeaders checks headers after the latest finalized block
 // and rewinds the chain if invalid headers are found.
 func (bc *BlockChain) verifyPendingHeaders() {
+	return
+
 	// Get the latest finalized block
 	hasMilestone, milestoneNumber, _ := bc.checker.GetWhitelistedMilestone()
 	if !hasMilestone {
