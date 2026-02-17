@@ -1056,7 +1056,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	}
 
 	now := time.Now()
-	if header.Time < uint64(now.Unix()) {
+	if now.After(header.GetActualTime()) {
 		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
 		if c.blockTime > 0 {
 			additionalBlockTime = c.blockTime

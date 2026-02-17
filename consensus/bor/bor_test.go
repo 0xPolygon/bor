@@ -1486,3 +1486,117 @@ func TestRunMilestoneFetcher_BlockingCallRespectsTimeout(t *testing.T) {
 		t.Fatal("FetchMilestone blocked beyond the context timeout; goroutine would leak without the fix")
 	}
 }
+
+// TestSubSecondLateBlockTriggersTimeAdjustment verifies that when a block's target
+// time has already passed (even by sub-second), the late-block adjustment triggers
+// and pushes header.Time into the future to give the miner real build time.
+//
+// Without the fix, the integer comparison `header.Time < now.Unix()` misses the case
+// where header.Time == now.Unix() but the sub-second target has already passed. This
+// causes the interrupt timer to expire immediately and Pending() to return an empty
+// map, producing a block with 0 transactions.
+func TestSubSecondLateBlockTriggersTimeAdjustment(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	// waitForMidSecond spins until we're between 300ms-700ms into the current
+	// second. This ensures the 200ms sub-second offset used by the tests won't
+	// cross a second boundary, which would make the old integer comparison
+	// trigger regardless of the fix.
+	waitForMidSecond := func() {
+		for {
+			ms := time.Now().Nanosecond() / 1_000_000
+			if ms >= 300 && ms <= 700 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	t.Run("default path without custom blockTime", func(t *testing.T) {
+		t.Parallel()
+
+		// Consensus period = 1s, no custom blockTime.
+		// This is the path where ActualTime is never set (stays zero)
+		// and GetActualTime() falls back to time.Unix(header.Time, 0).
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 1},
+		}
+
+		waitForMidSecond()
+		now := time.Now()
+
+		// Set genesis time so that header.Time = genesis.Time + period = now.Unix()
+		// (the block target is the start of the current second, already in the past).
+		genesisTime := uint64(now.Unix()) - 1
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		before := time.Now()
+		err := b.Prepare(chain.HeaderChain(), header)
+		require.NoError(t, err)
+
+		expectedMin := uint64(before.Add(1 * time.Second).Unix())
+		require.GreaterOrEqual(t, header.Time, expectedMin,
+			"header.Time should be at least now + period to provide build time")
+	})
+
+	t.Run("custom blockTime with Rio", func(t *testing.T) {
+		t.Parallel()
+
+		blockTimeDuration := 2 * time.Second
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+
+		waitForMidSecond()
+		now := time.Now()
+
+		// Set parent's cached ActualTime so that:
+		//   actualNewBlockTime = parentActualTime + blockTime = now - 200ms
+		// This is sub-second in the past, but truncated header.Time equals now.Unix().
+		parentActualTime := now.Add(-blockTimeDuration).Add(-200 * time.Millisecond)
+		genesisTime := uint64(parentActualTime.Unix())
+
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+		b.blockTime = blockTimeDuration
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		// Cache the parent ActualTime with sub-second precision
+		b.parentActualTimeCache.Add(genesis.Hash(), parentActualTime)
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		before := time.Now()
+		err := b.Prepare(chain.HeaderChain(), header)
+		require.NoError(t, err)
+
+		require.False(t, header.ActualTime.IsZero(),
+			"ActualTime should be set for Rio with custom blockTime")
+		require.True(t, header.ActualTime.After(before),
+			"ActualTime should be in the future after adjustment, got %v which is before %v",
+			header.ActualTime, before)
+
+		expectedMin := before.Add(blockTimeDuration)
+		require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMin.Unix(),
+			"ActualTime should be at least now + blockTime to provide build time")
+	})
+}
