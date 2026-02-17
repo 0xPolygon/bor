@@ -265,6 +265,10 @@ type Bor struct {
 
 	quit      chan struct{}
 	closeOnce sync.Once
+
+	// ctx is cancelled when Close() is called, allowing in-flight operations.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 }
 
 type signer struct {
@@ -309,6 +313,8 @@ func New(
 	// Create a new span store
 	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
 
+	ctx, ctxCancel := context.WithCancel(context.Background())
+
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
@@ -325,6 +331,8 @@ func New(
 		DevFakeAuthor:          devFakeAuthor,
 		blockTime:              blockTime,
 		quit:                   make(chan struct{}),
+		ctx:                    ctx,
+		ctxCancel:              ctxCancel,
 	}
 
 	c.authorizedSigner.Store(&signer{
@@ -555,7 +563,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		// validation stateless, we use the span from heimdall (via span store) instead of
 		// span from validator set genesis contract as both are supposed to be equivalent.
 		if number > zerothSpanEnd && IsSprintStart(number+1, c.config.CalculateSprint(number)) {
-			span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+			span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 			if err != nil {
 				return err
 			}
@@ -665,7 +673,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 				hash := checkpoint.Hash()
 
 				// get validators from span
-				span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+				span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 				if err != nil {
 					return nil, err
 				}
@@ -744,7 +752,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 		}
 	}
 
-	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
+	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -1427,6 +1435,7 @@ func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 // Close implements consensus.Engine.
 func (c *Bor) Close() error {
 	c.closeOnce.Do(func() {
+		c.ctxCancel()
 		close(c.quit)
 		if c.HeimdallClient != nil {
 			c.HeimdallClient.Close()
@@ -1652,9 +1661,9 @@ func (c *Bor) CommitStates(
 	var eventRecords []*clerk.EventRecordWithTime
 
 	// Wait for heimdall to be synced before fetching state sync events
-	c.spanStore.waitUntilHeimdallIsSynced(context.Background())
+	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
+	eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())
 	if err != nil {
 		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
 
