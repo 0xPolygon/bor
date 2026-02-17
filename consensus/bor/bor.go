@@ -266,7 +266,7 @@ type Bor struct {
 	quit      chan struct{}
 	closeOnce sync.Once
 
-	// ctx is cancelled when Close() is called, allowing in-flight operations.
+	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 }
