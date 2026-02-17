@@ -4227,9 +4227,9 @@ func (bc *BlockChain) startHeaderVerificationLoop() {
 
 // verifyPendingHeaders checks headers after the latest finalized block
 // and rewinds the chain if invalid headers are found.
+// Verification is capped to params.DefaultSpanLength + 1 blocks from the current head.
+// This covers atleast 2 spans for max reorg protection without unbounded memory growth.
 func (bc *BlockChain) verifyPendingHeaders() {
-	return
-
 	// Get the latest finalized block
 	hasMilestone, milestoneNumber, _ := bc.checker.GetWhitelistedMilestone()
 	if !hasMilestone {
@@ -4248,9 +4248,19 @@ func (bc *BlockChain) verifyPendingHeaders() {
 		return // Rio is not enabled yet
 	}
 
-	// Collect headers from finalized block + 1 to current head
-	var headers []*types.Header
-	for i := milestoneNumber + 1; i <= currentHead.Number.Uint64(); i++ {
+	// Cap verification window to span_duration + 1 blocks from the head.
+	// This covers 2 spans reorg depth, preventing unbounded memory growth and
+	// header reads when the gap between milestone and head is large.
+	startBlock := milestoneNumber + 1
+	headNumber := currentHead.Number.Uint64()
+
+	if headNumber > params.DefaultSpanLength && headNumber-params.DefaultSpanLength > startBlock {
+		startBlock = headNumber - params.DefaultSpanLength
+	}
+
+	// Collect headers from startBlock to current head
+	headers := make([]*types.Header, 0, headNumber-startBlock+1)
+	for i := startBlock; i <= headNumber; i++ {
 		header := bc.GetHeaderByNumber(i)
 		if header == nil {
 			log.Debug("Missing header during verification", "number", i)

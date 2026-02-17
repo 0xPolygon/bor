@@ -901,6 +901,11 @@ type BlockRangeOverrideValidatorSet struct {
 	Validators []common.Address `json:"validators"`
 }
 
+// DefaultSpanLength is the number of bor blocks in a span. This must match
+// heimdall-v2's bor module Params.span_duration to ensure reorg protection
+// boundaries stay consistent between the execution and consensus layers.
+const DefaultSpanLength = 6400
+
 // BorConfig is the consensus engine configs for Matic bor based sealing.
 type BorConfig struct {
 	Period                          map[string]uint64                `json:"period"`                          // Number of seconds between blocks to enforce
@@ -1142,7 +1147,7 @@ func (c *ChainConfig) Description() string {
 			banner += fmt.Sprintf(" - Lisovo:                      #%-8v\n", c.Bor.LisovoBlock)
 		}
 		if c.Bor.LisovoProBlock != nil {
-			banner += fmt.Sprintf(" - Lisovo Pro:                      #%-8v\n", c.Bor.LisovoProBlock)
+			banner += fmt.Sprintf(" - Lisovo Pro:                  #%-8v\n", c.Bor.LisovoProBlock)
 		}
 		return banner
 	}

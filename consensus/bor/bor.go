@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	defaultSpanLength  = 6400            // Default span length i.e. number of bor blocks in a span
+	defaultSpanLength  = params.DefaultSpanLength
 	zerothSpanEnd      = 255             // End block of 0th span
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
