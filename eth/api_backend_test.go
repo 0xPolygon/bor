@@ -348,3 +348,45 @@ func TestRelayMethodWiring(t *testing.T) {
 		require.NotPanics(t, func() { b.PurgePrivateTx(hash) })
 	})
 }
+
+// TestRelayGracefulShutdownOnStop verifies that the relay shutdown path in
+// Ethereum.Stop() completes promptly and doesn't hang or panic.
+func TestRelayGracefulShutdownOnStop(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil relay does not panic", func(t *testing.T) {
+		t.Parallel()
+		b := &EthAPIBackend{}
+		require.NotPanics(t, func() {
+			if b.relay != nil {
+				b.relay.Close()
+			}
+		})
+	})
+
+	t.Run("close completes promptly with active service", func(t *testing.T) {
+		t.Parallel()
+		// enablePreconf=true creates a Service with background goroutines
+		// (processPreconfTasks, cleanup). Close() must signal them and wait.
+		rs := relay.Init(true, true, true, true, nil)
+		b := &EthAPIBackend{relay: rs}
+
+		require.True(t, b.PreconfEnabled(), "relay should be operational before shutdown")
+
+		done := make(chan struct{})
+		go func() {
+			// This is the exact call from Ethereum.Stop()
+			if b.relay != nil {
+				b.relay.Close()
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Close completed — goroutines shut down cleanly
+		case <-time.After(5 * time.Second):
+			t.Fatal("relay.Close() did not complete within 5s, likely a goroutine leak or deadlock")
+		}
+	})
+}
