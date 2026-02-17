@@ -4292,10 +4292,16 @@ func (bc *BlockChain) verifyPendingHeaders() {
 					"number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
 				// Rewind to the last valid block
 				if lastValidNumber < currentHead.Number.Uint64() {
+					dropCount := int64(currentHead.Number.Uint64() - lastValidNumber)
+
 					log.Warn("Rewinding chain due to invalid header",
-						"from", currentHead.Number.Uint64(), "to", lastValidNumber)
+						"from", currentHead.Number.Uint64(), "to", lastValidNumber, "drop", dropCount)
+
 					if err := bc.SetHead(lastValidNumber); err != nil {
 						log.Error("Failed to rewind chain", "err", err)
+					} else {
+						blockReorgMeter.Mark(1)
+						blockReorgDropMeter.Mark(dropCount)
 					}
 				}
 				return
