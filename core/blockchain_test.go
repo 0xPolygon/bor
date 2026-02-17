@@ -5138,6 +5138,171 @@ func TestHeaderVerificationWithNilChecker(t *testing.T) {
 	}
 }
 
+// headerCountingEngine wraps ethash and records how many headers VerifyHeaders receives.
+type headerCountingEngine struct {
+	*ethash.Ethash
+	headersVerified atomic.Int64
+}
+
+func (m *headerCountingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+	m.headersVerified.Store(int64(len(headers)))
+	return m.Ethash.VerifyHeaders(chain, headers)
+}
+
+// TestVerifyPendingHeadersCapBoundary tests that verifyPendingHeaders caps the
+// verification window to DefaultSpanLength + 1 headers from the current head.
+func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
+	t.Run("GapSmallerThanCap", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		mockValidator := &mockChainValidator{
+			hasMilestone:    true,
+			milestoneNumber: 3,
+			milestoneHash:   common.HexToHash("0x123"),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 20, nil)
+
+		cfg := DefaultConfig()
+		cfg.Checker = mockValidator
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		chain.verifyPendingHeaders()
+
+		// Gap is 20 - 3 = 17, which is less than DefaultSpanLength (6400).
+		// All 17 headers (blocks 4-20) should be verified.
+		if got := engine.headersVerified.Load(); got != 17 {
+			t.Errorf("expected 17 headers verified (no cap), got %d", got)
+		}
+	})
+
+	t.Run("GapLargerThanCap", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+		chainLength := int(params.DefaultSpanLength) + 100
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		mockValidator := &mockChainValidator{
+			hasMilestone:    true,
+			milestoneNumber: 0,
+			milestoneHash:   common.HexToHash("0x123"),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, chainLength, nil)
+
+		cfg := DefaultConfig()
+		cfg.Checker = mockValidator
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		chain.verifyPendingHeaders()
+
+		// Gap is 6500 - 0 = 6500, which exceeds DefaultSpanLength (6400).
+		// Only DefaultSpanLength + 1 = 6401 headers should be verified.
+		expected := int64(params.DefaultSpanLength + 1)
+		if got := engine.headersVerified.Load(); got != expected {
+			t.Errorf("expected %d headers verified (capped), got %d", expected, got)
+		}
+	})
+}
+
+// TestVerifyPendingHeadersReorgMetrics tests that reorg metrics are recorded
+// when verifyPendingHeaders rewinds the chain due to an invalid header.
+func TestVerifyPendingHeadersReorgMetrics(t *testing.T) {
+	failingHeaders := map[uint64]bool{6: true}
+	engine := &mockFailingEngine{
+		Ethash:                ethash.NewFaker(),
+		shouldFailHeader:      failingHeaders,
+		allowInitialInsertion: true,
+	}
+
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{
+		RioBlock: big.NewInt(0),
+	}
+	genesis := &Genesis{
+		Config:  &config,
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+
+	mockValidator := &mockChainValidator{
+		hasMilestone:    true,
+		milestoneNumber: 3,
+		milestoneHash:   common.HexToHash("0x123"),
+	}
+
+	_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 8, nil)
+
+	cfg := DefaultConfig()
+	cfg.Checker = mockValidator
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	engine.markInsertionComplete()
+
+	// Snapshot metrics before
+	reorgCountBefore := blockReorgMeter.Snapshot().Count()
+	reorgDropBefore := blockReorgDropMeter.Snapshot().Count()
+
+	chain.verifyPendingHeaders()
+
+	// Chain should have rewound to block 5
+	newHead := chain.CurrentBlock().Number.Uint64()
+	if newHead != 5 {
+		t.Errorf("expected head to rewind to 5, got %d", newHead)
+	}
+
+	// Reorg execute meter should have incremented by 1
+	reorgCountAfter := blockReorgMeter.Snapshot().Count()
+	if reorgCountAfter-reorgCountBefore != 1 {
+		t.Errorf("expected blockReorgMeter to increment by 1, got %d", reorgCountAfter-reorgCountBefore)
+	}
+
+	// Reorg drop meter should have incremented by 3 (dropped blocks 6, 7, 8)
+	reorgDropAfter := blockReorgDropMeter.Snapshot().Count()
+	if reorgDropAfter-reorgDropBefore != 3 {
+		t.Errorf("expected blockReorgDropMeter to increment by 3, got %d", reorgDropAfter-reorgDropBefore)
+	}
+}
+
 // TestEIP7702 deploys two delegation designations and calls them. It writes one
 // value to storage which is verified after.
 func TestEIP7702(t *testing.T) {
