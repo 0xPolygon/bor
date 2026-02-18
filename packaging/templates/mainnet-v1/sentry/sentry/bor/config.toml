@@ -17,6 +17,11 @@ syncmode = "full"
 
 # ["eth.requiredblocks"]
 
+# [relay]
+# enable-preconfs = true
+# enable-private-tx = true
+# bp-rpc-endpoints = [ ]
+
 # [log]
     # vmodule = ""
     # json = false
@@ -36,6 +41,7 @@ syncmode = "full"
     # nodekeyhex = ""
     # txarrivalwait = "500ms"
     # txannouncementonly = false
+    # disable-tx-propagation = false
     [p2p.discovery]
         # v4disc = true
         # v5disc = true
@@ -81,6 +87,8 @@ syncmode = "full"
     # txfeecap = 5.0
     # allow-unprotected-txs = false
     # enabledeprecatedpersonal = false
+    # accept-preconf-tx = false
+    # accept-private-tx = false
     [jsonrpc.http]
         enabled = true
         port = 8545
