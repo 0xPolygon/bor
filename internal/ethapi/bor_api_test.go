@@ -29,7 +29,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -2821,7 +2820,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 	// Test 1: Get logs from the latest block (blockCount=1)
 	t.Run("latest_single_block", func(t *testing.T) {
 		blockCount := uint64(1)
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 		opts := LogFilterOptions{
 			BlockCount: &blockCount,
 		}
@@ -2838,7 +2837,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 	// Test 2: Get logs with block range
 	t.Run("block_range", func(t *testing.T) {
 		blockCount := uint64(3)
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 		opts := LogFilterOptions{
 			BlockCount: &blockCount,
 		}
@@ -2853,7 +2852,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 	// Test 3: Get logs with a logCount limit
 	t.Run("log_count_limit", func(t *testing.T) {
 		logCount := uint64(100)
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 		opts := LogFilterOptions{
 			LogCount: &logCount,
 		}
@@ -2867,7 +2866,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 
 	// Test 4: Default options (should use blockCount=1)
 	t.Run("default_options", func(t *testing.T) {
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 		opts := LogFilterOptions{}
 
 		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
@@ -2881,7 +2880,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 	t.Run("ambiguous_options", func(t *testing.T) {
 		logCount := uint64(10)
 		blockCount := uint64(5)
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 		opts := LogFilterOptions{
 			LogCount:   &logCount,
 			BlockCount: &blockCount,
@@ -2899,7 +2898,7 @@ func TestBorGetLatestLogs(t *testing.T) {
 	// Test 6: Verify timestamp is populated
 	t.Run("timestamp_populated", func(t *testing.T) {
 		blockCount := uint64(1)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			Addresses: []common.Address{testAddr},
 		}
 		opts := LogFilterOptions{
@@ -2959,7 +2958,7 @@ func TestBorGetLogs(t *testing.T) {
 		}
 
 		blockHash := block.Hash()
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			BlockHash: &blockHash,
 		}
 
@@ -2974,7 +2973,7 @@ func TestBorGetLogs(t *testing.T) {
 	t.Run("block_range", func(t *testing.T) {
 		fromBlock := big.NewInt(1)
 		toBlock := big.NewInt(3)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: fromBlock,
 			ToBlock:   toBlock,
 		}
@@ -2988,7 +2987,7 @@ func TestBorGetLogs(t *testing.T) {
 
 	// Test 3: Get logs from an entire chain (no range specified)
 	t.Run("entire_chain", func(t *testing.T) {
-		crit := ethereum.FilterQuery{}
+		crit := FilterCriteria{}
 
 		logs, err := api.GetLogs(context.Background(), crit)
 		if err != nil {
@@ -2999,7 +2998,7 @@ func TestBorGetLogs(t *testing.T) {
 
 	// Test 4: Get logs with an address filter
 	t.Run("address_filter", func(t *testing.T) {
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			Addresses: []common.Address{testAddr},
 		}
 
@@ -3014,7 +3013,7 @@ func TestBorGetLogs(t *testing.T) {
 	t.Run("invalid_range", func(t *testing.T) {
 		fromBlock := big.NewInt(5)
 		toBlock := big.NewInt(1)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: fromBlock,
 			ToBlock:   toBlock,
 		}
@@ -3037,7 +3036,7 @@ func TestBorGetLogs(t *testing.T) {
 		}
 
 		blockHash := block.Hash()
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			BlockHash: &blockHash,
 		}
 
@@ -3058,7 +3057,7 @@ func TestBorGetLogs(t *testing.T) {
 	// Test 7: Get logs from the genesis block
 	t.Run("genesis_block", func(t *testing.T) {
 		blockHash := backend.chain.GetBlockByNumber(0).Hash()
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			BlockHash: &blockHash,
 		}
 
@@ -3073,7 +3072,7 @@ func TestBorGetLogs(t *testing.T) {
 	t.Run("ascending_order", func(t *testing.T) {
 		fromBlock := big.NewInt(1)
 		toBlock := big.NewInt(5)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: fromBlock,
 			ToBlock:   toBlock,
 		}
@@ -3095,7 +3094,7 @@ func TestBorGetLogs(t *testing.T) {
 	// Test 9: Negative block tag should use latest
 	t.Run("latest_block_tag", func(t *testing.T) {
 		latest := big.NewInt(int64(rpc.LatestBlockNumber))
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   latest,
 		}
@@ -3110,7 +3109,7 @@ func TestBorGetLogs(t *testing.T) {
 	// Test 10: Invalid negative block tag (should error)
 	t.Run("invalid_negative_block_tag", func(t *testing.T) {
 		invalidNegative := big.NewInt(-999)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: invalidNegative,
 			ToBlock:   big.NewInt(5),
 		}
@@ -3127,7 +3126,7 @@ func TestBorGetLogs(t *testing.T) {
 	// Test 11: Invalid negative ToBlock tag
 	t.Run("invalid_negative_toblock_tag", func(t *testing.T) {
 		invalidNegative := big.NewInt(-999)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   invalidNegative,
 		}
@@ -3150,7 +3149,7 @@ func TestBorGetLogs(t *testing.T) {
 		topic2 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
 
 		// Test with topics array (should match positionally)
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(5),
 			Topics: [][]common.Hash{
@@ -3219,7 +3218,7 @@ func TestBorGetLatestLogs_TopicMatching(t *testing.T) {
 
 	// Test 1: Ordered topic matching (positional)
 	t.Run("ordered_topic_matching", func(t *testing.T) {
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(3),
 			Topics: [][]common.Hash{
@@ -3260,7 +3259,7 @@ func TestBorGetLatestLogs_TopicMatching(t *testing.T) {
 
 	// Test 2: Unordered topic matching (IgnoreTopicsOrder = true)
 	t.Run("unordered_topic_matching", func(t *testing.T) {
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(3),
 			Topics: [][]common.Hash{
@@ -3296,7 +3295,7 @@ func TestBorGetLatestLogs_TopicMatching(t *testing.T) {
 
 	// Test 3: Empty topics filter (should match all logs)
 	t.Run("empty_topics_matches_all", func(t *testing.T) {
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(3),
 			Topics:    [][]common.Hash{}, // Empty topics array
@@ -3318,7 +3317,7 @@ func TestBorGetLatestLogs_TopicMatching(t *testing.T) {
 
 	// Test 4: Multiple topics at same position
 	t.Run("multiple_topics_same_position", func(t *testing.T) {
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(3),
 			Topics: [][]common.Hash{
@@ -3377,7 +3376,7 @@ func TestBorGetLogs_ErrorPropagation(t *testing.T) {
 		api := NewBorAPI(backend)
 
 		// Query blocks beyond the chain tip
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(1000), // Chain only has 5 blocks
 		}
@@ -3411,7 +3410,7 @@ func TestBorGetLogs_ErrorPropagation(t *testing.T) {
 
 		// Query with a non-existent block hash
 		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			BlockHash: &nonExistentHash,
 		}
 
@@ -3445,7 +3444,7 @@ func TestBorGetLogs_ErrorPropagation(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(10),
 		}
@@ -3481,7 +3480,7 @@ func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
 		})
 		api := NewBorAPI(backend)
 
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(1000), // Beyond chain tip
 		}
@@ -3518,7 +3517,7 @@ func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
 		api := NewBorAPI(backend)
 
 		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			BlockHash: &nonExistentHash,
 		}
 
@@ -3555,7 +3554,7 @@ func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
 		})
 		api := NewBorAPI(backend)
 
-		crit := ethereum.FilterQuery{
+		crit := FilterCriteria{
 			FromBlock: big.NewInt(0),
 			ToBlock:   big.NewInt(3),
 		}
