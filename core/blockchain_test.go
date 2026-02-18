@@ -5064,24 +5064,24 @@ func TestVerifyPendingHeaders(t *testing.T) {
 
 func testVerifyPendingHeaders(t *testing.T, scheme string) {
 	engine := ethash.NewFaker()
+
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{
+		RioBlock: big.NewInt(0),
+	}
 	genesis := &Genesis{
-		Config:  params.TestChainConfig,
+		Config:  &config,
 		BaseFee: big.NewInt(params.InitialBaseFee),
 	}
 
 	// Generate blocks
 	_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 8, nil)
 
-	// Test with mock validator
-	mockValidator := &mockChainValidator{
-		hasMilestone:    true,
-		milestoneNumber: 3,
-		milestoneHash:   common.HexToHash("0x123"),
-	}
-
-	// Create blockchain
+	// Create blockchain with milestone fetcher
 	cfg := DefaultConfig()
-	cfg.Checker = mockValidator
+	cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+		return 3, nil
+	}
 	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 	if err != nil {
 		t.Fatalf("failed to create blockchain: %v", err)
@@ -5105,15 +5105,16 @@ func testVerifyPendingHeaders(t *testing.T, scheme string) {
 	}
 }
 
-// TestHeaderVerificationWithNilChecker tests that verification is skipped when checker is nil
-func TestHeaderVerificationWithNilChecker(t *testing.T) {
+// TestHeaderVerificationWithNilFetcher tests that the verification loop is skipped
+// when MilestoneFetcher is nil.
+func TestHeaderVerificationWithNilFetcher(t *testing.T) {
 	engine := ethash.NewFaker()
 	genesis := &Genesis{
 		Config:  params.TestChainConfig,
 		BaseFee: big.NewInt(params.InitialBaseFee),
 	}
 
-	// Create blockchain with nil checker
+	// Create blockchain without MilestoneFetcher
 	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, DefaultConfig())
 	if err != nil {
 		t.Fatalf("failed to create blockchain: %v", err)
@@ -5128,13 +5129,13 @@ func TestHeaderVerificationWithNilChecker(t *testing.T) {
 
 	initialHead := chain.CurrentBlock().Number.Uint64()
 
-	// Wait a bit - the verification loop should not run since checker is nil
+	// Wait a bit - the verification loop should not run since milestoneFetcher is nil
 	time.Sleep(2 * time.Second)
 
 	// Head should not have changed
 	newHead := chain.CurrentBlock().Number.Uint64()
 	if newHead != initialHead {
-		t.Errorf("Head should not have changed when checker is nil, got %d, want %d", newHead, initialHead)
+		t.Errorf("Head should not have changed when milestoneFetcher is nil, got %d, want %d", newHead, initialHead)
 	}
 }
 
@@ -5149,10 +5150,10 @@ func (m *headerCountingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, 
 	return m.Ethash.VerifyHeaders(chain, headers)
 }
 
-// TestVerifyPendingHeadersCapBoundary tests that verifyPendingHeaders caps the
-// verification window to DefaultSpanLength + 1 headers from the current head.
-func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
-	t.Run("GapSmallerThanCap", func(t *testing.T) {
+// TestVerifyPendingHeadersMilestoneFetcher tests that verifyPendingHeaders
+// verifies only headers between the Heimdall milestone and the chain head.
+func TestVerifyPendingHeadersMilestoneFetcher(t *testing.T) {
+	t.Run("VerifiesFromMilestoneToHead", func(t *testing.T) {
 		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
 
 		config := *params.TestChainConfig
@@ -5162,18 +5163,14 @@ func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
 		genesis := &Genesis{
 			Config:  &config,
 			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
-
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 3,
-			milestoneHash:   common.HexToHash("0x123"),
 		}
 
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 20, nil)
 
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil // milestone at block 3
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -5186,16 +5183,14 @@ func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
 
 		chain.verifyPendingHeaders()
 
-		// Gap is 20 - 3 = 17, which is less than DefaultSpanLength (6400).
-		// All 17 headers (blocks 4-20) should be verified.
+		// Should verify blocks 4-20 = 17 headers
 		if got := engine.headersVerified.Load(); got != 17 {
-			t.Errorf("expected 17 headers verified (no cap), got %d", got)
+			t.Errorf("expected 17 headers verified, got %d", got)
 		}
 	})
 
-	t.Run("GapLargerThanCap", func(t *testing.T) {
+	t.Run("SkipsWhenMilestoneAheadOfHead", func(t *testing.T) {
 		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
-		chainLength := int(params.DefaultSpanLength) + 100
 
 		config := *params.TestChainConfig
 		config.Bor = &params.BorConfig{
@@ -5206,16 +5201,12 @@ func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
 			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 0,
-			milestoneHash:   common.HexToHash("0x123"),
-		}
-
-		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, chainLength, nil)
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 10, nil)
 
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 100, nil // milestone ahead of head (still syncing)
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -5226,13 +5217,51 @@ func TestVerifyPendingHeadersCapBoundary(t *testing.T) {
 			t.Fatalf("failed to insert chain: %v", err)
 		}
 
+		engine.headersVerified.Store(0) // reset counter after initial insertion
+
 		chain.verifyPendingHeaders()
 
-		// Gap is 6500 - 0 = 6500, which exceeds DefaultSpanLength (6400).
-		// Only DefaultSpanLength + 1 = 6401 headers should be verified.
-		expected := int64(params.DefaultSpanLength + 1)
-		if got := engine.headersVerified.Load(); got != expected {
-			t.Errorf("expected %d headers verified (capped), got %d", expected, got)
+		// Should not verify anything since milestone > head
+		if got := engine.headersVerified.Load(); got != 0 {
+			t.Errorf("expected 0 headers verified when milestone ahead of head, got %d", got)
+		}
+	})
+
+	t.Run("SkipsOnFetcherError", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 10, nil)
+
+		cfg := DefaultConfig()
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 0, fmt.Errorf("heimdall unavailable")
+		}
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		engine.headersVerified.Store(0) // reset counter after initial insertion
+
+		chain.verifyPendingHeaders()
+
+		// Should not verify anything when fetcher returns error
+		if got := engine.headersVerified.Load(); got != 0 {
+			t.Errorf("expected 0 headers verified on fetcher error, got %d", got)
 		}
 	})
 }
@@ -5256,16 +5285,12 @@ func TestVerifyPendingHeadersReorgMetrics(t *testing.T) {
 		BaseFee: big.NewInt(params.InitialBaseFee),
 	}
 
-	mockValidator := &mockChainValidator{
-		hasMilestone:    true,
-		milestoneNumber: 3,
-		milestoneHash:   common.HexToHash("0x123"),
-	}
-
 	_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 8, nil)
 
 	cfg := DefaultConfig()
-	cfg.Checker = mockValidator
+	cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+		return 3, nil // milestone at block 3
+	}
 	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 	if err != nil {
 		t.Fatalf("failed to create blockchain: %v", err)

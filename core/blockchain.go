@@ -228,7 +228,12 @@ type BlockChainConfig struct {
 	// This defines the cutoff block for history expiry.
 	// Blocks before this number may be unavailable in the chain database.
 	HistoryPruningCutoff uint64
-	Stateless            bool // Whether the node is in stateless mode
+
+	// Whether the node is in stateless mode or not.
+	Stateless bool
+
+	// MilestoneFetcher returns the latest milestone end block from Heimdall.
+	MilestoneFetcher func(ctx context.Context) (uint64, error)
 }
 
 // DefaultConfig returns the default config.
@@ -390,14 +395,14 @@ type BlockChain struct {
 	stateSizer                     *state.SizeTracker // State size tracking
 
 	// Bor related changes
-	borReceiptsCache    *lru.Cache[common.Hash, *types.Receipt] // Cache for the most recent bor receipt receipts per block
-	stateSyncMu         sync.RWMutex                            // Mutex to protect the stateSyncData access
-	borReceiptsRLPCache *lru.Cache[common.Hash, rlp.RawValue]   // Cache for the most recent bor receipt RLPs per block
-	stateSyncData       []*types.StateSyncData                  // State sync data
-	stateSyncFeed       event.Feed                              // State sync feed
-	chain2HeadFeed      event.Feed                              // Reorg/NewHead/Fork data feed
-	chainSideFeed       event.Feed                              // Side chain data feed (removed from geth but needed in bor)
-	checker             ethereum.ChainValidator
+	borReceiptsCache    *lru.Cache[common.Hash, *types.Receipt]   // Cache for the most recent bor receipt receipts per block
+	stateSyncMu         sync.RWMutex                              // Mutex to protect the stateSyncData access
+	borReceiptsRLPCache *lru.Cache[common.Hash, rlp.RawValue]     // Cache for the most recent bor receipt RLPs per block
+	stateSyncData       []*types.StateSyncData                    // State sync data
+	stateSyncFeed       event.Feed                                // State sync feed
+	chain2HeadFeed      event.Feed                                // Reorg/NewHead/Fork data feed
+	chainSideFeed       event.Feed                                // Side chain data feed (removed from geth but needed in bor)
+	milestoneFetcher    func(ctx context.Context) (uint64, error) // Function to fetch the latest milestone end block from Heimdall.
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -452,7 +457,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
 		logger:              cfg.VmConfig.Tracer,
-		checker:             cfg.Checker,
+		milestoneFetcher:    cfg.MilestoneFetcher,
 	}
 
 	bc.hc, err = NewHeaderChain(db, chainConfig, engine, bc.insertStopped)
@@ -4200,9 +4205,9 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 // verifies headers after the latest finalized block and rewinds the chain if
 // invalid headers are detected.
 func (bc *BlockChain) startHeaderVerificationLoop() {
-	if bc.checker == nil {
-		log.Warn("chain validator service is not set, skipping header verification loop")
-		return // No checker available
+	if bc.milestoneFetcher == nil {
+		log.Warn("milestone fetcher is not set, skipping header verification loop")
+		return
 	}
 
 	bc.wg.Add(1)
@@ -4211,7 +4216,7 @@ func (bc *BlockChain) startHeaderVerificationLoop() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
-		log.Info("Started header verification loop")
+		log.Info("Starting header verification loop")
 
 		for {
 			select {
@@ -4225,63 +4230,57 @@ func (bc *BlockChain) startHeaderVerificationLoop() {
 	}()
 }
 
-// verifyPendingHeaders checks headers after the latest finalized block
-// and rewinds the chain if invalid headers are found.
-// Verification is capped to params.DefaultSpanLength + 1 blocks from the current head.
-// This covers atleast 2 spans for max reorg protection without unbounded memory growth.
+// verifyPendingHeaders fetches the latest milestone from Heimdall and verifies
+// all headers between that milestone's end block and the current chain head. If an invalid
+// header is found, the chain is rewound to the last valid block.
 func (bc *BlockChain) verifyPendingHeaders() {
-	// Get the latest finalized block
-	hasMilestone, milestoneNumber, _ := bc.checker.GetWhitelistedMilestone()
-	if !hasMilestone {
-		return // No finalized block yet
-	}
-
 	currentHead := bc.CurrentBlock()
-	if currentHead.Number.Uint64() <= milestoneNumber {
-		return // Nothing to verify
-	}
 
 	chainConfig := bc.Config()
-
-	// We don't need to verify headers before Rio
 	if chainConfig.Bor == nil || !chainConfig.Bor.IsRio(currentHead.Number) {
-		return // Rio is not enabled yet
+		return
 	}
 
-	// Cap verification window to span_duration + 1 blocks from the head.
-	// This covers 2 spans reorg depth, preventing unbounded memory growth and
-	// header reads when the gap between milestone and head is large.
-	startBlock := milestoneNumber + 1
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	milestoneEndBlock, err := bc.milestoneFetcher(ctx)
+	if err != nil {
+		log.Error("Failed to fetch milestone end block from Heimdall for header verification", "err", err)
+		return
+	}
+
 	headNumber := currentHead.Number.Uint64()
-
-	if headNumber > params.DefaultSpanLength && headNumber-params.DefaultSpanLength > startBlock {
-		startBlock = headNumber - params.DefaultSpanLength
+	if milestoneEndBlock >= headNumber {
+		return // Still syncing or synced to the milestone end block, nothing to verify.
 	}
 
-	// Collect headers from startBlock to current head
+	startBlock := milestoneEndBlock + 1
+
+	// Collect headers from startBlock to current head.
 	headers := make([]*types.Header, 0, headNumber-startBlock+1)
 	for i := startBlock; i <= headNumber; i++ {
 		header := bc.GetHeaderByNumber(i)
 		if header == nil {
 			log.Debug("Missing header during verification", "number", i)
-			return // Missing header, skip verification
+			return
 		}
 		headers = append(headers, header)
 	}
 
 	if len(headers) == 0 {
+		log.Debug("No headers to verify")
 		return
 	}
 
-	log.Debug("Verifying pending headers", "from", headers[0].Number.Uint64(),
-		"to", headers[len(headers)-1].Number.Uint64(), "count", len(headers))
+	log.Debug("Verifying pending headers",
+		"from", headers[0].Number.Uint64(), "to", headers[len(headers)-1].Number.Uint64(), "count", len(headers))
 
-	// Verify headers
 	abort, results := bc.engine.VerifyHeaders(bc, headers)
 	defer close(abort)
 
-	// Check results and find the last valid header
-	lastValidNumber := milestoneNumber
+	// Check results and find the last valid header.
+	lastValidNumber := milestoneEndBlock
 	for _, header := range headers {
 		select {
 		case <-bc.quit:
@@ -4290,15 +4289,15 @@ func (bc *BlockChain) verifyPendingHeaders() {
 			if err != nil {
 				log.Warn("Invalid header detected during background verification",
 					"number", header.Number.Uint64(), "hash", header.Hash(), "err", err)
-				// Rewind to the last valid block
-				if lastValidNumber < currentHead.Number.Uint64() {
-					dropCount := int64(currentHead.Number.Uint64() - lastValidNumber)
 
-					log.Warn("Rewinding chain due to invalid header",
-						"from", currentHead.Number.Uint64(), "to", lastValidNumber, "drop", dropCount)
+				if lastValidNumber < headNumber {
+					dropCount := int64(headNumber - lastValidNumber)
+
+					log.Warn("Rewinding chain due to an invalid header",
+						"from", headNumber, "to", lastValidNumber, "drop", dropCount)
 
 					if err := bc.SetHead(lastValidNumber); err != nil {
-						log.Error("Failed to rewind chain", "err", err)
+						log.Error("Failed to rewind chain to the last valid header", "err", err)
 					} else {
 						blockReorgMeter.Mark(1)
 						blockReorgDropMeter.Mark(dropCount)
