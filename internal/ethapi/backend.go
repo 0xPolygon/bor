@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -59,6 +60,19 @@ type Backend interface {
 	UnprotectedAllowed() bool      // allows only for EIP155 transactions.
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
+
+	// Preconf / Private tx related API for relay
+	PreconfEnabled() bool
+	SubmitTxForPreconf(tx *types.Transaction) error
+	CheckPreconfStatus(hash common.Hash) (bool, error)
+	PrivateTxEnabled() bool
+	SubmitPrivateTx(tx *types.Transaction) error
+
+	// Preconf / Private tx related API for block producers
+	AcceptPreconfTxs() bool
+	AcceptPrivateTxs() bool
+	RecordPrivateTx(hash common.Hash)
+	PurgePrivateTx(hash common.Hash)
 
 	// Blockchain API
 	SetHead(number uint64)
@@ -91,6 +105,7 @@ type Backend interface {
 	Stats() (pending int, queued int)
 	TxPoolContent() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction)
 	TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction)
+	TxStatus(hash common.Hash) txpool.TxStatus
 	SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription
 
 	ChainConfig() *params.ChainConfig

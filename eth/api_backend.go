@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -54,6 +55,8 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
+
+	relay *relay.RelayService
 }
 
 // ChainConfig returns the active chain configuration.
@@ -481,6 +484,10 @@ func (b *EthAPIBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transac
 	return b.eth.txPool.ContentFrom(addr)
 }
 
+func (b *EthAPIBackend) TxStatus(hash common.Hash) txpool.TxStatus {
+	return b.eth.txPool.Status(hash)
+}
+
 func (b *EthAPIBackend) TxPool() *txpool.TxPool {
 	return b.eth.txPool
 }
@@ -719,4 +726,41 @@ func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
 
 func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return b.eth.config.TxSyncMaxTimeout
+}
+
+// Preconf / Private tx related API for relay
+func (b *EthAPIBackend) PreconfEnabled() bool {
+	return b.relay.PreconfEnabled()
+}
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	return b.relay.SubmitPreconfTransaction(tx)
+}
+
+func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	return b.relay.CheckPreconfStatus(hash)
+}
+
+func (b *EthAPIBackend) PrivateTxEnabled() bool {
+	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	return b.relay.SubmitPrivateTransaction(tx)
+}
+
+// Preconf / Private tx related API for block producers
+func (b *EthAPIBackend) AcceptPreconfTxs() bool {
+	return b.relay.AcceptPreconfTxs()
+}
+
+func (b *EthAPIBackend) AcceptPrivateTxs() bool {
+	return b.relay.AcceptPrivateTxs()
+}
+
+func (b *EthAPIBackend) RecordPrivateTx(hash common.Hash) {
+	b.relay.RecordPrivateTx(hash)
+}
+
+func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {
+	b.relay.PurgePrivateTx(hash)
 }
