@@ -67,7 +67,7 @@ jobs:
     needs:
       - build-bor
       - build-heimdall-v2
-    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     # These permissions are required to log in to GCR
     permissions:
@@ -89,6 +89,18 @@ jobs:
           main_branch: develop
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Configure Docker API compatibility for Pumba
+        run: |
+          # Pumba uses Docker SDK v23.0.3 (API v1.42), but Docker 29+ requires minimum API v1.44
+          # Lower the daemon's minimum API version to maintain compatibility
+          if [ -f /etc/docker/daemon.json ]; then
+            sudo jq '. + {"min-api-version": "1.42"}' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json.tmp > /dev/null
+            sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+          else
+            echo '{"min-api-version": "1.42"}' | sudo tee /etc/docker/daemon.json > /dev/null
+          fi
+          sudo systemctl restart docker
 
       - name: Checkout pos-workflows
         uses: actions/checkout@v5

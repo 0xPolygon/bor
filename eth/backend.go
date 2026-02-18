@@ -54,6 +54,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -228,14 +229,18 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		closeCh:         make(chan struct{}),
 	}
 
+	relayService := relay.Init(config.EnablePreconfs, config.EnablePrivateTx, config.AcceptPreconfTx, config.AcceptPrivateTx, config.BlockProducerRpcEndpoints)
+	privateTxGetter := relayService.GetPrivateTxGetter()
+
 	// START: Bor changes
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil, relayService}
 	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("------Unprotected transactions allowed-------")
+		log.Info("Unprotected transactions allowed")
 		config.TxPool.AllowUnprotectedTxs = true
 	}
 
-	gpoParams := config.GPO
+	// Set transaction getter for relay service to query local database
+	relayService.SetTxGetter(eth.APIBackend.GetCanonicalTransaction)
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
 	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
@@ -328,6 +333,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.blockchain, err = core.NewBlockChain(chainDb, config.Genesis, eth.engine, options)
 	}
 
+	// Set the chain head event subscription function for private tx store
+	relayService.SetchainEventSubFn(eth.blockchain.SubscribeChainEvent)
+
 	// Set parallel stateless import toggle on blockchain
 	if err == nil && eth.blockchain != nil && config.EnableParallelStatelessImport {
 		eth.blockchain.ParallelStatelessImportEnable()
@@ -342,18 +350,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Set blockchain reference for fork detection in whitelist service
 	checker.SetBlockchain(eth.blockchain)
-
-	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
-	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, gpoParams, config.Miner.GasPrice)
-
-	// bor: this is nor present in geth
-	/*
-		_ = eth.engine.VerifyHeader(eth.blockchain, eth.blockchain.CurrentHeader()) // TODO think on it
-	*/
-
-	// BOR changes
-	eth.APIBackend.gpo.ProcessCache()
-	// BOR changes
 
 	// Initialize filtermaps log index.
 	fmConfig := filtermaps.Config{
@@ -424,11 +420,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		checker:                 checker,
 		enableBlockTracking:     eth.config.EnableBlockTracking,
 		txAnnouncementOnly:      eth.p2pServer.TxAnnouncementOnly,
+		disableTxPropagation:    eth.p2pServer.DisableTxPropagation,
 		witnessProtocol:         eth.config.WitnessProtocol,
 		syncWithWitnesses:       eth.config.SyncWithWitnesses,
 		syncAndProduceWitnesses: eth.config.SyncAndProduceWitnesses,
 		fastForwardThreshold:    config.FastForwardThreshold,
 		p2pServer:               eth.p2pServer,
+		privateTxGetter:         privateTxGetter,
 	}); err != nil {
 		return nil, err
 	}
@@ -441,12 +439,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
 
-	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
-	if eth.APIBackend.allowUnprotectedTxs {
-		log.Info("Unprotected transactions allowed")
-	}
 	// 1.14.8: NewOracle function definition was changed to accept (startPrice *big.Int) param.
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
+	eth.APIBackend.gpo.ProcessCache()
 
 	// Start the RPC service
 	eth.netRPCService = ethapi.NewNetAPI(eth.p2pServer, config.NetworkId)
@@ -1010,6 +1005,11 @@ func (s *Ethereum) getHandler() (*ethHandler, *bor.Bor, error) {
 func (s *Ethereum) Stop() error {
 	// Stop all the peer-related stuff first.
 	s.discmix.Close()
+
+	// Close the tx relay service if enabled
+	if s.APIBackend.relay != nil {
+		s.APIBackend.relay.Close()
+	}
 
 	// Close the engine before handler else it may cause a deadlock where
 	// the heimdall is unresponsive and the syncing loop keeps waiting

@@ -293,6 +293,15 @@ type Config struct {
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
+
+	// Preconf / Private transaction relay related settings
+	EnablePreconfs            bool
+	EnablePrivateTx           bool
+	BlockProducerRpcEndpoints []string
+
+	// Preconf / Private transaction related settings for block producers
+	AcceptPreconfTx bool
+	AcceptPrivateTx bool
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

@@ -164,6 +164,9 @@ type Config struct {
 
 	// HealthConfig has health check related settings
 	Health *HealthConfig `hcl:"health,block" toml:"health,block"`
+
+	// Relay has transaction relay related settings
+	Relay *RelayConfig `hcl:"relay,block" toml:"relay,block"`
 }
 
 type HistoryConfig struct {
@@ -276,6 +279,9 @@ type P2PConfig struct {
 
 	// TxAnnouncementOnly is used to only announce transactions to peers
 	TxAnnouncementOnly bool `hcl:"txannouncementonly,optional" toml:"txannouncementonly,optional"`
+
+	// DisableTxPropagation disables transaction broadcast and announcement completely to its peers
+	DisableTxPropagation bool `hcl:"disable-tx-propagation,optional" toml:"disable-tx-propagation,optional"`
 }
 
 type P2PDiscovery struct {
@@ -426,6 +432,12 @@ type SealerConfig struct {
 
 	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Lisovo blocks
 	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
+
+	// EnablePrefetch enables transaction prefetching from pool during block building
+	EnablePrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
+
+	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -474,6 +486,12 @@ type JsonRPCConfig struct {
 	// Maximum allowed timeout for eth_sendRawTransactionSync (e.g. 5m)
 	TxSyncMaxTimeout    time.Duration `hcl:"-,optional" toml:"-"`
 	TxSyncMaxTimeoutRaw string        `hcl:"txsync.maxtimeout,optional" toml:"txsync.maxtimeout,optional"`
+
+	// AcceptPreconfTx allows the RPC server to accept preconf transactions
+	AcceptPreconfTx bool `hcl:"accept-preconf-tx,optional" toml:"accept-preconf-tx,optional"`
+
+	// AcceptPrivateTx allows the RPC server to accept private transactions
+	AcceptPrivateTx bool `hcl:"accept-private-tx,optional" toml:"accept-private-tx,optional"`
 }
 
 type AUTHConfig struct {
@@ -761,6 +779,17 @@ type WitnessConfig struct {
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 }
 
+type RelayConfig struct {
+	// EnablePreconfs enables relay to accept transactions for preconfs
+	EnablePreconfs bool `hcl:"enable-preconfs,optional" toml:"enable-preconfs,optional"`
+
+	// EnablePrivateTx enables relaying transactions privately to block producers
+	EnablePrivateTx bool `hcl:"enable-private-tx,optional" toml:"enable-private-tx,optional"`
+
+	// BlockProducerRpcEndpoints is a list of block producer rpc endpoints to submit transactions to
+	BlockProducerRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
@@ -786,15 +815,16 @@ func DefaultConfig() *Config {
 		RPCBatchLimit:      100,
 		RPCReturnDataLimit: 100000,
 		P2P: &P2PConfig{
-			MaxPeers:           50,
-			MaxPendPeers:       50,
-			Bind:               "0.0.0.0",
-			Port:               30303,
-			NoDiscover:         false,
-			NAT:                "any",
-			NetRestrict:        "",
-			TxArrivalWait:      500 * time.Millisecond,
-			TxAnnouncementOnly: false,
+			MaxPeers:             50,
+			MaxPendPeers:         50,
+			Bind:                 "0.0.0.0",
+			Port:                 30303,
+			NoDiscover:           false,
+			NAT:                  "any",
+			NetRestrict:          "",
+			TxArrivalWait:        500 * time.Millisecond,
+			TxAnnouncementOnly:   false,
+			DisableTxPropagation: false,
 			Discovery: &P2PDiscovery{
 				DiscoveryV4:  true,
 				DiscoveryV5:  true,
@@ -851,6 +881,8 @@ func DefaultConfig() *Config {
 			Recommit:                 125 * time.Second,
 			CommitInterruptFlag:      true,
 			BlockTime:                0,
+			EnablePrefetch:           false, // Disabled by default, requires explicit opt-in
+			PrefetchGasLimitPercent:  100,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 		},
@@ -873,6 +905,8 @@ func DefaultConfig() *Config {
 			EnablePersonal:       false,
 			TxSyncDefaultTimeout: ethconfig.Defaults.TxSyncDefaultTimeout,
 			TxSyncMaxTimeout:     ethconfig.Defaults.TxSyncMaxTimeout,
+			AcceptPreconfTx:      false,
+			AcceptPrivateTx:      false,
 			Http: &APIConfig{
 				Enabled:                     false,
 				Port:                        8545,
@@ -1006,6 +1040,11 @@ func DefaultConfig() *Config {
 			WarnGoRoutineThreshold: 0,
 			MinPeerThreshold:       0,
 			WarnPeerThreshold:      0,
+		},
+		Relay: &RelayConfig{
+			EnablePreconfs:            false,
+			EnablePrivateTx:           false,
+			BlockProducerRpcEndpoints: []string{},
 		},
 	}
 }
@@ -1209,6 +1248,13 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
+		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+
+		// Validate prefetch gas limit percentage
+		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {
+			return nil, fmt.Errorf("miner.prefetch-gaslimit-percent (%d) must not exceed 150%%", c.Sealer.PrefetchGasLimitPercent)
+		}
 
 		// Dynamic gas limit configuration
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
@@ -1569,6 +1615,15 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation
 	n.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 
+	// Set preconf / private transaction flags for relay
+	n.EnablePreconfs = c.Relay.EnablePreconfs
+	n.EnablePrivateTx = c.Relay.EnablePrivateTx
+	n.BlockProducerRpcEndpoints = c.Relay.BlockProducerRpcEndpoints
+
+	// Set preconf / private transaction flags for block producers
+	n.AcceptPreconfTx = c.JsonRPC.AcceptPreconfTx
+	n.AcceptPrivateTx = c.JsonRPC.AcceptPrivateTx
+
 	return &n, nil
 }
 
@@ -1782,13 +1837,14 @@ func (c *Config) buildNode() (*node.Config, error) {
 		AllowUnprotectedTxs:   c.JsonRPC.AllowUnprotectedTxs,
 		EnablePersonal:        c.JsonRPC.EnablePersonal,
 		P2P: p2p.Config{
-			MaxPeers:           int(c.P2P.MaxPeers),
-			MaxPendingPeers:    int(c.P2P.MaxPendPeers),
-			ListenAddr:         c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
-			DiscoveryV4:        c.P2P.Discovery.DiscoveryV4,
-			DiscoveryV5:        c.P2P.Discovery.DiscoveryV5,
-			TxArrivalWait:      c.P2P.TxArrivalWait,
-			TxAnnouncementOnly: c.P2P.TxAnnouncementOnly,
+			MaxPeers:             int(c.P2P.MaxPeers),
+			MaxPendingPeers:      int(c.P2P.MaxPendPeers),
+			ListenAddr:           c.P2P.Bind + ":" + strconv.Itoa(int(c.P2P.Port)),
+			DiscoveryV4:          c.P2P.Discovery.DiscoveryV4,
+			DiscoveryV5:          c.P2P.Discovery.DiscoveryV5,
+			TxArrivalWait:        c.P2P.TxArrivalWait,
+			TxAnnouncementOnly:   c.P2P.TxAnnouncementOnly,
+			DisableTxPropagation: c.P2P.DisableTxPropagation,
 		},
 		HTTPModules:         c.JsonRPC.Http.API,
 		HTTPCors:            c.JsonRPC.Http.Cors,

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,15 +109,31 @@ var (
 
 	// Cache hit/miss metrics for block production (miner path)
 	// These are the same meters used by the import path in blockchain.go
-	accountCacheHitMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit", nil)
-	accountCacheMissMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/miss", nil)
-	storageCacheHitMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit", nil)
-	storageCacheMissMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/miss", nil)
+	accountCacheHitMeter  = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit", nil)
+	accountCacheMissMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/miss", nil)
+	storageCacheHitMeter  = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit", nil)
+	storageCacheMissMeter = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/miss", nil)
 
-	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/hit", nil)
-	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/miss", nil)
-	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
-	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
+	accountCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/hit", nil)
+	accountCacheMissPrefetchMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/miss", nil)
+	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/hit", nil)
+	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/miss", nil)
+
+	// Additional prefetch attribution metrics
+	accountHitFromPrefetchMeter       = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter       = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter        = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter        = metrics.NewRegisteredMeter("worker/chain/storage/reads/cache/prefetch/insert", nil)
+	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
+	prefetchPanicMeter                = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
+
+	// prefetchCoverageHistogram tracks percentage of block transactions that were prefetched.
+	// Values range 0-100. High percentiles indicate effective prefetching.
+	prefetchCoverageHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/coverage_percent",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
 )
 
 // environment is the worker's current environment and holds all
@@ -1016,12 +1033,25 @@ func (w *worker) resultLoop() {
 }
 
 // makeEnv creates a new environment for the sealing block.
-func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase common.Address, witness bool) (*environment, error) {
-	// Retrieve the parent state to execute on top, with separate readers for stats tracking.
-	state, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
-	if err != nil {
-		return nil, err
+func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness bool, genParams *generateParams) (*environment, error) {
+	var state *state.StateDB
+
+	// If statedb is not provided (e.g., from getSealingBlock path), create it
+	if genParams.statedb == nil {
+		parent := w.chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+		if parent == nil {
+			return nil, fmt.Errorf("parent block not found")
+		}
+		var err error
+		state, err = w.chain.StateAt(parent.Root)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Use the provided statedb (from commitWork with dual readers)
+		state = genParams.statedb
 	}
+
 	if witness {
 		bundle, err := stateless.NewWitness(header, w.chain)
 		if err != nil {
@@ -1042,8 +1072,8 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 		header:         header,
 		witness:        state.Witness(),
 		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
-		prefetchReader: prefetchReader,
-		processReader:  processReader,
+		prefetchReader: genParams.prefetchReader,
+		processReader:  genParams.processReader,
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1415,30 +1445,29 @@ mainloop:
 
 // generateParams wraps various of settings for generating sealing task.
 type generateParams struct {
-	timestamp   uint64            // The timestamp for sealing task
-	forceTime   bool              // Flag whether the given timestamp is immutable or not
-	parentHash  common.Hash       // Parent block hash, empty means the latest chain head
-	coinbase    common.Address    // The fee recipient address for including transaction
-	random      common.Hash       // The randomness generated by beacon chain, empty before the merge
-	withdrawals types.Withdrawals // List of withdrawals to include in block.
-	beaconRoot  *common.Hash      // The beacon root (cancun field).
-	noTxs       bool              // Flag whether an empty block without any transaction is expected
+	timestamp          uint64                // The timestamp for sealing task
+	forceTime          bool                  // Flag whether the given timestamp is immutable or not
+	parentHash         common.Hash           // Parent block hash, empty means the latest chain head
+	coinbase           common.Address        // The fee recipient address for including transaction
+	random             common.Hash           // The randomness generated by beacon chain, empty before the merge
+	withdrawals        types.Withdrawals     // List of withdrawals to include in block.
+	beaconRoot         *common.Hash          // The beacon root (cancun field).
+	noTxs              bool                  // Flag whether an empty block without any transaction is expected
+	statedb            *state.StateDB        // The statedb to use for block generation
+	prefetchReader     state.ReaderWithStats // The prefetch reader to use for statistics
+	processReader      state.ReaderWithStats // The process reader to use for statistics
+	prefetchedTxHashes *sync.Map             // Map of successfully prefetched transaction hashes
 }
 
-// prepareWork constructs the sealing task according to the given parameters,
-// either based on the last chain head or specified parent. In this function
-// the pending transactions are not filled yet, only the empty task returned.
-func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environment, error) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
+// makeHeader creates a new block header for sealing.
+func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
 
 	if genParams.parentHash != (common.Hash{}) {
 		block := w.chain.GetBlockByHash(genParams.parentHash)
 		if block == nil {
-			return nil, fmt.Errorf("missing parent")
+			return nil, common.Address{}, fmt.Errorf("missing parent")
 		}
 
 		parent = block.Header()
@@ -1448,7 +1477,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	timestamp := genParams.timestamp
 	if parent.Time >= timestamp {
 		if genParams.forceTime {
-			return nil, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time, timestamp)
+			return nil, common.Address{}, fmt.Errorf("invalid timestamp, parent %d given %d", parent.Time, timestamp)
 		}
 
 		timestamp = parent.Time + 1
@@ -1500,7 +1529,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	header.ParentBeaconRoot = nil
 
 	// Run the consensus preparation with the default or customized consensus engine.
-	if err := w.engine.Prepare(w.chain, header); err != nil {
+	if err := w.engine.Prepare(w.chain, header, waitOnPrepare); err != nil {
 		switch err.(type) {
 		case *bor.UnauthorizedSignerError:
 			log.Debug("Failed to prepare header for sealing", "err", err)
@@ -1508,12 +1537,28 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 			log.Error("Failed to prepare header for sealing", "err", err)
 		}
 
+		return nil, common.Address{}, err
+	}
+
+	return header, coinbase, nil
+}
+
+// prepareWork constructs the sealing task according to the given parameters,
+// either based on the last chain head or specified parent. In this function
+// the pending transactions are not filled yet, only the empty task returned.
+func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environment, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	header, coinbase, err := w.makeHeader(genParams, true)
+	if err != nil {
 		return nil, err
 	}
+
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
-	env, err := w.makeEnv(parent, header, coinbase, witness)
+	env, err := w.makeEnv(header, coinbase, witness, genParams)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
@@ -1532,6 +1577,32 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	return env, nil
 }
 
+// buildDefaultFilter creates a pending transaction filter based on chain configuration
+// and current tip/base fee settings.
+func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.PendingFilter {
+	w.mu.RLock()
+	tip := w.tip
+	w.mu.RUnlock()
+
+	// Retrieve the pending transactions pre-filtered by the 1559/4844 dynamic fees
+	filter := txpool.PendingFilter{
+		MinTip: uint256.MustFromBig(tip.ToBig()),
+	}
+
+	if BaseFee != nil {
+		filter.BaseFee = uint256.MustFromBig(BaseFee)
+	}
+
+	isOsaka := w.chainConfig.IsOsaka(Number)
+	isMadhugiri := w.chainConfig.Bor != nil && w.chainConfig.Bor.IsMadhugiri(Number)
+	// Verify tx gas limit does not exceed EIP-7825 cap.
+	if isOsaka || isMadhugiri {
+		filter.GasLimitCap = params.MaxTxGas
+	}
+
+	return filter
+}
+
 // fillTransactions retrieves the pending transactions from the txpool and fills them
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
@@ -1540,25 +1611,10 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 //nolint:gocognit
 func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) error {
 	w.mu.RLock()
-	tip := w.tip
 	prio := w.prio
 	w.mu.RUnlock()
 
-	// Retrieve the pending transactions pre-filtered by the 1559/4844 dynamic fees
-	filter := txpool.PendingFilter{
-		MinTip: uint256.MustFromBig(tip.ToBig()),
-	}
-
-	if env.header.BaseFee != nil {
-		filter.BaseFee = uint256.MustFromBig(env.header.BaseFee)
-	}
-
-	isOsaka := w.chainConfig.IsOsaka(env.header.Number)
-	isMadhugiri := w.chainConfig.Bor != nil && w.chainConfig.Bor.IsMadhugiri(env.header.Number)
-	// Verify tx gas limit does not exceed EIP-7825 cap.
-	if isOsaka || isMadhugiri {
-		filter.GasLimitCap = params.MaxTxGas
-	}
+	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 
 	filter.BlobTxs = false
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
@@ -1681,17 +1737,11 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	if w.syncing.Load() {
 		return
 	}
-	start := time.Now()
 
 	// Clear the pending work block number when commitWork completes (success or failure).
 	defer func() {
 		w.pendingWorkBlock.Store(0)
 	}()
-
-	var (
-		work *environment
-		err  error
-	)
 
 	// Set the coinbase if the worker is running or it's required
 	var coinbase common.Address
@@ -1703,14 +1753,54 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		}
 	}
 
-	work, err = w.prepareWork(&generateParams{
-		timestamp: uint64(timestamp),
-		coinbase:  coinbase,
-	}, w.makeWitness)
+	// Find the parent block for sealing task
+	parent := w.chain.CurrentBlock()
 
+	// Retrieve the parent state to execute on top, with separate readers for stats tracking.
+	state, throwaway, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
 	if err != nil {
 		return
 	}
+
+	genParams := generateParams{
+		timestamp:          uint64(timestamp),
+		coinbase:           coinbase,
+		parentHash:         parent.Hash(),
+		statedb:            state,
+		prefetchReader:     prefetchReader,
+		processReader:      processReader,
+		prefetchedTxHashes: &sync.Map{},
+	}
+
+	var interruptPrefetch atomic.Bool
+	if w.config.EnablePrefetch {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))
+					prefetchPanicMeter.Mark(1)
+				}
+			}()
+			w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
+			// Goroutine exits naturally after prefetch completes.
+			// Go's GC keeps throwaway StateDB alive while this goroutine references it.
+			// When the goroutine exits, the reference is released and GC can collect it.
+		}()
+	}
+
+	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
+}
+
+// buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
+func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	work, err := w.prepareWork(genParams, w.makeWitness)
+	if err != nil {
+		return
+	}
+
+	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
+	start := time.Now()
+	interruptPrefetch.Store(true)
 
 	stopFn := func() {}
 	defer func() {
@@ -1730,7 +1820,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		isRio = w.chainConfig.Bor.IsRio(work.header.Number)
 	}
 	if !noempty && !w.noempty.Load() && !isRio {
-		_ = w.commit(work.copy(), nil, false, start)
+		_ = w.commit(work.copy(), nil, false, start, genParams)
 	}
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)
@@ -1764,7 +1854,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 	// Submit the generated block for consensus sealing.
-	_ = w.commit(work.copy(), w.fullTaskHook, true, start)
+	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
@@ -1774,6 +1864,134 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 	w.current = work
 	w.currentMu.Unlock()
+}
+
+func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	const minLoopInterval = 100 * time.Millisecond
+
+	baseFee := eip1559.CalcBaseFee(w.chainConfig, parent)
+	number := new(big.Int).Add(parent.Number, common.Big1)
+	filter := w.buildDefaultFilter(baseFee, number)
+	filter.BlobTxs = false
+
+	// Acquire read lock to safely access w.extra in makeHeader
+	w.mu.RLock()
+	header, _, err := w.makeHeader(genParams, false)
+	w.mu.RUnlock()
+
+	if err != nil {
+		log.Warn("Prefetch failed to create header", "err", err)
+		return
+	}
+	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
+	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
+
+	// Initialize total gas pool with configured percentage of header gas limit
+	gasLimitPercent := w.config.PrefetchGasLimitPercent
+	if gasLimitPercent == 0 {
+		gasLimitPercent = 100 // Default to 100% if not configured
+	}
+	// Defensive cap at 150% to prevent misconfiguration DoS
+	if gasLimitPercent > 150 {
+		log.Warn("Prefetch gas limit percent exceeds maximum, capping at 150%", "configured", gasLimitPercent)
+		gasLimitPercent = 150
+	}
+	totalGasLimit := header.GasLimit * gasLimitPercent / 100
+	totalGasPool := new(core.GasPool).AddGas(totalGasLimit)
+
+	txsAlreadyPrefetched := make(map[common.Hash]struct{})
+	loopIteration := 0
+
+	for {
+		if interruptPrefetch.Load() {
+			return
+		}
+
+		// Check if we've exhausted the total gas pool
+		if totalGasPool.Gas() == 0 {
+			return
+		}
+
+		loopStart := time.Now()
+		loopIteration++
+
+		// Use the remaining gas from totalGasPool, but cap at header.GasLimit per loop
+		remainingGas := totalGasPool.Gas()
+		loopGasLimit := header.GasLimit
+		if remainingGas < loopGasLimit {
+			loopGasLimit = remainingGas
+		}
+		gaspool := new(core.GasPool).AddGas(loopGasLimit)
+
+		pendingTxs := w.eth.TxPool().Pending(filter, interruptPrefetch)
+		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interruptPrefetch)
+
+		transactions := make([]*types.Transaction, 0)
+		skippedAlreadyPrefetched := 0
+		skippedInsufficientGas := 0
+		skippedNilTx := 0
+
+		for {
+			ltx, _ := txs.Peek()
+			if ltx == nil {
+				break
+			}
+			if gaspool.Gas() < ltx.Gas {
+				txs.Pop()
+				skippedInsufficientGas++
+				continue
+			}
+			if _, exists := txsAlreadyPrefetched[ltx.Hash]; exists {
+				txs.Shift()
+				skippedAlreadyPrefetched++
+				continue
+			}
+
+			tx := ltx.Resolve()
+			if tx == nil {
+				txs.Pop()
+				skippedNilTx++
+				continue
+			}
+
+			transactions = append(transactions, tx)
+			gaspool.SubGas(tx.Gas())
+			txs.Shift()
+		}
+
+		block := types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil))
+		result := prefetcher.Prefetch(block, throwaway, vm.Config{}, true, interruptPrefetch)
+
+		// Use the actual gas used from prefetch result and mark successful transactions
+		if result != nil {
+			totalGasPool.SubGas(result.TotalGasUsed)
+			for _, txHash := range result.SuccessfulTxs {
+				txsAlreadyPrefetched[txHash] = struct{}{}
+				// Store in shared map for coverage metrics
+				if genParams.prefetchedTxHashes != nil {
+					genParams.prefetchedTxHashes.Store(txHash, struct{}{})
+				}
+			}
+		}
+		// Calculate elapsed time and wait if necessary to ensure minimum 100ms interval
+		// Check interrupt flag every 10ms during wait for responsive shutdown
+		elapsed := time.Since(loopStart)
+		if elapsed < minLoopInterval {
+			checkInterval := 10 * time.Millisecond
+
+			for remaining := minLoopInterval - elapsed; remaining > 0; remaining = minLoopInterval - time.Since(loopStart) {
+				if interruptPrefetch.Load() {
+					return
+				}
+
+				sleepDuration := checkInterval
+				if remaining < checkInterval {
+					sleepDuration = remaining
+				}
+				time.Sleep(sleepDuration)
+			}
+		}
+	}
 }
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
@@ -1811,7 +2029,7 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
-func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, genParams *generateParams) error {
 	// Track total block building time and report metrics at the end of the commit cycle.
 	defer func() {
 		// Update total commit timer (matches the "elapsed" time in log)
@@ -1832,6 +2050,32 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			accountCacheMissMeter.Mark(processStats.AccountMiss)
 			storageCacheHitMeter.Mark(processStats.StorageHit)
 			storageCacheMissMeter.Mark(processStats.StorageMiss)
+
+			// Report additional prefetch attribution metrics
+			prefetchAttribStats := env.prefetchReader.GetPrefetchStats()
+			accountInsertPrefetchMeter.Mark(prefetchAttribStats.AccountInsert)
+			storageInsertPrefetchMeter.Mark(prefetchAttribStats.StorageInsert)
+
+			processAttribStats := env.processReader.GetPrefetchStats()
+			accountHitFromPrefetchMeter.Mark(processAttribStats.AccountHitFromPrefetch)
+			storageHitFromPrefetchMeter.Mark(processAttribStats.StorageHitFromPrefetch)
+			accountHitFromPrefetchUniqueMeter.Mark(processAttribStats.AccountHitFromPrefetchUnique)
+
+			// Report prefetch coverage percentage
+			if len(env.txs) > 0 && genParams != nil && genParams.prefetchedTxHashes != nil {
+				prefetchedCount := 0
+
+				// Count how many block transactions were prefetched
+				for _, tx := range env.txs {
+					if _, ok := genParams.prefetchedTxHashes.Load(tx.Hash()); ok {
+						prefetchedCount++
+					}
+				}
+
+				// Calculate percentage (0-100)
+				percentage := int64(prefetchedCount * 100 / len(env.txs))
+				prefetchCoverageHistogram.Update(percentage)
+			}
 		}
 	}()
 
