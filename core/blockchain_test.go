@@ -4829,24 +4829,23 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 	// Test case 1: Valid chain - no rewinds should happen
 	t.Run("ValidChain", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		// Create a mock validator that has a finalized block at height 3
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 3,
-			milestoneHash:   common.HexToHash("0x123"),
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 8, nil)
 
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4891,19 +4890,14 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
-		// Create a mock validator that has a finalized block at height 3
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 3,
-			milestoneHash:   common.HexToHash("0x123"),
-		}
-
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 8, nil)
 
-		// Create blockchain with mock validator and failing engine
+		// Create blockchain with milestone fetcher and failing engine
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil // milestone at block 3
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4934,25 +4928,26 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		}
 	})
 
-	// Test case 3: No finalized block - verification should not run
+	// Test case 3: Fetcher returns error - verification should not run
 	t.Run("NoFinalizedBlock", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		// Create a mock validator with no finalized block
-		mockValidator := &mockChainValidator{
-			hasMilestone: false,
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 0, fmt.Errorf("no milestone available")
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4976,27 +4971,26 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		}
 	})
 
-	// Test case 4: Current head at finalized block - no verification needed
+	// Test case 4: Milestone at head - no verification needed
 	t.Run("HeadAtFinalizedBlock", func(t *testing.T) {
 		engine := ethash.NewFaker()
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
 		genesis := &Genesis{
-			Config:  params.TestChainConfig,
+			Config:  &config,
 			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create a mock validator where finalized block equals current head
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 5, // Same as head
-			milestoneHash:   blocks[4].Hash(),
-		}
-
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 5, nil // milestone at head
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -5023,23 +5017,23 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 	// Test case 5: Verify proper shutdown when blockchain stops
 	t.Run("ProperShutdown", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 2,
-			milestoneHash:   common.HexToHash("0x123"),
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create blockchain
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 2, nil
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
