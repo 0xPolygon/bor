@@ -7,7 +7,7 @@ package filters
 import (
 	reflect "reflect"
 
-	gomock "github.com/golang/mock/gomock"
+	gomock "go.uber.org/mock/gomock"
 )
 
 // MockIterator is a mock of Iterator interface.

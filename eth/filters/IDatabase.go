@@ -7,8 +7,9 @@ package filters
 import (
 	reflect "reflect"
 
+	gomock "go.uber.org/mock/gomock"
+
 	ethdb "github.com/ethereum/go-ethereum/ethdb"
-	gomock "github.com/golang/mock/gomock"
 )
 
 // MockDatabase is a mock of Database interface.
