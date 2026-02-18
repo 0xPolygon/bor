@@ -4737,50 +4737,6 @@ func TestPragueRequests(t *testing.T) {
 	}
 }
 
-// mockChainValidator is a mock implementation of ethereum.ChainValidator for testing
-type mockChainValidator struct {
-	hasMilestone    bool
-	milestoneNumber uint64
-	milestoneHash   common.Hash
-}
-
-func (m *mockChainValidator) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
-	return true, nil
-}
-
-func (m *mockChainValidator) IsValidChain(currentHeader *types.Header, chain []*types.Header) (bool, error) {
-	return true, nil
-}
-
-func (m *mockChainValidator) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {
-	return false, 0, common.Hash{}
-}
-
-func (m *mockChainValidator) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
-	return m.hasMilestone, m.milestoneNumber, m.milestoneHash
-}
-
-func (m *mockChainValidator) ProcessCheckpoint(endBlockNum uint64, endBlockHash common.Hash) {}
-
-func (m *mockChainValidator) ProcessMilestone(endBlockNum uint64, endBlockHash common.Hash) {}
-
-func (m *mockChainValidator) ProcessFutureMilestone(num uint64, hash common.Hash) {}
-
-func (m *mockChainValidator) PurgeWhitelistedCheckpoint() {}
-
-func (m *mockChainValidator) PurgeWhitelistedMilestone() {}
-
-func (m *mockChainValidator) LockMutex(endBlockNum uint64) bool { return true }
-
-func (m *mockChainValidator) UnlockMutex(doLock bool, milestoneId string, endBlockNum uint64, endBlockHash common.Hash) {
-}
-
-func (m *mockChainValidator) UnlockSprint(endBlockNum uint64) {}
-
-func (m *mockChainValidator) RemoveMilestoneID(milestoneId string) {}
-
-func (m *mockChainValidator) GetMilestoneIDsList() []string { return nil }
-
 // mockEngine that can fail header verification for specific block numbers
 type mockFailingEngine struct {
 	*ethash.Ethash

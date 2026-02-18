@@ -1680,4 +1680,3 @@ func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
 		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
 	}
 }
-
