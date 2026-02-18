@@ -29,6 +29,12 @@ type LogFilterOptions struct {
 	IgnoreTopicsOrder bool    `json:"ignoreTopicsOrder,omitempty"` // Match topics in any order
 }
 
+// FilterCriteria represents a request to filter logs.
+// This is the same as ethereum.FilterQuery but with proper JSON unmarshaling
+// that handles the RPC-standard "address" field (singular) and validates
+// mutually exclusive fields.
+type FilterCriteria ethereum.FilterQuery
+
 const (
 	// GetLatestLogMaxLogCount is the maximum number of logs that can be retrieved
 	GetLatestLogMaxLogCount = 30000
@@ -408,11 +414,13 @@ func (api *BorAPI) Forks(ctx context.Context) (Forks, error) {
 // GetBlockByTimestamp returns the first block with a timestamp greater than or equal to the given timestamp.
 //
 // Parameters:
-//   - timestamp: Unix timestamp in seconds
+//   - timestamp: Unix timestamp in seconds (accepts both hex strings and decimal numbers)
 //   - fullTx: If true, returns full transaction objects; if false, only transaction hashes
 //
 // Returns the block in RPC format, or nil if not found.
-func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fullTx bool) (map[string]interface{}, error) {
+func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp rpc.Timestamp, fullTx bool) (map[string]interface{}, error) {
+	// Convert rpc.Timestamp to uint64
+	ts := uint64(timestamp)
 
 	// Get current header
 	currentHeader := api.b.CurrentHeader()
@@ -421,7 +429,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 	}
 
 	// If the current block's time <= timestamp, return the latest block
-	if currentHeader.Time <= timestamp {
+	if currentHeader.Time <= ts {
 		block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(currentHeader.Number.Int64()))
 		if err != nil {
 			return nil, err
@@ -442,7 +450,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 	}
 
 	// If genesis time >= timestamp, return the genesis block (timestamp is before genesis)
-	if genesisHeader.Time >= timestamp {
+	if genesisHeader.Time >= ts {
 		block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(0))
 		if err != nil {
 			return nil, err
@@ -460,7 +468,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 		if err != nil || header == nil {
 			return false
 		}
-		return header.Time >= timestamp
+		return header.Time >= ts
 	})
 
 	// Get the resulting header
@@ -473,7 +481,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 	}
 
 	// Walk backwards while block time > timestamp to find the closest match
-	for resultingHeader.Time > timestamp {
+	for resultingHeader.Time > ts {
 		if blockNum == 0 {
 			break
 		}
@@ -483,7 +491,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp uint64, fu
 			return nil, err
 		}
 
-		if beforeHeader == nil || beforeHeader.Time < timestamp {
+		if beforeHeader == nil || beforeHeader.Time < ts {
 			break
 		}
 
@@ -788,10 +796,12 @@ func (api *BorAPI) GetLogsByHash(ctx context.Context, hash common.Hash) ([][]*ty
 //   - crit: Standard log filter criteria (addresses, topics, from/to blocks, or specific block hash)
 //
 // Returns logs in ascending order (earliest first) with BlockTimestamp populated.
-// Note that Bor returns []*types.Log with the "blockTimestamp" field, whilst Erigon returns ErigonLogs with the "timestamp" field
-func (api *BorAPI) GetLogs(ctx context.Context, crit ethereum.FilterQuery) ([]*types.Log, error) {
+func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.Log, error) {
+	// Convert to ethereum.FilterQuery for internal use
+	filterQuery := ethereum.FilterQuery(crit)
+
 	// Determine block range
-	begin, end, err := api.determineBlockRange(ctx, crit)
+	begin, end, err := api.determineBlockRange(ctx, filterQuery)
 	if err != nil {
 		// Special case: invalid BlockHash returns (nil, nil) for getLogs (Erigon behavior)
 		if errors.Is(err, errInvalidBlockHash) {
@@ -818,7 +828,7 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit ethereum.FilterQuery) ([]*t
 		for _, receipt := range receipts {
 			for _, log := range receipt.Logs {
 				// Apply filter
-				if api.matchesFilter(log, crit.Addresses, crit.Topics, false) {
+				if api.matchesFilter(log, filterQuery.Addresses, filterQuery.Topics, false) {
 					// Populate timestamp
 					log.BlockTimestamp = block.Time()
 					result = append(result, log)
@@ -842,7 +852,7 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit ethereum.FilterQuery) ([]*t
 // Note: LogCount and BlockCount are mutually exclusive. If both are 0, defaults to BlockCount=1.
 //
 // Returns logs in descending order (latest first) with BlockTimestamp populated.
-func (api *BorAPI) GetLatestLogs(ctx context.Context, crit ethereum.FilterQuery, logOptions LogFilterOptions) ([]*types.Log, error) {
+func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOptions LogFilterOptions) ([]*types.Log, error) {
 	// Validate that LogCount and BlockCount are not both specified
 	if logOptions.LogCount != nil && *logOptions.LogCount != 0 && logOptions.BlockCount != nil && *logOptions.BlockCount != 0 {
 		return nil, errors.New("logs count & block count are ambiguous")
@@ -868,11 +878,14 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit ethereum.FilterQuery,
 		blockCount = GetLatestLogMaxBlockCount
 	}
 
+	// Convert to ethereum.FilterQuery for internal use
+	filterQuery := ethereum.FilterQuery(crit)
+
 	// Determine block range
-	begin, end, err := api.determineBlockRange(ctx, crit)
+	begin, end, err := api.determineBlockRange(ctx, filterQuery)
 	if err != nil {
 		if errors.Is(err, errInvalidBlockHash) {
-			return nil, fmt.Errorf("block header not found %x", *crit.BlockHash)
+			return nil, fmt.Errorf("block header not found %x", *filterQuery.BlockHash)
 		}
 		return nil, err
 	}
@@ -902,7 +915,7 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit ethereum.FilterQuery,
 		for _, receipt := range receipts {
 			for _, log := range receipt.Logs {
 				// Apply filter
-				if api.matchesFilter(log, crit.Addresses, crit.Topics, logOptions.IgnoreTopicsOrder) {
+				if api.matchesFilter(log, filterQuery.Addresses, filterQuery.Topics, logOptions.IgnoreTopicsOrder) {
 					// Add timestamp
 					log.BlockTimestamp = block.Time()
 					result = append(result, log)
@@ -1085,4 +1098,122 @@ func (api *BorAPI) getBlockAndReceipts(ctx context.Context, blockNum uint64) (*t
 	}
 
 	return block, receipts, nil
+}
+
+// UnmarshalJSON parses JSON log filter criteria.
+// Handles:
+// - "address" field (singular) that accepts both single string and array
+// - Validates blockHash is mutually exclusive with fromBlock/toBlock
+// - Converts rpc.BlockNumber to *big.Int
+func (fc *FilterCriteria) UnmarshalJSON(data []byte) error {
+	type input struct {
+		BlockHash *common.Hash     `json:"blockHash"`
+		FromBlock *rpc.BlockNumber `json:"fromBlock"`
+		ToBlock   *rpc.BlockNumber `json:"toBlock"`
+		Addresses interface{}      `json:"address"` // string or []string
+		Topics    []interface{}    `json:"topics"`
+	}
+
+	var raw input
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Validate blockHash is mutually exclusive with fromBlock/toBlock
+	if raw.BlockHash != nil {
+		if raw.FromBlock != nil || raw.ToBlock != nil {
+			return errors.New("cannot specify both BlockHash and FromBlock/ToBlock, choose one or the other")
+		}
+		fc.BlockHash = raw.BlockHash
+	} else {
+		if raw.FromBlock != nil {
+			fc.FromBlock = big.NewInt(raw.FromBlock.Int64())
+		}
+		if raw.ToBlock != nil {
+			fc.ToBlock = big.NewInt(raw.ToBlock.Int64())
+		}
+	}
+
+	// Parse addresses - handle both single string and array of strings
+	fc.Addresses = []common.Address{}
+	if raw.Addresses != nil {
+		switch addrs := raw.Addresses.(type) {
+		case []interface{}:
+			for i, addr := range addrs {
+				if strAddr, ok := addr.(string); ok {
+					address, err := decodeAddress(strAddr)
+					if err != nil {
+						return fmt.Errorf("invalid address at index %d: %v", i, err)
+					}
+					fc.Addresses = append(fc.Addresses, address)
+				} else {
+					return fmt.Errorf("non-string address at index %d", i)
+				}
+			}
+		case string:
+			address, err := decodeAddress(addrs)
+			if err != nil {
+				return fmt.Errorf("invalid address: %v", err)
+			}
+			fc.Addresses = []common.Address{address}
+		default:
+			return errors.New("invalid addresses in query")
+		}
+	}
+
+	// Parse topics
+	if len(raw.Topics) > 0 {
+		fc.Topics = make([][]common.Hash, len(raw.Topics))
+		for i, t := range raw.Topics {
+			switch topic := t.(type) {
+			case nil:
+				// nil matches any topic
+			case string:
+				hash, err := decodeTopic(topic)
+				if err != nil {
+					return fmt.Errorf("invalid topic at index %d: %v", i, err)
+				}
+				fc.Topics[i] = []common.Hash{hash}
+			case []interface{}:
+				for _, rawTopic := range topic {
+					if rawTopic == nil {
+						continue
+					}
+					if strTopic, ok := rawTopic.(string); ok {
+						hash, err := decodeTopic(strTopic)
+						if err != nil {
+							return fmt.Errorf("invalid topic: %v", err)
+						}
+						fc.Topics[i] = append(fc.Topics[i], hash)
+					} else {
+						return fmt.Errorf("invalid topic type")
+					}
+				}
+			default:
+				return fmt.Errorf("invalid topic type at index %d", i)
+			}
+		}
+	}
+
+	return nil
+}
+
+// decodeAddress decodes a hex-encoded address with strict validation.
+// Uses hexutil.Decode to properly validate hex encoding and reject invalid characters.
+func decodeAddress(s string) (common.Address, error) {
+	b, err := hexutil.Decode(s)
+	if err == nil && len(b) != common.AddressLength {
+		err = fmt.Errorf("hex has invalid length %d after decoding; expected %d for address", len(b), common.AddressLength)
+	}
+	return common.BytesToAddress(b), err
+}
+
+// decodeTopic decodes a hex-encoded topic hash with strict validation.
+// Uses hexutil.Decode to properly validate hex encoding and reject invalid characters.
+func decodeTopic(s string) (common.Hash, error) {
+	b, err := hexutil.Decode(s)
+	if err == nil && len(b) != common.HashLength {
+		err = fmt.Errorf("hex has invalid length %d after decoding; expected %d for topic", len(b), common.HashLength)
+	}
+	return common.BytesToHash(b), err
 }
