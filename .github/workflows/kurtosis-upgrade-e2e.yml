@@ -22,11 +22,6 @@ jobs:
       actions: write
       id-token: write
     steps:
-      - name: Checkout bor
-        uses: actions/checkout@v5
-        with:
-          path: bor
-
       - name: Checkout kurtosis-pos
         uses: actions/checkout@v5
         with:
@@ -39,6 +34,11 @@ jobs:
           main_branch: develop
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Checkout bor
+        uses: actions/checkout@v5
+        with:
+          path: bor
 
       - name: Build bor docker image
         working-directory: bor
@@ -130,7 +130,7 @@ jobs:
               echo "========================================"
               echo "  LOGS: $container"
               echo "========================================"
-              docker logs --tail 100 "$container" 2>&1 || echo "  ERROR: failed to get logs"
+              docker logs --tail 250 "$container" 2>&1 || echo "  ERROR: failed to get logs"
               echo ""
             done
           } >"${OUT}" 2>&1
