@@ -18,6 +18,7 @@ package downloader
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"time"
@@ -148,12 +149,24 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// Check if we're fetching witnesses to filter peers appropriately
 			isWitnessQueue := reflect.TypeOf(queue) == reflect.TypeOf(&witnessQueue{})
 
+			// Check if we're fetching receipts to filter peers appropriately
+			isReceiptQueue := reflect.TypeOf(queue) == reflect.TypeOf(&receiptQueue{})
+
 			for _, peer := range d.peers.AllPeers() {
+				fmt.Println("--- peer version", peer.version)
 				pending, stale := pending[peer.id], stales[peer.id]
 				if pending == nil && stale == nil {
 					// For witness fetching, skip peers that don't support the witness protocol
 					if isWitnessQueue && !peer.peer.SupportsWitness() {
 						peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
+						continue
+					}
+
+					// eth/69 handlers also sends bor receipts via p2p. Skip peers
+					// below that to avoid missing bor receipts.
+					if isReceiptQueue && peer.version < eth.ETH69 {
+						peer.log.Trace("Skipping peer for fetching receipts - version below eth/69", "peer", peer.id)
+						fmt.Println("--- skipping eth/69 peer")
 						continue
 					}
 
@@ -235,6 +248,13 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				// For witness fetching, only count peers that support the witness protocol
 				for _, peer := range d.peers.AllPeers() {
 					if peer.peer.SupportsWitness() {
+						capablePeers++
+					}
+				}
+			} else if isReceiptQueue {
+				// For receipt fetching, only count eth/69+ peers that include bor receipts
+				for _, peer := range d.peers.AllPeers() {
+					if peer.version >= eth.ETH69 {
 						capablePeers++
 					}
 				}
