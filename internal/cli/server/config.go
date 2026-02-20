@@ -1534,13 +1534,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
 
-	// Choose the sync mode. Only "full" or "stateless" sync is supported
+	// Choose the sync mode
 	switch c.SyncMode {
 	case "full":
 		n.SyncMode = downloader.FullSync
 	case "snap":
-		log.Info("Snap sync is momentarily disabled in bor, switching to full sync")
-		n.SyncMode = downloader.FullSync
+		n.SyncMode = downloader.SnapSync
 	case "stateless":
 		n.SyncMode = downloader.StatelessSync
 		log.Info("Using Stateless Sync mode - syncing from latest checkpoint without history")
