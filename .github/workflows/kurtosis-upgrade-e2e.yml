@@ -1,0 +1,164 @@
+name: Kurtosis Upgrade E2E Tests
+
+on:
+  pull_request:
+    branches:
+      - 'master'
+    types: [opened, synchronize]
+
+concurrency:
+  group: kurtosis-upgrade-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENCLAVE_NAME: pos
+
+jobs:
+  upgrade-e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    steps:
+      - name: Checkout bor
+        uses: actions/checkout@v5
+        with:
+          path: bor
+
+      - name: Checkout kurtosis-pos
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/kurtosis-pos
+          ref: v1.2.12
+
+      - name: Pre kurtosis run
+        uses: ./.github/actions/setup
+        with:
+          main_branch: develop
+          docker_username: ${{ secrets.DOCKERHUB }}
+          docker_token: ${{ secrets.DOCKERHUB_KEY }}
+
+      - name: Build bor docker image
+        working-directory: bor
+        run: docker build -t bor:local --file Dockerfile .
+
+      - name: Checkout e2e
+        uses: actions/checkout@v5
+        with:
+          repository: agglayer/e2e
+          ref: kamui/upgrade-refactor
+          path: e2e
+
+      - name: Checkout pos-workflows
+        uses: actions/checkout@v5
+        with:
+          repository: 0xPolygon/pos-workflows
+          ref: kamui/upgrade-tests
+          path: pos-workflows
+
+      # Configure the upgrade scenario
+      - name: Copy kurtosis config
+        run: cp pos-workflows/configs/kurtosis-upgrade-e2e.yml e2e/scenarios/pos/upgrade/params.yml
+
+      - name: Create .env for upgrade script
+        run: |
+          cat > e2e/scenarios/pos/upgrade/.env << 'EOF'
+          ENCLAVE_NAME=pos
+          KURTOSIS_POS_VERSION=v1.2.12
+          RIO_HF=256
+          RIO_HF_TIMEOUT=300
+          NEW_BOR_IMAGE=bor:local
+          NEW_HEIMDALL_V2_IMAGE=0xpolygon/heimdall-v2:latest
+          NEW_ERIGON_IMAGE=0xpolygon/erigon:latest
+          EOF
+
+      # Run the upgrade scenario
+      - name: Run upgrade script
+        id: upgrade
+        working-directory: e2e/scenarios/pos/upgrade
+        run: sudo -E bash run.sh
+
+      # Run post-upgrade health check
+      - name: Run health check
+        id: health-check
+        working-directory: pos-workflows/tests/upgrade
+        run: bash health_check.sh
+        env:
+          ENCLAVE_NAME: pos
+
+      # Collect diagnostics on failure
+      # Cannot use the kurtosis-based diagnostics action because upgraded
+      # containers are raw docker containers, not kurtosis-managed.
+      - name: Collect diagnostics
+        if: >-
+          always() && (
+          steps.upgrade.outcome == 'failure' ||
+          steps.health-check.outcome == 'failure')
+        run: |
+          set +e
+          OUT="./upgrade-diagnostics.txt"
+          ENCLAVE="${{ env.ENCLAVE_NAME }}"
+
+          {
+            echo "========================================"
+            echo "  UPGRADE DIAGNOSTICS"
+            echo "  Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "========================================"
+            echo ""
+
+            echo "--- All L2 containers ---"
+            docker ps --all --filter "network=kt-${ENCLAVE}" \
+              --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E "l2-(el|cl)"
+            echo ""
+
+            echo "--- Block numbers ---"
+            for container in $(docker ps --filter "network=kt-${ENCLAVE}" --format '{{.Names}}' | grep 'l2-el'); do
+              host_port=$(docker port "$container" 8545 2>/dev/null | head -1 | sed 's/0.0.0.0/127.0.0.1/')
+              if [[ -n "$host_port" ]]; then
+                bn=$(cast bn --rpc-url "http://$host_port" 2>/dev/null || echo "ERROR")
+                echo "  $container: block $bn"
+              else
+                echo "  $container: no published port"
+              fi
+            done
+            echo ""
+
+            echo "--- Container logs (last 100 lines each) ---"
+            for container in $(docker ps --all --filter "network=kt-${ENCLAVE}" --format '{{.Names}}' | grep -E "l2-(el|cl)" | grep -v rabbitmq); do
+              echo "========================================"
+              echo "  LOGS: $container"
+              echo "========================================"
+              docker logs --tail 100 "$container" 2>&1 || echo "  ERROR: failed to get logs"
+              echo ""
+            done
+          } >"${OUT}" 2>&1
+
+          echo "Diagnostics written to ${OUT}"
+
+      - name: Upload diagnostics
+        if: >-
+          always() && (
+          steps.upgrade.outcome == 'failure' ||
+          steps.health-check.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-diagnostics-${{ github.run_id }}
+          path: ./upgrade-diagnostics.txt
+          retention-days: 2
+
+      # Clean up (kurtosis dump first, then remove orphaned containers)
+      - name: Post kurtosis run
+        if: always()
+        uses: ./.github/actions/cleanup
+        with:
+          main_branch: develop
+          enclave_name: ${{ env.ENCLAVE_NAME }}
+
+      - name: Remove orphaned containers
+        if: always()
+        run: |
+          docker ps --all --format '{{.Names}}' \
+            | grep -E '^l2-(e|c)l-.*-.*-' \
+            | xargs -r docker rm --force || true
