@@ -347,7 +347,7 @@ func (dlp *downloadTesterPeer) RequestReceipts(hashes []common.Hash, sink chan *
 		receiptLists[i] = &rl
 	}
 
-	// Skip calculating the receipt root as that duty is removed from the handler to the fetcher.
+	// Skip calculating the receipt root as that duty is moved from the handler to the fetcher.
 	req := &eth.Request{
 		Peer: dlp.id,
 	}
