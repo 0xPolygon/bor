@@ -271,9 +271,11 @@ func isFailoverError(err error, callerCtx context.Context) bool {
 		return true
 	}
 
-	// Non-successful HTTP response (4xx, 5xx excluding 503)
-	if errors.Is(err, ErrNotSuccessfulResponse) {
-		return true
+	// Server-side HTTP error (5xx, excluding 503 which is already handled above).
+	// Client errors (4xx) are logical errors; the secondary would return the same response.
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode >= 500
 	}
 
 	// Sub-context deadline exceeded (the caller's context is still alive at this point)

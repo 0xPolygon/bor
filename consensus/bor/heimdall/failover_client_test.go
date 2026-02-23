@@ -568,8 +568,13 @@ func TestIsFailoverError(t *testing.T) {
 	// ErrNoResponse should trigger failover
 	assert.True(t, isFailoverError(ErrNoResponse, ctx), "ErrNoResponse should trigger failover")
 
-	// ErrNotSuccessfulResponse should trigger failover
-	assert.True(t, isFailoverError(fmt.Errorf("wrapped: %w", ErrNotSuccessfulResponse), ctx), "ErrNotSuccessfulResponse should trigger failover")
+	// 5xx HTTP errors should trigger failover; the server is unhealthy
+	assert.True(t, isFailoverError(&HTTPStatusError{StatusCode: 500}, ctx), "5xx should trigger failover")
+	assert.True(t, isFailoverError(fmt.Errorf("wrapped: %w", &HTTPStatusError{StatusCode: 502}), ctx), "wrapped 5xx should trigger failover")
+
+	// 4xx HTTP errors should NOT trigger failover; a logical error will be the same on every node
+	assert.False(t, isFailoverError(&HTTPStatusError{StatusCode: 400}, ctx), "4xx should not trigger failover")
+	assert.False(t, isFailoverError(&HTTPStatusError{StatusCode: 404}, ctx), "4xx should not trigger failover")
 
 	// DeadlineExceeded with live caller ctx should trigger failover
 	assert.True(t, isFailoverError(context.DeadlineExceeded, ctx), "DeadlineExceeded should trigger failover when caller ctx is alive")
