@@ -49,6 +49,10 @@ type MultiHeimdallClient struct {
 }
 
 func NewMultiHeimdallClient(clients ...Endpoint) *MultiHeimdallClient {
+	if len(clients) == 0 {
+		panic("NewMultiHeimdallClient requires at least one client")
+	}
+
 	return &MultiHeimdallClient{
 		clients:        clients,
 		attemptTimeout: defaultAttemptTimeout,

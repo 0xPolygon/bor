@@ -356,7 +356,10 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				n := max(len(httpURLs), len(grpcAddrs))
 				for i := 0; i < n; i++ {
 					if i < len(grpcAddrs) && grpcAddrs[i] != "" {
-						httpURL := httpURLs[min(i, len(httpURLs)-1)]
+						var httpURL string
+						if len(httpURLs) > 0 {
+							httpURL = httpURLs[min(i, len(httpURLs)-1)]
+						}
 
 						grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(grpcAddrs[i], httpURL, ethConfig.HeimdallTimeout)
 						if err != nil {
