@@ -122,6 +122,9 @@ func (m *mockHeimdallClient) Close() {
 }
 
 func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
+	switchesBefore := failoverSwitchCounter.Snapshot().Count()
+	activeBefore := failoverActiveGauge.Snapshot().Value()
+
 	primary := &mockHeimdallClient{
 		getSpanFn: func(ctx context.Context, _ uint64) (*types.Span, error) {
 			// Simulate transport error
@@ -140,6 +143,10 @@ func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
 
 	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
 	assert.Equal(t, int32(1), secondary.hits.Load(), "secondary should have been called once")
+
+	assert.Greater(t, failoverSwitchCounter.Snapshot().Count(), switchesBefore, "failover switch counter should increment")
+	_ = activeBefore // gauge is set, not incremented
+	assert.Equal(t, int64(1), failoverActiveGauge.Snapshot().Value(), "active gauge should reflect secondary index")
 }
 
 func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
@@ -752,6 +759,9 @@ func TestFailover_ClosesAllClients(t *testing.T) {
 }
 
 func TestFailover_HealthCheckStartsOnFailover(t *testing.T) {
+	probeAttemptsBefore := failoverProbeAttempts.Snapshot().Count()
+	probeSuccessesBefore := failoverProbeSuccesses.Snapshot().Count()
+
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
 			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
@@ -782,6 +792,9 @@ func TestFailover_HealthCheckStartsOnFailover(t *testing.T) {
 	fc.mu.Lock()
 	assert.Equal(t, 0, fc.active, "should be back on primary")
 	fc.mu.Unlock()
+
+	assert.Greater(t, failoverProbeAttempts.Snapshot().Count(), probeAttemptsBefore, "probe attempts should increment")
+	assert.Greater(t, failoverProbeSuccesses.Snapshot().Count(), probeSuccessesBefore, "probe successes should increment")
 }
 
 func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
@@ -835,6 +848,8 @@ func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
 		return fc.active == 1
 	}, 2*time.Second, 20*time.Millisecond, "should promote to secondary")
 
+	assert.Equal(t, int64(1), failoverActiveGauge.Snapshot().Value(), "active gauge should reflect secondary after first promotion")
+
 	// Now bring primary back
 	primaryDown.Store(false)
 
@@ -843,6 +858,8 @@ func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
 		defer fc.mu.Unlock()
 		return fc.active == 0
 	}, 2*time.Second, 20*time.Millisecond, "should promote to primary")
+
+	assert.Equal(t, int64(0), failoverActiveGauge.Snapshot().Value(), "active gauge should reflect primary after full recovery")
 }
 
 func TestFailover_HealthCheckRespectsClose(t *testing.T) {

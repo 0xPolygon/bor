@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor/heimdall"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -109,6 +110,8 @@ func (c *HeimdallWSClient) startWSHealthCheck() {
 
 		// Probe URLs 0..active-1 (highest priority first).
 		for i := 0; i < active; i++ {
+			heimdall.FailoverWSProbeAttempts.Inc(1)
+
 			testConn, _, err := websocket.DefaultDialer.Dial(c.urls[i], nil)
 			if err != nil {
 				continue
@@ -119,6 +122,9 @@ func (c *HeimdallWSClient) startWSHealthCheck() {
 			c.activeURL = i
 			conn := c.conn
 			c.mu.Unlock()
+
+			heimdall.FailoverWSProbeSuccesses.Inc(1)
+			heimdall.FailoverWSActiveGauge.Update(int64(i))
 
 			log.Info("WS health-check: promoted to higher-priority URL", "index", i, "url", c.urls[i])
 
@@ -181,6 +187,9 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 					c.mu.Lock()
 					c.activeURL = next
 					c.mu.Unlock()
+
+					heimdall.FailoverWSSwitchCounter.Inc(1)
+					heimdall.FailoverWSActiveGauge.Update(int64(next))
 
 					if c.probing.CompareAndSwap(false, true) {
 						go c.startWSHealthCheck()

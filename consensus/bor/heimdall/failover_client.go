@@ -148,6 +148,8 @@ func (f *MultiHeimdallClient) startHealthCheck() {
 
 		// Probe clients 0..active-1 (highest priority first).
 		for i := 0; i < active; i++ {
+			failoverProbeAttempts.Inc(1)
+
 			ctx, cancel := context.WithTimeout(context.Background(), f.attemptTimeout)
 			_, err := f.clients[i].FetchStatus(ctx)
 			cancel()
@@ -156,6 +158,9 @@ func (f *MultiHeimdallClient) startHealthCheck() {
 				f.mu.Lock()
 				f.active = i
 				f.mu.Unlock()
+
+				failoverProbeSuccesses.Inc(1)
+				failoverActiveGauge.Update(int64(i))
 
 				log.Info("Heimdall health-check: promoted to higher-priority client", "index", i)
 
@@ -208,6 +213,9 @@ func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(
 			f.mu.Lock()
 			f.active = i
 			f.mu.Unlock()
+
+			failoverSwitchCounter.Inc(1)
+			failoverActiveGauge.Update(int64(i))
 
 			log.Warn("Heimdall failover: switched to client", "index", i)
 
