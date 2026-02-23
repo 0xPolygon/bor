@@ -148,7 +148,10 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 		log.Debug("Heimdall failover: primary still down after probe, staying on current", "active", active, "err", err)
 
 		// Try current client, then cascade through remaining on failure
-		result, err = fn(ctx, f.clients[active])
+		subCtx2, cancel2 := context.WithTimeout(ctx, f.attemptTimeout)
+		result, err = fn(subCtx2, f.clients[active])
+		cancel2()
+
 		if err == nil {
 			return result, nil
 		}
@@ -163,7 +166,10 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 
 	if active != 0 {
 		// On a non-primary client, not yet time to probe: use current directly
-		result, err := fn(ctx, f.clients[active])
+		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
+		result, err := fn(subCtx, f.clients[active])
+		cancel()
+
 		if err == nil {
 			return result, nil
 		}
@@ -200,7 +206,10 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 // switches the active client and returns. If all fail, returns the last error.
 func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error), after int, lastErr error) (T, error) {
 	for i := after + 1; i < len(f.clients); i++ {
-		result, err := fn(ctx, f.clients[i])
+		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
+		result, err := fn(subCtx, f.clients[i])
+		cancel()
+
 		if err == nil {
 			f.mu.Lock()
 			f.active = i
