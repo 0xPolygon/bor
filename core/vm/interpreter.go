@@ -16,6 +16,8 @@
 
 package vm
 
+//go:generate go run ./gen_dispatch/
+
 import (
 	"errors"
 	"fmt"
@@ -174,6 +176,18 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool, interrupt *
 			}
 		}()
 	}
+
+	// Fast path: use switch dispatch when no tracer is attached and EIP-4762
+	// (Verkle) is not active. This eliminates indirect function calls, debug
+	// branches, and accumulates static gas in a register variable.
+	if !debug && !isEIP4762 {
+		ret, err = evm.runSwitch(contract, stack, mem, callContext, jumpTable, interrupt)
+		if err == errStopToken {
+			err = nil
+		}
+		return ret, err
+	}
+
 	// The Interpreter main run loop (contextual). This loop runs until either an
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
