@@ -21,6 +21,7 @@ func CreateMockServer(config *Config) (*Server, error) {
 	}
 
 	// The test uses grpc port from config so setting it here.
+	config.GRPC.Enabled = true
 	config.GRPC.Addr = fmt.Sprintf(":%d", grpcPort)
 
 	// datadir

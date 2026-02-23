@@ -510,6 +510,9 @@ type AUTHConfig struct {
 }
 
 type GRPCConfig struct {
+	// Enabled controls whether the gRPC server is started
+	Enabled bool `hcl:"enabled,optional" toml:"enabled,optional"`
+
 	// Addr is the bind address for the grpc rpc server
 	Addr string `hcl:"addr,optional" toml:"addr,optional"`
 }
@@ -999,7 +1002,8 @@ func DefaultConfig() *Config {
 			DisableBorWallet:    true,
 		},
 		GRPC: &GRPCConfig{
-			Addr: ":3131",
+			Enabled: false,
+			Addr:    "127.0.0.1:3131",
 		},
 		Developer: &DeveloperConfig{
 			Enabled:  false,
