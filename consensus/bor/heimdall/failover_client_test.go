@@ -210,7 +210,7 @@ func TestFailover_StickyBehavior(t *testing.T) {
 
 	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 1 * time.Hour // very long cooldown
+	fc.healthCheckInterval = 1 * time.Hour // very long — no background probe
 	defer fc.Close()
 
 	// First call triggers failover
@@ -241,32 +241,35 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 			}
 			return &types.Span{Id: spanID}, nil
 		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if primaryDown.Load() {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
 	}
 	secondary := &mockHeimdallClient{}
 
 	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
 	defer fc.Close()
 
 	// Trigger failover
 	_, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
-	// Wait for cooldown to elapse
-	time.Sleep(100 * time.Millisecond)
-
 	// Bring primary back
 	primaryDown.Store(false)
 
-	primaryBefore := primary.hits.Load()
+	// Wait for background health-check to promote primary
+	require.Eventually(t, func() bool {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		return fc.active == 0
+	}, 2*time.Second, 20*time.Millisecond, "health-check should promote back to primary")
 
-	// Next call should probe primary and succeed
-	_, err = fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
-	assert.Greater(t, primary.hits.Load(), primaryBefore, "primary should have been probed")
-
-	// Verify we're back on primary
+	// Verify subsequent calls go to primary
 	secondaryBefore := secondary.hits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
@@ -278,26 +281,34 @@ func TestFailover_ProbeBackFails(t *testing.T) {
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
 			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
 	}
 	secondary := &mockHeimdallClient{}
 
 	fc := NewMultiHeimdallClient(primary, secondary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
 	defer fc.Close()
 
 	// Trigger failover
 	_, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
-	// Wait for cooldown
-	time.Sleep(100 * time.Millisecond)
+	// Wait for a few health-check ticks
+	time.Sleep(200 * time.Millisecond)
 
-	// Probe should fail, then fallback to secondary
+	// Active should still be on secondary since primary FetchStatus fails
+	fc.mu.Lock()
+	assert.Equal(t, 1, fc.active, "should stay on secondary when primary still down")
+	fc.mu.Unlock()
+
+	// Calls should still succeed via secondary
 	secondaryBefore := secondary.hits.Load()
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
-	assert.Greater(t, secondary.hits.Load(), secondaryBefore, "should fall back to secondary after failed probe")
+	assert.Greater(t, secondary.hits.Load(), secondaryBefore, "should still use secondary")
 }
 
 func TestFailover_ClosesBothClients(t *testing.T) {
@@ -492,34 +503,6 @@ func TestFailover_FetchStatus(t *testing.T) {
 	assert.Equal(t, int32(1), secondary.hits.Load())
 }
 
-func TestFailover_ProbeBackNonFailoverError(t *testing.T) {
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, ErrShutdownDetected
-		},
-	}
-	secondary := &mockHeimdallClient{}
-
-	fc := NewMultiHeimdallClient(primary, secondary)
-	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
-	defer fc.Close()
-
-	// Force onto secondary
-	fc.mu.Lock()
-	fc.active = 1
-	fc.lastSwitch = time.Now().Add(-time.Hour) // cooldown already elapsed
-	fc.mu.Unlock()
-
-	// Probe primary → gets ErrShutdownDetected (non-failover error)
-	// Should return the error directly, NOT fall back to secondary
-	secondaryBefore := secondary.hits.Load()
-	_, err := fc.GetSpan(context.Background(), 1)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should not fall back to secondary on non-failover error during probe")
-}
-
 func TestFailover_SwitchOnPrimarySubContextError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -655,6 +638,12 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 			}
 			return &types.Span{Id: spanID}, nil
 		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if primaryDown.Load() {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
 	}
 	secondary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
@@ -665,24 +654,22 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 
 	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
 	defer fc.Close()
 
 	// Trigger cascade to tertiary
 	_, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
-	// Wait for cooldown
-	time.Sleep(100 * time.Millisecond)
-
 	// Bring primary back
 	primaryDown.Store(false)
-	primaryBefore := primary.hits.Load()
 
-	// Next call should probe primary and succeed
-	_, err = fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
-	assert.Greater(t, primary.hits.Load(), primaryBefore, "primary should have been probed")
+	// Wait for health-check goroutine to promote back to primary
+	require.Eventually(t, func() bool {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		return fc.active == 0
+	}, 2*time.Second, 20*time.Millisecond, "health-check should promote back to primary")
 
 	// Verify we're back on primary
 	tertiaryBefore := tertiary.hits.Load()
@@ -691,79 +678,8 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 	assert.Equal(t, tertiaryBefore, tertiary.hits.Load(), "should be back on primary now")
 }
 
-// Tests for the shouldProbe path (lines 156-161): probe primary fails with
-// failover error, then current (non-primary) client also fails.
-func TestFailover_ProbeCurrentNonFailoverError(t *testing.T) {
-	// Probe primary → failover error, current (secondary) → non-failover error.
-	// Should return the non-failover error without cascading to tertiary.
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-	}
-	secondary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, ErrShutdownDetected
-		},
-	}
-	tertiary := &mockHeimdallClient{}
-
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
-	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
-	defer fc.Close()
-
-	// Force onto secondary with cooldown elapsed so probe triggers.
-	fc.mu.Lock()
-	fc.active = 1
-	fc.lastSwitch = time.Now().Add(-time.Hour)
-	fc.mu.Unlock()
-
-	_, err := fc.GetSpan(context.Background(), 1)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
-}
-
-func TestFailover_ProbeCurrentFailoverError_CascadesToNext(t *testing.T) {
-	// Probe primary → failover error, current (secondary) → failover error.
-	// Should cascade to tertiary.
-	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-	}
-	secondary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-	}
-	tertiary := &mockHeimdallClient{}
-
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
-	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 50 * time.Millisecond
-	defer fc.Close()
-
-	// Force onto secondary with cooldown elapsed so probe triggers.
-	fc.mu.Lock()
-	fc.active = 1
-	fc.lastSwitch = time.Now().Add(-time.Hour)
-	fc.mu.Unlock()
-
-	span, err := fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
-	require.NotNil(t, span)
-	assert.Equal(t, int32(1), tertiary.hits.Load(), "should cascade to tertiary")
-
-	fc.mu.Lock()
-	assert.Equal(t, 2, fc.active, "active should switch to tertiary")
-	fc.mu.Unlock()
-}
-
-// Tests for the active != 0 no-probe path (lines 171-176): on a non-primary
-// client with cooldown not elapsed, the current client fails.
-func TestFailover_StickyNonFailoverError(t *testing.T) {
-	// Sticky on secondary (cooldown not elapsed), secondary returns non-failover error.
-	// Should return error without cascading to tertiary.
+// Active client returns non-failover error: should return directly, no cascade.
+func TestFailover_ActiveNonFailoverError(t *testing.T) {
 	primary := &mockHeimdallClient{}
 	secondary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
@@ -774,13 +690,11 @@ func TestFailover_StickyNonFailoverError(t *testing.T) {
 
 	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 1 * time.Hour // very long — no probe
 	defer fc.Close()
 
-	// Force onto secondary with recent switch (cooldown not elapsed).
+	// Force onto secondary
 	fc.mu.Lock()
 	fc.active = 1
-	fc.lastSwitch = time.Now()
 	fc.mu.Unlock()
 
 	_, err := fc.GetSpan(context.Background(), 1)
@@ -790,9 +704,8 @@ func TestFailover_StickyNonFailoverError(t *testing.T) {
 	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
 }
 
-func TestFailover_StickyFailoverError_CascadesToNext(t *testing.T) {
-	// Sticky on secondary (cooldown not elapsed), secondary returns failover error.
-	// Should cascade to tertiary.
+// Active client returns failover error: should cascade to next.
+func TestFailover_ActiveFailoverError_CascadesToNext(t *testing.T) {
 	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
 	primary := &mockHeimdallClient{}
@@ -803,13 +716,11 @@ func TestFailover_StickyFailoverError_CascadesToNext(t *testing.T) {
 
 	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.cooldown = 1 * time.Hour // very long — no probe
 	defer fc.Close()
 
-	// Force onto secondary with recent switch (cooldown not elapsed).
+	// Force onto secondary
 	fc.mu.Lock()
 	fc.active = 1
-	fc.lastSwitch = time.Now()
 	fc.mu.Unlock()
 
 	span, err := fc.GetSpan(context.Background(), 1)
@@ -838,4 +749,162 @@ func TestFailover_ClosesAllClients(t *testing.T) {
 	for i := range closed {
 		assert.True(t, closed[i].Load(), "client %d should be closed", i)
 	}
+}
+
+func TestFailover_HealthCheckStartsOnFailover(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			return &ctypes.SyncInfo{}, nil // primary recovers for health-check
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewMultiHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Trigger failover
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	// probing should be true after cascade
+	assert.True(t, fc.probing.Load(), "probing should be true after failover")
+
+	// Wait for health-check to promote and self-terminate
+	require.Eventually(t, func() bool {
+		return !fc.probing.Load()
+	}, 2*time.Second, 20*time.Millisecond, "probing should be false after recovery")
+
+	fc.mu.Lock()
+	assert.Equal(t, 0, fc.active, "should be back on primary")
+	fc.mu.Unlock()
+}
+
+func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
+	// 3 clients: primary down, secondary recovers, tertiary active.
+	// Health-check should promote to secondary first, then primary.
+	primaryDown := atomic.Bool{}
+	primaryDown.Store(true)
+
+	secondaryDown := atomic.Bool{}
+	secondaryDown.Store(true)
+
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if primaryDown.Load() {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if secondaryDown.Load() {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
+	defer fc.Close()
+
+	// Trigger cascade to tertiary
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	// Bring secondary back first
+	secondaryDown.Store(false)
+
+	require.Eventually(t, func() bool {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		return fc.active == 1
+	}, 2*time.Second, 20*time.Millisecond, "should promote to secondary")
+
+	// Now bring primary back
+	primaryDown.Store(false)
+
+	require.Eventually(t, func() bool {
+		fc.mu.Lock()
+		defer fc.mu.Unlock()
+		return fc.active == 0
+	}, 2*time.Second, 20*time.Millisecond, "should promote to primary")
+}
+
+func TestFailover_HealthCheckRespectsClose(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc := NewMultiHeimdallClient(primary, secondary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.healthCheckInterval = 50 * time.Millisecond
+
+	// Trigger failover
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	assert.True(t, fc.probing.Load(), "probing should be true after failover")
+
+	// Close should stop the goroutine
+	fc.Close()
+
+	require.Eventually(t, func() bool {
+		return !fc.probing.Load()
+	}, 2*time.Second, 20*time.Millisecond, "probing should stop after Close")
+}
+
+func TestFailover_NoDuplicateGoroutines(t *testing.T) {
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{
+		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
+	}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+	}
+	tertiary := &mockHeimdallClient{}
+
+	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.healthCheckInterval = 1 * time.Hour // long interval so goroutine stays alive
+	defer fc.Close()
+
+	// First cascade: primary→secondary fails, lands on tertiary
+	_, err := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	assert.True(t, fc.probing.Load(), "probing should be true")
+
+	// Force back to secondary and cascade again — should NOT spawn a second goroutine
+	fc.mu.Lock()
+	fc.active = 1
+	fc.mu.Unlock()
+
+	_, err = fc.GetSpan(context.Background(), 1)
+	require.NoError(t, err)
+
+	// probing is still true from the first goroutine; CompareAndSwap prevents a second
+	assert.True(t, fc.probing.Load(), "probing should still be true (no duplicate)")
 }

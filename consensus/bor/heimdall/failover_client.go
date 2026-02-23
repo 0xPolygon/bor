@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
@@ -17,8 +18,8 @@ import (
 )
 
 const (
-	defaultAttemptTimeout    = 30 * time.Second
-	defaultSecondaryCooldown = 2 * time.Minute
+	defaultAttemptTimeout      = 30 * time.Second
+	defaultHealthCheckInterval = 30 * time.Second
 )
 
 // Endpoint matches bor.IHeimdallClient. It is exported so that external
@@ -38,14 +39,17 @@ type Endpoint interface {
 
 // MultiHeimdallClient wraps N heimdall clients (primary at index 0, failovers
 // at 1..N-1) and transparently cascades through them when the active client is
-// unreachable. After a cooldown period it probes the primary again.
+// unreachable. A background goroutine periodically health-checks higher-priority
+// endpoints and promotes back when one recovers.
 type MultiHeimdallClient struct {
-	clients        []Endpoint
-	mu             sync.Mutex
-	active         int       // 0 = primary, >0 = failover
-	lastSwitch     time.Time // when we last switched away from primary
-	attemptTimeout time.Duration
-	cooldown       time.Duration
+	clients             []Endpoint
+	mu                  sync.Mutex
+	active              int // 0 = primary, >0 = failover
+	attemptTimeout      time.Duration
+	healthCheckInterval time.Duration
+	quit                chan struct{}
+	closeOnce           sync.Once
+	probing             atomic.Bool
 }
 
 func NewMultiHeimdallClient(clients ...Endpoint) *MultiHeimdallClient {
@@ -54,9 +58,10 @@ func NewMultiHeimdallClient(clients ...Endpoint) *MultiHeimdallClient {
 	}
 
 	return &MultiHeimdallClient{
-		clients:        clients,
-		attemptTimeout: defaultAttemptTimeout,
-		cooldown:       defaultSecondaryCooldown,
+		clients:             clients,
+		attemptTimeout:      defaultAttemptTimeout,
+		healthCheckInterval: defaultHealthCheckInterval,
+		quit:                make(chan struct{}),
 	}
 }
 
@@ -109,86 +114,70 @@ func (f *MultiHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo
 }
 
 func (f *MultiHeimdallClient) Close() {
+	f.closeOnce.Do(func() { close(f.quit) })
+
 	for _, c := range f.clients {
 		c.Close()
 	}
 }
 
+// startHealthCheck runs in a background goroutine, periodically probing
+// higher-priority endpoints. When one recovers, it promotes active and
+// self-terminates. This keeps real requests off the probe path.
+func (f *MultiHeimdallClient) startHealthCheck() {
+	defer f.probing.Store(false)
+
+	ticker := time.NewTicker(f.healthCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-f.quit:
+			return
+		case <-ticker.C:
+		}
+
+		f.mu.Lock()
+		active := f.active
+		f.mu.Unlock()
+
+		if active == 0 {
+			// Already on primary, nothing to probe.
+			return
+		}
+
+		// Probe clients 0..active-1 (highest priority first).
+		for i := 0; i < active; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), f.attemptTimeout)
+			_, err := f.clients[i].FetchStatus(ctx)
+			cancel()
+
+			if err == nil {
+				f.mu.Lock()
+				f.active = i
+				f.mu.Unlock()
+
+				log.Info("Heimdall health-check: promoted to higher-priority client", "index", i)
+
+				if i == 0 {
+					return
+				}
+
+				break // keep ticking to probe even higher-priority clients
+			}
+		}
+	}
+}
+
 // callWithFailover executes fn against the active client. If the active client
 // fails with a failover-eligible error, it cascades through remaining clients.
-// If on a non-primary client past the cooldown, it probes the primary first.
 func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error)) (T, error) {
 	f.mu.Lock()
 	active := f.active
-	shouldProbe := active != 0 && time.Since(f.lastSwitch) >= f.cooldown
 	f.mu.Unlock()
 
-	// If on a non-primary client and cooldown has elapsed, probe primary
-	if shouldProbe {
-		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
-		result, err := fn(subCtx, f.clients[0])
-		cancel()
-
-		if err == nil {
-			f.mu.Lock()
-			f.active = 0
-			f.mu.Unlock()
-
-			log.Info("Heimdall failover: primary recovered, switching back")
-
-			return result, nil
-		}
-
-		if !isFailoverError(err, ctx) {
-			var zero T
-			return zero, err
-		}
-
-		// Primary still down, stay on current client
-		f.mu.Lock()
-		f.lastSwitch = time.Now()
-		f.mu.Unlock()
-
-		log.Debug("Heimdall failover: primary still down after probe, staying on current", "active", active, "err", err)
-
-		// Try current client, then cascade through remaining on failure
-		subCtx2, cancel2 := context.WithTimeout(ctx, f.attemptTimeout)
-		result, err = fn(subCtx2, f.clients[active])
-		cancel2()
-
-		if err == nil {
-			return result, nil
-		}
-
-		if !isFailoverError(err, ctx) {
-			var zero T
-			return zero, err
-		}
-
-		return cascadeClients(f, ctx, fn, active, err)
-	}
-
-	if active != 0 {
-		// On a non-primary client, not yet time to probe: use current directly
-		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
-		result, err := fn(subCtx, f.clients[active])
-		cancel()
-
-		if err == nil {
-			return result, nil
-		}
-
-		if !isFailoverError(err, ctx) {
-			var zero T
-			return zero, err
-		}
-
-		return cascadeClients(f, ctx, fn, active, err)
-	}
-
-	// Active is primary: try with timeout
 	subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
-	result, err := fn(subCtx, f.clients[0])
+	result, err := fn(subCtx, f.clients[active])
 	cancel()
 
 	if err == nil {
@@ -200,10 +189,11 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 		return zero, err
 	}
 
-	// Cascade through clients [1, 2, ..., N-1]
-	log.Warn("Heimdall failover: primary failed, cascading to next client", "err", err)
+	if active == 0 {
+		log.Warn("Heimdall failover: primary failed, cascading to next client", "err", err)
+	}
 
-	return cascadeClients(f, ctx, fn, 0, err)
+	return cascadeClients(f, ctx, fn, active, err)
 }
 
 // cascadeClients tries clients after the given index. On first success it
@@ -217,10 +207,13 @@ func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(
 		if err == nil {
 			f.mu.Lock()
 			f.active = i
-			f.lastSwitch = time.Now()
 			f.mu.Unlock()
 
 			log.Warn("Heimdall failover: switched to client", "index", i)
+
+			if i > 0 && f.probing.CompareAndSwap(false, true) {
+				go f.startHealthCheck()
+			}
 
 			return result, nil
 		}

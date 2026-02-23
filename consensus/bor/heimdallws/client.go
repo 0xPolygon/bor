@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -31,13 +32,11 @@ const (
 type HeimdallWSClient struct {
 	conn      *websocket.Conn
 	urls      []string // primary at [0], secondary at [1] (if configured)
-	activeURL int      // index into urls
+	activeURL int      // index into urls; protected by mu
 	events    chan *milestone.Milestone
 	done      chan struct{}
 	mu        sync.Mutex
-
-	// lastFailover tracks when the client last switched to secondary
-	lastFailover time.Time
+	probing   atomic.Bool // guards against spawning multiple health-check goroutines
 
 	// Configurable parameters (defaults set in constructor, overridable for testing)
 	primaryAttempts int
@@ -84,15 +83,70 @@ func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan 
 	return c.events
 }
 
+// startWSHealthCheck runs in a background goroutine, periodically probing
+// higher-priority WS endpoints. When one responds, it updates activeURL and
+// closes the current connection to trigger reconnection in readMessages.
+func (c *HeimdallWSClient) startWSHealthCheck() {
+	defer c.probing.Store(false)
+
+	ticker := time.NewTicker(c.wsCooldown)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+		}
+
+		c.mu.Lock()
+		active := c.activeURL
+		c.mu.Unlock()
+
+		if active == 0 {
+			return
+		}
+
+		// Probe URLs 0..active-1 (highest priority first).
+		for i := 0; i < active; i++ {
+			testConn, _, err := websocket.DefaultDialer.Dial(c.urls[i], nil)
+			if err != nil {
+				continue
+			}
+			testConn.Close()
+
+			c.mu.Lock()
+			c.activeURL = i
+			conn := c.conn
+			c.mu.Unlock()
+
+			log.Info("WS health-check: promoted to higher-priority URL", "index", i, "url", c.urls[i])
+
+			// Close current connection to trigger reconnection in readMessages.
+			if conn != nil {
+				conn.Close()
+			}
+
+			if i == 0 {
+				return
+			}
+
+			break // keep ticking to probe even higher-priority URLs
+		}
+	}
+}
+
 // tryUntilSubscribeMilestoneEvents retries connecting and subscribing until success,
 // with failover to secondary URL after defaultPrimaryAttempts failures on primary.
 func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context) {
-	primaryAttempts := 0
+	attempts := 0
 	firstTime := true
+
 	for {
 		if !firstTime {
 			time.Sleep(c.reconnectDelay)
 		}
+
 		firstTime = false
 
 		// Check for context cancellation or unsubscribe.
@@ -106,35 +160,39 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		default:
 		}
 
-		// If on a non-primary URL and cooldown has elapsed, probe primary first.
-		if c.activeURL != 0 && !c.lastFailover.IsZero() && time.Since(c.lastFailover) >= c.wsCooldown {
-			log.Info("WS cooldown elapsed, probing primary", "url", c.urls[0])
-			c.activeURL = 0
-			primaryAttempts = 0
-		}
+		c.mu.Lock()
+		active := c.activeURL
+		c.mu.Unlock()
 
-		url := c.urls[c.activeURL]
+		url := c.urls[active]
 
 		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			log.Error("failed to dial websocket on heimdall ws subscription", "url", url, "err", err)
 
-			// Count failures on current URL; advance to next after threshold.
-			primaryAttempts++
+			attempts++
 
-			if len(c.urls) > 1 && primaryAttempts >= c.primaryAttempts {
-				next := min(c.activeURL+1, len(c.urls)-1)
-				if next != c.activeURL {
+			if len(c.urls) > 1 && attempts >= c.primaryAttempts {
+				next := min(active+1, len(c.urls)-1)
+				if next != active {
 					log.Warn("WS URL failed, switching to next",
-						"from", c.urls[c.activeURL], "to", c.urls[next], "attempts", primaryAttempts)
+						"from", c.urls[active], "to", c.urls[next], "attempts", attempts)
+
+					c.mu.Lock()
 					c.activeURL = next
-					c.lastFailover = time.Now()
+					c.mu.Unlock()
+
+					if c.probing.CompareAndSwap(false, true) {
+						go c.startWSHealthCheck()
+					}
 				}
-				primaryAttempts = 0
+
+				attempts = 0
 			}
 
 			continue
 		}
+
 		c.mu.Lock()
 		c.conn = conn
 		c.mu.Unlock()
@@ -151,7 +209,9 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			log.Error("failed to send subscription request on heimdall ws subscription", "url", url, "err", err)
 			continue
 		}
+
 		log.Info("successfully connected on heimdall ws subscription", "url", url)
+
 		return
 	}
 }

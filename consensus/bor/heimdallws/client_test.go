@@ -218,7 +218,9 @@ func TestWSClient_DualURL_FailoverToSecondary(t *testing.T) {
 		assert.Equal(t, uint64(100), m.StartBlock)
 		assert.Equal(t, uint64(200), m.EndBlock)
 		// Verify we switched to secondary.
+		client.mu.Lock()
 		assert.Equal(t, 1, client.activeURL)
+		client.mu.Unlock()
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for milestone event via failover")
 	}
@@ -254,7 +256,9 @@ func TestWSClient_ThreeURL_CascadeToTertiary(t *testing.T) {
 		require.NotNil(t, m)
 		assert.Equal(t, uint64(100), m.StartBlock)
 		// Verify we ended up on tertiary.
+		client.mu.Lock()
 		assert.Equal(t, 2, client.activeURL)
+		client.mu.Unlock()
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for milestone event via cascade")
 	}
@@ -291,39 +295,61 @@ func TestWSClient_ContextCancellation(t *testing.T) {
 }
 
 func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
-	// Test that after cooldown, the reconnection loop probes primary first.
-	primary := newTestWSServer(t, true)
-	defer primary.Close()
+	// Primary starts rejecting, secondary accepts.
+	// After failover to secondary, primary comes back, health-check should promote.
+	primaryReject := newTestWSServer(t, true)
+	defer primaryReject.Close()
 
-	secondary := newTestWSServer(t, true)
+	secondary := newTestWSServerWithMilestone(t)
 	defer secondary.Close()
 
-	client, err := NewHeimdallWSClient(wsURL(primary.URL), wsURL(secondary.URL))
+	client, err := NewHeimdallWSClient(wsURL(primaryReject.URL), wsURL(secondary.URL))
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.wsCooldown = 50 * time.Millisecond
+	client.primaryAttempts = 2
+	client.wsCooldown = 100 * time.Millisecond
 
-	// Simulate being on secondary after failover with cooldown elapsed.
-	client.activeURL = 1
-	client.lastFailover = time.Now().Add(-1 * time.Second)
-
-	// Short-lived context — the function will probe primary (reset activeURL=0),
-	// fail to dial, then context expires.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client.tryUntilSubscribeMilestoneEvents(ctx)
+	events := client.SubscribeMilestoneEvents(ctx)
 
-	// After cooldown elapsed, activeURL should be reset to 0 (probed primary).
-	assert.Equal(t, 0, client.activeURL)
+	// Should failover to secondary.
+	select {
+	case m := <-events:
+		require.NotNil(t, m)
+		client.mu.Lock()
+		assert.Equal(t, 1, client.activeURL)
+		client.mu.Unlock()
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for failover")
+	}
+
+	// Close the rejecting primary and replace with an accepting one.
+	primaryReject.Close()
+
+	primaryGood := newTestWSServer(t, false)
+	defer primaryGood.Close()
+
+	// Update URL to the new primary that accepts connections.
+	client.mu.Lock()
+	client.urls[0] = wsURL(primaryGood.URL)
+	client.mu.Unlock()
+
+	// Wait for background health-check to promote back to primary.
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.activeURL == 0
+	}, 5*time.Second, 50*time.Millisecond, "health-check should promote back to primary")
+
+	require.NoError(t, client.Unsubscribe(ctx))
 }
 
 func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
 	// Both URLs reject. The client should stay on the last URL once it gets
-	// there rather than wrapping back to primary with the modulo operator.
-	// Wrapping would also incorrectly reset lastFailover, preventing the
-	// cooldown-based probe-back-to-primary from ever firing.
+	// there rather than wrapping back to primary.
 	primary := newTestWSServer(t, true)
 	defer primary.Close()
 
@@ -335,12 +361,12 @@ func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
 
 	client.reconnectDelay = 10 * time.Millisecond
 	client.primaryAttempts = 2
-	client.wsCooldown = 1 * time.Hour // prevent probe-back from interfering
+	client.wsCooldown = 1 * time.Hour // prevent health-check from interfering
 
 	// Pre-set to secondary as if a prior failover already happened.
+	client.mu.Lock()
 	client.activeURL = 1
-	client.lastFailover = time.Now()
-	lastFailoverBefore := client.lastFailover
+	client.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -348,11 +374,9 @@ func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
 	client.tryUntilSubscribeMilestoneEvents(ctx)
 
 	// Must stay on secondary (index 1), not wrap back to primary (index 0).
+	client.mu.Lock()
 	assert.Equal(t, 1, client.activeURL, "should stay on last URL, not wrap back to primary")
-
-	// lastFailover must not be updated — the cooldown timer must remain intact
-	// so that the probe-back-to-primary mechanism can eventually fire.
-	assert.Equal(t, lastFailoverBefore, client.lastFailover, "lastFailover must not be reset when already at last URL")
+	client.mu.Unlock()
 }
 
 func TestWSClient_DualURL_PrimaryRecovery(t *testing.T) {
@@ -380,18 +404,55 @@ func TestWSClient_DualURL_PrimaryRecovery(t *testing.T) {
 	select {
 	case m := <-events:
 		require.NotNil(t, m)
+		client.mu.Lock()
 		assert.Equal(t, 1, client.activeURL)
+		client.mu.Unlock()
 		assert.Equal(t, uint64(100), m.StartBlock)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for failover")
 	}
 
-	// The fact that failover worked and lastFailover is set
-	// proves the probe-back mechanism can work later.
-	assert.False(t, client.lastFailover.IsZero(), "lastFailover should be set after switching to secondary")
-
 	// Close the rejecting primary.
 	primaryReject.Close()
 
 	require.NoError(t, client.Unsubscribe(ctx))
+}
+
+func TestWSClient_HealthCheckRespectsUnsubscribe(t *testing.T) {
+	// Verify that the health-check goroutine stops when done channel is closed.
+	primary := newTestWSServer(t, true)
+	defer primary.Close()
+
+	secondary := newTestWSServerWithMilestone(t)
+	defer secondary.Close()
+
+	client, err := NewHeimdallWSClient(wsURL(primary.URL), wsURL(secondary.URL))
+	require.NoError(t, err)
+
+	client.reconnectDelay = 100 * time.Millisecond
+	client.primaryAttempts = 2
+	client.wsCooldown = 50 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	events := client.SubscribeMilestoneEvents(ctx)
+
+	// Wait for failover to secondary.
+	select {
+	case m := <-events:
+		require.NotNil(t, m)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for failover")
+	}
+
+	// Probing goroutine should be running.
+	assert.True(t, client.probing.Load(), "probing should be active after failover")
+
+	// Unsubscribe should stop the health-check goroutine.
+	require.NoError(t, client.Unsubscribe(ctx))
+
+	require.Eventually(t, func() bool {
+		return !client.probing.Load()
+	}, 2*time.Second, 50*time.Millisecond, "probing should stop after unsubscribe")
 }
