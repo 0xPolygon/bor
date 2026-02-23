@@ -385,7 +385,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 					heimdallClient = heimdallClients[0]
 				} else {
 					heimdallClient = heimdall.NewMultiHeimdallClient(heimdallClients...)
-					log.Info("Heimdall failover enabled", "endpoints", len(heimdallClients))
+					log.Info("Heimdall failover enabled with multiple endpoints", "endpoints", len(heimdallClients))
 				}
 			}
 
@@ -402,7 +402,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				}
 
 				if len(wsAddrs) > 1 {
-					log.Info("Heimdall WS failover enabled", "endpoints", len(wsAddrs))
+					log.Info("Heimdall WS failover enabled with multiple endpoints", "endpoints", len(wsAddrs))
 				}
 			}
 
