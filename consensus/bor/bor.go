@@ -1109,7 +1109,6 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			if c.config.IsMadhugiri(header.Number) && len(body.Transactions) > 0 {
 				lastTx := body.Transactions[len(body.Transactions)-1]
 				if lastTx.Type() == types.StateSyncTxType {
-					// todo(milando12): check how much overhead this adds, if it does we can initialize it earlier and pass down to ApplyMessage()
 					vmenv := vm.NewEVM(
 						core.NewEVMBlockContext(header, cx, &header.Coinbase),
 						wrappedState, c.chainConfig, vmCfg,
