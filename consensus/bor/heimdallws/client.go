@@ -123,11 +123,13 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			primaryAttempts++
 
 			if len(c.urls) > 1 && primaryAttempts >= c.primaryAttempts {
-				next := (c.activeURL + 1) % len(c.urls)
-				log.Warn("WS URL failed, switching to next",
-					"from", c.urls[c.activeURL], "to", c.urls[next], "attempts", primaryAttempts)
-				c.activeURL = next
-				c.lastFailover = time.Now()
+				next := min(c.activeURL+1, len(c.urls)-1)
+				if next != c.activeURL {
+					log.Warn("WS URL failed, switching to next",
+						"from", c.urls[c.activeURL], "to", c.urls[next], "attempts", primaryAttempts)
+					c.activeURL = next
+					c.lastFailover = time.Now()
+				}
 				primaryAttempts = 0
 			}
 

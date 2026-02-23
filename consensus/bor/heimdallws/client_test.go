@@ -319,6 +319,42 @@ func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
 	assert.Equal(t, 0, client.activeURL)
 }
 
+func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
+	// Both URLs reject. The client should stay on the last URL once it gets
+	// there rather than wrapping back to primary with the modulo operator.
+	// Wrapping would also incorrectly reset lastFailover, preventing the
+	// cooldown-based probe-back-to-primary from ever firing.
+	primary := newTestWSServer(t, true)
+	defer primary.Close()
+
+	secondary := newTestWSServer(t, true)
+	defer secondary.Close()
+
+	client, err := NewHeimdallWSClient(wsURL(primary.URL), wsURL(secondary.URL))
+	require.NoError(t, err)
+
+	client.reconnectDelay = 10 * time.Millisecond
+	client.primaryAttempts = 2
+	client.wsCooldown = 1 * time.Hour // prevent probe-back from interfering
+
+	// Pre-set to secondary as if a prior failover already happened.
+	client.activeURL = 1
+	client.lastFailover = time.Now()
+	lastFailoverBefore := client.lastFailover
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	client.tryUntilSubscribeMilestoneEvents(ctx)
+
+	// Must stay on secondary (index 1), not wrap back to primary (index 0).
+	assert.Equal(t, 1, client.activeURL, "should stay on last URL, not wrap back to primary")
+
+	// lastFailover must not be updated — the cooldown timer must remain intact
+	// so that the probe-back-to-primary mechanism can eventually fire.
+	assert.Equal(t, lastFailoverBefore, client.lastFailover, "lastFailover must not be reset when already at last URL")
+}
+
 func TestWSClient_DualURL_PrimaryRecovery(t *testing.T) {
 	// Start with primary down, then bring it up.
 
