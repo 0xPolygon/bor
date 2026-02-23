@@ -18,7 +18,6 @@ package downloader
 
 import (
 	"errors"
-	"reflect"
 	"sort"
 	"time"
 
@@ -34,10 +33,23 @@ import (
 // to each request. Failing to do so is considered a protocol violation.
 var timeoutGracePeriod = 2 * time.Minute
 
+// queueKind identifies the type of a typedQueue implementation.
+type queueKind int
+
+const (
+	headerQueueKind  queueKind = iota
+	bodyQueueKind
+	receiptQueueKind
+	witnessQueueKind
+)
+
 // typedQueue is an interface defining the adaptor needed to translate the type
 // specific downloader/queue schedulers into the type-agnostic general concurrent
 // fetcher algorithm calls.
 type typedQueue interface {
+	// kind returns the type of this queue.
+	kind() queueKind
+
 	// waker returns a notification channel that gets pinged in case more fetches
 	// have been queued up, so the fetcher might assign it to idle peers.
 	waker() chan bool
@@ -145,11 +157,8 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				caps  []int
 			)
 
-			// Check if we're fetching witnesses to filter peers appropriately
-			isWitnessQueue := reflect.TypeOf(queue) == reflect.TypeOf(&witnessQueue{})
-
-			// Check if we're fetching receipts to filter peers appropriately
-			isReceiptQueue := reflect.TypeOf(queue) == reflect.TypeOf(&receiptQueue{})
+			isWitnessQueue := queue.kind() == witnessQueueKind
+			isReceiptQueue := queue.kind() == receiptQueueKind
 
 			for _, peer := range d.peers.AllPeers() {
 				pending, stale := pending[peer.id], stales[peer.id]
@@ -417,12 +426,12 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			res.Done <- nil
 			res.Req.Close()
 
-			if reflect.TypeOf(queue) == reflect.TypeOf(&witnessQueue{}) {
+			if queue.kind() == witnessQueueKind {
 				for _, peer := range d.peers.AllPeers() {
-					log.Debug("Peer", "peer", peer.id, "peer", peer.peer, "queue type", reflect.TypeOf(queue))
+					log.Debug("Peer", "peer", peer.id, "peer", peer.peer, "queue kind", "witness")
 				}
 
-				log.Debug("Peer", "peer1", res.Req.Peer, "peer2", d.peers.Peer(res.Req.Peer), "queue type", reflect.TypeOf(queue))
+				log.Debug("Peer", "peer1", res.Req.Peer, "peer2", d.peers.Peer(res.Req.Peer), "queue kind", "witness")
 			}
 
 			// If the peer was previously banned and failed to deliver its pack
