@@ -4,9 +4,9 @@ import "github.com/ethereum/go-ethereum/metrics"
 
 var (
 	// HTTP/gRPC failover metrics (used within this package)
-	failoverSwitchCounter = metrics.NewRegisteredCounter("client/failover/switches", nil)
-	failoverActiveGauge   = metrics.NewRegisteredGauge("client/failover/active", nil)
-	failoverProbeAttempts = metrics.NewRegisteredCounter("client/failover/probe/attempts", nil)
+	failoverSwitchCounter  = metrics.NewRegisteredCounter("client/failover/switches", nil)
+	failoverActiveGauge    = metrics.NewRegisteredGauge("client/failover/active", nil)
+	failoverProbeAttempts  = metrics.NewRegisteredCounter("client/failover/probe/attempts", nil)
 	failoverProbeSuccesses = metrics.NewRegisteredCounter("client/failover/probe/successes", nil)
 
 	// WS failover metrics (exported for use by heimdallws package)
