@@ -1105,18 +1105,16 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 
 		// Start tracing StateSyncTx (if present in the block body)
-		var stateSyncTx *types.Transaction
-		if c.config.IsMadhugiri(header.Number) && len(body.Transactions) > 0 {
-			lastTx := body.Transactions[len(body.Transactions)-1]
-			if lastTx.Type() == types.StateSyncTxType {
-				stateSyncTx = lastTx
-				if hooks := vmCfg.Tracer; hooks != nil && hooks.OnTxStart != nil {
+		if hooks := vmCfg.Tracer; hooks != nil && hooks.OnTxStart != nil {
+			if c.config.IsMadhugiri(header.Number) && len(body.Transactions) > 0 {
+				lastTx := body.Transactions[len(body.Transactions)-1]
+				if lastTx.Type() == types.StateSyncTxType {
 					// todo(milando12): check how much overhead this adds, if it does we can initialize it earlier and pass down to ApplyMessage()
 					vmenv := vm.NewEVM(
 						core.NewEVMBlockContext(header, cx, &header.Coinbase),
 						wrappedState, c.chainConfig, vmCfg,
 					)
-					hooks.OnTxStart(vmenv.GetVMContext(), stateSyncTx, statefull.SystemAddress)
+					hooks.OnTxStart(vmenv.GetVMContext(), lastTx, statefull.SystemAddress)
 				}
 			}
 		}
@@ -1136,7 +1134,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 				log.Error("Error while committing states", "error", err)
 				return nil
 			}
-			}
+		}
 		// Get the underlying state for updating consensus time
 		state := wrappedState.Inner()
 		state.BorConsensusTime = time.Since(start)
