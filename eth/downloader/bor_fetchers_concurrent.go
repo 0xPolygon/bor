@@ -37,7 +37,7 @@ var timeoutGracePeriod = 2 * time.Minute
 type queueKind int
 
 const (
-	headerQueueKind  queueKind = iota
+	headerQueueKind queueKind = iota
 	bodyQueueKind
 	receiptQueueKind
 	witnessQueueKind
