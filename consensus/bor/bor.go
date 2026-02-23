@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	defaultSpanLength  = 6400            // Default span length i.e. number of bor blocks in a span
+	defaultSpanLength  = params.DefaultSpanLength
 	zerothSpanEnd      = 255             // End block of 0th span
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
@@ -265,6 +265,10 @@ type Bor struct {
 
 	quit      chan struct{}
 	closeOnce sync.Once
+
+	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 }
 
 type signer struct {
@@ -309,6 +313,8 @@ func New(
 	// Create a new span store
 	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
 
+	ctx, ctxCancel := context.WithCancel(context.Background())
+
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
@@ -325,6 +331,8 @@ func New(
 		DevFakeAuthor:          devFakeAuthor,
 		blockTime:              blockTime,
 		quit:                   make(chan struct{}),
+		ctx:                    ctx,
+		ctxCancel:              ctxCancel,
 	}
 
 	c.authorizedSigner.Store(&signer{
@@ -543,8 +551,13 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		parent = chain.GetHeader(header.ParentHash, number-1)
 	}
 
-	if parent == nil || parent.Number.Uint64() != number-1 || parent.Hash() != header.ParentHash {
+	if parent == nil || parent.Hash() != header.ParentHash {
 		return consensus.ErrUnknownAncestor
+	}
+
+	// Verify block number continuity
+	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
+		return consensus.ErrInvalidNumber
 	}
 
 	// Verify that the gasUsed is <= gasLimit
@@ -583,7 +596,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		// validation stateless, we use the span from heimdall (via span store) instead of
 		// span from validator set genesis contract as both are supposed to be equivalent.
 		if number > zerothSpanEnd && IsSprintStart(number+1, c.config.CalculateSprint(number)) {
-			span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+			span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 			if err != nil {
 				return err
 			}
@@ -693,7 +706,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 				hash := checkpoint.Hash()
 
 				// get validators from span
-				span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+				span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 				if err != nil {
 					return nil, err
 				}
@@ -772,7 +785,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 		}
 	}
 
-	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
+	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -1080,7 +1093,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	}
 
 	now := time.Now()
-	if header.Time < uint64(now.Unix()) {
+	if now.After(header.GetActualTime()) {
 		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			additionalBlockTime = c.blockTime
@@ -1469,6 +1482,7 @@ func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 // Close implements consensus.Engine.
 func (c *Bor) Close() error {
 	c.closeOnce.Do(func() {
+		c.ctxCancel()
 		close(c.quit)
 		if c.HeimdallClient != nil {
 			c.HeimdallClient.Close()
@@ -1490,7 +1504,9 @@ func (c *Bor) runMilestoneFetcher() {
 		select {
 		case <-ticker.C:
 			if c.HeimdallClient != nil {
-				milestone, err := c.HeimdallClient.FetchMilestone(context.Background())
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				milestone, err := c.HeimdallClient.FetchMilestone(ctx)
+				cancel()
 				if err != nil {
 					log.Warn("Error while fetching milestone", "error", err)
 					continue
@@ -1692,9 +1708,9 @@ func (c *Bor) CommitStates(
 	var eventRecords []*clerk.EventRecordWithTime
 
 	// Wait for heimdall to be synced before fetching state sync events
-	c.spanStore.waitUntilHeimdallIsSynced(context.Background())
+	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
+	eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())
 	if err != nil {
 		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
 

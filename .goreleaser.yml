@@ -119,6 +119,8 @@ dockers:
       - linux-amd64
     build_flag_templates:
       - --platform=linux/amd64
+      - --provenance=false
+      - --sbom=false
     extra_files:
       - builder/files/genesis-mainnet-v1.json
       - builder/files/genesis-testnet-v4.json
@@ -133,6 +135,8 @@ dockers:
       - linux-arm64
     build_flag_templates:
       - --platform=linux/arm64/v8
+      - --provenance=false
+      - --sbom=false
     extra_files:
       - builder/files/genesis-mainnet-v1.json
       - builder/files/genesis-testnet-v4.json

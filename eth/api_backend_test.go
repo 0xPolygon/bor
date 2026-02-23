@@ -40,8 +40,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -284,4 +286,107 @@ func TestWitnessCacheUsageInAPIBackend(t *testing.T) {
 	}
 	// The important part is that blockchain.GetWitness() was called again after cache purge
 	// demonstrating the cache miss -> DB read -> re-cache flow
+}
+
+// TestRelayMethodWiring verifies that EthAPIBackend relay methods correctly
+// delegate to the underlying RelayService.
+func TestRelayMethodWiring(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all flags enabled", func(t *testing.T) {
+		t.Parallel()
+		rs := relay.Init(true, true, true, true, nil)
+		defer rs.Close()
+		b := &EthAPIBackend{relay: rs}
+
+		require.True(t, b.PreconfEnabled())
+		require.True(t, b.PrivateTxEnabled())
+		require.True(t, b.AcceptPreconfTxs())
+		require.True(t, b.AcceptPrivateTxs())
+	})
+
+	t.Run("all flags disabled", func(t *testing.T) {
+		t.Parallel()
+		rs := relay.Init(false, false, false, false, nil)
+		defer rs.Close()
+		b := &EthAPIBackend{relay: rs}
+
+		require.False(t, b.PreconfEnabled())
+		require.False(t, b.PrivateTxEnabled())
+		require.False(t, b.AcceptPreconfTxs())
+		require.False(t, b.AcceptPrivateTxs())
+	})
+
+	t.Run("submit and check methods reach relay", func(t *testing.T) {
+		t.Parallel()
+		// Init with enablePreconf=true, enablePrivateTx=true but no URLs
+		// → txRelay created with nil multiclient → methods return errors, proving wiring works
+		rs := relay.Init(true, true, false, false, nil)
+		defer rs.Close()
+		b := &EthAPIBackend{relay: rs}
+
+		tx := types.NewTransaction(0, common.Address{}, nil, 0, nil, nil)
+
+		err := b.SubmitTxForPreconf(tx)
+		require.Error(t, err, "SubmitTxForPreconf should return error with nil multiclient")
+
+		_, err = b.CheckPreconfStatus(common.Hash{})
+		require.Error(t, err, "CheckPreconfStatus should return error with nil multiclient")
+
+		err = b.SubmitPrivateTx(tx)
+		require.Error(t, err, "SubmitPrivateTx should return error with nil multiclient")
+	})
+
+	t.Run("record and purge private tx do not panic", func(t *testing.T) {
+		t.Parallel()
+		rs := relay.Init(false, false, false, true, nil) // creates privateTxStore
+		defer rs.Close()
+		b := &EthAPIBackend{relay: rs}
+
+		hash := common.HexToHash("0xabc")
+		require.NotPanics(t, func() { b.RecordPrivateTx(hash) })
+		require.NotPanics(t, func() { b.PurgePrivateTx(hash) })
+	})
+}
+
+// TestRelayGracefulShutdownOnStop verifies that the relay shutdown path in
+// Ethereum.Stop() completes promptly and doesn't hang or panic.
+func TestRelayGracefulShutdownOnStop(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil relay does not panic", func(t *testing.T) {
+		t.Parallel()
+		b := &EthAPIBackend{}
+		require.NotPanics(t, func() {
+			if b.relay != nil {
+				b.relay.Close()
+			}
+		})
+	})
+
+	t.Run("close completes promptly with active service", func(t *testing.T) {
+		t.Parallel()
+		// enablePreconf=true creates a Service with background goroutines
+		// (processPreconfTasks, cleanup). Close() must signal them and wait.
+		rs := relay.Init(true, true, true, true, nil)
+		b := &EthAPIBackend{relay: rs}
+
+		require.True(t, b.PreconfEnabled(), "relay should be operational before shutdown")
+
+		done := make(chan struct{})
+		go func() {
+			// This is the exact call from Ethereum.Stop()
+			if b.relay != nil {
+				b.relay.Close()
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Close completed — goroutines shut down cleanly
+		case <-time.After(5 * time.Second):
+			t.Fatal("relay.Close() did not complete within 5s, likely a goroutine leak or deadlock")
+		}
+	})
 }

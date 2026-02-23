@@ -306,6 +306,11 @@ func DecodePubkey(curve elliptic.Curve, e Pubkey) (*ecdsa.PublicKey, error) {
 	p.X.SetBytes(e[:half])
 	p.Y.SetBytes(e[half:])
 
+	// Reject non-canonical coordinates (X >= P or Y >= P)
+	if p.X.Cmp(p.Curve.Params().P) >= 0 || p.Y.Cmp(p.Curve.Params().P) >= 0 {
+		return nil, ErrBadPoint
+	}
+
 	if !p.Curve.IsOnCurve(p.X, p.Y) {
 		return nil, ErrBadPoint
 	}

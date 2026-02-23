@@ -794,6 +794,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.Graphql.VHost,
 		Group:   "JsonRPC",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "accept-preconf-tx",
+		Usage:   "Allows the RPC server to accept transactions for preconfirmation",
+		Value:   &c.cliConfig.JsonRPC.AcceptPreconfTx,
+		Default: c.cliConfig.JsonRPC.AcceptPreconfTx,
+		Group:   "JsonRPC",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "accept-private-tx",
+		Usage:   "Allows the RPC server to accept private transactions",
+		Value:   &c.cliConfig.JsonRPC.AcceptPrivateTx,
+		Default: c.cliConfig.JsonRPC.AcceptPrivateTx,
+		Group:   "JsonRPC",
+	})
 
 	// http options
 	f.BoolFlag(&flagset.BoolFlag{
@@ -1003,6 +1017,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Whether to only announce transactions to peers",
 		Value:   &c.cliConfig.P2P.TxAnnouncementOnly,
 		Default: c.cliConfig.P2P.TxAnnouncementOnly,
+		Group:   "P2P",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "disable-tx-propagation",
+		Usage:   "Disable transaction broadcast and announcements to all peers",
+		Value:   &c.cliConfig.P2P.DisableTxPropagation,
+		Default: c.cliConfig.P2P.DisableTxPropagation,
 		Group:   "P2P",
 	})
 	f.SliceStringFlag(&flagset.SliceStringFlag{
@@ -1335,6 +1356,29 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Health.WarnPeerThreshold,
 		Default: c.cliConfig.Health.WarnPeerThreshold,
 		Group:   "Health",
+	})
+
+	// Relay related flags
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "relay.enable-preconfs",
+		Usage:   "Enable transaction preconfirmations",
+		Value:   &c.cliConfig.Relay.EnablePreconfs,
+		Default: c.cliConfig.Relay.EnablePreconfs,
+		Group:   "P2P",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "relay.enable-private-tx",
+		Usage:   "Enable private transaction submission",
+		Value:   &c.cliConfig.Relay.EnablePrivateTx,
+		Default: c.cliConfig.Relay.EnablePrivateTx,
+		Group:   "P2P",
+	})
+	f.SliceStringFlag(&flagset.SliceStringFlag{
+		Name:    "relay.bp-rpc-endpoints",
+		Usage:   "Comma separated rpc endpoints of all block producers",
+		Value:   &c.cliConfig.Relay.BlockProducerRpcEndpoints,
+		Default: c.cliConfig.Relay.BlockProducerRpcEndpoints,
+		Group:   "P2P",
 	})
 
 	return f
