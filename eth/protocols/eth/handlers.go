@@ -630,13 +630,13 @@ func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params
 
 	hasher := trie.NewStackTrie(nil)
 	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
-		// Don't exclude state-sync receipts for post hardfork blocks
-		if borCfg.IsMadhugiri(number) {
-			return types.DeriveSha(receipts[index], hasher)
-		} else {
-			receipts[index].ExcludeStateSyncReceipt()
+		// For non-bor chains or post-Madhugiri blocks, include all receipts in hash
+		if borCfg == nil || borCfg.IsMadhugiri(number) {
 			return types.DeriveSha(receipts[index], hasher)
 		}
+		// Pre-Madhugiri bor blocks: exclude state-sync receipt from hash calculation
+		receipts[index].ExcludeStateSyncReceipt()
+		return types.DeriveSha(receipts[index], hasher)
 	}
 
 	return encodedReceipts, calculateReceiptHashes
