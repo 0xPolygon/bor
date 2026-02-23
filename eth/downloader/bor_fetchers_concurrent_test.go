@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -115,13 +116,10 @@ func TestConcurrentFetchReceipts_MixedPeers(t *testing.T) {
 		}
 	}
 
-	// Cancel the downloader once the eth/69 peer receives the request.
-	// The request is dispatched synchronously before the select, so by
-	// the time we close cancelCh the dispatch has already happened.
+	// Cancel the downloader after a short delay to allow the receipt request
+	// to be dispatched to the eth/69 peer.
 	go func() {
-		for !mockPeers[1].receiptRequested.Load() {
-			// spin until the request is dispatched
-		}
+		<-time.After(1 * time.Second)
 		close(d.cancelCh)
 	}()
 
