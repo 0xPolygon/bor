@@ -1026,9 +1026,24 @@ func TestDispatchDifferential(t *testing.T) {
 
 	// --- GAS ---
 
-	t.Run("default_path/GAS", func(t *testing.T) {
+	t.Run("default_path/GAS/simple", func(t *testing.T) {
 		t.Parallel()
 		runDiff(t, withRet(op1(GAS)), G)
+	})
+
+	t.Run("default_path/GAS/after_accumulated_gas", func(t *testing.T) {
+		t.Parallel()
+		// ADD+ADD accumulate gas in runSwitch without flushing to contract.Gas.
+		// GAS (default path) must flush before reading contract.Gas, otherwise
+		// it would report a higher value than the old Run() path.
+		code := withRet(cc(
+			p1(1), p1(2), p1(3), p1(4),
+			op1(ADD), // gasAccum += 3
+			op1(ADD), // gasAccum += 3
+			op1(POP), // gasAccum += 2
+			op1(GAS), // default: flush gasAccum, charge GAS cost, push contract.Gas
+		))
+		runDiff(t, code, G)
 	})
 
 	// --- Crypto ---
@@ -1073,9 +1088,110 @@ func TestDispatchDifferential(t *testing.T) {
 
 	// --- REVERT ---
 
-	t.Run("default_path/REVERT", func(t *testing.T) {
+	t.Run("default_path/REVERT/empty", func(t *testing.T) {
 		t.Parallel()
 		code := cc(p1(0), p1(0), op1(REVERT))
 		runDiff(t, code, G)
 	})
+
+	t.Run("default_path/REVERT/with_data", func(t *testing.T) {
+		t.Parallel()
+		// Store 0xDEAD at memory offset 0, then REVERT with offset=0 size=32.
+		// The revert data should be returned to the caller.
+		code := cc(p1(0xDE), p1(0), op1(MSTORE8), p1(0xAD), p1(1), op1(MSTORE8),
+			p1(32), p1(0), op1(REVERT))
+		runDiff(t, code, G)
+	})
+}
+
+// TestPreShanghaiForkGate verifies that PUSH0 is correctly rejected on a
+// pre-Shanghai chain config. Without the IsShanghai gate on runSwitch, the
+// fast path inlines PUSH0 unconditionally and incorrectly executes it.
+func TestPreShanghaiForkGate(t *testing.T) {
+	// Chain config with all forks through Merge, but Shanghai NOT activated.
+	preShanghaiConfig := &params.ChainConfig{
+		ChainID:             big.NewInt(1),
+		HomesteadBlock:      new(big.Int),
+		DAOForkBlock:        new(big.Int),
+		EIP150Block:         new(big.Int),
+		EIP155Block:         new(big.Int),
+		EIP158Block:         new(big.Int),
+		ByzantiumBlock:      new(big.Int),
+		ConstantinopleBlock: new(big.Int),
+		PetersburgBlock:     new(big.Int),
+		IstanbulBlock:       new(big.Int),
+		MuirGlacierBlock:    new(big.Int),
+		BerlinBlock:         new(big.Int),
+		LondonBlock:         new(big.Int),
+		ArrowGlacierBlock:   new(big.Int),
+		GrayGlacierBlock:    new(big.Int),
+		MergeNetsplitBlock:  new(big.Int),
+		// ShanghaiBlock intentionally nil — PUSH0 should be invalid.
+	}
+
+	execWithConfig := func(code []byte, gas uint64, useTracer bool, cfg *params.ChainConfig) ([]byte, uint64, error) {
+		addr := common.BytesToAddress([]byte("contract"))
+		caller := common.BytesToAddress([]byte("caller"))
+
+		db, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		db.CreateAccount(addr)
+		db.SetCode(addr, code, tracing.CodeChangeUnspecified)
+		db.CreateAccount(caller)
+		db.Finalise(true)
+
+		bctx := BlockContext{
+			CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
+			Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int) {},
+			GetHash:     func(uint64) common.Hash { return common.Hash{} },
+			BlockNumber: big.NewInt(1),
+			Time:        1,
+			Difficulty:  big.NewInt(1),
+			GasLimit:    gas,
+			BaseFee:     big.NewInt(1),
+			BlobBaseFee: big.NewInt(1),
+			Random:      &common.Hash{},
+		}
+
+		rules := cfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
+		db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
+
+		var evmCfg Config
+		if useTracer {
+			evmCfg.Tracer = &tracing.Hooks{
+				OnOpcode: func(uint64, byte, uint64, uint64, tracing.OpContext, []byte, int, error) {},
+			}
+		}
+
+		evm := NewEVM(bctx, db, cfg, evmCfg)
+		evm.SetTxContext(TxContext{
+			Origin:   caller,
+			GasPrice: big.NewInt(1),
+		})
+		return evm.Call(caller, addr, nil, gas, new(uint256.Int), nil)
+	}
+
+	// PUSH0, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN
+	// If PUSH0 is allowed this returns 32 bytes of zeros.
+	// If PUSH0 is rejected this should return an invalid_opcode error.
+	code := cc(op1(PUSH0), retSeq)
+	gas := uint64(100_000)
+
+	// Slow path (tracer attached) — should reject PUSH0 as invalid opcode.
+	_, _, errSlow := execWithConfig(code, gas, true, preShanghaiConfig)
+	slowClass := classifyErr(errSlow)
+	if slowClass != "invalid_opcode" {
+		t.Fatalf("slow path: expected invalid_opcode, got %q (%v)", slowClass, errSlow)
+	}
+
+	// Fast path (no tracer) — without the IsShanghai gate, this incorrectly succeeds.
+	_, _, errFast := execWithConfig(code, gas, false, preShanghaiConfig)
+	fastClass := classifyErr(errFast)
+
+	if fastClass != slowClass {
+		t.Fatalf("fork gate bug: fast path returned %q but slow path returned %q\n"+
+			"  fast err: %v\n  slow err: %v\n"+
+			"  runSwitch inlines PUSH0 unconditionally — needs IsShanghai gate",
+			fastClass, slowClass, errFast, errSlow)
+	}
+	t.Logf("both paths correctly reject PUSH0 pre-Shanghai: %q", fastClass)
 }

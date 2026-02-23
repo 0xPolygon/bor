@@ -421,11 +421,10 @@ func (evm *EVM) runSwitch(
 			}
 			start := min(codeLen, pc+1)
 			end := min(codeLen, pc+4)
-			a := new(uint256.Int).SetBytes(code[start:end])
+			stack.data[stack.top].SetBytes(code[start:end])
 			if missing := 3 - int(end-start); missing > 0 {
-				a.Lsh(a, uint(8*missing))
+				stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))
 			}
-			stack.data[stack.top] = *a
 			pc += 3
 			stack.top++
 		case PUSH4:
@@ -435,11 +434,10 @@ func (evm *EVM) runSwitch(
 			}
 			start := min(codeLen, pc+1)
 			end := min(codeLen, pc+5)
-			a := new(uint256.Int).SetBytes(code[start:end])
+			stack.data[stack.top].SetBytes(code[start:end])
 			if missing := 4 - int(end-start); missing > 0 {
-				a.Lsh(a, uint(8*missing))
+				stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))
 			}
-			stack.data[stack.top] = *a
 			pc += 4
 			stack.top++
 		case PUSH5, PUSH6, PUSH7, PUSH8, PUSH9, PUSH10, PUSH11, PUSH12, PUSH13, PUSH14, PUSH15, PUSH16, PUSH17, PUSH18, PUSH19, PUSH20, PUSH21, PUSH22, PUSH23, PUSH24, PUSH25, PUSH26, PUSH27, PUSH28, PUSH29, PUSH30, PUSH31, PUSH32:
@@ -450,11 +448,10 @@ func (evm *EVM) runSwitch(
 			n := uint64(op - byte(PUSH0))
 			start := min(codeLen, pc+1)
 			end := min(codeLen, pc+1+n)
-			a := new(uint256.Int).SetBytes(code[start:end])
+			stack.data[stack.top].SetBytes(code[start:end])
 			if missing := int(n) - int(end-start); missing > 0 {
-				a.Lsh(a, uint(8*missing))
+				stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))
 			}
-			stack.data[stack.top] = *a
 			pc += n
 			stack.top++
 		case DUP1:
@@ -784,7 +781,7 @@ func (evm *EVM) runSwitch(
 				if err == errStopToken {
 					return ret, errStopToken
 				}
-				return nil, err
+				return ret, err
 			}
 		}
 		pc++

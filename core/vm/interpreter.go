@@ -177,10 +177,9 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool, interrupt *
 		}()
 	}
 
-	// Fast path: use switch dispatch when no tracer is attached and EIP-4762
-	// (Verkle) is not active. This eliminates indirect function calls, debug
-	// branches, and accumulates static gas in a register variable.
-	if !debug && !isEIP4762 {
+	// Fast path: switch dispatch with inlined hot opcodes and gas accumulation.
+	// Requires Shanghai+ because PUSH0 is the latest fork-gated inlined opcode.
+	if !debug && !isEIP4762 && evm.chainRules.IsShanghai {
 		ret, err = evm.runSwitch(contract, stack, mem, callContext, jumpTable, interrupt)
 		if err == errStopToken {
 			err = nil

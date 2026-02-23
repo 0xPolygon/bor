@@ -114,21 +114,19 @@ stack.top++`
 
 const bodyPush3 = `start := min(codeLen, pc+1)
 end := min(codeLen, pc+4)
-a := new(uint256.Int).SetBytes(code[start:end])
+stack.data[stack.top].SetBytes(code[start:end])
 if missing := 3 - int(end-start); missing > 0 {
-a.Lsh(a, uint(8*missing))
+stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))
 }
-stack.data[stack.top] = *a
 pc += 3
 stack.top++`
 
 const bodyPush4 = `start := min(codeLen, pc+1)
 end := min(codeLen, pc+5)
-a := new(uint256.Int).SetBytes(code[start:end])
+stack.data[stack.top].SetBytes(code[start:end])
 if missing := 4 - int(end-start); missing > 0 {
-a.Lsh(a, uint(8*missing))
+stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))
 }
-stack.data[stack.top] = *a
 pc += 4
 stack.top++`
 
@@ -379,11 +377,10 @@ func (e *emitter) emitPushGeneric() {
 	e.p("n := uint64(op - byte(PUSH0))\n")
 	e.p("start := min(codeLen, pc+1)\n")
 	e.p("end := min(codeLen, pc+1+n)\n")
-	e.p("a := new(uint256.Int).SetBytes(code[start:end])\n")
+	e.p("stack.data[stack.top].SetBytes(code[start:end])\n")
 	e.p("if missing := int(n) - int(end-start); missing > 0 {\n")
-	e.p("a.Lsh(a, uint(8*missing))\n")
+	e.p("stack.data[stack.top].Lsh(&stack.data[stack.top], uint(8*missing))\n")
 	e.p("}\n")
-	e.p("stack.data[stack.top] = *a\n")
 	e.p("pc += n\n")
 	e.p("stack.top++\n")
 }
@@ -456,7 +453,7 @@ if err != nil {
 if err == errStopToken {
 return ret, errStopToken
 }
-return nil, err
+return ret, err
 }
 `)
 }
