@@ -1030,6 +1030,9 @@ func (s *Ethereum) Stop() error {
 	s.dropper.Stop()
 	s.handler.Stop()
 
+	// Stop the dial scheduler to suppress "Looking for peers" during shutdown.
+	s.p2pServer.StopDialing()
+
 	// Then stop everything else.
 	// Close all bg processes
 	close(s.closeCh)
