@@ -413,6 +413,12 @@ type SealerConfig struct {
 	TargetBaseFee         uint64 `hcl:"targetBaseFee,optional" toml:"targetBaseFee,optional"`
 	BaseFeeBuffer         uint64 `hcl:"baseFeeBuffer,optional" toml:"baseFeeBuffer,optional"`
 
+	// Dynamic target gas percentage configuration (post-Lisovo, mutually exclusive with EnableDynamicGasLimit)
+	// Shares TargetBaseFee and BaseFeeBuffer with dynamic gas limit configuration.
+	EnableDynamicTargetGas bool   `hcl:"enableDynamicTargetGas,optional" toml:"enableDynamicTargetGas,optional"`
+	TargetGasMin           uint64 `hcl:"targetGasMin,optional" toml:"targetGasMin,optional"`
+	TargetGasMax           uint64 `hcl:"targetGasMax,optional" toml:"targetGasMax,optional"`
+
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
 	GasPriceRaw string   `hcl:"gasprice,optional" toml:"gasprice,optional"`
@@ -876,6 +882,9 @@ func DefaultConfig() *Config {
 			GasLimitMax:              miner.DefaultConfig.GasLimitMax,
 			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
 			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
+			EnableDynamicTargetGas:   false,
+			TargetGasMin:             50, // 50% floor
+			TargetGasMax:             80, // 80% ceiling
 			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:                "",
 			Recommit:                 125 * time.Second,
@@ -1263,6 +1272,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.TargetBaseFee = c.Sealer.TargetBaseFee
 		n.Miner.BaseFeeBuffer = c.Sealer.BaseFeeBuffer
 
+		// Enforce mutual exclusivity between dynamic gas limit and dynamic target gas
+		if c.Sealer.EnableDynamicGasLimit && c.Sealer.EnableDynamicTargetGas {
+			return nil, fmt.Errorf("miner.enableDynamicGasLimit and miner.enableDynamicTargetGas are mutually exclusive; only one may be enabled at a time")
+		}
+
 		// Validate dynamic gas limit configuration
 		if c.Sealer.EnableDynamicGasLimit {
 			if c.Sealer.GasLimitMin >= c.Sealer.GasLimitMax {
@@ -1273,6 +1287,25 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 			if c.Sealer.TargetBaseFee == 0 {
 				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic gas limit is enabled")
+			}
+		}
+
+		// Validate dynamic target gas percentage configuration
+		if c.Sealer.EnableDynamicTargetGas {
+			if c.Sealer.TargetGasMin == 0 || c.Sealer.TargetGasMin > 100 {
+				return nil, fmt.Errorf("miner.targetGasMin (%d) must be between 1-100", c.Sealer.TargetGasMin)
+			}
+			if c.Sealer.TargetGasMax == 0 || c.Sealer.TargetGasMax > 100 {
+				return nil, fmt.Errorf("miner.targetGasMax (%d) must be between 1-100", c.Sealer.TargetGasMax)
+			}
+			if c.Sealer.TargetGasMin >= c.Sealer.TargetGasMax {
+				return nil, fmt.Errorf("miner.targetGasMin (%d) must be less than miner.targetGasMax (%d)", c.Sealer.TargetGasMin, c.Sealer.TargetGasMax)
+			}
+			if c.Sealer.TargetBaseFee == 0 {
+				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic target gas is enabled")
+			}
+			if c.Sealer.BaseFeeBuffer >= c.Sealer.TargetBaseFee {
+				log.Warn("miner.baseFeeBuffer >= miner.targetBaseFee; lower bound will be 0 (all base fees treated as below target)")
 			}
 		}
 
@@ -1296,6 +1329,16 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		if c.Sealer.BaseFeeChangeDenominator > 0 {
 			n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
+		}
+
+		// Wire dynamic target gas percentage configuration to BorConfig
+		if c.Sealer.EnableDynamicTargetGas {
+			enabled := true
+			n.Genesis.Config.Bor.EnableDynamicTargetGas = &enabled
+			n.Genesis.Config.Bor.TargetGasMin = &c.Sealer.TargetGasMin
+			n.Genesis.Config.Bor.TargetGasMax = &c.Sealer.TargetGasMax
+			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
+			n.Genesis.Config.Bor.BaseFeeBuffer = &c.Sealer.BaseFeeBuffer
 		}
 	}
 
