@@ -47,6 +47,7 @@ type HealthRegistry struct {
 	metrics RegistryMetrics
 
 	quit      chan struct{}
+	done      chan struct{} // closed when run() exits
 	closeOnce sync.Once
 	startOnce sync.Once
 }
@@ -70,6 +71,7 @@ func NewHealthRegistry(n int, probeFunc func(int) error, onSwitch func(from, to 
 		onSwitch:             onSwitch,
 		metrics:              m,
 		quit:                 make(chan struct{}),
+		done:                 make(chan struct{}),
 	}
 }
 
@@ -154,15 +156,24 @@ func (r *HealthRegistry) Start() {
 	})
 }
 
-// Stop closes the quit channel, stopping the background goroutine.
+// Stop closes the quit channel and waits for the background goroutine to exit.
 func (r *HealthRegistry) Stop() {
+	// If Start() was never called, close done so the wait below doesn't block.
+	r.startOnce.Do(func() {
+		close(r.done)
+	})
+
 	r.closeOnce.Do(func() {
 		close(r.quit)
 	})
+
+	<-r.done
 }
 
 // run is the background goroutine: probe → promote → proactive switch.
 func (r *HealthRegistry) run() {
+	defer close(r.done)
+
 	ticker := time.NewTicker(r.HealthCheckInterval)
 	defer ticker.Stop()
 
@@ -179,25 +190,49 @@ func (r *HealthRegistry) run() {
 	}
 }
 
-// probeAll probes every endpoint and updates health state.
+// probeAll probes every endpoint concurrently and updates health state.
 func (r *HealthRegistry) probeAll() {
-	for i := 0; i < r.n; i++ {
-		// Check for shutdown between individual probes.
-		select {
-		case <-r.quit:
-			return
-		default:
-		}
+	// Check for shutdown before launching probes.
+	select {
+	case <-r.quit:
+		return
+	default:
+	}
 
+	// Launch all probes concurrently. Each goroutine writes to its own
+	// index in errs — no data race, no mutex needed for the slice.
+	errs := make([]error, r.n)
+
+	var wg sync.WaitGroup
+	wg.Add(r.n)
+
+	for i := 0; i < r.n; i++ {
 		if r.metrics.ProbeAttempts != nil {
 			r.metrics.ProbeAttempts.Inc(1)
 		}
 
-		err := r.probeFunc(i)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = r.probeFunc(idx)
+		}(i)
+	}
 
-		r.mu.Lock()
+	wg.Wait()
 
-		if err == nil {
+	// Discard results if shutdown occurred while probes were in flight.
+	select {
+	case <-r.quit:
+		return
+	default:
+	}
+
+	// Apply all results under a single lock acquisition.
+	r.mu.Lock()
+
+	healthyCount := int64(0)
+
+	for i := 0; i < r.n; i++ {
+		if errs[i] == nil {
 			r.health[i].ConsecutiveSuccess++
 			r.health[i].LastErr = nil
 
@@ -212,26 +247,18 @@ func (r *HealthRegistry) probeAll() {
 		} else {
 			r.health[i].ConsecutiveSuccess = 0
 			r.health[i].Healthy = false
-			r.health[i].LastErr = err
+			r.health[i].LastErr = errs[i]
 		}
 
-		r.mu.Unlock()
-	}
-
-	// Update healthy endpoints gauge.
-	r.mu.Lock()
-	count := int64(0)
-
-	for i := range r.health {
 		if r.health[i].Healthy {
-			count++
+			healthyCount++
 		}
 	}
 
 	r.mu.Unlock()
 
 	if r.metrics.HealthyEndpoints != nil {
-		r.metrics.HealthyEndpoints.Update(count)
+		r.metrics.HealthyEndpoints.Update(healthyCount)
 	}
 }
 
