@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
@@ -18,8 +17,10 @@ import (
 )
 
 const (
-	defaultAttemptTimeout      = 30 * time.Second
-	defaultHealthCheckInterval = 30 * time.Second
+	defaultAttemptTimeout       = 30 * time.Second
+	defaultHealthCheckInterval  = 10 * time.Second
+	defaultConsecutiveThreshold = 3
+	defaultPromotionCooldown    = 60 * time.Second
 )
 
 // Endpoint matches bor.IHeimdallClient. It is exported so that external
@@ -37,19 +38,33 @@ type Endpoint interface {
 	Close()
 }
 
+// endpointHealth tracks the health state of a single endpoint.
+type endpointHealth struct {
+	healthy            bool
+	consecutiveSuccess int
+	healthySince       time.Time // when consecutive threshold was reached
+	lastErr            error
+}
+
 // MultiHeimdallClient wraps N heimdall clients (primary at index 0, failovers
 // at 1..N-1) and transparently cascades through them when the active client is
-// unreachable. A background goroutine periodically health-checks higher-priority
-// endpoints and promotes back when one recovers.
+// unreachable. A background health registry continuously probes ALL endpoints,
+// requires consecutive successes + cooldown before promotion, and gives cascade
+// full visibility into endpoint health.
 type MultiHeimdallClient struct {
-	clients             []Endpoint
-	mu                  sync.Mutex
-	active              int // 0 = primary, >0 = failover
-	attemptTimeout      time.Duration
-	healthCheckInterval time.Duration
-	quit                chan struct{}
-	closeOnce           sync.Once
-	probing             atomic.Bool
+	clients              []Endpoint
+	mu                   sync.Mutex
+	active               int // 0 = primary, >0 = failover
+	health               []endpointHealth
+	attemptTimeout       time.Duration
+	healthCheckInterval  time.Duration
+	consecutiveThreshold int
+	promotionCooldown    time.Duration
+	quit                 chan struct{}
+	closeOnce            sync.Once
+	startOnce            sync.Once
+	probeCtx             context.Context    // cancelled on Close to abort in-flight probes
+	probeCancel          context.CancelFunc
 }
 
 func NewMultiHeimdallClient(clients ...Endpoint) *MultiHeimdallClient {
@@ -57,11 +72,33 @@ func NewMultiHeimdallClient(clients ...Endpoint) *MultiHeimdallClient {
 		panic("NewMultiHeimdallClient requires at least one client")
 	}
 
+	health := make([]endpointHealth, len(clients))
+	// Primary starts as healthy; others start unhealthy.
+	health[0] = endpointHealth{healthy: true}
+
+	probeCtx, probeCancel := context.WithCancel(context.Background())
+
 	return &MultiHeimdallClient{
-		clients:             clients,
-		attemptTimeout:      defaultAttemptTimeout,
-		healthCheckInterval: defaultHealthCheckInterval,
-		quit:                make(chan struct{}),
+		clients:              clients,
+		health:               health,
+		attemptTimeout:       defaultAttemptTimeout,
+		healthCheckInterval:  defaultHealthCheckInterval,
+		consecutiveThreshold: defaultConsecutiveThreshold,
+		promotionCooldown:    defaultPromotionCooldown,
+		quit:                 make(chan struct{}),
+		probeCtx:             probeCtx,
+		probeCancel:          probeCancel,
+	}
+}
+
+// ensureHealthRegistry lazily starts the health registry goroutine on the first
+// API call. This allows tests to configure fields (thresholds, intervals) after
+// construction but before the goroutine reads them.
+func (f *MultiHeimdallClient) ensureHealthRegistry() {
+	if len(f.clients) > 1 {
+		f.startOnce.Do(func() {
+			go f.runHealthRegistry()
+		})
 	}
 }
 
@@ -114,19 +151,20 @@ func (f *MultiHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo
 }
 
 func (f *MultiHeimdallClient) Close() {
-	f.closeOnce.Do(func() { close(f.quit) })
+	f.closeOnce.Do(func() {
+		f.probeCancel() // cancel in-flight probes first
+		close(f.quit)
+	})
 
 	for _, c := range f.clients {
 		c.Close()
 	}
 }
 
-// startHealthCheck runs in a background goroutine, periodically probing
-// higher-priority endpoints. When one recovers, it promotes active and
-// self-terminates. This keeps real requests off the probe path.
-func (f *MultiHeimdallClient) startHealthCheck() {
-	defer f.probing.Store(false)
-
+// runHealthRegistry is an always-on goroutine (started in constructor, stopped
+// on Close) that continuously probes ALL endpoints, requires consecutive
+// successes before marking healthy, and enforces cooldown before promotion.
+func (f *MultiHeimdallClient) runHealthRegistry() {
 	ticker := time.NewTicker(f.healthCheckInterval)
 	defer ticker.Stop()
 
@@ -137,46 +175,146 @@ func (f *MultiHeimdallClient) startHealthCheck() {
 		case <-ticker.C:
 		}
 
-		f.mu.Lock()
-		active := f.active
-		f.mu.Unlock()
+		f.probeAllEndpoints()
+		f.maybePromote()
+		f.maybeProactiveSwitch()
+	}
+}
 
-		if active == 0 {
-			// Already on primary, nothing to probe.
+// probeAllEndpoints probes every endpoint via FetchStatus and updates health state.
+func (f *MultiHeimdallClient) probeAllEndpoints() {
+	for i := 0; i < len(f.clients); i++ {
+		// Check for shutdown between individual probes so we don't
+		// burn N*timeout before noticing Close() was called.
+		select {
+		case <-f.quit:
 			return
+		default:
 		}
 
-		// Probe clients 0..active-1 (highest priority first).
-		for i := 0; i < active; i++ {
-			failoverProbeAttempts.Inc(1)
+		failoverProbeAttempts.Inc(1)
 
-			ctx, cancel := context.WithTimeout(context.Background(), f.attemptTimeout)
-			_, err := f.clients[i].FetchStatus(ctx)
-			cancel()
+		ctx, cancel := context.WithTimeout(f.probeCtx, f.attemptTimeout)
+		_, err := f.clients[i].FetchStatus(ctx)
+		cancel()
 
-			if err == nil {
-				f.mu.Lock()
-				f.active = i
-				f.mu.Unlock()
+		f.mu.Lock()
 
-				failoverProbeSuccesses.Inc(1)
-				failoverActiveGauge.Update(int64(i))
+		if err == nil {
+			f.health[i].consecutiveSuccess++
+			f.health[i].lastErr = nil
 
-				log.Info("Heimdall health-check: promoted to higher-priority client", "index", i)
-
-				if i == 0 {
-					return
-				}
-
-				break // keep ticking to probe even higher-priority clients
+			if f.health[i].consecutiveSuccess >= f.consecutiveThreshold && !f.health[i].healthy {
+				f.health[i].healthy = true
+				f.health[i].healthySince = time.Now()
 			}
+
+			failoverProbeSuccesses.Inc(1)
+		} else {
+			// Fast failure detection: one failure resets to unhealthy.
+			f.health[i].consecutiveSuccess = 0
+			f.health[i].healthy = false
+			f.health[i].lastErr = err
+		}
+
+		f.mu.Unlock()
+	}
+
+	// Update healthy endpoints gauge.
+	f.mu.Lock()
+	count := int64(0)
+	for i := range f.health {
+		if f.health[i].healthy {
+			count++
+		}
+	}
+	f.mu.Unlock()
+
+	failoverHealthyEndpoints.Update(count)
+}
+
+// maybePromote checks if a higher-priority endpoint (index < active) is healthy
+// and has passed cooldown. If yes, promotes to the highest-priority qualified endpoint.
+func (f *MultiHeimdallClient) maybePromote() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.active == 0 {
+		return
+	}
+
+	for i := 0; i < f.active; i++ {
+		if f.health[i].healthy && time.Since(f.health[i].healthySince) >= f.promotionCooldown {
+			f.active = i
+			failoverActiveGauge.Update(int64(i))
+			failoverProactiveSwitches.Inc(1)
+
+			log.Info("Heimdall health registry: promoted to higher-priority client",
+				"index", i, "previous", f.active)
+
+			return
+		}
+	}
+}
+
+// maybeProactiveSwitch detects if the active endpoint is unhealthy and switches
+// to the highest-priority healthy endpoint.
+func (f *MultiHeimdallClient) maybeProactiveSwitch() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.health[f.active].healthy {
+		return
+	}
+
+	// Active is unhealthy. Find the best alternative.
+	// Pass 1: healthy + cooled.
+	for i := 0; i < len(f.clients); i++ {
+		if i == f.active {
+			continue
+		}
+
+		if f.health[i].healthy && time.Since(f.health[i].healthySince) >= f.promotionCooldown {
+			prev := f.active
+			f.active = i
+
+			failoverActiveGauge.Update(int64(i))
+			failoverProactiveSwitches.Inc(1)
+
+			log.Warn("Heimdall health registry: proactive switch (active unhealthy, cooled target)",
+				"from", prev, "to", i)
+
+			return
+		}
+	}
+
+	// Pass 2: healthy but NOT cooled (emergency).
+	for i := 0; i < len(f.clients); i++ {
+		if i == f.active {
+			continue
+		}
+
+		if f.health[i].healthy {
+			prev := f.active
+			f.active = i
+
+			failoverActiveGauge.Update(int64(i))
+			failoverProactiveSwitches.Inc(1)
+
+			log.Warn("Heimdall health registry: proactive switch (active unhealthy, uncooled target)",
+				"from", prev, "to", i)
+
+			return
 		}
 	}
 }
 
 // callWithFailover executes fn against the active client. If the active client
-// fails with a failover-eligible error, it cascades through remaining clients.
+// fails with a failover-eligible error, it marks it unhealthy and cascades
+// through remaining clients using health registry information.
 func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error)) (T, error) {
+	f.ensureHealthRegistry()
+
 	f.mu.Lock()
 	active := f.active
 	f.mu.Unlock()
@@ -194,43 +332,91 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 		return zero, err
 	}
 
+	// Mark the active endpoint unhealthy in the registry.
+	f.mu.Lock()
+	f.health[active].consecutiveSuccess = 0
+	f.health[active].healthy = false
+	f.health[active].lastErr = err
+	f.mu.Unlock()
+
 	if active == 0 {
-		log.Warn("Heimdall failover: primary failed, cascading to next client", "err", err)
+		log.Warn("Heimdall failover: primary failed, cascading", "err", err)
 	}
 
 	return cascadeClients(f, ctx, fn, active, err)
 }
 
-// cascadeClients tries clients after the given index. On first success it
-// switches the active client and returns. If all fail, returns the last error.
-func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error), after int, lastErr error) (T, error) {
-	for i := after + 1; i < len(f.clients); i++ {
-		subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
-		result, err := fn(subCtx, f.clients[i])
-		cancel()
+// cascadeClients tries all endpoints in priority order using health registry
+// information. It uses a three-pass approach:
+//  1. Healthy + cooled endpoints in priority order (skipping failed active)
+//  2. Healthy but NOT cooled endpoints in priority order
+//  3. Unhealthy endpoints in priority order (last resort)
+func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(context.Context, Endpoint) (T, error), failed int, lastErr error) (T, error) {
+	n := len(f.clients)
 
-		if err == nil {
-			f.mu.Lock()
-			f.active = i
-			f.mu.Unlock()
+	// Build candidate lists based on health state.
+	f.mu.Lock()
 
-			failoverSwitchCounter.Inc(1)
-			failoverActiveGauge.Update(int64(i))
+	var cooled, uncooled, unhealthy []int
 
-			log.Warn("Heimdall failover: switched to client", "index", i)
-
-			if i > 0 && f.probing.CompareAndSwap(false, true) {
-				go f.startHealthCheck()
-			}
-
-			return result, nil
+	for i := 0; i < n; i++ {
+		if i == failed {
+			continue
 		}
 
-		lastErr = err
+		if f.health[i].healthy {
+			if time.Since(f.health[i].healthySince) >= f.promotionCooldown {
+				cooled = append(cooled, i)
+			} else {
+				uncooled = append(uncooled, i)
+			}
+		} else {
+			unhealthy = append(unhealthy, i)
+		}
+	}
 
-		if !isFailoverError(err, ctx) {
-			var zero T
-			return zero, err
+	f.mu.Unlock()
+
+	// Try each pass in order.
+	passes := [][]int{cooled, uncooled, unhealthy}
+
+	for _, candidates := range passes {
+		for _, i := range candidates {
+			subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
+			result, err := fn(subCtx, f.clients[i])
+			cancel()
+
+			if err == nil {
+				f.mu.Lock()
+				f.active = i
+				f.health[i].consecutiveSuccess++
+				if !f.health[i].healthy && f.health[i].consecutiveSuccess >= f.consecutiveThreshold {
+					f.health[i].healthy = true
+					f.health[i].healthySince = time.Now()
+				}
+				f.mu.Unlock()
+
+				failoverSwitchCounter.Inc(1)
+				failoverActiveGauge.Update(int64(i))
+
+				log.Warn("Heimdall failover: switched to client", "index", i)
+
+				return result, nil
+			}
+
+			lastErr = err
+
+			if !isFailoverError(err, ctx) {
+				var zero T
+				return zero, err
+			}
+
+			// Mark this endpoint unhealthy too.
+			f.mu.Lock()
+			f.health[i].consecutiveSuccess = 0
+			f.health[i].healthy = false
+			f.health[i].lastErr = err
+			f.mu.Unlock()
 		}
 	}
 
