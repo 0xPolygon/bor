@@ -712,3 +712,29 @@ func syncAddPeer(srv *Server, node *enode.Node) bool {
 		}
 	}
 }
+
+func TestServerStopDialing(t *testing.T) {
+	srv := &Server{
+		Config: Config{
+			PrivateKey:  newkey(),
+			MaxPeers:    10,
+			NoDiscovery: true,
+			ListenAddr:  "127.0.0.1:0",
+			Logger:      testlog.Logger(t, log.LvlTrace),
+		},
+	}
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.StopDialing()
+
+	// Server should still be operational.
+	_ = srv.PeerCount()
+
+	// Idempotent: calling again must not panic.
+	srv.StopDialing()
+
+	// Full Stop after StopDialing must complete cleanly.
+	srv.Stop()
+}

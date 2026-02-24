@@ -64,14 +64,8 @@ func (frdb *freezerdb) AncientDatadir() (string, error) {
 // the slow ancient tables.
 func (frdb *freezerdb) Close() error {
 	var errs []error
-	if err := frdb.chainFreezer.Close(); err != nil {
-		errs = append(errs, err)
-	}
 
-	if err := frdb.KeyValueStore.Close(); err != nil {
-		errs = append(errs, err)
-	}
-
+	// Stop pruners first, while the DB is still open.
 	if frdb.witPruner != nil {
 		if err := frdb.witPruner.Close(); err != nil {
 			errs = append(errs, err)
@@ -82,6 +76,14 @@ func (frdb *freezerdb) Close() error {
 		if err := frdb.blockPruner.Close(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	if err := frdb.chainFreezer.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := frdb.KeyValueStore.Close(); err != nil {
+		errs = append(errs, err)
 	}
 
 	if len(errs) != 0 {
