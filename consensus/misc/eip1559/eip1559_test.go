@@ -1555,11 +1555,11 @@ func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
 	t.Parallel()
 
 	const (
-		gasLimit    = uint64(30_000_000)
-		desiredFee  = uint64(30_000_000_000) // 30 gwei
-		buffer      = uint64(5_000_000_000)  // 5 gwei
-		tGasMin     = uint64(50)
-		tGasMax     = uint64(80)
+		gasLimit     = uint64(30_000_000)
+		desiredFee   = uint64(30_000_000_000) // 30 gwei
+		buffer       = uint64(5_000_000_000)  // 5 gwei
+		tGasMin      = uint64(50)
+		tGasMax      = uint64(80)
 		dandeliBlock = int64(50)
 		lisovoBlock  = int64(100)
 	)
@@ -1576,14 +1576,14 @@ func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
 		EnableDynamicTargetGas: &enabled,
 		TargetGasMin:           &min,
 		TargetGasMax:           &max,
-		TargetBaseFee:         &dbf,
-		BaseFeeBuffer:   &buf,
+		TargetBaseFee:          &dbf,
+		BaseFeeBuffer:          &buf,
 	}
 
 	chainConfig := &params.ChainConfig{
-		ChainID:        big.NewInt(1),
-		LondonBlock:    big.NewInt(0),
-		Bor:            borCfg,
+		ChainID:     big.NewInt(1),
+		LondonBlock: big.NewInt(0),
+		Bor:         borCfg,
 	}
 
 	highBaseFee := big.NewInt(40_000_000_000) // 40 gwei → above upper bound
@@ -1638,8 +1638,8 @@ func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
 		EnableDynamicTargetGas: &enabled,
 		TargetGasMin:           &min,
 		TargetGasMax:           &max,
-		TargetBaseFee:         &dbf,
-		BaseFeeBuffer:   &buf,
+		TargetBaseFee:          &dbf,
+		BaseFeeBuffer:          &buf,
 	}
 
 	chainConfig := &params.ChainConfig{
@@ -1653,10 +1653,10 @@ func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
 	minTarget := gasLimit * tGasMin / 100
 
 	testCases := []struct {
-		blockNum      int64
-		baseFeeGwei   int64
+		blockNum       int64
+		baseFeeGwei    int64
 		expectedTarget uint64
-		description   string
+		description    string
 	}{
 		{101, 40_000_000_000, maxTarget, "above upper bound → max"},
 		{102, 30_000_000_000, staticTarget, "at desired → static"},

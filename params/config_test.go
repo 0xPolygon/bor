@@ -1062,13 +1062,13 @@ func TestGetDynamicTargetGasPercentage(t *testing.T) {
 	t.Parallel()
 
 	const (
-		desiredBaseFee       = uint64(30_000_000_000) // 30 gwei
-		buffer               = uint64(5_000_000_000)  // 5 gwei → upper=35g, lower=25g
-		targetGasMin         = uint64(50)              // 50%
-		targetGasMax         = uint64(80)              // 80%
-		staticPercentage     = TargetGasPercentagePostDandeli
-		lisovoBlockNum       = int64(100)
-		dandeliBlockNum      = int64(50)
+		desiredBaseFee   = uint64(30_000_000_000) // 30 gwei
+		buffer           = uint64(5_000_000_000)  // 5 gwei → upper=35g, lower=25g
+		targetGasMin     = uint64(50)             // 50%
+		targetGasMax     = uint64(80)             // 80%
+		staticPercentage = TargetGasPercentagePostDandeli
+		lisovoBlockNum   = int64(100)
+		dandeliBlockNum  = int64(50)
 	)
 
 	// Helper to build a config with dynamic target gas enabled
@@ -1084,8 +1084,8 @@ func TestGetDynamicTargetGasPercentage(t *testing.T) {
 			EnableDynamicTargetGas: &en,
 			TargetGasMin:           &min,
 			TargetGasMax:           &max,
-			TargetBaseFee:         &dbf,
-			BaseFeeBuffer:   &buf,
+			TargetBaseFee:          &dbf,
+			BaseFeeBuffer:          &buf,
 		}
 	}
 
@@ -1188,7 +1188,7 @@ func TestGetDynamicTargetGasPercentage_BufferUnderflow(t *testing.T) {
 	min := uint64(50)
 	max := uint64(80)
 	desiredBaseFee := uint64(10_000_000_000) // 10 gwei
-	buffer := uint64(50_000_000_000)          // 50 gwei — larger than desired
+	buffer := uint64(50_000_000_000)         // 50 gwei — larger than desired
 
 	config := &BorConfig{
 		DandeliBlock:           big.NewInt(50),
@@ -1196,8 +1196,8 @@ func TestGetDynamicTargetGasPercentage_BufferUnderflow(t *testing.T) {
 		EnableDynamicTargetGas: &en,
 		TargetGasMin:           &min,
 		TargetGasMax:           &max,
-		TargetBaseFee:         &desiredBaseFee,
-		BaseFeeBuffer:   &buffer,
+		TargetBaseFee:          &desiredBaseFee,
+		BaseFeeBuffer:          &buffer,
 	}
 
 	// 5 gwei: upperBound = 10+50 = 60 gwei, lowerBound = 0 (underflow guard)
@@ -1233,7 +1233,7 @@ func TestGetDynamicTargetGasPercentage_NilDesiredBaseFee(t *testing.T) {
 		EnableDynamicTargetGas: &en,
 		TargetGasMin:           &min,
 		TargetGasMax:           &max,
-		TargetBaseFee:         nil, // not set — misconfiguration
+		TargetBaseFee:          nil, // not set — misconfiguration
 	}
 
 	// Should fall back to static with log.Error
@@ -1259,7 +1259,7 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			EnableDynamicTargetGas: &en,
 			TargetGasMin:           &min,
 			TargetGasMax:           nil, // nil
-			TargetBaseFee:         &desiredBaseFee,
+			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		// base fee above upper → should return TargetGasMax, but it's nil → static fallback
@@ -1279,7 +1279,7 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			EnableDynamicTargetGas: &en,
 			TargetGasMin:           nil, // nil
 			TargetGasMax:           &max,
-			TargetBaseFee:         &desiredBaseFee,
+			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		// base fee below lower → should return TargetGasMin, but it's nil → static fallback
@@ -1300,7 +1300,7 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			EnableDynamicTargetGas: &en,
 			TargetGasMin:           &min,
 			TargetGasMax:           &zero,
-			TargetBaseFee:         &desiredBaseFee,
+			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(40_000_000_000), big.NewInt(101))
@@ -1320,7 +1320,7 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			EnableDynamicTargetGas: &en,
 			TargetGasMin:           &min,
 			TargetGasMax:           &over,
-			TargetBaseFee:         &desiredBaseFee,
+			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(40_000_000_000), big.NewInt(101))
