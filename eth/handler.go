@@ -906,9 +906,10 @@ type PeerStats struct {
 // GetPeerStats returns the current head height and td of all the connected peers
 // along with few additional identifiers.
 func (h *handler) GetPeerStats() []*PeerStats {
-	info := make([]*PeerStats, 0, len(h.peers.peers))
+	peers := h.peers.getAllPeers()
+	info := make([]*PeerStats, 0, len(peers))
 
-	for _, peer := range h.peers.peers {
+	for _, peer := range peers {
 		hash, td := peer.Head()
 		block := h.chain.GetBlockByHash(hash)
 		number := uint64(0)
