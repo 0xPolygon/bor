@@ -298,11 +298,6 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 	}
 
-	// If snap sync is requested but snapshots are disabled, fail loudly
-	if h.snapSync.Load() && config.Chain.Snapshots() == nil {
-		return nil, errors.New("snap sync not supported with snapshots disabled")
-	}
-
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
