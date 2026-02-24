@@ -334,11 +334,11 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			// Find the best healthy alternative.
 			switched := false
 			for i := 0; i < len(c.urls); i++ {
-				if i == active && c.health[i].healthy {
+				if i == active {
 					continue
 				}
 
-				if i != active && c.health[i].healthy {
+				if c.health[i].healthy {
 					c.activeURL = i
 					switched = true
 
@@ -502,5 +502,10 @@ func (c *HeimdallWSClient) Unsubscribe(ctx context.Context) error {
 func (c *HeimdallWSClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return nil
+	}
+
 	return c.conn.Close()
 }

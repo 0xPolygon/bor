@@ -63,7 +63,7 @@ type MultiHeimdallClient struct {
 	quit                 chan struct{}
 	closeOnce            sync.Once
 	startOnce            sync.Once
-	probeCtx             context.Context    // cancelled on Close to abort in-flight probes
+	probeCtx             context.Context // cancelled on Close to abort in-flight probes
 	probeCancel          context.CancelFunc
 }
 
@@ -245,12 +245,13 @@ func (f *MultiHeimdallClient) maybePromote() {
 
 	for i := 0; i < f.active; i++ {
 		if f.health[i].healthy && time.Since(f.health[i].healthySince) >= f.promotionCooldown {
+			prev := f.active
 			f.active = i
 			failoverActiveGauge.Update(int64(i))
 			failoverProactiveSwitches.Inc(1)
 
 			log.Info("Heimdall health registry: promoted to higher-priority client",
-				"index", i, "previous", f.active)
+				"index", i, "previous", prev)
 
 			return
 		}

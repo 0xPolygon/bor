@@ -170,7 +170,7 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 	secondary := &mockHeimdallClient{}
 
 	fc := NewMultiHeimdallClient(primary, secondary)
-	fc.attemptTimeout = 5 * time.Second // longer than caller's ctx
+	fc.attemptTimeout = 5 * time.Second    // longer than caller's ctx
 	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
 	fc.consecutiveThreshold = 1
 	fc.promotionCooldown = 0
