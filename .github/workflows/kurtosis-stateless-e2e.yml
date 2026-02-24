@@ -90,17 +90,24 @@ jobs:
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
-      - name: Configure Docker API compatibility for Pumba
+      - name: Build Pumba image for the current docker API
         run: |
-          # Pumba uses Docker SDK v23.0.3 (API v1.42), but Docker 29+ requires minimum API v1.44
-          # Lower the daemon's minimum API version to maintain compatibility
-          if [ -f /etc/docker/daemon.json ]; then
-            sudo jq '. + {"min-api-version": "1.42"}' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json.tmp > /dev/null
-            sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
-          else
-            echo '{"min-api-version": "1.42"}' | sudo tee /etc/docker/daemon.json > /dev/null
+          # Pumba 0.10.1 defaults to Docker API 1.42. Newer Docker daemons may require a higher version.
+          # Keep the same expected image tag and set the API version accordingly in the image itself.
+          docker_min_api="$(docker version --format '{{.Server.MinAPIVersion}}')"
+          if [ -z "$docker_min_api" ]; then
+            echo "Unable to determine Docker server minimum API version"
+            exit 1
           fi
-          sudo systemctl restart docker
+          echo "Detected Docker minimum API version: $docker_min_api"
+          docker pull gaiaadm/pumba:0.10.1
+          cat >/tmp/pumba-compat.Dockerfile <<'EOF'
+          FROM gaiaadm/pumba:0.10.1
+          ARG DOCKER_MIN_API
+          ENV DOCKER_API_VERSION=${DOCKER_MIN_API}
+          EOF
+          docker build --build-arg DOCKER_MIN_API="$docker_min_api" -t gaiaadm/pumba:0.10.1 -f /tmp/pumba-compat.Dockerfile /tmp
+          docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' gaiaadm/pumba:0.10.1 | grep "^DOCKER_API_VERSION=$docker_min_api$"
 
       - name: Checkout pos-workflows
         uses: actions/checkout@v5
