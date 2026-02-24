@@ -125,13 +125,22 @@ func (m *mockHeimdallClient) Close() {
 // newInstantMulti creates a MultiHeimdallClient with instant health registry
 // behavior: consecutiveThreshold=1, promotionCooldown=0, fast health-check interval.
 func newInstantMulti(clients ...Endpoint) *MultiHeimdallClient {
-	fc := NewMultiHeimdallClient(clients...)
+	fc, err := NewMultiHeimdallClient(clients...)
+	if err != nil {
+		panic(err)
+	}
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
-	fc.healthCheckInterval = 50 * time.Millisecond
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	fc.registry.HealthCheckInterval = 50 * time.Millisecond
 
 	return fc
+}
+
+func TestNewMultiHeimdallClient_NoClients_ReturnsError(t *testing.T) {
+	_, err := NewMultiHeimdallClient()
+	require.Error(t, err)
 }
 
 func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
@@ -169,17 +178,19 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
-	fc.attemptTimeout = 5 * time.Second    // longer than caller's ctx
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 5 * time.Second // longer than caller's ctx
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := fc.GetSpan(ctx, 1)
+	_, err = fc.GetSpan(ctx, 1)
 	require.Error(t, err)
 	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on caller context cancellation")
 }
@@ -192,14 +203,16 @@ func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
 	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
@@ -213,14 +226,16 @@ func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
 	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
@@ -237,15 +252,17 @@ func TestFailover_StickyBehavior(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
-	fc.healthCheckInterval = 1 * time.Hour // very long — no background promotion
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour // very long — no background promotion
 	defer fc.Close()
 
 	// First call triggers failover
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
 	primaryBefore := primary.hits.Load()
@@ -293,9 +310,7 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 
 	// Wait for background health registry to promote primary
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 0
+		return fc.registry.Active() == 0
 	}, 2*time.Second, 20*time.Millisecond, "health registry should promote back to primary")
 
 	// Verify subsequent calls go to primary
@@ -327,9 +342,7 @@ func TestFailover_ProbeBackFails(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Active should still be on secondary since primary FetchStatus fails
-	fc.mu.Lock()
-	assert.Equal(t, 1, fc.active, "should stay on secondary when primary still down")
-	fc.mu.Unlock()
+	assert.Equal(t, 1, fc.registry.Active(), "should stay on secondary when primary still down")
 
 	// Calls should still succeed via secondary
 	secondaryBefore := secondary.hits.Load()
@@ -344,7 +357,9 @@ func TestFailover_ClosesBothClients(t *testing.T) {
 	primary := &mockHeimdallClient{closeFn: func() { primaryClosed.Store(true) }}
 	secondary := &mockHeimdallClient{closeFn: func() { secondaryClosed.Store(true) }}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.Close()
 
 	assert.True(t, primaryClosed.Load(), "primary should be closed")
@@ -355,11 +370,13 @@ func TestFailover_PassthroughWhenPrimaryHealthy(t *testing.T) {
 	primary := &mockHeimdallClient{}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 5 * time.Second
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	for i := 0; i < 5; i++ {
@@ -386,14 +403,16 @@ func TestFailover_Integration_ServiceUnavailable(t *testing.T) {
 	primaryClient := NewHeimdallClient(primary.URL, 5*time.Second)
 	secondaryClient := NewHeimdallClient(secondary.URL, 5*time.Second)
 
-	fc := NewMultiHeimdallClient(primaryClient, secondaryClient)
+	fc, err := NewMultiHeimdallClient(primaryClient, secondaryClient)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 2 * time.Second
 	defer fc.Close()
 
 	ctx := WithRequestType(context.Background(), SpanRequest)
 
 	// 503 should NOT trigger failover
-	_, err := fc.GetSpan(ctx, 1)
+	_, err = fc.GetSpan(ctx, 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
 }
@@ -677,9 +696,7 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 
 	// Wait for health registry to promote back to primary
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 0
+		return fc.registry.Active() == 0
 	}, 2*time.Second, 20*time.Millisecond, "health registry should promote back to primary")
 
 	// Verify we're back on primary
@@ -699,19 +716,19 @@ func TestFailover_ActiveNonFailoverError(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Force onto secondary
-	fc.mu.Lock()
-	fc.active = 1
-	fc.mu.Unlock()
+	fc.registry.SetActive(1)
 
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
 	assert.Equal(t, int32(0), tertiary.hits.Load(), "should not cascade to tertiary on non-failover error")
@@ -734,18 +751,14 @@ func TestFailover_ActiveFailoverError_CascadesToNext(t *testing.T) {
 	defer fc.Close()
 
 	// Force onto secondary
-	fc.mu.Lock()
-	fc.active = 1
-	fc.mu.Unlock()
+	fc.registry.SetActive(1)
 
 	span, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 	require.NotNil(t, span)
 	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "should cascade to tertiary")
 
-	fc.mu.Lock()
-	assert.Equal(t, 2, fc.active, "active should switch to tertiary")
-	fc.mu.Unlock()
+	assert.Equal(t, 2, fc.registry.Active(), "active should switch to tertiary")
 }
 
 func TestFailover_ClosesAllClients(t *testing.T) {
@@ -757,7 +770,9 @@ func TestFailover_ClosesAllClients(t *testing.T) {
 		clients[i] = &mockHeimdallClient{closeFn: func() { closed[idx].Store(true) }}
 	}
 
-	fc := NewMultiHeimdallClient(clients...)
+	fc, err := NewMultiHeimdallClient(clients...)
+	require.NoError(t, err)
+
 	fc.Close()
 
 	for i := range closed {
@@ -807,18 +822,14 @@ func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
 	secondaryDown.Store(false)
 
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 1
+		return fc.registry.Active() == 1
 	}, 2*time.Second, 20*time.Millisecond, "should promote to secondary")
 
 	// Now bring primary back
 	primaryDown.Store(false)
 
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 0
+		return fc.registry.Active() == 0
 	}, 2*time.Second, 20*time.Millisecond, "should promote to primary")
 }
 
@@ -830,11 +841,13 @@ func TestFailover_HealthRegistryRespectsClose(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 50 * time.Millisecond
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 50 * time.Millisecond
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 
 	// Close should stop the health registry goroutine
 	fc.Close()
@@ -864,20 +877,20 @@ func TestRegistry_ConsecutiveThreshold(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 50 * time.Millisecond
-	fc.consecutiveThreshold = 3 // need 3 consecutive successes
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 50 * time.Millisecond
+	fc.registry.ConsecutiveThreshold = 3 // need 3 consecutive successes
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Trigger failover
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
-	fc.mu.Lock()
-	assert.Equal(t, 1, fc.active, "should be on secondary")
-	fc.mu.Unlock()
+	assert.Equal(t, 1, fc.registry.Active(), "should be on secondary")
 
 	// Wait for enough probes to pass the threshold
 	require.Eventually(t, func() bool {
@@ -886,9 +899,7 @@ func TestRegistry_ConsecutiveThreshold(t *testing.T) {
 
 	// Should eventually promote after threshold met
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 0
+		return fc.registry.Active() == 0
 	}, 2*time.Second, 20*time.Millisecond, "should promote after consecutive threshold met")
 }
 
@@ -909,15 +920,17 @@ func TestRegistry_PromotionCooldown(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 50 * time.Millisecond
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 500 * time.Millisecond // 500ms cooldown
+	fc.registry.HealthCheckInterval = 50 * time.Millisecond
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 500 * time.Millisecond // 500ms cooldown
 	defer fc.Close()
 
 	// Trigger failover
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
 	// Bring primary back
@@ -925,15 +938,11 @@ func TestRegistry_PromotionCooldown(t *testing.T) {
 
 	// Wait for at least one probe to succeed — primary should be healthy but not promoted yet
 	time.Sleep(150 * time.Millisecond)
-	fc.mu.Lock()
-	assert.Equal(t, 1, fc.active, "should not promote before cooldown")
-	fc.mu.Unlock()
+	assert.Equal(t, 1, fc.registry.Active(), "should not promote before cooldown")
 
 	// Wait for cooldown to pass and promotion to happen
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 0
+		return fc.registry.Active() == 0
 	}, 3*time.Second, 20*time.Millisecond, "should promote after cooldown passes")
 }
 
@@ -955,15 +964,17 @@ func TestRegistry_FlappingPrevention(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 50 * time.Millisecond
-	fc.consecutiveThreshold = 3
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 50 * time.Millisecond
+	fc.registry.ConsecutiveThreshold = 3
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Trigger failover
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
 	// Wait for several probe cycles
@@ -971,9 +982,7 @@ func TestRegistry_FlappingPrevention(t *testing.T) {
 
 	// Primary should never reach healthy because alternating success/fail
 	// never reaches 3 consecutive successes.
-	fc.mu.Lock()
-	assert.Equal(t, 1, fc.active, "should stay on secondary — flapping primary never reaches threshold")
-	fc.mu.Unlock()
+	assert.Equal(t, 1, fc.registry.Active(), "should stay on secondary — flapping primary never reaches threshold")
 }
 
 func TestRegistry_InformedCascade_SkipsUnhealthy(t *testing.T) {
@@ -989,28 +998,26 @@ func TestRegistry_InformedCascade_SkipsUnhealthy(t *testing.T) {
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour // prevent background probes
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Mark secondary as unhealthy in the registry
-	fc.mu.Lock()
-	fc.health[1] = endpointHealth{healthy: false}
-	fc.mu.Unlock()
+	fc.registry.SetHealth(1, EndpointHealth{Healthy: false})
 
 	// Trigger failover from primary
 	secondaryHitsBefore := secondary.hits.Load()
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 
 	// Secondary should not have been tried for the GetSpan call since it's unhealthy,
 	// but it may be tried in the last-resort pass. The key thing is that tertiary succeeds.
-	fc.mu.Lock()
-	assert.Equal(t, 2, fc.active, "should end up on tertiary")
-	fc.mu.Unlock()
+	assert.Equal(t, 2, fc.registry.Active(), "should end up on tertiary")
 
 	_ = secondaryHitsBefore
 }
@@ -1047,29 +1054,27 @@ func TestRegistry_InformedCascade_TriesByPriority(t *testing.T) {
 		},
 	}
 
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Force active to index 1 (secondary); primary (index 0) is healthy
-	fc.mu.Lock()
-	fc.active = 1
-	fc.health[0] = endpointHealth{healthy: true, healthySince: time.Now().Add(-1 * time.Hour)}
-	fc.health[1] = endpointHealth{healthy: true}
-	fc.health[2] = endpointHealth{healthy: true}
-	fc.mu.Unlock()
+	fc.registry.SetActive(1)
+	fc.registry.SetHealth(0, EndpointHealth{Healthy: true, HealthySince: time.Now().Add(-1 * time.Hour)})
+	fc.registry.SetHealth(1, EndpointHealth{Healthy: true})
+	fc.registry.SetHealth(2, EndpointHealth{Healthy: true})
 
 	span, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 	require.NotNil(t, span)
 
 	// Cascade should try primary (index 0) before tertiary (index 2)
-	fc.mu.Lock()
-	assert.Equal(t, 0, fc.active, "should cascade to primary (highest priority)")
-	fc.mu.Unlock()
+	assert.Equal(t, 0, fc.registry.Active(), "should cascade to primary (highest priority)")
 }
 
 func TestRegistry_ProactiveSwitchOnActiveUnhealthy(t *testing.T) {
@@ -1093,17 +1098,13 @@ func TestRegistry_ProactiveSwitchOnActiveUnhealthy(t *testing.T) {
 	fc.ensureHealthRegistry()
 
 	// Verify we start on primary
-	fc.mu.Lock()
-	assert.Equal(t, 0, fc.active, "should start on primary")
-	fc.mu.Unlock()
+	assert.Equal(t, 0, fc.registry.Active(), "should start on primary")
 
 	// Now make primary go down — the health registry should detect and switch
 	primaryDown.Store(true)
 
 	require.Eventually(t, func() bool {
-		fc.mu.Lock()
-		defer fc.mu.Unlock()
-		return fc.active == 1
+		return fc.registry.Active() == 1
 	}, 2*time.Second, 20*time.Millisecond, "health registry should proactively switch to secondary")
 }
 
@@ -1116,26 +1117,24 @@ func TestRegistry_CascadeFallsBackToUnhealthy(t *testing.T) {
 	// Secondary is marked unhealthy but actually works
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Mark secondary as unhealthy
-	fc.mu.Lock()
-	fc.health[1] = endpointHealth{healthy: false}
-	fc.mu.Unlock()
+	fc.registry.SetHealth(1, EndpointHealth{Healthy: false})
 
 	// Primary fails, cascade should fall back to unhealthy secondary as last resort
 	span, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 	require.NotNil(t, span)
 
-	fc.mu.Lock()
-	assert.Equal(t, 1, fc.active, "should fall back to unhealthy secondary as last resort")
-	fc.mu.Unlock()
+	assert.Equal(t, 1, fc.registry.Active(), "should fall back to unhealthy secondary as last resort")
 }
 
 func TestRegistry_MarkUnhealthyOnRealFailure(t *testing.T) {
@@ -1146,27 +1145,27 @@ func TestRegistry_MarkUnhealthyOnRealFailure(t *testing.T) {
 	}
 	secondary := &mockHeimdallClient{}
 
-	fc := NewMultiHeimdallClient(primary, secondary)
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 0
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Primary starts as healthy
-	fc.mu.Lock()
-	assert.True(t, fc.health[0].healthy, "primary should start healthy")
-	fc.mu.Unlock()
+	snap := fc.registry.HealthSnapshot()
+	assert.True(t, snap[0].Healthy, "primary should start healthy")
 
 	// Trigger a real request that fails on primary
-	_, err := fc.GetSpan(context.Background(), 1)
+	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err) // succeeds via secondary
 
 	// Primary should now be marked unhealthy
-	fc.mu.Lock()
-	assert.False(t, fc.health[0].healthy, "primary should be marked unhealthy after real failure")
-	assert.Equal(t, 0, fc.health[0].consecutiveSuccess, "consecutive success should be reset")
-	fc.mu.Unlock()
+	snap = fc.registry.HealthSnapshot()
+	assert.False(t, snap[0].Healthy, "primary should be marked unhealthy after real failure")
+	assert.Equal(t, 0, snap[0].ConsecutiveSuccess, "consecutive success should be reset")
 }
 
 func TestRegistry_InformedCascade_RespectsCooldown(t *testing.T) {
@@ -1190,27 +1189,25 @@ func TestRegistry_InformedCascade_RespectsCooldown(t *testing.T) {
 		},
 	}
 
-	fc := NewMultiHeimdallClient(primary, secondary, tertiary)
+	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
+	require.NoError(t, err)
+
 	fc.attemptTimeout = 100 * time.Millisecond
-	fc.healthCheckInterval = 1 * time.Hour
-	fc.consecutiveThreshold = 1
-	fc.promotionCooldown = 1 * time.Hour // long cooldown
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 1 * time.Hour // long cooldown
 	defer fc.Close()
 
 	// Set up health states
-	fc.mu.Lock()
-	fc.active = 1
-	fc.health[0] = endpointHealth{healthy: true, healthySince: time.Now()} // NOT cooled
-	fc.health[1] = endpointHealth{healthy: true}
-	fc.health[2] = endpointHealth{healthy: true, healthySince: time.Now().Add(-2 * time.Hour)} // cooled
-	fc.mu.Unlock()
+	fc.registry.SetActive(1)
+	fc.registry.SetHealth(0, EndpointHealth{Healthy: true, HealthySince: time.Now()})                     // NOT cooled
+	fc.registry.SetHealth(1, EndpointHealth{Healthy: true})                                               // active, will fail
+	fc.registry.SetHealth(2, EndpointHealth{Healthy: true, HealthySince: time.Now().Add(-2 * time.Hour)}) // cooled
 
 	span, err := fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
 	require.NotNil(t, span)
 
 	// Should prefer tertiary (cooled) over primary (uncooled)
-	fc.mu.Lock()
-	assert.Equal(t, 2, fc.active, "should prefer cooled tertiary over uncooled primary")
-	fc.mu.Unlock()
+	assert.Equal(t, 2, fc.registry.Active(), "should prefer cooled tertiary over uncooled primary")
 }

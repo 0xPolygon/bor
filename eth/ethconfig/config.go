@@ -18,6 +18,7 @@
 package ethconfig
 
 import (
+	"fmt"
 	"math/big"
 	"strings"
 	"time"
@@ -393,7 +394,12 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				} else if len(heimdallClients) == 1 {
 					heimdallClient = heimdallClients[0]
 				} else {
-					heimdallClient = heimdall.NewMultiHeimdallClient(heimdallClients...)
+					multiClient, err := heimdall.NewMultiHeimdallClient(heimdallClients...)
+					if err != nil {
+						return nil, fmt.Errorf("failed to create heimdall failover client: %w", err)
+					}
+
+					heimdallClient = multiClient
 					log.Info("Heimdall failover enabled with multiple endpoints", "endpoints", len(heimdallClients))
 				}
 			}

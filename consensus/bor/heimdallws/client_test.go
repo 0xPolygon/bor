@@ -134,9 +134,10 @@ func TestWSClient_ConstructorSingleURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, client.urls, 1)
 	assert.Equal(t, "ws://localhost:1234", client.urls[0])
-	assert.Equal(t, 0, client.activeURL)
-	assert.Len(t, client.health, 1)
-	assert.True(t, client.health[0].healthy, "primary should start healthy")
+	assert.Equal(t, 0, client.registry.Active())
+	snap := client.registry.HealthSnapshot()
+	assert.Len(t, snap, 1)
+	assert.True(t, snap[0].Healthy, "primary should start healthy")
 }
 
 func TestWSClient_ConstructorMultipleURLs(t *testing.T) {
@@ -146,11 +147,12 @@ func TestWSClient_ConstructorMultipleURLs(t *testing.T) {
 	assert.Equal(t, "ws://primary:1234", client.urls[0])
 	assert.Equal(t, "ws://secondary:5678", client.urls[1])
 	assert.Equal(t, "ws://tertiary:9999", client.urls[2])
-	assert.Equal(t, 0, client.activeURL)
-	assert.Len(t, client.health, 3)
-	assert.True(t, client.health[0].healthy, "primary should start healthy")
-	assert.False(t, client.health[1].healthy, "secondary should start unhealthy")
-	assert.False(t, client.health[2].healthy, "tertiary should start unhealthy")
+	assert.Equal(t, 0, client.registry.Active())
+	snap := client.registry.HealthSnapshot()
+	assert.Len(t, snap, 3)
+	assert.True(t, snap[0].Healthy, "primary should start healthy")
+	assert.False(t, snap[1].Healthy, "secondary should start unhealthy")
+	assert.False(t, snap[2].Healthy, "tertiary should start unhealthy")
 }
 
 func TestWSClient_ConstructorFiltersEmpty(t *testing.T) {
@@ -211,8 +213,8 @@ func TestWSClient_DualURL_FailoverToSecondary(t *testing.T) {
 
 	// Speed up test.
 	client.reconnectDelay = 100 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -225,9 +227,7 @@ func TestWSClient_DualURL_FailoverToSecondary(t *testing.T) {
 		assert.Equal(t, uint64(100), m.StartBlock)
 		assert.Equal(t, uint64(200), m.EndBlock)
 		// Verify we switched to secondary.
-		client.mu.Lock()
-		assert.Equal(t, 1, client.activeURL)
-		client.mu.Unlock()
+		assert.Equal(t, 1, client.registry.Active())
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for milestone event via failover")
 	}
@@ -251,8 +251,8 @@ func TestWSClient_ThreeURL_CascadeToTertiary(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -264,9 +264,7 @@ func TestWSClient_ThreeURL_CascadeToTertiary(t *testing.T) {
 		require.NotNil(t, m)
 		assert.Equal(t, uint64(100), m.StartBlock)
 		// Verify we ended up on tertiary.
-		client.mu.Lock()
-		assert.Equal(t, 2, client.activeURL)
-		client.mu.Unlock()
+		assert.Equal(t, 2, client.registry.Active())
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for milestone event via cascade")
 	}
@@ -286,8 +284,8 @@ func TestWSClient_ContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -317,9 +315,9 @@ func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.healthCheckInterval = 100 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.HealthCheckInterval = 100 * time.Millisecond
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -330,9 +328,7 @@ func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
 	select {
 	case m := <-events:
 		require.NotNil(t, m)
-		client.mu.Lock()
-		assert.Equal(t, 1, client.activeURL)
-		client.mu.Unlock()
+		assert.Equal(t, 1, client.registry.Active())
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for failover")
 	}
@@ -350,9 +346,7 @@ func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
 
 	// Wait for background health registry to promote back to primary.
 	require.Eventually(t, func() bool {
-		client.mu.Lock()
-		defer client.mu.Unlock()
-		return client.activeURL == 0
+		return client.registry.Active() == 0
 	}, 5*time.Second, 50*time.Millisecond, "health registry should promote back to primary")
 
 	require.NoError(t, client.Unsubscribe(ctx))
@@ -370,14 +364,12 @@ func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 10 * time.Millisecond
-	client.healthCheckInterval = 1 * time.Hour // prevent health-check from interfering
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.HealthCheckInterval = 1 * time.Hour // prevent health-check from interfering
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	// Pre-set to secondary as if a prior failover already happened.
-	client.mu.Lock()
-	client.activeURL = 1
-	client.mu.Unlock()
+	client.registry.SetActive(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -385,9 +377,7 @@ func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
 	client.tryUntilSubscribeMilestoneEvents(ctx)
 
 	// Should have moved off secondary since it fails.
-	client.mu.Lock()
-	active := client.activeURL
-	client.mu.Unlock()
+	active := client.registry.Active()
 
 	// May have wrapped to primary (index 0) since secondary fails.
 	_ = active // either index is acceptable; the important thing is it didn't hang.
@@ -407,8 +397,8 @@ func TestWSClient_DualURL_PrimaryRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -419,9 +409,7 @@ func TestWSClient_DualURL_PrimaryRecovery(t *testing.T) {
 	select {
 	case m := <-events:
 		require.NotNil(t, m)
-		client.mu.Lock()
-		assert.Equal(t, 1, client.activeURL)
-		client.mu.Unlock()
+		assert.Equal(t, 1, client.registry.Active())
 		assert.Equal(t, uint64(100), m.StartBlock)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for failover")
@@ -445,9 +433,9 @@ func TestWSClient_HealthRegistryRespectsUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.healthCheckInterval = 50 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 0
+	client.registry.HealthCheckInterval = 50 * time.Millisecond
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -483,9 +471,9 @@ func TestWSClient_Registry_ConsecutiveThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.healthCheckInterval = 50 * time.Millisecond
-	client.consecutiveThreshold = 3 // need 3 consecutive successes
-	client.promotionCooldown = 0
+	client.registry.HealthCheckInterval = 50 * time.Millisecond
+	client.registry.ConsecutiveThreshold = 3 // need 3 consecutive successes
+	client.registry.PromotionCooldown = 0
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -511,9 +499,7 @@ func TestWSClient_Registry_ConsecutiveThreshold(t *testing.T) {
 
 	// Should eventually promote after 3 consecutive successes.
 	require.Eventually(t, func() bool {
-		client.mu.Lock()
-		defer client.mu.Unlock()
-		return client.activeURL == 0
+		return client.registry.Active() == 0
 	}, 5*time.Second, 50*time.Millisecond, "should promote after consecutive threshold met")
 
 	require.NoError(t, client.Unsubscribe(ctx))
@@ -530,9 +516,9 @@ func TestWSClient_Registry_PromotionCooldown(t *testing.T) {
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.healthCheckInterval = 50 * time.Millisecond
-	client.consecutiveThreshold = 1
-	client.promotionCooldown = 500 * time.Millisecond
+	client.registry.HealthCheckInterval = 50 * time.Millisecond
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 500 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -558,15 +544,11 @@ func TestWSClient_Registry_PromotionCooldown(t *testing.T) {
 
 	// Should not promote immediately (cooldown not met).
 	time.Sleep(150 * time.Millisecond)
-	client.mu.Lock()
-	assert.Equal(t, 1, client.activeURL, "should not promote before cooldown")
-	client.mu.Unlock()
+	assert.Equal(t, 1, client.registry.Active(), "should not promote before cooldown")
 
 	// Wait for cooldown to pass.
 	require.Eventually(t, func() bool {
-		client.mu.Lock()
-		defer client.mu.Unlock()
-		return client.activeURL == 0
+		return client.registry.Active() == 0
 	}, 3*time.Second, 50*time.Millisecond, "should promote after cooldown passes")
 
 	require.NoError(t, client.Unsubscribe(ctx))

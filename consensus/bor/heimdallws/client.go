@@ -16,57 +16,39 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+var (
+	ErrNoURLs         = errors.New("at least one WS URL required")
+	ErrNoNonEmptyURLs = errors.New("at least one non-empty WS URL required")
+)
+
 const (
 	// defaultReconnectDelay is the backoff between reconnection attempts.
 	defaultReconnectDelay = 10 * time.Second
-
-	// defaultWSHealthCheckInterval is how often the health registry probes all endpoints.
-	defaultWSHealthCheckInterval = 10 * time.Second
-
-	// defaultWSConsecutiveThreshold is the number of consecutive successful probes
-	// needed before an endpoint is considered healthy.
-	defaultWSConsecutiveThreshold = 3
-
-	// defaultWSPromotionCooldown is how long after becoming healthy before an
-	// endpoint is eligible for promotion.
-	defaultWSPromotionCooldown = 60 * time.Second
 
 	// defaultWSProbeTimeout bounds each individual WS probe dial so a
 	// firewalled host can't block the health-check goroutine forever.
 	defaultWSProbeTimeout = 10 * time.Second
 )
 
-// wsEndpointHealth tracks the health state of a single WS endpoint.
-type wsEndpointHealth struct {
-	healthy            bool
-	consecutiveSuccess int
-	healthySince       time.Time
-	lastErr            error
-}
-
 // HeimdallWSClient represents a websocket client with auto-reconnection and failover support.
 type HeimdallWSClient struct {
-	conn      *websocket.Conn
-	urls      []string // primary at [0], secondary at [1] (if configured)
-	activeURL int      // index into urls; protected by mu
-	health    []wsEndpointHealth
-	events    chan *milestone.Milestone
-	done      chan struct{}
-	mu        sync.Mutex
+	conn     *websocket.Conn
+	urls     []string // primary at [0], secondary at [1] (if configured)
+	registry *heimdall.HealthRegistry
+	events   chan *milestone.Milestone
+	done     chan struct{}
+	mu       sync.Mutex
 
 	// Configurable parameters (defaults set in constructor, overridable for testing)
-	reconnectDelay       time.Duration
-	healthCheckInterval  time.Duration
-	consecutiveThreshold int
-	promotionCooldown    time.Duration
-	probeTimeout         time.Duration
+	reconnectDelay time.Duration
+	probeTimeout   time.Duration
 }
 
 // NewHeimdallWSClient creates a new WS client for Heimdall with optional failover.
 // The first URL is primary; additional URLs are failover candidates in priority order.
 func NewHeimdallWSClient(urls ...string) (*HeimdallWSClient, error) {
 	if len(urls) == 0 {
-		return nil, errors.New("at least one WS URL required")
+		return nil, ErrNoURLs
 	}
 
 	var filtered []string
@@ -77,25 +59,66 @@ func NewHeimdallWSClient(urls ...string) (*HeimdallWSClient, error) {
 	}
 
 	if len(filtered) == 0 {
-		return nil, errors.New("at least one non-empty WS URL required")
+		return nil, ErrNoNonEmptyURLs
 	}
 
-	health := make([]wsEndpointHealth, len(filtered))
-	// Primary starts as healthy; others start unhealthy.
-	health[0] = wsEndpointHealth{healthy: true}
+	c := &HeimdallWSClient{
+		conn:           nil,
+		urls:           filtered,
+		events:         make(chan *milestone.Milestone),
+		done:           make(chan struct{}),
+		reconnectDelay: defaultReconnectDelay,
+		probeTimeout:   defaultWSProbeTimeout,
+	}
 
-	return &HeimdallWSClient{
-		conn:                 nil,
-		urls:                 filtered,
-		health:               health,
-		events:               make(chan *milestone.Milestone),
-		done:                 make(chan struct{}),
-		reconnectDelay:       defaultReconnectDelay,
-		healthCheckInterval:  defaultWSHealthCheckInterval,
-		consecutiveThreshold: defaultWSConsecutiveThreshold,
-		promotionCooldown:    defaultWSPromotionCooldown,
-		probeTimeout:         defaultWSProbeTimeout,
-	}, nil
+	c.registry = heimdall.NewHealthRegistry(
+		len(filtered),
+		c.probeWSEndpoint,
+		c.onWSSwitch,
+		heimdall.RegistryMetrics{
+			ProbeAttempts:     heimdall.FailoverWSProbeAttempts,
+			ProbeSuccesses:    heimdall.FailoverWSProbeSuccesses,
+			ProactiveSwitches: heimdall.FailoverWSProactiveSwitches,
+			ActiveGauge:       heimdall.FailoverWSActiveGauge,
+			HealthyEndpoints:  heimdall.FailoverWSHealthyEndpoints,
+		},
+	)
+
+	return c, nil
+}
+
+// probeWSEndpoint dials a WS endpoint and immediately closes the connection.
+func (c *HeimdallWSClient) probeWSEndpoint(i int) error {
+	c.mu.Lock()
+	url := c.urls[i]
+	c.mu.Unlock()
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: c.probeTimeout,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.probeTimeout)
+	defer cancel()
+
+	testConn, _, err := dialer.DialContext(ctx, url, nil)
+	if err != nil {
+		return err
+	}
+
+	testConn.Close()
+
+	return nil
+}
+
+// onWSSwitch is called by the registry (under registry lock) when the active
+// endpoint changes. It closes the current connection to trigger reconnection.
+func (c *HeimdallWSClient) onWSSwitch(from, to int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn != nil {
+		c.conn.Close()
+	}
 }
 
 // SubscribeMilestoneEvents sends the subscription request and starts processing incoming messages.
@@ -107,181 +130,10 @@ func (c *HeimdallWSClient) SubscribeMilestoneEvents(ctx context.Context) <-chan 
 
 	// Start the health registry if there are multiple URLs.
 	if len(c.urls) > 1 {
-		go c.runWSHealthRegistry()
+		c.registry.Start()
 	}
 
 	return c.events
-}
-
-// runWSHealthRegistry is an always-on goroutine that continuously probes ALL WS
-// endpoints, requires consecutive successes before marking healthy, and enforces
-// cooldown before promotion. Stopped when done channel is closed (Unsubscribe).
-func (c *HeimdallWSClient) runWSHealthRegistry() {
-	ticker := time.NewTicker(c.healthCheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-ticker.C:
-		}
-
-		c.probeAllWSEndpoints()
-		c.maybeWSPromote()
-		c.maybeWSProactiveSwitch()
-	}
-}
-
-// probeAllWSEndpoints probes every WS endpoint via dial (connect + immediately close).
-func (c *HeimdallWSClient) probeAllWSEndpoints() {
-	dialer := websocket.Dialer{
-		HandshakeTimeout: c.probeTimeout,
-	}
-
-	for i := 0; i < len(c.urls); i++ {
-		// Check for shutdown between individual probes.
-		select {
-		case <-c.done:
-			return
-		default:
-		}
-
-		heimdall.FailoverWSProbeAttempts.Inc(1)
-
-		c.mu.Lock()
-		url := c.urls[i]
-		c.mu.Unlock()
-
-		ctx, cancel := context.WithTimeout(context.Background(), c.probeTimeout)
-		testConn, _, err := dialer.DialContext(ctx, url, nil)
-		cancel()
-
-		c.mu.Lock()
-
-		if err == nil {
-			testConn.Close()
-
-			c.health[i].consecutiveSuccess++
-			c.health[i].lastErr = nil
-
-			if c.health[i].consecutiveSuccess >= c.consecutiveThreshold && !c.health[i].healthy {
-				c.health[i].healthy = true
-				c.health[i].healthySince = time.Now()
-			}
-
-			heimdall.FailoverWSProbeSuccesses.Inc(1)
-		} else {
-			c.health[i].consecutiveSuccess = 0
-			c.health[i].healthy = false
-			c.health[i].lastErr = err
-		}
-
-		c.mu.Unlock()
-	}
-
-	// Update healthy endpoints gauge.
-	c.mu.Lock()
-	count := int64(0)
-	for i := range c.health {
-		if c.health[i].healthy {
-			count++
-		}
-	}
-	c.mu.Unlock()
-
-	heimdall.FailoverWSHealthyEndpoints.Update(count)
-}
-
-// maybeWSPromote checks if a higher-priority URL (index < activeURL) is healthy
-// and has passed cooldown. If yes, promotes to the highest-priority qualified URL.
-func (c *HeimdallWSClient) maybeWSPromote() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.activeURL == 0 {
-		return
-	}
-
-	for i := 0; i < c.activeURL; i++ {
-		if c.health[i].healthy && time.Since(c.health[i].healthySince) >= c.promotionCooldown {
-			prev := c.activeURL
-			c.activeURL = i
-
-			heimdall.FailoverWSActiveGauge.Update(int64(i))
-			heimdall.FailoverWSProactiveSwitches.Inc(1)
-
-			log.Info("WS health registry: promoted to higher-priority URL",
-				"index", i, "previous", prev, "url", c.urls[i])
-
-			// Close current connection to trigger reconnection in readMessages.
-			if c.conn != nil {
-				c.conn.Close()
-			}
-
-			return
-		}
-	}
-}
-
-// maybeWSProactiveSwitch detects if the active URL is unhealthy and switches
-// to the highest-priority healthy URL.
-func (c *HeimdallWSClient) maybeWSProactiveSwitch() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.health[c.activeURL].healthy {
-		return
-	}
-
-	// Active is unhealthy. Find the best alternative.
-	// Pass 1: healthy + cooled.
-	for i := 0; i < len(c.urls); i++ {
-		if i == c.activeURL {
-			continue
-		}
-
-		if c.health[i].healthy && time.Since(c.health[i].healthySince) >= c.promotionCooldown {
-			prev := c.activeURL
-			c.activeURL = i
-
-			heimdall.FailoverWSActiveGauge.Update(int64(i))
-			heimdall.FailoverWSProactiveSwitches.Inc(1)
-
-			log.Warn("WS health registry: proactive switch (active unhealthy, cooled target)",
-				"from", prev, "to", i, "url", c.urls[i])
-
-			if c.conn != nil {
-				c.conn.Close()
-			}
-
-			return
-		}
-	}
-
-	// Pass 2: healthy but NOT cooled (emergency).
-	for i := 0; i < len(c.urls); i++ {
-		if i == c.activeURL {
-			continue
-		}
-
-		if c.health[i].healthy {
-			prev := c.activeURL
-			c.activeURL = i
-
-			heimdall.FailoverWSActiveGauge.Update(int64(i))
-			heimdall.FailoverWSProactiveSwitches.Inc(1)
-
-			log.Warn("WS health registry: proactive switch (active unhealthy, uncooled target)",
-				"from", prev, "to", i, "url", c.urls[i])
-
-			if c.conn != nil {
-				c.conn.Close()
-			}
-
-			return
-		}
-	}
 }
 
 // tryUntilSubscribeMilestoneEvents retries connecting and subscribing until success,
@@ -315,10 +167,7 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		default:
 		}
 
-		c.mu.Lock()
-		active := c.activeURL
-		c.mu.Unlock()
-
+		active := c.registry.Active()
 		url := c.urls[active]
 
 		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -326,24 +175,22 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			log.Error("failed to dial websocket on heimdall ws subscription", "url", url, "err", err)
 
 			// Mark endpoint unhealthy in the registry.
-			c.mu.Lock()
-			c.health[active].consecutiveSuccess = 0
-			c.health[active].healthy = false
-			c.health[active].lastErr = err
+			c.registry.MarkUnhealthy(active, err)
 
 			// Find the best healthy alternative.
+			snap := c.registry.HealthSnapshot()
 			switched := false
+
 			for i := 0; i < len(c.urls); i++ {
 				if i == active {
 					continue
 				}
 
-				if c.health[i].healthy {
-					c.activeURL = i
+				if snap[i].Healthy {
+					c.registry.SetActive(i)
 					switched = true
 
 					heimdall.FailoverWSSwitchCounter.Inc(1)
-					heimdall.FailoverWSActiveGauge.Update(int64(i))
 
 					log.Warn("WS URL failed, switching to healthy endpoint",
 						"from", c.urls[active], "to", c.urls[i])
@@ -356,32 +203,30 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			if !switched && len(c.urls) > 1 {
 				next := (active + 1) % len(c.urls)
 				if next != active {
-					c.activeURL = next
+					c.registry.SetActive(next)
 
 					heimdall.FailoverWSSwitchCounter.Inc(1)
-					heimdall.FailoverWSActiveGauge.Update(int64(next))
 
 					log.Warn("WS URL failed, switching to next endpoint",
 						"from", c.urls[active], "to", c.urls[next])
 				}
 			}
 
-			c.mu.Unlock()
-
 			continue
 		}
 
+		// Close previous connection if any, then set the new one.
 		c.mu.Lock()
-		c.conn = conn
-		// Mark this endpoint as successful.
-		c.health[active].consecutiveSuccess++
-		if c.health[active].consecutiveSuccess >= c.consecutiveThreshold && !c.health[active].healthy {
-			c.health[active].healthy = true
-			c.health[active].healthySince = time.Now()
+		if c.conn != nil {
+			c.conn.Close()
 		}
-		c.mu.Unlock()
+		c.conn = conn
 
-		// Build the subscription request.
+		// Mark this endpoint as successful.
+		c.registry.MarkSuccess(active)
+
+		// Build the subscription request and send it under lock to avoid
+		// racing with readMessages on c.conn.
 		req := subscriptionRequest{
 			JSONRPC: "2.0",
 			Method:  "subscribe",
@@ -389,7 +234,10 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		}
 		req.Params.Query = "tm.event='NewBlock' AND milestone.number>0"
 
-		if err := c.conn.WriteJSON(req); err != nil {
+		err = c.conn.WriteJSON(req)
+		c.mu.Unlock()
+
+		if err != nil {
 			log.Error("failed to send subscription request on heimdall ws subscription", "url", url, "err", err)
 			continue
 		}
@@ -403,6 +251,7 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 // readMessages continuously reads messages from the websocket, handling reconnections if necessary.
 func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 	defer close(c.events)
+
 	for {
 		// Check if the context or unsubscribe signal is set.
 		select {
@@ -414,14 +263,24 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			// continue to process messages
 		}
 
-		if err := c.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		// Grab local ref under lock to avoid racing with reconnection.
+		c.mu.Lock()
+		conn := c.conn
+		c.mu.Unlock()
+
+		if conn == nil {
+			c.tryUntilSubscribeMilestoneEvents(ctx)
+			continue
+		}
+
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			log.Error("failed to set read deadline on heimdall ws subscription", "err", err)
 
 			c.tryUntilSubscribeMilestoneEvents(ctx)
 			continue
 		}
 
-		_, message, err := c.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
 
@@ -495,6 +354,9 @@ func (c *HeimdallWSClient) Unsubscribe(ctx context.Context) error {
 	default:
 		close(c.done)
 	}
+
+	c.registry.Stop()
+
 	return nil
 }
 
