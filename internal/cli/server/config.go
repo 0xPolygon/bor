@@ -882,9 +882,9 @@ func DefaultConfig() *Config {
 			GasLimitMax:              miner.DefaultConfig.GasLimitMax,
 			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
 			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
-			EnableDynamicTargetGas:   false,
-			TargetGasMin:             50, // 50% floor
-			TargetGasMax:             80, // 80% ceiling
+			EnableDynamicTargetGas:   miner.DefaultConfig.EnableDynamicTargetGas,
+			TargetGasMin:             miner.DefaultConfig.TargetGasMin,
+			TargetGasMax:             miner.DefaultConfig.TargetGasMax,
 			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:                "",
 			Recommit:                 125 * time.Second,
