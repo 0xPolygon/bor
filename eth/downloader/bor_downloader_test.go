@@ -493,7 +493,7 @@ func assertOwnChain(t *testing.T, tester *downloadTester, length int) {
 func TestCanonicalSynchronisation68Full(t *testing.T) { testCanonSync(t, eth.ETH68, FullSync) }
 
 func TestCanonicalSynchronisation68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testCanonSync(t, eth.ETH68, SnapSync)
 }
 
@@ -542,7 +542,7 @@ func TestSnapSyncFailsOverEth68(t *testing.T) {
 func TestThrottling68Full(t *testing.T) { testThrottling(t, eth.ETH68, FullSync) }
 
 func TestThrottling68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testThrottling(t, eth.ETH68, SnapSync)
 }
 func TestThrottling69Full(t *testing.T) { testThrottling(t, eth.ETH69, FullSync) }
@@ -634,7 +634,7 @@ func testThrottling(t *testing.T, protocol uint, mode SyncMode) {
 func TestForkedSync68Full(t *testing.T) { testForkedSync(t, eth.ETH68, FullSync) }
 
 func TestForkedSync68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testForkedSync(t, eth.ETH68, SnapSync)
 }
 func TestForkedSync69Full(t *testing.T) { testForkedSync(t, eth.ETH69, FullSync) }
@@ -669,7 +669,7 @@ func testForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 func TestHeavyForkedSync68Full(t *testing.T) { testHeavyForkedSync(t, eth.ETH68, FullSync) }
 
 func TestHeavyForkedSync68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testHeavyForkedSync(t, eth.ETH68, SnapSync)
 }
 func TestHeavyForkedSync69Full(t *testing.T) { testHeavyForkedSync(t, eth.ETH69, FullSync) }
@@ -706,7 +706,7 @@ func testHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 func TestBoundedForkedSync68Full(t *testing.T) { testBoundedForkedSync(t, eth.ETH68, FullSync) }
 
 func TestBoundedForkedSync68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testBoundedForkedSync(t, eth.ETH68, SnapSync)
 }
 func TestBoundedForkedSync69Full(t *testing.T) { testBoundedForkedSync(t, eth.ETH69, FullSync) }
@@ -744,7 +744,7 @@ func TestBoundedHeavyForkedSync68Full(t *testing.T) {
 }
 
 func TestBoundedHeavyForkedSync68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testBoundedHeavyForkedSync(t, eth.ETH68, SnapSync)
 }
 
@@ -786,7 +786,7 @@ func testBoundedHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 func TestCancel68Full(t *testing.T) { testCancel(t, eth.ETH68, FullSync) }
 
 func TestCancel68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testCancel(t, eth.ETH68, SnapSync)
 }
 func TestCancel69Full(t *testing.T) { testCancel(t, eth.ETH69, FullSync) }
@@ -822,7 +822,7 @@ func testCancel(t *testing.T, protocol uint, mode SyncMode) {
 func TestMultiSynchronisation68Full(t *testing.T) { testMultiSynchronisation(t, eth.ETH68, FullSync) }
 
 func TestMultiSynchronisation68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testMultiSynchronisation(t, eth.ETH68, SnapSync)
 }
 func TestMultiSynchronisation69Full(t *testing.T) { testMultiSynchronisation(t, eth.ETH69, FullSync) }
@@ -854,7 +854,7 @@ func testMultiSynchronisation(t *testing.T, protocol uint, mode SyncMode) {
 func TestMultiProtoSynchronisation68Full(t *testing.T) { testMultiProtoSync(t, eth.ETH68, FullSync) }
 
 func TestMultiProtoSynchronisation68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testMultiProtoSync(t, eth.ETH68, SnapSync)
 }
 func TestMultiProtoSynchronisation69Full(t *testing.T) { testMultiProtoSync(t, eth.ETH69, FullSync) }
@@ -893,7 +893,7 @@ func testMultiProtoSync(t *testing.T, protocol uint, mode SyncMode) {
 func TestEmptyShortCircuit68Full(t *testing.T) { testEmptyShortCircuit(t, eth.ETH68, FullSync) }
 
 func TestEmptyShortCircuit68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testEmptyShortCircuit(t, eth.ETH68, SnapSync)
 }
 func TestEmptyShortCircuit69Full(t *testing.T) { testEmptyShortCircuit(t, eth.ETH69, FullSync) }
@@ -956,7 +956,7 @@ func testEmptyShortCircuit(t *testing.T, protocol uint, mode SyncMode) {
 func TestMissingHeaderAttack68Full(t *testing.T) { testMissingHeaderAttack(t, eth.ETH68, FullSync) }
 
 func TestMissingHeaderAttack68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testMissingHeaderAttack(t, eth.ETH68, SnapSync)
 }
 func TestMissingHeaderAttack69Full(t *testing.T) { testMissingHeaderAttack(t, eth.ETH69, FullSync) }
@@ -990,7 +990,7 @@ func testMissingHeaderAttack(t *testing.T, protocol uint, mode SyncMode) {
 func TestShiftedHeaderAttack68Full(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH68, FullSync) }
 
 func TestShiftedHeaderAttack68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testShiftedHeaderAttack(t, eth.ETH68, SnapSync)
 }
 func TestShiftedHeaderAttack69Full(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH69, FullSync) }
@@ -1027,7 +1027,7 @@ func TestHighTDStarvationAttack68Full(t *testing.T) {
 }
 
 func TestHighTDStarvationAttack68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testHighTDStarvationAttack(t, eth.ETH68, SnapSync)
 }
 
@@ -1109,7 +1109,7 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 func TestSyncProgress68Full(t *testing.T) { testSyncProgress(t, eth.ETH68, FullSync) }
 
 func TestSyncProgress68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testSyncProgress(t, eth.ETH68, SnapSync)
 }
 func TestSyncProgress69Full(t *testing.T) { testSyncProgress(t, eth.ETH69, FullSync) }
@@ -1202,7 +1202,7 @@ func checkProgress(t *testing.T, d *Downloader, stage string, want ethereum.Sync
 func TestForkedSyncProgress68Full(t *testing.T) { testForkedSyncProgress(t, eth.ETH68, FullSync) }
 
 func TestForkedSyncProgress68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testForkedSyncProgress(t, eth.ETH68, SnapSync)
 }
 func TestForkedSyncProgress69Full(t *testing.T) { testForkedSyncProgress(t, eth.ETH69, FullSync) }
@@ -1287,7 +1287,7 @@ func testForkedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 func TestFailedSyncProgress68Full(t *testing.T) { testFailedSyncProgress(t, eth.ETH68, FullSync) }
 
 func TestFailedSyncProgress68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testFailedSyncProgress(t, eth.ETH68, SnapSync)
 }
 func TestFailedSyncProgress69Full(t *testing.T) { testFailedSyncProgress(t, eth.ETH69, FullSync) }
@@ -1367,7 +1367,7 @@ func testFailedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 func TestFakedSyncProgress68Full(t *testing.T) { testFakedSyncProgress(t, eth.ETH68, FullSync) }
 
 func TestFakedSyncProgress68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testFakedSyncProgress(t, eth.ETH68, SnapSync)
 }
 func TestFakedSyncProgress69Full(t *testing.T) { testFakedSyncProgress(t, eth.ETH69, FullSync) }
@@ -1535,7 +1535,7 @@ func TestRemoteHeaderRequestSpan(t *testing.T) {
 func TestBeaconSync68Full(t *testing.T) { testBeaconSync(t, eth.ETH68, FullSync) }
 
 func TestBeaconSync68Snap(t *testing.T) {
-	t.Skip("snap sync only supported on eth/69+ peers")
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
 	testBeaconSync(t, eth.ETH68, SnapSync)
 }
 func TestBeaconSync69Full(t *testing.T) { testBeaconSync(t, eth.ETH69, FullSync) }
