@@ -32,12 +32,13 @@ const (
 
 // HeimdallWSClient represents a websocket client with auto-reconnection and failover support.
 type HeimdallWSClient struct {
-	conn     *websocket.Conn
-	urls     []string // primary at [0], secondary at [1] (if configured)
-	registry *heimdall.HealthRegistry
-	events   chan *milestone.Milestone
-	done     chan struct{}
-	mu       sync.Mutex
+	conn      *websocket.Conn
+	connEpoch uint64   // incremented on each connection change; detects proactive switches
+	urls      []string // primary at [0], secondary at [1] (if configured)
+	registry  *heimdall.HealthRegistry
+	events    chan *milestone.Milestone
+	done      chan struct{}
+	mu        sync.Mutex
 
 	// Configurable parameters (defaults set in constructor, overridable for testing)
 	reconnectDelay time.Duration
@@ -111,14 +112,28 @@ func (c *HeimdallWSClient) probeWSEndpoint(i int) error {
 }
 
 // onWSSwitch is called by the registry (under registry lock) when the active
-// endpoint changes. It closes the current connection to trigger reconnection.
+// endpoint changes. It bumps the connection epoch, closes the current connection,
+// and nils it out. The epoch change lets readMessages distinguish a proactive
+// switch from a real network error, avoiding misleading logs and double-closes.
 func (c *HeimdallWSClient) onWSSwitch(from, to int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.connEpoch++
+
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
+}
+
+// connEpochChanged reports whether the connection epoch has advanced past the
+// given snapshot, indicating that a proactive switch (or reconnection) occurred.
+func (c *HeimdallWSClient) connEpochChanged(epoch uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.connEpoch != epoch
 }
 
 // SubscribeMilestoneEvents sends the subscription request and starts processing incoming messages.
@@ -221,6 +236,7 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 			c.conn.Close()
 		}
 		c.conn = conn
+		c.connEpoch++
 
 		// Mark this endpoint as successful.
 		c.registry.MarkSuccess(active)
@@ -263,9 +279,10 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 			// continue to process messages
 		}
 
-		// Grab local ref under lock to avoid racing with reconnection.
+		// Grab local ref and epoch under lock to detect proactive switches.
 		c.mu.Lock()
 		conn := c.conn
+		epoch := c.connEpoch
 		c.mu.Unlock()
 
 		if conn == nil {
@@ -274,6 +291,12 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 		}
 
 		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			if c.connEpochChanged(epoch) {
+				// Proactive switch closed the connection; loop back to pick up the new endpoint.
+				log.Info("reconnecting due to endpoint switch on heimdall ws subscription")
+				continue
+			}
+
 			log.Error("failed to set read deadline on heimdall ws subscription", "err", err)
 
 			c.tryUntilSubscribeMilestoneEvents(ctx)
@@ -282,6 +305,12 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			if c.connEpochChanged(epoch) {
+				// Proactive switch closed the connection; loop back to pick up the new endpoint.
+				log.Info("reconnecting due to endpoint switch on heimdall ws subscription")
+				continue
+			}
+
 			log.Error("connection lost; will attempt to reconnect on heimdall ws subscription", "error", err)
 
 			c.tryUntilSubscribeMilestoneEvents(ctx)

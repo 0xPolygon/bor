@@ -553,3 +553,56 @@ func TestWSClient_Registry_PromotionCooldown(t *testing.T) {
 
 	require.NoError(t, client.Unsubscribe(ctx))
 }
+
+func TestWSClient_ProactiveSwitchSetsConnNil(t *testing.T) {
+	// Verify that onWSSwitch nils out the connection and bumps the epoch,
+	// so readMessages detects the switch via epoch change rather than
+	// seeing a stale non-nil closed conn.
+	primary := newTestWSServerWithMilestone(t)
+	defer primary.Close()
+
+	secondary := newTestWSServerWithMilestone(t)
+	defer secondary.Close()
+
+	client, err := NewHeimdallWSClient(wsURL(primary.URL), wsURL(secondary.URL))
+	require.NoError(t, err)
+
+	client.reconnectDelay = 100 * time.Millisecond
+	client.registry.HealthCheckInterval = 1 * time.Hour // manual control
+	client.registry.ConsecutiveThreshold = 1
+	client.registry.PromotionCooldown = 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	events := client.SubscribeMilestoneEvents(ctx)
+
+	// Receive milestone from primary.
+	select {
+	case m := <-events:
+		require.NotNil(t, m)
+		assert.Equal(t, 0, client.registry.Active())
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for milestone from primary")
+	}
+
+	// Capture epoch before switch.
+	client.mu.Lock()
+	epochBefore := client.connEpoch
+	client.mu.Unlock()
+
+	// Simulate a proactive switch by calling onWSSwitch directly.
+	client.onWSSwitch(0, 1)
+
+	// Verify conn is nil and epoch advanced.
+	client.mu.Lock()
+	assert.Nil(t, client.conn, "onWSSwitch should nil out the connection")
+	assert.Greater(t, client.connEpoch, epochBefore, "onWSSwitch should bump epoch")
+	client.mu.Unlock()
+
+	// readMessages should detect the nil conn and reconnect.
+	// Set active to secondary so reconnection goes there.
+	client.registry.SetActive(1)
+
+	require.NoError(t, client.Unsubscribe(ctx))
+}
