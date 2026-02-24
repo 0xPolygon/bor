@@ -19,6 +19,7 @@ package crypto
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"math/big"
 	"reflect"
 	"testing"
 
@@ -173,4 +174,117 @@ func BenchmarkDecompressPubkey(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// TestNonCanonicalCoordinates verifies that public keys with coordinates >= P
+// are rejected during unmarshalling
+func TestNonCanonicalCoordinates(t *testing.T) {
+	P := S256().Params().P
+
+	// Test case 1: X = P
+	t.Run("X_equals_P", func(t *testing.T) {
+		pubkey := make([]byte, 65)
+		pubkey[0] = 4 // uncompressed
+		P.FillBytes(pubkey[1:33])
+		// Y = 1
+		pubkey[64] = 1
+
+		// Should be rejected by UnmarshalPubkey
+		_, err := UnmarshalPubkey(pubkey)
+		if err == nil {
+			t.Fatal("expected error for X >= P, got nil")
+		}
+	})
+
+	// Test case 2: X = P + 1
+	t.Run("X_greater_than_P", func(t *testing.T) {
+		xPlus1 := new(big.Int).Add(P, big.NewInt(1))
+		pubkey := make([]byte, 65)
+		pubkey[0] = 4
+		xPlus1.FillBytes(pubkey[1:33])
+		pubkey[64] = 1 // Y = 1
+
+		_, err := UnmarshalPubkey(pubkey)
+		if err == nil {
+			t.Fatal("expected error for X > P, got nil")
+		}
+	})
+
+	// Test case 3: Y = P
+	t.Run("Y_equals_P", func(t *testing.T) {
+		pubkey := make([]byte, 65)
+		pubkey[0] = 4
+		pubkey[32] = 1 // X = 1
+		P.FillBytes(pubkey[33:65])
+
+		_, err := UnmarshalPubkey(pubkey)
+		if err == nil {
+			t.Fatal("expected error for Y >= P, got nil")
+		}
+	})
+
+	// Test case 4: Valid coordinates
+	t.Run("valid_coordinates", func(t *testing.T) {
+		params := S256().Params()
+		pubkey := make([]byte, 65)
+		pubkey[0] = 4
+		params.Gx.FillBytes(pubkey[1:33])
+		params.Gy.FillBytes(pubkey[33:65])
+
+		pub, err := UnmarshalPubkey(pubkey)
+		if err != nil {
+			t.Fatalf("valid coordinates rejected: %v", err)
+		}
+		if pub.X.Cmp(params.Gx) != 0 || pub.Y.Cmp(params.Gy) != 0 {
+			t.Fatal("unmarshalled coordinates don't match")
+		}
+	})
+
+	// Test case 5: Verify CompressPubkey doesn't panic on valid keys
+	t.Run("compress_valid_key", func(t *testing.T) {
+		key, err := GenerateKey()
+		if err != nil {
+			t.Fatalf("key generation failed: %v", err)
+		}
+
+		compressed := CompressPubkey(&key.PublicKey)
+		if len(compressed) != 33 {
+			t.Fatalf("wrong compressed length: %d", len(compressed))
+		}
+	})
+}
+
+// TestIsOnCurveNonCanonical verifies that IsOnCurve rejects non-canonical
+// coordinates, preventing misuse by callers who might bypass Unmarshal
+func TestIsOnCurveNonCanonical(t *testing.T) {
+	curve := S256()
+	P := curve.Params().P
+
+	// Test case 1: X = P should be rejected
+	t.Run("X_equals_P", func(t *testing.T) {
+		x := new(big.Int).Set(P)
+		y := big.NewInt(1)
+
+		if curve.IsOnCurve(x, y) {
+			t.Fatal("IsOnCurve accepted X = P (non-canonical)")
+		}
+	})
+
+	// Test case 2: Y = P should be rejected
+	t.Run("Y_equals_P", func(t *testing.T) {
+		x := big.NewInt(1)
+		y := new(big.Int).Set(P)
+
+		if curve.IsOnCurve(x, y) {
+			t.Fatal("IsOnCurve accepted Y = P (non-canonical)")
+		}
+	})
+
+	// Test case 3: Valid generator point should still work
+	t.Run("valid_generator", func(t *testing.T) {
+		params := curve.Params()
+		if !curve.IsOnCurve(params.Gx, params.Gy) {
+			t.Fatal("IsOnCurve rejected valid generator point")
+		}
+	})
 }

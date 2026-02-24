@@ -14,17 +14,21 @@ import (
 	"github.com/0xPolygon/heimdall-v2/x/clerk/types"
 )
 
+const (
+	stateSyncTotalTimeout = 1 * time.Minute
+)
+
 func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	log.Info("Fetching state sync events", "fromID", fromID, "to", to)
 
 	var err error
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, defaultTimeout)
+	globalCtx, cancel := context.WithTimeout(ctx, stateSyncTotalTimeout)
 	defer cancel()
 
 	// Start the timer and set the request type on the context.
 	start := time.Now()
-	ctx = heimdall.WithRequestType(ctxWithTimeout, heimdall.StateSyncRequest)
+	ctx = heimdall.WithRequestType(globalCtx, heimdall.StateSyncRequest)
 
 	// Defer the metrics call.
 	defer func() {
@@ -33,36 +37,47 @@ func (h *HeimdallGRPCClient) StateSyncEvents(ctx context.Context, fromID uint64,
 
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
-	pagination := query.PageRequest{
-		Limit: stateFetchLimit,
-	}
-
-	req := &types.RecordListWithTimeRequest{
-		FromId:     fromID,
-		ToTime:     time.Unix(to, 0),
-		Pagination: pagination,
-	}
-
-	res, err := h.clerkQueryClient.GetRecordListWithTime(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	events := res.GetEventRecords()
-
-	for _, event := range events {
-		eventRecord := &clerk.EventRecordWithTime{
-			EventRecord: clerk.EventRecord{
-				ID:       event.Id,
-				Contract: common.HexToAddress(event.Contract),
-				Data:     event.Data,
-				TxHash:   common.HexToHash(event.TxHash),
-				LogIndex: event.LogIndex,
-				ChainID:  event.BorChainId,
-			},
-			Time: event.RecordTime,
+	for {
+		pagination := query.PageRequest{
+			Limit: stateFetchLimit,
 		}
-		eventRecords = append(eventRecords, eventRecord)
+
+		req := &types.RecordListWithTimeRequest{
+			FromId:     fromID,
+			ToTime:     time.Unix(to, 0),
+			Pagination: pagination,
+		}
+
+		var res *types.RecordListWithTimeResponse
+		pageCtx, pageCancel := context.WithTimeout(ctx, defaultTimeout)
+		res, err = h.clerkQueryClient.GetRecordListWithTime(pageCtx, req)
+		pageCancel()
+		if err != nil {
+			return nil, err
+		}
+
+		events := res.GetEventRecords()
+
+		for _, event := range events {
+			eventRecord := &clerk.EventRecordWithTime{
+				EventRecord: clerk.EventRecord{
+					ID:       event.Id,
+					Contract: common.HexToAddress(event.Contract),
+					Data:     event.Data,
+					TxHash:   common.HexToHash(event.TxHash),
+					LogIndex: event.LogIndex,
+					ChainID:  event.BorChainId,
+				},
+				Time: event.RecordTime,
+			}
+			eventRecords = append(eventRecords, eventRecord)
+		}
+
+		if len(events) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
 	}
 
 	log.Info("Fetched state sync events", "fromID", fromID, "to", to)

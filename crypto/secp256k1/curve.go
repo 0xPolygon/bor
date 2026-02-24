@@ -73,6 +73,11 @@ func (bitCurve *BitCurve) Params() *elliptic.CurveParams {
 
 // IsOnCurve returns true if the given (x,y) lies on the BitCurve.
 func (bitCurve *BitCurve) IsOnCurve(x, y *big.Int) bool {
+	// Reject non-canonical encodings to ensure coordinates are < P
+	if x.Cmp(bitCurve.P) >= 0 || y.Cmp(bitCurve.P) >= 0 {
+		return false
+	}
+
 	// y² = x³ + b
 	y2 := new(big.Int).Mul(y, y) //y²
 	y2.Mod(y2, bitCurve.P)       //y²%P
@@ -266,6 +271,11 @@ func (bitCurve *BitCurve) Unmarshal(data []byte) (x, y *big.Int) {
 
 	x = new(big.Int).SetBytes(data[1 : 1+byteLen])
 	y = new(big.Int).SetBytes(data[1+byteLen:])
+
+	// Reject non-canonical encodings to ensure coordinates are < P
+	if x.Cmp(bitCurve.P) >= 0 || y.Cmp(bitCurve.P) >= 0 {
+		return nil, nil
+	}
 
 	return
 }

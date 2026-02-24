@@ -325,6 +325,17 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	options.Overrides = &overrides
 	options.Checker = checker
 
+	// Wire MilestoneFetcher so verifyPendingHeaders queries Heimdall directly.
+	if borEngine, ok := eth.engine.(*bor.Bor); ok && borEngine.HeimdallClient != nil {
+		options.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			m, err := borEngine.HeimdallClient.FetchMilestone(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return m.EndBlock, nil
+		}
+	}
+
 	// check if Parallel EVM is enabled
 	// if enabled, use parallel state processor
 	if config.ParallelEVM.Enable {
