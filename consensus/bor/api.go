@@ -28,7 +28,7 @@ var (
 // rootHashCacheEntry is an entry in the root hash cache
 type rootHashCacheEntry struct {
 	endHash common.Hash
-	root     string
+	root    string
 }
 
 // API is a user facing RPC API to allow controlling the signer and voting
@@ -403,7 +403,7 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 	// Cache the root bound to the end-block hash we computed against.
 	api.rootHashCache.Add(key, &rootHashCacheEntry{
 		endHash: endHash,
-		root:     root,
+		root:    root,
 	})
 
 	return root, nil
