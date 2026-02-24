@@ -42,7 +42,7 @@ type HealthRegistry struct {
 	PromotionCooldown    time.Duration
 
 	probeFunc func(i int) error
-	onSwitch  func(from, to int) // called under mu; may acquire other locks
+	onSwitch  func(from, to int) // called outside mu to avoid lock-ordering issues
 
 	metrics RegistryMetrics
 
@@ -53,8 +53,8 @@ type HealthRegistry struct {
 
 // NewHealthRegistry creates a registry for n endpoints.
 // probeFunc is called for each endpoint index to test reachability.
-// onSwitch (optional) is called under the registry lock when the active
-// endpoint changes due to promotion or proactive switch.
+// onSwitch (optional) is called outside the registry lock when the active
+// endpoint changes due to promotion, proactive switch, or SetActive.
 func NewHealthRegistry(n int, probeFunc func(int) error, onSwitch func(from, to int), m RegistryMetrics) *HealthRegistry {
 	health := make([]EndpointHealth, n)
 	// Primary starts as healthy; others start unhealthy.
@@ -85,15 +85,18 @@ func (r *HealthRegistry) Active() int {
 // if the active endpoint changed. The caller must NOT hold r.mu.
 func (r *HealthRegistry) SetActive(i int) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	prev := r.active
 	r.active = i
 
 	if r.metrics.ActiveGauge != nil {
 		r.metrics.ActiveGauge.Update(int64(i))
 	}
+	r.mu.Unlock()
 
+	// Call onSwitch outside r.mu to avoid lock-ordering deadlock.
+	// The WS client's onWSSwitch callback acquires c.mu, so calling it
+	// under r.mu would create a registry.mu → c.mu path that conflicts
+	// with the c.mu → registry.mu path in tryUntilSubscribeMilestoneEvents.
 	if prev != i && r.onSwitch != nil {
 		r.onSwitch(prev, i)
 	}
@@ -235,34 +238,40 @@ func (r *HealthRegistry) probeAll() {
 // maybePromote checks if a higher-priority endpoint (index < active) is healthy
 // and has passed cooldown. If yes, promotes to the highest-priority qualified endpoint.
 func (r *HealthRegistry) maybePromote() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	var prev, next int
+	doSwitch := false
 
-	if r.active == 0 {
-		return
+	r.mu.Lock()
+
+	if r.active != 0 {
+		for i := 0; i < r.active; i++ {
+			if r.health[i].Healthy && time.Since(r.health[i].HealthySince) >= r.PromotionCooldown {
+				prev = r.active
+				next = i
+				r.active = i
+				doSwitch = true
+
+				if r.metrics.ActiveGauge != nil {
+					r.metrics.ActiveGauge.Update(int64(i))
+				}
+
+				if r.metrics.ProactiveSwitches != nil {
+					r.metrics.ProactiveSwitches.Inc(1)
+				}
+
+				break
+			}
+		}
 	}
 
-	for i := 0; i < r.active; i++ {
-		if r.health[i].Healthy && time.Since(r.health[i].HealthySince) >= r.PromotionCooldown {
-			prev := r.active
-			r.active = i
+	r.mu.Unlock()
 
-			if r.metrics.ActiveGauge != nil {
-				r.metrics.ActiveGauge.Update(int64(i))
-			}
+	if doSwitch {
+		log.Info("Health registry: promoted to higher-priority endpoint",
+			"index", next, "previous", prev)
 
-			if r.metrics.ProactiveSwitches != nil {
-				r.metrics.ProactiveSwitches.Inc(1)
-			}
-
-			log.Info("Health registry: promoted to higher-priority endpoint",
-				"index", i, "previous", prev)
-
-			if r.onSwitch != nil {
-				r.onSwitch(prev, i)
-			}
-
-			return
+		if r.onSwitch != nil {
+			r.onSwitch(prev, next)
 		}
 	}
 }
@@ -270,10 +279,14 @@ func (r *HealthRegistry) maybePromote() {
 // maybeProactiveSwitch detects if the active endpoint is unhealthy and switches
 // to the highest-priority healthy endpoint.
 func (r *HealthRegistry) maybeProactiveSwitch() {
+	var prev, next int
+	doSwitch := false
+	var logMsg string
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if r.health[r.active].Healthy {
+		r.mu.Unlock()
 		return
 	}
 
@@ -285,8 +298,11 @@ func (r *HealthRegistry) maybeProactiveSwitch() {
 		}
 
 		if r.health[i].Healthy && time.Since(r.health[i].HealthySince) >= r.PromotionCooldown {
-			prev := r.active
+			prev = r.active
+			next = i
 			r.active = i
+			doSwitch = true
+			logMsg = "Health registry: proactive switch (active unhealthy, cooled target)"
 
 			if r.metrics.ActiveGauge != nil {
 				r.metrics.ActiveGauge.Update(int64(i))
@@ -296,43 +312,44 @@ func (r *HealthRegistry) maybeProactiveSwitch() {
 				r.metrics.ProactiveSwitches.Inc(1)
 			}
 
-			log.Warn("Health registry: proactive switch (active unhealthy, cooled target)",
-				"from", prev, "to", i)
-
-			if r.onSwitch != nil {
-				r.onSwitch(prev, i)
-			}
-
-			return
+			break
 		}
 	}
 
 	// Pass 2: healthy but NOT cooled (emergency).
-	for i := 0; i < r.n; i++ {
-		if i == r.active {
-			continue
+	if !doSwitch {
+		for i := 0; i < r.n; i++ {
+			if i == r.active {
+				continue
+			}
+
+			if r.health[i].Healthy {
+				prev = r.active
+				next = i
+				r.active = i
+				doSwitch = true
+				logMsg = "Health registry: proactive switch (active unhealthy, uncooled target)"
+
+				if r.metrics.ActiveGauge != nil {
+					r.metrics.ActiveGauge.Update(int64(i))
+				}
+
+				if r.metrics.ProactiveSwitches != nil {
+					r.metrics.ProactiveSwitches.Inc(1)
+				}
+
+				break
+			}
 		}
+	}
 
-		if r.health[i].Healthy {
-			prev := r.active
-			r.active = i
+	r.mu.Unlock()
 
-			if r.metrics.ActiveGauge != nil {
-				r.metrics.ActiveGauge.Update(int64(i))
-			}
+	if doSwitch {
+		log.Warn(logMsg, "from", prev, "to", next)
 
-			if r.metrics.ProactiveSwitches != nil {
-				r.metrics.ProactiveSwitches.Inc(1)
-			}
-
-			log.Warn("Health registry: proactive switch (active unhealthy, uncooled target)",
-				"from", prev, "to", i)
-
-			if r.onSwitch != nil {
-				r.onSwitch(prev, i)
-			}
-
-			return
+		if r.onSwitch != nil {
+			r.onSwitch(prev, next)
 		}
 	}
 }

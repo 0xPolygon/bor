@@ -238,9 +238,6 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 		c.conn = conn
 		c.connEpoch++
 
-		// Mark this endpoint as successful.
-		c.registry.MarkSuccess(active)
-
 		// Build the subscription request and send it under lock to avoid
 		// racing with readMessages on c.conn.
 		req := subscriptionRequest{
@@ -252,6 +249,10 @@ func (c *HeimdallWSClient) tryUntilSubscribeMilestoneEvents(ctx context.Context)
 
 		err = c.conn.WriteJSON(req)
 		c.mu.Unlock()
+
+		// Mark outside c.mu to prevent lock-ordering deadlock with
+		// registry.mu → c.mu (onWSSwitch called from health-check goroutine).
+		c.registry.MarkSuccess(active)
 
 		if err != nil {
 			log.Error("failed to send subscription request on heimdall ws subscription", "url", url, "err", err)
