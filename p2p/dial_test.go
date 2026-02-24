@@ -737,7 +737,7 @@ func (c *logCollector) Handle(_ context.Context, r slog.Record) error {
 
 func (c *logCollector) Enabled(_ context.Context, _ slog.Level) bool { return true }
 func (c *logCollector) WithAttrs([]slog.Attr) slog.Handler           { return c }
-func (c *logCollector) WithGroup(string) slog.Handler                 { return c }
+func (c *logCollector) WithGroup(string) slog.Handler                { return c }
 
 func (c *logCollector) count(msg string) int {
 	c.mu.Lock()
