@@ -377,14 +377,17 @@ func (c *HeimdallWSClient) readMessages(ctx context.Context) {
 // Unsubscribe signals the reader goroutine to stop.
 func (c *HeimdallWSClient) Unsubscribe(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	select {
 	case <-c.done:
 		// Already unsubscribed.
 	default:
 		close(c.done)
 	}
+	c.mu.Unlock()
 
+	// Stop the registry outside c.mu to avoid deadlock with probeWSEndpoint,
+	// which acquires c.mu to read the URL while running under the registry's
+	// run() goroutine.
 	c.registry.Stop()
 
 	return nil

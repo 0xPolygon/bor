@@ -18,6 +18,7 @@ import (
 
 const (
 	defaultAttemptTimeout       = 30 * time.Second
+	defaultProbeTimeout         = 5 * time.Second
 	defaultHealthCheckInterval  = 10 * time.Second
 	defaultConsecutiveThreshold = 3
 	defaultPromotionCooldown    = 60 * time.Second
@@ -47,6 +48,7 @@ type MultiHeimdallClient struct {
 	clients        []Endpoint
 	registry       *HealthRegistry
 	attemptTimeout time.Duration
+	probeTimeout   time.Duration
 	probeCtx       context.Context // cancelled on Close to abort in-flight probes
 	probeCancel    context.CancelFunc
 }
@@ -61,6 +63,7 @@ func NewMultiHeimdallClient(clients ...Endpoint) (*MultiHeimdallClient, error) {
 	f := &MultiHeimdallClient{
 		clients:        clients,
 		attemptTimeout: defaultAttemptTimeout,
+		probeTimeout:   defaultProbeTimeout,
 		probeCtx:       probeCtx,
 		probeCancel:    probeCancel,
 	}
@@ -83,7 +86,7 @@ func NewMultiHeimdallClient(clients ...Endpoint) (*MultiHeimdallClient, error) {
 
 // probeEndpoint probes a single endpoint via FetchStatus.
 func (f *MultiHeimdallClient) probeEndpoint(i int) error {
-	ctx, cancel := context.WithTimeout(f.probeCtx, f.attemptTimeout)
+	ctx, cancel := context.WithTimeout(f.probeCtx, f.probeTimeout)
 	defer cancel()
 
 	_, err := f.clients[i].FetchStatus(ctx)

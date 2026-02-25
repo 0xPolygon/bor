@@ -131,6 +131,7 @@ func newInstantMulti(clients ...Endpoint) *MultiHeimdallClient {
 	}
 
 	fc.attemptTimeout = 100 * time.Millisecond
+	fc.probeTimeout = 100 * time.Millisecond
 	fc.registry.ConsecutiveThreshold = 1
 	fc.registry.PromotionCooldown = 0
 	fc.registry.HealthCheckInterval = 50 * time.Millisecond
@@ -182,17 +183,25 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 	require.NoError(t, err)
 
 	fc.attemptTimeout = 5 * time.Second // longer than caller's ctx
+	fc.probeTimeout = 100 * time.Millisecond
 	fc.registry.HealthCheckInterval = 1 * time.Hour
 	fc.registry.ConsecutiveThreshold = 1
 	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
+
+	// Start registry and let the immediate probe cycle complete so its
+	// FetchStatus hits don't race with the assertion below.
+	fc.ensureHealthRegistry()
+	time.Sleep(50 * time.Millisecond)
+
+	secondaryBefore := secondary.hits.Load()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
 	_, err = fc.GetSpan(ctx, 1)
 	require.Error(t, err)
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on caller context cancellation")
+	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "should not failover on caller context cancellation")
 }
 
 func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
@@ -256,6 +265,7 @@ func TestFailover_StickyBehavior(t *testing.T) {
 	require.NoError(t, err)
 
 	fc.attemptTimeout = 100 * time.Millisecond
+	fc.probeTimeout = 100 * time.Millisecond
 	fc.registry.ConsecutiveThreshold = 1
 	fc.registry.PromotionCooldown = 0
 	fc.registry.HealthCheckInterval = 1 * time.Hour // very long — no background promotion
@@ -264,6 +274,10 @@ func TestFailover_StickyBehavior(t *testing.T) {
 	// First call triggers failover
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.NoError(t, err)
+
+	// Wait for the immediate probe cycle (launched by ensureHealthRegistry
+	// inside the first GetSpan call) to complete before snapshotting hits.
+	time.Sleep(50 * time.Millisecond)
 
 	primaryBefore := primary.hits.Load()
 	secondaryBefore := secondary.hits.Load()
@@ -374,18 +388,27 @@ func TestFailover_PassthroughWhenPrimaryHealthy(t *testing.T) {
 	require.NoError(t, err)
 
 	fc.attemptTimeout = 5 * time.Second
+	fc.probeTimeout = 100 * time.Millisecond
 	fc.registry.HealthCheckInterval = 1 * time.Hour
 	fc.registry.ConsecutiveThreshold = 1
 	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
+
+	// Start registry and let the immediate probe cycle complete so its
+	// FetchStatus hits don't interfere with assertions below.
+	fc.ensureHealthRegistry()
+	time.Sleep(50 * time.Millisecond)
+
+	primaryBefore := primary.hits.Load()
+	secondaryBefore := secondary.hits.Load()
 
 	for i := 0; i < 5; i++ {
 		_, err := fc.GetSpan(context.Background(), 1)
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, int32(5), primary.hits.Load(), "all calls should go to primary")
-	assert.Equal(t, int32(0), secondary.hits.Load(), "secondary should not be contacted")
+	assert.Equal(t, primaryBefore+5, primary.hits.Load(), "all calls should go to primary")
+	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "secondary should not be contacted for API calls")
 }
 
 // Integration test using real HTTP servers to verify end-to-end behavior
@@ -740,21 +763,30 @@ func TestFailover_ActiveFailoverError_CascadesToNext(t *testing.T) {
 
 	// Primary also fails so cascade doesn't land there.
 	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
 	}
 	secondary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
 	}
 	tertiary := &mockHeimdallClient{}
 
-	fc := newInstantMulti(primary, secondary, tertiary)
+	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.probeTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour // prevent background probes from promoting
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
 
 	// Force onto secondary
 	fc.registry.SetActive(1)
 
-	span, err := fc.GetSpan(context.Background(), 1)
-	require.NoError(t, err)
+	span, getErr := fc.GetSpan(context.Background(), 1)
+	require.NoError(t, getErr)
 	require.NotNil(t, span)
 	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "should cascade to tertiary")
 
@@ -1121,10 +1153,16 @@ func TestRegistry_CascadeFallsBackToUnhealthy(t *testing.T) {
 	require.NoError(t, err)
 
 	fc.attemptTimeout = 100 * time.Millisecond
+	fc.probeTimeout = 100 * time.Millisecond
 	fc.registry.HealthCheckInterval = 1 * time.Hour
 	fc.registry.ConsecutiveThreshold = 1
 	fc.registry.PromotionCooldown = 0
 	defer fc.Close()
+
+	// Start registry and let the immediate probe complete before setting up
+	// the test state, otherwise the probe can mark secondary healthy.
+	fc.ensureHealthRegistry()
+	time.Sleep(50 * time.Millisecond)
 
 	// Mark secondary as unhealthy
 	fc.registry.SetHealth(1, EndpointHealth{Healthy: false})
@@ -1166,6 +1204,42 @@ func TestRegistry_MarkUnhealthyOnRealFailure(t *testing.T) {
 	snap = fc.registry.HealthSnapshot()
 	assert.False(t, snap[0].Healthy, "primary should be marked unhealthy after real failure")
 	assert.Equal(t, 0, snap[0].ConsecutiveSuccess, "consecutive success should be reset")
+}
+
+func TestFailover_ProbeUsesProbeTimeout(t *testing.T) {
+	// Verify that probes use the short probeTimeout, not the long attemptTimeout.
+	// A probe against a hanging endpoint should fail within probeTimeout, not
+	// wait for attemptTimeout.
+	primary := &mockHeimdallClient{
+		fetchStatusFn: func(ctx context.Context) (*ctypes.SyncInfo, error) {
+			// Hang until context expires.
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 10 * time.Second // long — should NOT be used for probes
+	fc.probeTimeout = 200 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	start := time.Now()
+	fc.registry.Start()
+
+	// Wait for the immediate probe cycle to complete.
+	require.Eventually(t, func() bool {
+		snap := fc.registry.HealthSnapshot()
+		return !snap[0].Healthy || snap[0].LastErr != nil
+	}, 2*time.Second, 20*time.Millisecond, "probe should complete")
+
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 2*time.Second, "probe should complete within probeTimeout, not attemptTimeout")
 }
 
 func TestRegistry_InformedCascade_RespectsCooldown(t *testing.T) {

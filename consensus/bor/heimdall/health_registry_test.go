@@ -223,6 +223,72 @@ func TestHealthRegistry_MaybeProactiveSwitch_NoHealthy(t *testing.T) {
 	assert.Equal(t, 0, r.Active(), "should stay on 0 when no alternatives are healthy")
 }
 
+func TestHealthRegistry_ImmediateProbeOnStart(t *testing.T) {
+	probeCount := atomic.Int32{}
+
+	r := NewHealthRegistry(2, func(i int) error {
+		probeCount.Add(1)
+		return nil
+	}, nil, RegistryMetrics{})
+	r.HealthCheckInterval = 10 * time.Second // long interval — should NOT gate first probe
+
+	r.Start()
+	defer r.Stop()
+
+	// The first probe cycle should fire immediately, not after HealthCheckInterval.
+	require.Eventually(t, func() bool {
+		return probeCount.Load() >= 2 // 2 endpoints probed
+	}, 2*time.Second, 10*time.Millisecond, "first probe cycle should run immediately on Start")
+}
+
+func TestHealthRegistry_ProbeAll_IncrementalUpdate(t *testing.T) {
+	// Verify that a fast probe's result is visible before a slow probe completes.
+	slowStarted := make(chan struct{})
+	slowRelease := make(chan struct{})
+
+	r := NewHealthRegistry(2, func(i int) error {
+		if i == 0 {
+			// Fast probe: returns immediately.
+			return nil
+		}
+		// Slow probe: blocks until released.
+		close(slowStarted)
+		<-slowRelease
+		return nil
+	}, nil, RegistryMetrics{})
+	r.ConsecutiveThreshold = 1
+
+	// Run probeAll in a goroutine since the slow probe blocks.
+	done := make(chan struct{})
+	go func() {
+		r.probeAll()
+		close(done)
+	}()
+
+	// Wait for the slow probe to start (meaning the fast probe has already completed).
+	select {
+	case <-slowStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for slow probe to start")
+	}
+
+	// The fast probe (index 0) should already be applied even though the slow
+	// probe (index 1) is still in flight.
+	snap := r.HealthSnapshot()
+	assert.True(t, snap[0].Healthy, "fast probe result should be visible before slow probe completes")
+
+	// Release the slow probe and wait for probeAll to finish.
+	close(slowRelease)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for probeAll to finish")
+	}
+
+	snap = r.HealthSnapshot()
+	assert.True(t, snap[1].Healthy, "slow probe result should be applied after release")
+}
+
 func TestHealthRegistry_Stop_HaltsGoroutine(t *testing.T) {
 	probeCount := atomic.Int32{}
 

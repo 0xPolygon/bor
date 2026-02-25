@@ -174,6 +174,12 @@ func (r *HealthRegistry) Stop() {
 func (r *HealthRegistry) run() {
 	defer close(r.done)
 
+	// Run an immediate probe cycle so a down primary is detected within
+	// seconds of boot rather than waiting for the first ticker fire.
+	r.probeAll()
+	r.maybePromote()
+	r.maybeProactiveSwitch()
+
 	ticker := time.NewTicker(r.HealthCheckInterval)
 	defer ticker.Stop()
 
@@ -191,6 +197,9 @@ func (r *HealthRegistry) run() {
 }
 
 // probeAll probes every endpoint concurrently and updates health state.
+// Each goroutine applies its own result immediately so that a request
+// arriving mid-cycle (via callWithFailover → HealthSnapshot) sees fresh
+// data for already-completed probes rather than stale data for all of them.
 func (r *HealthRegistry) probeAll() {
 	// Check for shutdown before launching probes.
 	select {
@@ -198,10 +207,6 @@ func (r *HealthRegistry) probeAll() {
 		return
 	default:
 	}
-
-	// Launch all probes concurrently. Each goroutine writes to its own
-	// index in errs — no data race, no mutex needed for the slice.
-	errs := make([]error, r.n)
 
 	var wg sync.WaitGroup
 	wg.Add(r.n)
@@ -213,51 +218,51 @@ func (r *HealthRegistry) probeAll() {
 
 		go func(idx int) {
 			defer wg.Done()
-			errs[idx] = r.probeFunc(idx)
+
+			err := r.probeFunc(idx)
+
+			// Apply this probe's result immediately.
+			r.mu.Lock()
+			if err == nil {
+				r.health[idx].ConsecutiveSuccess++
+				r.health[idx].LastErr = nil
+
+				if r.health[idx].ConsecutiveSuccess >= r.ConsecutiveThreshold && !r.health[idx].Healthy {
+					r.health[idx].Healthy = true
+					r.health[idx].HealthySince = time.Now()
+				}
+
+				if r.metrics.ProbeSuccesses != nil {
+					r.metrics.ProbeSuccesses.Inc(1)
+				}
+			} else {
+				r.health[idx].ConsecutiveSuccess = 0
+				r.health[idx].Healthy = false
+				r.health[idx].LastErr = err
+			}
+			r.mu.Unlock()
 		}(i)
 	}
 
 	wg.Wait()
 
-	// Discard results if shutdown occurred while probes were in flight.
+	// Update gauge after all probes complete — needs to scan all results.
 	select {
 	case <-r.quit:
 		return
 	default:
 	}
 
-	// Apply all results under a single lock acquisition.
-	r.mu.Lock()
-
-	healthyCount := int64(0)
-
-	for i := 0; i < r.n; i++ {
-		if errs[i] == nil {
-			r.health[i].ConsecutiveSuccess++
-			r.health[i].LastErr = nil
-
-			if r.health[i].ConsecutiveSuccess >= r.ConsecutiveThreshold && !r.health[i].Healthy {
-				r.health[i].Healthy = true
-				r.health[i].HealthySince = time.Now()
-			}
-
-			if r.metrics.ProbeSuccesses != nil {
-				r.metrics.ProbeSuccesses.Inc(1)
-			}
-		} else {
-			r.health[i].ConsecutiveSuccess = 0
-			r.health[i].Healthy = false
-			r.health[i].LastErr = errs[i]
-		}
-
-		if r.health[i].Healthy {
-			healthyCount++
-		}
-	}
-
-	r.mu.Unlock()
-
 	if r.metrics.HealthyEndpoints != nil {
+		r.mu.Lock()
+		healthyCount := int64(0)
+		for i := 0; i < r.n; i++ {
+			if r.health[i].Healthy {
+				healthyCount++
+			}
+		}
+		r.mu.Unlock()
+
 		r.metrics.HealthyEndpoints.Update(healthyCount)
 	}
 }
