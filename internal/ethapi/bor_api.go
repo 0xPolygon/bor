@@ -42,6 +42,8 @@ const (
 	GetLatestLogMaxLogCount = 30000
 	// GetLatestLogMaxBlockCount is the maximum number of blocks that can be scanned
 	GetLatestLogMaxBlockCount = 1000
+	// GetLogsMaxBlockRange is the maximum block span allowed for bor_getLogs.
+	GetLogsMaxBlockRange = 1000
 )
 
 // isBorSystemTx checks if the tx is for bor genesis contract addresses or not
@@ -811,12 +813,23 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.L
 		}
 		return nil, err
 	}
+	if end-begin >= GetLogsMaxBlockRange {
+		return nil, &clientLimitExceededError{
+			message: fmt.Sprintf("too many blocks in range (max %d)", GetLogsMaxBlockRange),
+		}
+	}
 
 	// Collect logs in ascending order
 	var result []*types.Log
 
 	// Iterate blocks from the beginning to the end
 	for blockNum := begin; blockNum <= end; blockNum++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		block, receipts, err := api.getBlockAndReceipts(ctx, blockNum)
 		if err != nil {
 			return nil, err
@@ -898,6 +911,12 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 
 	// Iterate blocks from the end to the beginning
 	for blockNum := end; blockNum >= begin && blockNum <= end; blockNum-- {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		// Check block count
 		if blockCount > 0 && blocksScanned >= blockCount {
 			break

@@ -22,6 +22,7 @@ import (
 	"hash/crc32"
 	"math"
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -440,5 +441,45 @@ func TestTimeBasedForkInGenesis(t *testing.T) {
 		if have := NewID(tt.config, genesis, 0, time); have != tt.want {
 			t.Fatalf("incorrect forkid hash: have %x, want %x", have, tt.want)
 		}
+	}
+}
+
+func TestGatherForks_IncludesBorForks(t *testing.T) {
+	config := &params.ChainConfig{
+		HomesteadBlock: big.NewInt(5),
+		LondonBlock:    big.NewInt(10),
+		Bor: &params.BorConfig{
+			JaipurBlock:    big.NewInt(0),  // should be filtered as genesis fork
+			DelhiBlock:     big.NewInt(12), // should be included
+			IndoreBlock:    big.NewInt(12), // duplicate should be deduplicated
+			RioBlock:       big.NewInt(20),
+			MadhugiriBlock: big.NewInt(25),
+		},
+	}
+
+	heightForks, timeForks := GatherForks(config, 0)
+
+	wantHeights := []uint64{5, 10, 12, 20, 25}
+	if !reflect.DeepEqual(heightForks, wantHeights) {
+		t.Fatalf("height forks mismatch: have %v, want %v", heightForks, wantHeights)
+	}
+	if timeForks != nil {
+		t.Fatalf("expected nil time forks, got %v", timeForks)
+	}
+}
+
+func TestGatherForks_EmptyResultsAreNil(t *testing.T) {
+	config := &params.ChainConfig{
+		Bor: &params.BorConfig{
+			JaipurBlock: big.NewInt(0), // filtered out
+		},
+	}
+
+	heightForks, timeForks := GatherForks(config, 0)
+	if heightForks != nil {
+		t.Fatalf("expected nil height forks, got %v", heightForks)
+	}
+	if timeForks != nil {
+		t.Fatalf("expected nil time forks, got %v", timeForks)
 	}
 }
