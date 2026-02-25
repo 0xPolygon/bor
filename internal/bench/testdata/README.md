@@ -18,7 +18,7 @@ The genesis includes two funded accounts (1000 ETH each):
 
 ## Generating Transaction Dataset
 
-The transaction dataset is not included due to size. Generate it using [polycli](https://github.com/maticnetwork/polygon-cli):
+The transaction dataset is not included due to size. Generate it using [polycli](https://github.com/0xPolygon/polygon-cli):
 
 ```bash
 # Install polycli (if not already installed)
@@ -27,15 +27,16 @@ go install github.com/maticnetwork/polygon-cli/cmd/polycli@latest
 # Generate 100k signed transactions
 # You'll need the private key for one of the funded accounts
 polycli loadtest \
-    --verbosity 0 \
-    --mode t \
-    --requests 100000 \
-    --chain-id 80002 \
-    --private-key <PRIVATE_KEY> \
-    --output-raw-tx-only > raw-txs.txt
+        --verbosity 700 \
+        --chain-id 80002 \
+        --output-raw-tx-only \
+        --requests 1000 \
+        --rate-limit 10000 \
+        --concurrency 100 \
+        --nonce 0 \
+        --priority-gas-price 100000000000 \
+        --gas-price 100000000000 > raw-txs.txt
 ```
-
-Replace `<PRIVATE_KEY>` with the private key for `0x85dA99c8a7C2C95964c8EfD687E95E632Fc533D6` or another funded account.
 
 ## Running the Benchmark
 
