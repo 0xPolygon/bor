@@ -122,6 +122,55 @@ func (m *mockHeimdallClient) Close() {
 	}
 }
 
+// testConnErr is a reusable connection-refused error for tests.
+var testConnErr = &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+// newConnRefusedMock creates a mock where both API calls and health probes always fail.
+func newConnRefusedMock() *mockHeimdallClient {
+	return &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, testConnErr
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			return nil, testConnErr
+		},
+	}
+}
+
+// newToggleMock creates a mock whose API calls and health probes fail when down.Load() is true.
+func newToggleMock(down *atomic.Bool) *mockHeimdallClient {
+	return &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
+			if down.Load() {
+				return nil, testConnErr
+			}
+			return &types.Span{Id: spanID}, nil
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if down.Load() {
+				return nil, testConnErr
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
+	}
+}
+
+// newProbeToggleMock creates a mock where API calls always fail but health probes
+// succeed when down.Load() is false.
+func newProbeToggleMock(down *atomic.Bool) *mockHeimdallClient {
+	return &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			return nil, testConnErr
+		},
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
+			if down.Load() {
+				return nil, testConnErr
+			}
+			return &ctypes.SyncInfo{}, nil
+		},
+	}
+}
+
 // newInstantMulti creates a MultiHeimdallClient with instant health registry
 // behavior: consecutiveThreshold=1, promotionCooldown=0, fast health-check interval.
 func newInstantMulti(clients ...Endpoint) *MultiHeimdallClient {
@@ -296,20 +345,7 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 	primaryDown := atomic.Bool{}
 	primaryDown.Store(true)
 
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &types.Span{Id: spanID}, nil
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &ctypes.SyncInfo{}, nil
-		},
-	}
+	primary := newToggleMock(&primaryDown)
 	secondary := &mockHeimdallClient{}
 
 	fc := newInstantMulti(primary, secondary)
@@ -335,14 +371,7 @@ func TestFailover_ProbeBackToPrimary(t *testing.T) {
 }
 
 func TestFailover_ProbeBackFails(t *testing.T) {
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-	}
+	primary := newConnRefusedMock()
 	secondary := &mockHeimdallClient{}
 
 	fc := newInstantMulti(primary, secondary)
@@ -686,23 +715,10 @@ func TestFailover_ThreeClients_ProbeBackToPrimary(t *testing.T) {
 	primaryDown := atomic.Bool{}
 	primaryDown.Store(true)
 
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, spanID uint64) (*types.Span, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &types.Span{Id: spanID}, nil
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &ctypes.SyncInfo{}, nil
-		},
-	}
+	primary := newToggleMock(&primaryDown)
 	secondary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			return nil, testConnErr
 		},
 	}
 	tertiary := &mockHeimdallClient{}
@@ -759,17 +775,9 @@ func TestFailover_ActiveNonFailoverError(t *testing.T) {
 
 // Active client returns failover error: cascade should try by priority.
 func TestFailover_ActiveFailoverError_CascadesToNext(t *testing.T) {
-	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-
 	// Primary also fails so cascade doesn't land there.
-	primary := &mockHeimdallClient{
-		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
-	}
-	secondary := &mockHeimdallClient{
-		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
-	}
+	primary := newConnRefusedMock()
+	secondary := newConnRefusedMock()
 	tertiary := &mockHeimdallClient{}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)
@@ -819,28 +827,8 @@ func TestFailover_HealthCheckPromotesHighestPriority(t *testing.T) {
 	secondaryDown := atomic.Bool{}
 	secondaryDown.Store(true)
 
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &ctypes.SyncInfo{}, nil
-		},
-	}
-	secondary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			if secondaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &ctypes.SyncInfo{}, nil
-		},
-	}
+	primary := newProbeToggleMock(&primaryDown)
+	secondary := newProbeToggleMock(&secondaryDown)
 	tertiary := &mockHeimdallClient{}
 
 	fc := newInstantMulti(primary, secondary, tertiary)
@@ -900,7 +888,7 @@ func TestRegistry_ConsecutiveThreshold(t *testing.T) {
 
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			return nil, testConnErr
 		},
 		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
 			probeCount.Add(1)
@@ -939,17 +927,7 @@ func TestRegistry_PromotionCooldown(t *testing.T) {
 	primaryDown := atomic.Bool{}
 	primaryDown.Store(true)
 
-	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
-			if primaryDown.Load() {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			}
-			return &ctypes.SyncInfo{}, nil
-		},
-	}
+	primary := newProbeToggleMock(&primaryDown)
 	secondary := &mockHeimdallClient{}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
@@ -983,13 +961,13 @@ func TestRegistry_FlappingPrevention(t *testing.T) {
 
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+			return nil, testConnErr
 		},
 		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) {
 			n := callCount.Add(1)
 			// Alternate: success, fail, success, fail...
 			if n%2 == 0 {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+				return nil, testConnErr
 			}
 			return &ctypes.SyncInfo{}, nil
 		},
@@ -1018,16 +996,8 @@ func TestRegistry_FlappingPrevention(t *testing.T) {
 }
 
 func TestRegistry_InformedCascade_SkipsUnhealthy(t *testing.T) {
-	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-
-	primary := &mockHeimdallClient{
-		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
-	}
-	secondary := &mockHeimdallClient{
-		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
-		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
-	}
+	primary := newConnRefusedMock()
+	secondary := newConnRefusedMock()
 	tertiary := &mockHeimdallClient{}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary, tertiary)

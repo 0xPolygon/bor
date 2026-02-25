@@ -303,53 +303,13 @@ func TestWSClient_ContextCancellation(t *testing.T) {
 }
 
 func TestWSClient_DualURL_ProbeBackToPrimary(t *testing.T) {
-	// Primary starts rejecting, secondary accepts.
-	// After failover to secondary, primary comes back, health-check should promote.
-	primaryReject := newTestWSServer(t, true)
-	defer primaryReject.Close()
-
-	secondary := newTestWSServerWithMilestone(t)
-	defer secondary.Close()
-
-	client, err := NewHeimdallWSClient(wsURL(primaryReject.URL), wsURL(secondary.URL))
-	require.NoError(t, err)
-
-	client.reconnectDelay = 100 * time.Millisecond
-	client.registry.HealthCheckInterval = 100 * time.Millisecond
-	client.registry.ConsecutiveThreshold = 1
-	client.registry.PromotionCooldown = 0
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	events := client.SubscribeMilestoneEvents(ctx)
-
-	// Should failover to secondary.
-	select {
-	case m := <-events:
-		require.NotNil(t, m)
-		assert.Equal(t, 1, client.registry.Active())
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for failover")
-	}
-
-	// Close the rejecting primary and replace with an accepting one.
-	primaryReject.Close()
-
-	primaryGood := newTestWSServer(t, false)
-	defer primaryGood.Close()
-
-	// Update URL to the new primary that accepts connections.
-	client.mu.Lock()
-	client.urls[0] = wsURL(primaryGood.URL)
-	client.mu.Unlock()
+	fix := setupWSFailover(t, 100*time.Millisecond, 1, 0)
+	defer fix.cleanup(t)
 
 	// Wait for background health registry to promote back to primary.
 	require.Eventually(t, func() bool {
-		return client.registry.Active() == 0
+		return fix.client.registry.Active() == 0
 	}, 5*time.Second, 50*time.Millisecond, "health registry should promote back to primary")
-
-	require.NoError(t, client.Unsubscribe(ctx))
 }
 
 func TestWSClient_DualURL_NoWrapOnLastURLFails(t *testing.T) {
@@ -457,30 +417,40 @@ func TestWSClient_HealthRegistryRespectsUnsubscribe(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-// --- New health registry tests ---
+// wsFailoverFixture holds the shared state for WS failover tests that start with
+// a rejecting primary, failover to a milestone-serving secondary, then swap in a
+// good primary to test promotion behavior.
+type wsFailoverFixture struct {
+	client *HeimdallWSClient
+	ctx    context.Context
+	cancel context.CancelFunc
+}
 
-func TestWSClient_Registry_ConsecutiveThreshold(t *testing.T) {
-	// Primary starts rejecting, secondary accepts.
+// setupWSFailover creates a rejecting primary and accepting secondary, subscribes
+// to milestone events, waits for failover to secondary, then replaces the primary
+// with an accepting server. The caller can then assert promotion behavior.
+func setupWSFailover(t *testing.T, healthInterval time.Duration, threshold int, cooldown time.Duration) *wsFailoverFixture {
+	t.Helper()
+
 	primaryReject := newTestWSServer(t, true)
-	defer primaryReject.Close()
+	t.Cleanup(primaryReject.Close)
 
 	secondary := newTestWSServerWithMilestone(t)
-	defer secondary.Close()
+	t.Cleanup(secondary.Close)
 
 	client, err := NewHeimdallWSClient(wsURL(primaryReject.URL), wsURL(secondary.URL))
 	require.NoError(t, err)
 
 	client.reconnectDelay = 100 * time.Millisecond
-	client.registry.HealthCheckInterval = 50 * time.Millisecond
-	client.registry.ConsecutiveThreshold = 3 // need 3 consecutive successes
-	client.registry.PromotionCooldown = 0
+	client.registry.HealthCheckInterval = healthInterval
+	client.registry.ConsecutiveThreshold = threshold
+	client.registry.PromotionCooldown = cooldown
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	events := client.SubscribeMilestoneEvents(ctx)
 
-	// Failover to secondary.
+	// Wait for failover to secondary.
 	select {
 	case m := <-events:
 		require.NotNil(t, m)
@@ -490,68 +460,48 @@ func TestWSClient_Registry_ConsecutiveThreshold(t *testing.T) {
 
 	// Replace rejecting primary with accepting one.
 	primaryReject.Close()
+
 	primaryGood := newTestWSServer(t, false)
-	defer primaryGood.Close()
+	t.Cleanup(primaryGood.Close)
 
 	client.mu.Lock()
 	client.urls[0] = wsURL(primaryGood.URL)
 	client.mu.Unlock()
+
+	return &wsFailoverFixture{client: client, ctx: ctx, cancel: cancel}
+}
+
+func (f *wsFailoverFixture) cleanup(t *testing.T) {
+	t.Helper()
+
+	defer f.cancel()
+	require.NoError(t, f.client.Unsubscribe(f.ctx))
+}
+
+// --- New health registry tests ---
+
+func TestWSClient_Registry_ConsecutiveThreshold(t *testing.T) {
+	fix := setupWSFailover(t, 50*time.Millisecond, 3, 0)
+	defer fix.cleanup(t)
 
 	// Should eventually promote after 3 consecutive successes.
 	require.Eventually(t, func() bool {
-		return client.registry.Active() == 0
+		return fix.client.registry.Active() == 0
 	}, 5*time.Second, 50*time.Millisecond, "should promote after consecutive threshold met")
-
-	require.NoError(t, client.Unsubscribe(ctx))
 }
 
 func TestWSClient_Registry_PromotionCooldown(t *testing.T) {
-	primaryReject := newTestWSServer(t, true)
-	defer primaryReject.Close()
-
-	secondary := newTestWSServerWithMilestone(t)
-	defer secondary.Close()
-
-	client, err := NewHeimdallWSClient(wsURL(primaryReject.URL), wsURL(secondary.URL))
-	require.NoError(t, err)
-
-	client.reconnectDelay = 100 * time.Millisecond
-	client.registry.HealthCheckInterval = 50 * time.Millisecond
-	client.registry.ConsecutiveThreshold = 1
-	client.registry.PromotionCooldown = 500 * time.Millisecond
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	events := client.SubscribeMilestoneEvents(ctx)
-
-	// Failover to secondary.
-	select {
-	case m := <-events:
-		require.NotNil(t, m)
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for failover")
-	}
-
-	// Replace primary with good one.
-	primaryReject.Close()
-	primaryGood := newTestWSServer(t, false)
-	defer primaryGood.Close()
-
-	client.mu.Lock()
-	client.urls[0] = wsURL(primaryGood.URL)
-	client.mu.Unlock()
+	fix := setupWSFailover(t, 50*time.Millisecond, 1, 500*time.Millisecond)
+	defer fix.cleanup(t)
 
 	// Should not promote immediately (cooldown not met).
 	time.Sleep(150 * time.Millisecond)
-	assert.Equal(t, 1, client.registry.Active(), "should not promote before cooldown")
+	assert.Equal(t, 1, fix.client.registry.Active(), "should not promote before cooldown")
 
 	// Wait for cooldown to pass.
 	require.Eventually(t, func() bool {
-		return client.registry.Active() == 0
+		return fix.client.registry.Active() == 0
 	}, 3*time.Second, 50*time.Millisecond, "should promote after cooldown passes")
-
-	require.NoError(t, client.Unsubscribe(ctx))
 }
 
 func TestWSClient_ProactiveSwitchSetsConnNil(t *testing.T) {
