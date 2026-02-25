@@ -27,6 +27,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -278,6 +279,11 @@ func validatePoolInternals(pool *LegacyPool) error {
 	}
 
 	pool.priced.Reheap()
+	// Yield to any goroutines launched by go pool.priced.Put/PutMany that may
+	// be waiting to acquire reheapMu. If those goroutines run after Reheap they
+	// will double-add items, exposing the race between async priced updates and
+	// Reheap rebuilding from pool.all.
+	runtime.Gosched()
 	pool.priced.reheapMu.Lock()
 	priced := pool.priced.urgent.Len() + pool.priced.floating.Len()
 	pool.priced.reheapMu.Unlock()

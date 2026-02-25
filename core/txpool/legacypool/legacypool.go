@@ -1090,17 +1090,14 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 					break
 				}
 			}
-			// Add all transactions back to the priced queue
+			// Add all transactions back to the priced queue.
+			// Must be synchronous: a goroutine here races with Reheap() -
+			// Reheap rebuilds from pool.all (which still contains drop), then
+			// the goroutine double-adds the same transactions, making
+			// priced.Len() > all.Count(). reheapMu holders never acquire
+			// pool.mu, so calling PutMany while holding pool.mu is safe.
 			if replacesPending {
-				if async {
-					// We don't want to get blocked on this due to internal lock, so
-					// call the function to insert transactions into the heap async.
-					go pool.priced.PutMany(drop)
-				} else {
-					for _, dropTx := range drop {
-						pool.priced.Put(dropTx)
-					}
-				}
+				pool.priced.PutMany(drop)
 				log.Trace("Discarding future transaction replacing pending tx", "hash", hash)
 				stage2Duration = time.Since(stage2Time)
 				return false, ErrFutureReplacePending

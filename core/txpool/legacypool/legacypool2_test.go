@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -229,6 +230,159 @@ func TestTransactionZAttack(t *testing.T) {
 	if newIvPending != ivPending {
 		t.Errorf("Wrong invalid pending-count, have %d, want %d (GlobalSlots: %d, queued: %d)",
 			newIvPending, ivPending, pool.config.GlobalSlots, newQueued)
+	}
+}
+
+// TestLockOrderingPricedHeapNoDeadlock proves the lock hierarchy
+//
+//	pool.mu (W) → reheapMu → lookup.lock
+//
+// by running pool.mu.Lock() + PutMany (acquires reheapMu) concurrently with
+// Reheap() (acquires reheapMu, then lookup.lock). If a reheapMu → pool.mu
+// reverse path ever existed, Thread A below would hold pool.mu waiting for
+// reheapMu while Thread B held reheapMu waiting for pool.mu — a deadlock.
+func TestLockOrderingPricedHeapNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+	config.GlobalSlots = 100
+	config.GlobalQueue = 100
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+	fillPool(t, pool)
+
+	// Collect a small slice of txs from pool.all to feed into PutMany.
+	var txs types.Transactions
+	pool.mu.RLock()
+	pool.all.Range(func(_ common.Hash, tx *types.Transaction) bool {
+		txs = append(txs, tx)
+		return len(txs) < 5
+	})
+	pool.mu.RUnlock()
+
+	const iterations = 500
+	done := make(chan struct{})
+
+	// Thread B: Reheap acquires reheapMu then lookup.lock — never acquires pool.mu.
+	// If it tried to acquire pool.mu it would deadlock with Thread A below.
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	// Thread A: hold pool.mu (write lock) while calling PutMany (acquires reheapMu).
+	// This is the exact pattern introduced by the replacesPending fix.
+	for i := 0; i < iterations; i++ {
+		pool.mu.Lock()
+		pool.priced.PutMany(txs)
+		pool.mu.Unlock()
+	}
+
+	select {
+	case <-done:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle exists")
+	}
+}
+
+// TestLockOrderingReplacePendingNoDeadlock proves that the end-to-end
+// replacesPending code path in add() — which calls pool.priced.PutMany while
+// holding pool.mu — does not deadlock when Reheap runs concurrently.
+func TestLockOrderingReplacePendingNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+	config.GlobalSlots = 100
+	config.GlobalQueue = 100
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+	fillPool(t, pool)
+
+	// Future txs (gapped nonce, higher gas) that hit the replacesPending path:
+	// the pool is full with pending txs at gasPrice=300, so each future tx at
+	// gasPrice=500 triggers Discard + PutMany(drop) while holding pool.mu.
+	key, _ := crypto.GenerateKey()
+	pool.currentState.AddBalance(crypto.PubkeyToAddress(key.PublicKey),
+		uint256.NewInt(100000000000), tracing.BalanceChangeUnspecified)
+	futureTxs := types.Transactions{}
+	for j := 0; j < int(pool.config.GlobalSlots+pool.config.GlobalQueue); j++ {
+		futureTxs = append(futureTxs, pricedTransaction(1000+uint64(j), 100000, big.NewInt(500), key))
+	}
+
+	reheapDone := make(chan struct{})
+
+	// Concurrent Reheap — if it tried to acquire pool.mu it would deadlock
+	// with the addRemotesSync goroutines holding pool.mu in the add() path.
+	go func() {
+		defer close(reheapDone)
+		for i := 0; i < 500; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		pool.addRemotesSync(futureTxs)
+	}
+
+	select {
+	case <-reheapDone:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected in replacesPending code path")
+	}
+}
+
+// TestLockOrderingRemovedNoDeadlock proves that pool.mu(W) → Removed(reheapMu)
+// concurrent with Reheap(reheapMu → lookup.lock) does not deadlock. Removed is
+// called under pool.mu from demoteUnexecutables, promoteExecutables,
+// truncatePending, and SetGasTip, so this covers the broader pool.mu→reheapMu
+// ordering for all those call sites too.
+func TestLockOrderingRemovedNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+	config.GlobalSlots = 100
+	config.GlobalQueue = 100
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+	fillPool(t, pool)
+
+	const iterations = 2000 // Removed is a brief lock; use more iterations for coverage
+	done := make(chan struct{})
+
+	// Thread B: Reheap holds reheapMu and accesses lookup.lock — never pool.mu.
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	// Thread A: hold pool.mu (write lock) while calling Removed (acquires reheapMu
+	// briefly and may internally trigger Reheap if stales threshold is crossed).
+	for i := 0; i < iterations; i++ {
+		pool.mu.Lock()
+		pool.priced.Removed(1)
+		pool.mu.Unlock()
+	}
+
+	select {
+	case <-done:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle in Removed path")
 	}
 }
 
