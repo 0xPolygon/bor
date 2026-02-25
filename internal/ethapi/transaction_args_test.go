@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -318,6 +319,16 @@ func (b *backendMock) setFork(fork string) error {
 	return nil
 }
 
+func (b *backendMock) PreconfEnabled() bool                              { return false }
+func (b *backendMock) SubmitTxForPreconf(tx *types.Transaction) error    { return nil }
+func (b *backendMock) CheckPreconfStatus(hash common.Hash) (bool, error) { return false, nil }
+func (b *backendMock) PrivateTxEnabled() bool                            { return false }
+func (b *backendMock) SubmitPrivateTx(tx *types.Transaction) error       { return nil }
+func (b *backendMock) AcceptPreconfTxs() bool                            { return false }
+func (b *backendMock) AcceptPrivateTxs() bool                            { return false }
+func (b *backendMock) RecordPrivateTx(hash common.Hash)                  {}
+func (b *backendMock) PurgePrivateTx(hash common.Hash)                   {}
+
 func (b *backendMock) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return big.NewInt(42), nil
 }
@@ -415,6 +426,9 @@ func (b *backendMock) TxPoolContent() (map[common.Address][]*types.Transaction, 
 }
 func (b *backendMock) TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
 	return nil, nil
+}
+func (b *backendMock) TxStatus(hash common.Hash) txpool.TxStatus {
+	return txpool.TxStatusUnknown
 }
 func (b *backendMock) SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription { return nil }
 func (b *backendMock) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription    { return nil }

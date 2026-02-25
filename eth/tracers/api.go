@@ -222,6 +222,26 @@ type TraceConfig struct {
 	BorTx           *bool
 }
 
+// deepCopyTraceConfig returns a deep copy of the given TraceConfig so that
+// each goroutine can safely mutate its own copy without racing.
+func deepCopyTraceConfig(config *TraceConfig) TraceConfig {
+	cpy := *config
+	if config.Config != nil {
+		loggerCfg := *config.Config
+		cpy.Config = &loggerCfg
+	}
+	if config.BorTx != nil {
+		cpy.BorTx = newBoolPtr(*config.BorTx)
+	}
+	if config.BorTraceEnabled != nil {
+		cpy.BorTraceEnabled = newBoolPtr(*config.BorTraceEnabled)
+	}
+	if config.TracerConfig != nil {
+		cpy.TracerConfig = append(json.RawMessage{}, config.TracerConfig...)
+	}
+	return cpy
+}
+
 // TraceCallConfig is the config for traceCall API. It holds one more
 // field to override the state for tracing.
 type TraceCallConfig struct {
@@ -383,11 +403,13 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 
 					var err error
 
+					// Deep copy config for this transaction to avoid race conditions
+					txConfig := deepCopyTraceConfig(config)
 					if stateSyncPresent && i == len(txs)-1 && includeStateSyncTx {
-						config.BorTx = newBoolPtr(true)
+						txConfig.BorTx = newBoolPtr(true)
 					}
 
-					res, err = api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, config, nil)
+					res, err = api.traceTx(ctx, tx, msg, txctx, blockCtx, task.statedb, &txConfig, nil)
 					if err != nil {
 						task.results[i] = &txTraceResult{TxHash: txHash, Error: err.Error()}
 						log.Warn("Tracing failed", "hash", txHash, "block", task.block.NumberU64(), "err", err)
@@ -863,11 +885,13 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 
 				var err error
 
+				// Deep copy config for this transaction to avoid race conditions
+				txConfig := deepCopyTraceConfig(config)
 				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
 				if stateSyncPresent && task.index == len(txs)-1 {
 					isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
 					if isMadhugiri || *config.BorTraceEnabled {
-						config.BorTx = newBoolPtr(true)
+						txConfig.BorTx = newBoolPtr(true)
 					}
 				}
 
@@ -876,7 +900,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 				// concurrent use.
 				// See: https://github.com/ethereum/go-ethereum/issues/29114
 				blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-				res, err = api.traceTx(ctx, txs[task.index], msg, txctx, blockCtx, task.statedb, config, nil)
+				res, err = api.traceTx(ctx, txs[task.index], msg, txctx, blockCtx, task.statedb, &txConfig, nil)
 				if err != nil {
 					results[task.index] = &txTraceResult{TxHash: txHash, Error: err.Error()}
 					continue

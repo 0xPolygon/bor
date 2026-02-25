@@ -162,6 +162,11 @@ type Config struct {
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
 
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// 0 = unlimited (legacy behavior), default = 1MB/s
+	PreloadRateLimit int64
+
 	// Mining options
 	Miner miner.Config
 
@@ -288,6 +293,15 @@ type Config struct {
 	// EIP-7966: eth_sendRawTransactionSync timeouts
 	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
 	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
+
+	// Preconf / Private transaction relay related settings
+	EnablePreconfs            bool
+	EnablePrivateTx           bool
+	BlockProducerRpcEndpoints []string
+
+	// Preconf / Private transaction related settings for block producers
+	AcceptPreconfTx bool
+	AcceptPrivateTx bool
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.

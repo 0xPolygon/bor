@@ -63,7 +63,7 @@ func (t *ResettingTimer) Time(f func()) {
 
 // Update records the duration of an event.
 func (t *ResettingTimer) Update(d time.Duration) {
-	if !metricsEnabled {
+	if !metricsEnabled.Load() {
 		return
 	}
 	t.mutex.Lock()

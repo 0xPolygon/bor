@@ -51,8 +51,8 @@ func TestBorConfigParameterChange(t *testing.T) {
 	genesis.Config.Bor.LisovoBlock = lisovoBlock
 
 	// Set custom BaseFeeChangeDenominator and TargetGasPercentage that will take effect at Lisovo
-	customBaseFeeChangeDenominator := uint64(32)  // Different from default (64)
-	customTargetGasPercentage := uint64(70)        // Different from default (65)
+	customBaseFeeChangeDenominator := uint64(32) // Different from default (64)
+	customTargetGasPercentage := uint64(70)      // Different from default (65)
 	genesis.Config.Bor.BaseFeeChangeDenominator = &customBaseFeeChangeDenominator
 	genesis.Config.Bor.TargetGasPercentage = &customTargetGasPercentage
 
@@ -306,7 +306,7 @@ func TestBorConfigParameterDivergence(t *testing.T) {
 	genesisProducer := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesisProducer.Config.LondonBlock = common.Big0
 	genesisProducer.Config.Bor.JaipurBlock = common.Big0
-	genesisProducer.Config.Bor.DandeliBlock = big.NewInt(5)  // Enable Dandeli early (percentage-based calc)
+	genesisProducer.Config.Bor.DandeliBlock = big.NewInt(5) // Enable Dandeli early (percentage-based calc)
 	genesisProducer.Config.Bor.LisovoBlock = big.NewInt(10) // Enable Lisovo (configurable params)
 
 	// Producer uses first set of parameters
@@ -319,12 +319,12 @@ func TestBorConfigParameterDivergence(t *testing.T) {
 	genesisValidator := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesisValidator.Config.LondonBlock = common.Big0
 	genesisValidator.Config.Bor.JaipurBlock = common.Big0
-	genesisValidator.Config.Bor.DandeliBlock = big.NewInt(5)  // Same Dandeli activation
+	genesisValidator.Config.Bor.DandeliBlock = big.NewInt(5) // Same Dandeli activation
 	genesisValidator.Config.Bor.LisovoBlock = big.NewInt(10) // Same Lisovo activation
 
 	// Validator uses DIFFERENT parameters (simulating a "second change")
 	validatorBaseFeeChangeDenominator := uint64(128) // Much larger denominator
-	validatorTargetGasPercentage := uint64(80)        // Higher target percentage
+	validatorTargetGasPercentage := uint64(80)       // Higher target percentage
 	genesisValidator.Config.Bor.BaseFeeChangeDenominator = &validatorBaseFeeChangeDenominator
 	genesisValidator.Config.Bor.TargetGasPercentage = &validatorTargetGasPercentage
 
@@ -477,8 +477,8 @@ func TestBorConfigMultipleParameterChanges(t *testing.T) {
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesis.Config.LondonBlock = common.Big0
 	genesis.Config.Bor.JaipurBlock = common.Big0
-	genesis.Config.Bor.DandeliBlock = big.NewInt(5)  // Percentage-based calculation
-	genesis.Config.Bor.LisovoBlock = big.NewInt(10)  // Configurable parameters
+	genesis.Config.Bor.DandeliBlock = big.NewInt(5) // Percentage-based calculation
+	genesis.Config.Bor.LisovoBlock = big.NewInt(10) // Configurable parameters
 
 	// Start with first set of parameters (will be used from block 10 onward)
 	firstBaseFeeChangeDenominator := uint64(32)

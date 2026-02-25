@@ -18,6 +18,11 @@ gcmode = "archive"
 
 # ["eth.requiredblocks"]
 
+# [relay]
+# enable-preconfs = true
+# enable-private-tx = true
+# bp-rpc-endpoints = [ ]
+
 # [log]
     # vmodule = ""
     # json = false
@@ -36,6 +41,7 @@ gcmode = "archive"
     # nodekeyhex = ""
     # txarrivalwait = "500ms"
     # txannouncementonly = false
+    # disable-tx-propagation = false
     [p2p.discovery]
         # v5disc = true
         # bootnodesv4 = []
@@ -80,6 +86,8 @@ gcmode = "archive"
     # txfeecap = 5.0
     # allow-unprotected-txs = false
     # enabledeprecatedpersonal = false
+    # accept-preconf-tx = false
+    # accept-private-tx = false
     [jsonrpc.http]
         enabled = true
         port = 8545

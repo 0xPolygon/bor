@@ -150,7 +150,7 @@ func (ma *meterTicker) remove(m *Meter) {
 func (ma *meterTicker) loop() {
 	ticker := time.NewTicker(5 * time.Second)
 	for range ticker.C {
-		if !metricsEnabled {
+		if !metricsEnabled.Load() {
 			continue
 		}
 		ma.mu.RLock()

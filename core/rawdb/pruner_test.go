@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -664,6 +665,32 @@ func TestBlockPruner_CursorBeyondHead_Clamping(t *testing.T) {
 		}
 		if canon := ReadCanonicalHash(db, i); canon != hashes[i] {
 			t.Fatalf("expected canonical hash at %d to be preserved", i)
+		}
+	}
+}
+
+func TestDeleteRange_ShutdownInterrupt(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	// Chain large enough for multiple deleteRange iterations (step = 50,000).
+	const chainLen uint64 = 150_001
+	hashes := buildCanonicalChain(t, db, chainLen)
+	for i := uint64(0); i <= chainLen; i++ {
+		WriteWitness(db, hashes[i], []byte{0xAB})
+	}
+
+	p := NewPruner(db, &WitnessStrategy{retention: 5})
+	close(p.quit)
+
+	err := p.deleteRange(0, chainLen)
+	if !errors.Is(err, errPrunerStopped) {
+		t.Fatalf("expected errPrunerStopped, got %v", err)
+	}
+
+	// Quit was closed before any iteration, so no witnesses should be deleted.
+	for i := uint64(1); i <= chainLen; i++ {
+		if !HasWitness(db, hashes[i]) {
+			t.Fatalf("witness at block %d was deleted despite shutdown", i)
 		}
 	}
 }

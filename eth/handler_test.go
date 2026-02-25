@@ -230,6 +230,44 @@ func newTestHandlerWithBlocks(blocks int) *testHandler {
 	}
 }
 
+func newTestHandlerWithConfig(updateConfig func(*handlerConfig) *handlerConfig) *testHandler {
+	// Create a database pre-initialize with a genesis block
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+	}
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+
+	_, bs, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), 0, nil)
+	if _, err := chain.InsertChain(bs, false); err != nil {
+		panic(err)
+	}
+
+	txpool := newTestTxPool()
+
+	config := &handlerConfig{
+		Database:   db,
+		Chain:      chain,
+		TxPool:     txpool,
+		Network:    1,
+		Sync:       downloader.SnapSync,
+		BloomCache: 1,
+	}
+	if updateConfig != nil {
+		config = updateConfig(config)
+	}
+	handler, _ := newHandler(config)
+	handler.Start(1000)
+
+	return &testHandler{
+		db:      db,
+		chain:   chain,
+		txpool:  txpool,
+		handler: handler,
+	}
+}
+
 // close tears down the handler and all its internal constructs.
 func (b *testHandler) close() {
 	b.handler.Stop()

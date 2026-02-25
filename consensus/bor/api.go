@@ -27,8 +27,8 @@ var (
 
 // rootHashCacheEntry is an entry in the root hash cache
 type rootHashCacheEntry struct {
-	headHash common.Hash
-	root     string
+	endHash common.Hash
+	root    string
 }
 
 // API is a user facing RPC API to allow controlling the signer and voting
@@ -283,23 +283,37 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 		return "", err
 	}
 
-	// Snapshot the current canonical tip (number and hash)
+	// Snapshot the current canonical tip number for request bounds.
 	head := api.chain.CurrentHeader()
 	if head == nil {
 		return "", errUnknownBlock
 	}
 	headNumber := head.Number.Uint64()
-	headHash := head.Hash()
+
+	if start > end || end > headNumber {
+		return "", &valset.InvalidStartEndBlockError{
+			Start:         start,
+			End:           end,
+			CurrentHeader: headNumber,
+		}
+	}
+
+	// Compute at end-block hash.
+	endHeader := api.chain.GetHeaderByNumber(end)
+	if endHeader == nil {
+		return "", errUnknownBlock
+	}
+	endHash := endHeader.Hash()
 
 	key := getRootHashKey(start, end)
 
-	// Try the cache first, where entries are bound to a specific tip hash.
+	// Try the cache first, where entries are bound to a specific end-block hash.
 	if cached, ok := api.rootHashCache.Get(key); ok {
 		if entry, ok := cached.(*rootHashCacheEntry); ok {
-			if entry.headHash == headHash {
+			if entry.endHash == endHash {
 				return entry.root, nil
 			}
-			// Tip changed, hence we potentially had a reorg: invalidate this cache entry.
+			// End block changed, so the canonical range may have changed.
 			api.rootHashCache.Remove(key)
 		}
 	}
@@ -308,14 +322,6 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 
 	if length > MaxCheckpointLength {
 		return "", &MaxCheckpointLengthExceededError{start, end}
-	}
-
-	if start > end || end > headNumber {
-		return "", &valset.InvalidStartEndBlockError{
-			Start:         start,
-			End:           end,
-			CurrentHeader: headNumber,
-		}
 	}
 
 	blockHeaders := make([]*types.Header, length)
@@ -340,10 +346,10 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 	wg.Wait()
 	close(concurrent)
 
-	// Detect in-flight reorg: if the tip changed while we were reading headers,
-	// abort instead of potentially returning a mixed-fork root.
-	newHead := api.chain.CurrentHeader()
-	if newHead == nil || newHead.Hash() != headHash {
+	// Detect in-flight reorg in the checkpoint range: if the canonical end block changed
+	// while reading headers, abort instead of potentially returning a mixed-fork root.
+	newEndHeader := api.chain.GetHeaderByNumber(end)
+	if newEndHeader == nil || newEndHeader.Hash() != endHash {
 		return "", errReorgDuringRootComputation
 	}
 
@@ -394,10 +400,10 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 
 	root := hex.EncodeToString(tree.Root().Hash)
 
-	// Cache the root bound to the tip hash we computed against.
+	// Cache the root bound to the end-block hash we computed against.
 	api.rootHashCache.Add(key, &rootHashCacheEntry{
-		headHash: headHash,
-		root:     root,
+		endHash: endHash,
+		root:    root,
 	})
 
 	return root, nil
