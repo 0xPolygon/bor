@@ -272,4 +272,4 @@ included in our repository in the `COPYING` file.
 
 ## Join our Discord server
 
-Join Polygon community  – share your ideas or just say hi over on [Polygon Community Discord](https://discord.com/invite/0xPolygonCommunity) or on [Polygon R&D Discord](https://discord.com/invite/0xpolygonrnd).
+Join Polygon community  – share your ideas or just say hi over on [Polygon Community Discord](https://discord.com/invite/0xPolygonCommunity) or on [Polygon R&D Discord](https://discord.com/invite/0xpolygonrnd). 
