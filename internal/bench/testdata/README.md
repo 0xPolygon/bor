@@ -24,8 +24,7 @@ The transaction dataset is not included due to size. Generate it using [polycli]
 # Install polycli (if not already installed)
 go install github.com/maticnetwork/polygon-cli/cmd/polycli@latest
 
-# Generate 100k signed transactions
-# You'll need the private key for one of the funded accounts
+# Generate 100k signed transactions for EOA transfers
 polycli loadtest \
         --verbosity 700 \
         --chain-id 80002 \
@@ -36,6 +35,22 @@ polycli loadtest \
         --nonce 0 \
         --priority-gas-price 100000000000 \
         --gas-price 100000000000 > raw-txs.txt
+
+# Generate transactions going toward a gas waster contract
+polycli loadtest \
+        --verbosity 700 \
+        --chain-id 80002 \
+        --output-raw-tx-only \
+        --requests 100 \
+        --rate-limit 10000 \
+        --concurrency 100 \
+        --gas-limit 1000000 \
+        --mode contract-call \
+        --calldata 0x \
+        --contract-address 0xdeadbeef00000000000000000000000000000000 \
+        --nonce 0 \
+        --priority-gas-price 100000000000 \
+        --gas-price 100000000000 > raw-txs-waste.txt
 ```
 
 ## Running the Benchmark
@@ -50,6 +65,13 @@ go build -o bor-bench ./cmd/bor-bench
     --genesis ./internal/bench/testdata/genesis.json \
     --txs ./raw-txs.txt \
     --out ./benchmark-report.json
+
+# Test the case where we're calling the gas waste contract
+./bor-bench \
+    --config ./internal/bench/testdata/benchmark.toml \
+    --genesis ./internal/bench/testdata/genesis.json \
+    --txs ./raw-txs-waste.txt \
+    --out ./benchmark-report-waste.json
 ```
 
 ## Expected Results
@@ -82,3 +104,9 @@ The benchmark automatically sets:
 - `bor.devfakeauthor = true`
 - `p2p.maxpeers = 0`
 - All RPC interfaces disabled
+
+
+## Future Work
+
+In the future, the genesis block should include some smart contracts
+that are useful for load testing.
