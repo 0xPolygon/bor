@@ -65,9 +65,8 @@ func applyBenchmarkOverrides(cfg *server.Config) {
 	cfg.P2P.Discovery.DiscoveryV4 = false
 	cfg.P2P.Discovery.DiscoveryV5 = false
 
-	// Disable telemetry and profiling
+	// Disable telemetry
 	cfg.Telemetry.Enabled = false
-	cfg.Pprof.Enabled = false
 
 	// Disable gRPC
 	cfg.GRPC.Addr = ""

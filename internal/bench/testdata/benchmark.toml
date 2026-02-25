@@ -192,9 +192,9 @@ syncmode = "full"
   # procs = 8
   # enforce = false
 
-# [pprof]
-#   pprof = false
-#   port = 6060
-#   addr = "127.0.0.1"
+[pprof]
+  pprof = true
+  port = 6262
+  addr = "127.0.0.1"
 #   memprofilerate = 524288
 #   blockprofilerate = 0
