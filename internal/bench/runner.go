@@ -194,10 +194,27 @@ func Run(ctx context.Context, opts Options) error {
 		"totalTxs", result.TotalTxs,
 		"totalGas", result.TotalGas)
 
-	// Check txpool health after ingestion
+	// Log txpool stats after ingestion (informational only)
 	pending, queued := backend.TxPool().Stats()
-	if err := ValidateTxPoolHealth(TxPoolStats{Pending: pending, Queued: queued}, result.TotalTxs); err != nil {
-		return fail(err)
+	log.Info("TxPool stats after ingestion", "pending", pending, "queued", queued)
+
+	// Note: We don't fail on queued-only state here because:
+	// 1. Transactions may still be promoting from queued to pending
+	// 2. Mining may already be processing transactions
+	// 3. The completion check will catch actual failures
+	if pending == 0 && queued == 0 && result.TotalTxs > 0 {
+		log.Warn("TxPool is empty after ingestion - transactions may have been immediately mined or rejected")
+	}
+
+	// Scan blocks mined during ingestion to catch transactions that were
+	// mined before they were marked as seen
+	currentBlock := backend.BlockChain().CurrentBlock().Number.Uint64()
+	if currentBlock > startBlock {
+		log.Info("Scanning blocks mined during ingestion",
+			"from", startBlock+1,
+			"to", currentBlock)
+		tracker.ScanBlockRange(startBlock+1, currentBlock)
+		log.Info("After historical scan", "mined", tracker.MinedCount())
 	}
 
 	// Wait for all transactions to be mined
@@ -205,15 +222,22 @@ func Run(ctx context.Context, opts Options) error {
 		"target", result.TotalTxs,
 		"currentlyMined", tracker.MinedCount())
 
-	if err := waitForCompletion(ctx, tracker, result.TotalTxs); err != nil {
-		return fail(WrapError(ErrCodeTimeout, "waiting for mining completion", err))
-	}
+	waitErr := waitForCompletion(ctx, tracker, result.TotalTxs)
 
-	// Calculate final stats
+	// Calculate final stats (even on timeout, capture what we got)
 	endBlock := backend.BlockChain().CurrentBlock().Number.Uint64()
 	report.TotalTxsMined = tracker.MinedCount()
 	if endBlock >= startBlock {
 		report.BlocksMined = endBlock - startBlock
+	}
+
+	if waitErr != nil {
+		// Capture partial results before failing
+		log.Warn("Mining did not complete",
+			"mined", report.TotalTxsMined,
+			"target", result.TotalTxs,
+			"blocks", report.BlocksMined)
+		return fail(WrapError(ErrCodeTimeout, "waiting for mining completion", waitErr))
 	}
 
 	// Finalize report

@@ -124,3 +124,16 @@ func (t *MinedTracker) Stats() (seen, mined uint64) {
 	defer t.mu.RUnlock()
 	return uint64(len(t.seen)), uint64(len(t.mined))
 }
+
+// ScanBlockRange scans a range of blocks for mined transactions.
+// This is used to catch transactions mined during ingestion before
+// they were marked as seen.
+func (t *MinedTracker) ScanBlockRange(startBlock, endBlock uint64) {
+	for blockNum := startBlock; blockNum <= endBlock; blockNum++ {
+		block := t.eth.BlockChain().GetBlockByNumber(blockNum)
+		if block == nil {
+			continue
+		}
+		t.processBlock(block)
+	}
+}
