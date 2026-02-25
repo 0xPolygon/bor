@@ -17,6 +17,7 @@
 package fetcher
 
 import (
+	"crypto/sha256"
 	"errors"
 	"math/big"
 	"math/rand"
@@ -28,7 +29,10 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 var (
@@ -1759,6 +1763,236 @@ func TestTransactionFetcherFuzzCrash04(t *testing.T) {
 			}),
 			doWait{time: 0, step: true},
 			doWait{time: txFetchTimeout, step: true},
+		},
+	})
+}
+
+// This test ensures the blob transactions will be scheduled for fetching
+// once they are announced in the network.
+func TestBlobTransactionAnnounce(t *testing.T) {
+	t.Skip("bor: skipped blobs are not relevant to bor")
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Initial announcement to get something into the waitlist
+			doTxNotify{peer: "A", hashes: []common.Hash{{0x01}, {0x02}}, types: []byte{types.LegacyTxType, types.LegacyTxType}, sizes: []uint32{111, 222}},
+			isWaiting(map[string][]announce{
+				"A": {
+					{common.Hash{0x01}, types.LegacyTxType, 111},
+					{common.Hash{0x02}, types.LegacyTxType, 222},
+				},
+			}),
+			// Announce a blob transaction
+			doTxNotify{peer: "B", hashes: []common.Hash{{0x03}}, types: []byte{types.BlobTxType}, sizes: []uint32{333}},
+			isWaiting(map[string][]announce{
+				"A": {
+					{common.Hash{0x01}, types.LegacyTxType, 111},
+					{common.Hash{0x02}, types.LegacyTxType, 222},
+				},
+				"B": {
+					{common.Hash{0x03}, types.BlobTxType, 333},
+				},
+			}),
+			doWait{time: 0, step: true}, // zero time, but the blob fetching should be scheduled
+			isWaiting(map[string][]announce{
+				"A": {
+					{common.Hash{0x01}, types.LegacyTxType, 111},
+					{common.Hash{0x02}, types.LegacyTxType, 222},
+				},
+			}),
+			isScheduled{
+				tracking: map[string][]announce{
+					"B": {
+						{common.Hash{0x03}, types.BlobTxType, 333},
+					},
+				},
+				fetching: map[string][]common.Hash{ // Depends on deterministic test randomizer
+					"B": {{0x03}},
+				},
+			},
+			doWait{time: txArriveTimeout, step: true}, // zero time, but the blob fetching should be scheduled
+			isWaiting(nil),
+			isScheduled{
+				tracking: map[string][]announce{
+					"A": {
+						{common.Hash{0x01}, types.LegacyTxType, 111},
+						{common.Hash{0x02}, types.LegacyTxType, 222},
+					},
+					"B": {
+						{common.Hash{0x03}, types.BlobTxType, 333},
+					},
+				},
+				fetching: map[string][]common.Hash{ // Depends on deterministic test randomizer
+					"A": {{0x01}, {0x02}},
+					"B": {{0x03}},
+				},
+			},
+		},
+	})
+}
+
+func TestTransactionFetcherDropAlternates(t *testing.T) {
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					return make([]error, len(txs))
+				},
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{peer: "A", hashes: []common.Hash{testTxsHashes[0]}, types: []byte{testTxs[0].Type()}, sizes: []uint32{uint32(testTxs[0].Size())}},
+			doWait{time: txArriveTimeout, step: true},
+			doTxNotify{peer: "B", hashes: []common.Hash{testTxsHashes[0]}, types: []byte{testTxs[0].Type()}, sizes: []uint32{uint32(testTxs[0].Size())}},
+
+			isScheduled{
+				tracking: map[string][]announce{
+					"A": {
+						{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())},
+					},
+					"B": {
+						{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())},
+					},
+				},
+				fetching: map[string][]common.Hash{
+					"A": {testTxsHashes[0]},
+				},
+			},
+			doDrop("B"),
+
+			isScheduled{
+				tracking: map[string][]announce{
+					"A": {
+						{testTxsHashes[0], testTxs[0].Type(), uint32(testTxs[0].Size())},
+					},
+				},
+				fetching: map[string][]common.Hash{
+					"A": {testTxsHashes[0]},
+				},
+			},
+			doDrop("A"),
+			isScheduled{
+				tracking: nil, fetching: nil,
+			},
+		},
+	})
+}
+
+func makeInvalidBlobTx() *types.Transaction {
+	key, _ := crypto.GenerateKey()
+	blob := &kzg4844.Blob{byte(0xa)}
+	commitment, _ := kzg4844.BlobToCommitment(blob)
+	blobHash := kzg4844.CalcBlobHashV1(sha256.New(), &commitment)
+	cellProof, _ := kzg4844.ComputeCellProofs(blob)
+
+	// Mutate the cell proof
+	cellProof[0][0] = 0x0
+
+	blobtx := &types.BlobTx{
+		ChainID:    uint256.MustFromBig(params.MainnetChainConfig.ChainID),
+		Nonce:      0,
+		GasTipCap:  uint256.NewInt(100),
+		GasFeeCap:  uint256.NewInt(200),
+		Gas:        21000,
+		BlobFeeCap: uint256.NewInt(200),
+		BlobHashes: []common.Hash{blobHash},
+		Value:      uint256.NewInt(100),
+		Sidecar:    types.NewBlobTxSidecar(types.BlobSidecarVersion1, []kzg4844.Blob{*blob}, []kzg4844.Commitment{commitment}, cellProof),
+	}
+	return types.MustSignNewTx(key, types.LatestSigner(params.MainnetChainConfig), blobtx)
+}
+
+// This test ensures that the peer will be disconnected for protocol violation
+// and all its internal traces should be removed properly.
+func TestTransactionProtocolViolation(t *testing.T) {
+	t.Skip("bor: not relevant, transaction type not supported")
+	//log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelDebug, true)))
+
+	var (
+		badTx = makeInvalidBlobTx()
+		drop  = make(chan struct{}, 1)
+	)
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				func(txs []*types.Transaction) []error {
+					var errs []error
+					for range txs {
+						errs = append(errs, txpool.ErrKZGVerificationError)
+					}
+					return errs
+				},
+				func(a string, b []common.Hash) error {
+					return nil
+				},
+				func(peer string) { drop <- struct{}{} },
+			)
+		},
+		steps: []interface{}{
+			// Initial announcement to get something into the waitlist
+			doTxNotify{
+				peer:   "A",
+				hashes: []common.Hash{testTxs[0].Hash(), badTx.Hash(), testTxs[1].Hash()},
+				types:  []byte{types.LegacyTxType, types.BlobTxType, types.LegacyTxType},
+				sizes:  []uint32{uint32(testTxs[0].Size()), uint32(badTx.Size()), uint32(testTxs[1].Size())},
+			},
+			isWaiting(map[string][]announce{
+				"A": {
+					{testTxs[0].Hash(), types.LegacyTxType, uint32(testTxs[0].Size())},
+					{badTx.Hash(), types.BlobTxType, uint32(badTx.Size())},
+					{testTxs[1].Hash(), types.LegacyTxType, uint32(testTxs[1].Size())},
+				},
+			}),
+			doWait{time: 0, step: true}, // zero time, but the blob fetching should be scheduled
+
+			isWaiting(map[string][]announce{
+				"A": {
+					{testTxs[0].Hash(), types.LegacyTxType, uint32(testTxs[0].Size())},
+					{testTxs[1].Hash(), types.LegacyTxType, uint32(testTxs[1].Size())},
+				},
+			}),
+			isScheduled{
+				tracking: map[string][]announce{
+					"A": {
+						{badTx.Hash(), types.BlobTxType, uint32(badTx.Size())},
+					},
+				},
+				fetching: map[string][]common.Hash{
+					"A": {badTx.Hash()},
+				},
+			},
+
+			doTxEnqueue{
+				peer:   "A",
+				txs:    []*types.Transaction{badTx},
+				direct: true,
+			},
+			// Some internal traces are left and will be cleaned by a following drop
+			// operation.
+			isWaiting(map[string][]announce{
+				"A": {
+					{testTxs[0].Hash(), types.LegacyTxType, uint32(testTxs[0].Size())},
+					{testTxs[1].Hash(), types.LegacyTxType, uint32(testTxs[1].Size())},
+				},
+			}),
+			isScheduled{},
+			doFunc(func() { <-drop }),
+
+			// Simulate the drop operation emitted by the server
+			doDrop("A"),
+			isWaiting(nil),
+			isScheduled{nil, nil, nil},
 		},
 	})
 }

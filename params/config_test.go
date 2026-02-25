@@ -21,9 +21,11 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/holiman/uint256"
 	"gotest.tools/assert"
 )
 
@@ -627,6 +629,431 @@ func TestCalculateCoinbase(t *testing.T) {
 				t.Errorf("Block %d (%s): expected %s, got %s",
 					tc.blockNumber, tc.description, tc.expected, result)
 			}
+		}
+	})
+}
+
+// TestBlockAlloc_NoPrecisionLoss makes sure that
+// the current BlockAlloc balances (updated at Oct 22, 2025) fit in 256 bits
+// and do not change numerically when moving from Uint64() to MustFromBig.
+func TestBlockAlloc_NoPrecisionLoss(t *testing.T) {
+	blockAllocs := currentBlockAllocs()
+	maxU64 := new(big.Int).SetUint64(^uint64(0))
+
+	for network, baBlock := range blockAllocs {
+		for blockNum, alloc := range baBlock {
+			for addr, account := range alloc {
+				acct, ok := account.(map[string]interface{})
+				if !ok {
+					t.Fatalf("[%s @ %s] addr %s: unexpected account type %T", network, blockNum, addr, account)
+				}
+				rawBal, ok := acct["balance"]
+				if !ok {
+					t.Fatalf("[%s @ %s] addr %s: missing balance", network, blockNum, addr)
+				}
+				bal, err := parseBalance(rawBal)
+				if err != nil {
+					t.Fatalf("[%s @ %s] addr %s: parse balance error: %v", network, blockNum, addr, err)
+				}
+				// 256-bit fit check
+				if bal.BitLen() > 256 {
+					t.Fatalf("[%s @ %s] addr %s: balance bitlen=%d exceeds 256 bits",
+						network, blockNum, addr, bal.BitLen())
+				}
+				// Compare NewInt(bal.Uint64()) and uint256.FromBig(bal)
+				oldValue := uint256.NewInt(bal.Uint64())
+				newValue, overflow := uint256.FromBig(bal)
+				if overflow {
+					t.Fatalf("[%s @ %s] addr %s: overflow converting to uint256", network, blockNum, addr)
+				}
+				if newValue.Cmp(oldValue) != 0 {
+					// bock alloc balance truncated (bal > MaxUint64)
+					t.Fatalf("[%s @ %s] addr %s: precision loss (balance %s > MaxUint64)",
+						network, blockNum, addr, bal.String())
+				}
+				// same numeric conditions
+				if bal.Cmp(maxU64) > 0 {
+					t.Fatalf("[%s @ %s] addr %s: balance %s > MaxUint64 (would truncate)",
+						network, blockNum, addr, bal.String())
+				}
+			}
+		}
+	}
+}
+
+// parseBalance converts a 0x-value from blockAlloc's balance into *big.Int.
+func parseBalance(v interface{}) (*big.Int, error) {
+	switch x := v.(type) {
+	case string:
+		s := strings.TrimSpace(x)
+		if s == "" {
+			return nil, fmt.Errorf("empty balance string")
+		}
+		z := new(big.Int)
+		if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+			if _, ok := z.SetString(s[2:], 16); !ok {
+				return nil, fmt.Errorf("invalid hex balance: %q", s)
+			}
+			return z, nil
+		} else {
+			return nil, fmt.Errorf("unsupported balance type %T (%v)", v, v)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported balance type %T (%v)", v, v)
+	}
+}
+
+// currentBlockAllocs returns the allocs pasted from config.go.
+func currentBlockAllocs() map[string]map[string]map[string]interface{} {
+	return map[string]map[string]map[string]interface{}{
+		// Mumbai
+		"mumbai": {
+			"22244000": {
+				"0000000000000000000000000000000000001010": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+			"41874000": {
+				"0x0000000000000000000000000000000000001001": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+		},
+		// Amoy
+		"amoy": {
+			"11865856": {
+				"0000000000000000000000000000000000001001": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+				"0000000000000000000000000000000000001010": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+				"360ad4f9a9A8EFe9A8DCB5f461c4Cc1047E1Dcf9": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+			"12121856": {
+				"360ad4f9a9A8EFe9A8DCB5f461c4Cc1047E1Dcf9": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+		},
+		// Mainnet
+		"mainnet": {
+			"22156660": {
+				"0000000000000000000000000000000000001010": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+			"50523000": {
+				"0x0000000000000000000000000000000000001001": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+			"62278656": {
+				"0000000000000000000000000000000000001001": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+				"0000000000000000000000000000000000001010": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+				"0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270": map[string]interface{}{
+					"balance": "0x0",
+					"code":    "...",
+				},
+			},
+		},
+	}
+}
+
+func TestGetTargetGasPercentage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Pre-Dandeli block returns 0", func(t *testing.T) {
+		config := &BorConfig{
+			DandeliBlock: big.NewInt(1000),
+		}
+
+		// Test before Dandeli fork
+		result := config.GetTargetGasPercentage(big.NewInt(500))
+		if result != 0 {
+			t.Errorf("Pre-Dandeli: expected 0, got %d", result)
+		}
+
+		result = config.GetTargetGasPercentage(big.NewInt(999))
+		if result != 0 {
+			t.Errorf("Pre-Dandeli (block 999): expected 0, got %d", result)
+		}
+	})
+
+	t.Run("Post-Dandeli with nil TargetGasPercentage returns default", func(t *testing.T) {
+		config := &BorConfig{
+			DandeliBlock:        big.NewInt(1000),
+			TargetGasPercentage: nil,
+		}
+
+		result := config.GetTargetGasPercentage(big.NewInt(1000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with nil: expected %d, got %d", TargetGasPercentagePostDandeli, result)
+		}
+
+		result = config.GetTargetGasPercentage(big.NewInt(2000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with nil (block 2000): expected %d, got %d", TargetGasPercentagePostDandeli, result)
+		}
+	})
+
+	t.Run("Post-Lisovo with valid custom values", func(t *testing.T) {
+		testCases := []struct {
+			customValue uint64
+			description string
+		}{
+			{1, "minimum valid value"},
+			{50, "mid-range value"},
+			{100, "maximum valid value"},
+			{65, "default value"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.description, func(t *testing.T) {
+				val := tc.customValue
+				config := &BorConfig{
+					DandeliBlock:        big.NewInt(1000),
+					LisovoBlock:         big.NewInt(1000), // Configurable params require Lisovo
+					TargetGasPercentage: &val,
+				}
+
+				result := config.GetTargetGasPercentage(big.NewInt(1000))
+				if result != tc.customValue {
+					t.Errorf("Post-Lisovo with custom value %d: expected %d, got %d",
+						tc.customValue, tc.customValue, result)
+				}
+			})
+		}
+	})
+
+	t.Run("Post-Dandeli with invalid value 0 falls back to default", func(t *testing.T) {
+		invalidVal := uint64(0)
+		config := &BorConfig{
+			DandeliBlock:        big.NewInt(1000),
+			TargetGasPercentage: &invalidVal,
+		}
+
+		result := config.GetTargetGasPercentage(big.NewInt(1000))
+		if result != TargetGasPercentagePostDandeli {
+			t.Errorf("Post-Dandeli with invalid value 0: expected %d, got %d",
+				TargetGasPercentagePostDandeli, result)
+		}
+	})
+
+	t.Run("Post-Dandeli with invalid value >100 falls back to default", func(t *testing.T) {
+		testCases := []uint64{101, 200, 1000}
+
+		for _, invalidVal := range testCases {
+			t.Run(fmt.Sprintf("value_%d", invalidVal), func(t *testing.T) {
+				val := invalidVal
+				config := &BorConfig{
+					DandeliBlock:        big.NewInt(1000),
+					TargetGasPercentage: &val,
+				}
+
+				result := config.GetTargetGasPercentage(big.NewInt(1000))
+				if result != TargetGasPercentagePostDandeli {
+					t.Errorf("Post-Dandeli with invalid value %d: expected %d, got %d",
+						invalidVal, TargetGasPercentagePostDandeli, result)
+				}
+			})
+		}
+	})
+}
+
+func TestGetBaseFeeChangeDenominator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Pre-Delhi returns DefaultBaseFeeChangeDenominator", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:  big.NewInt(1000),
+			BhilaiBlock: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(500))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Pre-Delhi: expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(999))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Pre-Delhi (block 999): expected %d, got %d", DefaultBaseFeeChangeDenominator, result)
+		}
+	})
+
+	t.Run("Post-Delhi Pre-Bhilai returns BaseFeeChangeDenominatorPostDelhi", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  big.NewInt(2000),
+			DandeliBlock: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(1500))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(1999))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Delhi, Pre-Bhilai (block 1999): expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+	})
+
+	t.Run("Post-Bhilai Pre-Dandeli returns BaseFeeChangeDenominatorPostBhilai", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  big.NewInt(2000),
+			DandeliBlock: big.NewInt(3000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(2500))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(2999))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Bhilai, Pre-Dandeli (block 2999): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Lisovo with nil custom value falls back to Bhilai default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
+			BaseFeeChangeDenominator: nil,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Lisovo with nil custom value: expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+
+		result = BaseFeeChangeDenominator(config, big.NewInt(4000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Lisovo with nil custom value (block 4000): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Lisovo with valid custom value", func(t *testing.T) {
+		testCases := []uint64{1, 8, 16, 32, 64, 128}
+
+		for _, customVal := range testCases {
+			t.Run(fmt.Sprintf("value_%d", customVal), func(t *testing.T) {
+				val := customVal
+				config := &BorConfig{
+					DelhiBlock:               big.NewInt(1000),
+					BhilaiBlock:              big.NewInt(2000),
+					DandeliBlock:             big.NewInt(3000),
+					LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
+					BaseFeeChangeDenominator: &val,
+				}
+
+				result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+				if result != customVal {
+					t.Errorf("Post-Lisovo with custom value %d: expected %d, got %d",
+						customVal, customVal, result)
+				}
+			})
+		}
+	})
+
+	t.Run("Post-Lisovo with invalid value 0 falls back to Bhilai default", func(t *testing.T) {
+		invalidVal := uint64(0)
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(3000), // Configurable params require Lisovo
+			BaseFeeChangeDenominator: &invalidVal,
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(3000))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Post-Lisovo with invalid value 0: expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Pre-Lisovo with custom value ignores it", func(t *testing.T) {
+		customVal := uint64(999)
+		config := &BorConfig{
+			DelhiBlock:               big.NewInt(1000),
+			BhilaiBlock:              big.NewInt(2000),
+			DandeliBlock:             big.NewInt(3000),
+			LisovoBlock:              big.NewInt(4000), // Lisovo after Dandeli
+			BaseFeeChangeDenominator: &customVal,
+		}
+
+		// Before Lisovo, custom value should be ignored
+		result := BaseFeeChangeDenominator(config, big.NewInt(3500))
+		if result != BaseFeeChangeDenominatorPostBhilai {
+			t.Errorf("Pre-Lisovo with custom value (block 3500): expected %d, got %d",
+				BaseFeeChangeDenominatorPostBhilai, result)
+		}
+	})
+
+	t.Run("Post-Dandeli but Pre-Bhilai falls back to Delhi default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   big.NewInt(1000),
+			BhilaiBlock:  nil,
+			DandeliBlock: big.NewInt(2000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(2000))
+		if result != BaseFeeChangeDenominatorPostDelhi {
+			t.Errorf("Post-Dandeli, Pre-Bhilai: expected %d, got %d",
+				BaseFeeChangeDenominatorPostDelhi, result)
+		}
+	})
+
+	t.Run("Post-Dandeli but Pre-Delhi falls back to default", func(t *testing.T) {
+		config := &BorConfig{
+			DelhiBlock:   nil,
+			BhilaiBlock:  nil,
+			DandeliBlock: big.NewInt(1000),
+		}
+
+		result := BaseFeeChangeDenominator(config, big.NewInt(1000))
+		if result != DefaultBaseFeeChangeDenominator {
+			t.Errorf("Post-Dandeli, Pre-Delhi: expected %d, got %d",
+				DefaultBaseFeeChangeDenominator, result)
 		}
 	})
 }

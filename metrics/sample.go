@@ -198,7 +198,7 @@ func (s *ExpDecaySample) Snapshot() *sampleSnapshot {
 
 // Update samples a new value.
 func (s *ExpDecaySample) Update(v int64) {
-	if !metricsEnabled {
+	if !metricsEnabled.Load() {
 		return
 	}
 	s.update(time.Now(), v)
@@ -330,7 +330,7 @@ func (s *UniformSample) Snapshot() *sampleSnapshot {
 
 // Update samples a new value.
 func (s *UniformSample) Update(v int64) {
-	if !metricsEnabled {
+	if !metricsEnabled.Load() {
 		return
 	}
 	s.mutex.Lock()

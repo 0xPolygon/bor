@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net"
 	"net/netip"
@@ -720,4 +721,95 @@ func (t *dialTestResolver) Resolve(n *enode.Node) *enode.Node {
 	t.calls = append(t.calls, n.ID())
 
 	return t.answers[n.ID()]
+}
+
+type logCollector struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (c *logCollector) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	c.msgs = append(c.msgs, r.Message)
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *logCollector) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (c *logCollector) WithAttrs([]slog.Attr) slog.Handler           { return c }
+func (c *logCollector) WithGroup(string) slog.Handler                { return c }
+
+func (c *logCollector) count(msg string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, m := range c.msgs {
+		if m == msg {
+			n++
+		}
+	}
+	return n
+}
+
+func (c *logCollector) reset() {
+	c.mu.Lock()
+	c.msgs = nil
+	c.mu.Unlock()
+}
+
+func newTestDialScheduler(t *testing.T, collector *logCollector) (*dialScheduler, *mclock.Simulated) {
+	t.Helper()
+	clock := new(mclock.Simulated)
+	config := dialConfig{
+		maxDialPeers:   4,
+		maxActiveDials: 5,
+		clock:          clock,
+		log:            log.NewLogger(collector),
+		rand:           rand.New(rand.NewSource(0)),
+	}
+	setup := func(net.Conn, connFlag, *enode.Node) error { return errors.New("unused") }
+	return newDialScheduler(config, newDialTestIterator(), setup), clock
+}
+
+func TestDialSchedulerStopSuppressesLookingForPeers(t *testing.T) {
+	t.Run("appears_while_running", func(t *testing.T) {
+		collector := &logCollector{}
+		d, clock := newTestDialScheduler(t, collector)
+		defer d.stop()
+
+		clock.Run(dialStatsLogInterval + time.Second)
+
+		// Trigger a loop iteration via peer add/remove.
+		peer := &conn{flags: dynDialedConn, node: newNode(uintID(0x01), "")}
+		d.peerAdded(peer)
+		d.peerRemoved(peer)
+		time.Sleep(100 * time.Millisecond)
+
+		count := collector.count("Looking for peers")
+		t.Logf("'Looking for peers' logged %d time(s)", count)
+		if count == 0 {
+			t.Fatal("expected 'Looking for peers' while scheduler is running")
+		}
+	})
+
+	t.Run("suppressed_after_stop", func(t *testing.T) {
+		collector := &logCollector{}
+		d, clock := newTestDialScheduler(t, collector)
+
+		d.stop()
+		collector.reset()
+
+		clock.Run(dialStatsLogInterval + time.Second)
+
+		peer := &conn{flags: dynDialedConn, node: newNode(uintID(0x01), "")}
+		d.peerAdded(peer)
+		d.peerRemoved(peer)
+		time.Sleep(100 * time.Millisecond)
+
+		count := collector.count("Looking for peers")
+		t.Logf("'Looking for peers' logged %d time(s) after stop", count)
+		if count > 0 {
+			t.Fatal("'Looking for peers' should not appear after stop")
+		}
+	})
 }

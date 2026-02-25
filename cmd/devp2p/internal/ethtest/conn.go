@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
@@ -130,7 +131,7 @@ func (c *Conn) Write(proto Proto, code uint64, msg any) error {
 	return err
 }
 
-var errDisc error = fmt.Errorf("disconnect")
+var errDisc error = errors.New("disconnect")
 
 // ReadEth reads an Eth sub-protocol wire message.
 func (c *Conn) ReadEth() (any, error) {

@@ -24,10 +24,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand"
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -543,19 +545,26 @@ func TestUDPv4_smallNetConvergence(t *testing.T) {
 	status := make(chan error, len(nodes))
 
 	for i := range nodes {
-		node := nodes[i]
+		self := nodes[i]
 		go func() {
-			found := make(map[enode.ID]bool, len(nodes))
-			it := node.RandomNodes()
+			missing := make(map[enode.ID]bool, len(nodes))
+			for _, n := range nodes {
+				if n.Self().ID() == self.Self().ID() {
+					continue // skip self
+				}
+				missing[n.Self().ID()] = true
+			}
 
+			it := self.RandomNodes()
 			for it.Next() {
-				found[it.Node().ID()] = true
-				if len(found) == len(nodes) {
+				delete(missing, it.Node().ID())
+				if len(missing) == 0 {
 					status <- nil
 					return
 				}
 			}
-			status <- fmt.Errorf("node %s didn't find all nodes", node.Self().ID().TerminalString())
+			missingIDs := slices.Collect(maps.Keys(missing))
+			status <- fmt.Errorf("node %s didn't find all nodes, missing %v", self.Self().ID().TerminalString(), missingIDs)
 		}()
 	}
 
@@ -574,7 +583,6 @@ func TestUDPv4_smallNetConvergence(t *testing.T) {
 
 			if err != nil {
 				t.Error("ERROR:", err)
-				return
 			}
 		}
 	}
@@ -606,6 +614,12 @@ func startLocalhostV4(t *testing.T, cfg Config) *UDPv4 {
 		t.Fatal(err)
 	}
 
+	// Wait for bootstrap to complete.
+	select {
+	case <-udp.tab.initDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for table initialization")
+	}
 	return udp
 }
 

@@ -25,6 +25,12 @@ var (
 	MaxCheckpointLength = uint64(math.Pow(2, 15))
 )
 
+// rootHashCacheEntry is an entry in the root hash cache
+type rootHashCacheEntry struct {
+	endHash common.Hash
+	root    string
+}
+
 // API is a user facing RPC API to allow controlling the signer and voting
 // mechanisms of the proof-of-authority scheme.
 type API struct {
@@ -271,16 +277,45 @@ func (api *API) GetCurrentValidators() ([]*valset.Validator, error) {
 	return snap.ValidatorSet.Validators, nil
 }
 
-// GetRootHash returns the merkle root of the start to end block headers
+// GetRootHash returns the merkle root of the start-to-end blocks' headers
 func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 	if err := api.initializeRootHashCache(); err != nil {
 		return "", err
 	}
 
+	// Snapshot the current canonical tip number for request bounds.
+	head := api.chain.CurrentHeader()
+	if head == nil {
+		return "", errUnknownBlock
+	}
+	headNumber := head.Number.Uint64()
+
+	if start > end || end > headNumber {
+		return "", &valset.InvalidStartEndBlockError{
+			Start:         start,
+			End:           end,
+			CurrentHeader: headNumber,
+		}
+	}
+
+	// Compute at end-block hash.
+	endHeader := api.chain.GetHeaderByNumber(end)
+	if endHeader == nil {
+		return "", errUnknownBlock
+	}
+	endHash := endHeader.Hash()
+
 	key := getRootHashKey(start, end)
 
-	if root, known := api.rootHashCache.Get(key); known {
-		return root.(string), nil
+	// Try the cache first, where entries are bound to a specific end-block hash.
+	if cached, ok := api.rootHashCache.Get(key); ok {
+		if entry, ok := cached.(*rootHashCacheEntry); ok {
+			if entry.endHash == endHash {
+				return entry.root, nil
+			}
+			// End block changed, so the canonical range may have changed.
+			api.rootHashCache.Remove(key)
+		}
 	}
 
 	length := end - start + 1
@@ -289,38 +324,58 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 		return "", &MaxCheckpointLengthExceededError{start, end}
 	}
 
-	currentHeaderNumber := api.chain.CurrentHeader().Number.Uint64()
-
-	if start > end || end > currentHeaderNumber {
-		return "", &valset.InvalidStartEndBlockError{Start: start, End: end, CurrentHeader: currentHeaderNumber}
-	}
-
-	blockHeaders := make([]*types.Header, end-start+1)
+	blockHeaders := make([]*types.Header, length)
 	wg := new(sync.WaitGroup)
 	concurrent := make(chan bool, 20)
 
+	// Fetch headers by number using the current canonical mapping.
 	for i := start; i <= end; i++ {
 		wg.Add(1)
 		concurrent <- true
 
 		go func(number uint64) {
-			blockHeaders[number-start] = api.chain.GetHeaderByNumber(number)
+			defer func() {
+				<-concurrent
+				wg.Done()
+			}()
 
-			<-concurrent
-			wg.Done()
+			blockHeaders[number-start] = api.chain.GetHeaderByNumber(number)
 		}(i)
 	}
+
 	wg.Wait()
 	close(concurrent)
 
+	// Detect in-flight reorg in the checkpoint range: if the canonical end block changed
+	// while reading headers, abort instead of potentially returning a mixed-fork root.
+	newEndHeader := api.chain.GetHeaderByNumber(end)
+	if newEndHeader == nil || newEndHeader.Hash() != endHash {
+		return "", errReorgDuringRootComputation
+	}
+
 	headers := make([][32]byte, nextPowerOfTwo(length))
 
+	// Check continuity and build Merkle leaves.
+	var prevHash common.Hash
 	for i := 0; i < len(blockHeaders); i++ {
 		blockHeader := blockHeaders[i]
 		// Handle no header case, which is possible if ancient pruning was done
 		if blockHeader == nil {
 			return "", errUnknownBlock
 		}
+
+		// For i > 0, enforce parent-child continuity:
+		// H_n.ParentHash must equal H_{n-1}.Hash().
+		if i > 0 {
+			if blockHeader.ParentHash != prevHash {
+				return "", errNonContiguousHeaderRange
+			}
+		}
+
+		// Compute this header's hash once, reuse for continuity.
+		currHash := blockHeader.Hash()
+		prevHash = currHash
+
 		header := crypto.Keccak256(appendBytes32(
 			blockHeader.Number.Bytes(),
 			new(big.Int).SetUint64(blockHeader.Time).Bytes(),
@@ -334,13 +389,22 @@ func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 		headers[i] = arr
 	}
 
-	tree := merkle.NewTreeWithOpts(merkle.TreeOptions{EnableHashSorting: false, DisableHashLeaves: true})
+	tree := merkle.NewTreeWithOpts(merkle.TreeOptions{
+		EnableHashSorting: false,
+		DisableHashLeaves: true,
+	})
+
 	if err := tree.Generate(convert(headers), sha3.NewLegacyKeccak256()); err != nil {
 		return "", err
 	}
 
 	root := hex.EncodeToString(tree.Root().Hash)
-	api.rootHashCache.Add(key, root)
+
+	// Cache the root bound to the end-block hash we computed against.
+	api.rootHashCache.Add(key, &rootHashCacheEntry{
+		endHash: endHash,
+		root:    root,
+	})
 
 	return root, nil
 }

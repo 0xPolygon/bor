@@ -25,6 +25,9 @@
       "rioBlock": 77414656,
       "madhugiriBlock": 80084800,
       "madhugiriProBlock": 80084800,
+      "dandeliBlock": 81424000,
+      "lisovoBlock": 83756500,
+      "lisovoProBlock": 83756500,
       "stateSyncConfirmationDelay": {
         "44934656": 128
       },
@@ -65,6 +68,20 @@
           "startBlock": 73812433,
           "endBlock": 73826700,
           "value": 0
+        },
+        {
+          "startBlock": 81556977,
+          "endBlock": 81558799,
+          "value": 0
+        }
+      ],
+      "overrideValidatorSetInRange": [
+        {
+          "startBlock": 80440819,
+          "endBlock": 80440834,
+          "validators": [
+            "0x41018795fA95783117242244303fd7e26e964eE8"
+          ]
         }
       ],
       "blockAlloc": {
@@ -97,7 +114,8 @@
       },
       "burntContract": {
         "23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
-        "50523000": "0x7A8ed27F4C30512326878652d20fC85727401854"
+        "50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",
+        "83756500": "0x3ef57def668054dd750bd260526105c4eeef104f"
       }
     }
   },

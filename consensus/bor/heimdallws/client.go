@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/gorilla/websocket"
 )
 
 // HeimdallWSClient represents a websocket client with auto-reconnection.

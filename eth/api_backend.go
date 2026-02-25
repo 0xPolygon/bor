@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -54,6 +55,8 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
+
+	relay *relay.RelayService
 }
 
 // ChainConfig returns the active chain configuration.
@@ -481,6 +484,10 @@ func (b *EthAPIBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transac
 	return b.eth.txPool.ContentFrom(addr)
 }
 
+func (b *EthAPIBackend) TxStatus(hash common.Hash) txpool.TxStatus {
+	return b.eth.txPool.Status(hash)
+}
+
 func (b *EthAPIBackend) TxPool() *txpool.TxPool {
 	return b.eth.txPool
 }
@@ -511,7 +518,7 @@ func (b *EthAPIBackend) FeeHistory(ctx context.Context, blockCount uint64, lastB
 }
 
 func (b *EthAPIBackend) BlobBaseFee(ctx context.Context) *big.Int {
-	if excess := b.CurrentHeader().ExcessBlobGas; excess != nil {
+	if excess := b.CurrentHeader().ExcessBlobGas; excess != nil && b.ChainConfig().BlobScheduleConfig != nil {
 		return eip4844.CalcBlobFee(b.ChainConfig(), b.CurrentHeader())
 	}
 	return nil
@@ -615,7 +622,7 @@ func (b *EthAPIBackend) GetWitnesses(ctx context.Context, originBlock uint64, to
 			return nil, err
 		}
 
-		rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+		rlpEncodedWitness := b.eth.blockchain.GetWitness(blockHeader.Hash())
 
 		witness, err := stateless.GetWitnessFromRlp(rlpEncodedWitness)
 		if err != nil {
@@ -637,7 +644,7 @@ func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash,
 		log.Error("Failed to encode witness", "error", err)
 	}
 
-	rawdb.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
+	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
 
 	return nil
 }
@@ -655,7 +662,7 @@ func (b *EthAPIBackend) WitnessByNumber(ctx context.Context, number rpc.BlockNum
 		return nil, nil
 	}
 
-	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), blockHeader.Hash())
+	rlpEncodedWitness := b.eth.blockchain.GetWitness(blockHeader.Hash())
 	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}
@@ -681,7 +688,7 @@ func (b *EthAPIBackend) WitnessByHash(ctx context.Context, hash common.Hash) (*s
 		return nil, nil
 	}
 
-	rlpEncodedWitness := rawdb.ReadWitness(b.eth.blockchain.DB(), hash)
+	rlpEncodedWitness := b.eth.blockchain.GetWitness(hash)
 	if len(rlpEncodedWitness) == 0 {
 		return nil, nil
 	}
@@ -711,4 +718,49 @@ func (b *EthAPIBackend) WitnessByNumberOrHash(ctx context.Context, blockNrOrHash
 
 func (b *EthAPIBackend) IsParallelImportActive() bool {
 	return b.eth.blockchain.IsParallelStatelessImportEnabled()
+}
+
+func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
+	return b.eth.config.TxSyncDefaultTimeout
+}
+
+func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
+	return b.eth.config.TxSyncMaxTimeout
+}
+
+// Preconf / Private tx related API for relay
+func (b *EthAPIBackend) PreconfEnabled() bool {
+	return b.relay.PreconfEnabled()
+}
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	return b.relay.SubmitPreconfTransaction(tx)
+}
+
+func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	return b.relay.CheckPreconfStatus(hash)
+}
+
+func (b *EthAPIBackend) PrivateTxEnabled() bool {
+	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	return b.relay.SubmitPrivateTransaction(tx)
+}
+
+// Preconf / Private tx related API for block producers
+func (b *EthAPIBackend) AcceptPreconfTxs() bool {
+	return b.relay.AcceptPreconfTxs()
+}
+
+func (b *EthAPIBackend) AcceptPrivateTxs() bool {
+	return b.relay.AcceptPrivateTxs()
+}
+
+func (b *EthAPIBackend) RecordPrivateTx(hash common.Hash) {
+	b.relay.RecordPrivateTx(hash)
+}
+
+func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {
+	b.relay.PurgePrivateTx(hash)
 }

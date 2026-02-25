@@ -24,7 +24,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
-	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -48,17 +47,15 @@ type ParallelEVMConfig struct {
 //
 // StateProcessor implements Processor.
 type ParallelStateProcessor struct {
-	config *params.ChainConfig // Chain configuration options
-	bc     *BlockChain         // Canonical block chain
-	engine consensus.Engine    // Consensus engine used for block rewards
+	chain ChainContext // Chain context interface
+	bc    *BlockChain  // Canonical block chain
 }
 
 // NewParallelStateProcessor initialises a new StateProcessor.
-func NewParallelStateProcessor(config *params.ChainConfig, bc *BlockChain, engine consensus.Engine) *ParallelStateProcessor {
+func NewParallelStateProcessor(chain ChainContext, bc *BlockChain) *ParallelStateProcessor {
 	return &ParallelStateProcessor{
-		config: config,
-		bc:     bc,
-		engine: engine,
+		chain: chain,
+		bc:    bc,
 	}
 }
 
@@ -182,7 +179,7 @@ func (task *ExecutionTask) Settle() {
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
 
-	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVFullWriteList())
+	task.finalStateDB.ApplyMVWriteSet(task.statedb.MVWriteList())
 
 	for _, l := range task.statedb.GetLogs(task.tx.Hash(), task.blockNumber.Uint64(), task.blockHash, task.blockTime) {
 		task.finalStateDB.AddLog(l)
@@ -258,6 +255,11 @@ func (task *ExecutionTask) Settle() {
 
 var parallelizabilityTimer = metrics.NewRegisteredTimer("block/parallelizability", nil)
 
+// chainConfig returns the chain configuration.
+func (p *ParallelStateProcessor) chainConfig() *params.ChainConfig {
+	return p.chain.Config()
+}
+
 // Process processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb and applying any rewards to both
 // the processor (coinbase) and any included uncles.
@@ -276,6 +278,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}()
 
 	var (
+		config      = p.chainConfig()
 		receipts    types.Receipts
 		header      = block.Header()
 		blockHash   = block.Hash()
@@ -292,7 +295,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	// Mutate the block and state according to any hard-fork specs
-	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
+	if config.DAOForkSupport && config.DAOForkBlock != nil && config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
 
@@ -318,12 +321,12 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	context := NewEVMBlockContext(header, p.bc.hc, author)
 
-	vmenv := vm.NewEVM(context, statedb, p.config, cfg)
+	vmenv := vm.NewEVM(context, statedb, config, cfg)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv)
 	}
-	if p.config.IsPrague(block.Number()) {
+	if config.IsPrague(block.Number()) {
 		// EIP-2935
 		ProcessParentBlockHash(block.ParentHash(), vmenv)
 	}
@@ -332,7 +335,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		if tx.Type() == types.StateSyncTxType {
 			continue
 		}
-		msg, err := TransactionToMessage(tx, types.MakeSigner(p.config, header.Number, header.Time), header.BaseFee)
+		msg, err := TransactionToMessage(tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
 		if err != nil {
 			log.Error("error creating message", "err", err)
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -346,7 +349,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 		task := &ExecutionTask{
 			msg:               *msg,
-			config:            p.config,
+			config:            config,
 			gasLimit:          block.GasLimit(),
 			blockNumber:       blockNumber,
 			blockHash:         blockHash,
@@ -421,12 +424,18 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	var requests [][]byte
 
-	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
+	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
+	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.engine.Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
+	receipts = p.chain.Engine().Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
 
 	// apply state sync logs
-	if p.config.Bor != nil && p.config.Bor.IsMadhugiri(block.Number()) {
+	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
+		// In case of any errors in state-sync tx processing, the number of receipts won't match
+		// the number of transactions in the block body.
+		if len(block.Transactions()) != len(receipts) {
+			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {
@@ -465,7 +474,7 @@ func VerifyDeps(deps map[int][]int) bool {
 	for i := 0; i <= n-1; i++ {
 		val := deps[i]
 		for _, depTx := range val {
-			if depTx >= n || depTx >= i {
+			if depTx < 0 || depTx >= n || depTx >= i {
 				return false
 			}
 		}

@@ -21,10 +21,11 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
-	"github.com/holiman/uint256"
 )
 
 func TestIsPrimitive(t *testing.T) {
@@ -129,11 +130,7 @@ func TestBlobTxs(t *testing.T) {
 		BlobFeeCap: uint256.NewInt(700),
 		BlobHashes: []common.Hash{hash},
 		Value:      uint256.NewInt(100),
-		Sidecar: &types.BlobTxSidecar{
-			Blobs:       []kzg4844.Blob{blob},
-			Commitments: []kzg4844.Commitment{commitment},
-			Proofs:      []kzg4844.Proof{proof},
-		},
+		Sidecar:    types.NewBlobTxSidecar(types.BlobSidecarVersion0, []kzg4844.Blob{blob}, []kzg4844.Commitment{commitment}, []kzg4844.Proof{proof}),
 	}
 	tx := types.NewTx(b)
 	data, err := json.Marshal(tx)

@@ -164,6 +164,13 @@ type btCurve struct {
 	*secp256k1.KoblitzCurve
 }
 
+func (curve btCurve) IsOnCurve(x, y *big.Int) bool {
+	if x.Cmp(secp256k1.Params().P) >= 0 || y.Cmp(secp256k1.Params().P) >= 0 {
+		return false
+	}
+	return curve.KoblitzCurve.IsOnCurve(x, y)
+}
+
 // Marshal converts a point given as (x, y) into a byte slice.
 func (curve btCurve) Marshal(x, y *big.Int) []byte {
 	byteLen := (curve.Params().BitSize + 7) / 8
@@ -189,5 +196,11 @@ func (curve btCurve) Unmarshal(data []byte) (x, y *big.Int) {
 	}
 	x = new(big.Int).SetBytes(data[1 : 1+byteLen])
 	y = new(big.Int).SetBytes(data[1+byteLen:])
+
+	// Reject non-canonical encodings to ensure coordinates are < P
+	if x.Cmp(curve.Params().P) >= 0 || y.Cmp(curve.Params().P) >= 0 {
+		return nil, nil
+	}
+
 	return
 }

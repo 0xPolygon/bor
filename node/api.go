@@ -52,7 +52,7 @@ func (n *Node) apis() []rpc.API {
 }
 
 // adminAPI is the collection of administrative API methods exposed over
-// both secure and unsecure RPC channels.
+// both secure and insecure RPC channels.
 type adminAPI struct {
 	node *Node // Node interfaced by this API
 }
@@ -231,7 +231,7 @@ func (api *adminAPI) StartHTTP(host *string, port *int, cors *string, apis *stri
 
 	if vhosts != nil {
 		config.Vhosts = nil
-		for _, vhost := range strings.Split(*host, ",") {
+		for _, vhost := range strings.Split(*vhosts, ",") {
 			config.Vhosts = append(config.Vhosts, strings.TrimSpace(vhost))
 		}
 	}

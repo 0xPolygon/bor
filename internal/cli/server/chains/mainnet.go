@@ -39,6 +39,9 @@ var mainnetBor = &Chain{
 				RioBlock:          big.NewInt(77414656),
 				MadhugiriBlock:    big.NewInt(80084800),
 				MadhugiriProBlock: big.NewInt(80084800),
+				DandeliBlock:      big.NewInt(81424000),
+				LisovoBlock:       big.NewInt(83756500),
+				LisovoProBlock:    big.NewInt(83756500),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,
 				},
@@ -72,11 +75,18 @@ var mainnetBor = &Chain{
 				},
 				OverrideStateSyncRecordsInRange: []params.BlockRangeOverride{
 					{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+					{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
+				},
+				OverrideValidatorSetInRange: []params.BlockRangeOverrideValidatorSet{
+					{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{
+						common.HexToAddress("0x41018795fA95783117242244303fd7e26e964eE8"),
+					}},
 				},
 
 				BurntContract: map[string]string{
 					"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
 					"50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",
+					"83756500": "0x3ef57def668054dd750bd260526105c4eeef104f",
 				},
 				Coinbase: map[string]string{
 					"0":        "0x0000000000000000000000000000000000000000",

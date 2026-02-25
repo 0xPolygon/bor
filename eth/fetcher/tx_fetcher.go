@@ -31,11 +31,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
 )
 
 const (
-	// maxTxAnnounces is the maximum number of unique transaction a peer
+	// maxTxAnnounces is the maximum number of unique transactions a peer
 	// can announce in a short time.
 	maxTxAnnounces = 4096
 
@@ -81,35 +80,6 @@ var (
 	txFetchTimeout = 5 * time.Second
 )
 
-var (
-	txAnnounceInMeter          = metrics.NewRegisteredMeter("eth/fetcher/transaction/announces/in", nil)
-	txAnnounceKnownMeter       = metrics.NewRegisteredMeter("eth/fetcher/transaction/announces/known", nil)
-	txAnnounceUnderpricedMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/announces/underpriced", nil)
-	txAnnounceDOSMeter         = metrics.NewRegisteredMeter("eth/fetcher/transaction/announces/dos", nil)
-
-	txBroadcastInMeter          = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/in", nil)
-	txBroadcastKnownMeter       = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/known", nil)
-	txBroadcastUnderpricedMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/underpriced", nil)
-	txBroadcastOtherRejectMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/broadcasts/otherreject", nil)
-
-	txRequestOutMeter     = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/out", nil)
-	txRequestFailMeter    = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/fail", nil)
-	txRequestDoneMeter    = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/done", nil)
-	txRequestTimeoutMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/request/timeout", nil)
-
-	txReplyInMeter          = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/in", nil)
-	txReplyKnownMeter       = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/known", nil)
-	txReplyUnderpricedMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/underpriced", nil)
-	txReplyOtherRejectMeter = metrics.NewRegisteredMeter("eth/fetcher/transaction/replies/otherreject", nil)
-
-	txFetcherWaitingPeers   = metrics.NewRegisteredGauge("eth/fetcher/transaction/waiting/peers", nil)
-	txFetcherWaitingHashes  = metrics.NewRegisteredGauge("eth/fetcher/transaction/waiting/hashes", nil)
-	txFetcherQueueingPeers  = metrics.NewRegisteredGauge("eth/fetcher/transaction/queueing/peers", nil)
-	txFetcherQueueingHashes = metrics.NewRegisteredGauge("eth/fetcher/transaction/queueing/hashes", nil)
-	txFetcherFetchingPeers  = metrics.NewRegisteredGauge("eth/fetcher/transaction/fetching/peers", nil)
-	txFetcherFetchingHashes = metrics.NewRegisteredGauge("eth/fetcher/transaction/fetching/hashes", nil)
-)
-
 // txAnnounce is the notification of the availability of a batch
 // of new transactions in the network.
 type txAnnounce struct {
@@ -118,8 +88,8 @@ type txAnnounce struct {
 	metas  []*txMetadata // Batch of metadatas associated with the hashes (nil before eth/68)
 }
 
-// txMetadata is a set of extra data transmitted along the announcement for better
-// fetch scheduling.
+// txMetadata provides the extra data transmitted along with the announcement
+// for better fetch scheduling.
 type txMetadata struct {
 	kind byte   // Transaction consensus type
 	size uint32 // Transaction size in bytes
@@ -136,10 +106,11 @@ type txRequest struct {
 // txDelivery is the notification that a batch of transactions have been added
 // to the pool and should be untracked.
 type txDelivery struct {
-	origin string        // Identifier of the peer originating the notification
-	hashes []common.Hash // Batch of transaction hashes having been delivered
-	metas  []txMetadata  // Batch of metadatas associated with the delivered hashes
-	direct bool          // Whether this is a direct reply or a broadcast
+	origin    string        // Identifier of the peer originating the notification
+	hashes    []common.Hash // Batch of transaction hashes having been delivered
+	metas     []txMetadata  // Batch of metadata associated with the delivered hashes
+	direct    bool          // Whether this is a direct reply or a broadcast
+	violation error         // Whether we encountered a protocol violation
 }
 
 // txDrop is the notification that a peer has disconnected.
@@ -307,6 +278,7 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 		knownMeter       = txReplyKnownMeter
 		underpricedMeter = txReplyUnderpricedMeter
 		otherRejectMeter = txReplyOtherRejectMeter
+		violation        error
 	)
 
 	if !direct {
@@ -356,6 +328,12 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			case errors.Is(err, txpool.ErrUnderpriced) || errors.Is(err, txpool.ErrReplaceUnderpriced) || errors.Is(err, txpool.ErrTxGasPriceTooLow):
 				underpriced++
 
+			case errors.Is(err, txpool.ErrKZGVerificationError):
+				// KZG verification failed, terminate transaction processing immediately.
+				// Since KZG verification is computationally expensive, this acts as a
+				// defensive measure against potential DoS attacks.
+				violation = err
+
 			default:
 				otherreject++
 			}
@@ -365,6 +343,11 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 				kind: batch[j].Type(),
 				size: uint32(batch[j].Size()),
 			})
+			// Terminate the transaction processing if violation is encountered. All
+			// the remaining transactions in response will be silently discarded.
+			if violation != nil {
+				break
+			}
 		}
 
 		knownMeter.Mark(duplicate)
@@ -376,9 +359,13 @@ func (f *TxFetcher) Enqueue(peer string, txs []*types.Transaction, direct bool) 
 			time.Sleep(200 * time.Millisecond)
 			log.Debug("Peer delivering stale transactions", "peer", peer, "rejected", otherreject)
 		}
+		// If we encountered a protocol violation, disconnect this peer.
+		if violation != nil {
+			break
+		}
 	}
 	select {
-	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct}:
+	case f.cleanup <- &txDelivery{origin: peer, hashes: added, metas: metas, direct: direct, violation: violation}:
 		return nil
 	case <-f.quit:
 		return errTerminated
@@ -438,8 +425,8 @@ func (f *TxFetcher) loop() {
 			if want > maxTxAnnounces {
 				txAnnounceDOSMeter.Mark(int64(want - maxTxAnnounces))
 
-				ann.hashes = ann.hashes[:want-maxTxAnnounces]
-				ann.metas = ann.metas[:want-maxTxAnnounces]
+				ann.hashes = ann.hashes[:maxTxAnnounces-used]
+				ann.metas = ann.metas[:maxTxAnnounces-used]
 			}
 			// All is well, schedule the remainder of the transactions
 			idleWait := len(f.waittime) == 0
@@ -599,6 +586,7 @@ func (f *TxFetcher) loop() {
 					}
 					// Keep track of the request as dangling, but never expire
 					f.requests[peer].hashes = nil
+					txFetcherSlowPeers.Inc(1)
 				}
 			}
 			// Schedule a new transaction retrieval
@@ -698,7 +686,10 @@ func (f *TxFetcher) loop() {
 					log.Warn("Unexpected transaction delivery", "peer", delivery.origin)
 					break
 				}
-
+				if req.hashes == nil {
+					txFetcherSlowPeers.Dec(1)
+					txFetcherSlowWait.Update(time.Duration(f.clock.Now() - req.time).Nanoseconds())
+				}
 				delete(f.requests, delivery.origin)
 
 				// Anything not delivered should be re-scheduled (with or without
@@ -749,6 +740,11 @@ func (f *TxFetcher) loop() {
 				// Something was delivered, try to reschedule requests
 				f.scheduleFetches(timeoutTimer, timeoutTrigger, nil) // Partial delivery may enable others to deliver too
 			}
+			// If we encountered a protocol violation, disconnect the peer
+			if delivery.violation != nil {
+				log.Warn("Disconnect peer for protocol violation", "peer", delivery.origin, "error", delivery.violation)
+				f.dropPeer(delivery.origin)
+			}
 
 		case drop := <-f.drop:
 			// A peer was dropped, remove all traces of it
@@ -790,7 +786,10 @@ func (f *TxFetcher) loop() {
 
 					delete(f.fetching, hash)
 				}
-
+				if request.hashes == nil {
+					txFetcherSlowPeers.Dec(1)
+					txFetcherSlowWait.Update(time.Duration(f.clock.Now() - request.time).Nanoseconds())
+				}
 				delete(f.requests, drop.peer)
 			}
 			// Clean up general announcement tracking
@@ -800,6 +799,10 @@ func (f *TxFetcher) loop() {
 
 					if len(f.announced[hash]) == 0 {
 						delete(f.announced, hash)
+					}
+					delete(f.alternates[hash], drop.peer)
+					if len(f.alternates[hash]) == 0 {
+						delete(f.alternates, hash)
 					}
 				}
 
@@ -867,7 +870,7 @@ func (f *TxFetcher) rescheduleWait(timer *mclock.Timer, trigger chan struct{}) {
 // This method is a bit "flaky" "by design". In theory the timeout timer only ever
 // should be rescheduled if some request is pending. In practice, a timeout will
 // cause the timer to be rescheduled every 5 secs (until the peer comes through or
-// disconnects). This is a limitation of the fetcher code because we don't trac
+// disconnects). This is a limitation of the fetcher code because we don't track
 // pending requests and timed out requests separately. Without double tracking, if
 // we simply didn't reschedule the timer on all-timeout then the timer would never
 // be set again since len(request) > 0 => something's running.

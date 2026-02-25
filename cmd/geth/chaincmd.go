@@ -61,6 +61,8 @@ var (
 		Flags: slices.Concat([]cli.Flag{
 			utils.CachePreimagesFlag,
 			utils.OverrideOsaka,
+			utils.OverrideBPO1,
+			utils.OverrideBPO2,
 			utils.OverrideVerkle,
 		}, utils.DatabaseFlags),
 		Description: `
@@ -110,6 +112,7 @@ if one is set.  Otherwise it prints the genesis from the datadir.`,
 			utils.MetricsInfluxDBTokenFlag,
 			utils.MetricsInfluxDBBucketFlag,
 			utils.MetricsInfluxDBOrganizationFlag,
+			utils.StateSizeTrackingFlag,
 			utils.TxLookupLimitFlag,
 			utils.VMTraceFlag,
 			utils.VMTraceJsonConfigFlag,
@@ -286,7 +289,7 @@ func initGenesis(ctx *cli.Context) error {
 	chaindb := utils.MakeChainDatabase(ctx, stack, false, false)
 	defer chaindb.Close()
 
-	triedb := utils.MakeTrieDatabase(ctx, chaindb, ctx.Bool(utils.CachePreimagesFlag.Name), false, genesis.IsVerkle())
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, ctx.Bool(utils.CachePreimagesFlag.Name), false, genesis.IsVerkle())
 	defer triedb.Close()
 
 	_, hash, compatErr, err := core.SetupGenesisBlockWithOverride(chaindb, triedb, genesis, &overrides)
@@ -600,8 +603,8 @@ func parseDumpConfig(ctx *cli.Context, db ethdb.Database) (*state.DumpConfig, co
 		arg := ctx.Args().First()
 		if hashish(arg) {
 			hash := common.HexToHash(arg)
-			if number := rawdb.ReadHeaderNumber(db, hash); number != nil {
-				header = rawdb.ReadHeader(db, hash, *number)
+			if number, ok := rawdb.ReadHeaderNumber(db, hash); ok {
+				header = rawdb.ReadHeader(db, hash, number)
 			} else {
 				return nil, common.Hash{}, fmt.Errorf("block %x not found", hash)
 			}
@@ -665,7 +668,7 @@ func dump(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	triedb := utils.MakeTrieDatabase(ctx, db, true, true, false) // always enable preimage lookup
+	triedb := utils.MakeTrieDatabase(ctx, stack, db, true, true, false) // always enable preimage lookup
 	defer triedb.Close()
 
 	state, err := state.New(root, state.NewDatabase(triedb, nil))
@@ -736,7 +739,7 @@ func pruneHistory(ctx *cli.Context) error {
 	return nil
 }
 
-// downladEra is the era1 file downloader tool.
+// downloadEra is the era1 file downloader tool.
 func downloadEra(ctx *cli.Context) error {
 	flags.CheckExclusive(ctx, eraBlockFlag, eraEpochFlag, eraAllFlag)
 
@@ -748,7 +751,7 @@ func downloadEra(ctx *cli.Context) error {
 		case ctx.IsSet(utils.SepoliaFlag.Name):
 			network = "sepolia"
 		default:
-			return fmt.Errorf("unsupported network, no known era1 checksums")
+			return errors.New("unsupported network, no known era1 checksums")
 		}
 	}
 

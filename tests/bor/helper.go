@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -25,8 +26,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk" //nolint:typecheck
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
-	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -171,9 +170,10 @@ func insertNewBlock(t *testing.T, chain *core.BlockChain, block *types.Block) {
 	}
 }
 
-type Option func(header *types.Header)
+type modifyHeaderFunc func(header *types.Header)
+type modifyBlockFunc func(block *types.Block, receipts []*types.Receipt) *types.Block
 
-func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, opts ...Option) *types.Header {
+func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, currentValidators []*valset.Validator, modifyHeader []modifyHeaderFunc) *types.Header {
 	t.Helper()
 
 	header := &types.Header{
@@ -266,18 +266,18 @@ func buildHeader(t *testing.T, chain *core.BlockChain, parentBlock *types.Block,
 		}
 	}
 
-	for _, opt := range opts {
-		opt(header)
+	for _, fn := range modifyHeader {
+		fn(header)
 	}
 
 	return header
 }
 
-func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, opts ...Option) *types.Block {
+func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain, parentBlock *types.Block, signer []byte, borConfig *params.BorConfig, txs []*types.Transaction, currentValidators []*valset.Validator, skipSealing bool, modifyHeader []modifyHeaderFunc, modifyBody []modifyBlockFunc) *types.Block {
 	t.Helper()
 
 	// Build a new header based on parent block
-	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, opts...)
+	header := buildHeader(t, chain, parentBlock, signer, borConfig, currentValidators, modifyHeader)
 	state, err := chain.State()
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -290,11 +290,15 @@ func buildNextBlock(t *testing.T, _bor consensus.Engine, chain *core.BlockChain,
 
 	// Finalize and seal the block
 	var block *types.Block
-	block, b.receipts, err = _bor.FinalizeAndAssemble(chain, b.header, state, &types.Body{
+	block, b.receipts, _, err = _bor.FinalizeAndAssemble(chain, b.header, state, &types.Body{
 		Transactions: b.txs,
 	}, b.receipts)
 	if err != nil {
 		panic(fmt.Sprintf("error finalizing block: %v", err))
+	}
+
+	for _, fn := range modifyBody {
+		block = fn(block, b.receipts)
 	}
 
 	// Write state changes to db
@@ -468,8 +472,10 @@ func createMockHeimdall(ctrl *gomock.Controller, span0, span1 *borTypes.Span) *m
 	h.EXPECT().GetSpan(gomock.Any(), uint64(0)).Return(span0, nil).AnyTimes()
 	h.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(span1, nil).AnyTimes()
 	h.EXPECT().GetLatestSpan(gomock.Any()).Return(span1, nil).AnyTimes()
-	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(&checkpoint.Checkpoint{}, nil).AnyTimes()
-	h.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{}, nil).AnyTimes()
+	// Return errors for checkpoint and milestone to prevent background verification from
+	// comparing empty hashes against the chain and triggering unwanted chain rewinds
+	h.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(nil, errors.New("no checkpoint")).AnyTimes()
+	h.EXPECT().FetchMilestone(gomock.Any()).Return(nil, errors.New("no milestone")).AnyTimes()
 	h.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 
 	return h
@@ -571,10 +577,26 @@ func InitGenesis(t *testing.T, faucets []*ecdsa.PrivateKey, fileLocation string,
 }
 
 func InitMiner(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
-	return InitMinerWithBlockTime(genesis, privKey, withoutHeimdall, 0)
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, 0, nil)
 }
 
-func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
+// InitMinerWithHeimdall creates a miner node with a mock HeimdallClient injected during initialization.
+// This is the preferred way to test with mock Heimdall clients as it avoids caching issues.
+func InitMinerWithHeimdall(genesis *core.Genesis, privKey *ecdsa.PrivateKey, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, false, 0, heimdallClient)
+}
+
+// DynamicGasLimitConfig holds configuration for dynamic gas limit testing
+type DynamicGasLimitConfig struct {
+	EnableDynamicGasLimit bool
+	GasLimitMin           uint64
+	GasLimitMax           uint64
+	TargetBaseFee         uint64
+	BaseFeeBuffer         uint64
+}
+
+// InitMinerWithDynamicGasLimit creates a miner with dynamic gas limit configuration
+func InitMinerWithDynamicGasLimit(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, dynamicConfig DynamicGasLimitConfig) (*node.Node, *eth.Ethereum, error) {
 	// Define the basic configurations for the Ethereum node
 	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
 	if err != nil {
@@ -607,13 +629,97 @@ func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, wi
 		TxPool:          legacypool.DefaultConfig,
 		GPO:             ethconfig.Defaults.GPO,
 		Miner: miner.Config{
-			Etherbase: crypto.PubkeyToAddress(privKey.PublicKey),
-			GasCeil:   genesis.GasLimit * 11 / 10,
-			GasPrice:  big.NewInt(1),
-			Recommit:  time.Second,
-			BlockTime: blockTime,
+			Etherbase:             crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:               genesis.GasLimit * 11 / 10,
+			GasPrice:              big.NewInt(1),
+			Recommit:              time.Second,
+			EnableDynamicGasLimit: dynamicConfig.EnableDynamicGasLimit,
+			GasLimitMin:           dynamicConfig.GasLimitMin,
+			GasLimitMax:           dynamicConfig.GasLimitMax,
+			TargetBaseFee:         dynamicConfig.TargetBaseFee,
+			BaseFeeBuffer:         dynamicConfig.BaseFeeBuffer,
 		},
 		WithoutHeimdall: withoutHeimdall,
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// register backend to account manager with keystore for signing
+	keydir := stack.KeyStoreDir()
+
+	n, p := keystore.StandardScryptN, keystore.StandardScryptP
+	kStore := keystore.NewKeyStore(keydir, n, p)
+
+	_, err = kStore.ImportECDSA(privKey, "")
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	acc := kStore.Accounts()[0]
+	err = kStore.Unlock(acc, "")
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// proceed to authorize the local account manager in any case
+	ethBackend.AccountManager().AddBackend(kStore)
+
+	err = stack.Start()
+
+	return stack, ethBackend, err
+}
+
+func InitMinerWithBlockTime(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration) (*node.Node, *eth.Ethereum, error) {
+	return InitMinerWithOptions(genesis, privKey, withoutHeimdall, blockTime, nil)
+}
+
+// InitMinerWithOptions is the base function for creating miner nodes with various options.
+func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool, blockTime time.Duration, heimdallClient bor.IHeimdallClient) (*node.Node, *eth.Ethereum, error) {
+	// Define the basic configurations for the Ethereum node
+	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	config := &node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    25,
+		},
+		UseLightweightKDF: true,
+	}
+	// Create the node and configure a full Ethereum node on it
+	stack, err := node.New(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend, err := eth.New(stack, &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   256,
+		DatabaseHandles: 256,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase:           crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:             genesis.GasLimit * 11 / 10,
+			GasPrice:            big.NewInt(1),
+			Recommit:            time.Second,
+			BlockTime:           blockTime,
+			CommitInterruptFlag: true,
+		},
+		WithoutHeimdall:        withoutHeimdall,
+		OverrideHeimdallClient: heimdallClient,
 	})
 
 	if err != nil {

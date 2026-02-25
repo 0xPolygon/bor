@@ -33,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -135,6 +136,21 @@ func (m *simChainHeadReader) GetHeader(hash common.Hash, number uint64) *types.H
 		return nil
 	}
 	return header
+}
+
+// SetStateSync implements core.BorStateSyncer for Bor consensus compatibility.
+// Since this is a simulation, we don't need to actually store state sync data.
+func (m *simChainHeadReader) SetStateSync(stateData []*types.StateSyncData) {
+	// No-op for simulation
+}
+
+// SubscribeStateSyncEvent implements core.BorStateSyncer for Bor consensus compatibility.
+// Returns a no-op subscription since we don't need state sync events in simulation.
+func (m *simChainHeadReader) SubscribeStateSyncEvent(ch chan<- core.StateSyncEvent) event.Subscription {
+	return event.NewSubscription(func(quit <-chan struct{}) error {
+		<-quit
+		return nil
+	})
 }
 
 func (m *simChainHeadReader) GetHeaderByNumber(number uint64) *types.Header {
@@ -248,7 +264,7 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		callResults          = make([]simCallResult, len(block.Calls))
 		receipts             = make([]*types.Receipt, len(block.Calls))
 		// Block hash will be repaired after execution.
-		tracer   = newTracer(sim.traceTransfers, blockContext.BlockNumber.Uint64(), common.Hash{}, common.Hash{}, 0)
+		tracer   = newTracer(sim.traceTransfers, blockContext.BlockNumber.Uint64(), blockContext.Time, common.Hash{}, common.Hash{}, 0)
 		vmConfig = &vm.Config{
 			NoBaseFee: !sim.validate,
 			Tracer:    tracer.Hooks(),
@@ -352,9 +368,14 @@ func (sim *simulator) processBlock(ctx context.Context, block *simBlock, header,
 		reqHash := types.CalcRequestsHash(requests)
 		header.RequestsHash = &reqHash
 	}
-	blockBody := &types.Body{Transactions: txes, Withdrawals: *block.BlockOverrides.Withdrawals}
+	// For Bor chains, Withdrawals will be nil, so we need to handle that
+	var withdrawals types.Withdrawals
+	if block.BlockOverrides.Withdrawals != nil {
+		withdrawals = *block.BlockOverrides.Withdrawals
+	}
+	blockBody := &types.Body{Transactions: txes, Withdrawals: withdrawals}
 	chainHeadReader := &simChainHeadReader{ctx, sim.b}
-	b, receipts, err := sim.b.Engine().FinalizeAndAssemble(chainHeadReader, header, sim.state, blockBody, receipts)
+	b, receipts, _, err := sim.b.Engine().FinalizeAndAssemble(chainHeadReader, header, sim.state, blockBody, receipts)
 	_ = receipts // mark unused
 	if err != nil {
 		return nil, nil, nil, err
@@ -420,7 +441,9 @@ func (sim *simulator) sanitizeChain(blocks []simBlock) ([]simBlock, error) {
 			n := new(big.Int).Add(prevNumber, big.NewInt(1))
 			block.BlockOverrides.Number = (*hexutil.Big)(n)
 		}
-		if block.BlockOverrides.Withdrawals == nil {
+		// Only set withdrawals for non-Bor chains (Ethereum mainnet and testnets)
+		// Bor/Polygon doesn't support withdrawals even post-Shanghai
+		if block.BlockOverrides.Withdrawals == nil && sim.chainConfig.Bor == nil {
 			block.BlockOverrides.Withdrawals = &types.Withdrawals{}
 		}
 		diff := new(big.Int).Sub(block.BlockOverrides.Number.ToInt(), prevNumber)
@@ -437,12 +460,16 @@ func (sim *simulator) sanitizeChain(blocks []simBlock) ([]simBlock, error) {
 			for i := uint64(0); i < gap.Uint64(); i++ {
 				n := new(big.Int).Add(prevNumber, big.NewInt(int64(i+1)))
 				t := prevTimestamp + timestampIncrement
+				overrides := &override.BlockOverrides{
+					Number: (*hexutil.Big)(n),
+					Time:   (*hexutil.Uint64)(&t),
+				}
+				// Only set withdrawals for non-Bor chains
+				if sim.chainConfig.Bor == nil {
+					overrides.Withdrawals = &types.Withdrawals{}
+				}
 				b := simBlock{
-					BlockOverrides: &override.BlockOverrides{
-						Number:      (*hexutil.Big)(n),
-						Time:        (*hexutil.Uint64)(&t),
-						Withdrawals: &types.Withdrawals{},
-					},
+					BlockOverrides: overrides,
 				}
 				prevTimestamp = t
 				res = append(res, b)
@@ -482,22 +509,30 @@ func (sim *simulator) makeHeaders(blocks []simBlock) ([]*types.Header, error) {
 		overrides := block.BlockOverrides
 
 		var withdrawalsHash *common.Hash
-		if sim.chainConfig.IsShanghai(overrides.Number.ToInt()) {
+		number := overrides.Number.ToInt()
+		// Only set withdrawals hash for non-Bor chains that have Shanghai fork
+		if sim.chainConfig.IsShanghai(number) && sim.chainConfig.Bor == nil {
 			withdrawalsHash = &types.EmptyWithdrawalsHash
 		}
 		var parentBeaconRoot *common.Hash
-		if sim.chainConfig.IsCancun(overrides.Number.ToInt()) {
+		if sim.chainConfig.IsCancun(number) {
 			parentBeaconRoot = &common.Hash{}
 			if overrides.BeaconRoot != nil {
 				parentBeaconRoot = overrides.BeaconRoot
 			}
+		}
+		// Set difficulty to zero if the given block is post-merge. Without this, all post-merge hardforks would remain inactive.
+		// For example, calling eth_simulateV1(..., blockParameter: 0x0) on hoodi network will cause all blocks to have a difficulty of 1 and be treated as pre-merge.
+		difficulty := header.Difficulty
+		if sim.chainConfig.IsPostMerge(number.Uint64(), 0) {
+			difficulty = big.NewInt(0)
 		}
 		header = overrides.MakeHeader(&types.Header{
 			UncleHash:        types.EmptyUncleHash,
 			ReceiptHash:      types.EmptyReceiptsHash,
 			TxHash:           types.EmptyTxsHash,
 			Coinbase:         header.Coinbase,
-			Difficulty:       header.Difficulty,
+			Difficulty:       difficulty,
 			GasLimit:         header.GasLimit,
 			WithdrawalsHash:  withdrawalsHash,
 			ParentBeaconRoot: parentBeaconRoot,
@@ -540,4 +575,24 @@ func (b *simBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber)
 
 func (b *simBackend) ChainConfig() *params.ChainConfig {
 	return b.b.ChainConfig()
+}
+
+func (b *simBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	if b.base.Hash() == hash {
+		return b.base, nil
+	}
+	if header, err := b.b.HeaderByHash(ctx, hash); err == nil {
+		return header, nil
+	}
+	// Check simulated headers
+	for _, header := range b.headers {
+		if header.Hash() == hash {
+			return header, nil
+		}
+	}
+	return nil, errors.New("header not found")
+}
+
+func (b *simBackend) CurrentHeader() *types.Header {
+	return b.b.CurrentHeader()
 }

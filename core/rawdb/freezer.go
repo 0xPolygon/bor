@@ -26,11 +26,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gofrs/flock"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
-	"github.com/gofrs/flock"
 )
 
 var (
@@ -125,6 +126,8 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		instanceLock: lock,
 	}
 
+	freezer.offset.Store(offset)
+
 	// Create the tables.
 	for name, config := range tables {
 		table, err := newTable(datadir, name, readMeter, writeMeter, sizeGauge, maxTableSize, config, readonly)
@@ -153,6 +156,10 @@ func NewFreezer(datadir string, namespace string, readonly bool, offset uint64, 
 		lock.Unlock()
 		return nil, err
 	}
+
+	// Some blocks in ancientDB may have already been frozen and been pruned, so adding the offset to
+	// represent the absolute number of blocks already frozen.
+	freezer.frozen.Add(offset)
 
 	// Create the write batch.
 	freezer.writeBatch = newFreezerBatch(freezer)
@@ -202,6 +209,15 @@ func (f *Freezer) Ancient(kind string, number uint64) ([]byte, error) {
 func (f *Freezer) AncientRange(kind string, start, count, maxBytes uint64) ([][]byte, error) {
 	if table := f.tables[kind]; table != nil {
 		return table.RetrieveItems(start, count, maxBytes)
+	}
+	return nil, errUnknownTable
+}
+
+// AncientBytes retrieves the value segment of the element specified by the id
+// and value offsets.
+func (f *Freezer) AncientBytes(kind string, id, offset, length uint64) ([]byte, error) {
+	if table := f.tables[kind]; table != nil {
+		return table.RetrieveBytes(id, offset, length)
 	}
 	return nil, errUnknownTable
 }

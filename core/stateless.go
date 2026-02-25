@@ -64,7 +64,7 @@ func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *typ
 		headerCache: lru.NewCache[common.Hash, *types.Header](256),
 		engine:      consensus,
 	}
-	processor := NewStateProcessor(config, headerChain)
+	processor := NewStateProcessor(headerChain)
 	validator := NewBlockValidator(config, nil) // No chain, we only validate the state, not the block
 
 	res, err := processor.Process(block, db, vmconfig, author, context.Background())

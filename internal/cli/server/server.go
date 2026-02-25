@@ -13,6 +13,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hellofresh/health-go/v5"
+	"github.com/mattn/go-colorable"
+	"github.com/mattn/go-isatty"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/cmd/utils"
@@ -33,17 +45,6 @@ import (
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/hellofresh/health-go/v5"
-	"github.com/mattn/go-colorable"
-	"github.com/mattn/go-isatty"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
@@ -70,8 +71,6 @@ type Server struct {
 }
 
 type serverOption func(srv *Server, config *Config) error
-
-var glogger *log.GlogHandler
 
 func init() {
 	handler := log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, false)
@@ -492,28 +491,29 @@ func (s *Server) loggingServerInterceptor(ctx context.Context, req interface{}, 
 func setupLogger(logLevel int, loggingInfo LoggingConfig) {
 	output := io.Writer(os.Stderr)
 
+	var handler *log.GlogHandler
 	if loggingInfo.Json {
-		glogger = log.NewGlogHandler(log.JSONHandler(os.Stderr))
+		handler = log.NewGlogHandler(log.JSONHandler(os.Stderr))
 	} else {
 		usecolor := (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) && os.Getenv("TERM") != "dumb"
 		if usecolor {
 			output = colorable.NewColorableStderr()
 		}
 
-		glogger = log.NewGlogHandler(log.NewTerminalHandler(output, usecolor))
+		handler = log.NewGlogHandler(log.NewTerminalHandler(output, usecolor))
 	}
 
 	// logging
 	lvl := log.FromLegacyLevel(logLevel)
-	glogger.Verbosity(lvl)
+	handler.Verbosity(lvl)
 
 	if loggingInfo.Vmodule != "" {
-		if err := glogger.Vmodule(loggingInfo.Vmodule); err != nil {
+		if err := handler.Vmodule(loggingInfo.Vmodule); err != nil {
 			log.Error("failed to set Vmodule", "err", err)
 		}
 	}
 
-	log.SetDefault(log.NewLogger(glogger))
+	log.SetDefault(log.NewLogger(handler))
 }
 
 func (s *Server) GetLatestBlockNumber() *big.Int {

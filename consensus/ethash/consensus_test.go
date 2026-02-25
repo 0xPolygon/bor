@@ -25,12 +25,125 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/holiman/uint256"
 )
+
+// testStateBuilder creates and initializes a state database for testing
+type testStateBuilder struct {
+	t      *testing.T
+	db     *triedb.Database
+	state  *state.StateDB
+	addr   common.Address
+	amount *big.Int
+}
+
+func newTestStateBuilder(t *testing.T) *testStateBuilder {
+	privateKey, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(privateKey.PublicKey)
+
+	memDB := rawdb.NewMemoryDatabase()
+	trieDB := triedb.NewDatabase(memDB, triedb.HashDefaults)
+	stateDB, _ := state.New(types.EmptyRootHash, state.NewDatabase(trieDB, nil))
+
+	initialBalance := new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+	stateDB.SetBalance(addr, uint256.MustFromBig(initialBalance), tracing.BalanceChangeUnspecified)
+	stateDB.SetNonce(addr, 0, tracing.NonceChangeUnspecified)
+
+	return &testStateBuilder{
+		t:      t,
+		db:     trieDB,
+		state:  stateDB,
+		addr:   addr,
+		amount: initialBalance,
+	}
+}
+
+func (tsb *testStateBuilder) getState() *state.StateDB {
+	return tsb.state
+}
+
+// assertBlockValid validates the finalized block matches expectations
+func assertBlockValid(t *testing.T, result *blockAssemblyResult, expectedHeader *types.Header) {
+	t.Helper()
+
+	if result.err != nil {
+		t.Fatalf("block assembly failed with error: %v", result.err)
+	}
+
+	if result.block == nil || result.receipts == nil {
+		t.Fatal("block assembly returned nil block or receipts")
+	}
+
+	if result.commitDuration < 0 {
+		t.Fatalf("negative commit duration: %v", result.commitDuration)
+	}
+
+	// Validate block fields
+	if result.block.Number().Cmp(expectedHeader.Number) != 0 {
+		t.Errorf("block number mismatch: expected %v, got %v", expectedHeader.Number, result.block.Number())
+	}
+
+	if result.block.GasLimit() != expectedHeader.GasLimit {
+		t.Errorf("gas limit mismatch: expected %v, got %v", expectedHeader.GasLimit, result.block.GasLimit())
+	}
+
+	// Check root hashes are populated
+	if result.block.Root() == (common.Hash{}) || expectedHeader.Root == (common.Hash{}) {
+		t.Error("root hash should not be empty")
+	}
+}
+
+type blockAssemblyResult struct {
+	block          *types.Block
+	receipts       []*types.Receipt
+	commitDuration time.Duration
+	err            error
+}
+
+// fakeChainConfig wraps chain configuration for testing
+type fakeChainConfig struct {
+	cfg *params.ChainConfig
+}
+
+func createFakeChain(cfg *params.ChainConfig) consensus.ChainHeaderReader {
+	return &fakeChainConfig{cfg: cfg}
+}
+
+func (f *fakeChainConfig) Config() *params.ChainConfig {
+	return f.cfg
+}
+
+func (f *fakeChainConfig) CurrentHeader() *types.Header {
+	return &types.Header{}
+}
+
+func (f *fakeChainConfig) GetHeader(_ common.Hash, _ uint64) *types.Header {
+	return nil
+}
+
+func (f *fakeChainConfig) GetHeaderByNumber(_ uint64) *types.Header {
+	return nil
+}
+
+func (f *fakeChainConfig) GetHeaderByHash(_ common.Hash) *types.Header {
+	return nil
+}
+
+func (f *fakeChainConfig) GetTd(_ common.Hash, _ uint64) *big.Int {
+	return big.NewInt(0)
+}
 
 type diffTest struct {
 	ParentTimestamp    uint64
@@ -200,4 +313,69 @@ func BenchmarkDifficultyCalculator(b *testing.B) {
 			x2(1000014, h)
 		}
 	})
+}
+
+func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
+	t.Parallel()
+
+	// Setup first test scenario
+	stateBuilder1 := newTestStateBuilder(t)
+	testConfig := params.TestChainConfig
+	fakeChain := createFakeChain(testConfig)
+	ethashEngine := NewFaker()
+
+	firstHeader := &types.Header{
+		Number:     big.NewInt(1),
+		GasLimit:   5000000,
+		GasUsed:    0,
+		Time:       1000000,
+		Difficulty: big.NewInt(1),
+		Coinbase:   common.Address{},
+		ParentHash: common.Hash{},
+	}
+
+	firstBody := &types.Body{
+		Transactions: []*types.Transaction{},
+		Uncles:       []*types.Header{},
+		Withdrawals:  []*types.Withdrawal{},
+	}
+
+	b1, r1, ct1, e1 := ethashEngine.FinalizeAndAssemble(fakeChain, firstHeader, stateBuilder1.getState(), firstBody, []*types.Receipt{})
+	result1 := &blockAssemblyResult{block: b1, receipts: r1, commitDuration: ct1, err: e1}
+	assertBlockValid(t, result1, firstHeader)
+
+	// Setup second test scenario with larger state
+	stateBuilder2 := newTestStateBuilder(t)
+	largeStateAddr := common.Address{0xaa}
+	stateBuilder2.state.SetBalance(largeStateAddr, uint256.NewInt(100), tracing.BalanceChangeUnspecified)
+
+	// Populate state with storage entries
+	for idx := 0; idx < 100; idx++ {
+		storageKey := common.BigToHash(big.NewInt(int64(idx)))
+		storageVal := common.BigToHash(big.NewInt(int64(idx * 2)))
+		stateBuilder2.state.SetState(largeStateAddr, storageKey, storageVal)
+	}
+
+	secondHeader := &types.Header{
+		Number:     big.NewInt(2),
+		GasLimit:   5000000,
+		GasUsed:    0,
+		Time:       1000001,
+		Difficulty: big.NewInt(1),
+		Coinbase:   common.Address{},
+		ParentHash: b1.Hash(),
+	}
+
+	secondBody := &types.Body{
+		Transactions: []*types.Transaction{},
+		Uncles:       []*types.Header{},
+		Withdrawals:  []*types.Withdrawal{},
+	}
+
+	b2, r2, ct2, e2 := ethashEngine.FinalizeAndAssemble(fakeChain, secondHeader, stateBuilder2.getState(), secondBody, []*types.Receipt{})
+	result2 := &blockAssemblyResult{block: b2, receipts: r2, commitDuration: ct2, err: e2}
+	assertBlockValid(t, result2, secondHeader)
+
+	t.Logf("Commit time for empty state: %v", ct1)
+	t.Logf("Commit time for state with 100 storage entries: %v", ct2)
 }

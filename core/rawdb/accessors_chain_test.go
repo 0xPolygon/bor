@@ -26,12 +26,13 @@ import (
 	"reflect"
 	"testing"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/crypto/sha3"
 )
 
 // Tests block header storage and retrieval operations.
@@ -268,7 +269,7 @@ func TestBadBlockStorage(t *testing.T) {
 
 	for i := 0; i < len(badBlocks)-1; i++ {
 		if badBlocks[i].NumberU64() < badBlocks[i+1].NumberU64() {
-			t.Fatalf("The bad blocks are not sorted #[%d](%d) < #[%d](%d)", i, i+1, badBlocks[i].NumberU64(), badBlocks[i+1].NumberU64())
+			t.Fatalf("The bad blocks are not sorted #[%d](%d) < #[%d](%d)", i, badBlocks[i].NumberU64(), i+1, badBlocks[i+1].NumberU64())
 		}
 	}
 
@@ -1036,4 +1037,94 @@ func TestHeadersRLPStorage(t *testing.T) {
 	checkSequence(0, 1)    // Only genesis
 	checkSequence(1, 1)    // Only block 1
 	checkSequence(1, 2)    // Genesis + block 1
+}
+
+// mockErrorDB is a mock database that always returns errors on Get operations
+type mockErrorDB struct {
+	getError error
+}
+
+func (m *mockErrorDB) Has(key []byte) (bool, error) {
+	return false, m.getError
+}
+
+func (m *mockErrorDB) Get(key []byte) ([]byte, error) {
+	return nil, m.getError
+}
+
+func TestReadBlockPruneHead(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	// Test reading non-existent entry (should return nil)
+	if entry := ReadBlockPruneHead(db); entry != nil {
+		t.Fatalf("Non-existent block prune head returned: %v", entry)
+	}
+
+	// Test reading when Get returns an error
+	errorDB := &mockErrorDB{getError: fmt.Errorf("database error")}
+	if entry := ReadBlockPruneHead(errorDB); entry != nil {
+		t.Fatalf("Expected nil when Get returns error, got: %v", entry)
+	}
+
+	// Write a valid value and verify read
+	testHead := uint64(12345)
+	WriteBlockPruneHead(db, testHead)
+
+	if entry := ReadBlockPruneHead(db); entry == nil {
+		t.Fatalf("Stored block prune head not found")
+	} else if *entry != testHead {
+		t.Fatalf("Retrieved block prune head mismatch: have %v, want %v", *entry, testHead)
+	}
+
+	// Test reading after writing zero value
+	WriteBlockPruneHead(db, 0)
+	if entry := ReadBlockPruneHead(db); entry == nil {
+		t.Fatalf("Stored block prune head (zero) not found")
+	} else if *entry != 0 {
+		t.Fatalf("Retrieved block prune head mismatch: have %v, want 0", *entry)
+	}
+
+	// Test reading after writing max uint64 value
+	maxHead := uint64(18446744073709551615)
+	WriteBlockPruneHead(db, maxHead)
+	if entry := ReadBlockPruneHead(db); entry == nil {
+		t.Fatalf("Stored block prune head (max uint64) not found")
+	} else if *entry != maxHead {
+		t.Fatalf("Retrieved block prune head mismatch: have %v, want %v", *entry, maxHead)
+	}
+}
+
+func TestWriteBlockPruneHead(t *testing.T) {
+	db := NewMemoryDatabase()
+
+	// Test writing and reading back a value
+	testHead := uint64(54321)
+	WriteBlockPruneHead(db, testHead)
+
+	if entry := ReadBlockPruneHead(db); entry == nil {
+		t.Fatalf("Stored block prune head not found")
+	} else if *entry != testHead {
+		t.Fatalf("Retrieved block prune head mismatch: have %v, want %v", *entry, testHead)
+	}
+
+	// Test overwriting with a different value
+	newHead := uint64(99999)
+	WriteBlockPruneHead(db, newHead)
+
+	if entry := ReadBlockPruneHead(db); entry == nil {
+		t.Fatalf("Updated block prune head not found")
+	} else if *entry != newHead {
+		t.Fatalf("Updated block prune head mismatch: have %v, want %v", *entry, newHead)
+	}
+
+	// Test writing multiple different values in sequence
+	testValues := []uint64{0, 1, 100, 1000, 10000, 18446744073709551615}
+	for _, val := range testValues {
+		WriteBlockPruneHead(db, val)
+		if entry := ReadBlockPruneHead(db); entry == nil {
+			t.Fatalf("Block prune head not found for value %d", val)
+		} else if *entry != val {
+			t.Fatalf("Block prune head mismatch for value %d: have %v, want %v", val, *entry, val)
+		}
+	}
 }

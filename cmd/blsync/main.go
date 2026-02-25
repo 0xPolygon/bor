@@ -22,6 +22,8 @@ import (
 	"os"
 	"slices"
 
+	cli "github.com/urfave/cli/v2"
+
 	"github.com/ethereum/go-ethereum/beacon/blsync"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/internal/debug"
@@ -29,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
-	cli "github.com/urfave/cli/v2"
 )
 
 func main() {

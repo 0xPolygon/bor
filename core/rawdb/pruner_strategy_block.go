@@ -33,6 +33,13 @@ func (b *BlockStrategy) WriteCursor(db ethdb.KeyValueWriter, cur uint64) {
 	WriteBlockPruneCursor(db, cur)
 }
 
+func (b *BlockStrategy) ReadPrunerHead(db ethdb.KeyValueReader) *uint64 {
+	return ReadBlockPruneHead(db)
+}
+func (b *BlockStrategy) WritePrunerHead(db ethdb.KeyValueWriter, cur uint64) {
+	WriteBlockPruneHead(db, cur)
+}
+
 func (b *BlockStrategy) FindEarliest(db ethdb.Database, cutoff uint64) (uint64, bool) {
 	// earliest canonical header with data
 	return findEarliestBlockWithData(db, cutoff)

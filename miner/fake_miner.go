@@ -7,6 +7,8 @@ import (
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	gomock "go.uber.org/mock/gomock"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
@@ -26,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/triedb"
-	gomock "go.uber.org/mock/gomock"
 )
 
 type DefaultBorMiner struct {
@@ -146,6 +147,12 @@ func NewDBForFakes(t TensingObject) (ethdb.Database, *core.Genesis, *params.Chai
 	chainConfig, _, err, _ := core.SetupGenesisBlock(chainDB, triedb.NewDatabase(chainDB, triedb.HashDefaults), genesis)
 	if err != nil {
 		t.Fatalf("can't create new chain config: %v", err)
+	}
+
+	// Make a copy of BorConfig to avoid race conditions with parallel tests
+	if chainConfig.Bor != nil {
+		borCopy := *chainConfig.Bor
+		chainConfig.Bor = &borCopy
 	}
 
 	chainConfig.Bor.Period = map[string]uint64{

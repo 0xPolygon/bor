@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"

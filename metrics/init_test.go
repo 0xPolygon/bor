@@ -1,5 +1,5 @@
 package metrics
 
 func init() {
-	metricsEnabled = true
+	metricsEnabled.Store(true)
 }

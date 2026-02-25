@@ -38,6 +38,9 @@ var amoyTestnet = &Chain{
 				RioBlock:          big.NewInt(26272256),
 				MadhugiriBlock:    big.NewInt(28899616),
 				MadhugiriProBlock: big.NewInt(29287400),
+				DandeliBlock:      big.NewInt(31890000),
+				LisovoBlock:       big.NewInt(33634700),
+				LisovoProBlock:    big.NewInt(34062000),
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,
 				},

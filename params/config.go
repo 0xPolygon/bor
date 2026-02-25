@@ -25,6 +25,7 @@ import (
 	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
 
@@ -90,6 +91,7 @@ var (
 		GrayGlacierBlock:        nil,
 		TerminalTotalDifficulty: big.NewInt(0),
 		MergeNetsplitBlock:      nil,
+		DepositContractAddress:  common.HexToAddress("0x4242424242424242424242424242424242424242"),
 		Ethash:                  new(EthashConfig),
 	}
 	// SepoliaChainConfig contains the chain parameters to run a node on the Sepolia test network.
@@ -340,6 +342,9 @@ var (
 			RioBlock:          big.NewInt(26272256),
 			MadhugiriBlock:    big.NewInt(28899616),
 			MadhugiriProBlock: big.NewInt(29287400),
+			DandeliBlock:      big.NewInt(31890000),
+			LisovoBlock:       big.NewInt(33634700),
+			LisovoProBlock:    big.NewInt(34062000),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -423,6 +428,9 @@ var (
 			RioBlock:          big.NewInt(77414656),
 			MadhugiriBlock:    big.NewInt(80084800),
 			MadhugiriProBlock: big.NewInt(80084800),
+			DandeliBlock:      big.NewInt(81424000),
+			LisovoBlock:       big.NewInt(83756500),
+			LisovoProBlock:    big.NewInt(83756500),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -457,11 +465,18 @@ var (
 			},
 			OverrideStateSyncRecordsInRange: []BlockRangeOverride{
 				{StartBlock: 73812433, EndBlock: 73826700, Value: 0},
+				{StartBlock: 81556977, EndBlock: 81558799, Value: 0},
+			},
+			OverrideValidatorSetInRange: []BlockRangeOverrideValidatorSet{
+				{StartBlock: 80440819, EndBlock: 80440834, Validators: []common.Address{
+					common.HexToAddress("0x41018795fA95783117242244303fd7e26e964eE8"),
+				}},
 			},
 
 			BurntContract: map[string]string{
 				"23850000": "0x70bca57f4579f58670ab2d18ef16e02c17553c38",
 				"50523000": "0x7A8ed27F4C30512326878652d20fC85727401854",
+				"83756500": "0x3ef57def668054dd750bd260526105c4eeef104f",
 			},
 			Coinbase: map[string]string{
 				"0":        "0x0000000000000000000000000000000000000000",
@@ -558,6 +573,7 @@ var (
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
 			Prague: DefaultPragueBlobConfig,
+			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
 			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
@@ -667,8 +683,9 @@ var (
 
 	// MergedTestChainConfig contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers for testing purposes.
+	// Includes all Bor hard forks enabled at block 0.
 	MergedTestChainConfig = &ChainConfig{
-		ChainID:                 big.NewInt(1),
+		ChainID:                 big.NewInt(1337),
 		HomesteadBlock:          big.NewInt(0),
 		DAOForkBlock:            nil,
 		DAOForkSupport:          false,
@@ -699,10 +716,26 @@ var (
 			Osaka:  DefaultOsakaBlobConfig,
 		},
 		Bor: &BorConfig{
-			Sprint: map[string]uint64{
-				"0": 4},
-			BurntContract: map[string]string{"0": "0x000000000000000000000000000000000000dead"},
-			Period:        map[string]uint64{"0": 2},
+			Sprint:                map[string]uint64{"0": 4},
+			Period:                map[string]uint64{"0": 2},
+			ProducerDelay:         map[string]uint64{"0": 1},
+			BackupMultiplier:      map[string]uint64{"0": 2},
+			ValidatorContract:     "0x0000000000000000000000000000000000001000",
+			StateReceiverContract: "0x0000000000000000000000000000000000001001",
+			BurntContract:         map[string]string{"0": "0x000000000000000000000000000000000000dead"},
+			BlockAlloc:            map[string]interface{}{},
+			// Bor hard forks
+			JaipurBlock:       big.NewInt(0),
+			DelhiBlock:        big.NewInt(0),
+			IndoreBlock:       big.NewInt(0),
+			AhmedabadBlock:    big.NewInt(0),
+			BhilaiBlock:       big.NewInt(0),
+			RioBlock:          big.NewInt(0),
+			MadhugiriBlock:    big.NewInt(0),
+			MadhugiriProBlock: big.NewInt(0),
+			DandeliBlock:      big.NewInt(0),
+			LisovoBlock:       big.NewInt(0),
+			LisovoProBlock:    big.NewInt(0),
 		},
 	}
 
@@ -865,29 +898,50 @@ type BlockRangeOverride struct {
 	Value      int    `json:"value"`
 }
 
+type BlockRangeOverrideValidatorSet struct {
+	StartBlock uint64           `json:"startBlock"`
+	EndBlock   uint64           `json:"endBlock"`
+	Validators []common.Address `json:"validators"`
+}
+
+// DefaultSpanLength is the number of bor blocks in a span. This must match
+// heimdall-v2's bor module Params.span_duration to ensure reorg protection
+// boundaries stay consistent between the execution and consensus layers.
+const DefaultSpanLength = 6400
+
 // BorConfig is the consensus engine configs for Matic bor based sealing.
 type BorConfig struct {
-	Period                          map[string]uint64      `json:"period"`                          // Number of seconds between blocks to enforce
-	ProducerDelay                   map[string]uint64      `json:"producerDelay"`                   // Number of seconds delay between two producer interval
-	Sprint                          map[string]uint64      `json:"sprint"`                          // Epoch length to proposer
-	BackupMultiplier                map[string]uint64      `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
-	ValidatorContract               string                 `json:"validatorContract"`               // Validator set contract
-	StateReceiverContract           string                 `json:"stateReceiverContract"`           // State receiver contract
-	OverrideStateSyncRecords        map[string]int         `json:"overrideStateSyncRecords"`        // override state records count
-	OverrideStateSyncRecordsInRange []BlockRangeOverride   `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
-	BlockAlloc                      map[string]interface{} `json:"blockAlloc"`
-	BurntContract                   map[string]string      `json:"burntContract"`              // governance contract where the token will be sent to and burnt in london fork
-	Coinbase                        map[string]string      `json:"coinbase"`                   // coinbase address
-	SkipValidatorByteCheck          []uint64               `json:"skipValidatorByteCheck"`     // skip validator byte check
-	JaipurBlock                     *big.Int               `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                      *big.Int               `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                     *big.Int               `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay      map[string]uint64      `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock                  *big.Int               `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                     *big.Int               `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                        *big.Int               `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock                  *big.Int               `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock               *big.Int               `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	Period                          map[string]uint64                `json:"period"`                          // Number of seconds between blocks to enforce
+	ProducerDelay                   map[string]uint64                `json:"producerDelay"`                   // Number of seconds delay between two producer interval
+	Sprint                          map[string]uint64                `json:"sprint"`                          // Epoch length to proposer
+	BackupMultiplier                map[string]uint64                `json:"backupMultiplier"`                // Backup multiplier to determine the wiggle time
+	ValidatorContract               string                           `json:"validatorContract"`               // Validator set contract
+	StateReceiverContract           string                           `json:"stateReceiverContract"`           // State receiver contract
+	OverrideStateSyncRecords        map[string]int                   `json:"overrideStateSyncRecords"`        // override state records count
+	OverrideStateSyncRecordsInRange []BlockRangeOverride             `json:"overrideStateSyncRecordsInRange"` // override state records count in a given block range
+	OverrideValidatorSetInRange     []BlockRangeOverrideValidatorSet `json:"overrideValidatorSetInRange"`     // override validator set in a given block range
+	BlockAlloc                      map[string]interface{}           `json:"blockAlloc"`
+	BurntContract                   map[string]string                `json:"burntContract"`          // governance contract where the token will be sent to and burnt in london fork
+	Coinbase                        map[string]string                `json:"coinbase"`               // coinbase address
+	SkipValidatorByteCheck          []uint64                         `json:"skipValidatorByteCheck"` // skip validator byte check
+
+	// Runtime miner configuration (set via sealer/miner CLI flags, not from genesis JSON)
+	// These affect consensus gas pricing but are configurable per-node for operational flexibility
+	TargetGasPercentage      *uint64 `json:"-"` // Post-Lisovo: target gas as % of gas limit (configurable post-Lisovo, default 65% post-Dandeli). Set via --miner.target-gas-percentage
+	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Lisovo: base fee change rate (configurable post-Lisovo, must be >0, default 64). Set via --miner.base-fee-change-denominator
+
+	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay map[string]uint64 `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock             *big.Int          `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                *big.Int          `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                   *big.Int          `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
+	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -947,16 +1001,44 @@ func (c *BorConfig) IsMadhugiriPro(number *big.Int) bool {
 	return isBlockForked(c.MadhugiriProBlock, number)
 }
 
-// // TODO: modify this function once the block number is finalized
-// func (c *BorConfig) IsNapoli(number *big.Int) bool {
-// 	if c.NapoliBlock != nil {
-// 		if c.NapoliBlock.Cmp(big.NewInt(0)) == 0 {
-// 			return false
-// 		}
-// 	}
+func (c *BorConfig) IsDandeli(number *big.Int) bool {
+	return isBlockForked(c.DandeliBlock, number)
+}
 
-// 	return isBlockForked(c.NapoliBlock, number)
-// }
+func (c *BorConfig) IsLisovo(number *big.Int) bool {
+	return isBlockForked(c.LisovoBlock, number)
+}
+
+func (c *BorConfig) IsLisovoPro(number *big.Int) bool {
+	return isBlockForked(c.LisovoProBlock, number)
+}
+
+// GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
+// After Lisovo hard fork, this value can be configured via CLI flags (stored in BorConfig at runtime).
+// It validates the configured value and falls back to defaults if invalid or nil.
+// Valid range: 1-100 (percentage).
+func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
+	// Only applies after Dandeli
+	if !c.IsDandeli(number) {
+		return 0 // Caller should use ElasticityMultiplier for pre-Dandeli
+	}
+
+	// If custom value is set, validate it
+	if c.TargetGasPercentage != nil && c.IsLisovo(number) {
+		val := *c.TargetGasPercentage
+		// Validate: must be between 1 and 100
+		if val > 0 && val <= 100 {
+			return val
+		}
+		// Invalid value - log error and fall back to default
+		log.Error("Invalid TargetGasPercentage in BorConfig, falling back to default",
+			"configured", val,
+			"validRange", "1-100")
+	}
+
+	// Default for post-Dandeli
+	return TargetGasPercentagePostDandeli
+}
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {
 	return number%c.CalculateSprint(number) == 0
@@ -1034,45 +1116,77 @@ func (c *ChainConfig) Description() string {
 
 	banner += "\n"
 
+	// Bor-specific hard forks.
+	if c.Bor != nil {
+		banner += "Bor hard forks (block based):\n"
+		if c.Bor.JaipurBlock != nil {
+			banner += fmt.Sprintf(" - Jaipur:                      #%-8v\n", c.Bor.JaipurBlock)
+		}
+		if c.Bor.DelhiBlock != nil {
+			banner += fmt.Sprintf(" - Delhi:                       #%-8v\n", c.Bor.DelhiBlock)
+		}
+		if c.Bor.IndoreBlock != nil {
+			banner += fmt.Sprintf(" - Indore:                      #%-8v\n", c.Bor.IndoreBlock)
+		}
+		if c.Bor.AhmedabadBlock != nil {
+			banner += fmt.Sprintf(" - Ahmedabad:                   #%-8v\n", c.Bor.AhmedabadBlock)
+		}
+		if c.Bor.BhilaiBlock != nil {
+			banner += fmt.Sprintf(" - Bhilai:                      #%-8v\n", c.Bor.BhilaiBlock)
+		}
+		if c.Bor.RioBlock != nil {
+			banner += fmt.Sprintf(" - Rio:                         #%-8v\n", c.Bor.RioBlock)
+		}
+		if c.Bor.MadhugiriBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri:                   #%-8v\n", c.Bor.MadhugiriBlock)
+		}
+		if c.Bor.MadhugiriProBlock != nil {
+			banner += fmt.Sprintf(" - Madhugiri Pro:               #%-8v\n", c.Bor.MadhugiriProBlock)
+		}
+		if c.Bor.DandeliBlock != nil {
+			banner += fmt.Sprintf(" - Dandeli:                     #%-8v\n", c.Bor.DandeliBlock)
+		}
+		if c.Bor.LisovoBlock != nil {
+			banner += fmt.Sprintf(" - Lisovo:                      #%-8v\n", c.Bor.LisovoBlock)
+		}
+		if c.Bor.LisovoProBlock != nil {
+			banner += fmt.Sprintf(" - Lisovo Pro:                  #%-8v\n", c.Bor.LisovoProBlock)
+		}
+		return banner
+	}
+
 	// Create a list of forks with a short description of them. Forks that only
 	// makes sense for mainnet should be optional at printing to avoid bloating
 	// the output for testnets and private networks.
 	banner += "Pre-Merge hard forks (block based):\n"
-	banner += fmt.Sprintf(" - Homestead:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/homestead.md)\n", c.HomesteadBlock)
-
+	banner += fmt.Sprintf(" - Homestead:                   #%-8v\n", c.HomesteadBlock)
 	if c.DAOForkBlock != nil {
-		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/dao-fork.md)\n", c.DAOForkBlock)
+		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v\n", c.DAOForkBlock)
 	}
-
-	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/tangerine-whistle.md)\n", c.EIP150Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Byzantium:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/byzantium.md)\n", c.ByzantiumBlock)
-	banner += fmt.Sprintf(" - Constantinople:              #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/constantinople.md)\n", c.ConstantinopleBlock)
-	banner += fmt.Sprintf(" - Petersburg:                  #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/petersburg.md)\n", c.PetersburgBlock)
-	banner += fmt.Sprintf(" - Istanbul:                    #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/istanbul.md)\n", c.IstanbulBlock)
-
+	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v\n", c.EIP150Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v\n", c.EIP155Block)
+	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v\n", c.EIP158Block)
+	banner += fmt.Sprintf(" - Byzantium:                   #%-8v\n", c.ByzantiumBlock)
+	banner += fmt.Sprintf(" - Constantinople:              #%-8v\n", c.ConstantinopleBlock)
+	banner += fmt.Sprintf(" - Petersburg:                  #%-8v\n", c.PetersburgBlock)
+	banner += fmt.Sprintf(" - Istanbul:                    #%-8v\n", c.IstanbulBlock)
 	if c.MuirGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/muir-glacier.md)\n", c.MuirGlacierBlock)
+		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v\n", c.MuirGlacierBlock)
 	}
-
-	banner += fmt.Sprintf(" - Berlin:                      #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/berlin.md)\n", c.BerlinBlock)
-	banner += fmt.Sprintf(" - London:                      #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/london.md)\n", c.LondonBlock)
-
+	banner += fmt.Sprintf(" - Berlin:                      #%-8v\n", c.BerlinBlock)
+	banner += fmt.Sprintf(" - London:                      #%-8v\n", c.LondonBlock)
 	if c.ArrowGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/arrow-glacier.md)\n", c.ArrowGlacierBlock)
+		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v\n", c.ArrowGlacierBlock)
 	}
 
 	if c.GrayGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/gray-glacier.md)\n", c.GrayGlacierBlock)
+		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v\n", c.GrayGlacierBlock)
 	}
 
 	banner += "\n"
 
 	// Add a special section for the merge as it's non-obvious
 	banner += "Merge configured:\n"
-	banner += " - Hard-fork specification:    https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/paris.md\n"
-	banner += " - Network known to be merged\n"
 	banner += fmt.Sprintf(" - Total terminal difficulty:  %v\n", c.TerminalTotalDifficulty)
 	if c.MergeNetsplitBlock != nil {
 		banner += fmt.Sprintf(" - Merge netsplit block:       #%-8v\n", c.MergeNetsplitBlock)
@@ -1098,6 +1212,7 @@ func (c *ChainConfig) Description() string {
 	if c.OsakaBlock != nil {
 		banner += fmt.Sprintf(" - Osaka:                      #%-8v\n", *c.OsakaBlock)
 	}
+	banner += fmt.Sprintf("\nAll fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/\n")
 	return banner
 }
 
@@ -1106,6 +1221,14 @@ type BlobConfig struct {
 	Target         int    `json:"target"`
 	Max            int    `json:"max"`
 	UpdateFraction uint64 `json:"baseFeeUpdateFraction"`
+}
+
+// String implement fmt.Stringer, returning string format blob config.
+func (bc *BlobConfig) String() string {
+	if bc == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("target: %d, max: %d, fraction: %d", bc.Target, bc.Max, bc.UpdateFraction)
 }
 
 // BlobScheduleConfig determines target and max number of blobs allow per fork.
@@ -1195,6 +1318,17 @@ func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *bi
 	}
 
 	return parentTotalDiff.Cmp(c.TerminalTotalDifficulty) < 0 && totalDiff.Cmp(c.TerminalTotalDifficulty) >= 0
+}
+
+// IsPostMerge reports whether the given block number is assumed to be post-merge.
+// Here we check the MergeNetsplitBlock to allow configuring networks with a PoW or
+// PoA chain for unit testing purposes.
+// Note that this is not needed in bor: only used in simulate.go
+func (c *ChainConfig) IsPostMerge(blockNum uint64, _ uint64) bool {
+	mergedAtGenesis := c.TerminalTotalDifficulty != nil && c.TerminalTotalDifficulty.Sign() == 0
+	return mergedAtGenesis ||
+		c.MergeNetsplitBlock != nil && blockNum >= c.MergeNetsplitBlock.Uint64() ||
+		c.ShanghaiBlock != nil && blockNum >= c.ShanghaiBlock.Uint64()
 }
 
 // IsShanghai returns whether num is either equal to the Shanghai fork block or greater.
@@ -1470,7 +1604,6 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.OsakaBlock, newcfg.OsakaBlock, headNumber) {
 		return newBlockCompatError("Osaka fork block", c.OsakaBlock, newcfg.OsakaBlock)
 	}
-
 	return nil
 }
 
@@ -1485,15 +1618,15 @@ func (c *ChainConfig) ElasticityMultiplier() uint64 {
 }
 
 // LatestFork returns the latest time-based fork that would be active for the given time.
-func (c *ChainConfig) LatestFork(time uint64) forks.Fork {
+func (c *ChainConfig) LatestFork(_ uint64) forks.Fork {
 	// Assume last non-time-based fork has passed.
 	london := c.LondonBlock
 
 	switch {
-	case c.IsPrague(london):
-		return forks.Prague
 	case c.IsOsaka(london):
 		return forks.Osaka
+	case c.IsPrague(london):
+		return forks.Prague
 	case c.IsCancun(london):
 		return forks.Cancun
 	case c.IsShanghai(london):
@@ -1503,24 +1636,56 @@ func (c *ChainConfig) LatestFork(time uint64) forks.Fork {
 	}
 }
 
-/*
-// Timestamp returns the timestamp associated with the fork or returns nil if
-// the fork isn't defined or isn't a time-based fork.
-func (c *ChainConfig) Timestamp(fork forks.Fork) *uint64 {
-	switch {
-	case fork == forks.Osaka:
-		return c.OsakaTime
-	case fork == forks.Prague:
-		return c.PragueTime
-	case fork == forks.Cancun:
-		return c.CancunTime
-	case fork == forks.Shanghai:
-		return c.ShanghaiTime
+// BlobConfig returns the blob config associated with the provided fork.
+func (c *ChainConfig) BlobConfig(fork forks.Fork) *BlobConfig {
+	switch fork {
+	case forks.Osaka:
+		return c.BlobScheduleConfig.Osaka
+	case forks.Prague:
+		return c.BlobScheduleConfig.Prague
+	case forks.Cancun:
+		return c.BlobScheduleConfig.Cancun
 	default:
 		return nil
 	}
 }
-*/
+
+// ActiveSystemContracts returns the currently active system contracts at the
+// given timestamp.
+func (c *ChainConfig) ActiveSystemContracts(time uint64) map[string]common.Address {
+	fork := c.LatestFork(time)
+	active := make(map[string]common.Address)
+	if fork >= forks.Osaka {
+		// no new system contracts
+	}
+	if fork >= forks.Prague {
+		active["CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS"] = ConsolidationQueueAddress
+		active["DEPOSIT_CONTRACT_ADDRESS"] = c.DepositContractAddress
+		active["HISTORY_STORAGE_ADDRESS"] = HistoryStorageAddress
+		active["WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS"] = WithdrawalQueueAddress
+	}
+	if fork >= forks.Cancun {
+		active["BEACON_ROOTS_ADDRESS"] = BeaconRootsAddress
+	}
+	return active
+}
+
+// Block returns the Block associated with the fork or returns nil if
+// the fork isn't defined
+func (c *ChainConfig) Block(fork forks.Fork) *big.Int {
+	switch {
+	case fork == forks.Osaka:
+		return c.OsakaBlock
+	case fork == forks.Prague:
+		return c.PragueBlock
+	case fork == forks.Cancun:
+		return c.CancunBlock
+	case fork == forks.Shanghai:
+		return c.ShanghaiBlock
+	default:
+		return nil
+	}
+}
 
 // isForkBlockIncompatible returns true if a fork scheduled at block s1 cannot be
 // rescheduled to block s2 because head is already past the fork.
@@ -1529,8 +1694,7 @@ func isForkBlockIncompatible(s1, s2, head *big.Int) bool {
 }
 
 // isBlockForked returns whether a fork scheduled at block s is active at the
-// given head block. Whilst this method is the same as isTimestampForked, they
-// are explicitly separate for clearer reading.
+// given head block.
 func isBlockForked(s, head *big.Int) bool {
 	if s == nil || head == nil {
 		return false
@@ -1594,30 +1758,6 @@ func newBlockCompatError(what string, storedblock, newblock *big.Int) *ConfigCom
 	return err
 }
 
-// nolint
-func newTimestampCompatError(what string, storedtime, newtime *uint64) *ConfigCompatError {
-	var rew *uint64
-	switch {
-	case storedtime == nil:
-		rew = newtime
-	case newtime == nil || *storedtime < *newtime:
-		rew = storedtime
-	default:
-		rew = newtime
-	}
-	err := &ConfigCompatError{
-		What:         what,
-		StoredTime:   storedtime,
-		NewTime:      newtime,
-		RewindToTime: 0,
-	}
-	if rew != nil && *rew != 0 {
-		err.RewindToTime = *rew - 1
-	}
-
-	return err
-}
-
 func (err *ConfigCompatError) Error() string {
 	if err.StoredBlock != nil {
 		return fmt.Sprintf("mismatching %s in database (have block %d, want block %d, rewindto block %d)", err.What, err.StoredBlock, err.NewBlock, err.RewindToBlock)
@@ -1648,10 +1788,12 @@ type Rules struct {
 	IsVerkle                                                bool
 	IsMadhugiri                                             bool
 	IsMadhugiriPro                                          bool
+	IsLisovo                                                bool
+	IsLisovoPro                                             bool
 }
 
 // Rules ensures c's ChainID is not nil.
-func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules {
+func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 	chainID := c.ChainID
 	if chainID == nil {
 		chainID = new(big.Int)
@@ -1681,5 +1823,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsEIP4762:        c.IsVerkle(num),
 		IsMadhugiri:      c.Bor != nil && c.Bor.IsMadhugiri(num),
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
+		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
+		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
 	}
 }
