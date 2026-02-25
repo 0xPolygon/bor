@@ -1136,13 +1136,7 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 			delete(pool.lastRebroadcast, old.Hash())
 		}
 		pool.all.Add(tx)
-		if async {
-			// We don't want to get blocked on this due to internal lock, so
-			// call the function to insert transactions into the heap async.
-			go pool.priced.Put(tx)
-		} else {
-			pool.priced.Put(tx)
-		}
+		pool.priced.Put(tx)
 		pool.queueTxEvent(tx)
 		log.Trace("Pooled new executable transaction", "hash", hash, "from", from, "to", tx.To())
 
@@ -1205,9 +1199,7 @@ func (pool *LegacyPool) enqueueTx(hash common.Hash, tx *types.Transaction, addAl
 	}
 	if addAll {
 		pool.all.Add(tx)
-		// We don't want to get blocked on this due to internal lock, so
-		// call the function to insert transactions into the heap async.
-		go pool.priced.Put(tx)
+		pool.priced.Put(tx)
 	}
 	return replaced != nil, nil
 }
