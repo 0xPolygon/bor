@@ -150,6 +150,18 @@ type StateDB struct {
 	witness      *stateless.Witness
 	witnessStats *stateless.WitnessStats
 
+	// nonExistentReads tracks addresses that were looked up but don't exist
+	// in the state trie. Under delayed SRC, these are included in the
+	// FlatDiff so the SRC goroutine can walk their trie paths and capture
+	// proof-of-absence nodes for the witness. Without this, stateless
+	// execution fails when it tries to prove these accounts don't exist.
+	nonExistentReads map[common.Address]struct{}
+
+	// flatDiffRef is a read-only reference to the parent block's FlatDiff,
+	// consulted lazily by getStateObject and GetCommittedState before falling
+	// through to the trie reader. Set by NewWithFlatBase; nil otherwise.
+	flatDiffRef *FlatDiff
+
 	// Measurements gathered during execution for debugging purposes
 
 	AccountLoaded        int          // Number of accounts retrieved from the database during the state transition
@@ -1014,6 +1026,18 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		if _, ok := s.stateObjectsDestruct[addr]; ok {
 			return nil
 		}
+		// Check the FlatDiff reference for accounts mutated in the parent block.
+		if s.flatDiffRef != nil {
+			if acct, ok := s.flatDiffRef.Accounts[addr]; ok {
+				acctCopy := acct
+				obj := newObject(s, addr, &acctCopy)
+				if code, ok := s.flatDiffRef.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {
+					obj.code = code
+				}
+				s.setStateObject(obj)
+				return obj
+			}
+		}
 		s.AccountLoaded++
 
 		start := time.Now()
@@ -1033,6 +1057,14 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		}
 		// Short circuit if the account is not found
 		if acct == nil {
+			// Track the address so the delayed SRC goroutine can walk
+			// the trie path and capture proof-of-absence nodes for the
+			// witness. Without this, stateless execution can't verify
+			// non-existent accounts.
+			if s.nonExistentReads == nil {
+				s.nonExistentReads = make(map[common.Address]struct{})
+			}
+			s.nonExistentReads[addr] = struct{}{}
 			return nil
 		}
 		// Insert into the live set
@@ -1149,6 +1181,7 @@ func (s *StateDB) Copy() *StateDB {
 		transientStorage: s.transientStorage.Copy(),
 		journal:          s.journal.copy(),
 	}
+	state.flatDiffRef = s.flatDiffRef // read-only, safe to share
 	if s.trie != nil {
 		state.trie = mustCopyTrie(s.trie)
 	}
@@ -1195,6 +1228,10 @@ func (s *StateDB) Copy() *StateDB {
 
 	if s.mvHashmap != nil {
 		state.mvHashmap = s.mvHashmap
+	}
+
+	if len(s.nonExistentReads) > 0 {
+		state.nonExistentReads = maps.Clone(s.nonExistentReads)
 	}
 
 	return state
@@ -1350,6 +1387,17 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				if s.witnessStats != nil {
 					s.witnessStats.Add(witness, obj.addrHash)
 				}
+			} else if s.prefetcher == nil {
+				if tr, err := obj.getTrie(); err == nil {
+					for key := range obj.originStorage {
+						tr.GetStorage(obj.address, key[:])
+					}
+					witness := tr.Witness()
+					s.witness.AddState(witness)
+					if s.witnessStats != nil {
+						s.witnessStats.Add(witness, obj.addrHash)
+					}
+				}
 			}
 		}
 		// Pull in only-read and non-destructed trie witnesses
@@ -1373,6 +1421,21 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				s.witness.AddState(witness)
 				if s.witnessStats != nil {
 					s.witnessStats.Add(witness, obj.addrHash)
+				}
+			} else if s.prefetcher == nil {
+				// No prefetcher and no pre-existing trie. Storage reads went
+				// through the reader (separate trie/prevalueTracer), so the
+				// intermediate proof-path nodes are missing. Open the storage
+				// trie and re-read the slots to capture them for the witness.
+				if tr, err := obj.getTrie(); err == nil {
+					for key := range obj.originStorage {
+						tr.GetStorage(obj.address, key[:])
+					}
+					witness := tr.Witness()
+					s.witness.AddState(witness)
+					if s.witnessStats != nil {
+						s.witnessStats.Add(witness, obj.addrHash)
+					}
 				}
 			}
 		}
@@ -1432,6 +1495,26 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 
 	if s.prefetcher != nil {
 		s.prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs, nil)
+	}
+	// When there is no prefetcher and witness building is enabled, account
+	// reads went through the reader (a separate trie with its own
+	// prevalueTracer), so s.trie lacks intermediate nodes for read-only
+	// accounts. Walk them through s.trie now to capture proof-path nodes
+	// that will be included in the witness.
+	if s.witness != nil && s.prefetcher == nil && !s.db.TrieDB().IsVerkle() {
+		for _, obj := range s.stateObjects {
+			if _, ok := s.mutations[obj.address]; ok {
+				continue
+			}
+			s.trie.GetAccount(obj.address)
+		}
+		// Walk proof-of-absence paths for non-existent accounts. Even
+		// though these accounts don't exist, the trie traversal captures
+		// intermediate nodes that stateless execution needs to verify
+		// the accounts' non-existence.
+		for addr := range s.nonExistentReads {
+			s.trie.GetAccount(addr)
+		}
 	}
 	// Track the amount of time wasted on hashing the account trie
 	defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
@@ -1868,6 +1951,293 @@ func (s *StateDB) CommitWithUpdate(block uint64, deleteEmptyObjects bool, noStor
 		return common.Hash{}, nil, err
 	}
 	return ret.root, ret, nil
+}
+
+// FlatDiff is a flat snapshot of all account and storage mutations from one
+// block's execution. It is extracted cheaply (~1ms) via CommitSnapshot without
+// requiring MPT hashing. A goroutine then applies the FlatDiff to a fresh
+// StateDB to compute the actual state root concurrently with the next block.
+type FlatDiff struct {
+	Accounts  map[common.Address]types.StateAccount          // post-state of each modified account
+	Storage   map[common.Address]map[common.Hash]common.Hash // post-state storage slots
+	Destructs map[common.Address]struct{}                    // self-destructed accounts
+	Code      map[common.Hash][]byte                         // newly deployed code
+
+	// ReadSet and ReadStorage list accounts and storage slots that were read
+	// (but not mutated) during block execution. The delayed SRC goroutine loads
+	// these from the root_{N-1} trie so their MPT proof nodes are captured in
+	// the witness for stateless execution.
+	ReadSet     []common.Address
+	ReadStorage map[common.Address][]common.Hash
+
+	// NonExistentReads lists addresses that were looked up during execution
+	// but don't exist in the state trie. The SRC goroutine walks these paths
+	// to capture proof-of-absence trie nodes for the witness, enabling
+	// stateless execution to verify these accounts don't exist.
+	NonExistentReads []common.Address
+}
+
+// TouchAllAddresses performs read-only accesses on dst for every address and
+// storage slot recorded in the FlatDiff. This ensures dst tracks these
+// addresses in its stateObjects so they later appear in dst's own FlatDiff
+// (via CommitSnapshot). Unlike ApplyFlatDiff, it does NOT overwrite any
+// account data — it only forces dst to load the accounts from its own trie.
+func (diff *FlatDiff) TouchAllAddresses(dst *StateDB) {
+	for addr := range diff.Accounts {
+		dst.GetBalance(addr)
+		if slots, ok := diff.Storage[addr]; ok {
+			for slot := range slots {
+				dst.GetCommittedState(addr, slot)
+			}
+		}
+	}
+	for _, addr := range diff.ReadSet {
+		dst.GetBalance(addr)
+		for _, slot := range diff.ReadStorage[addr] {
+			dst.GetCommittedState(addr, slot)
+		}
+	}
+	for addr := range diff.Destructs {
+		dst.GetBalance(addr)
+	}
+	// Touch non-existent addresses so dst tracks them (via its own
+	// nonExistentReads) and the SRC goroutine can capture their
+	// proof-of-absence trie nodes for the witness.
+	for _, addr := range diff.NonExistentReads {
+		dst.GetBalance(addr)
+	}
+}
+
+// CommitSnapshot finalises the StateDB and returns a FlatDiff capturing all
+// mutations without performing any MPT hashing (~1ms). After this call the
+// StateDB should no longer be used by the caller.
+func (s *StateDB) CommitSnapshot(deleteEmptyObjects bool) *FlatDiff {
+	s.Finalise(deleteEmptyObjects)
+
+	diff := &FlatDiff{
+		Accounts:    make(map[common.Address]types.StateAccount),
+		Storage:     make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs:   make(map[common.Address]struct{}),
+		Code:        make(map[common.Hash][]byte),
+		ReadStorage: make(map[common.Address][]common.Hash),
+	}
+
+	// Capture self-destructed accounts.
+	for addr := range s.stateObjectsDestruct {
+		diff.Destructs[addr] = struct{}{}
+	}
+
+	// Capture mutations for live (non-destructed) accounts.
+	for addr, op := range s.mutations {
+		if op.isDelete() {
+			diff.Destructs[addr] = struct{}{}
+			continue
+		}
+		obj, ok := s.stateObjects[addr]
+		if !ok {
+			continue
+		}
+		diff.Accounts[addr] = obj.data
+
+		// Capture dirty code.
+		if obj.dirtyCode {
+			diff.Code[common.BytesToHash(obj.CodeHash())] = obj.code
+		}
+
+		// Capture pending (post-Finalise) storage.
+		if len(obj.pendingStorage) > 0 {
+			slots := make(map[common.Hash]common.Hash, len(obj.pendingStorage))
+			for k, v := range obj.pendingStorage {
+				slots[k] = v
+			}
+			diff.Storage[addr] = slots
+		}
+		// Capture read-only storage for mutated accounts: storage slots that
+		// were read (in originStorage) but not written (not in pendingStorage).
+		// Without this, the SRC goroutine won't load these slots' trie nodes
+		// into the witness, causing "missing trie node" during stateless replay
+		// (e.g., span commits read validator contract slots they don't write).
+		if len(obj.originStorage) > 0 {
+			var readSlots []common.Hash
+			for slot := range obj.originStorage {
+				if _, dirty := obj.pendingStorage[slot]; !dirty {
+					readSlots = append(readSlots, slot)
+				}
+			}
+			if len(readSlots) > 0 {
+				diff.ReadStorage[addr] = readSlots
+			}
+		}
+	}
+
+	// Capture read-only accounts: accessed during execution but not mutated.
+	// The delayed SRC goroutine uses these to load their root_{N-1} trie nodes
+	// into the witness so stateless nodes can execute against root_{N-1}.
+	for addr, obj := range s.stateObjects {
+		if _, isMutation := s.mutations[addr]; isMutation {
+			continue // already captured above
+		}
+		if _, isDestruct := s.stateObjectsDestruct[addr]; isDestruct {
+			continue // already captured above
+		}
+		diff.ReadSet = append(diff.ReadSet, addr)
+		if len(obj.originStorage) > 0 {
+			slots := make([]common.Hash, 0, len(obj.originStorage))
+			for slot := range obj.originStorage {
+				slots = append(slots, slot)
+			}
+			diff.ReadStorage[addr] = slots
+		}
+	}
+
+	// Capture non-existent account reads: addresses that were looked up but
+	// don't exist in the state trie. The SRC goroutine needs these to walk
+	// proof-of-absence paths and capture trie nodes for the witness.
+	for addr := range s.nonExistentReads {
+		// Skip addresses that ended up existing (e.g., created later in the block).
+		if _, isMutation := s.mutations[addr]; isMutation {
+			continue
+		}
+		if _, ok := s.stateObjects[addr]; ok {
+			continue
+		}
+		diff.NonExistentReads = append(diff.NonExistentReads, addr)
+	}
+
+	return diff
+}
+
+// ApplyFlatDiff installs the previous block's mutations as pre-loaded (but not
+// dirty) state objects, giving the current block immediate read access to the
+// previous block's post-state without waiting for the background goroutine to
+// commit the trie.
+//
+// Accounts are inserted directly into s.stateObjects — bypassing the journal —
+// so Finalise/CommitSnapshot only captures accounts the CURRENT block actually
+// modifies. Without this, every account touched in block N would be re-captured
+// in block N+1's FlatDiff and cascade indefinitely.
+//
+// Newly deployed contract code (dirtyCode in the previous block) is carried
+// in-memory because the background goroutine may not have written it to the
+// key-value store yet.
+func (s *StateDB) ApplyFlatDiff(diff *FlatDiff) {
+	// Register self-destructed accounts so getStateObject returns nil for them,
+	// preventing a stale trie read while the background goroutine's deletion
+	// has not yet been committed.
+	for addr := range diff.Destructs {
+		if _, already := s.stateObjectsDestruct[addr]; !already {
+			s.stateObjectsDestruct[addr] = newObject(s, addr, nil)
+		}
+	}
+
+	// Install each mutated account directly, without journal entries.
+	for addr, acct := range diff.Accounts {
+		acctCopy := acct
+		obj := newObject(s, addr, &acctCopy)
+
+		// Carry newly-deployed code in memory. For pre-existing contracts the
+		// code hash is already persisted; stateObject.Code() will fetch it from
+		// the DB on first access without needing dirtyCode set.
+		if code, ok := diff.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {
+			obj.code = code
+			// dirtyCode intentionally left false: this code was deployed in the
+			// previous block, not this one.
+		}
+
+		// Load storage as originStorage (the "already committed" baseline).
+		// dirtyStorage stays empty, so only slots the current block writes will
+		// be captured by CommitSnapshot.
+		if slots, ok := diff.Storage[addr]; ok {
+			for k, v := range slots {
+				obj.originStorage[k] = v
+			}
+		}
+
+		s.stateObjects[addr] = obj
+	}
+}
+
+// ApplyFlatDiffForCommit marks all mutations in diff as dirty via the normal
+// Set* mutation path, so that a subsequent CommitWithUpdate produces the
+// correct state root for the block. Unlike ApplyFlatDiff, which installs
+// accounts as a read-only overlay, this method ensures every change is
+// journalled so Finalise and commit pick them up.
+//
+// Use this only in the background goroutine that computes a block's actual
+// state root; it is not suitable for execution state objects (it would cause
+// mutations to cascade into subsequent FlatDiffs).
+func (s *StateDB) ApplyFlatDiffForCommit(diff *FlatDiff) {
+	// Handle self-destructs. Pure destructs (not resurrected) are done via
+	// SelfDestruct, which loads the original from the trie and marks it for
+	// deletion. Resurrected accounts (present in both Destructs and Accounts)
+	// need the original placed in stateObjectsDestruct manually so the
+	// subsequent Set* calls create a fresh object via getOrNewStateObject.
+	for addr := range diff.Destructs {
+		if _, resurrected := diff.Accounts[addr]; resurrected {
+			// Handled in the Accounts loop below.
+			continue
+		}
+		s.SelfDestruct(addr)
+	}
+
+	for addr, acct := range diff.Accounts {
+		// For resurrected accounts, populate stateObjectsDestruct with the
+		// original pre-block account (needed by handleDestruction to delete the
+		// original storage trie) and remove any cached entry so the Set* calls
+		// below create a fresh object via getOrNewStateObject.
+		if _, destructed := diff.Destructs[addr]; destructed {
+			if _, already := s.stateObjectsDestruct[addr]; !already {
+				if prev := s.getStateObject(addr); prev != nil {
+					s.stateObjectsDestruct[addr] = prev
+				}
+			}
+			delete(s.stateObjects, addr)
+		}
+
+		// Apply newly-deployed contract code.
+		if code, ok := diff.Code[common.BytesToHash(acct.CodeHash)]; ok {
+			s.SetCode(addr, code, tracing.CodeChangeUnspecified)
+		}
+
+		// Mark each storage slot dirty. SetState reads the pre-block origin
+		// from the storage trie, populating uncommittedStorage so updateTrie
+		// correctly writes or deletes each slot (including zero-value deletions).
+		if slots, ok := diff.Storage[addr]; ok {
+			for k, v := range slots {
+				s.SetState(addr, k, v)
+			}
+		}
+
+		// Mark account metadata dirty. Calling Set* ensures the account
+		// appears in journal.dirties so Finalise emits a markUpdate, even
+		// when only storage or code changed.
+		s.SetNonce(addr, acct.Nonce, tracing.NonceChangeUnspecified)
+		s.SetBalance(addr, acct.Balance, tracing.BalanceChangeUnspecified)
+	}
+}
+
+// NewWithFlatBase creates a StateDB at parentCommittedRoot (the last root
+// committed to the trie database) with a FlatDiff overlay so that reads see
+// the post-state of the block that produced flatDiff, without waiting for
+// that block's state root to be computed.
+//
+// This is used during DelayedSRC block processing: while goroutine G_N is
+// computing root_N from (root_{N-1}, FlatDiff_N), the next block N+1 can
+// already be executed using NewWithFlatBase(root_{N-1}, db, FlatDiff_N).
+func NewWithFlatBase(parentCommittedRoot common.Hash, db Database, flatDiff *FlatDiff) (*StateDB, error) {
+	sdb, err := New(parentCommittedRoot, db)
+	if err != nil {
+		return nil, err
+	}
+	if flatDiff != nil {
+		sdb.flatDiffRef = flatDiff
+	}
+	return sdb, nil
+}
+
+// SetFlatDiffRef sets the read-only FlatDiff reference for lazy lookups.
+func (s *StateDB) SetFlatDiffRef(diff *FlatDiff) {
+	s.flatDiffRef = diff
 }
 
 // Prepare handles the preparatory steps for executing a state transition with.

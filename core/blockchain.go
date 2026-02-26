@@ -343,6 +343,18 @@ type txLookup struct {
 	transaction *types.Transaction
 }
 
+// pendingSRCState tracks an in-flight state root computation goroutine.
+// root, witness, and err are written by the goroutine before wg.Done();
+// callers block on wg.Wait() and read them afterwards.
+type pendingSRCState struct {
+	blockHash   common.Hash
+	blockNumber uint64
+	wg          sync.WaitGroup
+	root        common.Hash
+	witness     *stateless.Witness // complete witness for stateless execution of this block
+	err         error
+}
+
 // BlockChain represents the canonical chain given a database with a genesis
 // block. The Blockchain manages chain imports, reverts, chain reorganisations.
 //
@@ -377,9 +389,20 @@ type BlockChain struct {
 	chainHeadFeed    event.Feed
 	logsFeed         event.Feed
 	blockProcFeed    event.Feed
+	witnessFeed      event.Feed
 	blockProcCounter int32
 	scope            event.SubscriptionScope
 	genesisBlock     *types.Block
+
+	// lastFlatDiff holds the FlatDiff from the most recently committed block's
+	// CommitSnapshot. Under delayed SRC, the miner uses it together with the
+	// grandparent's committed root to open a statedb via NewWithFlatBase,
+	// allowing block N+1 execution to start before G_N finishes.
+	// lastFlatDiffBlockHash is the hash of the block that produced lastFlatDiff,
+	// used by insertChain to verify the diff is for the correct parent before seeding.
+	lastFlatDiff          *state.FlatDiff
+	lastFlatDiffBlockHash common.Hash
+	lastFlatDiffMu        sync.RWMutex
 
 	// This mutex synchronizes chain write operations.
 	// Readers don't need to take it, they can just read the database.
@@ -428,6 +451,11 @@ type BlockChain struct {
 	chain2HeadFeed      event.Feed                                // Reorg/NewHead/Fork data feed
 	chainSideFeed       event.Feed                                // Side chain data feed (removed from geth but needed in bor)
 	milestoneFetcher    func(ctx context.Context) (uint64, error) // Function to fetch the latest milestone end block from Heimdall.
+
+	// DelayedSRC: concurrent state root calculation.
+	// pendingSRC tracks the in-flight state root goroutine for the most recent block.
+	pendingSRC   *pendingSRCState
+	pendingSRCMu sync.Mutex
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -564,6 +592,16 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 					return nil, err
 				}
 			}
+		}
+	}
+	// Delayed SRC crash recovery: if the head block is in the delayed-SRC range
+	// and its post-execution state root is missing, re-execute the head block to
+	// recover the FlatDiff and spawn the SRC goroutine.
+	head = bc.CurrentBlock() // re-read, may have been rewound above
+	if bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsDelayedSRC(head.Number) && !bc.cfg.Stateless {
+		postRoot := bc.GetPostStateRoot(head.Hash())
+		if postRoot == (common.Hash{}) || !bc.HasState(postRoot) {
+			bc.recoverDelayedSRC(head)
 		}
 	}
 	// Ensure that a previous crash in SetHead doesn't leave extra ancients
@@ -707,7 +745,18 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 	return bc, nil
 }
 
+// ProcessBlock executes the transactions in block, validates state, and returns
+// the resulting receipts, logs, gas used, and updated StateDB.
 func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+	return bc.processBlock(block, parent, nil, witness, followupInterrupt)
+}
+
+// processBlock is the internal implementation of ProcessBlock.
+// When flatDiff is non-nil (delayed SRC path), each statedb is opened at
+// parent.Root and then has flatDiff applied as an in-memory overlay, allowing
+// block N+1's transaction execution to begin concurrently with the background
+// goroutine that commits block N's state root to the path DB.
+func (bc *BlockChain) processBlock(block *types.Block, parent *types.Header, flatDiff *state.FlatDiff, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -741,13 +790,22 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
+	if flatDiff != nil {
+		throwaway.SetFlatDiffRef(flatDiff)
+	}
 	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
+	if flatDiff != nil {
+		statedb.SetFlatDiffRef(flatDiff)
+	}
 	parallelStatedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
+	}
+	if flatDiff != nil {
+		parallelStatedb.SetFlatDiffRef(flatDiff)
 	}
 
 	// Upload the statistics of reader at the end
@@ -1027,6 +1085,7 @@ func (bc *BlockChain) loadLastState() error {
 	if pruning := bc.historyPrunePoint.Load(); pruning != nil {
 		log.Info("Chain history is pruned", "earliest", pruning.BlockNumber, "hash", pruning.BlockHash)
 	}
+
 	return nil
 }
 
@@ -2410,6 +2469,392 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	return stateSyncLogs, nil
 }
 
+// writeBlockData writes the block data (TD, block body, receipts, preimages,
+// witness) to the database WITHOUT committing trie state. Used by the delayed-SRC
+// path where a background goroutine handles CommitWithUpdate concurrently.
+// Returns state-sync logs (bor-specific logs not covered by receipts) for feed emission.
+func (bc *BlockChain) writeBlockData(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB) ([]*types.Log, error) {
+	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
+	if ptd == nil {
+		return nil, consensus.ErrUnknownAncestor
+	}
+	externTd := new(big.Int).Add(block.Difficulty(), ptd)
+
+	blockBatch := bc.db.NewBatch()
+	rawdb.WriteTd(blockBatch, block.Hash(), block.NumberU64(), externTd)
+	rawdb.WriteBlock(blockBatch, block)
+	rawdb.WriteReceipts(blockBatch, block.Hash(), block.NumberU64(), receipts)
+
+	var stateSyncLogs []*types.Log
+	blockLogs := statedb.Logs()
+	if len(blockLogs) > 0 {
+		if !(bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsMadhugiri(block.Number())) && len(blockLogs) > len(logs) {
+			sort.SliceStable(blockLogs, func(i, j int) bool {
+				return blockLogs[i].Index < blockLogs[j].Index
+			})
+			stateSyncLogs = blockLogs[len(logs):]
+			types.DeriveFieldsForBorLogs(stateSyncLogs, block.Hash(), block.NumberU64(), uint(len(receipts)), uint(len(logs)))
+
+			var cumulativeGasUsed uint64
+			if len(receipts) > 0 {
+				cumulativeGasUsed = receipts[len(receipts)-1].CumulativeGasUsed
+			}
+			rawdb.WriteBorReceipt(blockBatch, block.Hash(), block.NumberU64(), &types.ReceiptForStorage{
+				Status:            types.ReceiptStatusSuccessful,
+				Logs:              stateSyncLogs,
+				CumulativeGasUsed: cumulativeGasUsed,
+			})
+			rawdb.WriteBorTxLookupEntry(blockBatch, block.Hash(), block.NumberU64())
+		}
+	}
+
+	rawdb.WritePreimages(blockBatch, statedb.Preimages())
+
+	// Under delayed SRC, the witness built during tx execution (via NewWithFlatBase)
+	// is incomplete: accounts in the FlatDiff overlay bypass the trie, so their MPT
+	// proof nodes are never captured. The complete witness is built by the SRC
+	// goroutine (spawnSRCGoroutine) and written there after CommitWithUpdate.
+
+	if err := blockBatch.Write(); err != nil {
+		log.Crit("Failed to write block into disk", "err", err)
+	}
+	rawdb.WriteBytecodeSyncLastBlock(bc.db, block.NumberU64())
+	return stateSyncLogs, nil
+}
+
+// writeBlockDataAndSetHead is the delayed-SRC analogue of writeBlockAndSetHead:
+// it persists block data without trie state (trie commit is done by the SRC goroutine)
+// and then applies the block as the new chain head.
+func (bc *BlockChain) writeBlockDataAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, emitHeadEvent bool) (WriteStatus, error) {
+	stateSyncLogs, err := bc.writeBlockData(block, receipts, logs, statedb)
+	if err != nil {
+		return NonStatTy, err
+	}
+
+	currentBlock := bc.CurrentBlock()
+	reorg, err := bc.forker.ReorgNeeded(currentBlock, block.Header())
+	if err != nil {
+		return NonStatTy, err
+	}
+
+	var status WriteStatus
+	if reorg {
+		if block.ParentHash() != currentBlock.Hash() {
+			if err = bc.reorg(currentBlock, block.Header()); err != nil {
+				return NonStatTy, err
+			}
+		}
+		status = CanonStatTy
+	} else {
+		status = SideStatTy
+	}
+
+	if status == CanonStatTy {
+		bc.writeHeadBlock(block)
+
+		bc.chainFeed.Send(ChainEvent{
+			Header:       block.Header(),
+			Receipts:     receipts,
+			Transactions: block.Transactions(),
+		})
+
+		if len(logs) > 0 {
+			bc.logsFeed.Send(logs)
+		}
+		if len(stateSyncLogs) > 0 {
+			bc.logsFeed.Send(stateSyncLogs)
+		}
+		if emitHeadEvent {
+			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
+			bc.stateSyncMu.RLock()
+			for _, data := range bc.GetStateSync() {
+				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
+			}
+			bc.stateSyncMu.RUnlock()
+		}
+	} else {
+		bc.chainSideFeed.Send(ChainSideEvent{Header: block.Header()})
+
+		bc.chain2HeadFeed.Send(Chain2HeadEvent{
+			Type:     Chain2HeadForkEvent,
+			NewChain: []*types.Header{block.Header()},
+		})
+	}
+
+	return status, nil
+}
+
+// recoverDelayedSRC re-executes the head block to recover the FlatDiff
+// and spawn the SRC goroutine after a crash. This is needed because
+// under delayed SRC the background goroutine may not have finished
+// (or its results may not have been journaled) before the crash.
+func (bc *BlockChain) recoverDelayedSRC(head *types.Header) {
+	block := bc.GetBlock(head.Hash(), head.Number.Uint64())
+	if block == nil {
+		log.Error("Delayed SRC recovery: head block not found", "number", head.Number, "hash", head.Hash())
+		return
+	}
+
+	// head.Root = root_{N-1} under delayed SRC; HasState already confirmed it's available.
+	statedb, err := bc.StateAt(head.Root)
+	if err != nil {
+		log.Error("Delayed SRC recovery: failed to open state", "root", head.Root, "err", err)
+		return
+	}
+
+	_, err = bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, context.Background())
+	if err != nil {
+		log.Error("Delayed SRC recovery: block re-execution failed", "number", head.Number, "err", err)
+		return
+	}
+
+	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(head.Number))
+
+	bc.lastFlatDiffMu.Lock()
+	bc.lastFlatDiff = flatDiff
+	bc.lastFlatDiffBlockHash = block.Hash()
+	bc.lastFlatDiffMu.Unlock()
+
+	bc.spawnSRCGoroutine(block, head.Root, flatDiff)
+	log.Info("Delayed SRC recovery: re-executed head block", "number", head.Number, "hash", head.Hash())
+}
+
+// GetPostStateRoot returns the actual post-execution state root for the given
+// block. It checks, in order:
+//
+//  1. The in-flight SRC goroutine (blocks until it finishes).
+//  2. The canonical child's header (block[N+1].Root == root_N by protocol invariant).
+//  3. The persisted post-state root key-value store.
+//  4. For pre-fork blocks, header.Root is the block's own post-execution root.
+func (bc *BlockChain) GetPostStateRoot(blockHash common.Hash) common.Hash {
+	// 1. Check in-flight goroutine.
+	bc.pendingSRCMu.Lock()
+	pending := bc.pendingSRC
+	bc.pendingSRCMu.Unlock()
+
+	if pending != nil && pending.blockHash == blockHash {
+		pending.wg.Wait()
+		if pending.err != nil {
+			log.Error("Delayed SRC goroutine failed", "blockHash", blockHash, "err", pending.err)
+			return common.Hash{}
+		}
+		return pending.root
+	}
+
+	// 2-4. No in-flight goroutine; resolve from on-chain data.
+	header := bc.GetHeaderByHash(blockHash)
+	if header == nil {
+		return common.Hash{}
+	}
+	if bc.chainConfig.Bor == nil || !bc.chainConfig.Bor.IsDelayedSRC(header.Number) {
+		return header.Root
+	}
+	child := bc.GetHeaderByNumber(header.Number.Uint64() + 1)
+	if child != nil && child.ParentHash == blockHash {
+		return child.Root
+	}
+	return rawdb.ReadPostStateRoot(bc.db, blockHash)
+}
+
+// PostExecutionStateAt returns a StateDB representing the post-execution state
+// of the given block header. Under delayed SRC, if the FlatDiff for this block
+// is still cached (i.e. this is the chain head), it returns a non-blocking
+// overlay state via NewWithFlatBase — matching the miner's approach.
+// Otherwise it falls back to resolving the actual state root (which may block
+// if the background SRC goroutine is still running).
+func (bc *BlockChain) PostExecutionStateAt(header *types.Header) (*state.StateDB, error) {
+	// Fast path: if delayed SRC is active and we have the FlatDiff for this
+	// block, use it as an overlay on top of header.Root (= root_{N-1}).
+	if bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsDelayedSRC(header.Number) {
+		bc.lastFlatDiffMu.RLock()
+		flatDiff := bc.lastFlatDiff
+		flatDiffHash := bc.lastFlatDiffBlockHash
+		bc.lastFlatDiffMu.RUnlock()
+
+		if flatDiff != nil && flatDiffHash == header.Hash() {
+			return state.NewWithFlatBase(header.Root, bc.statedb, flatDiff)
+		}
+	}
+
+	// Slow path: resolve the actual post-execution root.
+	// For delayed-SRC blocks this may block on the background goroutine.
+	// For pre-fork blocks, GetPostStateRoot returns common.Hash{} and we
+	// use header.Root directly.
+	root := header.Root
+	if r := bc.GetPostStateRoot(header.Hash()); r != (common.Hash{}) {
+		root = r
+	}
+	return bc.StateAt(root)
+}
+
+// expectedPreStateRoot returns the parent header's on-chain Root field.
+// This is what witness.Root() (= Headers[0].Root) should equal — it validates
+// that the witness carries the correct parent header.
+//
+// Note: under delayed SRC, parentHeader.Root = root_{N-2}, not root_{N-1}.
+// The actual pre-state root validation (block.Root() == root_{N-1}) is done
+// separately in writeBlockAndSetHead.
+func (bc *BlockChain) expectedPreStateRoot(block *types.Block) (common.Hash, error) {
+	parent := bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return common.Hash{}, fmt.Errorf("parent header not found: %s (block %d)", block.ParentHash(), block.NumberU64())
+	}
+	return parent.Root, nil
+}
+
+// GetDelayedWitnessForBlock returns the stateless witness for block blockHash
+// that was built as a byproduct of the delayed SRC goroutine. It blocks until
+// the goroutine finishes, identical in structure to GetPostStateRoot.
+// Returns nil if the witness was not built (e.g. pre-fork block or goroutine
+// failure) or if the goroutine for blockHash is no longer in flight.
+func (bc *BlockChain) GetDelayedWitnessForBlock(blockHash common.Hash) *stateless.Witness {
+	bc.pendingSRCMu.Lock()
+	pending := bc.pendingSRC
+	bc.pendingSRCMu.Unlock()
+
+	if pending != nil && pending.blockHash == blockHash {
+		pending.wg.Wait()
+		if pending.err != nil {
+			return nil
+		}
+		return pending.witness
+	}
+	// Witness is not retained after the goroutine is superseded; callers
+	// that need it must request it before the next block's goroutine starts.
+	return nil
+}
+
+// spawnSRCGoroutine launches a background goroutine that computes the actual
+// state root for block by replaying flatDiff on top of parentRoot.
+// The result is stored in pending.root; pending.wg is decremented when finished.
+// As a byproduct of the MPT hashing, a complete witness for stateless execution
+// of block is built and stored in pending.witness.
+func (bc *BlockChain) spawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff) {
+	pending := &pendingSRCState{
+		blockHash:   block.Hash(),
+		blockNumber: block.NumberU64(),
+	}
+
+	bc.pendingSRCMu.Lock()
+	bc.pendingSRC = pending
+	bc.pendingSRCMu.Unlock()
+
+	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
+	isCancun := bc.chainConfig.IsCancun(block.Number())
+
+	// bc.wg.Go handles Add(1)/Done() for graceful shutdown tracking.
+	// pending.wg tracks completion for GetPostStateRoot callers.
+	pending.wg.Add(1)
+	bc.wg.Go(func() {
+		defer pending.wg.Done()
+
+		// Create a snapshot-less database so that all account and storage
+		// reads go directly through the MPT. This ensures the prevalueTracer
+		// on each trie captures every intermediate node, which is later
+		// flushed into the witness. Using the snapshot would bypass the trie
+		// and leave those proof-path nodes out of the witness.
+		// noSnapDB := state.NewDatabase(bc.statedb.TrieDB(), nil)
+		tmpDB, err := state.New(parentRoot, bc.statedb)
+		if err != nil {
+			log.Error("Delayed SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
+			pending.err = err
+			return
+		}
+
+		// Attach a witness so that IntermediateRoot captures all root_{N-1}
+		// trie nodes as a byproduct of the MPT hashing.  parentRoot is the
+		// correct pre-state root for stateless execution of block N.
+		witness, witnessErr := stateless.NewWitness(block.Header(), bc)
+		if witnessErr != nil {
+			log.Warn("Delayed SRC: failed to create witness", "block", block.NumberU64(), "err", witnessErr)
+		} else {
+			// Embed parentRoot as the pre-state root. NewWitness zeroed context.Root;
+			// a non-zero value here signals delayed SRC to witness.Root().
+			witness.Header().Root = parentRoot
+			tmpDB.SetWitness(witness)
+		}
+
+		// Mark all write mutations as dirty.
+		tmpDB.ApplyFlatDiffForCommit(flatDiff)
+
+		// Load read-only accounts and storage slots so that the statedb
+		// has stateObjects (with originStorage) for every address and slot
+		// that was accessed during the original block execution. These reads
+		// go through the reader's trie; IntermediateRoot (called by
+		// CommitWithUpdate) then re-walks read-only accounts and storage
+		// through s.trie / obj.trie to capture proof-path nodes for the
+		// witness when no prefetcher is present.
+		for _, addr := range flatDiff.ReadSet {
+			tmpDB.GetBalance(addr)
+			for _, slot := range flatDiff.ReadStorage[addr] {
+				tmpDB.GetState(addr, slot)
+			}
+		}
+		// Load read-only storage for mutated accounts (slots in originStorage
+		// that aren't in pendingStorage). These reads capture trie nodes that
+		// stateless execution needs (e.g., span commit reads validator contract
+		// slots it doesn't write).
+		for addr := range flatDiff.Accounts {
+			for _, slot := range flatDiff.ReadStorage[addr] {
+				tmpDB.GetState(addr, slot)
+			}
+		}
+
+		// Pure-destruct accounts (created AND destroyed within block N) are
+		// absent from root_{N-1}. SelfDestruct returns early for them, so
+		// CommitWithUpdate never traverses their account trie paths. The
+		// stateless node still needs these paths for deleteStateObject.
+		// Force a read to create stateObjects; IntermediateRoot captures
+		// the account trie nodes via the no-prefetcher witness path.
+		for addr := range flatDiff.Destructs {
+			if _, resurrected := flatDiff.Accounts[addr]; !resurrected {
+				tmpDB.GetBalance(addr)
+			}
+		}
+
+		// Non-existent accounts accessed during execution (e.g., by
+		// state-sync EVM calls) need proof-of-absence trie nodes in the
+		// witness. GetBalance triggers a trie read through the reader;
+		// IntermediateRoot (called by CommitWithUpdate) then walks
+		// these paths through s.trie to capture the proof nodes.
+		for _, addr := range flatDiff.NonExistentReads {
+			tmpDB.GetBalance(addr)
+		}
+
+		root, stateUpdate, err := tmpDB.CommitWithUpdate(block.NumberU64(), deleteEmptyObjects, isCancun)
+		if err != nil {
+			log.Error("Delayed SRC: CommitWithUpdate failed", "block", block.NumberU64(), "err", err)
+			pending.err = err
+			return
+		}
+
+		if bc.stateSizer != nil {
+			bc.stateSizer.Notify(stateUpdate)
+		}
+
+		// Write the complete witness to the database and announce it.
+		// This must happen after CommitWithUpdate so that all trie nodes
+		// (for both write and read-set accounts) have been accumulated.
+		if witness != nil {
+			var witBuf bytes.Buffer
+			if err := witness.EncodeRLP(&witBuf); err != nil {
+				log.Error("Delayed SRC: failed to encode witness", "block", block.NumberU64(), "err", err)
+			} else {
+				bc.WriteWitness(bc.db, block.Hash(), witBuf.Bytes())
+				bc.witnessFeed.Send(WitnessReadyEvent{Block: block, Witness: witness})
+			}
+		}
+
+		// Persist so GetPostStateRoot can find this root on restart
+		// even before a child block is imported.
+		rawdb.WritePostStateRoot(bc.db, block.Hash(), root)
+
+		// Set root and witness before wg.Done() so callers see them.
+		pending.root = root
+		pending.witness = witness
+	})
+}
+
 // WriteBlockAndSetHead writes the given block and all associated state to the database,
 // and applies the block as the new chain head.
 func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
@@ -2424,6 +2869,52 @@ func (bc *BlockChain) WriteBlockAndSetHead(block *types.Block, receipts []*types
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
 // This function expects the chain mutex to be held.
 func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool, stateless bool) (status WriteStatus, err error) {
+	// Under delayed SRC: CommitWithUpdate is deferred — either to a background
+	// goroutine (miner/import path) or handled inline (stateless path).
+	if bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsDelayedSRC(block.Number()) {
+		parentRoot := bc.GetPostStateRoot(block.ParentHash())
+		if parentRoot == (common.Hash{}) {
+			return NonStatTy, fmt.Errorf("delayed state root unavailable for parent %s", block.ParentHash())
+		}
+		// Validate: block.Root() must equal the parent's computed post-state root.
+		// This mirrors ValidateState (block_validator.go:178) for stateless nodes,
+		// where ValidateState returns early (stateless=true skips root checks).
+		if block.Root() != parentRoot {
+			return NonStatTy, fmt.Errorf("delayed SRC state root mismatch: header.Root=%x, computedParentRoot=%x, block=%d",
+				block.Root(), parentRoot, block.NumberU64())
+		}
+
+		if stateless {
+			// Stateless path: the state root is cheap to compute on the
+			// witness-backed trie, so there's no need to defer it. Record
+			// the cross-root for the next block's validation, then fall
+			// through to writeBlockWithState which naturally handles code
+			// persistence, witness writing, etc.
+			crossRoot := state.IntermediateRoot(bc.chainConfig.IsEIP158(block.Number()))
+			pending := &pendingSRCState{
+				blockHash:   block.Hash(),
+				blockNumber: block.NumberU64(),
+				root:        crossRoot,
+			}
+			// pending.wg is at zero, so wg.Wait() returns immediately.
+			bc.pendingSRCMu.Lock()
+			bc.pendingSRC = pending
+			bc.pendingSRCMu.Unlock()
+			// Persist to DB so the root survives reorgs and restarts.
+			rawdb.WritePostStateRoot(bc.db, block.Hash(), crossRoot)
+			// Fall through to writeBlockWithState below.
+		} else {
+			// Full-node path: defer CommitWithUpdate to a background goroutine.
+			flatDiff := state.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
+			bc.lastFlatDiffMu.Lock()
+			bc.lastFlatDiff = flatDiff
+			bc.lastFlatDiffBlockHash = block.Hash()
+			bc.lastFlatDiffMu.Unlock()
+			bc.spawnSRCGoroutine(block, parentRoot, flatDiff)
+			return bc.writeBlockDataAndSetHead(block, receipts, logs, state, emitHeadEvent)
+		}
+	}
+
 	stateSyncLogs, err := bc.writeBlockWithState(block, receipts, logs, state)
 	if err != nil {
 		return NonStatTy, err
@@ -2732,11 +3223,12 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 
 		// Validate witness pre-state for this block (if present) before writing
 		if i < len(witnesses) && witnesses[i] != nil {
-			var headerReader stateless.HeaderReader = bc
-			if witnesses[i].HeaderReader() != nil {
-				headerReader = witnesses[i].HeaderReader()
+			expectedRoot, err := bc.expectedPreStateRoot(block)
+			if err != nil {
+				stopHeaders()
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], expectedRoot); err != nil {
 				stopHeaders()
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
@@ -2896,11 +3388,11 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 	// End-of-batch witness validation
 	for i, block := range chain {
 		if i < len(witnesses) && witnesses[i] != nil {
-			var headerReader stateless.HeaderReader = bc
-			if witnesses[i].HeaderReader() != nil {
-				headerReader = witnesses[i].HeaderReader()
+			expectedRoot, err := bc.expectedPreStateRoot(block)
+			if err != nil {
+				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], expectedRoot); err != nil {
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
 		}
@@ -3073,6 +3565,25 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 	// Track the singleton witness from this chain insertion (if any)
 	var witness *stateless.Witness
 
+	// prevFlatDiff is the FlatDiff extracted from the previous block under delayed SRC.
+	// Carrying it across iterations lets block N+1 open state at parent.Root + flatDiff_N
+	// immediately, without waiting for the background goroutine to commit root_N.
+	//
+	// Seed from bc.lastFlatDiff when the first block in this batch is the direct
+	// successor of the block that produced lastFlatDiff. This handles the case
+	// where block N was processed in a previous insertChain call (or by the miner
+	// path) and block N+1 now arrives in a fresh call. Without seeding here,
+	// processBlock would open state at parent.Root = root_{N-1} (under delayed SRC)
+	// without the flatDiff_N overlay, yielding stale nonces and bad block errors.
+	var prevFlatDiff *state.FlatDiff
+	if bc.chainConfig.Bor != nil && len(chain) > 0 && bc.chainConfig.Bor.IsDelayedSRC(chain[0].Number()) {
+		bc.lastFlatDiffMu.RLock()
+		if bc.lastFlatDiffBlockHash == chain[0].ParentHash() {
+			prevFlatDiff = bc.lastFlatDiff
+		}
+		bc.lastFlatDiffMu.RUnlock()
+	}
+
 	// accumulator for canonical blocks
 	var canonAccum []*types.Block
 
@@ -3165,6 +3676,19 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
+
+		isDelayedSRC := bc.chainConfig.Bor != nil && bc.chainConfig.Bor.IsDelayedSRC(block.Number())
+
+		// Under delayed SRC, parent.Root is the committed trie base (= root_{N-1} for block N).
+		// prevFlatDiff, if non-nil, carries block N-1's mutations as an in-memory overlay so
+		// block N's transaction execution can begin immediately without waiting for the
+		// background goroutine (G_{N-1}) to finish committing root_{N-1} to the path DB.
+		// The sync point (ValidateState → GetPostStateRoot) is deferred until
+		// AFTER transaction execution completes inside processBlock.
+		if !isDelayedSRC {
+			prevFlatDiff = nil // reset when leaving the delayed-SRC regime
+		}
+
 		statedb, err := state.New(parent.Root, bc.statedb)
 		if err != nil {
 			return nil, it.index, err
@@ -3199,11 +3723,14 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		if witnesses != nil && len(witnesses) > it.processed()-1 && witnesses[it.processed()-1] != nil {
 			// 1. Validate the witness.
-			var headerReader stateless.HeaderReader = bc
-			if witnesses[it.processed()-1].HeaderReader() != nil {
-				headerReader = witnesses[it.processed()-1].HeaderReader()
+			expectedRoot, err := bc.expectedPreStateRoot(block)
+			if err != nil {
+				log.Error("Pre-state root unavailable for witness validation", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+				bc.reportBlock(block, &ProcessResult{}, err)
+				followupInterrupt.Store(true)
+				return nil, it.index, fmt.Errorf("witness validation failed: %w", err)
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], expectedRoot); err != nil {
 				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
@@ -3224,7 +3751,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		receipts, logs, usedGas, statedb, vtime, err := bc.processBlock(block, parent, prevFlatDiff, witness, &followupInterrupt)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -3283,11 +3810,48 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			return nil, it.index, whitelist.ErrMismatch
 		}
 
-		if !setHead {
-			// Don't set the head, only insert the block
-			_, err = bc.writeBlockWithState(block, receipts, logs, statedb)
+		if isDelayedSRC {
+			// ValidateState (inside processBlock) was the sync point: it called
+			// GetPostStateRoot(block.ParentHash()) and waited for G_{N-1}.
+			// pendingSRC still points to G_{N-1}'s entry; reading from the closed
+			// done-channel is instant — no second goroutine barrier here.
+			actualParentRoot := bc.GetPostStateRoot(block.ParentHash())
+			if actualParentRoot == (common.Hash{}) {
+				return nil, it.index, fmt.Errorf("delayed state root unavailable for parent %s", block.ParentHash())
+			}
+
+			// Extract flat diff cheaply (~1ms, no MPT hashing) and spawn the
+			// background goroutine that will compute and persist root_N.
+			flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
+			bc.spawnSRCGoroutine(block, actualParentRoot, flatDiff)
+
+			// Pass the flat diff to the next iteration so it can open state at
+			// parent.Root (= root_{N-1}) + flatDiff overlay, starting tx execution
+			// concurrently with this goroutine's commitAndFlush.
+			prevFlatDiff = flatDiff
+
+			// Also update lastFlatDiff so the local miner uses the correct pre-state
+			// when building the next block after importing this one from a peer.
+			// Without this, a validator that imports a peer block via insertChain
+			// keeps a stale lastFlatDiff and mines the next block from the wrong
+			// base state (missing all mutations from the imported block).
+			bc.lastFlatDiffMu.Lock()
+			bc.lastFlatDiff = flatDiff
+			bc.lastFlatDiffBlockHash = block.Hash()
+			bc.lastFlatDiffMu.Unlock()
+
+			if !setHead {
+				_, err = bc.writeBlockData(block, receipts, logs, statedb)
+			} else {
+				status, err = bc.writeBlockDataAndSetHead(block, receipts, logs, statedb, false)
+			}
 		} else {
-			status, err = bc.writeBlockAndSetHead(block, receipts, logs, statedb, false, false)
+			if !setHead {
+				// Don't set the head, only insert the block
+				_, err = bc.writeBlockWithState(block, receipts, logs, statedb)
+			} else {
+				status, err = bc.writeBlockAndSetHead(block, receipts, logs, statedb, false, false)
+			}
 		}
 
 		followupInterrupt.Store(true)
@@ -3324,7 +3888,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		if !setHead {
 			// After merge we expect few side chains. Simply count
-			// all blocks the CL gives us for GC processing time
+			// all blocks the CL gives us for GC processing time.
 			bc.gcproc += proctime
 			return witness, it.index, nil // Direct block insertion of a single block
 		}
@@ -3346,7 +3910,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 			lastCanon = block
 
-			// Only count canonical blocks for GC processing time
+			// Only count canonical blocks for GC processing time.
 			bc.gcproc += proctime
 
 		case SideStatTy:
@@ -3388,10 +3952,10 @@ func (bpr *blockProcessingResult) Witness() *stateless.Witness {
 	return bpr.witness
 }
 
-// ProcessBlock executes and validates the given block. If there was no error
+// processBlockStateful executes and validates the given block. If there was no error
 // it writes the block and associated state to database.
 // nolint : unused
-func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
+func (bc *BlockChain) processBlockStateful(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, diskdb ethdb.Database) (_ *blockProcessingResult, blockEndErr error) {
 	startTime := time.Now()
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
@@ -3453,7 +4017,9 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		if err != nil {
 			return nil, fmt.Errorf("stateless self-validation failed: %v", err)
 		}
-		if crossStateRoot != block.Root() {
+		// Under delayed SRC, block.Root() = parent's state root, not this block's;
+		// skip the equality check in that case.
+		if (bc.chainConfig.Bor == nil || !bc.chainConfig.Bor.IsDelayedSRC(block.Number())) && crossStateRoot != block.Root() {
 			return nil, fmt.Errorf("stateless self-validation root mismatch (cross: %x local: %x)", crossStateRoot, block.Root())
 		}
 		if crossReceiptRoot != block.ReceiptHash() {
@@ -3971,6 +4537,21 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Header) error 
 	// Release the tx-lookup lock after mutation.
 	bc.txLookupLock.Unlock()
 
+	// Delayed-SRC cleanup: if the in-flight SRC goroutine is for a dropped block,
+	// clear it so GetPostStateRoot falls back to the canonical child-header lookup.
+	if bc.chainConfig.Bor != nil {
+		bc.pendingSRCMu.Lock()
+		if bc.pendingSRC != nil {
+			for _, h := range oldChain {
+				if bc.pendingSRC.blockHash == h.Hash() {
+					bc.pendingSRC = nil
+					break
+				}
+			}
+		}
+		bc.pendingSRCMu.Unlock()
+	}
+
 	return nil
 }
 
@@ -4216,6 +4797,29 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 	return bc.scope.Track(bc.chain2HeadFeed.Subscribe(ch))
 }
 
+// SubscribeWitnessReadyEvent registers a subscription for WitnessReadyEvent,
+// which is fired after the delayed-SRC goroutine finishes and the complete
+// witness has been written to the database.
+func (bc *BlockChain) SubscribeWitnessReadyEvent(ch chan<- WitnessReadyEvent) event.Subscription {
+	return bc.scope.Track(bc.witnessFeed.Subscribe(ch))
+}
+
+// GetLastFlatDiff returns the FlatDiff captured from the most recently committed
+// block's CommitSnapshot. Under delayed SRC, the miner uses this to open a
+// NewWithFlatBase statedb without waiting for the current SRC goroutine.
+func (bc *BlockChain) GetLastFlatDiff() *state.FlatDiff {
+	bc.lastFlatDiffMu.RLock()
+	defer bc.lastFlatDiffMu.RUnlock()
+	return bc.lastFlatDiff
+}
+
+// StateAtWithFlatDiff opens a statedb at baseRoot with flatDiff as an in-memory
+// overlay, equivalent to state.NewWithFlatBase. Used by the miner under delayed
+// SRC to begin executing block N+1 before G_N has finished.
+func (bc *BlockChain) StateAtWithFlatDiff(baseRoot common.Hash, flatDiff *state.FlatDiff) (*state.StateDB, error) {
+	return state.NewWithFlatBase(baseRoot, bc.statedb, flatDiff)
+}
+
 // ProcessBlockWithWitnesses processes a block in stateless mode using the provided witnesses.
 func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *stateless.Witness) (*state.StateDB, *ProcessResult, error) {
 	if witness == nil {
@@ -4225,21 +4829,26 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Validate witness.
 	// During parallel import, defer pre-state validation to the end of the batch.
 	if !bc.parallelStatelessImportEnabled.Load() {
-		var headerReader stateless.HeaderReader
-		if witness.HeaderReader() != nil {
-			headerReader = witness.HeaderReader()
-		} else {
-			headerReader = bc
+		expectedRoot, err := bc.expectedPreStateRoot(block)
+		if err != nil {
+			log.Error("Pre-state root unavailable for witness validation", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
+			return nil, nil, fmt.Errorf("witness validation failed: %w", err)
 		}
-		if err := stateless.ValidateWitnessPreState(witness, headerReader); err != nil {
+		if err := stateless.ValidateWitnessPreState(witness, expectedRoot); err != nil {
 			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 			return nil, nil, fmt.Errorf("witness validation failed: %w", err)
 		}
 	}
 
-	// Remove critical computed fields from the block to force true recalculation
+	// Remove the receipt hash so ExecuteStateless can recompute it from scratch.
+	// Under delayed SRC, block.Root() carries the pre-state root for this block
+	// (the actual post-execution state root of the parent); preserve it so that
+	// ExecuteStateless can use it to open the correct pre-execution state.
+	// For pre-fork blocks, zero Root too so ExecuteStateless recomputes it.
 	context := block.Header()
-	context.Root = common.Hash{}
+	if bc.chainConfig.Bor == nil || !bc.chainConfig.Bor.IsDelayedSRC(block.Number()) {
+		context.Root = common.Hash{}
+	}
 	context.ReceiptHash = common.Hash{}
 
 	task := types.NewBlockWithHeader(context).WithBody(*block.Body())
@@ -4254,7 +4863,9 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		log.Error("Stateless self-validation failed", "block", block.Number(), "hash", block.Hash(), "error", err)
 		return nil, nil, err
 	}
-	if crossStateRoot != block.Root() {
+	// Under delayed SRC, block.Root() = parent's state root, not this block's;
+	// skip the equality check in that case.
+	if (bc.chainConfig.Bor == nil || !bc.chainConfig.Bor.IsDelayedSRC(block.Number())) && crossStateRoot != block.Root() {
 		log.Error("Stateless self-validation root mismatch", "block", block.Number(), "hash", block.Hash(), "cross", crossStateRoot, "local", block.Root())
 		err = fmt.Errorf("%w: remote %x != local %x", ErrStatelessStateRootMismatch, block.Root(), crossStateRoot)
 		return nil, nil, err

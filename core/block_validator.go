@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -166,6 +167,20 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	} else if res.Requests != nil {
 		return errors.New("block has requests before prague fork")
 	}
+	// Under delayed SRC, header.Root = state root of the PARENT block.
+	// Verify it matches the persisted delayed root and skip IntermediateRoot —
+	// the background goroutine spawned by spawnSRCGoroutine computes root_N.
+	if v.config.Bor != nil && v.config.Bor.IsDelayedSRC(header.Number) {
+		parentActualRoot := v.bc.GetPostStateRoot(header.ParentHash)
+		if parentActualRoot == (common.Hash{}) {
+			return fmt.Errorf("delayed state root unavailable for parent %x", header.ParentHash)
+		}
+		if header.Root != parentActualRoot {
+			return fmt.Errorf("invalid delayed state root (header: %x, parent actual: %x)", header.Root, parentActualRoot)
+		}
+		return nil
+	}
+
 	// Validate the state root against the received state root and throw
 	// an error if they don't match.
 	if root := statedb.IntermediateRoot(v.config.IsEIP158(header.Number)); header.Root != root {

@@ -171,6 +171,12 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
+
+	// PostExecutionStateAt returns a StateDB representing the post-execution
+	// state of the given block header. Under delayed SRC, uses a non-blocking
+	// FlatDiff overlay when available; otherwise falls back to resolving the
+	// actual state root (which may block).
+	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
 }
 
 // Config are the configuration parameters of the transaction pool.
@@ -402,7 +408,7 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 	// Initialize the state with head block, or fallback to empty one in
 	// case the head state is not available (might occur when node is not
 	// fully synced).
-	statedb, err := pool.chain.StateAt(head.Root)
+	statedb, err := pool.chain.PostExecutionStateAt(head)
 	if err != nil {
 		statedb, err = pool.chain.StateAt(types.EmptyRootHash)
 	}
@@ -1781,7 +1787,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	if newHead == nil {
 		newHead = pool.chain.CurrentBlock() // Special case during testing
 	}
-	statedb, err := pool.chain.StateAt(newHead.Root)
+	statedb, err := pool.chain.PostExecutionStateAt(newHead)
 	if err != nil {
 		log.Error("Failed to reset txpool state", "err", err)
 		return

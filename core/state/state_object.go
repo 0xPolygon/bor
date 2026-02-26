@@ -187,6 +187,15 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	if value, cached := s.originStorage[key]; cached {
 		return value
 	}
+	// Check the FlatDiff reference for storage slots from the parent block.
+	if s.db.flatDiffRef != nil {
+		if slots, ok := s.db.flatDiffRef.Storage[s.address]; ok {
+			if value, ok := slots[key]; ok {
+				s.originStorage[key] = value
+				return value
+			}
+		}
+	}
 
 	// If the object was destructed in *this* block (and potentially resurrected),
 	// the storage has been cleared out, and we should *not* consult the previous
@@ -370,6 +379,19 @@ func (s *stateObject) updateTrie() (Trie, error) {
 
 	if s.db.prefetcher != nil {
 		s.db.prefetcher.used(s.addrHash, s.data.Root, nil, used)
+	}
+	// When witness building is enabled without a prefetcher, storage reads
+	// went through the reader (a separate trie with its own PrevalueTracer)
+	// and their intermediate nodes are NOT in obj.trie. Re-read read-only
+	// slots (in originStorage but not in uncommittedStorage) through the
+	// storage trie so that resolveAndTrack captures the intermediate nodes
+	// and obj.trie.Witness() includes them.
+	if s.db.witness != nil && s.db.prefetcher == nil {
+		for key := range s.originStorage {
+			if _, dirty := s.uncommittedStorage[key]; !dirty {
+				tr.GetStorage(s.address, key[:])
+			}
+		}
 	}
 	s.uncommittedStorage = make(Storage) // empties the commit markers
 	return tr, nil

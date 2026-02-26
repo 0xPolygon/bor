@@ -41,4 +41,10 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
+
+	// PostExecutionStateAt returns a StateDB representing the post-execution
+	// state of the given block header. Under delayed SRC, uses a non-blocking
+	// FlatDiff overlay when available; otherwise falls back to resolving the
+	// actual state root (which may block).
+	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
 }

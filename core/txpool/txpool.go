@@ -56,6 +56,12 @@ type BlockChain interface {
 
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
+
+	// PostExecutionStateAt returns a StateDB representing the post-execution
+	// state of the given block header. Under delayed SRC, uses a non-blocking
+	// FlatDiff overlay when available; otherwise falls back to resolving the
+	// actual state root (which may block).
+	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
 }
 
 // TxPool is an aggregator for various transaction specific pools, collectively
@@ -88,7 +94,7 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 	// Initialize the state with head block, or fallback to empty one in
 	// case the head state is not available (might occur when node is not
 	// fully synced).
-	statedb, err := chain.StateAt(head.Root)
+	statedb, err := chain.PostExecutionStateAt(head)
 	if err != nil {
 		statedb, err = chain.StateAt(types.EmptyRootHash)
 	}
@@ -193,7 +199,7 @@ func (p *TxPool) loop(head *types.Header) {
 			case resetBusy <- struct{}{}:
 				// Updates the statedb with the new chain head. The head state may be
 				// unavailable if the initial state sync has not yet completed.
-				if statedb, err := p.chain.StateAt(newHead.Root); err != nil {
+				if statedb, err := p.chain.PostExecutionStateAt(newHead); err != nil {
 					log.Error("Failed to reset txpool state", "err", err)
 				} else {
 					p.stateLock.Lock()

@@ -536,6 +536,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsMadhugiriPro",
 		"IsLisovo",
 		"IsLisovoPro",
+		"IsDelayedSRC",
 	}
 
 	if len(actual) != len(expected) {

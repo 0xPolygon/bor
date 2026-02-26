@@ -1325,9 +1325,25 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		return nil, nil, 0, err
 	}
 
-	// No block rewards in PoA, so the state remains as it is
 	start := time.Now()
-	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+
+	// No block rewards in PoA, so the state remains as it is.
+	// Under delayed SRC, header.Root stores the parent block's actual state root;
+	// the goroutine in BlockChain.spawnSRCGoroutine handles this block's root.
+	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
+		dsrcReader, ok := chain.(core.DelayedSRCReader)
+		if !ok {
+			return nil, nil, 0, fmt.Errorf("chain does not implement DelayedSRCReader")
+		}
+		parentRoot := dsrcReader.GetPostStateRoot(header.ParentHash)
+		if parentRoot == (common.Hash{}) {
+			return nil, nil, 0, fmt.Errorf("delayed state root unavailable for parent %s", header.ParentHash)
+		}
+		header.Root = parentRoot
+	} else {
+		header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	}
+
 	commitTime := time.Since(start)
 
 	// Uncles are dropped
@@ -1545,15 +1561,38 @@ func (c *Bor) checkAndCommitSpan(
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Inner().Copy()
-	tempState.ResetPrefetcher()
-	tempState.StartPrefetcher("bor", state.Witness(), nil)
+	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
+		// Under delayed SRC, skip ResetPrefetcher + StartPrefetcher.
+		// The full-node state is at root_{N-2} with a FlatDiff overlay
+		// approximating root_{N-1}. ResetPrefetcher clears that overlay,
+		// causing GetCurrentSpan to read stale root_{N-2} values — different
+		// from what the stateless node sees at root_{N-1}. The mismatch leads
+		// to different storage-slot access patterns, so the SRC goroutine
+		// captures the wrong trie nodes.
+		//
+		// StartPrefetcher is also unnecessary: the witness is built by the
+		// SRC goroutine, and tempState's reads are captured via
+		// CommitSnapshot + TouchAllAddresses below.
+	} else {
+		tempState.ResetPrefetcher()
+		tempState.StartPrefetcher("bor", state.Witness(), nil)
+	}
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
 		return err
 	}
 
-	tempState.IntermediateRoot(false)
+	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
+		// Under delayed SRC, use CommitSnapshot instead of IntermediateRoot
+		// to capture all accesses without computing a trie root. Touch
+		// every address on the main state so they appear in the block's
+		// FlatDiff and the SRC goroutine includes their trie paths in
+		// the witness.
+		tempState.CommitSnapshot(false).TouchAllAddresses(state.Inner())
+	} else {
+		tempState.IntermediateRoot(false)
+	}
 
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
@@ -1690,15 +1729,30 @@ func (c *Bor) CommitStates(
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
-		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness(), nil)
+		if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
+			// See comment in checkAndCommitSpan: under delayed SRC,
+			// skip ResetPrefetcher + StartPrefetcher to preserve the
+			// FlatDiff overlay and avoid stale root_{N-2} reads.
+		} else {
+			tempState.ResetPrefetcher()
+			tempState.StartPrefetcher("bor", state.Witness(), nil)
+		}
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
 		if err != nil {
 			return nil, err
 		}
 
-		tempState.IntermediateRoot(false)
+		if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
+			// Under delayed SRC, use CommitSnapshot instead of
+			// IntermediateRoot to capture all accesses without computing
+			// a trie root. Touch every address on the main state so they
+			// appear in the block's FlatDiff and the SRC goroutine
+			// includes their trie paths in the witness.
+			tempState.CommitSnapshot(false).TouchAllAddresses(state.Inner())
+		} else {
+			tempState.IntermediateRoot(false)
+		}
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)

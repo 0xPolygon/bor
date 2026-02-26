@@ -684,6 +684,13 @@ type BorStateSyncer interface {
 	SubscribeStateSyncEvent(ch chan<- StateSyncEvent) event.Subscription
 }
 
+// DelayedSRCReader is implemented by BlockChain and allows consensus code to
+// retrieve the actual post-execution state root stored separately under the
+// delayed-SRC protocol (where header.Root holds the parent's state root).
+type DelayedSRCReader interface {
+	GetPostStateRoot(blockHash common.Hash) common.Hash
+}
+
 // SetStateSync set sync data in state_data
 func (bc *BlockChain) SetStateSync(stateData []*types.StateSyncData) {
 	bc.stateSyncMu.Lock()

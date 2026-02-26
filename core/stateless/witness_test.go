@@ -26,12 +26,7 @@ func TestValidateWitnessPreState_Success(t *testing.T) {
 	contextHeader := &types.Header{
 		Number:     big.NewInt(100),
 		ParentHash: parentHash,
-		Root:       common.HexToHash("0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
 	}
-
-	// Set up mock header reader.
-	mockReader := NewMockHeaderReader()
-	mockReader.AddHeader(parentHeader)
 
 	// Create witness with matching pre-state root.
 	witness := &Witness{
@@ -41,8 +36,8 @@ func TestValidateWitnessPreState_Success(t *testing.T) {
 		State:   make(map[string]struct{}),
 	}
 
-	// Test validation - should succeed.
-	err := ValidateWitnessPreState(witness, mockReader)
+	// Test validation - should succeed (witness.Root() == parentStateRoot).
+	err := ValidateWitnessPreState(witness, parentStateRoot)
 	if err != nil {
 		t.Errorf("Expected validation to succeed, but got error: %v", err)
 	}
@@ -65,7 +60,6 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 	contextHeader := &types.Header{
 		Number:     big.NewInt(100),
 		ParentHash: parentHash,
-		Root:       common.HexToHash("0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
 	}
 
 	// Create witness header with mismatched state root.
@@ -75,10 +69,6 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 		Root:       mismatchedStateRoot, // Different from actual parent.
 	}
 
-	// Set up mock header reader.
-	mockReader := NewMockHeaderReader()
-	mockReader.AddHeader(parentHeader)
-
 	// Create witness with mismatched pre-state root.
 	witness := &Witness{
 		context: contextHeader,
@@ -87,8 +77,8 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 		State:   make(map[string]struct{}),
 	}
 
-	// Test validation - should fail.
-	err := ValidateWitnessPreState(witness, mockReader)
+	// Test validation - should fail (witness.Root() = mismatchedStateRoot != parentStateRoot).
+	err := ValidateWitnessPreState(witness, parentStateRoot)
 	if err == nil {
 		t.Error("Expected validation to fail due to state root mismatch, but it succeeded")
 	}
@@ -102,11 +92,11 @@ func TestValidateWitnessPreState_StateMismatch(t *testing.T) {
 }
 
 func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
-	mockReader := NewMockHeaderReader()
+	dummyRoot := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 
 	// Test case 1: Nil witness.
 	t.Run("NilWitness", func(t *testing.T) {
-		err := ValidateWitnessPreState(nil, mockReader)
+		err := ValidateWitnessPreState(nil, dummyRoot)
 		if err == nil {
 			t.Error("Expected validation to fail for nil witness")
 		}
@@ -124,7 +114,7 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			State:   make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, dummyRoot)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with no headers")
 		}
@@ -140,14 +130,14 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 			Headers: []*types.Header{
 				{
 					Number: big.NewInt(99),
-					Root:   common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+					Root:   dummyRoot,
 				},
 			},
 			Codes: make(map[string]struct{}),
 			State: make(map[string]struct{}),
 		}
 
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, dummyRoot)
 		if err == nil {
 			t.Error("Expected validation to fail for witness with nil context header")
 		}
@@ -156,33 +146,31 @@ func TestValidateWitnessPreState_EdgeCases(t *testing.T) {
 		}
 	})
 
-	// Test case 4: Parent header not found.
-	t.Run("ParentNotFound", func(t *testing.T) {
-		contextHeader := &types.Header{
-			Number:     big.NewInt(100),
-			ParentHash: common.HexToHash("0xnonexistent1234567890abcdef1234567890abcdef1234567890abcdef123456"),
-			Root:       common.HexToHash("0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
-		}
+	// Test case 4: Mismatch with expected root.
+	t.Run("Mismatch", func(t *testing.T) {
+		wrongRoot := common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999")
 
 		witness := &Witness{
-			context: contextHeader,
+			context: &types.Header{
+				Number:     big.NewInt(100),
+				ParentHash: common.HexToHash("0xabc"),
+			},
 			Headers: []*types.Header{
 				{
 					Number: big.NewInt(99),
-					Root:   common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"),
+					Root:   wrongRoot, // witness.Root() will be wrongRoot
 				},
 			},
 			Codes: make(map[string]struct{}),
 			State: make(map[string]struct{}),
 		}
 
-		// Don't add parent header to mock reader - it won't be found.
-		err := ValidateWitnessPreState(witness, mockReader)
+		err := ValidateWitnessPreState(witness, dummyRoot)
 		if err == nil {
-			t.Error("Expected validation to fail when parent header is not found")
+			t.Error("Expected validation to fail when witness root doesn't match expected")
 		}
 
-		expectedError := "parent block header not found"
+		expectedError := "witness pre-state root mismatch"
 		if err != nil && len(err.Error()) > len(expectedError) {
 			if err.Error()[:len(expectedError)] != expectedError {
 				t.Errorf("Expected error message to start with '%s', but got: %v", expectedError, err)
@@ -202,7 +190,6 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 		Root:       grandParentStateRoot,
 	}
 
-	// Use the actual hash of the grandparent header.
 	grandParentHash := grandParentHeader.Hash()
 
 	parentHeader := &types.Header{
@@ -211,19 +198,12 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 		Root:       parentStateRoot,
 	}
 
-	// Use the actual hash of the parent header.
 	parentHash := parentHeader.Hash()
 
 	contextHeader := &types.Header{
 		Number:     big.NewInt(100),
 		ParentHash: parentHash,
-		Root:       common.HexToHash("0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"),
 	}
-
-	// Set up mock header reader.
-	mockReader := NewMockHeaderReader()
-	mockReader.AddHeader(parentHeader)
-	mockReader.AddHeader(grandParentHeader)
 
 	// Create witness with multiple headers (parent should be first).
 	witness := &Witness{
@@ -233,11 +213,52 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 		State:   make(map[string]struct{}),
 	}
 
-	// Test validation - should succeed (only first header matters for validation).
-	err := ValidateWitnessPreState(witness, mockReader)
+	// Test validation - should succeed (witness.Root() = parentStateRoot).
+	err := ValidateWitnessPreState(witness, parentStateRoot)
 	if err != nil {
 		t.Errorf("Expected validation to succeed with multiple headers, but got error: %v", err)
 	}
+}
+
+func TestValidateWitnessPreState_DelayedSRC(t *testing.T) {
+	// Under delayed SRC, witness.Root() = Headers[0].Root = parent header's
+	// on-chain Root (= root_{N-2}). The caller passes parentHeader.Root as
+	// expectedPreStateRoot. The actual pre-state root (root_{N-1}) is validated
+	// separately in writeBlockAndSetHead.
+	parentOnChainRoot := common.HexToHash("0xbbbb") // root_{N-2}
+
+	t.Run("Match", func(t *testing.T) {
+		witness := &Witness{
+			context: &types.Header{
+				Number: big.NewInt(100),
+				Root:   common.HexToHash("0xaaaa"), // root_{N-1}, irrelevant here
+			},
+			Headers: []*types.Header{{Number: big.NewInt(99), Root: parentOnChainRoot}},
+			Codes:   make(map[string]struct{}),
+			State:   make(map[string]struct{}),
+		}
+		err := ValidateWitnessPreState(witness, parentOnChainRoot)
+		if err != nil {
+			t.Errorf("Expected delayed SRC validation to succeed, got: %v", err)
+		}
+	})
+
+	t.Run("Mismatch", func(t *testing.T) {
+		wrongExpected := common.HexToHash("0xcccc")
+		witness := &Witness{
+			context: &types.Header{
+				Number: big.NewInt(100),
+				Root:   common.HexToHash("0xaaaa"),
+			},
+			Headers: []*types.Header{{Number: big.NewInt(99), Root: parentOnChainRoot}},
+			Codes:   make(map[string]struct{}),
+			State:   make(map[string]struct{}),
+		}
+		err := ValidateWitnessPreState(witness, wrongExpected)
+		if err == nil {
+			t.Error("Expected delayed SRC validation to fail on mismatch")
+		}
+	})
 }
 
 // TestConsensusWithOriginalPeer tests consensus calculation including original peer

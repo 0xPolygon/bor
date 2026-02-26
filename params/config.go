@@ -951,6 +951,7 @@ type BorConfig struct {
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
+	DelayedSRCBlock            *big.Int          `json:"delayedSRCBlock"`            // DelayedSRC switch block (nil = no fork, 0 = already on delayedSRC)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1020,6 +1021,10 @@ func (c *BorConfig) IsLisovo(number *big.Int) bool {
 
 func (c *BorConfig) IsLisovoPro(number *big.Int) bool {
 	return isBlockForked(c.LisovoProBlock, number)
+}
+
+func (c *BorConfig) IsDelayedSRC(number *big.Int) bool {
+	return isBlockForked(c.DelayedSRCBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1865,6 +1870,7 @@ type Rules struct {
 	IsMadhugiriPro                                          bool
 	IsLisovo                                                bool
 	IsLisovoPro                                             bool
+	IsDelayedSRC                                            bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1900,5 +1906,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsMadhugiriPro:   c.Bor != nil && c.Bor.IsMadhugiriPro(num),
 		IsLisovo:         c.Bor != nil && c.Bor.IsLisovo(num),
 		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
+		IsDelayedSRC:     c.Bor != nil && c.Bor.IsDelayedSRC(num),
 	}
 }

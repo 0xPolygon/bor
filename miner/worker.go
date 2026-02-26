@@ -1047,7 +1047,26 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 			return nil, fmt.Errorf("parent block not found")
 		}
 		var err error
-		state, err = w.chain.StateAt(parent.Root)
+		if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsDelayedSRC(header.Number) {
+			// Under delayed SRC, the actual pre-state for executing block N is
+			// root_{N-1} = GetPostStateRoot(parent.ParentHash).
+			// G_{N-1} has already finished (it was the sync point during parent's
+			// validation), so this lookup is immediate — no blocking.
+			// G_N (computing root_N from FlatDiff_N) is still running concurrently.
+			// We open state at root_{N-1} + FlatDiff_N overlay, which gives a
+			// complete view of block N's post-execution state without waiting for G_N.
+			baseRoot := w.chain.GetPostStateRoot(parent.ParentHash)
+			if baseRoot == (common.Hash{}) {
+				return nil, fmt.Errorf("delayed state root unavailable for grandparent %s", parent.ParentHash)
+			}
+			flatDiff := w.chain.GetLastFlatDiff()
+			if flatDiff == nil {
+				return nil, fmt.Errorf("no flat diff available for delayed SRC block building")
+			}
+			state, err = w.chain.StateAtWithFlatDiff(baseRoot, flatDiff)
+		} else {
+			state, err = w.chain.StateAt(parent.Root)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1780,10 +1799,20 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		timestamp:          uint64(timestamp),
 		coinbase:           coinbase,
 		parentHash:         parent.Hash(),
-		statedb:            state,
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+	}
+	// Default to state (correct for pre-fork and activation boundary).
+	// Under delayed SRC, parent.Root = root_{N-1} and misses block N's mutations;
+	// overlay flatDiff_N to get the correct pre-state when it is available.
+	genParams.statedb = state
+	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsDelayedSRC(new(big.Int).Add(parent.Number, big.NewInt(1))) {
+		if flatDiff := w.chain.GetLastFlatDiff(); flatDiff != nil {
+			if s, ferr := w.chain.StateAtWithFlatDiff(parent.Root, flatDiff); ferr == nil {
+				genParams.statedb = s
+			}
+		}
 	}
 
 	var interruptPrefetch atomic.Bool

@@ -261,6 +261,10 @@ func (bc *testBlockChainBor) StateAt(common.Hash) (*state.StateDB, error) {
 	return bc.statedb, nil
 }
 
+func (bc *testBlockChainBor) PostExecutionStateAt(*types.Header) (*state.StateDB, error) {
+	return bc.statedb, nil
+}
+
 func (bc *testBlockChainBor) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	return bc.chainHeadFeed.Subscribe(ch)
 }

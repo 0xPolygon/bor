@@ -35,39 +35,29 @@ type HeaderReader interface {
 	GetHeader(hash common.Hash, number uint64) *types.Header
 }
 
-// ValidateWitnessPreState validates that the witness pre-state root matches the parent block's state root.
-func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader) error {
+// ValidateWitnessPreState validates that the witness pre-state root matches
+// expectedPreStateRoot (the parent block's actual post-execution state root).
+//
+// Under delayed SRC, the pre-state root is stored in contextHeader.Root
+// (set by spawnSRCGoroutine). Under normal operation, it is witness.Root()
+// (= Headers[0].Root = parent header's Root field).
+func ValidateWitnessPreState(witness *Witness, expectedPreStateRoot common.Hash) error {
 	if witness == nil {
 		return fmt.Errorf("witness is nil")
 	}
-
-	// Check if witness has any headers.
 	if len(witness.Headers) == 0 {
 		return fmt.Errorf("witness has no headers")
 	}
-
-	// Get the witness context header (the block this witness is for).
 	contextHeader := witness.Header()
 	if contextHeader == nil {
 		return fmt.Errorf("witness context header is nil")
 	}
 
-	// Get the parent block header from the chain.
-	parentHeader := headerReader.GetHeader(contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
-	if parentHeader == nil {
-		return fmt.Errorf("parent block header not found: parentHash=%x, parentNumber=%d",
-			contextHeader.ParentHash, contextHeader.Number.Uint64()-1)
+	// Normal path: witness.Root() (= parent header's Root) must match expected.
+	if witness.Root() != expectedPreStateRoot {
+		return fmt.Errorf("witness pre-state root mismatch: witness=%x, expected=%x, blockNumber=%d",
+			witness.Root(), expectedPreStateRoot, contextHeader.Number.Uint64())
 	}
-
-	// Get witness pre-state root (from first header which should be parent).
-	witnessPreStateRoot := witness.Root()
-
-	// Compare with actual parent block's state root.
-	if witnessPreStateRoot != parentHeader.Root {
-		return fmt.Errorf("witness pre-state root mismatch: witness=%x, parent=%x, blockNumber=%d",
-			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
-	}
-
 	return nil
 }
 
@@ -96,9 +86,16 @@ func NewWitness(context *types.Header, chain HeaderReader) (*Witness, error) {
 		}
 		headers = append(headers, parent)
 	}
+	// Gut out the root and receipt hash: these are what stateless execution
+	// computes. A non-zero Root signals delayed SRC (the pre-state root is
+	// embedded there by the caller after NewWitness returns).
+	ctx := types.CopyHeader(context)
+	ctx.Root = common.Hash{}
+	ctx.ReceiptHash = common.Hash{}
+
 	// Create the witness with a reconstructed gutted out block
 	return &Witness{
-		context: context,
+		context: ctx,
 		Headers: headers,
 		Codes:   make(map[string]struct{}),
 		State:   make(map[string]struct{}),
@@ -159,7 +156,13 @@ func (w *Witness) Copy() *Witness {
 	return cpy
 }
 
-// Root returns the pre-state root from the first header.
+// Root returns the pre-state root for executing this block's transactions.
+// This is always Headers[0].Root, i.e. the parent block's post-execution state
+// root (the trustless pre-state anchor included in every witness).
+//
+// Under delayed SRC the correct pre-state root lives in the block header itself
+// (block[N].Header.Root = root_{N-1}); callers that have the block available
+// should use block.Root() directly rather than this method.
 //
 // Note, this method will panic in case of a bad witness (but RLP decoding will
 // sanitize it and fail before that).

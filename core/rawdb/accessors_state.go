@@ -339,6 +339,24 @@ func DeleteWitness(db ethdb.KeyValueWriter, blockHash common.Hash) {
 	}
 }
 
+// WritePostStateRoot stores the post-execution state root for a given block.
+// This persists across reorgs and restarts so that GetPostStateRoot can
+// retrieve the root when no child block exists yet.
+func WritePostStateRoot(db ethdb.KeyValueWriter, blockHash common.Hash, root common.Hash) {
+	if err := db.Put(postStateRootKey(blockHash), root.Bytes()); err != nil {
+		log.Crit("Failed to store post-state root", "err", err)
+	}
+}
+
+// ReadPostStateRoot retrieves the post-execution state root for the given block.
+func ReadPostStateRoot(db ethdb.KeyValueReader, blockHash common.Hash) common.Hash {
+	data, err := db.Get(postStateRootKey(blockHash))
+	if err != nil || len(data) == 0 {
+		return common.Hash{}
+	}
+	return common.BytesToHash(data)
+}
+
 func ReadWitnessPruneCursor(db ethdb.KeyValueReader) *uint64 {
 	log.Debug("ReadWitnessCursor")
 	data, err := db.Get(witnessPruneCursorKey())
