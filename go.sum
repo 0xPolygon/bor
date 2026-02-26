@@ -74,8 +74,8 @@ cosmossdk.io/tools/confix v0.1.1/go.mod h1:nQVvP1tHsGXS83PonPVWJtSbddIqyjEw99L4M
 cosmossdk.io/x/tx v0.13.7 h1:8WSk6B/OHJLYjiZeMKhq7DK7lHDMyK0UfDbBMxVmeOI=
 cosmossdk.io/x/tx v0.13.7/go.mod h1:V6DImnwJMTq5qFjeGWpXNiT/fjgE4HtmclRmTqRVM3w=
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
-filippo.io/edwards25519 v1.1.0 h1:FNf4tywRC1HmFuKW5xopWpigGjJKiJSV0Cqo0cJWDaA=
-filippo.io/edwards25519 v1.1.0/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
+filippo.io/edwards25519 v1.1.1 h1:YpjwWWlNmGIDyXOn8zLzqiD+9TyIlPhGFG96P39uBpw=
+filippo.io/edwards25519 v1.1.1/go.mod h1:BxyFTGdWcka3PhytdK4V28tE5sGfRvvvRV7EaN4VDT4=
 github.com/0xPolygon/cometbft v0.3.6-polygon h1:V2ZB0ECg59xGrS1FKJv4p88UF2HeYMTmFl+UTLSuyFA=
 github.com/0xPolygon/cometbft v0.3.6-polygon/go.mod h1:ZFIXbBrjS2AlVL5UFIgnShMe3b2dso9M0yHLN+mBg4Y=
 github.com/0xPolygon/cometbft-db v0.14.1-polygon h1:sMlEPISgW0Wm9bC3bnLVPiPnyZ9EOuWJxoAV8ujrN3o=
