@@ -148,13 +148,14 @@ func Execute(code, input []byte, cfg *Config, interrupt *atomic.Bool) ([]byte, *
 	// set the receiver's (the executing contract) code for execution.
 	cfg.State.SetCode(address, code, tracing.CodeChangeUnspecified)
 	// Call the code with the given configuration.
+	vmenv.SetInterrupt(interrupt)
+
 	ret, leftOverGas, err := vmenv.Call(
 		cfg.Origin,
 		common.BytesToAddress([]byte("contract")),
 		input,
 		cfg.GasLimit,
 		uint256.MustFromBig(cfg.Value),
-		interrupt,
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxEnd != nil {
 		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - leftOverGas}, err)
@@ -226,7 +227,6 @@ func Call(address common.Address, input []byte, cfg *Config) ([]byte, uint64, er
 		input,
 		cfg.GasLimit,
 		uint256.MustFromBig(cfg.Value),
-		nil,
 	)
 	if cfg.EVMConfig.Tracer != nil && cfg.EVMConfig.Tracer.OnTxEnd != nil {
 		cfg.EVMConfig.Tracer.OnTxEnd(&types.Receipt{GasUsed: cfg.GasLimit - leftOverGas}, err)
