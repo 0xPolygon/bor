@@ -127,6 +127,17 @@ var (
 	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
 	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
 
+	// Witness and write-path metrics for block production observability.
+	// These track the time spent in each phase of writeBlockWithState, which runs
+	// on the critical path between block sealing and broadcasting. Delays here
+	// (e.g. from large witness encoding, DB compaction stalls, or pathdb diff layer
+	// flushes) can cause blocks to be broadcast late, triggering span rotations.
+	witnessEncodeTimer     = metrics.NewRegisteredTimer("chain/witness/encode", nil)     // time to RLP-encode the witness (EncodeRLP)
+	witnessDbWriteTimer    = metrics.NewRegisteredTimer("chain/witness/dbwrite", nil)    // time to write encoded witness into the DB batch (WriteWitness)
+	witnessCollectionTimer = metrics.NewRegisteredTimer("chain/witness/collection", nil) // time spent collecting trie nodes into the witness during IntermediateRoot
+	blockBatchWriteTimer   = metrics.NewRegisteredTimer("chain/batch/write", nil)        // time to flush the block batch to disk (blockBatch.Write) — spikes indicate DB compaction stalls
+	stateCommitTimer       = metrics.NewRegisteredTimer("chain/state/commit", nil)       // time for statedb.CommitWithUpdate — in pathdb mode, spikes indicate diff layer flushes
+
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
@@ -2254,24 +2265,35 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	rawdb.WritePreimages(blockBatch, statedb.Preimages())
 
 	if statedb.Witness() != nil {
+		encStart := time.Now()
+
 		var witBuf bytes.Buffer
 		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
-		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
+		witnessEncodeTimer.Update(time.Since(encStart))
 
 		witnessBytes := witBuf.Bytes()
+
+		writeStart := time.Now()
+		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
+		witnessDbWriteTimer.Update(time.Since(writeStart))
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
 
+	batchStart := time.Now()
 	if err := blockBatch.Write(); err != nil {
 		log.Crit("Failed to write block into disk", "err", err)
 	}
+	blockBatchWriteTimer.Update(time.Since(batchStart))
+
 	// Commit all cached state changes into underlying memory database.
+	commitStart := time.Now()
 	root, stateUpdate, err := statedb.CommitWithUpdate(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()), bc.chainConfig.IsCancun(block.Number()))
+	stateCommitTimer.Update(time.Since(commitStart))
 	if err != nil {
 		return []*types.Log{}, err
 	}
@@ -3237,6 +3259,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
 		snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
 		triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
+		witnessCollectionTimer.Update(statedb.WitnessCollection)
 
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
 		blockInsertTimer.UpdateSince(start)
@@ -3441,6 +3464,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
 	snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
 	triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
+	witnessCollectionTimer.Update(statedb.WitnessCollection)
 
 	blockWriteTimer.Update(time.Since(wstart) - max(statedb.AccountCommits, statedb.StorageCommits) /* concurrent */ - statedb.SnapshotCommits - statedb.TrieDBCommits)
 	elapsed := time.Since(startTime) + 1 // prevent zero division
