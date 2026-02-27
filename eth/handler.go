@@ -791,13 +791,16 @@ func (h *handler) minedBroadcastLoop() {
 
 	for obj := range h.minedBlockSub.Chan() {
 		if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
+			now := time.Now()
+			var sealToBcast time.Duration
 			if !ev.SealedAt.IsZero() {
-				sealToBroadcastTimer.Update(time.Since(ev.SealedAt))
+				sealToBcast = now.Sub(ev.SealedAt)
+				sealToBroadcastTimer.Update(sealToBcast)
 			}
 			if h.enableBlockTracking {
-				delayInMs := time.Now().UnixMilli() - int64(ev.Block.Time())*1000
+				delayInMs := now.UnixMilli() - int64(ev.Block.Time())*1000
 				delay := common.PrettyDuration(time.Millisecond * time.Duration(delayInMs))
-				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", time.Now().Unix(), "delay", delay, "delayInMs", delayInMs)
+				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
 			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
 			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest

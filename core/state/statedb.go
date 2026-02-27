@@ -169,8 +169,8 @@ type StateDB struct {
 	SnapshotAccountReads time.Duration
 	SnapshotStorageReads time.Duration
 	SnapshotCommits      time.Duration
-	TrieDBCommits       time.Duration
-	WitnessCollection  time.Duration // time spent collecting trie nodes into witness during IntermediateRoot (sequential portion only)
+	TrieDBCommits        time.Duration
+	WitnessCollection    time.Duration // time spent collecting trie nodes into witness during IntermediateRoot (sequential portion only)
 
 	// Bor metrics
 	BorConsensusTime time.Duration
