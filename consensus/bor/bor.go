@@ -125,7 +125,7 @@ var (
 )
 
 // maxAllowedFutureBlockTimeSeconds is the maximum number of seconds that a block
-// timestamp may exceed the local clock. 
+// timestamp may exceed the local clock.
 const maxAllowedFutureBlockTimeSeconds = uint64(30)
 
 // SignerFn is a signer callback function to request a header to be signed by a
