@@ -1123,6 +1123,19 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	return nil
 }
 
+// extractVMConfig retrieves the vm.Config from the chain reader, if available.
+func extractVMConfig(chain consensus.ChainHeaderReader) vm.Config {
+	if bc, ok := chain.(*core.BlockChain); ok {
+		return *bc.GetVMConfig()
+	}
+	if hc, ok := chain.(*core.HeaderChain); ok {
+		if cfg := hc.GetVMConfig(); cfg != nil {
+			return *cfg
+		}
+	}
+	return vm.Config{}
+}
+
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
 func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
@@ -1137,16 +1150,9 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	var (
 		stateSyncData []*types.StateSyncData
 		err           error
-		vmCfg         vm.Config
 	)
 
-	if bc, ok := chain.(*core.BlockChain); ok {
-		vmCfg = *bc.GetVMConfig()
-	} else if hc, ok := chain.(*core.HeaderChain); ok {
-		if cfg := hc.GetVMConfig(); cfg != nil {
-			vmCfg = *cfg
-		}
-	}
+	vmCfg := extractVMConfig(chain)
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
@@ -1313,16 +1319,9 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	var (
 		stateSyncData []*types.StateSyncData
 		err           error
-		vmCfg         vm.Config
 	)
 
-	if bc, ok := chain.(*core.BlockChain); ok {
-		vmCfg = *bc.GetVMConfig()
-	} else if hc, ok := chain.(*core.HeaderChain); ok {
-		if cfg := hc.GetVMConfig(); cfg != nil {
-			vmCfg = *cfg
-		}
-	}
+	vmCfg := extractVMConfig(chain)
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
