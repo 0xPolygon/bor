@@ -191,17 +191,13 @@ func TestInterruptNestedCall(t *testing.T) {
 		_, _, err := Execute(caller.Bytes(), nil, cfg, &interrupt)
 		elapsed := time.Since(start)
 
-		// Top-level still catches interrupt after nested call exhausts gas
+		// FIX: nested call IS interrupted promptly via EVM struct field
 		if err != vm.ErrInterrupt {
 			t.Fatalf("expected ErrInterrupt, got %v", err)
 		}
-
-		// BUG: nested call NOT interrupted — took much longer than 50ms
-		// because the interrupt flag is not propagated to nested EVM calls
-		if elapsed < 200*time.Millisecond {
-			t.Fatalf("expected slow execution (bug: nested call uninterruptible), but got %v", elapsed)
+		if elapsed > 200*time.Millisecond {
+			t.Fatalf("nested call not interrupted promptly: %v (expected < 200ms)", elapsed)
 		}
-		t.Logf("Bug confirmed: nested call took %v (interrupt ignored inside STATICCALL)", elapsed)
 	})
 }
 
