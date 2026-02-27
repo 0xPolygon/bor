@@ -1136,7 +1136,8 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var deps map[int]map[int]bool
 
-	chDeps := make(chan blockstm.TxDep)
+	var depsBuilder *blockstm.DepsBuilder
+	var chDeps chan blockstm.TxReadWriteSet
 
 	var depsWg sync.WaitGroup
 	var once sync.Once
@@ -1145,9 +1146,8 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	// create and add empty mvHashMap in statedb
 	if EnableMVHashMap && w.IsRunning() {
-		deps = map[int]map[int]bool{}
-
-		chDeps = make(chan blockstm.TxDep)
+		depsBuilder = blockstm.NewDepsBuilder()
+		chDeps = make(chan blockstm.TxReadWriteSet)
 
 		// Make sure we safely close the channel in case of interrupt
 		defer once.Do(func() {
@@ -1156,9 +1156,9 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 		depsWg.Add(1)
 
-		go func(chDeps chan blockstm.TxDep) {
+		go func(chDeps chan blockstm.TxReadWriteSet) {
 			for t := range chDeps {
-				deps = blockstm.UpdateDeps(deps, t)
+				depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList)
 			}
 
 			depsWg.Done()
@@ -1323,10 +1323,10 @@ mainloop:
 					return errors.New("transaction count exceeds dependency list length")
 				}
 
-				temp := blockstm.TxDep{
-					Index:         env.tcount - 1,
-					ReadList:      env.state.MVReadList(),
-					FullWriteList: env.depsMVFullWriteList,
+				temp := blockstm.TxReadWriteSet{
+					Index:     env.tcount - 1,
+					ReadList:  env.state.MVReadList(),
+					WriteList: env.state.MVFullWriteList(),
 				}
 
 				// Send with timeout to prevent deadlock
@@ -1366,6 +1366,8 @@ mainloop:
 			close(chDeps)
 		})
 		depsWg.Wait()
+
+		deps = depsBuilder.GetDeps()
 
 		var blockExtraData types.BlockExtraData
 
