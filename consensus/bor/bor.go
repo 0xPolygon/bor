@@ -125,12 +125,7 @@ var (
 )
 
 // maxAllowedFutureBlockTimeSeconds is the maximum number of seconds that a block
-// timestamp may exceed the local clock. This upper bound prevents chain-halting
-// attacks on the Rio+ path: the Rio verifyHeader check was intentionally relaxed
-// (removing the strict CalcProducerDelay upper bound) to support flexible block
-// times, but without any ceiling a single compromised validator could set
-// header.Time to year 2126, causing Prepare()'s delay computation to sleep for
-// ~100 years and permanently halt the chain.
+// timestamp may exceed the local clock. 
 const maxAllowedFutureBlockTimeSeconds = uint64(30)
 
 // SignerFn is a signer callback function to request a header to be signed by a
@@ -435,10 +430,7 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			return consensus.ErrFutureBlock
 		}
 		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
-		// ahead of the local clock is rejected. The Rio lower-bound check above was intentionally
-		// relaxed (parent.Time only) to support flexible block times, but without a ceiling a
-		// compromised validator could set header.Time to year 2126 — Prepare() would then compute
-		// a ~100-year delay and permanently halt the chain.
+		// ahead of the local clock is rejected.
 		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
 			log.Error("Block timestamp too far in future post rio", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
