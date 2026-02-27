@@ -267,7 +267,7 @@ func run(ctx context.Context, call *core.Message, opts *Options) (*core.Executio
 		evm.Cancel()
 	}()
 	// Execute the call, returning a wrapped error or the result
-	result, err := core.ApplyMessage(evm, call, new(core.GasPool).AddGas(math.MaxUint64), nil)
+	result, err := core.ApplyMessage(evm, call, new(core.GasPool).AddGas(math.MaxUint64))
 	if vmerr := dirtyState.Error(); vmerr != nil {
 		return nil, vmerr
 	}
