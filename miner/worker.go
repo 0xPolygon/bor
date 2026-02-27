@@ -1368,13 +1368,16 @@ mainloop:
 		depsWg.Wait()
 
 		deps = depsBuilder.GetDeps()
+		if deps == nil {
+			log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
+		}
 
 		var blockExtraData types.BlockExtraData
 
 		tempVanity := env.header.Extra[:types.ExtraVanityLength]
 		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
 
-		if len(env.mvReadMapList) > 0 {
+		if deps != nil && len(env.mvReadMapList) > 0 {
 			tempDeps := make([][]uint64, len(env.mvReadMapList))
 
 			for j := range deps[0] {
@@ -1420,9 +1423,7 @@ mainloop:
 		}
 
 		env.header.Extra = []byte{}
-
 		env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-
 		env.header.Extra = append(env.header.Extra, tempSeal...)
 	}
 

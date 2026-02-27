@@ -260,13 +260,18 @@ func TestDepsBuilder_WriteChain(t *testing.T) {
 	}
 }
 
-func TestDepsBuilder_NonSequentialPanics(t *testing.T) {
+func TestDepsBuilder_NonSequentialReturnsError(t *testing.T) {
 	db := NewDepsBuilder()
-	db.AddTransaction(0, nil, nil)
+	require.NoError(t, db.AddTransaction(0, nil, nil))
 
-	assert.Panics(t, func() {
-		db.AddTransaction(5, nil, nil) // skip indices 1-4
-	})
+	err := db.AddTransaction(5, nil, nil) // skip indices 1-4
+	require.ErrorIs(t, err, errNonSequentialIndex)
+
+	// Subsequent calls should return the same error
+	require.ErrorIs(t, db.AddTransaction(1, nil, nil), errNonSequentialIndex)
+
+	// GetDeps should return nil on a failed builder
+	assert.Nil(t, db.GetDeps())
 }
 
 func TestBitset_EmptyBitset(t *testing.T) {

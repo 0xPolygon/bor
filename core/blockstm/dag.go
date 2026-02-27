@@ -1,6 +1,7 @@
 package blockstm
 
 import (
+	"errors"
 	"fmt"
 	"math/bits"
 	"strings"
@@ -16,6 +17,7 @@ var (
 	hasReadDepCallCounter = metrics.NewRegisteredCounter("blockstm/hasreaddep/calls", nil)
 	readsMapSizeHist      = metrics.NewRegisteredHistogram("blockstm/hasreaddep/reads/size", nil, metrics.NewExpDecaySample(1028, 0.015))
 	dagBuildTimer         = metrics.NewRegisteredTimer("blockstm/dag/build", nil)
+	errNonSequentialIndex = errors.New("non-sequential transaction index")
 )
 
 const defaultBitsetWidth = 512
@@ -300,11 +302,12 @@ type TxReadWriteSet struct {
 // and bitsets for O(N/64) transitive reduction via word-parallel set operations.
 // Transactions must be added in sequential order (0, 1, 2, ...).
 type DepsBuilder struct {
-	lastWriter  map[Key]int // inverted index: state key → latest tx that wrote it
-	directDeps  []TxBitset  // per-tx direct dependencies (after transitive reduction)
-	reachable   []TxBitset  // per-tx transitive closure of all dependencies
-	width       int         // bitset width in transactions (grows dynamically)
-	numTx       int         // count of transactions added
+	lastWriter map[Key]int // inverted index: state key → latest tx that wrote it
+	directDeps []TxBitset  // per-tx direct dependencies (after transitive reduction)
+	reachable  []TxBitset  // per-tx transitive closure of all dependencies
+	width      int         // bitset width in transactions (grows dynamically)
+	numTx      int         // count of transactions added
+	err        error       // error
 }
 
 func NewDepsBuilder() *DepsBuilder {
@@ -340,9 +343,14 @@ func (db *DepsBuilder) ensureCapacity(needed int) {
 
 // AddTransaction records a transaction's read/write sets and computes its
 // reduced dependency set. Must be called with sequential indices (0, 1, 2, ...).
-func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writeList []WriteDescriptor) {
+func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writeList []WriteDescriptor) error {
+	if db.err != nil {
+		return db.err
+	}
+
 	if index != db.numTx {
-		panic(fmt.Sprintf("blockstm.DepsBuilder: non-sequential index %d, expected %d", index, db.numTx))
+		db.err = fmt.Errorf("%w: got %d, expected %d", errNonSequentialIndex, index, db.numTx)
+		return db.err
 	}
 
 	if index >= db.width {
@@ -375,11 +383,17 @@ func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writ
 	for _, wd := range writeList {
 		db.lastWriter[wd.Path] = index
 	}
+
+	return nil
 }
 
 // GetDeps returns the reduced dependency graph as a map for backward compatibility
-// with the existing serialization path.
+// with the existing serialization path. Returns nil if the builder encountered an error.
 func (db *DepsBuilder) GetDeps() map[int]map[int]bool {
+	if db.err != nil {
+		return nil
+	}
+
 	result := make(map[int]map[int]bool, db.numTx)
 
 	for i := 0; i < db.numTx; i++ {
