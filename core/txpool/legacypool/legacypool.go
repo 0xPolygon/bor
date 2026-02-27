@@ -1232,6 +1232,7 @@ func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *typ
 		pool.all.Remove(hash)
 		pool.priced.Removed(1)
 		pendingDiscardMeter.Mark(1)
+		delete(pool.lastRebroadcast, hash)
 		return false
 	}
 	// Otherwise discard any previous transaction and mark this
