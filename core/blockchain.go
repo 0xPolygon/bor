@@ -2272,14 +2272,23 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
-		witnessEncodeTimer.Update(time.Since(encStart))
+		encodeDuration := time.Since(encStart)
+		witnessEncodeTimer.Update(encodeDuration)
 
 		witnessBytes := witBuf.Bytes()
 
 		writeStart := time.Now()
 		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
-		witnessDbWriteTimer.Update(time.Since(writeStart))
+		dbWriteDuration := time.Since(writeStart)
+		witnessDbWriteTimer.Update(dbWriteDuration)
+
+		if encodeDuration > 100*time.Millisecond {
+			log.Warn("Slow witness encoding", "block", block.NumberU64(), "elapsed", common.PrettyDuration(encodeDuration), "size", common.StorageSize(len(witnessBytes)))
+		}
+		if dbWriteDuration > 100*time.Millisecond {
+			log.Warn("Slow witness DB write", "block", block.NumberU64(), "elapsed", common.PrettyDuration(dbWriteDuration), "size", common.StorageSize(len(witnessBytes)))
+		}
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
@@ -2288,12 +2297,20 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	if err := blockBatch.Write(); err != nil {
 		log.Crit("Failed to write block into disk", "err", err)
 	}
-	blockBatchWriteTimer.Update(time.Since(batchStart))
+	batchFlushDuration := time.Since(batchStart)
+	blockBatchWriteTimer.Update(batchFlushDuration)
+	if batchFlushDuration > 100*time.Millisecond {
+		log.Warn("Slow block batch flush", "block", block.NumberU64(), "elapsed", common.PrettyDuration(batchFlushDuration))
+	}
 
 	// Commit all cached state changes into underlying memory database.
 	commitStart := time.Now()
 	root, stateUpdate, err := statedb.CommitWithUpdate(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()), bc.chainConfig.IsCancun(block.Number()))
-	stateCommitTimer.Update(time.Since(commitStart))
+	commitDuration := time.Since(commitStart)
+	stateCommitTimer.Update(commitDuration)
+	if commitDuration > 100*time.Millisecond {
+		log.Warn("Slow state commit", "block", block.NumberU64(), "elapsed", common.PrettyDuration(commitDuration))
+	}
 	if err != nil {
 		return []*types.Log{}, err
 	}
