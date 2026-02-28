@@ -1701,3 +1701,43 @@ func TestCommitWithReaderStats(t *testing.T) {
 	// 5. Cache hit/miss metrics were reported (accountCacheHitMeter, storageCacheHitMeter, etc.)
 	// 6. Both prefetch and process reader stats were collected and reported
 }
+
+// TestWriteBlockAndSetHeadTimer verifies that the writeBlockAndSetHeadTimer
+// metric is updated when the worker seals and writes blocks.
+func TestWriteBlockAndSetHeadTimer(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	for i := 0; i < 5; i++ {
+		tx := b.newRandomTxWithNonce(true, uint64(i))
+		b.txPool.Add([]*types.Transaction{tx}, true)
+	}
+
+	countBefore := writeBlockAndSetHeadTimer.Snapshot().Count()
+
+	w.start()
+	time.Sleep(3 * time.Second)
+	w.stop()
+
+	currentBlock := w.chain.CurrentBlock()
+	if currentBlock.Number.Uint64() == 0 {
+		t.Fatal("no blocks were mined")
+	}
+
+	if writeBlockAndSetHeadTimer.Snapshot().Count() <= countBefore {
+		t.Error("writeBlockAndSetHeadTimer should have been updated after mining blocks")
+	}
+}
