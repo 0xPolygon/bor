@@ -153,9 +153,8 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	depsMVFullWriteList [][]blockstm.WriteDescriptor
-	mvReadMapList       []map[blockstm.Key]blockstm.ReadDescriptor
-	witness             *stateless.Witness
+	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
+	witness       *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
@@ -165,16 +164,15 @@ type environment struct {
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
-		signer:              env.signer,
-		state:               env.state.Copy(),
-		tcount:              env.tcount,
-		coinbase:            env.coinbase,
-		header:              types.CopyHeader(env.header),
-		receipts:            copyReceipts(env.receipts),
-		depsMVFullWriteList: env.depsMVFullWriteList,
-		mvReadMapList:       env.mvReadMapList,
-		prefetchReader:      env.prefetchReader,
-		processReader:       env.processReader,
+		signer:         env.signer,
+		state:          env.state.Copy(),
+		tcount:         env.tcount,
+		coinbase:       env.coinbase,
+		header:         types.CopyHeader(env.header),
+		receipts:       copyReceipts(env.receipts),
+		mvReadMapList:  env.mvReadMapList,
+		prefetchReader: env.prefetchReader,
+		processReader:  env.processReader,
 	}
 
 	if env.gasPool != nil {
@@ -1077,8 +1075,6 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
-
-	env.depsMVFullWriteList = [][]blockstm.WriteDescriptor{}
 	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}
 
 	return env, nil
@@ -1158,9 +1154,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 		go func(chDeps chan blockstm.TxReadWriteSet) {
 			for t := range chDeps {
-				depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList)
+				if err := depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList); err != nil {
+					log.Warn("Failed to add transaction to dependency builder", "tx", t.Index, "err", err)
+				}
 			}
-
 			depsWg.Done()
 		}(chDeps)
 	}
@@ -1315,11 +1312,10 @@ mainloop:
 			coalescedLogs = append(coalescedLogs, logs...)
 
 			if EnableMVHashMap && w.IsRunning() {
-				env.depsMVFullWriteList = append(env.depsMVFullWriteList, env.state.MVFullWriteList())
 				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
 
-				if env.tcount > len(env.depsMVFullWriteList) {
-					log.Warn("blockstm - env.tcount > len(env.depsMVFullWriteList)", "env.tcount", env.tcount, "len(depsMVFullWriteList)", len(env.depsMVFullWriteList))
+				if env.tcount > len(env.mvReadMapList) {
+					log.Warn("blockstm - env.tcount > len(env.mvReadMapList)", "env.tcount", env.tcount, "len(mvReadMapList)", len(env.mvReadMapList))
 					return errors.New("transaction count exceeds dependency list length")
 				}
 
@@ -1377,6 +1373,11 @@ mainloop:
 		tempVanity := env.header.Extra[:types.ExtraVanityLength]
 		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
 
+		if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
+			log.Error("error while decoding block extra data", "err", err)
+			return err
+		}
+
 		if deps != nil && len(env.mvReadMapList) > 0 {
 			tempDeps := make([][]uint64, len(env.mvReadMapList))
 
@@ -1400,11 +1401,6 @@ mainloop:
 				for j := range deps[i] {
 					tempDeps[i] = append(tempDeps[i], uint64(j))
 				}
-			}
-
-			if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-				log.Error("error while decoding block extra data", "err", err)
-				return err
 			}
 
 			if delayFlag {
