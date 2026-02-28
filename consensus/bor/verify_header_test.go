@@ -215,13 +215,11 @@ func TestVerifyHeader(t *testing.T) {
 			},
 			expectedError: consensus.ErrFutureBlock,
 		},
-		// Rio timestamp upper-bound tests: demonstrate the chain-halt attack vector
-		// and verify the fix rejects far-future timestamps.
+		// Rio timestamp upper-bound tests: verify that far-future timestamps are rejected.
 		{
-			// Attack vector: a compromised validator sets header.Time 100 years in the
-			// future. Without an upper-bound check this passes all Rio validation, then
-			// Prepare() computes a ~100-year delay that permanently halts the chain.
-			name: "far-future timestamp in Rio mode is rejected (chain-halt attack)",
+			// A header with a timestamp set 100 years in the future must be
+			// rejected by the upper-bound check introduced in Rio.
+			name: "far-future timestamp in Rio mode is rejected",
 			setupChain: makeSetupChain(signerAddr, func(opts *chainSetupOptions) {
 				opts.rioBlock = big.NewInt(0)
 			}),
