@@ -1053,11 +1053,10 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		}
 
 		// New transaction is better than our worse ones, make room for it.
-		// If we can't make enough room for new one, abort the operation.
-		drop, success := pool.priced.Discard(pool.all.Slots() - int(pool.config.GlobalSlots+pool.config.GlobalQueue) + numSlots(tx))
-
-		// Take a snapshot of reheap count as we've finished re-arrangements in the priced list
-		reheapCount := pool.priced.reheaps.Load()
+		// If we can't make enough room for new one, abort the operation. Also,
+		// take a snapshot of reheap count as we've finished re-arrangements in
+		// the priced list.
+		drop, success, reheapCount := pool.priced.Discard(pool.all.Slots() - int(pool.config.GlobalSlots+pool.config.GlobalQueue) + numSlots(tx))
 
 		// Special case, we still can't make the room for the new remote one.
 		if !success {

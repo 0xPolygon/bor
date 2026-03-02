@@ -741,7 +741,7 @@ func (l *pricedList) underpricedFor(h *priceHeap, tx *types.Transaction) bool {
 // Discard finds a number of most underpriced transactions, removes them from the
 // priced list and returns them for further removal from the entire pool.
 // If noPending is set to true, we will only consider the floating list
-func (l *pricedList) Discard(slots int) (types.Transactions, bool) {
+func (l *pricedList) Discard(slots int) (types.Transactions, bool, uint64) {
 	l.reheapMu.Lock()
 	defer l.reheapMu.Unlock()
 
@@ -782,10 +782,10 @@ func (l *pricedList) Discard(slots int) (types.Transactions, bool) {
 			heap.Push(&l.urgent, tx)
 		}
 
-		return nil, false
+		return nil, false, l.reheaps.Load()
 	}
 
-	return drop, true
+	return drop, true, l.reheaps.Load()
 }
 
 // Reheap forcibly rebuilds the heap based on the current remote transaction set.
