@@ -29,7 +29,9 @@ import (
 
 // Tests that snap sync is disabled after a successful sync cycle.
 func TestSnapSyncDisabling69(t *testing.T) { testSnapSyncDisabling(t, eth.ETH69, snap.SNAP1) }
-func TestSnapSyncDisabling68(t *testing.T) { testSnapSyncDisabling(t, eth.ETH68, snap.SNAP1) }
+
+// Skipping as eth/68 nodes are filtered out during snap sync
+// func TestSnapSyncDisabling68(t *testing.T) { testSnapSyncDisabling(t, eth.ETH68, snap.SNAP1) }
 
 // Tests that snap sync gets disabled as soon as a real block is successfully
 // imported into the blockchain.

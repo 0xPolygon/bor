@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
@@ -573,6 +574,8 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
 			return
 		}
+
+		metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
 
 		// Process successful fetch
 		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)

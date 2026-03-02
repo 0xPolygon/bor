@@ -55,7 +55,7 @@ func TestStoreCapture(t *testing.T) {
 
 	var index common.Hash
 	logger.OnTxStart(evm.GetVMContext(), nil, common.Address{})
-	_, err := evm.Run(contract, []byte{}, false, nil)
+	_, err := evm.Run(contract, []byte{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

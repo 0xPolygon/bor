@@ -891,7 +891,7 @@ func applyMessageWithEVM(ctx context.Context, evm *vm.EVM, msg *core.Message, ti
 	}()
 
 	// Execute the message.
-	result, err := core.ApplyMessage(evm, msg, gp, nil)
+	result, err := core.ApplyMessage(evm, msg, gp)
 
 	// If the timer caused an abort, return an appropriate error message
 	if evm.Cancelled() {
@@ -1686,7 +1686,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
 			evm.Context.BlobBaseFee = new(big.Int)
 		}
-		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit), nil)
+		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("failed to apply transaction: %v err: %v", args.ToTransaction(types.LegacyTxType).Hash(), err)
 		}
