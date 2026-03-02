@@ -241,6 +241,7 @@ func (d DAG) Report(stats map[int]ExecutionStat, out func(string)) {
 }
 
 // TxBitset is a word-parallel bitset for tracking transaction dependencies.
+// All bitsets operated on together must have the same len(words).
 type TxBitset struct {
 	words []uint64
 }
@@ -348,6 +349,7 @@ func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writ
 		return db.err
 	}
 
+	// Also rejects negative indices: numTx starts at 0 and only increments.
 	if index != db.numTx {
 		db.err = fmt.Errorf("%w: got %d, expected %d", errNonSequentialIndex, index, db.numTx)
 		return db.err
@@ -361,19 +363,19 @@ func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writ
 	db.reachable = append(db.reachable, newTxBitset(db.width))
 	db.numTx = index + 1
 
-	// Look up direct dependencies via inverted index
+	// Only the latest writer per key matters; earlier writers are already covered by transitivity.
 	for _, rd := range readList {
 		if writer, ok := db.lastWriter[rd.Path]; ok && writer < index {
 			db.directDeps[index].Set(writer)
 		}
 	}
 
-	// Build transitive closure from all direct deps
+	// reachable[j] is complete for all j < index.
 	db.directDeps[index].ForEach(func(j int) {
 		db.reachable[index].Or(&db.reachable[j])
 	})
 
-	// Remove edges that are already transitively reachable (transitive reduction)
+	// Remove edges already reachable via another path, leaving the minimal direct dependency set.
 	db.directDeps[index].AndNot(&db.reachable[index])
 
 	// Update reachability to include the remaining direct deps

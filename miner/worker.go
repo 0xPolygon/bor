@@ -1155,7 +1155,12 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 		go func(chDeps chan blockstm.TxReadWriteSet) {
 			for t := range chDeps {
 				if err := depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList); err != nil {
-					log.Warn("Failed to add transaction to dependency builder", "tx", t.Index, "err", err)
+					// Non-sequential index indicates a systematic bug, not a transient error.
+					// Drain the channel so the sender never blocks, then stop processing.
+					log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", t.Index, "err", err)
+					for range chDeps {
+					}
+					break
 				}
 			}
 			depsWg.Done()
@@ -1373,11 +1378,13 @@ mainloop:
 		tempVanity := env.header.Extra[:types.ExtraVanityLength]
 		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
 
+		// Always decode header extra data before overwriting TxDependency.
 		if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
 			log.Error("error while decoding block extra data", "err", err)
 			return err
 		}
 
+		// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
 		if deps != nil && len(env.mvReadMapList) > 0 {
 			tempDeps := make([][]uint64, len(env.mvReadMapList))
 
@@ -1388,11 +1395,11 @@ mainloop:
 			delayFlag := true
 
 			for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-				reads := env.mvReadMapList[i-1]
+				reads := env.mvReadMapList[i]
 
+				// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
 				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
 				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
-
 				if ok1 || ok2 {
 					delayFlag = false
 					break

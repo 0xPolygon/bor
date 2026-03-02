@@ -134,8 +134,6 @@ func TestDepsBuilder_LinearChain(t *testing.T) {
 }
 
 func TestDepsBuilder_TransitiveReduction(t *testing.T) {
-	// Tx0 writes A, Tx1 reads A + writes B, Tx2 reads A and B
-	// deps[2] = {1} only (0 is pruned via 1)
 	db := NewDepsBuilder()
 	keyA := makeKey(0, 0)
 	keyB := makeKey(0, 1)
@@ -180,6 +178,19 @@ func TestDepsBuilder_LatestWriterWins(t *testing.T) {
 	assert.Equal(t, map[int]bool{1: true}, deps[2])
 }
 
+func TestDepsBuilder_ReadAndWriteSameKey(t *testing.T) {
+	db := NewDepsBuilder()
+	keyA := makeKey(0, 0)
+
+	db.AddTransaction(0, nil, []WriteDescriptor{{Path: keyA}})
+	db.AddTransaction(1, []ReadDescriptor{{Path: keyA}}, []WriteDescriptor{{Path: keyA}})
+	db.AddTransaction(2, []ReadDescriptor{{Path: keyA}}, nil)
+
+	deps := db.GetDeps()
+	assert.Equal(t, map[int]bool{0: true}, deps[1])
+	assert.Equal(t, map[int]bool{1: true}, deps[2])
+}
+
 func TestDepsBuilder_Empty(t *testing.T) {
 	db := NewDepsBuilder()
 	deps := db.GetDeps()
@@ -217,7 +228,7 @@ func TestDepsBuilder_DynamicGrow(t *testing.T) {
 	for i := 0; i < n; i++ {
 		db.AddTransaction(i, nil, []WriteDescriptor{{Path: keyA}})
 	}
-	// Last tx reads the key — should depend on tx n-2 (the latest writer before it)
+	// Last tx reads the key, should depend on tx n-2 (the latest writer before it)
 	db.AddTransaction(n, []ReadDescriptor{{Path: keyA}}, nil)
 
 	deps := db.GetDeps()
@@ -272,6 +283,32 @@ func TestDepsBuilder_NonSequentialReturnsError(t *testing.T) {
 
 	// GetDeps should return nil on a failed builder
 	assert.Nil(t, db.GetDeps())
+}
+
+func TestDepsBuilder_IndexAtCapacityBoundary(t *testing.T) {
+	db := NewDepsBuilder()
+	keyA := makeKey(0, 0)
+
+	for i := 0; i < 513; i++ {
+		readList := []ReadDescriptor{}
+		writeList := []WriteDescriptor{{Path: keyA}}
+		if i > 0 {
+			readList = []ReadDescriptor{{Path: keyA}}
+		}
+		require.NoError(t, db.AddTransaction(i, readList, writeList))
+	}
+
+	deps := db.GetDeps()
+	require.NotNil(t, deps)
+	assert.Len(t, deps, 513)
+	assert.Equal(t, map[int]bool{511: true}, deps[512])
+}
+
+func TestDepsBuilder_EmptyBlock(t *testing.T) {
+	db := NewDepsBuilder()
+	deps := db.GetDeps()
+	assert.NotNil(t, deps)
+	assert.Empty(t, deps)
 }
 
 func TestBitset_EmptyBitset(t *testing.T) {
