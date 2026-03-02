@@ -288,6 +288,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				EnablePreimageRecording: config.EnablePreimageRecording,
 				EnableWitnessStats:      config.EnableWitnessStats,
 				StatelessSelfValidation: config.StatelessSelfValidation,
+				EnableSwitchDispatch:    config.EnableSwitchDispatch,
 			},
 			Stateless: config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
@@ -298,6 +299,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
+
+	if config.EnableSwitchDispatch {
+		log.Info("EVM switch dispatch fast path enabled")
+	}
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")

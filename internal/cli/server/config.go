@@ -64,6 +64,9 @@ type Config struct {
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
 
+	// Use switch-based fast path EVM interpreter
+	EnableSwitchDispatch bool `hcl:"switch-dispatch,optional" toml:"switch-dispatch,optional"`
+
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
@@ -798,6 +801,7 @@ func DefaultConfig() *Config {
 		Verbosity:                   3,
 		LogLevel:                    "",
 		EnablePreimageRecording:     false,
+		EnableSwitchDispatch:        false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
 		Ancient:                     "",
@@ -1209,6 +1213,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
+	n.EnableSwitchDispatch = c.EnableSwitchDispatch
 	n.EnableStateSizeTracking = c.StateSizeTracking
 
 	// txpool options
