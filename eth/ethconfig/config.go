@@ -18,7 +18,9 @@
 package ethconfig
 
 import (
+	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -44,6 +46,25 @@ import (
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// parseURLs splits a comma-separated URL string into a trimmed, non-empty slice.
+func parseURLs(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	parts := strings.Split(s, ",")
+
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+
+	return out
+}
 
 // FullNodeGPO contains default gasprice oracle settings for full node.
 var FullNodeGPO = gasprice.Config{
@@ -210,7 +231,7 @@ type Config struct {
 	// position in eth_getLogs filter criteria (0 = no cap)
 	RPCLogQueryLimit int
 
-	// URL to connect to Heimdall node
+	// URL to connect to Heimdall node (comma-separated for failover: "url1,url2,url3")
 	HeimdallURL string
 
 	// timeout in heimdall requests
@@ -219,10 +240,10 @@ type Config struct {
 	// No heimdall service
 	WithoutHeimdall bool
 
-	// Address to connect to Heimdall gRPC server
+	// Address to connect to Heimdall gRPC server (comma-separated for failover: "addr1,addr2")
 	HeimdallgRPCAddress string
 
-	// Address to connect to Heimdall WS subscription server
+	// Address to connect to Heimdall WS subscription server (comma-separated for failover: "addr1,addr2")
 	HeimdallWSAddress string
 
 	// Run heimdall service as a child process
@@ -334,32 +355,69 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				// TODO: Running heimdall from bor is not tested yet.
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
 				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
-			} else if ethConfig.HeimdallgRPCAddress != "" {
-				grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(
-					ethConfig.HeimdallgRPCAddress,
-					ethConfig.HeimdallURL,
-					ethConfig.HeimdallTimeout,
-				)
-				if err != nil {
-					log.Error("Failed to initialize Heimdall gRPC client; falling back to HTTP Heimdall client",
-						"heimdall_grpc", ethConfig.HeimdallgRPCAddress,
-						"heimdall_http", ethConfig.HeimdallURL,
-						"err", err,
-					)
-					heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
-				} else {
-					heimdallClient = grpcClient
-				}
 			} else {
-				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				httpURLs := parseURLs(ethConfig.HeimdallURL)
+				grpcAddrs := parseURLs(ethConfig.HeimdallgRPCAddress)
+
+				// Build one client per endpoint.
+				// gRPC takes priority where configured; falls back to HTTP.
+				var heimdallClients []heimdall.Endpoint
+
+				n := max(len(httpURLs), len(grpcAddrs))
+				for i := 0; i < n; i++ {
+					if i < len(grpcAddrs) && grpcAddrs[i] != "" {
+						var httpURL string
+						if len(httpURLs) > 0 {
+							httpURL = httpURLs[min(i, len(httpURLs)-1)]
+						}
+
+						grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(grpcAddrs[i], httpURL, ethConfig.HeimdallTimeout)
+						if err != nil {
+							log.Error("Failed to initialize Heimdall gRPC client; falling back to HTTP",
+								"index", i, "grpc", grpcAddrs[i], "err", err)
+
+							if i < len(httpURLs) {
+								heimdallClients = append(heimdallClients, heimdall.NewHeimdallClient(httpURLs[i], ethConfig.HeimdallTimeout))
+							}
+
+							continue
+						}
+
+						heimdallClients = append(heimdallClients, grpcClient)
+					} else if i < len(httpURLs) {
+						heimdallClients = append(heimdallClients, heimdall.NewHeimdallClient(httpURLs[i], ethConfig.HeimdallTimeout))
+					}
+				}
+
+				if len(heimdallClients) == 0 {
+					heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				} else if len(heimdallClients) == 1 {
+					heimdallClient = heimdallClients[0]
+				} else {
+					multiClient, err := heimdall.NewMultiHeimdallClient(heimdallClients...)
+					if err != nil {
+						return nil, fmt.Errorf("failed to create heimdall failover client: %w", err)
+					}
+
+					heimdallClient = multiClient
+					log.Info("Heimdall failover enabled with multiple endpoints", "endpoints", len(heimdallClients))
+				}
 			}
+
+			// WS client
+			wsAddrs := parseURLs(ethConfig.HeimdallWSAddress)
 
 			var heimdallWSClient bor.IHeimdallWSClient
 			var err error
-			if ethConfig.HeimdallWSAddress != "" {
-				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(ethConfig.HeimdallWSAddress)
+
+			if len(wsAddrs) > 0 {
+				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(wsAddrs...)
 				if err != nil {
 					return nil, err
+				}
+
+				if len(wsAddrs) > 1 {
+					log.Info("Heimdall WS failover enabled with multiple endpoints", "endpoints", len(wsAddrs))
 				}
 			}
 
