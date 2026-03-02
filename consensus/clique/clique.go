@@ -353,8 +353,13 @@ func (c *Clique) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		parent = chain.GetHeader(header.ParentHash, number-1)
 	}
 
-	if parent == nil || parent.Number.Uint64() != number-1 || parent.Hash() != header.ParentHash {
+	if parent == nil || parent.Hash() != header.ParentHash {
 		return consensus.ErrUnknownAncestor
+	}
+
+	// Verify block number continuity
+	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
+		return consensus.ErrInvalidNumber
 	}
 
 	if parent.Time+c.config.Period > header.Time {
@@ -547,7 +552,7 @@ func (c *Clique) verifySeal(snap *Snapshot, header *types.Header, parents []*typ
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -283,9 +284,13 @@ type BigIntFlag struct {
 	Value   *big.Int
 	Group   string
 	Default *big.Int
+	mu      sync.RWMutex
 }
 
 func (b *BigIntFlag) String() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	if b.Value == nil {
 		return ""
 	}
@@ -312,7 +317,9 @@ func (b *BigIntFlag) Set(value string) error {
 		return fmt.Errorf("failed to set big int")
 	}
 
+	b.mu.Lock()
 	*b.Value = *num
+	b.mu.Unlock()
 
 	return nil
 }
@@ -324,7 +331,9 @@ func (b *BigIntFlag) UpdateValue(value string) {
 		return
 	}
 
+	b.mu.Lock()
 	*b.Value = *num
+	b.mu.Unlock()
 }
 
 func (f *Flagset) BigIntFlag(b *BigIntFlag) {

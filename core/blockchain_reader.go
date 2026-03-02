@@ -519,16 +519,21 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 // The first reader (prefetch) is intended for prefetch operations, and the second (process)
 // is for actual transaction processing. This enables independent cache hit/miss tracking
 // for both phases of block production.
-func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, *state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
 	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return statedb, prefetchReader, processReader, nil
+	throwaway, err := state.NewWithReader(root, bc.statedb, prefetchReader)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	return statedb, throwaway, prefetchReader, processReader, nil
 }
 
 // HistoricState returns a historic state specified by the given root.

@@ -670,7 +670,12 @@ func (l *pricedList) PutMany(txs types.Transactions) {
 func (l *pricedList) Removed(count int) {
 	// Bump the stale counter, but exit if still too low (< 25%)
 	stales := l.stales.Add(int64(count))
-	if int(stales) <= (len(l.urgent.list)+len(l.floating.list))/4 {
+
+	l.reheapMu.Lock()
+	totalLen := len(l.urgent.list) + len(l.floating.list)
+	l.reheapMu.Unlock()
+
+	if int(stales) <= totalLen/4 {
 		return
 	}
 	reheapDueToStaleCounter.Inc(1)
@@ -811,6 +816,8 @@ func (l *pricedList) SetBaseFee(baseFee *big.Int) {
 	if baseFee != nil {
 		base.SetFromBig(baseFee)
 	}
+	l.reheapMu.Lock()
 	l.urgent.baseFee = base
+	l.reheapMu.Unlock()
 	l.Reheap()
 }

@@ -26,7 +26,24 @@ import (
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
+
+// queueItemTimer returns the per-item download duration timer for the given queue type.
+func queueItemTimer(queue typedQueue) *metrics.Timer {
+	switch queue.(type) {
+	case *headerQueue:
+		return headerItemDownloadTimer
+	case *bodyQueue:
+		return bodyItemDownloadTimer
+	case *receiptQueue:
+		return receiptItemDownloadTimer
+	case *witnessQueue:
+		return witnessItemDownloadTimer
+	default:
+		return nil
+	}
+}
 
 // timeoutGracePeriod is the amount of time to allow for a peer to deliver a
 // response to a locally already timed out request. Timeouts are not penalized
@@ -413,6 +430,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			if peer := d.peers.Peer(res.Req.Peer); peer != nil {
 				// Deliver the received chunk of data and check chain validity
 				accepted, err := queue.deliver(peer, res)
+				if err == nil && accepted > 0 {
+					metrics.RecordPerItemDuration(queueItemTimer(queue), res.Time, accepted)
+				}
 				if errors.Is(err, errInvalidChain) {
 					return err
 				}

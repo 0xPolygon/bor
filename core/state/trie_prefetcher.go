@@ -125,6 +125,7 @@ func (p *triePrefetcher) report() {
 	for _, fetcher := range p.fetchers {
 		fetcher.wait() // ensure the fetcher's idle before poking in its internals
 
+		fetcher.usedLock.Lock()
 		if fetcher.root == p.root {
 			p.accountLoadReadMeter.Mark(int64(len(fetcher.seenReadAddr)))
 			p.accountLoadWriteMeter.Mark(int64(len(fetcher.seenWriteAddr)))
@@ -152,6 +153,7 @@ func (p *triePrefetcher) report() {
 			}
 			p.storageWasteMeter.Mark(int64(len(fetcher.seenReadSlot) + len(fetcher.seenWriteSlot)))
 		}
+		fetcher.usedLock.Unlock()
 	}
 }
 
@@ -211,14 +213,12 @@ func (p *triePrefetcher) trie(owner common.Hash, root common.Hash) Trie {
 // used marks a batch of state items used to allow creating statistics as to
 // how useful or wasteful the fetcher is.
 func (p *triePrefetcher) used(owner common.Hash, root common.Hash, usedAddr []common.Address, usedSlot []common.Hash) {
-	p.lock.Lock()         // Lock for writing
-	defer p.lock.Unlock() // Ensure the lock is released after the function
+	p.lock.RLock()
+	fetcher := p.fetchers[p.trieID(owner, root)]
+	p.lock.RUnlock()
 
-	if fetcher := p.fetchers[p.trieID(owner, root)]; fetcher != nil {
-		fetcher.wait() // ensure the fetcher's idle before poking in its internals
-
-		fetcher.usedAddr = append(fetcher.usedAddr, usedAddr...)
-		fetcher.usedSlot = append(fetcher.usedSlot, usedSlot...)
+	if fetcher != nil {
+		fetcher.appendUsed(usedAddr, usedSlot)
 	}
 }
 
@@ -266,6 +266,7 @@ type subfetcher struct {
 
 	usedAddr []common.Address // Tracks the accounts used in the end
 	usedSlot []common.Hash    // Tracks the storage used in the end
+	usedLock sync.Mutex       // Lock protecting usedAddr/usedSlot appends
 }
 
 // subfetcherTask is a trie path to prefetch, tagged with whether it originates
@@ -330,6 +331,19 @@ func (sf *subfetcher) schedule(addrs []common.Address, slots []common.Hash, read
 // an async termination before accessing internal fields from the fetcher.
 func (sf *subfetcher) wait() {
 	<-sf.term
+}
+
+// appendUsed records which state items were actually consumed. This is called
+// concurrently from IntermediateRoot goroutines (each targeting a different
+// subfetcher), so it uses a per-subfetcher lock instead of the global
+// triePrefetcher lock to avoid serializing independent updates.
+func (sf *subfetcher) appendUsed(addrs []common.Address, slots []common.Hash) {
+	sf.wait() // ensure the fetcher's idle before poking in its internals
+
+	sf.usedLock.Lock()
+	sf.usedAddr = append(sf.usedAddr, addrs...)
+	sf.usedSlot = append(sf.usedSlot, slots...)
+	sf.usedLock.Unlock()
 }
 
 // peek retrieves the fetcher's trie, populated with any pre-fetched data. The

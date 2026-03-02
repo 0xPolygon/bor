@@ -122,7 +122,9 @@ func TestMilestoneUnlockSprintRace(t *testing.T) {
 
 			iterations++
 			if iterations%1_000 == 0 {
+				m.finality.RLock()
 				locked := m.Locked
+				m.finality.RUnlock()
 				t.Logf("IsValidChain iteration=%d, Locked=%v", iterations, locked)
 			}
 		}

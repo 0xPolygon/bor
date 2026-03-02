@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	defaultSpanLength  = 6400            // Default span length i.e. number of bor blocks in a span
+	defaultSpanLength  = params.DefaultSpanLength
 	zerothSpanEnd      = 255             // End block of 0th span
 	checkpointInterval = 1024            // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
@@ -265,6 +265,10 @@ type Bor struct {
 
 	quit      chan struct{}
 	closeOnce sync.Once
+
+	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 }
 
 type signer struct {
@@ -309,6 +313,8 @@ func New(
 	// Create a new span store
 	spanStore := NewSpanStore(heimdallClient, spanner, chainConfig.ChainID.String())
 
+	ctx, ctxCancel := context.WithCancel(context.Background())
+
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
@@ -325,6 +331,8 @@ func New(
 		DevFakeAuthor:          devFakeAuthor,
 		blockTime:              blockTime,
 		quit:                   make(chan struct{}),
+		ctx:                    ctx,
+		ctxCancel:              ctxCancel,
 	}
 
 	c.authorizedSigner.Store(&signer{
@@ -402,13 +410,30 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
 
-	// Allow early blocks if Bhilai HF is enabled
-	if c.config.IsBhilai(header.Number) {
+	if c.config.IsRio(header.Number) {
+		// Rio HF introduced flexible blocktime (can be set larger than consensus without approval).
+		// Using strict CalcProducerDelay would reject valid blocks, so we just ensure announcement
+		// time comes after parent time to allow for flexible blocktime.
+		var parent *types.Header
+
+		if len(parents) > 0 {
+			parent = parents[len(parents)-1]
+		} else {
+			parent = chain.GetHeader(header.ParentHash, number-1)
+		}
+		if parent == nil || now < parent.Time {
+			log.Error("Block announced too early post rio", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+		}
+	} else if c.config.IsBhilai(header.Number) {
+		// Allow early blocks if Bhilai HF is enabled
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
 		// number of the signer in the current sprint.
-		if header.Time-c.config.CalculatePeriod(number) > now {
+		// Uses CalcProducerDelay instead of block period to account for producer delay on sprint start blocks.
+		// We assume succession 0 (primary producer) to not be much restrictive for early block announcements.
+		if header.Time-CalcProducerDelay(number, 0, c.config) > now {
 			log.Error("Block announced too early post bhilai", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
@@ -476,7 +501,18 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return err
 	}
 
-	c.recentVerifiedHeaders.Set(header.Hash(), header, ttlcache.DefaultTTL)
+	// Calculate TTL for the header cache entry
+	// If the header time is in the future (early announced block), add extra time to TTL
+	cacheTTL := veblopBlockTimeout
+	nowTime := time.Now()
+	headerTime := time.Unix(int64(header.Time), 0)
+	if headerTime.After(nowTime) {
+		// Add the time from now until header time as extra to the base timeout
+		extraTime := headerTime.Sub(nowTime)
+		cacheTTL = veblopBlockTimeout + extraTime
+	}
+
+	c.recentVerifiedHeaders.Set(header.Hash(), header, cacheTTL)
 	return nil
 }
 
@@ -515,8 +551,13 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		parent = chain.GetHeader(header.ParentHash, number-1)
 	}
 
-	if parent == nil || parent.Number.Uint64() != number-1 || parent.Hash() != header.ParentHash {
+	if parent == nil || parent.Hash() != header.ParentHash {
 		return consensus.ErrUnknownAncestor
+	}
+
+	// Verify block number continuity
+	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
+		return consensus.ErrInvalidNumber
 	}
 
 	// Verify that the gasUsed is <= gasLimit
@@ -555,7 +596,7 @@ func (c *Bor) verifyCascadingFields(chain consensus.ChainHeaderReader, header *t
 		// validation stateless, we use the span from heimdall (via span store) instead of
 		// span from validator set genesis contract as both are supposed to be equivalent.
 		if number > zerothSpanEnd && IsSprintStart(number+1, c.config.CalculateSprint(number)) {
-			span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+			span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 			if err != nil {
 				return err
 			}
@@ -665,7 +706,7 @@ func (c *Bor) snapshot(chain consensus.ChainHeaderReader, targetHeader *types.He
 				hash := checkpoint.Hash()
 
 				// get validators from span
-				span, err := c.spanStore.spanByBlockNumber(context.Background(), number+1)
+				span, err := c.spanStore.spanByBlockNumber(c.ctx, number+1)
 				if err != nil {
 					return nil, err
 				}
@@ -744,7 +785,7 @@ func (c *Bor) getVeBlopSnapshot(chain consensus.ChainHeaderReader, targetHeader 
 		}
 	}
 
-	span, err := c.spanStore.spanByBlockNumber(context.Background(), number)
+	span, err := c.spanStore.spanByBlockNumber(c.ctx, number)
 	if err != nil {
 		return nil, err
 	}
@@ -928,7 +969,7 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
@@ -1026,6 +1067,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
 
+	var delay time.Duration
+
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
 
@@ -1043,19 +1086,37 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
+		delay = time.Until(parentActualBlockTime)
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
-	if header.Time < uint64(now.Unix()) {
+	if now.After(header.GetActualTime()) {
 		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
-		if c.blockTime > 0 {
+		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			additionalBlockTime = c.blockTime
 		}
 		header.Time = uint64(now.Add(additionalBlockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(additionalBlockTime)
+		}
+	}
+
+	// Wait before start the block production if needed (previsously this wait was on Seal)
+	if c.config.IsBhilai(header.Number) && waitOnPrepare {
+		var successionNumber int
+		// if signer is not empty (RPC nodes have empty signer)
+		if currentSigner.signer != (common.Address{}) {
+			var err error
+			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
+			if err != nil {
+				return err
+			}
+			if successionNumber == 0 {
+				<-time.After(delay)
+			}
 		}
 	}
 
@@ -1323,14 +1384,8 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time for non-primary validators
-		// Disable early block announcement
-		// if successionNumber == 0 {
-		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
-		// 	// for early block announcement instead of waiting for full block time.
-		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
-		// }
+	if c.config.IsBhilai(header.Number) && successionNumber == 0 {
+		delay = 0 // delay was moved to Prepare for bhilai and later
 	} else {
 		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}
@@ -1427,6 +1482,7 @@ func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 // Close implements consensus.Engine.
 func (c *Bor) Close() error {
 	c.closeOnce.Do(func() {
+		c.ctxCancel()
 		close(c.quit)
 		if c.HeimdallClient != nil {
 			c.HeimdallClient.Close()
@@ -1448,7 +1504,9 @@ func (c *Bor) runMilestoneFetcher() {
 		select {
 		case <-ticker.C:
 			if c.HeimdallClient != nil {
-				milestone, err := c.HeimdallClient.FetchMilestone(context.Background())
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				milestone, err := c.HeimdallClient.FetchMilestone(ctx)
+				cancel()
 				if err != nil {
 					log.Warn("Error while fetching milestone", "error", err)
 					continue
@@ -1650,9 +1708,9 @@ func (c *Bor) CommitStates(
 	var eventRecords []*clerk.EventRecordWithTime
 
 	// Wait for heimdall to be synced before fetching state sync events
-	c.spanStore.waitUntilHeimdallIsSynced(context.Background())
+	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(context.Background(), from, to.Unix())
+	eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())
 	if err != nil {
 		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
 

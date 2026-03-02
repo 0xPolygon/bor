@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // fetchHeadersByHash is a blocking version of Peer.RequestHeadersByHash which
@@ -54,15 +55,17 @@ func (d *Downloader) fetchHeadersByHash(p *peerConnection, hash common.Hash, amo
 
 	case res := <-resCh:
 		// Headers successfully retrieved, update the metrics
+		headers := *res.Res.(*eth.BlockHeadersRequest)
 		headerReqTimer.Update(time.Since(start))
-		headerInMeter.Mark(int64(len(*res.Res.(*eth.BlockHeadersRequest))))
+		headerInMeter.Mark(int64(len(headers)))
+		metrics.RecordPerItemDuration(headerItemDownloadTimer, res.Time, len(headers))
 
 		// Don't reject the packet even if it turns out to be bad, downloader will
 		// disconnect the peer on its own terms. Simply delivery the headers to
 		// be processed by the caller
 		res.Done <- nil
 
-		return *res.Res.(*eth.BlockHeadersRequest), res.Meta.([]common.Hash), nil
+		return headers, res.Meta.([]common.Hash), nil
 	}
 }
 
@@ -99,14 +102,16 @@ func (d *Downloader) fetchHeadersByNumber(p *peerConnection, number uint64, amou
 
 	case res := <-resCh:
 		// Headers successfully retrieved, update the metrics
+		headers := *res.Res.(*eth.BlockHeadersRequest)
 		headerReqTimer.Update(time.Since(start))
-		headerInMeter.Mark(int64(len(*res.Res.(*eth.BlockHeadersRequest))))
+		headerInMeter.Mark(int64(len(headers)))
+		metrics.RecordPerItemDuration(headerItemDownloadTimer, res.Time, len(headers))
 
 		// Don't reject the packet even if it turns out to be bad, downloader will
 		// disconnect the peer on its own terms. Simply delivery the headers to
 		// be processed by the caller
 		res.Done <- nil
 
-		return *res.Res.(*eth.BlockHeadersRequest), res.Meta.([]common.Hash), nil
+		return headers, res.Meta.([]common.Hash), nil
 	}
 }

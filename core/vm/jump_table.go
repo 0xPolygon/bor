@@ -64,6 +64,7 @@ var (
 	pragueInstructionSet           = newPragueInstructionSet()
 	osakaInstructionSet            = newOsakaInstructionSet()
 	lisovoInstructionSet           = newLisovoInstructionSet()
+	lisovoProInstructionSet        = newLisovoProInstructionSet()
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
@@ -89,6 +90,12 @@ func validate(jt JumpTable) JumpTable {
 }
 
 func newLisovoInstructionSet() JumpTable {
+	instructionSet := newPragueInstructionSet()
+	enable7939(&instructionSet) // EIP-7939 (CLZ opcode)
+	return validate(instructionSet)
+}
+
+func newLisovoProInstructionSet() JumpTable {
 	instructionSet := newPragueInstructionSet()
 	enable7939(&instructionSet) // EIP-7939 (CLZ opcode)
 	return validate(instructionSet)

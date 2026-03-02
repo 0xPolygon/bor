@@ -25,6 +25,11 @@ devfakeauthor = false           # Run miner without validator set authorization 
   "31000000" = "0x2087b9e2b353209c2c21e370c82daa12278efd0fe5f0febe6c29035352cf050e"
   "32000000" = "0x875500011e5eecc0c554f95d07b31cf59df4ca2505f4dbbfffa7d4e4da917c68"
 
+[relay] # Preconf / Private transaction relay related settings
+enable-preconfs = true # Enable transaction preconfirmations
+enable-private-tx = true # Enable private transaction relay
+bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
+
 [log]
   vmodule = ""                    # Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
   json = false                    # Format logs with JSON
@@ -33,17 +38,18 @@ devfakeauthor = false           # Run miner without validator set authorization 
   enable-block-tracking = false   # Enables additional logging of information collected while tracking block lifecycle
 
 [p2p]
-  maxpeers = 50               # Maximum number of network peers (network disabled if set to 0)
-  maxpendpeers = 50           # Maximum number of pending connection attempts
-  bind = "0.0.0.0"            # Network binding address
-  port = 30303                # Network listening port
-  nodiscover = false          # Disables the peer discovery mechanism (manual peer addition)
-  nat = "any"                 # NAT port mapping mechanism (any|none|upnp|pmp|extip:<IP>)
-  netrestrict = ""            # Restricts network communication to the given IP networks (CIDR masks)
-  nodekey = ""                # P2P node key file
-  nodekeyhex = ""             # P2P node key as hex
-  txarrivalwait = "500ms"     # Maximum duration to wait before requesting an announced transaction
-  txannouncementonly = false  # Whether to only announce transactions to peers
+  maxpeers = 50                  # Maximum number of network peers (network disabled if set to 0)
+  maxpendpeers = 50              # Maximum number of pending connection attempts
+  bind = "0.0.0.0"               # Network binding address
+  port = 30303                   # Network listening port
+  nodiscover = false             # Disables the peer discovery mechanism (manual peer addition)
+  nat = "any"                    # NAT port mapping mechanism (any|none|upnp|pmp|extip:<IP>)
+  netrestrict = ""               # Restricts network communication to the given IP networks (CIDR masks)
+  nodekey = ""                   # P2P node key file
+  nodekeyhex = ""                # P2P node key as hex
+  txarrivalwait = "500ms"        # Maximum duration to wait before requesting an announced transaction
+  txannouncementonly = false     # Whether to only announce transactions to peers
+  disable-tx-propagation = false # Disable transaction broadcast and announcements to all peers
   [p2p.discovery]
     v4disc = true       # Enables the V4 discovery mechanism
     v5disc = true       # Enables the V5 discovery mechanism
@@ -95,6 +101,8 @@ devfakeauthor = false           # Run miner without validator set authorization 
   txfeecap = 5.0                                   # Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap)
   allow-unprotected-txs = false                    # Allow for unprotected (non EIP155 signed) transactions to be submitted via RPC (default: false)
   enabledeprecatedpersonal = false                 # Enables the (deprecated) personal namespace
+  accept-preconf-tx = false                        # Allows the RPC server to accept transactions for preconfirmation
+  accept-private-tx = false                        # Allows the RPC server to accept private transactions
   [jsonrpc.http]
     enabled = false                                # Enable the HTTP-RPC server
     port = 8545                                    # http.port
