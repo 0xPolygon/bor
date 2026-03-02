@@ -279,7 +279,7 @@ func TestLockOrderingPricedHeapNoDeadlock(t *testing.T) {
 	// This is the exact pattern introduced by the replacesPending fix.
 	for i := 0; i < iterations; i++ {
 		pool.mu.Lock()
-		pool.priced.PutMany(txs)
+		pool.priced.PutMany(txs, pool.priced.reheaps.Load())
 		pool.mu.Unlock()
 	}
 

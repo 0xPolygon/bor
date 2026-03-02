@@ -830,15 +830,15 @@ func TestDropping(t *testing.T) {
 		tx12 = transaction(12, 300, key)
 	)
 	pool.all.Add(tx0)
-	pool.priced.Put(tx0)
+	pool.priced.Put(tx0, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx0.Hash(), tx0)
 
 	pool.all.Add(tx1)
-	pool.priced.Put(tx1)
+	pool.priced.Put(tx1, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx1.Hash(), tx1)
 
 	pool.all.Add(tx2)
-	pool.priced.Put(tx2)
+	pool.priced.Put(tx2, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx2.Hash(), tx2)
 
 	pool.enqueueTx(tx10.Hash(), tx10, true)
