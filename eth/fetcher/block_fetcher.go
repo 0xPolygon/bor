@@ -68,9 +68,10 @@ var (
 	bodyFetchMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/bodies", nil)
 	witnessFetchMeter = metrics.NewRegisteredMeter("eth/fetcher/block/witnesses", nil)
 
-	blockHeaderItemDownloadTimer  = metrics.NewRegisteredTimer("eth/fetcher/block/headers/item_download_duration", nil)
-	blockBodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/fetcher/block/bodies/item_download_duration", nil)
-	blockWitnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/fetcher/block/witnesses/item_download_duration", nil)
+	// Amortized per-item download durations for announcement-driven fetches (batch duration / item count).
+	blockHeaderItemDownloadTimer  = metrics.NewRegisteredTimer("eth/fetcher/block/headers/item_download_duration", nil)   // per-header amortized fetch latency
+	blockBodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/fetcher/block/bodies/item_download_duration", nil)    // per-body amortized fetch latency
+	blockWitnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/fetcher/block/witnesses/item_download_duration", nil) // per-witness amortized fetch latency
 
 	headerFilterInMeter  = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/in", nil)
 	headerFilterOutMeter = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/out", nil)
@@ -79,19 +80,6 @@ var (
 )
 
 var errTerminated = errors.New("terminated")
-
-// recordFetcherPerItemDownloadDuration attributes a batched download duration to
-// individual items so timers remain comparable even if response sizes differ.
-func recordFetcherPerItemDownloadDuration(timer *metrics.Timer, total time.Duration, items int) {
-	if timer == nil || total <= 0 || items <= 0 {
-		return
-	}
-	perItem := time.Duration(int64(total) / int64(items))
-	if perItem <= 0 {
-		perItem = time.Nanosecond
-	}
-	timer.Update(perItem)
-}
 
 // HeaderRetrievalFn is a callback type for retrieving a header from the local chain.
 type HeaderRetrievalFn func(common.Hash) *types.Header
@@ -716,7 +704,7 @@ func (f *BlockFetcher) loop() {
 									return
 								} // Invalid response type
 								headers := *headersResponse
-								recordFetcherPerItemDownloadDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
+								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
 								f.FilterHeaders(p, headers, time.Now(), announcedAt)
 
 							case <-timeout.C:
@@ -791,7 +779,7 @@ func (f *BlockFetcher) loop() {
 						} // Invalid response type
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
-						recordFetcherPerItemDownloadDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
+						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
 					case <-timeout.C:
