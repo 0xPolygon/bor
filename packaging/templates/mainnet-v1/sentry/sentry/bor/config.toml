@@ -143,11 +143,13 @@ syncmode = "full"
     # [telemetry.influx.tags]
 
 [cache]
-    cache = 4096
-    # gc = 25
-    # snapshot = 10
-    # database = 50
-    # trie = 15
+    # the following changes are made considering the node pos-mainnet-london-sentry-04
+    cache = 24576              # A: was 8192 (3×)
+    gc = 25                    # H: was 0 — re-enable dirty trie cache (async flush prevents old stall issue)
+    gomemlimit = "100GB"       # A: prevent Go from using all remaining RAM for GC
+    snapshot = 20              # keep as-is
+    database = 40              # keep as-is
+    trie = 15                  # was 40 — reduced because gc=25 now handles dirty trie data
     # noprefetch = false
     # preimages = false
     # txlookuplimit = 2350000

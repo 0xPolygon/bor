@@ -310,7 +310,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// Note, this must be the number of tables not the size of all memtables
 		// according to https://github.com/cockroachdb/pebble/blob/master/options.go#L738-L742
 		// and to https://github.com/cockroachdb/pebble/blob/master/db.go#L1892-L1903.
-		MemTableStopWritesThreshold: memTableLimit,
+		MemTableStopWritesThreshold: memTableLimit * 2, // B: double threshold to reduce write stalls during flush
 
 		// The default compaction concurrency(1 thread),
 		// Here use all available CPUs for faster compaction.
@@ -325,7 +325,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 			{TargetFileSize: 16 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
 			{TargetFileSize: 32 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
 			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 128 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 128 * 1024 * 1024}, // C: bloom filter removed from L6 — bottom level is always checked anyway
 		},
 		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{
@@ -363,6 +363,10 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	// Disable seek compaction explicitly. Check https://github.com/ethereum/go-ethereum/pull/20130
 	// for more details.
 	opt.Experimental.ReadSamplingMultiplier = -1
+
+	// D: adaptive compaction — scale workers based on load instead of always using all CPUs
+	opt.Experimental.L0CompactionConcurrency = 1      // +1 compaction worker per overlapping sublevel
+	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // +1 worker per 256 MB of compaction debt
 
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)
