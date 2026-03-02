@@ -1250,6 +1250,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.WitnessAPI,
 		Default: c.cliConfig.Witness.WitnessAPI,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.filestore",
+		Usage:   "Store witness blobs on the filesystem instead of the key-value database",
+		Value:   &c.cliConfig.Witness.FileStore,
+		Default: c.cliConfig.Witness.FileStore,
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
 		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",

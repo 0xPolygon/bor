@@ -305,6 +305,10 @@ type Config struct {
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
 
+	// WitnessFileStore enables storing witness blobs on the filesystem
+	// instead of in the key-value database. Reduces DB write amplification.
+	WitnessFileStore bool
+
 	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
 	DisableBlindForkValidation bool
 

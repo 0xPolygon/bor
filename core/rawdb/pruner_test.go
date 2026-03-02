@@ -48,7 +48,7 @@ func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
 	}
 
 	// Strategy: keep only last 5 blocks -> cutoff = 20 - 5 = 15
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 
 	// Generic pruner; interval irrelevant since we invoke runOnce directly.
 	p := NewPruner(db, ws)
@@ -110,7 +110,7 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 	}
 
 	// Keep only last 10 blocks -> cutoff = 60 - 10 = 50.
-	ws := &WitnessStrategy{retention: 10}
+	ws := &WitnessStrategy{retention: 10, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// Sanity: no prior cursor.
@@ -326,7 +326,7 @@ func TestWitnessPruner_Reorg_Shallow_CursorBelowNewHead(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xAA, 0xBB})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// First prune: establish cursor and delete old data.
@@ -403,7 +403,7 @@ func TestWitnessPruner_Reorg_Deep_CursorAboveNewHead(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xCA, 0xFE})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// Simulate prior pruning state:
@@ -469,7 +469,7 @@ func TestWitnessPruner_Reorg_Offline(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xBE, 0xEF})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 
 	// --- First run: normal pruning at oldHead ---
 	p1 := NewPruner(db, ws)
@@ -585,7 +585,7 @@ func TestWitnessPruner_CursorBeyondHead_Clamping(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xDE, 0xAD})
 	}
 
-	ws := &WitnessStrategy{retention: 10}
+	ws := &WitnessStrategy{retention: 10, witnessStore: NewDBWitnessStore(db)}
 
 	// Manually set cursor to a value beyond the head (simulates corrupted state or edge case).
 	invalidCursor := head + 20
@@ -679,7 +679,7 @@ func TestDeleteRange_ShutdownInterrupt(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xAB})
 	}
 
-	p := NewPruner(db, &WitnessStrategy{retention: 5})
+	p := NewPruner(db, &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)})
 	close(p.quit)
 
 	err := p.deleteRange(0, chainLen)

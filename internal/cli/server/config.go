@@ -775,6 +775,9 @@ type WitnessConfig struct {
 	// WitnessAPI enables witness API endpoints
 	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
 
+	// FileStore enables storing witness blobs on the filesystem instead of Pebble
+	FileStore bool `hcl:"filestore,optional" toml:"filestore,optional"`
+
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 }
@@ -1601,6 +1604,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.EnableParallelStatelessImport = c.Witness.EnableParallelStatelessImport
 	n.EnableParallelStatelessImportWorkers = c.Witness.ParallelStatelessImportWorkers
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
+	n.WitnessFileStore = c.Witness.FileStore
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
 
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit

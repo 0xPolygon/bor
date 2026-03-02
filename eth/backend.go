@@ -196,6 +196,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		WitnessPruneEnabled: witnessPruneEnabled,
 		BlockPruneEnabled:   blockPruneEnabled,
 		Stateless:           config.SyncMode == downloader.StatelessSync,
+		WitnessFileStore:    config.WitnessFileStore,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {

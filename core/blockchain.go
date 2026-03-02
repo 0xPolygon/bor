@@ -385,6 +385,7 @@ type BlockChain struct {
 	receiptsCache *lru.Cache[common.Hash, []*types.Receipt] // Receipts cache with all fields derived
 	blockCache    *lru.Cache[common.Hash, *types.Block]
 	witnessCache  *lru.Cache[common.Hash, []byte] // Witness cache for RLP-encoded witnesses
+	witnessStore  rawdb.WitnessStore
 
 	txLookupLock  sync.RWMutex
 	txLookupCache *lru.Cache[common.Hash, txLookup]
@@ -466,6 +467,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		blockCache:          lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
 		txLookupCache:       lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
 		witnessCache:        lru.NewCache[common.Hash, []byte](bodyCacheLimit),
+		witnessStore:        rawdb.GetWitnessStore(db),
 		engine:              engine,
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -2285,7 +2287,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
 
 		witnessBytes := witBuf.Bytes()
-		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
+		bc.WriteWitness(block.Hash(), witnessBytes)
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
