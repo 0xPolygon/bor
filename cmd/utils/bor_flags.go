@@ -16,10 +16,10 @@ var (
 	// Bor Specific flags
 	//
 
-	// HeimdallURLFlag flag for heimdall url
+	// HeimdallURLFlag flag for heimdall url (comma-separated for failover)
 	HeimdallURLFlag = &cli.StringFlag{
 		Name:  "bor.heimdall",
-		Usage: "URL of Heimdall service",
+		Usage: "URL of Heimdall service (comma-separated for failover: \"url1,url2\")",
 		Value: "http://localhost:1317",
 	}
 
@@ -36,17 +36,17 @@ var (
 		Usage: "Run without Heimdall service (for testing purpose)",
 	}
 
-	// HeimdallgRPCAddressFlag flag for heimdall gRPC address
+	// HeimdallgRPCAddressFlag flag for heimdall gRPC address (comma-separated for failover)
 	HeimdallgRPCAddressFlag = &cli.StringFlag{
 		Name:  "bor.heimdallgRPC",
-		Usage: "Address of Heimdall gRPC service",
+		Usage: "Address of Heimdall gRPC service (comma-separated for failover: \"addr1,addr2\")",
 		Value: "",
 	}
 
-	// HeimdallWSAddressFlag flag for heimdall websocket subscription service
+	// HeimdallWSAddressFlag flag for heimdall websocket subscription service (comma-separated for failover)
 	HeimdallWSAddressFlag = &cli.StringFlag{
 		Name:  "bor.heimdallWS",
-		Usage: "Address of Heimdall WS Subscription service",
+		Usage: "Address of Heimdall WS Subscription service (comma-separated for failover: \"addr1,addr2\")",
 		Value: "",
 	}
 

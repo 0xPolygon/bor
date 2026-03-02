@@ -312,7 +312,7 @@ type P2PDiscovery struct {
 }
 
 type HeimdallConfig struct {
-	// URL is the url of the heimdall server
+	// URL is the url of the heimdall server (comma-separated for failover: "url1,url2,url3")
 	URL string `hcl:"url,optional" toml:"url,optional"`
 
 	Timeout time.Duration `hcl:"timeout,optional" toml:"timeout,optional"`
@@ -320,10 +320,10 @@ type HeimdallConfig struct {
 	// Without is used to disable remote heimdall during testing
 	Without bool `hcl:"bor.without,optional" toml:"bor.without,optional"`
 
-	// GRPCAddress is the address of the heimdall grpc server
+	// GRPCAddress is the address of the heimdall grpc server (comma-separated for failover: "addr1,addr2")
 	GRPCAddress string `hcl:"grpc-address,optional" toml:"grpc-address,optional"`
 
-	// WSAddress is the address of the heimdall ws subscription server
+	// WSAddress is the address of the heimdall ws subscription server (comma-separated for failover: "addr1,addr2")
 	WSAddress string `hcl:"ws-address,optional" toml:"ws-address,optional"`
 
 	// RunHeimdall is used to run heimdall as a child process

@@ -1,6 +1,7 @@
 package rawdb
 
 import (
+	"errors"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -9,6 +10,8 @@ import (
 )
 
 const MaxDeleteRangeSize = uint64(50_000)
+
+var errPrunerStopped = errors.New("pruner stopped")
 
 type Strategy interface {
 	Name() string
@@ -134,7 +137,9 @@ func (p *pruner) prune() {
 	to := cutoff - 1
 
 	if err := p.deleteRange(from, to); err != nil {
-		log.Error(p.strategy.Name()+": batch write error during prune", "from", from, "to", to, "err", err)
+		if !errors.Is(err, errPrunerStopped) {
+			log.Error(p.strategy.Name()+": batch write error during prune", "from", from, "to", to, "err", err)
+		}
 		return
 	}
 
@@ -161,8 +166,10 @@ func (p *pruner) handleReorg(newHead, oldHead uint64) error {
 			"from", deleteFrom, "to", deleteTo)
 
 		if err := p.deleteRange(deleteFrom, deleteTo); err != nil {
-			log.Error(p.strategy.Name()+": reorg cleanup failed; keeping cursor unchanged",
-				"from", deleteFrom, "to", deleteTo, "err", err)
+			if !errors.Is(err, errPrunerStopped) {
+				log.Error(p.strategy.Name()+": reorg cleanup failed; keeping cursor unchanged",
+					"from", deleteFrom, "to", deleteTo, "err", err)
+			}
 			return err
 		}
 	}
@@ -191,6 +198,13 @@ func (p *pruner) deleteRange(from, to uint64) error {
 	start := from
 
 	for start <= to {
+		// Check for shutdown between batches.
+		select {
+		case <-p.quit:
+			return errPrunerStopped
+		default:
+		}
+
 		end := start + step - 1
 		if end > to {
 			end = to
