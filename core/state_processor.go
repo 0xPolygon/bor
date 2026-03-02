@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -96,6 +97,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	context = NewEVMBlockContext(header, p.chain, author)
 	evm := vm.NewEVM(context, tracingStateDB, p.chainConfig(), cfg)
+
+	if cfg.EnableSwitchDispatch && p.chainConfig().IsShanghai(header.Number) && !p.chainConfig().IsVerkle(header.Number) && cfg.Tracer == nil {
+		log.Info("EVM switch dispatch fast path enabled", "block", header.Number)
+	}
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
