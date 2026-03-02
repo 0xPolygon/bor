@@ -75,8 +75,6 @@ func HasReadDep(txFrom TxnOutput, txTo TxnInput) bool {
 }
 
 func BuildDAG(deps TxnInputOutput) (d DAG) {
-	defer dagBuildTimer.UpdateSince(time.Now())
-
 	d = DAG{dag.NewDAG()}
 	ids := make(map[int]string)
 
@@ -309,6 +307,7 @@ type DepsBuilder struct {
 	width      int         // bitset width in transactions (grows dynamically)
 	numTx      int         // count of transactions added
 	err        error       // error
+	start      time.Time   // start time for metrics
 }
 
 func NewDepsBuilder() *DepsBuilder {
@@ -317,6 +316,7 @@ func NewDepsBuilder() *DepsBuilder {
 		width:      defaultBitsetWidth,
 		directDeps: make([]TxBitset, 0, defaultBitsetWidth),
 		reachable:  make([]TxBitset, 0, defaultBitsetWidth),
+		start:      time.Now(),
 	}
 }
 
@@ -392,6 +392,8 @@ func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writ
 // GetDeps returns the reduced dependency graph as a map for backward compatibility
 // with the existing serialization path. Returns nil if the builder encountered an error.
 func (db *DepsBuilder) GetDeps() map[int]map[int]bool {
+	defer dagBuildTimer.UpdateSince(db.start)
+
 	if db.err != nil {
 		return nil
 	}
