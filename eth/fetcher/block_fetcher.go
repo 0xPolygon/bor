@@ -68,6 +68,11 @@ var (
 	bodyFetchMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/bodies", nil)
 	witnessFetchMeter = metrics.NewRegisteredMeter("eth/fetcher/block/witnesses", nil)
 
+	// Amortized per-item download durations for announcement-driven fetches (batch duration / item count).
+	blockHeaderItemDownloadTimer  = metrics.NewRegisteredTimer("eth/fetcher/block/headers/item_download_duration", nil)   // per-header amortized fetch latency
+	blockBodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/fetcher/block/bodies/item_download_duration", nil)    // per-body amortized fetch latency
+	blockWitnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/fetcher/block/witnesses/item_download_duration", nil) // per-witness amortized fetch latency
+
 	headerFilterInMeter  = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/in", nil)
 	headerFilterOutMeter = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/out", nil)
 	bodyFilterInMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/filter/bodies/in", nil)
@@ -695,10 +700,12 @@ func (f *BlockFetcher) loop() {
 								} // Channel closed
 								res.Done <- nil
 								headersResponse, ok := res.Res.(*eth.BlockHeadersRequest)
-								if !ok {
+								if !ok || headersResponse == nil {
 									return
 								} // Invalid response type
-								f.FilterHeaders(p, *headersResponse, time.Now(), announcedAt)
+								headers := *headersResponse
+								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
+								f.FilterHeaders(p, headers, time.Now(), announcedAt)
 
 							case <-timeout.C:
 								log.Debug("Header fetch timed out", "peer", p, "hash", h)
@@ -767,11 +774,12 @@ func (f *BlockFetcher) loop() {
 						} // Channel closed
 						res.Done <- nil
 						bodyResponse, ok := res.Res.(*eth.BlockBodiesResponse)
-						if !ok {
+						if !ok || bodyResponse == nil {
 							return
 						} // Invalid response type
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
+						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
 					case <-timeout.C:
