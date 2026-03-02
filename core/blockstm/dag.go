@@ -301,13 +301,13 @@ type TxReadWriteSet struct {
 // and bitsets for O(N/64) transitive reduction via word-parallel set operations.
 // Transactions must be added in sequential order (0, 1, 2, ...).
 type DepsBuilder struct {
-	lastWriter map[Key]int // inverted index: state key → latest tx that wrote it
-	directDeps []TxBitset  // per-tx direct dependencies (after transitive reduction)
-	reachable  []TxBitset  // per-tx transitive closure of all dependencies
-	width      int         // bitset width in transactions (grows dynamically)
-	numTx      int         // count of transactions added
-	err        error       // error
-	start      time.Time   // start time for metrics
+	lastWriter map[Key]int   // inverted index: state key → latest tx that wrote it
+	directDeps []TxBitset    // per-tx direct dependencies (after transitive reduction)
+	reachable  []TxBitset    // per-tx transitive closure of all dependencies
+	width      int           // bitset width in transactions (grows dynamically)
+	numTx      int           // count of transactions added
+	err        error         // error
+	elapsed    time.Duration // time spent building the DAG
 }
 
 func NewDepsBuilder() *DepsBuilder {
@@ -316,7 +316,6 @@ func NewDepsBuilder() *DepsBuilder {
 		width:      defaultBitsetWidth,
 		directDeps: make([]TxBitset, 0, defaultBitsetWidth),
 		reachable:  make([]TxBitset, 0, defaultBitsetWidth),
-		start:      time.Now(),
 	}
 }
 
@@ -345,6 +344,9 @@ func (db *DepsBuilder) ensureCapacity(needed int) {
 // AddTransaction records a transaction's read/write sets and computes its
 // reduced dependency set. Must be called with sequential indices (0, 1, 2, ...).
 func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writeList []WriteDescriptor) error {
+	start := time.Now()
+	defer func() { db.elapsed += time.Since(start) }()
+
 	if db.err != nil {
 		return db.err
 	}
@@ -392,7 +394,8 @@ func (db *DepsBuilder) AddTransaction(index int, readList []ReadDescriptor, writ
 // GetDeps returns the reduced dependency graph as a map for backward compatibility
 // with the existing serialization path. Returns nil if the builder encountered an error.
 func (db *DepsBuilder) GetDeps() map[int]map[int]bool {
-	defer dagBuildTimer.UpdateSince(db.start)
+	start := time.Now()
+	defer func() { dagBuildTimer.Update(db.elapsed + time.Since(start)) }()
 
 	if db.err != nil {
 		return nil
