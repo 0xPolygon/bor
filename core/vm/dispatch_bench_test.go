@@ -73,7 +73,7 @@ func BenchmarkSnailtracer(b *testing.B) {
 			Origin:   caller,
 			GasPrice: big.NewInt(1),
 		})
-		evm.Call(caller, addr, calldata, 1_000_000_000, new(uint256.Int), nil)
+		evm.Call(caller, addr, calldata, 1_000_000_000, new(uint256.Int))
 	}
 }
 

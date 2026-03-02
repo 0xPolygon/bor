@@ -164,7 +164,7 @@ func execPath(code []byte, gas uint64, useTracer bool) ([]byte, uint64, error) {
 		Origin:   caller,
 		GasPrice: big.NewInt(1),
 	})
-	return evm.Call(caller, addr, nil, gas, new(uint256.Int), nil)
+	return evm.Call(caller, addr, nil, gas, new(uint256.Int))
 }
 
 // runDiff runs code through both interpreter paths and asserts that the
@@ -1167,7 +1167,7 @@ func TestPreShanghaiForkGate(t *testing.T) {
 			Origin:   caller,
 			GasPrice: big.NewInt(1),
 		})
-		return evm.Call(caller, addr, nil, gas, new(uint256.Int), nil)
+		return evm.Call(caller, addr, nil, gas, new(uint256.Int))
 	}
 
 	// PUSH0, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN
