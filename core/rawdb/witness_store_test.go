@@ -3,6 +3,7 @@ package rawdb
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -244,5 +245,141 @@ func TestFSWitnessStore_TempFileCleanup(t *testing.T) {
 
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Fatalf("expected orphaned .tmp file to be cleaned up, got err=%v", err)
+	}
+}
+
+func TestFSWitnessStore_Close(t *testing.T) {
+	dir := t.TempDir()
+	db := NewMemoryDatabase()
+	ws := NewFSWitnessStore(dir, db)
+
+	if err := ws.Close(); err != nil {
+		t.Fatalf("Close should return nil, got %v", err)
+	}
+
+	// Close should be idempotent.
+	if err := ws.Close(); err != nil {
+		t.Fatalf("second Close should return nil, got %v", err)
+	}
+}
+
+// TestFSWitnessStore_DeletePermissionError exercises the os.Remove error path
+// in DeleteWitness where the error is NOT os.IsNotExist (e.g., permission denied).
+// The store should log the error but not panic.
+func TestFSWitnessStore_DeletePermissionError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+
+	dir := t.TempDir()
+	db := NewMemoryDatabase()
+	ws := NewFSWitnessStore(dir, db)
+
+	hash := testHash(77)
+	ws.WriteWitness(hash, []byte("data"))
+
+	// Make the shard directory read-only so os.Remove gets EACCES, not ENOENT.
+	shardDir := witnessDir(dir, hash)
+	os.Chmod(shardDir, 0555)
+	t.Cleanup(func() { os.Chmod(shardDir, 0755) })
+
+	// DeleteWitness should not panic; it logs the permission error and continues.
+	ws.DeleteWitness(hash)
+
+	// The file should still exist on disk because removal failed.
+	filePath := witnessFilePath(dir, hash)
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("file should still exist after failed delete, got err=%v", err)
+	}
+
+	// But Pebble data should still be cleaned up.
+	if HasWitness(db, hash) {
+		t.Fatal("Pebble witness data should be deleted even when fs delete fails")
+	}
+}
+
+// TestFSWitnessStore_CleanupSkipsUnreadableEntries exercises the WalkFunc error
+// path where an entry in the witness directory is unreadable. The cleanup should
+// skip it without panicking.
+func TestFSWitnessStore_CleanupSkipsUnreadableEntries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+
+	dir := t.TempDir()
+	db := NewMemoryDatabase()
+
+	// Create a valid .tmp file that should be cleaned up.
+	hash1 := testHash(1)
+	shard1 := witnessDir(dir, hash1)
+	os.MkdirAll(shard1, 0755)
+	tmpPath1 := witnessFilePath(dir, hash1) + ".tmp"
+	os.WriteFile(tmpPath1, []byte("orphan1"), 0644)
+
+	// Create an unreadable subdirectory. Walk will get a permission error
+	// when trying to read its contents and should skip it.
+	unreadableDir := filepath.Join(dir, "00", "ff")
+	os.MkdirAll(unreadableDir, 0755)
+	os.WriteFile(filepath.Join(unreadableDir, "test.tmp"), []byte("hidden"), 0644)
+	os.Chmod(unreadableDir, 0000)
+	t.Cleanup(func() { os.Chmod(unreadableDir, 0755) })
+
+	// NewFSWitnessStore calls cleanupTempFiles; should not panic.
+	_ = NewFSWitnessStore(dir, db)
+
+	// The accessible .tmp file should still be cleaned up.
+	if _, err := os.Stat(tmpPath1); !os.IsNotExist(err) {
+		t.Fatalf("expected accessible .tmp to be cleaned up, got err=%v", err)
+	}
+}
+
+// TestFSWitnessStore_CleanupNonRemovableTmpFile exercises the path where
+// os.Remove fails on a .tmp file during cleanup (e.g., the file became
+// read-only between Walk's Lstat and the Remove call).
+func TestFSWitnessStore_CleanupNonRemovableTmpFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+
+	dir := t.TempDir()
+	db := NewMemoryDatabase()
+
+	// Create a .tmp file, then make its parent directory read-only
+	// so os.Remove will fail with EACCES.
+	hash := testHash(50)
+	shard := witnessDir(dir, hash)
+	os.MkdirAll(shard, 0755)
+	tmpPath := witnessFilePath(dir, hash) + ".tmp"
+	os.WriteFile(tmpPath, []byte("stuck"), 0644)
+	os.Chmod(shard, 0555)
+	t.Cleanup(func() { os.Chmod(shard, 0755) })
+
+	// NewFSWitnessStore calls cleanupTempFiles; should log a warning
+	// but not panic.
+	_ = NewFSWitnessStore(dir, db)
+
+	// Restore permissions and verify the .tmp file is still there
+	// (removal failed as expected).
+	os.Chmod(shard, 0755)
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("expected .tmp file to survive failed cleanup, got err=%v", err)
+	}
+}
+
+// TestFSWitnessStore_CleanupNonExistentDir exercises cleanupTempFiles when
+// the witness directory does not exist yet. Walk receives an error for the
+// root path and the WalkFunc returns nil to skip it.
+func TestFSWitnessStore_CleanupNonExistentDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+	db := NewMemoryDatabase()
+
+	// Should not panic or error; the directory simply doesn't exist yet.
+	ws := NewFSWitnessStore(dir, db)
+
+	// The store should still be functional once a write creates the directory.
+	hash := testHash(1)
+	ws.WriteWitness(hash, []byte("data"))
+	if !ws.HasWitness(hash) {
+		t.Fatal("HasWitness should return true after write to initially non-existent dir")
 	}
 }

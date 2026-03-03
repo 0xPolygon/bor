@@ -694,3 +694,42 @@ func TestDeleteRange_ShutdownInterrupt(t *testing.T) {
 		}
 	}
 }
+
+func TestNewWitnessStrategy_Defaults(t *testing.T) {
+	db := NewMemoryDatabase()
+	ws := NewDBWitnessStore(db)
+	s := NewWitnessStrategy(ws)
+
+	if s.Name() != "witness pruner" {
+		t.Fatalf("unexpected name: %q", s.Name())
+	}
+	if s.RetentionBlocks() != WitnessRetentionBlocks {
+		t.Fatalf("expected retention %d, got %d", WitnessRetentionBlocks, s.RetentionBlocks())
+	}
+	if s.Interval() != WitnessPruneInterval {
+		t.Fatalf("expected interval %v, got %v", WitnessPruneInterval, s.Interval())
+	}
+	if s.witnessStore != ws {
+		t.Fatal("expected witnessStore to be the same instance passed to constructor")
+	}
+}
+
+func TestNewWitnessStrategy_DeletePerHashUsesStore(t *testing.T) {
+	db := NewMemoryDatabase()
+	ws := NewDBWitnessStore(db)
+	s := NewWitnessStrategy(ws)
+
+	hash := common.HexToHash("0xdeadbeef")
+	WriteWitness(db, hash, []byte("data"))
+
+	if !ws.HasWitness(hash) {
+		t.Fatal("witness should exist before delete")
+	}
+
+	// DeletePerHash should delegate to the witness store.
+	s.DeletePerHash(db, 1, hash)
+
+	if ws.HasWitness(hash) {
+		t.Fatal("witness should be deleted via witness store")
+	}
+}

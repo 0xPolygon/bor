@@ -886,6 +886,18 @@ func (db *closeTrackingDB) Close() error {
 	return db.Database.Close()
 }
 
+// WitnessStore forwards to the inner database so the witness store
+// remains accessible through the closeTrackingDB wrapper.
+func (db *closeTrackingDB) WitnessStore() rawdb.WitnessStore {
+	type witnessStoreDB interface {
+		WitnessStore() rawdb.WitnessStore
+	}
+	if wsdb, ok := db.Database.(witnessStoreDB); ok {
+		return wsdb.WitnessStore()
+	}
+	return nil
+}
+
 // wrapDatabase ensures the database will be auto-closed when Node is closed.
 func (n *Node) wrapDatabase(db ethdb.Database) ethdb.Database {
 	wrapper := &closeTrackingDB{db, n}
