@@ -2790,7 +2790,7 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 		}
 
 		stateDb.SetTxContext(tx.Hash(), int(idx))
-		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()), nil); err != nil {
+		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
 			return nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
 
