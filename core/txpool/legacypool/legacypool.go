@@ -1134,7 +1134,11 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		// New transaction is better, replace old one
 		if old != nil {
 			pool.all.Remove(old.Hash())
-			go pool.priced.Removed(1)
+			if async {
+				go pool.priced.Removed(1)
+			} else {
+				pool.priced.Removed(1)
+			}
 			pendingReplaceMeter.Mark(1)
 			delete(pool.lastRebroadcast, old.Hash())
 		}
