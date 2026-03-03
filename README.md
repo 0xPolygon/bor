@@ -45,11 +45,11 @@ The releases supports both the networks i.e. Polygon Mainnet, and Amoy (Testnet)
 
 Post `v0.3.0` release, bor uses a new command line interface (cli). The new-cli (located at `internal/cli`) has been built while keeping the flag usage similar to old-cli (located at `cmd/geth`) with a few notable changes. Please refer to [docs](./docs) section for the flag usage guide and example.
 
-### Latest Config References
+### Latest Config Reference
 
 For the latest canonical TOML config options, refer to:
 
-- [`docs/cli/example_config.toml`](docs/cli/example_config.toml)
+- [`docs/cli/default_config.toml`](docs/cli/default_config.toml)
 
 ### Documentation
 
