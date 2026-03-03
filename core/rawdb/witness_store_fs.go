@@ -102,7 +102,7 @@ func (s *fsWitnessStore) Close() error {
 func (s *fsWitnessStore) cleanupTempFiles() {
 	count := 0
 
-	err := filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(s.dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
@@ -115,10 +115,6 @@ func (s *fsWitnessStore) cleanupTempFiles() {
 		}
 		return nil
 	})
-
-	if err != nil {
-		log.Warn("Error walking witness directory for cleanup", "dir", s.dir, "err", err)
-	}
 
 	if count > 0 {
 		log.Info("Cleaned up orphaned witness temp files", "count", count)

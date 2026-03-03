@@ -2,6 +2,7 @@ package rawdb
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -381,5 +382,124 @@ func TestFSWitnessStore_CleanupNonExistentDir(t *testing.T) {
 	ws.WriteWitness(hash, []byte("data"))
 	if !ws.HasWitness(hash) {
 		t.Fatal("HasWitness should return true after write to initially non-existent dir")
+	}
+}
+
+// --- Subprocess tests for log.Crit paths ---
+//
+// log.Crit calls os.Exit(1), so these tests spawn a subprocess that runs
+// the crashing code path and verify it exits non-zero.
+
+// runCrashTest re-executes the current test binary in a subprocess with
+// the given test function name and WITNESS_CRASH_TEST=1 set.
+// Returns true if the subprocess exited with a non-zero status.
+func runCrashTest(t *testing.T, testName string) bool {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$")
+	cmd.Env = append(os.Environ(), "WITNESS_CRASH_TEST=1")
+	err := cmd.Run()
+	if err == nil {
+		return false // process exited 0 — no crash
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return true // non-zero exit — expected crash
+	}
+	t.Fatalf("unexpected error running subprocess: %v", err)
+	return false
+}
+
+// TestFSWitnessStore_CritOnMkdirAllFailure verifies that WriteWitness
+// calls log.Crit (exits non-zero) when os.MkdirAll fails.
+func TestFSWitnessStore_CritOnMkdirAllFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
+		// Subprocess: write to a path where MkdirAll will fail.
+		db := NewMemoryDatabase()
+		// Use a regular file as the base dir so MkdirAll fails with ENOTDIR.
+		f, _ := os.CreateTemp("", "witness-crash-*")
+		f.Close()
+		defer os.Remove(f.Name())
+		ws := NewFSWitnessStore(f.Name(), db)
+		ws.WriteWitness(testHash(1), []byte("data"))
+		return
+	}
+	if !runCrashTest(t, "TestFSWitnessStore_CritOnMkdirAllFailure") {
+		t.Fatal("expected subprocess to exit non-zero on MkdirAll failure")
+	}
+}
+
+// TestFSWitnessStore_CritOnWriteFileFailure verifies that WriteWitness
+// calls log.Crit when os.WriteFile fails.
+func TestFSWitnessStore_CritOnWriteFileFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
+		// Subprocess: create the shard dir as read-only so WriteFile fails.
+		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		defer os.RemoveAll(dir)
+		db := NewMemoryDatabase()
+		ws := NewFSWitnessStore(dir, db)
+		hash := testHash(1)
+		shard := witnessDir(dir, hash)
+		os.MkdirAll(shard, 0755)
+		os.Chmod(shard, 0555)
+		ws.WriteWitness(hash, []byte("data"))
+		return
+	}
+	if !runCrashTest(t, "TestFSWitnessStore_CritOnWriteFileFailure") {
+		t.Fatal("expected subprocess to exit non-zero on WriteFile failure")
+	}
+}
+
+// TestFSWitnessStore_CritOnRenameFailure verifies that WriteWitness
+// calls log.Crit when os.Rename fails.
+func TestFSWitnessStore_CritOnRenameFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
+		// Subprocess: write the temp file, then remove the shard dir before
+		// rename can happen. We achieve this by making the shard dir read-only
+		// after the temp file is written. Since WriteWitness does MkdirAll,
+		// WriteFile, then Rename atomically, we use a file as the final path
+		// to force the rename to fail: create a subdirectory at the final path.
+		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		defer os.RemoveAll(dir)
+		db := NewMemoryDatabase()
+		hash := testHash(1)
+		shard := witnessDir(dir, hash)
+		os.MkdirAll(shard, 0755)
+		// Create a directory at the final path — os.Rename of file to dir fails.
+		finalPath := witnessFilePath(dir, hash)
+		os.MkdirAll(finalPath, 0755)
+		// Place a file inside to prevent removal.
+		os.WriteFile(filepath.Join(finalPath, "blocker"), []byte("x"), 0644)
+		ws := NewFSWitnessStore(dir, db)
+		ws.WriteWitness(hash, []byte("data"))
+		return
+	}
+	if !runCrashTest(t, "TestFSWitnessStore_CritOnRenameFailure") {
+		t.Fatal("expected subprocess to exit non-zero on Rename failure")
+	}
+}
+
+// TestFSWitnessStore_CritOnDBPutFailure verifies that WriteWitness
+// calls log.Crit when the database Put for size metadata fails.
+func TestFSWitnessStore_CritOnDBPutFailure(t *testing.T) {
+	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
+		// Subprocess: use a database that has been closed so Put fails.
+		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		defer os.RemoveAll(dir)
+		db := NewMemoryDatabase()
+		ws := NewFSWitnessStore(dir, db)
+		db.Close()
+		ws.WriteWitness(testHash(1), []byte("data"))
+		return
+	}
+	if !runCrashTest(t, "TestFSWitnessStore_CritOnDBPutFailure") {
+		t.Fatal("expected subprocess to exit non-zero on DB Put failure")
 	}
 }

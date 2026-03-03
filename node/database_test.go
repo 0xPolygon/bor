@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/p2p"
 )
 
@@ -119,5 +120,28 @@ func TestOpenDatabase_InMemory_NoWitnessFileStore(t *testing.T) {
 	ws.WriteWitness(hash, []byte("mem-witness"))
 	if !ws.HasWitness(hash) {
 		t.Fatal("expected witness to exist in memory DB")
+	}
+}
+
+// TestCloseTrackingDB_WitnessStore_NilForNonFreezerDB verifies that the
+// closeTrackingDB.WitnessStore() method returns nil when the inner database
+// does not implement the witnessStoreDB interface (e.g., nofreezedb).
+func TestCloseTrackingDB_WitnessStore_NilForNonFreezerDB(t *testing.T) {
+	n, err := New(&Config{
+		Name:    "test",
+		DataDir: t.TempDir(),
+		P2P:     p2p.Config{MaxPeers: 0},
+	})
+	if err != nil {
+		t.Fatalf("failed to create test node: %v", err)
+	}
+	defer n.Close()
+
+	// nofreezedb does not implement WitnessStore().
+	inner := rawdb.NewDatabase(memorydb.New())
+	wrapper := &closeTrackingDB{Database: inner, n: n}
+
+	if ws := wrapper.WitnessStore(); ws != nil {
+		t.Fatal("expected nil WitnessStore for nofreezedb wrapped in closeTrackingDB")
 	}
 }
