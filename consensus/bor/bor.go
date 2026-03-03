@@ -414,8 +414,8 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
 
-	if c.config.IsRio(header.Number) {
-		// Rio HF introduced flexible blocktime (can be set larger than consensus without approval).
+	if c.config.IsNewHardfork(header.Number) {
+		// NewHardfork introduced flexible blocktime (can be set larger than consensus without approval).
 		// Using strict CalcProducerDelay would reject valid blocks, so we just ensure announcement
 		// time comes after parent time to allow for flexible blocktime.
 		var parent *types.Header
@@ -426,13 +426,13 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			parent = chain.GetHeader(header.ParentHash, number-1)
 		}
 		if parent == nil || now < parent.Time {
-			log.Error("Block announced too early post rio", "number", number, "headerTime", header.Time, "now", now)
+			log.Error("Block announced too early post newHardfork", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
 		// ahead of the local clock is rejected.
 		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
-			log.Error("Block timestamp too far in future post rio", "number", number, "headerTime", header.Time, "now", now)
+			log.Error("Block timestamp too far in future post newHardfork", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 	} else if c.config.IsBhilai(header.Number) {

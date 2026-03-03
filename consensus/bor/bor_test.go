@@ -1709,6 +1709,86 @@ func TestVerifyHeader_RequestsHash(t *testing.T) {
 	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
 }
 
+// TestVerifyHeader_NewHardfork_Boundary verifies that the flexible blocktime
+// timestamp validation in verifyHeader activates exactly at NewHardforkBlock.
+//
+// Before NewHardforkBlock the old code-path is used (header.Time > now fails),
+// at and after NewHardforkBlock the new path is used (parent-time check +
+// upper-bound check instead of a strict now comparison).
+func TestVerifyHeader_NewHardfork_Boundary(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	const newHardforkBlock = 100
+
+	now := uint64(time.Now().Unix())
+
+	t.Run("before NewHardforkBlock – future timestamp is rejected", func(t *testing.T) {
+		// NewHardforkBlock is far in the future, so the legacy path is taken.
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(1_000_000),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
+
+		h := &types.Header{
+			Number: big.NewInt(newHardforkBlock - 1),
+			Time:   now + 3600, // 1 hour in the future – must be rejected
+			Extra:  make([]byte, 32+65),
+		}
+		err := b.VerifyHeader(chain.HeaderChain(), h)
+		require.ErrorIs(t, err, consensus.ErrFutureBlock, "pre-NewHardfork: future timestamp should be rejected")
+	})
+
+	t.Run("at NewHardforkBlock – timestamp within upper bound is accepted", func(t *testing.T) {
+		// NewHardforkBlock active from genesis so every block uses the new path.
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		// Timestamp slightly in the future but within maxAllowedFutureBlockTimeSeconds.
+		h := &types.Header{
+			Number:     big.NewInt(newHardforkBlock),
+			ParentHash: genesis.Hash(),
+			Time:       now + maxAllowedFutureBlockTimeSeconds - 1,
+			Extra:      make([]byte, 32+65),
+		}
+		// verifyHeader will proceed past the timestamp check; subsequent checks
+		// (mixDigest, difficulty, etc.) may still fail, but ErrFutureBlock must not.
+		err := b.VerifyHeader(chain.HeaderChain(), h)
+		require.NotErrorIs(t, err, consensus.ErrFutureBlock, "post-NewHardfork: timestamp within bound should not return ErrFutureBlock")
+	})
+
+	t.Run("at NewHardforkBlock – timestamp beyond upper bound is rejected", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(0),
+		}
+		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		h := &types.Header{
+			Number:     big.NewInt(newHardforkBlock),
+			ParentHash: genesis.Hash(),
+			Time:       now + maxAllowedFutureBlockTimeSeconds + 10, // beyond upper bound
+			Extra:      make([]byte, 32+65),
+		}
+		err := b.VerifyHeader(chain.HeaderChain(), h)
+		require.ErrorIs(t, err, consensus.ErrFutureBlock, "post-NewHardfork: timestamp beyond upper bound must be rejected")
+	})
+}
+
 func TestVerifyCascadingFields_Genesis(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
