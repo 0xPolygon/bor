@@ -812,7 +812,12 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.L
 
 	// Enforce max block range (inclusive: 0..999 = 1000 blocks)
 	if end-begin+1 > GetLogsMaxBlockRange {
-		return nil, fmt.Errorf("block range exceeds maximum of %d blocks", GetLogsMaxBlockRange)
+		return nil, &clientLimitExceededError{message: fmt.Sprintf("block range exceeds maximum of %d blocks", GetLogsMaxBlockRange)}
+	}
+
+	// Check context before iterating
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Build address set for lookup
@@ -906,6 +911,11 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 	addressSet := make(map[common.Address]struct{}, len(filterQuery.Addresses))
 	for _, addr := range filterQuery.Addresses {
 		addressSet[addr] = struct{}{}
+	}
+
+	// Check context before iterating
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Collect logs in descending order
