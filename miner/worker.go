@@ -106,6 +106,10 @@ var (
 	intermediateRootTimer = metrics.NewRegisteredTimer("worker/intermediateRoot", nil)
 	// commitTimer measures total time for complete block building (tx execution + finalization + state root)
 	commitTimer = metrics.NewRegisteredTimer("worker/commit", nil)
+	// writeBlockAndSetHeadTimer measures total time for WriteBlockAndSetHead in the seal result loop.
+	// This covers the entire gap between block sealing and event posting: witness encoding, batch write,
+	// state commit, and (in hashdb mode) trie GC. Spikes here directly delay block broadcasting.
+	writeBlockAndSetHeadTimer = metrics.NewRegisteredTimer("worker/writeBlockAndSetHead", nil)
 
 	// Cache hit/miss metrics for block production (miner path)
 	// These are the same meters used by the import path in blockchain.go
@@ -997,7 +1001,9 @@ func (w *worker) resultLoop() {
 			}
 
 			// Commit block and state to database.
+			writeStart := time.Now()
 			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+			writeBlockAndSetHeadTimer.Update(time.Since(writeStart))
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
@@ -1012,7 +1018,7 @@ func (w *worker) resultLoop() {
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
 			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness})
+			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: time.Now()})
 
 			sealedBlocksCounter.Inc(1)
 
@@ -1073,6 +1079,8 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchReader: genParams.prefetchReader,
 		processReader:  genParams.processReader,
 	}
+	env.evm.SetInterrupt(&w.interruptBlockBuilding)
+
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
 	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}
@@ -1104,7 +1112,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 		gp   = env.gasPool.Gas()
 	)
 
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, &w.interruptBlockBuilding)
+	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
