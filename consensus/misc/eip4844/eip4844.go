@@ -123,6 +123,9 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 func CalcExcessBlobGas(config *params.ChainConfig, parent *types.Header, headTimestamp uint64) uint64 {
 	isOsaka := config.IsOsaka(config.LondonBlock)
 	bcfg := latestBlobConfig(config, headTimestamp)
+	if bcfg == nil {
+		return 0
+	}
 	return calcExcessBlobGas(isOsaka, bcfg, parent)
 }
 

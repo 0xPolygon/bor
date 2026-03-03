@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	borMilestone "github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
@@ -2786,7 +2787,7 @@ func TestVerifyPendingHeadersSpanRotationReorg(t *testing.T) {
 	h2.EXPECT().GetSpan(gomock.Any(), uint64(1)).Return(&span1, nil).AnyTimes()
 	h2.EXPECT().GetLatestSpan(gomock.Any()).Return(&span1, nil).AnyTimes()
 	h2.EXPECT().FetchCheckpoint(gomock.Any(), int64(-1)).Return(nil, fmt.Errorf("no checkpoint available")).AnyTimes()
-	h2.EXPECT().FetchMilestone(gomock.Any()).Return(nil, fmt.Errorf("no milestone available")).AnyTimes()
+	h2.EXPECT().FetchMilestone(gomock.Any()).Return(&borMilestone.Milestone{EndBlock: 15}, nil).AnyTimes()
 	h2.EXPECT().FetchStatus(gomock.Any()).Return(&ctypes.SyncInfo{CatchingUp: false}, nil).AnyTimes()
 	h2.EXPECT().StateSyncEvents(gomock.Any(), gomock.Any(), gomock.Any()).Return([]*clerk.EventRecordWithTime{getSampleEventRecord(t)}, nil).AnyTimes()
 
@@ -2798,17 +2799,6 @@ func TestVerifyPendingHeadersSpanRotationReorg(t *testing.T) {
 
 	borEngs[1].PurgeCache()
 	log.Info("Purged caches on validator 2 to apply new span data")
-
-	// Set a milestone at block 15 on validator 2's chain
-	// This will cause verifyPendingHeaders to check blocks 16-18
-	milestoneBlock := nodes[1].BlockChain().GetHeaderByNumber(15)
-	require.NotNil(t, milestoneBlock, "Milestone block 15 should exist")
-
-	log.Info("Setting milestone at block 15",
-		"hash", milestoneBlock.Hash(),
-		"miner", milestoneBlock.Coinbase)
-
-	nodes[1].Downloader().ChainValidator.ProcessMilestone(15, milestoneBlock.Hash())
 
 	log.Info("Waiting for header verification loop to detect invalid headers...")
 
@@ -2851,7 +2841,6 @@ func TestVerifyPendingHeadersSpanRotationReorg(t *testing.T) {
 
 	block15 := nodes[1].BlockChain().GetHeaderByNumber(15)
 	require.NotNil(t, block15, "Block 15 should still exist")
-	require.Equal(t, milestoneBlock.Hash(), block15.Hash(), "Block 15 hash should match milestone")
 
 	for blockNum := uint64(16); blockNum <= uint64(18); blockNum++ {
 		header := nodes[1].BlockChain().GetHeaderByNumber(blockNum)

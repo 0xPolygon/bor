@@ -24,7 +24,28 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-// ToExtWitness converts our internal witness representation to the consensus one.
+// BorWitness is the canonical 3-field RLP encoding used for network
+// transmission in Bor. The State field carries all proof data — both
+// contract bytecodes and MPT state trie nodes — as a flat list of byte slices.
+type BorWitness struct {
+	Context *types.Header
+	Headers []*types.Header
+	State   [][]byte
+}
+
+// ExtWitness is a witness representation used by the JSON debug API and for
+// backward-compatible RLP decoding of peers that temporarily used the
+// extended 5-field format. It is not the canonical wire format.
+type ExtWitness struct {
+	Context *types.Header
+	Headers []*types.Header `json:"headers"`
+	Codes   []hexutil.Bytes `json:"codes"`
+	State   []hexutil.Bytes `json:"state"`
+	Keys    []hexutil.Bytes `json:"keys"`
+}
+
+// ToExtWitness converts our internal witness representation to the ExtWitness
+// form used by the JSON debug API.
 func (w *Witness) ToExtWitness() *ExtWitness {
 	w.lock.RLock()
 	defer w.lock.RUnlock()
@@ -44,7 +65,7 @@ func (w *Witness) ToExtWitness() *ExtWitness {
 	return ext
 }
 
-// fromExtWitness converts the consensus witness format into our internal one.
+// fromExtWitness converts the ExtWitness format into our internal representation.
 func (w *Witness) fromExtWitness(ext *ExtWitness) error {
 	w.context = ext.Context
 	w.Headers = ext.Headers
@@ -60,25 +81,55 @@ func (w *Witness) fromExtWitness(ext *ExtWitness) error {
 	return nil
 }
 
-// EncodeRLP serializes a witness as RLP.
+// EncodeRLP serializes a witness as RLP using the canonical BorWitness 3-field
+// format. Only state trie nodes are encoded; contract bytecodes are not
+// included in the wire format.
 func (w *Witness) EncodeRLP(wr io.Writer) error {
-	return rlp.Encode(wr, w.ToExtWitness())
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+
+	bw := &BorWitness{
+		Context: w.context,
+		Headers: w.Headers,
+		State:   make([][]byte, 0, len(w.State)),
+	}
+	for node := range w.State {
+		bw.State = append(bw.State, []byte(node))
+	}
+	return rlp.Encode(wr, bw)
 }
 
-// DecodeRLP decodes a witness from RLP.
+// DecodeRLP decodes a witness from RLP. It first attempts the canonical
+// BorWitness 3-field format. If that fails (e.g. the peer sent the legacy
+// 5-field ExtWitness encoding), it falls back to ExtWitness for backward
+// compatibility.
+//
+// When decoding BorWitness, State items are placed into w.State and w.Codes
+// is left empty, since codes are not part of the BorWitness wire format.
 func (w *Witness) DecodeRLP(s *rlp.Stream) error {
+	raw, err := s.Raw()
+	if err != nil {
+		return err
+	}
+
+	// Try BorWitness first. A 5-field list will fail here with "too many
+	// elements", routing cleanly to the ExtWitness fallback.
+	var bw BorWitness
+	if err := rlp.DecodeBytes(raw, &bw); err == nil {
+		w.context = bw.Context
+		w.Headers = bw.Headers
+		w.Codes = make(map[string]struct{})
+		w.State = make(map[string]struct{}, len(bw.State))
+		for _, node := range bw.State {
+			w.State[string(node)] = struct{}{}
+		}
+		return nil
+	}
+
+	// Fall back to the legacy 5-field ExtWitness format.
 	var ext ExtWitness
-	if err := s.Decode(&ext); err != nil {
+	if err := rlp.DecodeBytes(raw, &ext); err != nil {
 		return err
 	}
 	return w.fromExtWitness(&ext)
-}
-
-// ExtWitness is a witness RLP encoding for transferring across clients.
-type ExtWitness struct {
-	Context *types.Header
-	Headers []*types.Header `json:"headers"`
-	Codes   []hexutil.Bytes `json:"codes"`
-	State   []hexutil.Bytes `json:"state"`
-	Keys    []hexutil.Bytes `json:"keys"`
 }

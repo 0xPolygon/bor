@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	lru "github.com/hashicorp/golang-lru"
-	ttlcache "github.com/jellydator/ttlcache/v3"
+	"github.com/jellydator/ttlcache/v3"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -38,6 +38,8 @@ import (
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	"github.com/ethereum/go-ethereum/tests/bor/mocks"
+	"go.uber.org/mock/gomock"
 )
 
 // fakeSpanner implements Spanner for tests
@@ -174,7 +176,8 @@ func newAllForksChainConfig(borCfg *params.BorConfig) *params.ChainConfig {
 func newChainAndBorForTestWithConfig(t *testing.T, sp Spanner, cfg *params.ChainConfig, devFake bool, signerAddr common.Address, genesisTime uint64, genOpts ...func(*core.Genesis)) (*core.BlockChain, *Bor) {
 	t.Helper()
 
-	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: devFake}
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	b := &Bor{chainConfig: cfg, config: cfg.Bor, DevFakeAuthor: devFake, ctx: ctx, ctxCancel: ctxCancel}
 	b.db = rawdb.NewMemoryDatabase()
 	b.recents = ttlcache.New(
 		ttlcache.WithTTL[common.Hash, *Snapshot](veblopBlockTimeout),
@@ -4372,4 +4375,321 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 
 		t.Logf("Both waitOnPrepare modes produce compatible headers for block %d", header1.Number.Uint64())
 	})
+}
+
+func newBorForMilestoneFetcherTest(t *testing.T) *Bor {
+	t.Helper()
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
+	borCfg := &params.BorConfig{Sprint: map[string]uint64{"0": 64}, Period: map[string]uint64{"0": 2}}
+	_, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+	b.quit = make(chan struct{})
+	return b
+}
+
+func TestRunMilestoneFetcher_ContextHasDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	gotDeadline := make(chan bool, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		_, ok := ctx.Deadline()
+		gotDeadline <- ok
+		return nil, errors.New("not available")
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	select {
+	case hasDeadline := <-gotDeadline:
+		require.True(t, hasDeadline, "context passed to FetchMilestone must have a deadline")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for FetchMilestone to be called")
+	}
+}
+
+func TestRunMilestoneFetcher_StoresMilestoneBlock(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).Return(&milestone.Milestone{EndBlock: 12345}, nil).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	require.Eventually(t, func() bool {
+		return b.latestMilestoneBlock.Load() == 12345
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestRunMilestoneFetcher_ErrorDoesNotUpdateBlock(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	called := make(chan struct{}, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		return nil, errors.New("heimdall unreachable")
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for FetchMilestone to be called")
+	}
+
+	// Give an extra tick to ensure no late update
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, uint64(0), b.latestMilestoneBlock.Load())
+}
+
+func TestRunMilestoneFetcher_BlockingCallRespectsTimeout(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockIHeimdallClient(ctrl)
+
+	callReturned := make(chan struct{}, 1)
+
+	client.EXPECT().FetchMilestone(gomock.Any()).DoAndReturn(func(ctx context.Context) (*milestone.Milestone, error) {
+		// Simulate unreachable Heimdall: block until context is cancelled
+		<-ctx.Done()
+		select {
+		case callReturned <- struct{}{}:
+		default:
+		}
+		return nil, ctx.Err()
+	}).AnyTimes()
+
+	b := newBorForMilestoneFetcherTest(t)
+	b.HeimdallClient = client
+
+	go b.runMilestoneFetcher()
+	defer close(b.quit)
+
+	// The context timeout is 30s; the blocked call should eventually return.
+	// We use a generous test timeout but this verifies the call doesn't block forever.
+	select {
+	case <-callReturned:
+		// Success: the blocking FetchMilestone returned because the context timed out
+	case <-time.After(35 * time.Second):
+		t.Fatal("FetchMilestone blocked beyond the context timeout; goroutine would leak without the fix")
+	}
+}
+
+// TestSubSecondLateBlockTriggersTimeAdjustment verifies that when a block's target
+// time has already passed (even by sub-second), the late-block adjustment triggers
+// and pushes header.Time into the future to give the miner real build time.
+//
+// Without the fix, the integer comparison `header.Time < now.Unix()` misses the case
+// where header.Time == now.Unix() but the sub-second target has already passed. This
+// causes the interrupt timer to expire immediately and Pending() to return an empty
+// map, producing a block with 0 transactions.
+func TestSubSecondLateBlockTriggersTimeAdjustment(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+
+	// waitForMidSecond spins until we're between 300ms-700ms into the current
+	// second. This ensures the 200ms sub-second offset used by the tests won't
+	// cross a second boundary, which would make the old integer comparison
+	// trigger regardless of the fix.
+	waitForMidSecond := func() {
+		for {
+			ms := time.Now().Nanosecond() / 1_000_000
+			if ms >= 300 && ms <= 700 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	t.Run("default path without custom blockTime", func(t *testing.T) {
+		t.Parallel()
+
+		// Consensus period = 1s, no custom blockTime.
+		// This is the path where ActualTime is never set (stays zero)
+		// and GetActualTime() falls back to time.Unix(header.Time, 0).
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 1},
+		}
+
+		waitForMidSecond()
+		now := time.Now()
+
+		// Set genesis time so that header.Time = genesis.Time + period = now.Unix()
+		// (the block target is the start of the current second, already in the past).
+		genesisTime := uint64(now.Unix()) - 1
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		before := time.Now()
+		err := b.Prepare(chain.HeaderChain(), header, false)
+		require.NoError(t, err)
+
+		expectedMin := uint64(before.Add(1 * time.Second).Unix())
+		require.GreaterOrEqual(t, header.Time, expectedMin,
+			"header.Time should be at least now + period to provide build time")
+	})
+
+	t.Run("custom blockTime with Rio", func(t *testing.T) {
+		t.Parallel()
+
+		blockTimeDuration := 2 * time.Second
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		borCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+
+		waitForMidSecond()
+		now := time.Now()
+
+		// Set parent's cached ActualTime so that:
+		//   actualNewBlockTime = parentActualTime + blockTime = now - 200ms
+		// This is sub-second in the past, but truncated header.Time equals now.Unix().
+		parentActualTime := now.Add(-blockTimeDuration).Add(-200 * time.Millisecond)
+		genesisTime := uint64(parentActualTime.Unix())
+
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+		b.blockTime = blockTimeDuration
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		// Cache the parent ActualTime with sub-second precision
+		b.parentActualTimeCache.Add(genesis.Hash(), parentActualTime)
+
+		header := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+		}
+
+		before := time.Now()
+		err := b.Prepare(chain.HeaderChain(), header, false)
+		require.NoError(t, err)
+
+		require.False(t, header.ActualTime.IsZero(),
+			"ActualTime should be set for Rio with custom blockTime")
+		require.True(t, header.ActualTime.After(before),
+			"ActualTime should be in the future after adjustment, got %v which is before %v",
+			header.ActualTime, before)
+
+		expectedMin := before.Add(blockTimeDuration)
+		require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMin.Unix(),
+			"ActualTime should be at least now + blockTime to provide build time")
+	})
+}
+
+func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
+	t.Parallel()
+
+	privKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	sp := &fakeSpanner{
+		vals: []*valset.Validator{
+			{Address: signerAddr, VotingPower: 1},
+		},
+	}
+
+	borCfg := &params.BorConfig{
+		Sprint: map[string]uint64{"0": 64},
+		Period: map[string]uint64{"0": 2},
+	}
+
+	// Use a fixed past timestamp to avoid "block in the future" errors
+	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, 1600000000)
+
+	parent := chain.HeaderChain().GetHeaderByNumber(0)
+	require.NotNil(t, parent)
+
+	// Block number that skips ahead (non-contiguous)
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(10), // Should be 1
+		Time:       parent.Time + 1000,
+		Difficulty: big.NewInt(2),
+		Extra:      make([]byte, 32+65),
+		UncleHash:  types.EmptyUncleHash,
+		GasLimit:   parent.GasLimit,
+		BaseFee:    parent.BaseFee,
+	}
+
+	sigHash := SealHash(header, borCfg)
+	sig, err := crypto.Sign(sigHash.Bytes(), privKey)
+	require.NoError(t, err)
+	copy(header.Extra[len(header.Extra)-65:], sig)
+
+	err = b.VerifyHeader(chain.HeaderChain(), header)
+	if err == nil {
+		t.Fatal("expected VerifyHeader to reject non-contiguous block number")
+	}
+	if !errors.Is(err, consensus.ErrInvalidNumber) {
+		t.Fatalf("expected ErrInvalidNumber, got %v", err)
+	}
+
+	// Test overflow case: parent + 1 + 2^64 (would pass with uint64 truncation)
+	overflow := new(big.Int).Lsh(big.NewInt(1), 64)
+	overflow.Add(overflow, parent.Number)
+	overflow.Add(overflow, big.NewInt(1))
+
+	header2 := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     overflow,
+		Time:       parent.Time + 1000,
+		Difficulty: big.NewInt(2),
+		Extra:      make([]byte, 32+65),
+		UncleHash:  types.EmptyUncleHash,
+		GasLimit:   parent.GasLimit,
+		BaseFee:    parent.BaseFee,
+	}
+
+	sigHash2 := SealHash(header2, borCfg)
+	sig2, err := crypto.Sign(sigHash2.Bytes(), privKey)
+	require.NoError(t, err)
+	copy(header2.Extra[len(header2.Extra)-65:], sig2)
+
+	err = b.VerifyHeader(chain.HeaderChain(), header2)
+	if err == nil {
+		t.Fatal("expected VerifyHeader to reject overflow block number")
+	}
+	if !errors.Is(err, consensus.ErrInvalidNumber) {
+		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
+	}
 }

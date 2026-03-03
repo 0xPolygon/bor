@@ -145,6 +145,10 @@ func UnmarshalPubkey(pub []byte) (*ecdsa.PublicKey, error) {
 	if x == nil {
 		return nil, errInvalidPubkey
 	}
+	// Check coordinates are < P, to protect against potential misses in Unmarshal implementations.
+	if x.Cmp(S256().Params().P) >= 0 || y.Cmp(S256().Params().P) >= 0 {
+		return nil, errInvalidPubkey
+	}
 	if !S256().IsOnCurve(x, y) {
 		return nil, errInvalidPubkey
 	}

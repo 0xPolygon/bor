@@ -3422,7 +3422,37 @@ func TestBorGetLogs_ErrorPropagation(t *testing.T) {
 		t.Log("Correctly returned (nil, nil) for non-existent block hash")
 	})
 
-	// Test 3: Context cancellation propagation
+	// Test 3: Range limit should reject overly broad scans
+	t.Run("range_limit_exceeded", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, int(GetLogsMaxBlockRange+2), genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		crit := FilterCriteria{
+			FromBlock: big.NewInt(0),
+			ToBlock:   new(big.Int).SetUint64(GetLogsMaxBlockRange + 1),
+		}
+
+		_, err := api.GetLogs(context.Background(), crit)
+		if err == nil {
+			t.Fatal("Expected client limit exceeded error, got nil")
+		}
+		var limitErr *clientLimitExceededError
+		if !errors.As(err, &limitErr) {
+			t.Fatalf("Expected clientLimitExceededError, got %T (%v)", err, err)
+		}
+	})
+
+	// Test 4: Context cancellation propagation
 	t.Run("context_cancellation", func(t *testing.T) {
 		var (
 			acc1    = newAccounts(1)[0]
@@ -3447,13 +3477,8 @@ func TestBorGetLogs_ErrorPropagation(t *testing.T) {
 		}
 
 		_, err := api.GetLogs(ctx, crit)
-		// Should respect context cancellation
-		if err == nil {
-			t.Log("Context cancellation didn't trigger error (operation too fast)")
-		} else if errors.Is(err, context.Canceled) {
-			t.Logf("Got expected context cancellation: %v", err)
-		} else {
-			t.Logf("Got error: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Expected context canceled error, got: %v", err)
 		}
 	})
 }
@@ -3572,6 +3597,39 @@ func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
 		}
 		if err != nil && !strings.Contains(err.Error(), "ambiguous") {
 			t.Errorf("Expected 'ambiguous' error, got: %v", err)
+		}
+	})
+
+	// Test 4: Context cancellation propagation
+	t.Run("context_cancellation", func(t *testing.T) {
+		var (
+			acc1    = newAccounts(1)[0]
+			genesis = &core.Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					acc1.addr: {Balance: big.NewInt(params.Ether)},
+				},
+			}
+		)
+
+		backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+		api := NewBorAPI(backend)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		crit := FilterCriteria{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(10),
+		}
+		blockCount := uint64(10)
+		logOptions := LogFilterOptions{
+			BlockCount: &blockCount,
+		}
+
+		_, err := api.GetLatestLogs(ctx, crit, logOptions)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Expected context canceled error, got: %v", err)
 		}
 	})
 }
