@@ -1,7 +1,6 @@
 chain = "mainnet"
 identity = "Polygon-Devs"
 verbosity = 3
-log-level = ""
 vmdebug = false
 datadir = "/var/lib/bor"
 ancient = ""
@@ -52,6 +51,7 @@ devfakeauthor = false
   url = "http://localhost:1317"
   "bor.without" = false
   grpc-address = ""
+  ws-address = ""
   "bor.runheimdall" = false
   "bor.runheimdallargs" = ""
   "bor.useheimdallapp" = false

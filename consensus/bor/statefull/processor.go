@@ -106,7 +106,6 @@ func ApplyMessage(
 		msg.Data(),
 		msg.Gas(),
 		uint256.NewInt(msg.Value().Uint64()),
-		nil,
 	)
 
 	success := big.NewInt(5).SetBytes(ret)
@@ -144,7 +143,6 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		msg.Data(),
 		msg.Gas(),
 		uint256.NewInt(msg.Value().Uint64()),
-		nil,
 	)
 	// Update the state with pending changes
 	if err != nil {

@@ -5197,91 +5197,76 @@ func TestRebroadcastCleanup(t *testing.T) {
 func TestRebroadcastCleanupAllPaths(t *testing.T) {
 	t.Parallel()
 
+	// Helper to verify lastRebroadcast cleanup
+	verifyCleanup := func(t *testing.T, pool *LegacyPool, txHash common.Hash, sizeBefore int, expectRemoved bool) {
+		t.Helper()
+		pool.mu.RLock()
+		_, stillTracked := pool.lastRebroadcast[txHash]
+		sizeAfter := len(pool.lastRebroadcast)
+		pool.mu.RUnlock()
+
+		if expectRemoved && stillTracked {
+			t.Error("transaction should be removed from lastRebroadcast")
+		}
+		if expectRemoved && sizeAfter >= sizeBefore {
+			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
+		}
+	}
+
 	t.Run("PendingReplacement", func(t *testing.T) {
 		t.Parallel()
-		// Test that replacing a pending transaction cleans up lastRebroadcast
 		pool, key := setupPoolWithConfig(params.TestChainConfig)
 		defer pool.Close()
 
 		from := crypto.PubkeyToAddress(key.PublicKey)
 		testAddBalance(pool, from, big.NewInt(1000000000000000000))
 
-		// Add original transaction
 		tx1 := pricedTransaction(0, 100000, big.NewInt(1), key)
 		if err := pool.addRemoteSync(tx1); err != nil {
 			t.Fatalf("failed to add original transaction: %v", err)
 		}
 
-		// Manually mark it as rebroadcast and record size
 		pool.mu.Lock()
 		pool.lastRebroadcast[tx1.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.mu.Unlock()
 
-		// Replace with higher price transaction
 		tx2 := pricedTransaction(0, 100000, big.NewInt(2), key)
 		if err := pool.addRemoteSync(tx2); err != nil {
 			t.Fatalf("failed to replace transaction: %v", err)
 		}
 
-		// Verify old tx is cleaned up and map size decreased
-		pool.mu.RLock()
-		_, stillTracked := pool.lastRebroadcast[tx1.Hash()]
-		sizeAfter := len(pool.lastRebroadcast)
-		pool.mu.RUnlock()
-
-		if stillTracked {
-			t.Error("replaced pending transaction should be removed from lastRebroadcast")
-		}
-		if sizeAfter >= sizeBefore {
-			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
-		}
+		verifyCleanup(t, pool, tx1.Hash(), sizeBefore, true)
 	})
 
 	t.Run("QueuedReplacement", func(t *testing.T) {
 		t.Parallel()
-		// Test that replacing a queued transaction cleans up lastRebroadcast
 		pool, key := setupPoolWithConfig(params.TestChainConfig)
 		defer pool.Close()
 
 		from := crypto.PubkeyToAddress(key.PublicKey)
 		testAddBalance(pool, from, big.NewInt(1000000000000000000))
 
-		// Add a queued transaction (nonce gap)
 		tx1 := pricedTransaction(5, 100000, big.NewInt(1), key)
 		if err := pool.addRemoteSync(tx1); err != nil {
 			t.Fatalf("failed to add original queued transaction: %v", err)
 		}
 
-		// Manually mark it as rebroadcast and record size
 		pool.mu.Lock()
 		pool.lastRebroadcast[tx1.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.mu.Unlock()
 
-		// Replace with higher price transaction
 		tx2 := pricedTransaction(5, 100000, big.NewInt(2), key)
 		if err := pool.addRemoteSync(tx2); err != nil {
 			t.Fatalf("failed to replace queued transaction: %v", err)
 		}
 
-		// Verify old tx is cleaned up and map size decreased
-		pool.mu.RLock()
-		_, stillTracked := pool.lastRebroadcast[tx1.Hash()]
-		sizeAfter := len(pool.lastRebroadcast)
-		pool.mu.RUnlock()
-
-		if stillTracked {
-			t.Error("replaced queued transaction should be removed from lastRebroadcast")
-		}
-		if sizeAfter >= sizeBefore {
-			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
-		}
+		verifyCleanup(t, pool, tx1.Hash(), sizeBefore, true)
 	})
 
 	t.Run("DemoteUnexecutables", func(t *testing.T) {
 		t.Parallel()
-		// Test that demoting transactions (when nonce advances externally) cleans up lastRebroadcast
 		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 		blockchain := newTestBlockChain(params.TestChainConfig, 1000000, statedb, new(event.Feed))
 
@@ -5293,41 +5278,24 @@ func TestRebroadcastCleanupAllPaths(t *testing.T) {
 		from := crypto.PubkeyToAddress(key.PublicKey)
 		testAddBalance(pool, from, big.NewInt(1000000000000000000))
 
-		// Add a pending transaction at nonce 0
 		tx := pricedTransaction(0, 100000, big.NewInt(1), key)
 		if err := pool.addRemoteSync(tx); err != nil {
 			t.Fatalf("failed to add transaction: %v", err)
 		}
 
-		// Manually mark it as rebroadcast and record size
 		pool.mu.Lock()
 		pool.lastRebroadcast[tx.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.mu.Unlock()
 
-		// Simulate external nonce advancement (e.g., tx included in block)
 		statedb.SetNonce(from, 1, tracing.NonceChangeUnspecified)
-
-		// Trigger reset which calls demoteUnexecutables
 		<-pool.requestReset(nil, nil)
 
-		// Verify old tx is cleaned up and map size decreased
-		pool.mu.RLock()
-		_, stillTracked := pool.lastRebroadcast[tx.Hash()]
-		sizeAfter := len(pool.lastRebroadcast)
-		pool.mu.RUnlock()
-
-		if stillTracked {
-			t.Error("demoted transaction should be removed from lastRebroadcast")
-		}
-		if sizeAfter >= sizeBefore {
-			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
-		}
+		verifyCleanup(t, pool, tx.Hash(), sizeBefore, true)
 	})
 
 	t.Run("PromoteExecutablesDropsOld", func(t *testing.T) {
 		t.Parallel()
-		// Test that promoting executables cleans up old queued txs from lastRebroadcast
 		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 		blockchain := newTestBlockChain(params.TestChainConfig, 1000000, statedb, new(event.Feed))
 
@@ -5339,36 +5307,45 @@ func TestRebroadcastCleanupAllPaths(t *testing.T) {
 		from := crypto.PubkeyToAddress(key.PublicKey)
 		testAddBalance(pool, from, big.NewInt(1000000000000000000))
 
-		// Add a queued transaction at nonce 5 (future nonce)
 		tx := pricedTransaction(5, 100000, big.NewInt(1), key)
 		if err := pool.addRemoteSync(tx); err != nil {
 			t.Fatalf("failed to add queued transaction: %v", err)
 		}
 
-		// Manually mark it as rebroadcast and record size
 		pool.mu.Lock()
 		pool.lastRebroadcast[tx.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.mu.Unlock()
 
-		// Advance the nonce past the queued tx (simulating txs 0-5 being included)
 		statedb.SetNonce(from, 6, tracing.NonceChangeUnspecified)
-
-		// Trigger reset which calls promoteExecutables and drops old queued txs
 		<-pool.requestReset(nil, nil)
 
-		// Verify old tx is cleaned up and map size decreased
-		pool.mu.RLock()
-		_, stillTracked := pool.lastRebroadcast[tx.Hash()]
-		sizeAfter := len(pool.lastRebroadcast)
-		pool.mu.RUnlock()
+		verifyCleanup(t, pool, tx.Hash(), sizeBefore, true)
+	})
 
-		if stillTracked {
-			t.Error("dropped queued transaction should be removed from lastRebroadcast")
+	t.Run("PromotionRejection", func(t *testing.T) {
+		t.Parallel()
+		pool, key := setupPoolWithConfig(params.TestChainConfig)
+		defer pool.Close()
+
+		from := crypto.PubkeyToAddress(key.PublicKey)
+		testAddBalance(pool, from, big.NewInt(1000000000000000000))
+
+		tx1 := pricedTransaction(0, 100000, big.NewInt(100), key)
+		if err := pool.addRemoteSync(tx1); err != nil {
+			t.Fatalf("failed to add original transaction: %v", err)
 		}
-		if sizeAfter >= sizeBefore {
-			t.Errorf("lastRebroadcast map size should decrease: before=%d, after=%d", sizeBefore, sizeAfter)
-		}
+
+		tx2 := pricedTransaction(0, 100000, big.NewInt(50), key)
+		pool.mu.Lock()
+		pool.all.Add(tx2)
+		pool.priced.Put(tx2)
+		pool.lastRebroadcast[tx2.Hash()] = time.Now()
+		sizeBefore := len(pool.lastRebroadcast)
+		pool.promoteTx(from, tx2.Hash(), tx2)
+		pool.mu.Unlock()
+
+		verifyCleanup(t, pool, tx2.Hash(), sizeBefore, true)
 	})
 }
 
