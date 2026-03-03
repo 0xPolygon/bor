@@ -65,24 +65,24 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 
 ### Config TOML Updater
 
-Use `scripts/update-config-toml/main.go` to keep Bor `config.toml` files aligned with current defaults and docs.
+Use `scripts/update-config-toml/main.go` to keep Bor TOML reference files aligned with current defaults and docs.
 
-1. **Dry-run first** (required before bulk updates):
+1. **Dry-run first** (required before updates):
 
    ```bash
-   go run ./scripts/update-config-toml -dry-run
+   go run ./scripts/update-config-toml -dry-run -files "docs/cli/example_config.toml,internal/cli/server/testdata/default.toml,internal/cli/server/testdata/test.toml"
    ```
 
-2. **Update all Bor config templates**:
+2. **Update all allowed reference files**:
 
    ```bash
-   go run ./scripts/update-config-toml
+   go run ./scripts/update-config-toml -files "docs/cli/example_config.toml,internal/cli/server/testdata/default.toml,internal/cli/server/testdata/test.toml"
    ```
 
 3. **Update selected files only**:
 
    ```bash
-   go run ./scripts/update-config-toml -files "builder/files/config.toml,packaging/templates/mainnet-v1/archive/config.toml"
+   go run ./scripts/update-config-toml -files "docs/cli/example_config.toml"
    ```
 
 Script behavior to preserve:
@@ -91,6 +91,14 @@ Script behavior to preserve:
 - Writes comments before keys/sections with aligned indentation and wrapped lines.
 - Keeps explicit empty defaults (`""`, `[]`, empty tables) unless a future change intentionally prunes them.
 - Handles quoted/dotted TOML keys and section paths conservatively.
+
+Scope restrictions:
+
+- Only update TOML files intended as config references/examples:
+  - `docs/cli/example_config.toml`
+  - `internal/cli/server/testdata/default.toml`
+  - `internal/cli/server/testdata/test.toml`
+- Do not update deployment packaging templates (for example `packaging/templates/**`) as part of this workflow.
 
 After running the updater:
 
