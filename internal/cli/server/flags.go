@@ -33,12 +33,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Verbosity,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "log-level",
-		Usage:   "Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead",
-		Value:   &c.cliConfig.LogLevel,
-		Default: c.cliConfig.LogLevel,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:               "datadir",
 		Usage:              "Path of the data directory to store information",
 		Value:              &c.cliConfig.DataDir,
@@ -135,7 +129,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.MaxBlindForkValidationLimit,
 	})
 
-	// logging related flags (log-level and verbosity is present above, it will be removed soon)
+	// logging related flags
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmodule",
 		Usage:   "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",

@@ -7,8 +7,6 @@ chain = ""
 identity = ""
 # Verbosity is the level of the logs to put out
 verbosity = 3
-# LogLevel is the level of the logs to put out
-log-level = ""
 # Record information useful for VM and contract debugging
 vmdebug = false
 # Enable state size tracking

@@ -35,7 +35,6 @@ type BootnodeCommand struct {
 	prometheusAddr string
 	v5             bool
 	verbosity      int
-	logLevel       string
 	nat            string
 	nodeKey        string
 	saveKey        string
@@ -89,12 +88,6 @@ func (b *BootnodeCommand) Flags() *flagset.Flagset {
 		Default: 3,
 		Usage:   "Logging verbosity (5=trace|4=debug|3=info|2=warn|1=error|0=crit)",
 		Value:   &b.verbosity,
-	})
-	flags.StringFlag(&flagset.StringFlag{
-		Name:    "log-level",
-		Default: "info",
-		Usage:   "log level (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead",
-		Value:   &b.logLevel,
 	})
 	flags.StringFlag(&flagset.StringFlag{
 		Name:    "nat",

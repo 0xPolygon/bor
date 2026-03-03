@@ -1,7 +1,6 @@
 chain = "mainnet"
 identity = "Polygon-Devs"
 verbosity = 3
-log-level = ""
 vmdebug = false
 datadir = "/var/lib/bor"
 ancient = ""

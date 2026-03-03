@@ -76,8 +76,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```keystore```: Path of the directory where keystores are located
 
-- ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
-
 - ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
 
 - ```parallelevm.enable```: Enable Block STM (default: true)

@@ -58,9 +58,6 @@ type Config struct {
 	// Verbosity is the level of the logs to put out
 	Verbosity int `hcl:"verbosity,optional" toml:"verbosity,optional"`
 
-	// LogLevel is the level of the logs to put out
-	LogLevel string `hcl:"log-level,optional" toml:"log-level,optional"`
-
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
 
@@ -796,7 +793,6 @@ func DefaultConfig() *Config {
 		Identity:                    Hostname(),
 		RequiredBlocks:              map[string]string{},
 		Verbosity:                   3,
-		LogLevel:                    "",
 		EnablePreimageRecording:     false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
