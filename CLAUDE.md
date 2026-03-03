@@ -63,40 +63,11 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
    make test
    ```
 
-### Config TOML Updater
-
-Use `scripts/update-config-toml/main.go` to keep Bor's CLI example TOML aligned with current defaults and docs.
-
-1. **Dry-run first** (required before updates):
+5. **Docs**: Regenerate CLI docs and example config
 
    ```bash
-   go run ./scripts/update-config-toml -dry-run
+   make docs
    ```
-
-2. **Update the canonical example config**:
-
-   ```bash
-   go run ./scripts/update-config-toml
-   ```
-
-Script behavior to preserve:
-
-- Merges each existing file on top of `server.DefaultConfig()` (preserve existing explicit values, fill missing keys).
-- Writes comments before keys/sections with aligned indentation and wrapped lines.
-- Keeps explicit empty defaults (`""`, `[]`, empty tables) unless a future change intentionally prunes them.
-- Handles quoted/dotted TOML keys and section paths conservatively.
-
-Scope restrictions:
-
-- The updater is hardcoded to only update `docs/cli/example_config.toml`.
-- Do not update deployment packaging templates (for example `packaging/templates/**`) as part of this workflow.
-- Do not update `internal/cli/server/testdata/*.toml` with this updater.
-
-After running the updater:
-
-- If the updater run fails, fix `scripts/update-config-toml/main.go` and re-run.
-- Verify the generated config diffs for correctness/readability.
-- If output is incorrect or low quality, update `scripts/update-config-toml/main.go` first, then re-run the updater.
 
 ## Testing Guidelines
 
