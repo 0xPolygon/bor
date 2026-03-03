@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -35,16 +34,14 @@ type docsIndex struct {
 func main() {
 	var (
 		root   string
-		files  string
 		dryRun bool
 	)
 
-	flag.StringVar(&root, "root", ".", "Repository root to scan for config.toml files")
-	flag.StringVar(&files, "files", "", "Comma-separated explicit config.toml paths (overrides -root scan)")
+	flag.StringVar(&root, "root", ".", "Repository root")
 	flag.BoolVar(&dryRun, "dry-run", false, "Only print files that would be updated")
 	flag.Parse()
 
-	targets, err := collectTargets(root, files)
+	targets, err := collectTargets(root)
 	if err != nil {
 		exitErr(err)
 	}
@@ -99,45 +96,12 @@ func main() {
 	fmt.Printf("complete: %d files updated\n", updated)
 }
 
-func collectTargets(root, files string) ([]string, error) {
-	if strings.TrimSpace(files) != "" {
-		parts := strings.Split(files, ",")
-		targets := make([]string, 0, len(parts))
-		for _, part := range parts {
-			path := strings.TrimSpace(part)
-			if path == "" {
-				continue
-			}
-			targets = append(targets, path)
-		}
-		sort.Strings(targets)
-		return targets, nil
+func collectTargets(root string) ([]string, error) {
+	target := filepath.Join(root, "docs", "cli", "example_config.toml")
+	if _, err := os.Stat(target); err != nil {
+		return nil, fmt.Errorf("required target missing: %s: %w", target, err)
 	}
-
-	targets := []string{}
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "vendor", "build", "dist":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if d.Name() == "config.toml" {
-			targets = append(targets, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	sort.Strings(targets)
-	return targets, nil
+	return []string{target}, nil
 }
 
 func loadMergedConfig(path string) (*server.Config, error) {

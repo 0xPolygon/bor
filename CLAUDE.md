@@ -65,24 +65,18 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 
 ### Config TOML Updater
 
-Use `scripts/update-config-toml/main.go` to keep Bor TOML reference files aligned with current defaults and docs.
+Use `scripts/update-config-toml/main.go` to keep Bor's CLI example TOML aligned with current defaults and docs.
 
 1. **Dry-run first** (required before updates):
 
    ```bash
-   go run ./scripts/update-config-toml -dry-run -files "docs/cli/example_config.toml,internal/cli/server/testdata/default.toml,internal/cli/server/testdata/test.toml"
+   go run ./scripts/update-config-toml -dry-run
    ```
 
-2. **Update all allowed reference files**:
+2. **Update the canonical example config**:
 
    ```bash
-   go run ./scripts/update-config-toml -files "docs/cli/example_config.toml,internal/cli/server/testdata/default.toml,internal/cli/server/testdata/test.toml"
-   ```
-
-3. **Update selected files only**:
-
-   ```bash
-   go run ./scripts/update-config-toml -files "docs/cli/example_config.toml"
+   go run ./scripts/update-config-toml
    ```
 
 Script behavior to preserve:
@@ -94,11 +88,9 @@ Script behavior to preserve:
 
 Scope restrictions:
 
-- Only update TOML files intended as config references/examples:
-  - `docs/cli/example_config.toml`
-  - `internal/cli/server/testdata/default.toml`
-  - `internal/cli/server/testdata/test.toml`
+- The updater is hardcoded to only update `docs/cli/example_config.toml`.
 - Do not update deployment packaging templates (for example `packaging/templates/**`) as part of this workflow.
+- Do not update `internal/cli/server/testdata/*.toml` with this updater.
 
 After running the updater:
 
