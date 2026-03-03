@@ -442,3 +442,92 @@ func TestTimeBasedForkInGenesis(t *testing.T) {
 		}
 	}
 }
+
+// TestGatherForksBor verifies that the exported GatherForks includes Bor-specific fork blocks
+// and correctly deduplicates/sorts them alongside the base chain forks.
+func TestGatherForksBor(t *testing.T) {
+	// Config with known Bor forks
+	cfg := &params.ChainConfig{
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		Bor: &params.BorConfig{
+			JaipurBlock:    big.NewInt(100),
+			DelhiBlock:     big.NewInt(200),
+			IndoreBlock:    big.NewInt(300),
+			AhmedabadBlock: big.NewInt(400),
+		},
+	}
+
+	heightForks, _ := GatherForks(cfg, 0)
+
+	// The Bor forks must appear in the result
+	borForks := map[uint64]bool{100: false, 200: false, 300: false, 400: false}
+	for _, f := range heightForks {
+		if _, ok := borForks[f]; ok {
+			borForks[f] = true
+		}
+	}
+	for fork, found := range borForks {
+		if !found {
+			t.Errorf("Bor fork at block %d not found in GatherForks result", fork)
+		}
+	}
+
+	// Result must be sorted
+	for i := 1; i < len(heightForks); i++ {
+		if heightForks[i] <= heightForks[i-1] {
+			t.Errorf("heightForks not sorted: %v", heightForks)
+			break
+		}
+	}
+}
+
+// TestGatherForksNilBor verifies GatherForks works when Bor config is nil.
+func TestGatherForksNilBor(t *testing.T) {
+	cfg := &params.ChainConfig{
+		HomesteadBlock: big.NewInt(5),
+		LondonBlock:    big.NewInt(10),
+	}
+
+	heightForks, _ := GatherForks(cfg, 0)
+	// Should still return base chain forks
+	if len(heightForks) == 0 {
+		t.Error("expected non-empty heightForks for config with fork blocks")
+	}
+}
+
+// TestGatherForksBorZeroBlock verifies that Bor forks at block 0 are filtered out.
+func TestGatherForksBorZeroBlock(t *testing.T) {
+	cfg := &params.ChainConfig{
+		HomesteadBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			JaipurBlock: big.NewInt(0),
+			DelhiBlock:  big.NewInt(100),
+		},
+	}
+
+	heightForks, _ := GatherForks(cfg, 0)
+	for _, f := range heightForks {
+		if f == 0 {
+			t.Error("fork at block 0 should be filtered out")
+		}
+	}
+	// DelhiBlock=100 should be present
+	found := false
+	for _, f := range heightForks {
+		if f == 100 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("DelhiBlock=100 not found in results")
+	}
+}

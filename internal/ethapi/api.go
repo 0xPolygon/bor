@@ -2763,6 +2763,9 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 	if err != nil {
 		return nil, err
 	}
+	if stateDb == nil {
+		return nil, fmt.Errorf("state not available for block %d", parent.NumberU64())
+	}
 
 	// Create EVM
 	signer := types.MakeSigner(api.b.ChainConfig(), block.Number(), block.Time())

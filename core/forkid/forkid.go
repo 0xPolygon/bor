@@ -320,24 +320,22 @@ func GatherForks(config *params.ChainConfig, genesisTime uint64) (heightForks []
 	// Use the existing internal fork gathering logic
 	heightForks, timeForks = gatherForks(config, genesisTime)
 
-	// Add Bor-specific forks using reflection
+	// Add Bor-specific fork blocks (explicit list to avoid reflection fragility)
 	if config.Bor != nil {
-		borKind := reflect.TypeOf(params.BorConfig{})
-		borConf := reflect.ValueOf(config.Bor).Elem()
-
-		for i := 0; i < borKind.NumField(); i++ {
-			field := borKind.Field(i)
-			// Only process fields ending in "Block"
-			if !strings.HasSuffix(field.Name, "Block") {
-				continue
-			}
-			// Only process *big.Int fields
-			if field.Type != reflect.TypeOf(new(big.Int)) {
-				continue
-			}
-			// Extract fork block number
-			if rule := borConf.Field(i).Interface().(*big.Int); rule != nil {
-				heightForks = append(heightForks, rule.Uint64())
+		for _, fork := range []*big.Int{
+			config.Bor.JaipurBlock,
+			config.Bor.DelhiBlock,
+			config.Bor.IndoreBlock,
+			config.Bor.AhmedabadBlock,
+			config.Bor.BhilaiBlock,
+			config.Bor.RioBlock,
+			config.Bor.MadhugiriBlock,
+			config.Bor.MadhugiriProBlock,
+			config.Bor.DandeliBlock,
+			config.Bor.LisovoBlock,
+		} {
+			if fork != nil {
+				heightForks = append(heightForks, fork.Uint64())
 			}
 		}
 

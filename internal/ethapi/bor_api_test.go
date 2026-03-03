@@ -763,16 +763,14 @@ func TestBorBlockNumber(t *testing.T) {
 	})
 
 	// Test 7: Numeric block number input returns latest executed (default behavior)
-	t.Run("numeric_input_returns_latest_executed", func(t *testing.T) {
+	t.Run("numeric_input_returns_that_block_number", func(t *testing.T) {
 		blockNum := rpc.BlockNumber(10)
 		result, err := api.BlockNumber(context.Background(), &blockNum)
 		if err != nil {
 			t.Fatalf("BlockNumber(10) error = %v", err)
 		}
-		// Should return the latest executed block, not the input number
-		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
-		if uint64(result) != expectedExecuted {
-			t.Errorf("BlockNumber(10) = %d, want latest executed %d", result, expectedExecuted)
+		if uint64(result) != 10 {
+			t.Errorf("BlockNumber(10) = %d, want 10", result)
 		}
 	})
 
@@ -828,16 +826,15 @@ func TestBorBlockNumber(t *testing.T) {
 	})
 
 	// Test 11: Unknown/custom block tag returns the latest executed (default behavior)
-	t.Run("unknown_tag_returns_latest_executed", func(t *testing.T) {
-		unknownTag := rpc.BlockNumber(999999)
-		result, err := api.BlockNumber(context.Background(), &unknownTag)
+	t.Run("large_numeric_returns_that_block_number", func(t *testing.T) {
+		largeNum := rpc.BlockNumber(999999)
+		result, err := api.BlockNumber(context.Background(), &largeNum)
 		if err != nil {
-			t.Fatalf("BlockNumber(unknown) error = %v", err)
+			t.Fatalf("BlockNumber(999999) error = %v", err)
 		}
-		// Should return the latest executed block
-		expectedExecuted := backend.chain.CurrentBlock().Number.Uint64()
-		if uint64(result) != expectedExecuted {
-			t.Errorf("BlockNumber(unknown) = %d, want latest executed %d", result, expectedExecuted)
+		// Should return the concrete number
+		if uint64(result) != 999999 {
+			t.Errorf("BlockNumber(999999) = %d, want 999999", result)
 		}
 	})
 }
@@ -1373,7 +1370,7 @@ func TestBorGetBlockReceiptsByBlockHash(t *testing.T) {
 		}
 
 		// Verify the error message matches for non-canonical blocks
-		expectedErrMsg := fmt.Sprintf("the hash %s is not canonical", fakeBlock.Hash().String())
+		expectedErrMsg := fmt.Sprintf("hash %x is not currently canonical", fakeBlock.Hash())
 		if err.Error() != expectedErrMsg {
 			t.Errorf("Error message = %q, want %q", err.Error(), expectedErrMsg)
 		}
@@ -3576,5 +3573,658 @@ func TestBorGetLatestLogs_ErrorPropagation(t *testing.T) {
 		if err != nil && !strings.Contains(err.Error(), "ambiguous") {
 			t.Errorf("Expected 'ambiguous' error, got: %v", err)
 		}
+	})
+}
+
+// TestGetLogsBlockRangeLimit verifies that bor_getLogs enforces GetLogsMaxBlockRange.
+func TestGetLogsBlockRangeLimit(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc:  types.GenesisAlloc{},
+	}
+	// Need a chain longer than GetLogsMaxBlockRange so the range isn't clamped
+	backend := newTestBackend(t, int(GetLogsMaxBlockRange)+2, genesis, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	t.Run("within_limit", func(t *testing.T) {
+		crit := FilterCriteria{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(5),
+		}
+		_, err := api.GetLogs(context.Background(), crit)
+		if err != nil {
+			t.Fatalf("GetLogs within range limit should not error: %v", err)
+		}
+	})
+
+	t.Run("exceeds_limit", func(t *testing.T) {
+		crit := FilterCriteria{
+			FromBlock: big.NewInt(0),
+			ToBlock:   big.NewInt(int64(GetLogsMaxBlockRange) + 1),
+		}
+		_, err := api.GetLogs(context.Background(), crit)
+		if err == nil {
+			t.Fatal("GetLogs exceeding range limit should error")
+		}
+		if !strings.Contains(err.Error(), "block range exceeds maximum") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
+// TestGetLogsLogCopySafety verifies that returned logs are copies,
+// not shared pointers to cached receipt data.
+func TestGetLogsLogCopySafety(t *testing.T) {
+	t.Parallel()
+
+	acc := newAccounts(1)[0]
+	testAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc: types.GenesisAlloc{
+			acc.addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(acc.addr),
+				To:       &testAddr,
+				Value:    big.NewInt(1000),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+			}),
+			types.LatestSigner(genesis.Config), acc.key,
+		)
+		b.AddTx(tx)
+	})
+	api := NewBorAPI(backend)
+
+	block := backend.chain.GetBlockByNumber(1)
+	require.NotNil(t, block)
+
+	blockHash := block.Hash()
+	crit := FilterCriteria{BlockHash: &blockHash}
+
+	// Call twice — if logs are copies, mutations from the first call must not affect the second.
+	logs1, err := api.GetLogs(context.Background(), crit)
+	require.NoError(t, err)
+
+	logs2, err := api.GetLogs(context.Background(), crit)
+	require.NoError(t, err)
+
+	// Mutate all timestamps from the first call
+	for _, l := range logs1 {
+		l.BlockTimestamp = 999999
+	}
+
+	// Second call's timestamps must be unaffected
+	for _, l := range logs2 {
+		if l.BlockTimestamp == 999999 {
+			t.Fatal("returned logs share pointers with cached data; expected copies")
+		}
+	}
+}
+
+// TestGetBalanceChangesGenesisBlock verifies that genesis (block 0) returns
+// an empty map regardless of how it is resolved.
+func TestGetBalanceChangesGenesisBlock(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0xaa"): {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	t.Run("explicit_block_0", func(t *testing.T) {
+		result, err := api.GetBalanceChangesInBlock(context.Background(),
+			rpc.BlockNumberOrHashWithNumber(0))
+		require.NoError(t, err)
+		require.Empty(t, result, "genesis block should have no balance changes")
+	})
+
+	t.Run("earliest_tag", func(t *testing.T) {
+		result, err := api.GetBalanceChangesInBlock(context.Background(),
+			rpc.BlockNumberOrHashWithNumber(rpc.EarliestBlockNumber))
+		require.NoError(t, err)
+		require.Empty(t, result, "earliest block should have no balance changes")
+	})
+}
+
+// TestGetBlockByTimestampContextCancellation verifies that a canceled context
+// aborts the binary search in GetBlockByTimestamp.
+func TestGetBlockByTimestampContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc:  types.GenesisAlloc{},
+	}
+	backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		b.OffsetTime(int64((i + 1) * 100))
+	})
+	api := NewBorAPI(backend)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := api.GetBlockByTimestamp(ctx, 500, false)
+	if err == nil {
+		t.Fatal("expected context cancellation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "context canceled") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestMatchesFilterAddressSet verifies address matching via map.
+func TestMatchesFilterAddressSet(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	addr2 := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	addr3 := common.HexToAddress("0x3333333333333333333333333333333333333333")
+
+	addressSet := map[common.Address]struct{}{
+		addr1: {},
+		addr2: {},
+	}
+
+	topic1 := common.HexToHash("0xaaaa")
+	topic2 := common.HexToHash("0xbbbb")
+
+	tests := []struct {
+		name      string
+		log       *types.Log
+		addrSet   map[common.Address]struct{}
+		topics    [][]common.Hash
+		ignoreOrd bool
+		wantMatch bool
+	}{
+		{
+			name:      "matching address",
+			log:       &types.Log{Address: addr1},
+			addrSet:   addressSet,
+			wantMatch: true,
+		},
+		{
+			name:      "non-matching address",
+			log:       &types.Log{Address: addr3},
+			addrSet:   addressSet,
+			wantMatch: false,
+		},
+		{
+			name:      "empty address set matches any",
+			log:       &types.Log{Address: addr3},
+			addrSet:   map[common.Address]struct{}{},
+			wantMatch: true,
+		},
+		{
+			name:      "topic match ordered",
+			log:       &types.Log{Address: addr1, Topics: []common.Hash{topic1, topic2}},
+			addrSet:   addressSet,
+			topics:    [][]common.Hash{{topic1}, {topic2}},
+			wantMatch: true,
+		},
+		{
+			name:      "topic mismatch ordered",
+			log:       &types.Log{Address: addr1, Topics: []common.Hash{topic2, topic1}},
+			addrSet:   addressSet,
+			topics:    [][]common.Hash{{topic1}, {topic2}},
+			wantMatch: false,
+		},
+		{
+			name:      "topic match unordered",
+			log:       &types.Log{Address: addr1, Topics: []common.Hash{topic2, topic1}},
+			addrSet:   addressSet,
+			topics:    [][]common.Hash{{topic1}, {topic2}},
+			ignoreOrd: true,
+			wantMatch: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := matchesFilter(tc.log, tc.addrSet, tc.topics, tc.ignoreOrd)
+			if got != tc.wantMatch {
+				t.Errorf("matchesFilter() = %v, want %v", got, tc.wantMatch)
+			}
+		})
+	}
+}
+
+// TestGetBlockByTimestampBinarySearch exercises the context-aware binary search
+func TestGetBlockByTimestampBinarySearch(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc:  types.GenesisAlloc{},
+	}
+	// Blocks with increasing timestamps: genesis=0, 1=100, 2=200, ..., 10=1000
+	backend := newTestBackend(t, 10, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		b.OffsetTime(int64((i + 1) * 100))
+	})
+	api := NewBorAPI(backend)
+
+	t.Run("finds_exact_timestamp", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 500, false)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		blockNum := result["number"].(*hexutil.Big).ToInt().Uint64()
+		// The block with time >= 500 should be block 5
+		header, _ := backend.HeaderByNumber(context.Background(), rpc.BlockNumber(blockNum))
+		require.NotNil(t, header)
+		if header.Time < 500 {
+			t.Errorf("block %d time %d < requested 500", blockNum, header.Time)
+		}
+	})
+
+	t.Run("future_timestamp_returns_latest", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 99999, false)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		// Should return the latest block
+		blockNum := result["number"].(*hexutil.Big).ToInt().Uint64()
+		latest := backend.chain.CurrentBlock().Number.Uint64()
+		if blockNum != latest {
+			t.Errorf("expected latest block %d, got %d", latest, blockNum)
+		}
+	})
+
+	t.Run("genesis_timestamp", func(t *testing.T) {
+		result, err := api.GetBlockByTimestamp(context.Background(), 0, false)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		blockNum := result["number"].(*hexutil.Big).ToInt().Uint64()
+		if blockNum != 0 {
+			t.Errorf("expected block 0 for genesis timestamp, got %d", blockNum)
+		}
+	})
+}
+
+// TestBorBlockNumberPendingTag verifies the pending tag returns the latest executed block.
+func TestBorBlockNumberPendingTag(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	pending := rpc.PendingBlockNumber
+	result, err := api.BlockNumber(context.Background(), &pending)
+	require.NoError(t, err)
+
+	expected := backend.chain.CurrentBlock().Number.Uint64()
+	if uint64(result) != expected {
+		t.Errorf("BlockNumber(pending) = %d, want %d", result, expected)
+	}
+}
+
+// TestBorBlockNumberNegativeUnknownTag verifies negative unknown tags fall through to the latest.
+func TestBorBlockNumberNegativeUnknownTag(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	unknownNeg := rpc.BlockNumber(-99)
+	result, err := api.BlockNumber(context.Background(), &unknownNeg)
+	require.NoError(t, err)
+
+	expected := backend.chain.CurrentBlock().Number.Uint64()
+	if uint64(result) != expected {
+		t.Errorf("BlockNumber(-99) = %d, want latest %d", result, expected)
+	}
+}
+
+// testBackendWithNilBorTx simulates ReadBorTransaction returning nil for the state-sync tx.
+type testBackendWithNilBorTx struct {
+	*testBackend
+}
+
+func (b *testBackendWithNilBorTx) GetBorBlockReceipt(_ context.Context, _ common.Hash) (*types.Receipt, error) {
+	// Return a receipt whose TxHash won't resolve to a bor transaction in DB
+	return &types.Receipt{
+		TxHash: common.HexToHash("0xdead"),
+		Logs:   []*types.Log{},
+	}, nil
+}
+
+func (b *testBackendWithNilBorTx) ChainConfig() *params.ChainConfig {
+	// Pre-Madhugiri so GetBlockReceiptsByBlockHash enters the state-sync path.
+	// Deep-copy BorConfig to avoid mutating the shared global.
+	cfg := *params.AllEthashProtocolChanges
+	borCfg := params.BorConfig{}
+	if cfg.Bor != nil {
+		borCfg = *cfg.Bor
+	}
+	borCfg.MadhugiriBlock = nil
+	cfg.Bor = &borCfg
+	return &cfg
+}
+
+// TestGetBlockReceiptsByBlockHashNilBorTx verifies that a nil bor transaction
+// does not crash with a nil-pointer dereference.
+func TestGetBlockReceiptsByBlockHashNilBorTx(t *testing.T) {
+	t.Parallel()
+
+	acc := newAccounts(1)[0]
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc: types.GenesisAlloc{
+			acc.addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	base := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(acc.addr),
+				To:       &common.Address{0x01},
+				Value:    big.NewInt(1000),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+			}),
+			types.LatestSigner(genesis.Config), acc.key,
+		)
+		b.AddTx(tx)
+	})
+
+	wrapped := &testBackendWithNilBorTx{testBackend: base}
+	api := NewBorAPI(wrapped)
+
+	block := base.chain.GetBlockByNumber(1)
+	require.NotNil(t, block)
+
+	// This should not panic even though ReadBorTransaction returns nil
+	result, err := api.GetBlockReceiptsByBlockHash(context.Background(), block.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have only the normal tx receipts (1 per block), no bor receipt appended
+	require.Len(t, result, 1)
+}
+
+// TestGetLatestLogsBlockScanCap verifies that LogCount mode is subject to GetLatestLogMaxBlockScan.
+func TestGetLatestLogsBlockScanCap(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc:  types.GenesisAlloc{},
+	}
+	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+	api := NewBorAPI(backend)
+
+	// Request logs by count with no block range
+	logCount := uint64(100)
+	crit := FilterCriteria{}
+	opts := LogFilterOptions{LogCount: &logCount}
+
+	// Should succeed without error
+	logs, err := api.GetLatestLogs(context.Background(), crit, opts)
+	require.NoError(t, err)
+	_ = logs
+}
+
+// TestGetLatestLogsLogCopySafety is the GetLatestLogs counterpart of TestGetLogsLogCopySafety.
+func TestGetLatestLogsLogCopySafety(t *testing.T) {
+	t.Parallel()
+
+	acc := newAccounts(1)[0]
+	testAddr := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	genesis := &core.Genesis{
+		Config: params.AllEthashProtocolChanges,
+		Alloc: types.GenesisAlloc{
+			acc.addr: {Balance: big.NewInt(params.Ether)},
+		},
+	}
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTx(&types.LegacyTx{
+				Nonce:    b.TxNonce(acc.addr),
+				To:       &testAddr,
+				Value:    big.NewInt(1000),
+				Gas:      21000,
+				GasPrice: big.NewInt(params.GWei),
+			}),
+			types.LatestSigner(genesis.Config), acc.key,
+		)
+		b.AddTx(tx)
+	})
+	api := NewBorAPI(backend)
+
+	blockCount := uint64(3)
+	crit := FilterCriteria{}
+	opts := LogFilterOptions{BlockCount: &blockCount}
+
+	logs1, err := api.GetLatestLogs(context.Background(), crit, opts)
+	require.NoError(t, err)
+
+	logs2, err := api.GetLatestLogs(context.Background(), crit, opts)
+	require.NoError(t, err)
+
+	for _, l := range logs1 {
+		l.BlockTimestamp = 999999
+	}
+	for _, l := range logs2 {
+		if l.BlockTimestamp == 999999 {
+			t.Fatal("GetLatestLogs returned logs sharing cached pointers")
+		}
+	}
+}
+
+// TestFilterCriteriaUnmarshalJSON covers FilterCriteria JSON parsing including
+// edge cases for addresses, topics, blockHash vs fromBlock/toBlock validation.
+func TestFilterCriteriaUnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+		check   func(t *testing.T, fc FilterCriteria)
+	}{
+		{
+			name:  "fromBlock and toBlock",
+			input: `{"fromBlock":"0x1","toBlock":"0xa"}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				if fc.FromBlock == nil || fc.FromBlock.Int64() != 1 {
+					t.Errorf("FromBlock = %v, want 1", fc.FromBlock)
+				}
+				if fc.ToBlock == nil || fc.ToBlock.Int64() != 10 {
+					t.Errorf("ToBlock = %v, want 10", fc.ToBlock)
+				}
+			},
+		},
+		{
+			name:  "blockHash only",
+			input: `{"blockHash":"0x0000000000000000000000000000000000000000000000000000000000000001"}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				if fc.BlockHash == nil {
+					t.Fatal("expected BlockHash to be set")
+				}
+			},
+		},
+		{
+			name:    "blockHash with fromBlock is error",
+			input:   `{"blockHash":"0x0000000000000000000000000000000000000000000000000000000000000001","fromBlock":"0x1"}`,
+			wantErr: "cannot specify both",
+		},
+		{
+			name:  "single address string",
+			input: `{"address":"0x1111111111111111111111111111111111111111"}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Len(t, fc.Addresses, 1)
+				if fc.Addresses[0] != common.HexToAddress("0x1111111111111111111111111111111111111111") {
+					t.Errorf("unexpected address: %s", fc.Addresses[0].Hex())
+				}
+			},
+		},
+		{
+			name:  "array of addresses",
+			input: `{"address":["0x1111111111111111111111111111111111111111","0x2222222222222222222222222222222222222222"]}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Len(t, fc.Addresses, 2)
+			},
+		},
+		{
+			name:    "invalid address hex",
+			input:   `{"address":"0xZZZZ"}`,
+			wantErr: "invalid address",
+		},
+		{
+			name:    "invalid address in array",
+			input:   `{"address":["0xZZZZ"]}`,
+			wantErr: "invalid address at index 0",
+		},
+		{
+			name:    "non-string address in array",
+			input:   `{"address":[123]}`,
+			wantErr: "non-string address",
+		},
+		{
+			name:    "invalid address type",
+			input:   `{"address":123}`,
+			wantErr: "invalid addresses",
+		},
+		{
+			name:  "single topic string",
+			input: `{"topics":["0x0000000000000000000000000000000000000000000000000000000000000001"]}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Len(t, fc.Topics, 1)
+				require.Len(t, fc.Topics[0], 1)
+			},
+		},
+		{
+			name:  "nil topic matches any",
+			input: `{"topics":[null,"0x0000000000000000000000000000000000000000000000000000000000000001"]}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Len(t, fc.Topics, 2)
+				require.Len(t, fc.Topics[0], 0, "nil topic slot should be empty")
+				require.Len(t, fc.Topics[1], 1)
+			},
+		},
+		{
+			name:  "topic array with nil element",
+			input: `{"topics":[["0x0000000000000000000000000000000000000000000000000000000000000001",null]]}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Len(t, fc.Topics, 1)
+				require.Len(t, fc.Topics[0], 1, "nil topics in array should be skipped")
+			},
+		},
+		{
+			name:    "invalid topic string",
+			input:   `{"topics":["0xZZZZ"]}`,
+			wantErr: "invalid topic at index 0",
+		},
+		{
+			name:    "invalid topic in array",
+			input:   `{"topics":[["0xZZZZ"]]}`,
+			wantErr: "invalid topic",
+		},
+		{
+			name:    "non-string topic in array",
+			input:   `{"topics":[[123]]}`,
+			wantErr: "invalid topic type",
+		},
+		{
+			name:    "invalid topic type (number)",
+			input:   `{"topics":[123]}`,
+			wantErr: "invalid topic type at index 0",
+		},
+		{
+			name:  "empty input",
+			input: `{}`,
+			check: func(t *testing.T, fc FilterCriteria) {
+				require.Empty(t, fc.Addresses)
+				require.Nil(t, fc.BlockHash)
+			},
+		},
+		{
+			name:    "address with wrong length",
+			input:   `{"address":"0x1234"}`,
+			wantErr: "invalid address",
+		},
+		{
+			name:    "topic with wrong length",
+			input:   `{"topics":["0x1234"]}`,
+			wantErr: "invalid topic",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var fc FilterCriteria
+			err := json.Unmarshal([]byte(tc.input), &fc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			require.NoError(t, err)
+			if tc.check != nil {
+				tc.check(t, fc)
+			}
+		})
+	}
+}
+
+// TestDecodeAddressAndTopic exercises decodeAddress and decodeTopic directly.
+func TestDecodeAddressAndTopic(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid_address", func(t *testing.T) {
+		addr, err := decodeAddress("0x1111111111111111111111111111111111111111")
+		require.NoError(t, err)
+		if addr != common.HexToAddress("0x1111111111111111111111111111111111111111") {
+			t.Errorf("unexpected: %s", addr.Hex())
+		}
+	})
+
+	t.Run("wrong_length_address", func(t *testing.T) {
+		_, err := decodeAddress("0x1234")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid length")
+	})
+
+	t.Run("invalid_hex_address", func(t *testing.T) {
+		_, err := decodeAddress("0xZZZZ")
+		require.Error(t, err)
+	})
+
+	t.Run("valid_topic", func(t *testing.T) {
+		h, err := decodeTopic("0x0000000000000000000000000000000000000000000000000000000000000001")
+		require.NoError(t, err)
+		expected := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001")
+		if h != expected {
+			t.Errorf("unexpected: %s", h.Hex())
+		}
+	})
+
+	t.Run("wrong_length_topic", func(t *testing.T) {
+		_, err := decodeTopic("0x1234")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid length")
+	})
+
+	t.Run("invalid_hex_topic", func(t *testing.T) {
+		_, err := decodeTopic("not-hex")
+		require.Error(t, err)
 	})
 }

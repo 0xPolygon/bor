@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -42,6 +41,10 @@ const (
 	GetLatestLogMaxLogCount = 30000
 	// GetLatestLogMaxBlockCount is the maximum number of blocks that can be scanned
 	GetLatestLogMaxBlockCount = 1000
+	// GetLatestLogMaxBlockScan caps blocks scanned in LogCount
+	GetLatestLogMaxBlockScan = 100000
+	// GetLogsMaxBlockRange is the maximum block range for bor_getLogs
+	GetLogsMaxBlockRange = 1000
 )
 
 // isBorSystemTx checks if the tx is for bor genesis contract addresses or not
@@ -210,7 +213,7 @@ func (api *BorAPI) GetBlockReceiptsByBlockHash(ctx context.Context, blockHash co
 	blockNumber := block.Number().Uint64()
 	canonicalHash := rawdb.ReadCanonicalHash(api.b.ChainDb(), blockNumber)
 	if canonicalHash != blockHash {
-		return nil, fmt.Errorf("the hash %s is not canonical", blockHash.String())
+		return nil, fmt.Errorf("hash %x is not currently canonical", blockHash)
 	}
 
 	// Get receipts for this block
@@ -251,7 +254,9 @@ func (api *BorAPI) GetBlockReceiptsByBlockHash(ctx context.Context, blockHash co
 	}
 	if stateSyncReceipt != nil {
 		tx, _, _, _ := rawdb.ReadBorTransaction(api.b.ChainDb(), stateSyncReceipt.TxHash)
-		result = append(result, marshalReceipt(stateSyncReceipt, blockHash, blockNumber, signer, tx, len(result), true))
+		if tx != nil {
+			result = append(result, marshalReceipt(stateSyncReceipt, blockHash, blockNumber, signer, tx, len(result), true))
+		}
 	}
 
 	return result, nil
@@ -311,12 +316,16 @@ func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockN
 
 // BlockNumber returns the block number for the given block tag:
 // - nil input → latest executed (CurrentBlock)
-// - "latest" → the latest head (CurrentHeader) via GetLatestBlockNumber
-// - "pending" → falls through to default (latest executed)
-// - unknown/numeric → latest executed (CurrentBlock)
+// - "latest" → the latest head (CurrentHeader)
+// - "pending" → latest executed (CurrentBlock)
+// - "earliest" → 0
+// - "safe" → safe block
+// - "finalized" → finalized block
+// - numeric (>=0) → that block number
+// - unknown negative → latest executed (CurrentBlock)
 //
 // Parameters:
-//   - blockNrPtr: Optional block tag (latest, earliest, safe, finalized, pending)
+//   - blockNrPtr: Optional block number or tag
 //     If nil, returns the latest executed block number
 //
 // Returns the block number as hexutil.Uint64
@@ -362,13 +371,25 @@ func (api *BorAPI) BlockNumber(ctx context.Context, blockNrPtr *rpc.BlockNumber)
 		}
 		blockNum = finalNum
 
-	default:
-		// For unrecognized/custom block tags (including pending), return the latest executed block
+	case rpc.PendingBlockNumber:
+		// Pending: return the latest executed block
 		block := api.b.CurrentBlock()
 		if block == nil {
 			return 0, errors.New("current block not found")
 		}
 		blockNum = block.Number.Uint64()
+
+	default:
+		// Concrete block number
+		if blockNr >= 0 {
+			blockNum = uint64(blockNr)
+		} else {
+			block := api.b.CurrentBlock()
+			if block == nil {
+				return 0, errors.New("current block not found")
+			}
+			blockNum = block.Number.Uint64()
+		}
 	}
 
 	return hexutil.Uint64(blockNum), nil
@@ -432,7 +453,7 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp rpc.Timest
 
 	// If the current block's time <= timestamp, return the latest block
 	if currentHeader.Time <= ts {
-		block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(currentHeader.Number.Int64()))
+		block, err := api.b.BlockByNumber(ctx, rpc.LatestBlockNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -463,46 +484,30 @@ func (api *BorAPI) GetBlockByTimestamp(ctx context.Context, timestamp rpc.Timest
 		return RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb()), nil
 	}
 
-	// Binary search for the first block with time >= timestamp
-	highestNumber := currentHeader.Number.Uint64()
-	blockNum := sort.Search(int(highestNumber), func(n int) bool {
-		header, err := api.b.HeaderByNumber(ctx, rpc.BlockNumber(n))
-		if err != nil || header == nil {
-			return false
+	// Binary search for the first block with time >= timestamp.
+	// Uses explicit loop instead of sort.Search to respect context cancellation.
+	low, high := uint64(0), currentHeader.Number.Uint64()
+	for low < high {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		return header.Time >= ts
-	})
-
-	// Get the resulting header
-	resultingHeader, err := api.b.HeaderByNumber(ctx, rpc.BlockNumber(blockNum))
-	if err != nil {
-		return nil, err
-	}
-	if resultingHeader == nil {
-		return nil, fmt.Errorf("no header found with header number: %d", blockNum)
-	}
-
-	// Walk backwards while block time > timestamp to find the closest match
-	for resultingHeader.Time > ts {
-		if blockNum == 0 {
-			break
-		}
-
-		beforeHeader, err := api.b.HeaderByNumber(ctx, rpc.BlockNumber(blockNum-1))
+		mid := low + (high-low)/2
+		header, err := api.b.HeaderByNumber(ctx, rpc.BlockNumber(mid))
 		if err != nil {
 			return nil, err
 		}
-
-		if beforeHeader == nil || beforeHeader.Time < ts {
-			break
+		if header == nil {
+			return nil, fmt.Errorf("no header found for block %d", mid)
 		}
-
-		blockNum--
-		resultingHeader = beforeHeader
+		if header.Time >= ts {
+			high = mid
+		} else {
+			low = mid + 1
+		}
 	}
 
 	// Get the final block
-	block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(blockNum))
+	block, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(low))
 	if err != nil {
 		return nil, err
 	}
@@ -542,15 +547,8 @@ func (api *BorAPI) GetBalanceChangesInBlock(ctx context.Context, blockNrOrHash r
 		return api.getBalanceChangesForPending(ctx)
 	}
 
-	// Resolve latest to actual block number
-	if !hasHash && blockNumber == rpc.LatestBlockNumber {
-		currentHeader := api.b.CurrentHeader()
-		if currentHeader != nil {
-			blockNumber = rpc.BlockNumber(currentHeader.Number.Int64())
-		}
-	}
-
 	// Get the specific block by hash or number
+	// (LatestBlockNumber is resolved by BlockByNumber; all downstream code uses block.NumberU64())
 	var block *types.Block
 	if hasHash {
 		block, err = api.b.BlockByHash(ctx, hash)
@@ -583,7 +581,7 @@ func (api *BorAPI) GetBalanceChangesInBlock(ctx context.Context, blockNrOrHash r
 	}
 
 	// Genesis block has no balance changes
-	if blockNumber == 0 || blockNumber == rpc.EarliestBlockNumber {
+	if block.NumberU64() == 0 {
 		return make(map[common.Address]*hexutil.Big), nil
 	}
 
@@ -812,6 +810,17 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.L
 		return nil, err
 	}
 
+	// Enforce max block range (inclusive: 0..999 = 1000 blocks)
+	if end-begin+1 > GetLogsMaxBlockRange {
+		return nil, fmt.Errorf("block range exceeds maximum of %d blocks", GetLogsMaxBlockRange)
+	}
+
+	// Build address set for lookup
+	addressSet := make(map[common.Address]struct{}, len(filterQuery.Addresses))
+	for _, addr := range filterQuery.Addresses {
+		addressSet[addr] = struct{}{}
+	}
+
 	// Collect logs in ascending order
 	var result []*types.Log
 
@@ -830,10 +839,11 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.L
 		for _, receipt := range receipts {
 			for _, log := range receipt.Logs {
 				// Apply filter
-				if api.matchesFilter(log, filterQuery.Addresses, filterQuery.Topics, false) {
-					// Populate timestamp
-					log.BlockTimestamp = block.Time()
-					result = append(result, log)
+				if matchesFilter(log, addressSet, filterQuery.Topics, false) {
+					// Copy log to avoid mutating cached receipt data
+					logCopy := *log
+					logCopy.BlockTimestamp = block.Time()
+					result = append(result, &logCopy)
 				}
 			}
 		}
@@ -892,14 +902,24 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 		return nil, err
 	}
 
+	// Build address set for lookup
+	addressSet := make(map[common.Address]struct{}, len(filterQuery.Addresses))
+	for _, addr := range filterQuery.Addresses {
+		addressSet[addr] = struct{}{}
+	}
+
 	// Collect logs in descending order
 	var result []*types.Log
 	var blocksScanned uint64
 
 	// Iterate blocks from the end to the beginning
 	for blockNum := end; blockNum >= begin && blockNum <= end; blockNum-- {
-		// Check block count
+		// Check the block count limit
 		if blockCount > 0 && blocksScanned >= blockCount {
+			break
+		}
+		// Hard cap on blocks scanned to prevent unbounded chain scans in LogCount mode
+		if blocksScanned >= GetLatestLogMaxBlockScan {
 			break
 		}
 		blocksScanned++
@@ -917,10 +937,11 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 		for _, receipt := range receipts {
 			for _, log := range receipt.Logs {
 				// Apply filter
-				if api.matchesFilter(log, filterQuery.Addresses, filterQuery.Topics, logOptions.IgnoreTopicsOrder) {
-					// Add timestamp
-					log.BlockTimestamp = block.Time()
-					result = append(result, log)
+				if matchesFilter(log, addressSet, filterQuery.Topics, logOptions.IgnoreTopicsOrder) {
+					// Copy log to avoid mutating cached receipt data
+					logCopy := *log
+					logCopy.BlockTimestamp = block.Time()
+					result = append(result, &logCopy)
 
 					// Check log count
 					if logCount > 0 && uint64(len(result)) >= logCount {
@@ -939,18 +960,12 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 	return result, nil
 }
 
-// matchesFilter checks if a log matches the filter criteria
-func (api *BorAPI) matchesFilter(log *types.Log, addresses []common.Address, topics [][]common.Hash, ignoreTopicsOrder bool) bool {
+// matchesFilter checks if a log matches the filter criteria.
+// addressSet is pre-built by the caller for O(1) lookups.
+func matchesFilter(log *types.Log, addressSet map[common.Address]struct{}, topics [][]common.Hash, ignoreTopicsOrder bool) bool {
 	// Check address filter
-	if len(addresses) > 0 {
-		match := false
-		for _, addr := range addresses {
-			if log.Address == addr {
-				match = true
-				break
-			}
-		}
-		if !match {
+	if len(addressSet) > 0 {
+		if _, ok := addressSet[log.Address]; !ok {
 			return false
 		}
 	}
@@ -959,18 +974,18 @@ func (api *BorAPI) matchesFilter(log *types.Log, addresses []common.Address, top
 	if len(topics) > 0 {
 		if ignoreTopicsOrder {
 			// Match topics in any order
-			return api.matchesTopicsUnordered(log.Topics, topics)
+			return matchesTopicsUnordered(log.Topics, topics)
 		}
 
 		// Match topics positionally
-		return api.matchesTopicsOrdered(log.Topics, topics)
+		return matchesTopicsOrdered(log.Topics, topics)
 	}
 
 	return true
 }
 
 // matchesTopicsOrdered checks if log topics match filter topics positionally
-func (api *BorAPI) matchesTopicsOrdered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
+func matchesTopicsOrdered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
 	// Filter topics length cannot exceed log topics
 	if len(filterTopics) > len(logTopics) {
 		return false
@@ -998,7 +1013,7 @@ func (api *BorAPI) matchesTopicsOrdered(logTopics []common.Hash, filterTopics []
 }
 
 // matchesTopicsUnordered checks if log topics contain all filter topics in any order
-func (api *BorAPI) matchesTopicsUnordered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
+func matchesTopicsUnordered(logTopics []common.Hash, filterTopics [][]common.Hash) bool {
 	// Build the set of log topics
 	logTopicSet := make(map[common.Hash]bool)
 	for _, topic := range logTopics {
