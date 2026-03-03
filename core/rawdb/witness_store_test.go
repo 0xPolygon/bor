@@ -418,7 +418,7 @@ func TestFSWitnessStore_CritOnMkdirAllFailure(t *testing.T) {
 		// Subprocess: write to a path where MkdirAll will fail.
 		db := NewMemoryDatabase()
 		// Use a regular file as the base dir so MkdirAll fails with ENOTDIR.
-		f, _ := os.CreateTemp("", "witness-crash-*")
+		f, _ := os.CreateTemp("", "witness-crash-*") //nolint:usetesting // subprocess exits via log.Crit; t.TempDir cleanup won't run
 		f.Close()
 		defer os.Remove(f.Name())
 		ws := NewFSWitnessStore(f.Name(), db)
@@ -438,7 +438,7 @@ func TestFSWitnessStore_CritOnWriteFileFailure(t *testing.T) {
 	}
 	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
 		// Subprocess: create the shard dir as read-only so WriteFile fails.
-		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		dir, _ := os.MkdirTemp("", "witness-crash-*") //nolint:usetesting // subprocess exits via log.Crit; t.TempDir cleanup won't run
 		defer os.RemoveAll(dir)
 		db := NewMemoryDatabase()
 		ws := NewFSWitnessStore(dir, db)
@@ -466,7 +466,7 @@ func TestFSWitnessStore_CritOnRenameFailure(t *testing.T) {
 		// after the temp file is written. Since WriteWitness does MkdirAll,
 		// WriteFile, then Rename atomically, we use a file as the final path
 		// to force the rename to fail: create a subdirectory at the final path.
-		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		dir, _ := os.MkdirTemp("", "witness-crash-*") //nolint:usetesting // subprocess exits via log.Crit; t.TempDir cleanup won't run
 		defer os.RemoveAll(dir)
 		db := NewMemoryDatabase()
 		hash := testHash(1)
@@ -491,7 +491,7 @@ func TestFSWitnessStore_CritOnRenameFailure(t *testing.T) {
 func TestFSWitnessStore_CritOnDBPutFailure(t *testing.T) {
 	if os.Getenv("WITNESS_CRASH_TEST") == "1" {
 		// Subprocess: use a database that has been closed so Put fails.
-		dir, _ := os.MkdirTemp("", "witness-crash-*")
+		dir, _ := os.MkdirTemp("", "witness-crash-*") //nolint:usetesting // subprocess exits via log.Crit; t.TempDir cleanup won't run
 		defer os.RemoveAll(dir)
 		db := NewMemoryDatabase()
 		ws := NewFSWitnessStore(dir, db)
