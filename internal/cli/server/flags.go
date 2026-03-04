@@ -33,12 +33,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Verbosity,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "log-level",
-		Usage:   "Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead",
-		Value:   &c.cliConfig.LogLevel,
-		Default: c.cliConfig.LogLevel,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:               "datadir",
 		Usage:              "Path of the data directory to store information",
 		Value:              &c.cliConfig.DataDir,
@@ -88,7 +82,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "syncmode",
-		Usage:   `Blockchain sync mode (only "full" or "stateless" sync supported)`,
+		Usage:   `Blockchain sync mode ("full", "snap" or "stateless")`,
 		Value:   &c.cliConfig.SyncMode,
 		Default: c.cliConfig.SyncMode,
 	})
@@ -135,7 +129,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.MaxBlindForkValidationLimit,
 	})
 
-	// logging related flags (log-level and verbosity is present above, it will be removed soon)
+	// logging related flags
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmodule",
 		Usage:   "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
@@ -175,7 +169,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// heimdall
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdall",
-		Usage:   "URL of Heimdall service",
+		Usage:   "URL of Heimdall service (comma-separated for failover: \"url1,url2\")",
 		Value:   &c.cliConfig.Heimdall.URL,
 		Default: c.cliConfig.Heimdall.URL,
 	})
@@ -199,13 +193,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallgRPC",
-		Usage:   "Address of Heimdall gRPC service",
+		Usage:   "Address of Heimdall gRPC service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.GRPCAddress,
 		Default: c.cliConfig.Heimdall.GRPCAddress,
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallWS",
-		Usage:   "Address of Heimdall ws subscription service",
+		Usage:   "Address of Heimdall WS subscription service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.WSAddress,
 		Default: c.cliConfig.Heimdall.WSAddress,
 	})

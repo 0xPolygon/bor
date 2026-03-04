@@ -1078,6 +1078,56 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		require.False(t, header.ActualTime.IsZero())
 		require.GreaterOrEqual(t, header.ActualTime.Unix(), expectedMin)
 	})
+
+	t.Run("near-late block with insufficient build time gets extended", func(t *testing.T) {
+		// Scenario: remaining time is between 500ms and 1s — not technically late,
+		// but less than minBlockBuildTime (1s). Prepare should extend the deadline.
+		sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+		rioCfg := &params.BorConfig{
+			Sprint:   map[string]uint64{"0": 64},
+			Period:   map[string]uint64{"0": 2},
+			RioBlock: big.NewInt(0),
+		}
+		blockTime := 2 * time.Second
+
+		// Use a genesis time far enough in the past so the normal header time
+		// won't be in the future by more than 1s. We'll inject a precise
+		// parentActualTime via the cache to control the sub-second remaining time.
+		parentActualTime := time.Now().Add(-blockTime + 700*time.Millisecond)
+		genesisTime := uint64(parentActualTime.Unix())
+
+		chain, b := newChainAndBorForTest(t, sp, rioCfg, true, addr1, genesisTime)
+		b.blockTime = blockTime
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		parentHash := genesis.Hash()
+
+		// Inject a sub-second-precision parentActualTime into the cache.
+		// This makes actualNewBlockTime = parentActualTime + blockTime ≈ now + 700ms.
+		b.parentActualTimeCache.Add(parentHash, parentActualTime)
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: parentHash}
+
+		before := time.Now()
+		expectedTargetWithoutExtension := parentActualTime.Add(blockTime)
+		remaining := time.Until(expectedTargetWithoutExtension)
+
+		// Sanity: confirm remaining is in the 500ms–1s range before calling Prepare
+		require.Greater(t, remaining, 500*time.Millisecond, "test setup: remaining should be > 500ms")
+		require.Less(t, remaining, minBlockBuildTime, "test setup: remaining should be < minBlockBuildTime")
+
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
+
+		// Prepare should have extended the deadline since remaining < minBlockBuildTime.
+		// The new ActualTime should be at least blockTime from before Prepare ran.
+		require.False(t, header.ActualTime.IsZero())
+		require.True(t, header.ActualTime.After(expectedTargetWithoutExtension),
+			"header.ActualTime should be extended beyond the original target")
+
+		expectedMin := before.Add(blockTime)
+		require.True(t, header.ActualTime.After(expectedMin) || header.ActualTime.Equal(expectedMin),
+			"header.ActualTime should be at least blockTime from now")
+	})
 }
 
 // setupFinalizeTest creates a test environment for FinalizeAndAssemble tests

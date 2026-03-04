@@ -197,56 +197,48 @@ func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
 }
 
 func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
-	// Enforce full or stateless sync as snap sync is disabled momentarily.
-	// Only exception is if we're in stateless sync mode.
-	if !cs.handler.statelessSync.Load() {
-		head := cs.handler.chain.CurrentBlock()
-		td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
-
-		if cs.handler.statelessSync.Load() {
-			return downloader.StatelessSync, td
-		} else {
-			return downloader.FullSync, td
-		}
-	} else {
-		// If we're in snap sync mode, return that directly
-		if cs.handler.snapSync.Load() && !cs.handler.statelessSync.Load() {
-			block := cs.handler.chain.CurrentSnapBlock()
-			td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
-			return downloader.SnapSync, td
-		}
-
-		// We are probably in full sync, but we might have rewound to before the
-		// snap sync pivot, check if we should re-enable snap sync.
-		head := cs.handler.chain.CurrentBlock()
-		if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil && !cs.handler.statelessSync.Load() {
-			if head.Number.Uint64() < *pivot {
-				block := cs.handler.chain.CurrentSnapBlock()
-				td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
-				return downloader.SnapSync, td
-			}
-		}
-
-		// For more info - https://github.com/ethereum/go-ethereum/pull/28171
-		// We are in a full sync, but the associated head state is missing. To complete
-		// the head state, forcefully rerun the snap sync. Note it doesn't mean the
-		// persistent state is corrupted, just mismatch with the head block.
-		if !cs.handler.chain.HasState(head.Root) && !cs.handler.statelessSync.Load() {
-			block := cs.handler.chain.CurrentSnapBlock()
-			td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
-			log.Info("Reenabled snap sync as chain is stateless")
-			return downloader.SnapSync, td
-		}
-
-		// Nope, we're really full syncing
-		td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
-
-		if cs.handler.statelessSync.Load() {
-			return downloader.StatelessSync, td
-		} else {
-			return downloader.FullSync, td
-		}
+	// If we're in snap sync mode, return that directly
+	if cs.handler.snapSync.Load() {
+		block := cs.handler.chain.CurrentSnapBlock()
+		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
+		return downloader.SnapSync, td
 	}
+
+	// If we're in stateless sync mode, return that directly
+	head := cs.handler.chain.CurrentBlock()
+	td := cs.handler.chain.GetTd(head.Hash(), head.Number.Uint64())
+	if cs.handler.statelessSync.Load() {
+		return downloader.StatelessSync, td
+	}
+
+	// The check below switches to snap sync if current block is before the last
+	// snap sync pivot. For polygon, the pivot keeps changing pretty fast due to
+	// low block time leading to unexpected switch to snap sync. Skip switching
+	// here as it's better and reliable to stay in full sync close to chain head.
+
+	// We are probably in full sync, but we might have rewound to before the
+	// snap sync pivot, check if we should re-enable snap sync.
+	// if pivot := rawdb.ReadLastPivotNumber(cs.handler.database); pivot != nil {
+	// 	if head.Number.Uint64() < *pivot {
+	// 		block := cs.handler.chain.CurrentSnapBlock()
+	// 		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
+	// 		return downloader.SnapSync, td
+	// 	}
+	// }
+
+	// For more info - https://github.com/ethereum/go-ethereum/pull/28171
+	// We are in a full sync, but the associated head state is missing. To complete
+	// the head state, forcefully rerun the snap sync. Note it doesn't mean the
+	// persistent state is corrupted, just mismatch with the head block.
+	if !cs.handler.chain.HasState(head.Root) {
+		block := cs.handler.chain.CurrentSnapBlock()
+		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
+		log.Info("Reenabled snap sync as chain is stateless")
+		return downloader.SnapSync, td
+	}
+
+	// Nope, we're really full syncing
+	return downloader.FullSync, td
 }
 
 // startSync launches doSync in a new goroutine.

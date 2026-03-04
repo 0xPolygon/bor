@@ -45,6 +45,12 @@ The releases supports both the networks i.e. Polygon Mainnet, and Amoy (Testnet)
 
 Post `v0.3.0` release, bor uses a new command line interface (cli). The new-cli (located at `internal/cli`) has been built while keeping the flag usage similar to old-cli (located at `cmd/geth`) with a few notable changes. Please refer to [docs](./docs) section for the flag usage guide and example.
 
+### Latest Config Reference
+
+For the latest canonical TOML config options, refer to:
+
+- [`docs/cli/default_config.toml`](docs/cli/default_config.toml)
+
 ### Documentation
 
 - The official documentation for the Polygon PoS chain can be found [here](https://wiki.polygon.technology/docs/pos/getting-started/). It contains all the conceptual and architectural details of the chain along with an operational guide for users running the nodes.

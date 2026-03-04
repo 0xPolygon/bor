@@ -6,11 +6,11 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.devfakeauthor```: Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
-- ```bor.heimdall```: URL of Heimdall service (default: http://localhost:1317)
+- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2") (default: http://localhost:1317)
 
-- ```bor.heimdallWS```: Address of Heimdall ws subscription service
+- ```bor.heimdallWS```: Address of Heimdall WS subscription service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdallgRPC```: Address of Heimdall gRPC service
+- ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
 - ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
 
@@ -76,8 +76,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```keystore```: Path of the directory where keystores are located
 
-- ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
-
 - ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
 
 - ```parallelevm.enable```: Enable Block STM (default: true)
@@ -104,7 +102,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode (only "full" or "stateless" sync supported) (default: full)
+- ```syncmode```: Blockchain sync mode ("full", "snap" or "stateless") (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 

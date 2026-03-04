@@ -6,8 +6,6 @@
 
 - ```listen-addr```: listening address of bootnode (<ip>:<port>) (default: 0.0.0.0:30303)
 
-- ```log-level```: log level (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead (default: info)
-
 - ```metrics```: Enable metrics collection and reporting (default: true)
 
 - ```nat```: port mapping mechanism (any|none|upnp|pmp|extip:<IP>) (default: none)

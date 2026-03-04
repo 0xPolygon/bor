@@ -28,6 +28,8 @@ import (
 // concurrent fetcher and the downloader.
 type receiptQueue Downloader
 
+func (q *receiptQueue) kind() queueKind { return receiptQueueKind }
+
 // waker returns a notification channel that gets pinged in case more receipt
 // fetches have been queued up, so the fetcher might assign it to idle peers.
 func (q *receiptQueue) waker() chan bool {

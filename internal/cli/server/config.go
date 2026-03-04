@@ -58,9 +58,6 @@ type Config struct {
 	// Verbosity is the level of the logs to put out
 	Verbosity int `hcl:"verbosity,optional" toml:"verbosity,optional"`
 
-	// LogLevel is the level of the logs to put out
-	LogLevel string `hcl:"log-level,optional" toml:"log-level,optional"`
-
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
 
@@ -312,7 +309,7 @@ type P2PDiscovery struct {
 }
 
 type HeimdallConfig struct {
-	// URL is the url of the heimdall server
+	// URL is the url of the heimdall server (comma-separated for failover: "url1,url2,url3")
 	URL string `hcl:"url,optional" toml:"url,optional"`
 
 	Timeout time.Duration `hcl:"timeout,optional" toml:"timeout,optional"`
@@ -320,10 +317,10 @@ type HeimdallConfig struct {
 	// Without is used to disable remote heimdall during testing
 	Without bool `hcl:"bor.without,optional" toml:"bor.without,optional"`
 
-	// GRPCAddress is the address of the heimdall grpc server
+	// GRPCAddress is the address of the heimdall grpc server (comma-separated for failover: "addr1,addr2")
 	GRPCAddress string `hcl:"grpc-address,optional" toml:"grpc-address,optional"`
 
-	// WSAddress is the address of the heimdall ws subscription server
+	// WSAddress is the address of the heimdall ws subscription server (comma-separated for failover: "addr1,addr2")
 	WSAddress string `hcl:"ws-address,optional" toml:"ws-address,optional"`
 
 	// RunHeimdall is used to run heimdall as a child process
@@ -802,7 +799,6 @@ func DefaultConfig() *Config {
 		Identity:                    Hostname(),
 		RequiredBlocks:              map[string]string{},
 		Verbosity:                   3,
-		LogLevel:                    "",
 		EnablePreimageRecording:     false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
@@ -1584,13 +1580,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
 
-	// Choose the sync mode. Only "full" or "stateless" sync is supported
+	// Choose the sync mode
 	switch c.SyncMode {
 	case "full":
 		n.SyncMode = downloader.FullSync
 	case "snap":
-		log.Info("Snap sync is momentarily disabled in bor, switching to full sync")
-		n.SyncMode = downloader.FullSync
+		n.SyncMode = downloader.SnapSync
 	case "stateless":
 		n.SyncMode = downloader.StatelessSync
 		log.Info("Using Stateless Sync mode - syncing from latest checkpoint without history")
