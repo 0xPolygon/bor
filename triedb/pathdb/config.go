@@ -32,16 +32,22 @@ const (
 	defaultStateCleanSize = 16 * 1024 * 1024
 
 	// maxBufferSize is the maximum memory allowance of node buffer.
-	// Too large buffer will cause the system to pause for a long
-	// time when write happens. Also, the largest batch that pebble can
-	// support is 4GB, node will panic if batch size exceeds this limit.
-	maxBufferSize = 256 * 1024 * 1024
+	// When async flushing is enabled (the default, controlled by
+	// NoAsyncFlush in Config), the buffer is frozen and flushed in a
+	// background goroutine while a new buffer accepts writes, so block
+	// processing is not blocked by the flush. When async flushing is
+	// disabled (NoAsyncFlush = true), larger buffers will cause the
+	// system to pause for a longer time when the flush happens.
+	// The largest batch that pebble can support is 4GB; the serialized
+	// batch is typically smaller than the in-memory buffer size.
+	maxBufferSize = 2048 * 1024 * 1024
 
 	// defaultBufferSize is the default memory allowance of node buffer
 	// that aggregates the writes from above until it's flushed into the
 	// disk. It's meant to be used once the initial sync is finished.
-	// Do not increase the buffer size arbitrarily, otherwise the system
-	// pause time will increase when the database writes happen.
+	// Do not increase the buffer size arbitrarily without async flushing
+	// enabled, otherwise the system pause time will increase when the
+	// database writes happen.
 	defaultBufferSize = 64 * 1024 * 1024
 )
 

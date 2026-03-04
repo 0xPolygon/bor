@@ -300,6 +300,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// memory allowance for cache.
 		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
+		BytesPerSync: 1 * 1024 * 1024, // was 512 KB as implicit default (increasing it will provide fewer but larger syncs during compaction)
 
 		// The size of memory table(as well as the write buffer).
 		// Note, there may have more than two memory tables in the system.
@@ -365,7 +366,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	opt.Experimental.ReadSamplingMultiplier = -1
 
 	// D: adaptive compaction — scale workers based on load instead of always using all CPUs
-	opt.Experimental.L0CompactionConcurrency = 1      // +1 compaction worker per overlapping sublevel
+	opt.Experimental.L0CompactionConcurrency = 1         // +1 compaction worker per overlapping sublevel
 	opt.Experimental.CompactionDebtConcurrency = 1 << 28 // +1 worker per 256 MB of compaction debt
 
 	// Open the db and recover any potential corruptions
