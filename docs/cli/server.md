@@ -6,11 +6,11 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.devfakeauthor```: Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
-- ```bor.heimdall```: URL of Heimdall service (default: http://localhost:1317)
+- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2") (default: http://localhost:1317)
 
-- ```bor.heimdallWS```: Address of Heimdall ws subscription service
+- ```bor.heimdallWS```: Address of Heimdall WS subscription service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdallgRPC```: Address of Heimdall gRPC service
+- ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
 - ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
 
@@ -76,8 +76,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```keystore```: Path of the directory where keystores are located
 
-- ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
-
 - ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
 
 - ```parallelevm.enable```: Enable Block STM (default: true)
@@ -104,7 +102,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode (only "full" or "stateless" sync supported) (default: full)
+- ```syncmode```: Blockchain sync mode ("full", "snap" or "stateless") (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
@@ -328,6 +326,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
 
+- ```miner.enableDynamicTargetGas```: Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit) (default: false)
+
 - ```miner.etherbase```: Public address for block mining rewards
 
 - ```miner.extradata```: Block extra data set by the miner (default = client version)
@@ -342,25 +342,19 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.interruptcommit```: Interrupt block commit when block creation time is passed (default: true)
 
-- ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
-
-- ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
-
-- ```miner.gasLimitMin```: Minimum gas limit when dynamic gas limit is enabled (default: 0)
-
-- ```miner.gasLimitMax```: Maximum gas limit when dynamic gas limit is enabled (default: 0)
-
-- ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 0)
-
-- ```miner.baseFeeBuffer```: Buffer around target base fee in wei (no adjustment when within buffer) (default: 0)
-
-- ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks (default: 0)
-
-- ```miner.baseFeeChangeDenominator```: Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks (default: 0)
-
 - ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: false)
 
 - ```miner.prefetch.gaslimit.percent```: Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%) (default: 100)
+
+- ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
+
+- ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 500000000000)
+
+- ```miner.targetGasMaxPercentage```: Maximum target gas percentage (1-100) when dynamic target gas is enabled (default: 80)
+
+- ```miner.targetGasMinPercentage```: Minimum target gas percentage (1-100) when dynamic target gas is enabled (default: 50)
+
+- ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks (default: 0)
 
 ### Telemetry Options
 
