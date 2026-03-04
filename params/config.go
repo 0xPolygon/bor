@@ -1093,6 +1093,8 @@ func (c *BorConfig) GetDynamicTargetGasPercentage(parentBaseFee *big.Int, number
 				return val
 			}
 			log.Error("Invalid TargetGasMaxPercentage in BorConfig, falling back to static", "configured", val)
+		} else {
+			log.Error("EnableDynamicTargetGas is set but TargetGasMaxPercentage is nil, falling back to static")
 		}
 		return c.GetTargetGasPercentage(number)
 	} else if parentBaseFee.Cmp(lowerBound) < 0 {
@@ -1103,6 +1105,8 @@ func (c *BorConfig) GetDynamicTargetGasPercentage(parentBaseFee *big.Int, number
 				return val
 			}
 			log.Error("Invalid TargetGasMinPercentage in BorConfig, falling back to static", "configured", val)
+		} else {
+			log.Error("EnableDynamicTargetGas is set but TargetGasMinPercentage is nil, falling back to static")
 		}
 		return c.GetTargetGasPercentage(number)
 	}

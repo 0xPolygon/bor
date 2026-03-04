@@ -488,6 +488,18 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("ImplicitDefault65_OutsideDynamicRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		// default 65% falls below min=70
+		config.Sealer.TargetGasMinPercentage = 70
+		config.Sealer.TargetGasMaxPercentage = 90
+		// TargetGasPercentage left at 0 (not set) → implicit default 65 < 70
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "default target gas percentage (65) falls outside")
+	})
+
 	t.Run("TargetBaseFee_Zero_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
 		config.Sealer.TargetBaseFee = 0
