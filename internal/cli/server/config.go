@@ -1713,6 +1713,7 @@ func (c *Config) buildNode() (*node.Config, error) {
 
 	cfg := &node.Config{
 		Name:                  clientIdentifier,
+		UserIdent:             c.Identity,
 		DataDir:               c.DataDir,
 		DBEngine:              c.DBEngine,
 		KeyStoreDir:           c.KeyStoreDir,
