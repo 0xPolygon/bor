@@ -1548,3 +1548,138 @@ func TestLowBaseFeeIntegrationWithExistingBoundary(t *testing.T) {
 			"CalcBaseFee should produce value within 5%% boundary")
 	})
 }
+
+// TestCalcParentGasTargetDynamicForkTransition verifies that calcParentGasTarget uses
+// static GetTargetGasPercentage before Lisovo and GetDynamicTargetGasPercentage after.
+func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
+	t.Parallel()
+
+	const (
+		gasLimit     = uint64(30_000_000)
+		desiredFee   = uint64(30_000_000_000) // 30 gwei
+		buffer       = uint64(5_000_000_000)  // 5 gwei
+		tGasMinPct   = uint64(50)
+		tGasMaxPct   = uint64(80)
+		dandeliBlock = int64(50)
+		lisovoBlock  = int64(100)
+	)
+
+	enabled := true
+	min := tGasMinPct
+	max := tGasMaxPct
+	dbf := desiredFee
+	buf := buffer
+
+	borCfg := &params.BorConfig{
+		DandeliBlock:           big.NewInt(dandeliBlock),
+		LisovoBlock:            big.NewInt(lisovoBlock),
+		EnableDynamicTargetGas: &enabled,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
+		TargetBaseFee:          &dbf,
+		BaseFeeBuffer:          &buf,
+	}
+
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		LondonBlock: big.NewInt(0),
+		Bor:         borCfg,
+	}
+
+	highBaseFee := big.NewInt(40_000_000_000) // 40 gwei → above upper bound
+
+	// Pre-Lisovo block (99): dynamic feature inactive → static percentage (65%)
+	preLisovoParent := &types.Header{
+		Number:   big.NewInt(99),
+		GasLimit: gasLimit,
+		BaseFee:  highBaseFee,
+	}
+	preLisovoTarget := calcParentGasTarget(chainConfig, preLisovoParent)
+	expectedStaticTarget := gasLimit * params.TargetGasPercentagePostDandeli / 100
+
+	require.Equal(t, expectedStaticTarget, preLisovoTarget,
+		"pre-Lisovo: target gas should use static percentage %d%%", params.TargetGasPercentagePostDandeli)
+
+	// Post-Lisovo block (101) with high base fee: dynamic feature active → TargetGasMaxPercentage (80%)
+	postLisovoParent := &types.Header{
+		Number:   big.NewInt(101),
+		GasLimit: gasLimit,
+		BaseFee:  highBaseFee,
+	}
+	postLisovoTarget := calcParentGasTarget(chainConfig, postLisovoParent)
+	expectedDynamicTarget := gasLimit * tGasMaxPct / 100
+
+	require.Equal(t, expectedDynamicTarget, postLisovoTarget,
+		"post-Lisovo with high base fee: target gas should use dynamic max percentage %d%%", tGasMaxPct)
+}
+
+// TestCalcParentGasTargetDynamicSequence simulates a series of blocks where the base fee
+// oscillates above and below the buffer, verifying the percentage jumps correctly.
+func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
+	t.Parallel()
+
+	const (
+		gasLimit   = uint64(30_000_000)
+		desiredFee = uint64(30_000_000_000) // 30 gwei
+		buffer     = uint64(5_000_000_000)  // 5 gwei → upper=35g, lower=25g
+		tGasMinPct = uint64(50)
+		tGasMaxPct = uint64(80)
+	)
+
+	enabled := true
+	min := tGasMinPct
+	max := tGasMaxPct
+	dbf := desiredFee
+	buf := buffer
+
+	borCfg := &params.BorConfig{
+		DandeliBlock:           big.NewInt(50),
+		LisovoBlock:            big.NewInt(100),
+		EnableDynamicTargetGas: &enabled,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
+		TargetBaseFee:          &dbf,
+		BaseFeeBuffer:          &buf,
+	}
+
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		LondonBlock: big.NewInt(0),
+		Bor:         borCfg,
+	}
+
+	staticTarget := gasLimit * params.TargetGasPercentagePostDandeli / 100
+	maxTarget := gasLimit * tGasMaxPct / 100
+	minTarget := gasLimit * tGasMinPct / 100
+
+	testCases := []struct {
+		blockNum       int64
+		baseFeeGwei    int64
+		expectedTarget uint64
+		description    string
+	}{
+		{101, 40_000_000_000, maxTarget, "above upper bound → max"},
+		{102, 30_000_000_000, staticTarget, "at desired → static"},
+		{103, 20_000_000_000, minTarget, "below lower bound → min"},
+		{104, 35_000_000_000, staticTarget, "at upper bound (inclusive) → static"},
+		{105, 25_000_000_000, staticTarget, "at lower bound (inclusive) → static"},
+		{106, 35_000_000_001, maxTarget, "just above upper → max"},
+		{107, 24_999_999_999, minTarget, "just below lower → min"},
+		{108, 32_000_000_000, staticTarget, "within buffer → static"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("block_%d_%s", tc.blockNum, tc.description), func(t *testing.T) {
+			t.Parallel()
+
+			parent := &types.Header{
+				Number:   big.NewInt(tc.blockNum),
+				GasLimit: gasLimit,
+				BaseFee:  big.NewInt(tc.baseFeeGwei),
+			}
+			target := calcParentGasTarget(chainConfig, parent)
+			require.Equal(t, tc.expectedTarget, target,
+				"block %d (baseFee=%d): %s", tc.blockNum, tc.baseFeeGwei, tc.description)
+		})
+	}
+}

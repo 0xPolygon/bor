@@ -125,6 +125,10 @@ var (
 	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
 
+// maxAllowedFutureBlockTimeSeconds is the maximum number of seconds that a block
+// timestamp may exceed the local clock.
+const maxAllowedFutureBlockTimeSeconds = uint64(30)
+
 // SignerFn is a signer callback function to request a header to be signed by a
 // backing account.
 type SignerFn func(accounts.Account, string, []byte) ([]byte, error)
@@ -424,6 +428,12 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		}
 		if parent == nil || now < parent.Time {
 			log.Error("Block announced too early post rio", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+		}
+		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
+		// ahead of the local clock is rejected.
+		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
+			log.Error("Block timestamp too far in future post rio", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 	} else if c.config.IsBhilai(header.Number) {

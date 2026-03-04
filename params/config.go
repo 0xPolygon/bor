@@ -930,6 +930,15 @@ type BorConfig struct {
 	TargetGasPercentage      *uint64 `json:"-"` // Post-Lisovo: target gas as % of gas limit (configurable post-Lisovo, default 65% post-Dandeli). Set via --miner.target-gas-percentage
 	BaseFeeChangeDenominator *uint64 `json:"-"` // Post-Lisovo: base fee change rate (configurable post-Lisovo, must be >0, default 64). Set via --miner.base-fee-change-denominator
 
+	// Runtime dynamic target gas percentage configuration (post-Lisovo, mutually exclusive with EnableDynamicGasLimit in miner.Config)
+	// When enabled, GetDynamicTargetGasPercentage adjusts the EIP-1559 target gas % based on parent base fee distance from TargetBaseFee.
+	// TargetBaseFee and BaseFeeBuffer are shared with miner.Config dynamic gas limit (only one feature may be active at a time).
+	EnableDynamicTargetGas *bool   `json:"-"` // Enable dynamic target gas % adjustment based on parent base fee
+	TargetGasMinPercentage *uint64 `json:"-"` // Minimum target gas percentage (1-100) when dynamic target gas is enabled
+	TargetGasMaxPercentage *uint64 `json:"-"` // Maximum target gas percentage (1-100) when dynamic target gas is enabled
+	TargetBaseFee          *uint64 `json:"-"` // Desired base fee in wei; target gas % adjusts around this value. Set via --miner.targetBaseFee
+	BaseFeeBuffer          *uint64 `json:"-"` // Buffer in wei; no adjustment when parentBaseFee is within ±buffer of TargetBaseFee. Set via --miner.baseFeeBuffer
+
 	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
 	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
 	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
@@ -1038,6 +1047,72 @@ func (c *BorConfig) GetTargetGasPercentage(number *big.Int) uint64 {
 
 	// Default for post-Dandeli
 	return TargetGasPercentagePostDandeli
+}
+
+// GetDynamicTargetGasPercentage returns the target gas percentage for EIP-1559 base fee calculation.
+// Post-Lisovo with EnableDynamicTargetGas set, it adjusts the percentage based on parentBaseFee:
+//   - parentBaseFee > DesiredBaseFee+Buffer → return TargetGasMaxPercentage (increase target → downward fee pressure)
+//   - parentBaseFee < DesiredBaseFee-Buffer → return TargetGasMinPercentage (decrease target → upward fee pressure)
+//   - within buffer or any fallback → return GetTargetGasPercentage(number)
+func (c *BorConfig) GetDynamicTargetGasPercentage(parentBaseFee *big.Int, number *big.Int) uint64 {
+	// If feature not enabled or pre-Lisovo, delegate to existing static logic
+	if !c.IsLisovo(number) || c.EnableDynamicTargetGas == nil || !*c.EnableDynamicTargetGas {
+		return c.GetTargetGasPercentage(number)
+	}
+
+	// No base fee (pre-London): fall back to static
+	if parentBaseFee == nil {
+		return c.GetTargetGasPercentage(number)
+	}
+
+	// Config guard: if essential field is absent, fall back
+	if c.TargetBaseFee == nil {
+		log.Error("EnableDynamicTargetGas is set but TargetBaseFee is nil, falling back to static")
+		return c.GetTargetGasPercentage(number)
+	}
+
+	// Use big.Int arithmetic to avoid uint64 truncation (parentBaseFee > math.MaxUint64)
+	// and overflow when computing upperBound (desired + buffer).
+	bigDesired := new(big.Int).SetUint64(*c.TargetBaseFee)
+	bigBuffer := new(big.Int)
+	if c.BaseFeeBuffer != nil {
+		bigBuffer.SetUint64(*c.BaseFeeBuffer)
+	}
+
+	upperBound := new(big.Int).Add(bigDesired, bigBuffer)
+	lowerBound := new(big.Int)
+	if bigDesired.Cmp(bigBuffer) > 0 {
+		lowerBound.Sub(bigDesired, bigBuffer)
+	} // else lowerBound = 0, prevents underflow
+
+	if parentBaseFee.Cmp(upperBound) > 0 {
+		// Fee too high → raise target % to create downward pressure
+		if c.TargetGasMaxPercentage != nil {
+			val := *c.TargetGasMaxPercentage
+			if val > 0 && val <= 100 {
+				return val
+			}
+			log.Error("Invalid TargetGasMaxPercentage in BorConfig, falling back to static", "configured", val)
+		} else {
+			log.Error("EnableDynamicTargetGas is set but TargetGasMaxPercentage is nil, falling back to static")
+		}
+		return c.GetTargetGasPercentage(number)
+	} else if parentBaseFee.Cmp(lowerBound) < 0 {
+		// Fee too low → lower target % to create upward pressure
+		if c.TargetGasMinPercentage != nil {
+			val := *c.TargetGasMinPercentage
+			if val > 0 && val <= 100 {
+				return val
+			}
+			log.Error("Invalid TargetGasMinPercentage in BorConfig, falling back to static", "configured", val)
+		} else {
+			log.Error("EnableDynamicTargetGas is set but TargetGasMinPercentage is nil, falling back to static")
+		}
+		return c.GetTargetGasPercentage(number)
+	}
+
+	// Within buffer → no change
+	return c.GetTargetGasPercentage(number)
 }
 
 func (c *BorConfig) IsSprintStart(number uint64) bool {
