@@ -22,7 +22,7 @@ RUN --mount=type=ssh \
     make bor
 
 # ─── RUNTIME STAGE ────────────────────────────────────────────────────────────────
-FROM alpine:latest
+FROM alpine:3.23
 
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR

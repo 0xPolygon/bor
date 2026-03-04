@@ -7,7 +7,7 @@ ADD . /bor
 RUN cd /bor && make bor-all
 
 # Pull all binaries into a second stage deploy alpine container
-FROM alpine:latest
+FROM alpine:3.23
 
 RUN set -x \
     && apk add --update --no-cache \
