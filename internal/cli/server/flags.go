@@ -477,17 +477,17 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "miner.targetGasMin",
+		Name:    "miner.targetGasMinPercentage",
 		Usage:   "Minimum target gas percentage (1-100) when dynamic target gas is enabled",
-		Value:   &c.cliConfig.Sealer.TargetGasMin,
-		Default: c.cliConfig.Sealer.TargetGasMin,
+		Value:   &c.cliConfig.Sealer.TargetGasMinPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMinPercentage,
 		Group:   "Sealer",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "miner.targetGasMax",
+		Name:    "miner.targetGasMaxPercentage",
 		Usage:   "Maximum target gas percentage (1-100) when dynamic target gas is enabled",
-		Value:   &c.cliConfig.Sealer.TargetGasMax,
-		Default: c.cliConfig.Sealer.TargetGasMax,
+		Value:   &c.cliConfig.Sealer.TargetGasMaxPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMaxPercentage,
 		Group:   "Sealer",
 	})
 

@@ -387,8 +387,8 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 	validDynamicTargetGasConfig := func() *Config {
 		config := DefaultConfig()
 		config.Sealer.EnableDynamicTargetGas = true
-		config.Sealer.TargetGasMin = 50              // 50% floor
-		config.Sealer.TargetGasMax = 80              // 80% ceiling
+		config.Sealer.TargetGasMinPercentage = 50    // 50% floor
+		config.Sealer.TargetGasMaxPercentage = 80    // 80% ceiling
 		config.Sealer.TargetBaseFee = 25_000_000_000 // 25 gwei
 		config.Sealer.BaseFeeBuffer = 10_000_000_000 // 10 gwei buffer
 		return config
@@ -415,60 +415,77 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
-	t.Run("TargetGasMin_Zero_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMinPercentage_Zero_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMin = 0
+		config.Sealer.TargetGasMinPercentage = 0
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMin (0) must be between 1-100")
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (0) must be between 1-100")
 	})
 
-	t.Run("TargetGasMin_OutOfRange_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMinPercentage_OutOfRange_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMin = 101
+		config.Sealer.TargetGasMinPercentage = 101
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMin (101) must be between 1-100")
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (101) must be between 1-100")
 	})
 
-	t.Run("TargetGasMax_Zero_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMaxPercentage_Zero_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMax = 0
+		config.Sealer.TargetGasMaxPercentage = 0
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMax (0) must be between 1-100")
+		assert.Contains(t, err.Error(), "miner.targetGasMaxPercentage (0) must be between 1-100")
 	})
 
-	t.Run("TargetGasMax_OutOfRange_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMaxPercentage_OutOfRange_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMax = 101
+		config.Sealer.TargetGasMaxPercentage = 101
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMax (101) must be between 1-100")
+		assert.Contains(t, err.Error(), "miner.targetGasMaxPercentage (101) must be between 1-100")
 	})
 
-	t.Run("TargetGasMin_EqualTo_TargetGasMax_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMinPercentage_EqualTo_TargetGasMaxPercentage_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMin = 65
-		config.Sealer.TargetGasMax = 65
+		config.Sealer.TargetGasMinPercentage = 65
+		config.Sealer.TargetGasMaxPercentage = 65
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMin (65) must be less than miner.targetGasMax (65)")
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (65) must be less than miner.targetGasMaxPercentage (65)")
 	})
 
-	t.Run("TargetGasMin_GreaterThan_TargetGasMax_ReturnsError", func(t *testing.T) {
+	t.Run("TargetGasMinPercentage_GreaterThan_TargetGasMaxPercentage_ReturnsError", func(t *testing.T) {
 		config := validDynamicTargetGasConfig()
-		config.Sealer.TargetGasMin = 80
-		config.Sealer.TargetGasMax = 50
+		config.Sealer.TargetGasMinPercentage = 80
+		config.Sealer.TargetGasMaxPercentage = 50
 
 		_, err := buildConfig(t, config)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.targetGasMin (80) must be less than miner.targetGasMax (50)")
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (80) must be less than miner.targetGasMaxPercentage (50)")
+	})
+
+	t.Run("TargetGasPercentage_OutsideDynamicRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig() // min=50, max=80
+		config.Sealer.TargetGasPercentage = 90  // outside [50, 80]
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.target-gas-percentage (90) must be between")
+	})
+
+	t.Run("TargetGasPercentage_WithinDynamicRange_NoError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig() // min=50, max=80
+		config.Sealer.TargetGasPercentage = 65  // within [50, 80]
+
+		_, err := buildConfig(t, config)
+		assert.NoError(t, err)
 	})
 
 	t.Run("TargetBaseFee_Zero_ReturnsError", func(t *testing.T) {
@@ -499,10 +516,10 @@ func TestSealerDynamicTargetGasConfig(t *testing.T) {
 		bor := ethConfig.Genesis.Config.Bor
 		assert.NotNil(t, bor.EnableDynamicTargetGas)
 		assert.True(t, *bor.EnableDynamicTargetGas)
-		assert.NotNil(t, bor.TargetGasMin)
-		assert.Equal(t, uint64(50), *bor.TargetGasMin)
-		assert.NotNil(t, bor.TargetGasMax)
-		assert.Equal(t, uint64(80), *bor.TargetGasMax)
+		assert.NotNil(t, bor.TargetGasMinPercentage)
+		assert.Equal(t, uint64(50), *bor.TargetGasMinPercentage)
+		assert.NotNil(t, bor.TargetGasMaxPercentage)
+		assert.Equal(t, uint64(80), *bor.TargetGasMaxPercentage)
 		assert.NotNil(t, bor.TargetBaseFee)
 		assert.Equal(t, uint64(25_000_000_000), *bor.TargetBaseFee)
 		assert.NotNil(t, bor.BaseFeeBuffer)

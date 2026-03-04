@@ -1558,15 +1558,15 @@ func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
 		gasLimit     = uint64(30_000_000)
 		desiredFee   = uint64(30_000_000_000) // 30 gwei
 		buffer       = uint64(5_000_000_000)  // 5 gwei
-		tGasMin      = uint64(50)
-		tGasMax      = uint64(80)
+		tGasMinPct   = uint64(50)
+		tGasMaxPct   = uint64(80)
 		dandeliBlock = int64(50)
 		lisovoBlock  = int64(100)
 	)
 
 	enabled := true
-	min := tGasMin
-	max := tGasMax
+	min := tGasMinPct
+	max := tGasMaxPct
 	dbf := desiredFee
 	buf := buffer
 
@@ -1574,8 +1574,8 @@ func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
 		DandeliBlock:           big.NewInt(dandeliBlock),
 		LisovoBlock:            big.NewInt(lisovoBlock),
 		EnableDynamicTargetGas: &enabled,
-		TargetGasMin:           &min,
-		TargetGasMax:           &max,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
 		TargetBaseFee:          &dbf,
 		BaseFeeBuffer:          &buf,
 	}
@@ -1600,17 +1600,17 @@ func TestCalcParentGasTargetDynamicForkTransition(t *testing.T) {
 	require.Equal(t, expectedStaticTarget, preLisovoTarget,
 		"pre-Lisovo: target gas should use static percentage %d%%", params.TargetGasPercentagePostDandeli)
 
-	// Post-Lisovo block (101) with high base fee: dynamic feature active → TargetGasMax (80%)
+	// Post-Lisovo block (101) with high base fee: dynamic feature active → TargetGasMaxPercentage (80%)
 	postLisovoParent := &types.Header{
 		Number:   big.NewInt(101),
 		GasLimit: gasLimit,
 		BaseFee:  highBaseFee,
 	}
 	postLisovoTarget := calcParentGasTarget(chainConfig, postLisovoParent)
-	expectedDynamicTarget := gasLimit * tGasMax / 100
+	expectedDynamicTarget := gasLimit * tGasMaxPct / 100
 
 	require.Equal(t, expectedDynamicTarget, postLisovoTarget,
-		"post-Lisovo with high base fee: target gas should use dynamic max percentage %d%%", tGasMax)
+		"post-Lisovo with high base fee: target gas should use dynamic max percentage %d%%", tGasMaxPct)
 }
 
 // TestCalcParentGasTargetDynamicSequence simulates a series of blocks where the base fee
@@ -1622,13 +1622,13 @@ func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
 		gasLimit   = uint64(30_000_000)
 		desiredFee = uint64(30_000_000_000) // 30 gwei
 		buffer     = uint64(5_000_000_000)  // 5 gwei → upper=35g, lower=25g
-		tGasMin    = uint64(50)
-		tGasMax    = uint64(80)
+		tGasMinPct = uint64(50)
+		tGasMaxPct = uint64(80)
 	)
 
 	enabled := true
-	min := tGasMin
-	max := tGasMax
+	min := tGasMinPct
+	max := tGasMaxPct
 	dbf := desiredFee
 	buf := buffer
 
@@ -1636,8 +1636,8 @@ func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
 		DandeliBlock:           big.NewInt(50),
 		LisovoBlock:            big.NewInt(100),
 		EnableDynamicTargetGas: &enabled,
-		TargetGasMin:           &min,
-		TargetGasMax:           &max,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
 		TargetBaseFee:          &dbf,
 		BaseFeeBuffer:          &buf,
 	}
@@ -1649,8 +1649,8 @@ func TestCalcParentGasTargetDynamicSequence(t *testing.T) {
 	}
 
 	staticTarget := gasLimit * params.TargetGasPercentagePostDandeli / 100
-	maxTarget := gasLimit * tGasMax / 100
-	minTarget := gasLimit * tGasMin / 100
+	maxTarget := gasLimit * tGasMaxPct / 100
+	minTarget := gasLimit * tGasMinPct / 100
 
 	testCases := []struct {
 		blockNum       int64

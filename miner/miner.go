@@ -60,8 +60,8 @@ type Config struct {
 
 	// Dynamic target gas percentage configuration (post-Lisovo, mutually exclusive with EnableDynamicGasLimit)
 	EnableDynamicTargetGas bool   // Enable dynamic EIP-1559 target gas % adjustment based on base fee
-	TargetGasMin           uint64 // Minimum target gas percentage (1-100) when dynamic target gas is enabled
-	TargetGasMax           uint64 // Maximum target gas percentage (1-100) when dynamic target gas is enabled
+	TargetGasMinPercentage uint64 // Minimum target gas percentage (1-100) when dynamic target gas is enabled
+	TargetGasMaxPercentage uint64 // Maximum target gas percentage (1-100) when dynamic target gas is enabled
 
 	GasPrice            *big.Int      // Minimum gas price for mining a transaction
 	Recommit            time.Duration // The time interval for miner to re-create mining work.
@@ -89,8 +89,8 @@ var DefaultConfig = Config{
 
 	// Dynamic target gas percentage defaults (disabled by default)
 	EnableDynamicTargetGas: false,
-	TargetGasMin:           50, // 50% floor
-	TargetGasMax:           80, // 80% ceiling
+	TargetGasMinPercentage: 50, // 50% floor
+	TargetGasMaxPercentage: 80, // 80% ceiling
 
 	// The default recommit time is chosen as two seconds since
 	// consensus-layer usually will wait a half slot of time(6s)

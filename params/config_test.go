@@ -1082,8 +1082,8 @@ func TestGetDynamicTargetGasPercentage(t *testing.T) {
 			DandeliBlock:           big.NewInt(dandeliBlockNum),
 			LisovoBlock:            big.NewInt(lisovoBlockNum),
 			EnableDynamicTargetGas: &en,
-			TargetGasMin:           &min,
-			TargetGasMax:           &max,
+			TargetGasMinPercentage: &min,
+			TargetGasMaxPercentage: &max,
 			TargetBaseFee:          &dbf,
 			BaseFeeBuffer:          &buf,
 		}
@@ -1194,8 +1194,8 @@ func TestGetDynamicTargetGasPercentage_BufferUnderflow(t *testing.T) {
 		DandeliBlock:           big.NewInt(50),
 		LisovoBlock:            big.NewInt(100),
 		EnableDynamicTargetGas: &en,
-		TargetGasMin:           &min,
-		TargetGasMax:           &max,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
 		TargetBaseFee:          &desiredBaseFee,
 		BaseFeeBuffer:          &buffer,
 	}
@@ -1231,8 +1231,8 @@ func TestGetDynamicTargetGasPercentage_NilDesiredBaseFee(t *testing.T) {
 		DandeliBlock:           big.NewInt(50),
 		LisovoBlock:            big.NewInt(100),
 		EnableDynamicTargetGas: &en,
-		TargetGasMin:           &min,
-		TargetGasMax:           &max,
+		TargetGasMinPercentage: &min,
+		TargetGasMaxPercentage: &max,
 		TargetBaseFee:          nil, // not set — misconfiguration
 	}
 
@@ -1249,7 +1249,7 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 	en := true
 	desiredBaseFee := uint64(30_000_000_000)
 
-	t.Run("nil_TargetGasMax_falls_back_to_static", func(t *testing.T) {
+	t.Run("nil_TargetGasMaxPercentage_falls_back_to_static", func(t *testing.T) {
 		t.Parallel()
 
 		min := uint64(50)
@@ -1257,19 +1257,19 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			DandeliBlock:           big.NewInt(50),
 			LisovoBlock:            big.NewInt(100),
 			EnableDynamicTargetGas: &en,
-			TargetGasMin:           &min,
-			TargetGasMax:           nil, // nil
+			TargetGasMinPercentage: &min,
+			TargetGasMaxPercentage: nil, // nil
 			TargetBaseFee:          &desiredBaseFee,
 		}
 
-		// base fee above upper → should return TargetGasMax, but it's nil → static fallback
+		// base fee above upper → should return TargetGasMaxPercentage, but it's nil → static fallback
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(40_000_000_000), big.NewInt(101))
 		if result != TargetGasPercentagePostDandeli {
-			t.Errorf("nil TargetGasMax: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
+			t.Errorf("nil TargetGasMaxPercentage: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
 		}
 	})
 
-	t.Run("nil_TargetGasMin_falls_back_to_static", func(t *testing.T) {
+	t.Run("nil_TargetGasMinPercentage_falls_back_to_static", func(t *testing.T) {
 		t.Parallel()
 
 		max := uint64(80)
@@ -1277,19 +1277,19 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			DandeliBlock:           big.NewInt(50),
 			LisovoBlock:            big.NewInt(100),
 			EnableDynamicTargetGas: &en,
-			TargetGasMin:           nil, // nil
-			TargetGasMax:           &max,
+			TargetGasMinPercentage: nil, // nil
+			TargetGasMaxPercentage: &max,
 			TargetBaseFee:          &desiredBaseFee,
 		}
 
-		// base fee below lower → should return TargetGasMin, but it's nil → static fallback
+		// base fee below lower → should return TargetGasMinPercentage, but it's nil → static fallback
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(10_000_000_000), big.NewInt(101))
 		if result != TargetGasPercentagePostDandeli {
-			t.Errorf("nil TargetGasMin: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
+			t.Errorf("nil TargetGasMinPercentage: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
 		}
 	})
 
-	t.Run("TargetGasMax_zero_falls_back_to_static", func(t *testing.T) {
+	t.Run("TargetGasMaxPercentage_zero_falls_back_to_static", func(t *testing.T) {
 		t.Parallel()
 
 		min := uint64(50)
@@ -1298,18 +1298,18 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			DandeliBlock:           big.NewInt(50),
 			LisovoBlock:            big.NewInt(100),
 			EnableDynamicTargetGas: &en,
-			TargetGasMin:           &min,
-			TargetGasMax:           &zero,
+			TargetGasMinPercentage: &min,
+			TargetGasMaxPercentage: &zero,
 			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(40_000_000_000), big.NewInt(101))
 		if result != TargetGasPercentagePostDandeli {
-			t.Errorf("TargetGasMax=0: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
+			t.Errorf("TargetGasMaxPercentage=0: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
 		}
 	})
 
-	t.Run("TargetGasMax_over_100_falls_back_to_static", func(t *testing.T) {
+	t.Run("TargetGasMaxPercentage_over_100_falls_back_to_static", func(t *testing.T) {
 		t.Parallel()
 
 		min := uint64(50)
@@ -1318,14 +1318,14 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 			DandeliBlock:           big.NewInt(50),
 			LisovoBlock:            big.NewInt(100),
 			EnableDynamicTargetGas: &en,
-			TargetGasMin:           &min,
-			TargetGasMax:           &over,
+			TargetGasMinPercentage: &min,
+			TargetGasMaxPercentage: &over,
 			TargetBaseFee:          &desiredBaseFee,
 		}
 
 		result := config.GetDynamicTargetGasPercentage(big.NewInt(40_000_000_000), big.NewInt(101))
 		if result != TargetGasPercentagePostDandeli {
-			t.Errorf("TargetGasMax=101: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
+			t.Errorf("TargetGasMaxPercentage=101: expected static %d, got %d", TargetGasPercentagePostDandeli, result)
 		}
 	})
 }
