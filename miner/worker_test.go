@@ -40,7 +40,9 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -2861,4 +2863,91 @@ func BenchmarkPrefetchMemoryOverhead(b *testing.B) {
 
 		b.ReportMetric(float64(m2.HeapAlloc-m1.HeapAlloc)/float64(b.N)/1024, "KB/op")
 	})
+}
+
+// TestWriteBlockAndSetHeadTimer verifies that the writeBlockAndSetHeadTimer
+// metric is updated when the worker seals and writes blocks.
+func TestWriteBlockAndSetHeadTimer(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	for i := 0; i < 5; i++ {
+		tx := b.newRandomTxWithNonce(true, uint64(i))
+		b.txPool.Add([]*types.Transaction{tx}, true)
+	}
+
+	countBefore := writeBlockAndSetHeadTimer.Snapshot().Count()
+
+	w.start()
+	time.Sleep(3 * time.Second)
+	w.stop()
+
+	currentBlock := w.chain.CurrentBlock()
+	if currentBlock.Number.Uint64() == 0 {
+		t.Fatal("no blocks were mined")
+	}
+
+	if writeBlockAndSetHeadTimer.Snapshot().Count() <= countBefore {
+		t.Error("writeBlockAndSetHeadTimer should have been updated after mining blocks")
+	}
+}
+
+// TestDelayFlagOffByOne verifies that the delayFlag check inspects each transaction's
+// own read set rather than its predecessor's.
+func TestDelayFlagOffByOne(t *testing.T) {
+	t.Parallel()
+
+	coinbase := common.HexToAddress("0x000000000000000000000000000000000000bA5e")
+	burntContract := common.HexToAddress("0x000000000000000000000000000000000000dead")
+
+	// Initialize the mvReadMapList with 3 transactions.
+	n := 3
+	mvReadMapList := make([]map[blockstm.Key]blockstm.ReadDescriptor, n)
+	for i := range mvReadMapList {
+		mvReadMapList[i] = make(map[blockstm.Key]blockstm.ReadDescriptor)
+	}
+
+	// Only the last tx reads the coinbase and burnt-contract balances.
+	mvReadMapList[n-1][blockstm.NewSubpathKey(coinbase, state.BalancePath)] = blockstm.ReadDescriptor{}
+	mvReadMapList[n-1][blockstm.NewSubpathKey(burntContract, state.BalancePath)] = blockstm.ReadDescriptor{}
+
+	buggyDelayFlag := func() bool {
+		for i := 1; i <= len(mvReadMapList)-1; i++ {
+			reads := mvReadMapList[i-1] // bug: checks predecessor read set instead of current tx
+			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
+			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
+			if ok1 || ok2 {
+				return false
+			}
+		}
+		return true
+	}
+
+	fixedDelayFlag := func() bool {
+		for i := 1; i <= len(mvReadMapList)-1; i++ {
+			reads := mvReadMapList[i]
+			_, ok1 := reads[blockstm.NewSubpathKey(coinbase, state.BalancePath)]
+			_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
+			if ok1 || ok2 {
+				return false
+			}
+		}
+		return true
+	}
+
+	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
+	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }

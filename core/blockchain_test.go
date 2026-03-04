@@ -51,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -6365,4 +6366,64 @@ func TestStateAtWithReaders(t *testing.T) {
 		// The key validation: throwaway state modifications don't affect main state
 		// This ensures prefetch speculation doesn't corrupt the actual block building state
 	})
+}
+
+// TestWriteBlockMetrics verifies that the block write path metrics
+// (batch write, state commit, witness collection) are updated after
+// inserting blocks into the chain, and that the slow-operation warning
+// log code paths execute without errors.
+func TestWriteBlockMetrics(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(1000000000000000)
+		gspec   = &Genesis{
+			Config:  params.TestChainConfig,
+			Alloc:   types.GenesisAlloc{address: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 5, func(i int, block *BlockGen) {
+		block.SetCoinbase(common.Address{0x01})
+		tx, err := types.SignTx(types.NewTransaction(block.TxNonce(address), common.Address{0x02}, big.NewInt(1000), params.TxGas, block.header.BaseFee, nil), signer, key)
+		if err != nil {
+			panic(err)
+		}
+		block.AddTx(tx)
+	})
+
+	chain, _ := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	defer chain.Stop()
+
+	// Capture metric counts before insertion
+	batchCountBefore := blockBatchWriteTimer.Snapshot().Count()
+	commitCountBefore := stateCommitTimer.Snapshot().Count()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	// Verify timers were updated
+	batchSnap := blockBatchWriteTimer.Snapshot()
+	commitSnap := stateCommitTimer.Snapshot()
+
+	if batchSnap.Count() <= batchCountBefore {
+		t.Error("blockBatchWriteTimer should have been updated after block insertion")
+	}
+	if commitSnap.Count() <= commitCountBefore {
+		t.Error("stateCommitTimer should have been updated after block insertion")
+	}
+
+	// Verify durations are non-negative (the duration variables that feed
+	// both the metrics and the >100ms warning log checks are valid)
+	if batchSnap.Mean() < 0 {
+		t.Error("blockBatchWriteTimer mean duration should be non-negative")
+	}
+	if commitSnap.Mean() < 0 {
+		t.Error("stateCommitTimer mean duration should be non-negative")
+	}
 }

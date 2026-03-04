@@ -336,26 +336,24 @@ func (dlp *downloadTesterPeer) RequestBodies(hashes []common.Hash, sink chan *et
 func (dlp *downloadTesterPeer) RequestReceipts(hashes []common.Hash, sink chan *eth.Response) (*eth.Request, error) {
 	blobs := eth.ServiceGetReceiptsQuery69(dlp.chain, hashes)
 
-	receipts := make([]types.Receipts, len(blobs))
+	// Decode each blob from network69 format into ReceiptList69, mirroring what
+	// handleReceipts[*ReceiptList69] does on the real receiver side.
+	receiptLists := make([]*eth.ReceiptList69, len(blobs))
 	for i, blob := range blobs {
-		rlp.DecodeBytes(blob, &receipts[i])
+		var rl eth.ReceiptList69
+		if err := rlp.DecodeBytes(blob, &rl); err != nil {
+			panic(err)
+		}
+		receiptLists[i] = &rl
 	}
 
-	hasher := trie.NewStackTrie(nil)
-	hashes = make([]common.Hash, len(receipts))
-
-	for i, receipt := range receipts {
-		hashes[i] = types.DeriveSha(receipt, hasher)
-	}
-
+	// Skip calculating the receipt root as that duty is moved from the handler to the fetcher.
 	req := &eth.Request{
 		Peer: dlp.id,
 	}
-	resp := eth.ReceiptsRLPResponse(types.EncodeBlockReceiptLists(receipts))
 	res := &eth.Response{
 		Req:  req,
-		Res:  resp,
-		Meta: hashes,
+		Res:  &receiptLists,
 		Time: 1,
 		Done: make(chan error, 1), // Ignore the returned status
 	}
@@ -494,12 +492,14 @@ func assertOwnChain(t *testing.T, tester *downloadTester, length int) {
 
 func TestCanonicalSynchronisation68Full(t *testing.T) { testCanonSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestCanonicalSynchronisation68Snap(t *testing.T) { testCanonSync(t, eth.ETH68, SnapSync) }
+func TestCanonicalSynchronisation68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testCanonSync(t, eth.ETH68, SnapSync)
+}
+
 func TestCanonicalSynchronisation69Full(t *testing.T) { testCanonSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestCanonicalSynchronisation69Snap(t *testing.T) { testCanonSync(t, eth.ETH69, SnapSync) }
+func TestCanonicalSynchronisation69Snap(t *testing.T) { testCanonSync(t, eth.ETH69, SnapSync) }
 
 func testCanonSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -517,16 +517,37 @@ func testCanonSync(t *testing.T, protocol uint, mode SyncMode) {
 	assertOwnChain(t, tester, len(chain.blocks))
 }
 
+// TestSnapSyncFailsOverEth68 tests that snap sync fails over eth/68 as such
+// peers are filtered out (due to their inability to serve bor receipts).
+func TestSnapSyncFailsOverEth68(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	// Create a small enough block chain to download
+	chain := testChainBase.shorten(blockCacheMaxItems - 15)
+	tester.newPeer("peer", eth.ETH68, chain.blocks[1:])
+
+	// Synchronise with the peer and make sure all relevant data was retrieved
+	err := tester.sync("peer", nil, SnapSync)
+	if err == nil {
+		t.Fatalf("snap sync succeeded instead of failing on eth/68 peer")
+	}
+	if !errors.Is(err, errPeersUnavailable) {
+		t.Fatalf("unexpected error while snap syncing with eth/68 peer: %v", err)
+	}
+}
+
 // Tests that if a large batch of blocks are being downloaded, it is throttled
 // until the cached blocks are retrieved.
 func TestThrottling68Full(t *testing.T) { testThrottling(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestThrottling68Snap(t *testing.T) { testThrottling(t, eth.ETH68, SnapSync) }
+func TestThrottling68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testThrottling(t, eth.ETH68, SnapSync)
+}
 func TestThrottling69Full(t *testing.T) { testThrottling(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestThrottling69Snap(t *testing.T) { testThrottling(t, eth.ETH69, SnapSync) }
+func TestThrottling69Snap(t *testing.T) { testThrottling(t, eth.ETH69, SnapSync) }
 
 func testThrottling(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -612,12 +633,13 @@ func testThrottling(t *testing.T, protocol uint, mode SyncMode) {
 // binary search should be executed.
 func TestForkedSync68Full(t *testing.T) { testForkedSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestForkedSync68Snap(t *testing.T) { testForkedSync(t, eth.ETH68, SnapSync) }
+func TestForkedSync68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testForkedSync(t, eth.ETH68, SnapSync)
+}
 func TestForkedSync69Full(t *testing.T) { testForkedSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestForkedSync69Snap(t *testing.T) { testForkedSync(t, eth.ETH69, SnapSync) }
+func TestForkedSync69Snap(t *testing.T) { testForkedSync(t, eth.ETH69, SnapSync) }
 
 func testForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -646,12 +668,13 @@ func testForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 // currently and is not dropped.
 func TestHeavyForkedSync68Full(t *testing.T) { testHeavyForkedSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestHeavyForkedSync68Snap(t *testing.T) { testHeavyForkedSync(t, eth.ETH68, SnapSync) }
+func TestHeavyForkedSync68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testHeavyForkedSync(t, eth.ETH68, SnapSync)
+}
 func TestHeavyForkedSync69Full(t *testing.T) { testHeavyForkedSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestHeavyForkedSync69Snap(t *testing.T) { testHeavyForkedSync(t, eth.ETH69, SnapSync) }
+func TestHeavyForkedSync69Snap(t *testing.T) { testHeavyForkedSync(t, eth.ETH69, SnapSync) }
 
 func testHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -682,12 +705,13 @@ func testHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 // long dead chains.
 func TestBoundedForkedSync68Full(t *testing.T) { testBoundedForkedSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBoundedForkedSync68Snap(t *testing.T) { testBoundedForkedSync(t, eth.ETH68, SnapSync) }
+func TestBoundedForkedSync68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testBoundedForkedSync(t, eth.ETH68, SnapSync)
+}
 func TestBoundedForkedSync69Full(t *testing.T) { testBoundedForkedSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBoundedForkedSync69Snap(t *testing.T) { testBoundedForkedSync(t, eth.ETH69, SnapSync) }
+func TestBoundedForkedSync69Snap(t *testing.T) { testBoundedForkedSync(t, eth.ETH69, SnapSync) }
 
 func testBoundedForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -719,21 +743,20 @@ func TestBoundedHeavyForkedSync68Full(t *testing.T) {
 	testBoundedHeavyForkedSync(t, eth.ETH68, FullSync)
 }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBoundedHeavyForkedSync68Snap(t *testing.T) {
-// 	testBoundedHeavyForkedSync(t, eth.ETH68, SnapSync)
-// }
+func TestBoundedHeavyForkedSync68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testBoundedHeavyForkedSync(t, eth.ETH68, SnapSync)
+}
 
 func TestBoundedHeavyForkedSync69Full(t *testing.T) {
 	t.Parallel()
 	testBoundedHeavyForkedSync(t, eth.ETH69, FullSync)
 }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBoundedHeavyForkedSync69Snap(t *testing.T) {
-// 	t.Parallel()
-// 	testBoundedHeavyForkedSync(t, eth.ETH69, SnapSync)
-// }
+func TestBoundedHeavyForkedSync69Snap(t *testing.T) {
+	t.Parallel()
+	testBoundedHeavyForkedSync(t, eth.ETH69, SnapSync)
+}
 
 func testBoundedHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -762,12 +785,13 @@ func testBoundedHeavyForkedSync(t *testing.T, protocol uint, mode SyncMode) {
 // Tests that a canceled download wipes all previously accumulated state.
 func TestCancel68Full(t *testing.T) { testCancel(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestCancel68Snap(t *testing.T) { testCancel(t, eth.ETH68, SnapSync) }
+func TestCancel68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testCancel(t, eth.ETH68, SnapSync)
+}
 func TestCancel69Full(t *testing.T) { testCancel(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestCancel69Snap(t *testing.T) { testCancel(t, eth.ETH69, SnapSync) }
+func TestCancel69Snap(t *testing.T) { testCancel(t, eth.ETH69, SnapSync) }
 
 func testCancel(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -797,12 +821,13 @@ func testCancel(t *testing.T, protocol uint, mode SyncMode) {
 // Tests that synchronisation from multiple peers works as intended (multi thread sanity test).
 func TestMultiSynchronisation68Full(t *testing.T) { testMultiSynchronisation(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMultiSynchronisation68Snap(t *testing.T) { testMultiSynchronisation(t, eth.ETH68, SnapSync) }
+func TestMultiSynchronisation68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testMultiSynchronisation(t, eth.ETH68, SnapSync)
+}
 func TestMultiSynchronisation69Full(t *testing.T) { testMultiSynchronisation(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMultiSynchronisation69Snap(t *testing.T) { testMultiSynchronisation(t, eth.ETH69, SnapSync) }
+func TestMultiSynchronisation69Snap(t *testing.T) { testMultiSynchronisation(t, eth.ETH69, SnapSync) }
 
 func testMultiSynchronisation(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -828,12 +853,13 @@ func testMultiSynchronisation(t *testing.T, protocol uint, mode SyncMode) {
 // and not wreak havoc on other nodes in the network.
 func TestMultiProtoSynchronisation68Full(t *testing.T) { testMultiProtoSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMultiProtoSynchronisation68Snap(t *testing.T) { testMultiProtoSync(t, eth.ETH68, SnapSync) }
+func TestMultiProtoSynchronisation68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testMultiProtoSync(t, eth.ETH68, SnapSync)
+}
 func TestMultiProtoSynchronisation69Full(t *testing.T) { testMultiProtoSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMultiProtoSynchronisation69Snap(t *testing.T) { testMultiProtoSync(t, eth.ETH69, SnapSync) }
+func TestMultiProtoSynchronisation69Snap(t *testing.T) { testMultiProtoSync(t, eth.ETH69, SnapSync) }
 
 func testMultiProtoSync(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -866,12 +892,13 @@ func testMultiProtoSync(t *testing.T, protocol uint, mode SyncMode) {
 // made, and instead the header should be assembled into a whole block in itself.
 func TestEmptyShortCircuit68Full(t *testing.T) { testEmptyShortCircuit(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestEmptyShortCircuit68Snap(t *testing.T) { testEmptyShortCircuit(t, eth.ETH68, SnapSync) }
+func TestEmptyShortCircuit68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testEmptyShortCircuit(t, eth.ETH68, SnapSync)
+}
 func TestEmptyShortCircuit69Full(t *testing.T) { testEmptyShortCircuit(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestEmptyShortCircuit69Snap(t *testing.T) { testEmptyShortCircuit(t, eth.ETH69, SnapSync) }
+func TestEmptyShortCircuit69Snap(t *testing.T) { testEmptyShortCircuit(t, eth.ETH69, SnapSync) }
 
 func testEmptyShortCircuit(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -906,8 +933,11 @@ func testEmptyShortCircuit(t *testing.T, protocol uint, mode SyncMode) {
 		}
 	}
 
+	// In eth/69, bor receipts are also requested for sprint end blocks (because we're not aware during snap sync
+	// if a block contains bor transactions or not). Ensure those blocks are counted towards the receipt retrieval count.
+	borCfg := params.TestChainConfig.Bor
 	for _, block := range chain.blocks[1:] {
-		if mode == SnapSync && len(block.Transactions()) > 0 {
+		if mode == SnapSync && (len(block.Transactions()) > 0 || types.IsSprintEndBlock(borCfg, block.NumberU64())) {
 			receiptsNeeded++
 		}
 	}
@@ -925,12 +955,13 @@ func testEmptyShortCircuit(t *testing.T, protocol uint, mode SyncMode) {
 // stalling the downloader by feeding gapped header chains.
 func TestMissingHeaderAttack68Full(t *testing.T) { testMissingHeaderAttack(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMissingHeaderAttack68Snap(t *testing.T) { testMissingHeaderAttack(t, eth.ETH68, SnapSync) }
+func TestMissingHeaderAttack68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testMissingHeaderAttack(t, eth.ETH68, SnapSync)
+}
 func TestMissingHeaderAttack69Full(t *testing.T) { testMissingHeaderAttack(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestMissingHeaderAttack69Snap(t *testing.T) { testMissingHeaderAttack(t, eth.ETH69, SnapSync) }
+func TestMissingHeaderAttack69Snap(t *testing.T) { testMissingHeaderAttack(t, eth.ETH69, SnapSync) }
 
 func testMissingHeaderAttack(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -958,12 +989,13 @@ func testMissingHeaderAttack(t *testing.T, protocol uint, mode SyncMode) {
 // detects the invalid numbering.
 func TestShiftedHeaderAttack68Full(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestShiftedHeaderAttack68Snap(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH68, SnapSync) }
+func TestShiftedHeaderAttack68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testShiftedHeaderAttack(t, eth.ETH68, SnapSync)
+}
 func TestShiftedHeaderAttack69Full(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestShiftedHeaderAttack69Snap(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH69, SnapSync) }
+func TestShiftedHeaderAttack69Snap(t *testing.T) { testShiftedHeaderAttack(t, eth.ETH69, SnapSync) }
 
 func testShiftedHeaderAttack(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -994,21 +1026,20 @@ func TestHighTDStarvationAttack68Full(t *testing.T) {
 	testHighTDStarvationAttack(t, eth.ETH68, FullSync)
 }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestHighTDStarvationAttack68Snap(t *testing.T) {
-// 	testHighTDStarvationAttack(t, eth.ETH68, SnapSync)
-// }
+func TestHighTDStarvationAttack68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testHighTDStarvationAttack(t, eth.ETH68, SnapSync)
+}
 
 func TestHighTDStarvationAttack69Full(t *testing.T) {
 	t.Parallel()
 	testHighTDStarvationAttack(t, eth.ETH69, FullSync)
 }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestHighTDStarvationAttack69Snap(t *testing.T) {
-// 	t.Parallel()
-// 	testHighTDStarvationAttack(t, eth.ETH69, SnapSync)
-// }
+func TestHighTDStarvationAttack69Snap(t *testing.T) {
+	t.Parallel()
+	testHighTDStarvationAttack(t, eth.ETH69, SnapSync)
+}
 
 func testHighTDStarvationAttack(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -1077,12 +1108,13 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 // and highest block number) is tracked and updated correctly.
 func TestSyncProgress68Full(t *testing.T) { testSyncProgress(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestSyncProgress68Snap(t *testing.T) { testSyncProgress(t, eth.ETH68, SnapSync) }
+func TestSyncProgress68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testSyncProgress(t, eth.ETH68, SnapSync)
+}
 func TestSyncProgress69Full(t *testing.T) { testSyncProgress(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestSyncProgress69Snap(t *testing.T) { testSyncProgress(t, eth.ETH69, SnapSync) }
+func TestSyncProgress69Snap(t *testing.T) { testSyncProgress(t, eth.ETH69, SnapSync) }
 
 func testSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -1169,12 +1201,13 @@ func checkProgress(t *testing.T, d *Downloader, stage string, want ethereum.Sync
 // revertal).
 func TestForkedSyncProgress68Full(t *testing.T) { testForkedSyncProgress(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestForkedSyncProgress68Snap(t *testing.T) { testForkedSyncProgress(t, eth.ETH68, SnapSync) }
+func TestForkedSyncProgress68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testForkedSyncProgress(t, eth.ETH68, SnapSync)
+}
 func TestForkedSyncProgress69Full(t *testing.T) { testForkedSyncProgress(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestForkedSyncProgress69Snap(t *testing.T) { testForkedSyncProgress(t, eth.ETH69, SnapSync) }
+func TestForkedSyncProgress69Snap(t *testing.T) { testForkedSyncProgress(t, eth.ETH69, SnapSync) }
 
 func testForkedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -1253,12 +1286,13 @@ func testForkedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 // continuation of the previous sync and not a new instance.
 func TestFailedSyncProgress68Full(t *testing.T) { testFailedSyncProgress(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestFailedSyncProgress68Snap(t *testing.T) { testFailedSyncProgress(t, eth.ETH68, SnapSync) }
+func TestFailedSyncProgress68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testFailedSyncProgress(t, eth.ETH68, SnapSync)
+}
 func TestFailedSyncProgress69Full(t *testing.T) { testFailedSyncProgress(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestFailedSyncProgress69Snap(t *testing.T) { testFailedSyncProgress(t, eth.ETH69, SnapSync) }
+func TestFailedSyncProgress69Snap(t *testing.T) { testFailedSyncProgress(t, eth.ETH69, SnapSync) }
 
 func testFailedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -1332,12 +1366,13 @@ func testFailedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 // the progress height is successfully reduced at the next sync invocation.
 func TestFakedSyncProgress68Full(t *testing.T) { testFakedSyncProgress(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestFakedSyncProgress68Snap(t *testing.T) { testFakedSyncProgress(t, eth.ETH68, SnapSync) }
+func TestFakedSyncProgress68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testFakedSyncProgress(t, eth.ETH68, SnapSync)
+}
 func TestFakedSyncProgress69Full(t *testing.T) { testFakedSyncProgress(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestFakedSyncProgress69Snap(t *testing.T) { testFakedSyncProgress(t, eth.ETH69, SnapSync) }
+func TestFakedSyncProgress69Snap(t *testing.T) { testFakedSyncProgress(t, eth.ETH69, SnapSync) }
 
 func testFakedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 	tester := newTester(t)
@@ -1499,12 +1534,13 @@ func TestRemoteHeaderRequestSpan(t *testing.T) {
 // being fast-synced from, avoiding potential cheap eclipse attacks.
 func TestBeaconSync68Full(t *testing.T) { testBeaconSync(t, eth.ETH68, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBeaconSync68Snap(t *testing.T) { testBeaconSync(t, eth.ETH68, SnapSync) }
+func TestBeaconSync68Snap(t *testing.T) {
+	t.Skip("Skipping as eth/68 nodes are filtered out during snap sync")
+	testBeaconSync(t, eth.ETH68, SnapSync)
+}
 func TestBeaconSync69Full(t *testing.T) { testBeaconSync(t, eth.ETH69, FullSync) }
 
-// TODO v1.16.1: Enable when snap sync gets fixed
-// func TestBeaconSync69Snap(t *testing.T) { testBeaconSync(t, eth.ETH69, SnapSync) }
+func TestBeaconSync69Snap(t *testing.T) { testBeaconSync(t, eth.ETH69, SnapSync) }
 
 func testBeaconSync(t *testing.T, protocol uint, mode SyncMode) {
 	t.Helper()

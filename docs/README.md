@@ -21,6 +21,6 @@
   $ bor server --config <path_to_config.toml>
   ```
 
-- You can find an example config file [here](./cli/example_config.toml) to know more about what each flag is used for, what are the defaults and recommended values for different networks. 
+- You can find the default config file [here](./cli/default_config.toml) to know more about what each flag is used for and what defaults are applied.
 
 - Toml files used earlier (with `--config` flag) to configure additional fields (like static and trusted nodes) are being deprecated and have been converted to flags. 

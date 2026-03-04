@@ -127,32 +127,8 @@ func (c *Command) extractFlags(args []string) error {
 
 	var tomlConfig *toml.Tree
 
-	// nolint:nestif
-	// check for log-level and verbosity here
 	if configFilePath != "" {
 		tomlConfig, _ = toml.LoadFile(configFilePath)
-		if tomlConfig.Has("verbosity") && tomlConfig.Has("log-level") {
-			log.Warn("Config contains both, verbosity and log-level, log-level will be deprecated soon. Use verbosity only.", "using", tomlConfig.Get("verbosity"))
-		} else if !tomlConfig.Has("verbosity") && tomlConfig.Has("log-level") {
-			log.Warn("Config contains log-level only, note that log-level will be deprecated soon. Use verbosity instead.", "using", tomlConfig.Get("log-level"))
-			c.cliConfig.Verbosity = VerbosityStringToInt(strings.ToLower(tomlConfig.Get("log-level").(string)))
-		}
-	} else {
-		tempFlag := 0
-
-		for _, val := range args {
-			if (strings.HasPrefix(val, "-verbosity") || strings.HasPrefix(val, "--verbosity")) && c.cliConfig.LogLevel != "" {
-				tempFlag = 1
-				break
-			}
-		}
-
-		if tempFlag == 1 {
-			log.Warn("Both, verbosity and log-level flags are provided, log-level will be deprecated soon. Use verbosity only.", "using", c.cliConfig.Verbosity)
-		} else if tempFlag == 0 && c.cliConfig.LogLevel != "" {
-			log.Warn("Only log-level flag is provided, note that log-level will be deprecated soon. Use verbosity instead.", "using", c.cliConfig.LogLevel)
-			c.cliConfig.Verbosity = VerbosityStringToInt(strings.ToLower(c.cliConfig.LogLevel))
-		}
 	}
 
 	// Handle multiple flags for tx lookup limit
