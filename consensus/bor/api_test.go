@@ -234,6 +234,52 @@ func TestAPI_GetCurrentValidators(t *testing.T) {
 	require.True(t, found)
 }
 
+func TestAPI_GetRootHash_StableWhenTipAdvancesPastEnd(t *testing.T) {
+	t.Parallel()
+	api, chain, _ := newAPIForTest(t)
+
+	root1, err := api.GetRootHash(0, 3)
+	require.NoError(t, err)
+	require.NotEmpty(t, root1)
+
+	chain.mu.Lock()
+	readsAfterFirst := chain.readCount
+	chain.mu.Unlock()
+
+	head := chain.CurrentHeader()
+	require.NotNil(t, head)
+
+	next := &types.Header{
+		ParentHash:  head.Hash(),
+		Number:      new(big.Int).SetUint64(5),
+		Time:        head.Time + 2,
+		GasLimit:    head.GasLimit,
+		Difficulty:  head.Difficulty,
+		Extra:       make([]byte, 32+65),
+		TxHash:      crypto.Keccak256Hash([]byte("tip-advance-tx")),
+		ReceiptHash: crypto.Keccak256Hash([]byte("tip-advance-receipt")),
+	}
+	rawdb.WriteHeader(chain.db, next)
+	rawdb.WriteCanonicalHash(chain.db, next.Hash(), 5)
+	rawdb.WriteTd(chain.db, next.Hash(), 5, big.NewInt(6))
+	rawdb.WriteHeadHeaderHash(chain.db, next.Hash())
+
+	chain.mu.Lock()
+	chain.current = next
+	chain.mu.Unlock()
+
+	root2, err := api.GetRootHash(0, 3)
+	require.NoError(t, err)
+	require.Equal(t, root1, root2)
+
+	chain.mu.Lock()
+	readsAfterSecond := chain.readCount
+	chain.mu.Unlock()
+
+	// Cache hit path should only read the end header (0-3 range must not be recomputed).
+	require.Equal(t, readsAfterFirst+1, readsAfterSecond)
+}
+
 func newAPIWithUnknownCurrentHeader() *API {
 	cfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: &params.BorConfig{Sprint: map[string]uint64{"0": 64}}}
 	chain := newRawDBChain(rawdb.NewMemoryDatabase(), cfg, nil, nil, nil)
