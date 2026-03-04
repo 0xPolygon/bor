@@ -5344,7 +5344,7 @@ func TestRebroadcastCleanupAllPaths(t *testing.T) {
 		tx2 := pricedTransaction(0, 100000, big.NewInt(50), key)
 		pool.mu.Lock()
 		pool.all.Add(tx2)
-		pool.priced.Put(tx2)
+		pool.priced.Put(tx2, pool.priced.reheaps.Load())
 		pool.lastRebroadcast[tx2.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.promoteTx(from, tx2.Hash(), tx2)
