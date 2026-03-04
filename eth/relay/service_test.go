@@ -101,7 +101,7 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 		defer service.close()
 
 		// Mock the server to send no preconf but accept tx submission
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
 		err := service.SubmitTransactionForPreconf(tx)
@@ -160,10 +160,10 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 
 		// Update the rpc server handlers to have a delay in processing tasks
 		for _, s := range rpcServers {
-			s.handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			s.setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				time.Sleep(time.Second)
 				defaultHandleSendPreconfTx(w, id, params)
-			}
+			})
 		}
 
 		service := NewService(urls, &config)
@@ -199,7 +199,7 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 
 		// Reset all rpc servers
 		for _, s := range rpcServers {
-			s.handleSendPreconfTx = defaultHandleSendPreconfTx
+			s.setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 		}
 	})
 
@@ -297,9 +297,9 @@ func TestServiceSubmitPrivateTx(t *testing.T) {
 
 	t.Run("error when submission fails", func(t *testing.T) {
 		// Mock server to fail private tx submissions
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		service := NewService(urls, nil)
 		defer service.close()
@@ -309,7 +309,7 @@ func TestServiceSubmitPrivateTx(t *testing.T) {
 		require.Equal(t, errPrivateTxSubmissionFailed, err, "expected errPrivateTxSubmissionFailed")
 
 		// Reset handler
-		rpcServers[0].handleSendPrivateTx = defaultHandleSendPrivateTx
+		rpcServers[0].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 	})
 
 	t.Run("concurrent private tx submissions", func(t *testing.T) {
@@ -378,10 +378,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track call count to ensure checkTxStatus is called
 		var callCount [2]atomic.Int32
 		for i, server := range rpcServers {
-			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			server.setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCount[i].Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Confirm that unknown tx is not present in cache
@@ -430,10 +430,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		var callCount [2]atomic.Int32
 		handleTxStatus := makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
 		for i, server := range rpcServers {
-			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			server.setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCount[i].Add(1)
 				handleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Confirm that unknown tx is not present in cache
@@ -483,10 +483,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track call count to ensure checkTxStatus is called and the call fails.
 		var callCount [2]atomic.Int32
 		for i, server := range rpcServers {
-			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			server.setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCount[i].Add(1)
 				defaultSendError(w, id, -32603, "internal server error")
-			}
+			})
 		}
 
 		// Confirm that unknown tx is not present in cache
@@ -536,10 +536,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track call count to ensure checkTxStatus is called and the call fails.
 		var callCount [2]atomic.Int32
 		for i, server := range rpcServers {
-			server.handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			server.setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCount[i].Add(1)
 				defaultSendError(w, id, -32603, "internal server error")
-			}
+			})
 		}
 
 		// Confirm that unknown tx is not present in cache
@@ -573,10 +573,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 			handleTxStatus := makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				unknownHash: txpool.TxStatusPending,
 			})
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCount[i].Add(1)
 				handleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Check preconfirmation status again to ensure tx status is re-checked
@@ -604,7 +604,7 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 
 	t.Run("re-checks status when not preconfirmed initially", func(t *testing.T) {
 		// Mock servers to reject preconf initially
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 
 		service := NewService(urls, nil)
 		defer service.close()
@@ -624,7 +624,7 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 
 		// Mock servers to return unknown tx status on initial status
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{}))
 		}
 
 		// Check status - should re-check via checkTxStatus
@@ -634,9 +634,9 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 
 		// Now update the mock servers to return pending status
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				tx.Hash(): txpool.TxStatusPending,
-			})
+			}))
 		}
 
 		// Check status - should again re-check via checkTxStatus
@@ -646,8 +646,8 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 
 		// Reset handlers
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = defaultHandleTxStatus
-			rpcServers[i].handleSendPreconfTx = defaultHandleSendPreconfTx
+			rpcServers[i].setHandleTxStatus(defaultHandleTxStatus)
+			rpcServers[i].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 		}
 	})
 
@@ -658,10 +658,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track if checkTxStatus is called (it shouldn't be)
 		var checkTxStatusCalled atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				checkTxStatusCalled.Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Create a transaction that will be "found" in local database
@@ -706,10 +706,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track if checkTxStatus is called
 		var checkTxStatusCalled atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				checkTxStatusCalled.Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		unknownHash := common.HexToHash("0x1")
@@ -749,10 +749,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track if checkTxStatus is called
 		var checkTxStatusCalled atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				checkTxStatusCalled.Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		unknownHash := common.HexToHash("0x1")
@@ -771,7 +771,7 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		defer service.close()
 
 		// Submit tx that gets rejected
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
 		err := service.SubmitTransactionForPreconf(tx)
 		require.NoError(t, err)
@@ -795,10 +795,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track if checkTxStatus is called (it shouldn't be)
 		var checkTxStatusCalled atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				checkTxStatusCalled.Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Check status - should find in local DB and update cache
@@ -818,7 +818,7 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		require.NoError(t, task.err, "expected task error to be nil after update")
 
 		// Reset handler
-		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+		rpcServers[0].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 	})
 
 	t.Run("txGetter returns error still falls back to checkTxStatus", func(t *testing.T) {
@@ -838,10 +838,10 @@ func TestCheckTxPreconfStatus(t *testing.T) {
 		// Track if checkTxStatus is called
 		var checkTxStatusCalled atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				checkTxStatusCalled.Add(1)
 				defaultHandleTxStatus(w, id, params)
-			}
+			})
 		}
 
 		// Check status - should try txGetter then fall back to checkTxStatus
@@ -979,7 +979,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		defer service.close()
 
 		// Reject the preconf tx to simulate failure
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
 		err := service.SubmitTransactionForPreconf(tx)
@@ -1026,7 +1026,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		require.NoError(t, task.err, "expected error to remain nil")
 
 		// Reset handler
-		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+		rpcServers[0].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 	})
 
 	t.Run("CheckTxPreconfStatus succeeds and processPreconfTask try to update same task", func(t *testing.T) {
@@ -1049,7 +1049,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		require.NoError(t, task.err, "expected no error in task")
 
 		// Reject the preconf tx to simulate failure
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 
 		// Now, simulate a scenario where processPreconfTask tries to update the same task
 		// with a non-preconfirmed status.
@@ -1068,7 +1068,7 @@ func TestTaskCacheOverride(t *testing.T) {
 		require.NoError(t, task.err, "expected error to remain nil")
 
 		// Reset handler
-		rpcServers[0].handleSendPreconfTx = defaultHandleSendPreconfTx
+		rpcServers[0].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 	})
 
 	t.Run("CheckTxPreconfStatus fails and processPreconfTask try to update same task", func(t *testing.T) {
@@ -1079,9 +1079,9 @@ func TestTaskCacheOverride(t *testing.T) {
 
 		// Mock the rpc server to reject the tx status call
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				defaultSendError(w, id, -32603, "internal server error")
-			}
+			})
 		}
 
 		// Check the preconf status directly
