@@ -240,7 +240,6 @@ type PprofConfig struct {
 
 	// Turn on block profiling with the given rate
 	BlockProfileRate int `hcl:"blockprofilerate,optional" toml:"blockprofilerate,optional"`
-
 }
 
 type P2PConfig struct {
