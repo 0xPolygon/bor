@@ -13,14 +13,16 @@ const (
 )
 
 type WitnessStrategy struct {
-	retention uint64
-	interval  time.Duration
+	retention    uint64
+	interval     time.Duration
+	witnessStore WitnessStore
 }
 
-func NewWitnessStrategy() *WitnessStrategy {
+func NewWitnessStrategy(ws WitnessStore) *WitnessStrategy {
 	return &WitnessStrategy{
-		retention: WitnessRetentionBlocks,
-		interval:  WitnessPruneInterval,
+		retention:    WitnessRetentionBlocks,
+		interval:     WitnessPruneInterval,
+		witnessStore: ws,
 	}
 }
 
@@ -43,14 +45,13 @@ func (w *WitnessStrategy) WritePrunerHead(db ethdb.KeyValueWriter, cur uint64) {
 }
 
 func (w *WitnessStrategy) FindEarliest(db ethdb.Database, cutoff uint64) (uint64, bool) {
-	// same as your findEarliestWitness
-	return findEarliestWitness(db, cutoff)
+	return findEarliestWitness(db, w.witnessStore, cutoff)
 }
 func (w *WitnessStrategy) ReadNumberHashes(db ethdb.Iteratee, from, to uint64) []*NumberHash {
 	return ReadAllHashesInRange(db, from, to)
 }
 func (w *WitnessStrategy) DeletePerHash(batch ethdb.KeyValueWriter, number uint64, hash common.Hash) {
-	DeleteWitness(batch, hash)
+	w.witnessStore.DeleteWitness(hash)
 }
 func (w *WitnessStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uint64) {
 	// nothing per height for witnesses
@@ -58,7 +59,7 @@ func (w *WitnessStrategy) DeletePerHeight(batch ethdb.KeyValueWriter, number uin
 
 // findEarliestWitness returns the smallest block number h in [0, hi] that has a witness.
 // If none exists in the range, it returns (hi, false).
-func findEarliestWitness(db ethdb.Database, hi uint64) (uint64, bool) {
+func findEarliestWitness(db ethdb.Database, ws WitnessStore, hi uint64) (uint64, bool) {
 	var (
 		lo    uint64 = 1
 		res   uint64
@@ -70,7 +71,7 @@ func findEarliestWitness(db ethdb.Database, hi uint64) (uint64, bool) {
 		mid := lo + (hi-lo)/2
 
 		hash := ReadCanonicalHash(db, mid)
-		if (hash == common.Hash{}) || !HasWitness(db, hash) {
+		if (hash == common.Hash{}) || !ws.HasWitness(hash) {
 			// No witness at mid, earliest (if any) must be to the right.
 			lo = mid + 1
 			continue

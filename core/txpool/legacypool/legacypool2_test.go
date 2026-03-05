@@ -20,8 +20,10 @@ import (
 	"crypto/ecdsa"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -230,6 +232,283 @@ func TestTransactionZAttack(t *testing.T) {
 		t.Errorf("Wrong invalid pending-count, have %d, want %d (GlobalSlots: %d, queued: %d)",
 			newIvPending, ivPending, pool.config.GlobalSlots, newQueued)
 	}
+}
+
+// TestLockOrdering_PricedHeapNoDeadlock proves the lock hierarchy and helps
+// in detecting deadlock if any.
+//
+//	pool.mu (W) → reheapMu → lookup.lock is the ideal ordering
+//
+// Runs priced.Reheap and PutMany (surrounded by pool.mu.Lock()) in parallel
+// routines to check if reverse path of acquiring pool.mu.Lock() from reheapMu
+// exists or not. If it does, it will lead to a deadlock.
+func TestLockOrdering_PricedHeapNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+
+	fillPool(t, pool)
+
+	// Collect a small slice of txs from pool.all to feed into PutMany.
+	var txs types.Transactions
+	pool.mu.RLock()
+	pool.all.Range(func(_ common.Hash, tx *types.Transaction) bool {
+		txs = append(txs, tx)
+		return len(txs) < 5
+	})
+	pool.mu.RUnlock()
+
+	const iterations = 500
+	done := make(chan struct{})
+
+	// Thread B: Reheap acquires reheapMu then lookup.lock — never acquires pool.mu.
+	// If it tried to acquire pool.mu it would deadlock with Thread A below.
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	// Thread A: hold pool.mu (write lock) while calling PutMany (acquires reheapMu).
+	// This is the exact pattern introduced by the replacesPending fix.
+	for i := 0; i < iterations; i++ {
+		pool.mu.Lock()
+		pool.priced.PutMany(txs, pool.priced.reheaps.Load())
+		pool.mu.Unlock()
+	}
+
+	select {
+	case <-done:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle exists")
+	}
+}
+
+// TestLockOrderingReplacePendingNoDeadlock proves that the end-to-end
+// replacesPending code path in add() — which calls pool.priced.PutMany while
+// holding pool.mu — does not deadlock when Reheap runs concurrently.
+func TestLockOrdering_ReplacePendingNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+	config.GlobalSlots = 100
+	config.GlobalQueue = 100
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+	fillPool(t, pool)
+
+	// Future txs (gapped nonce, higher gas) that hit the replacesPending path:
+	// the pool is full with pending txs at gasPrice=300, so each future tx at
+	// gasPrice=500 triggers Discard + PutMany(drop) while holding pool.mu.
+	key, _ := crypto.GenerateKey()
+	pool.currentState.AddBalance(crypto.PubkeyToAddress(key.PublicKey),
+		uint256.NewInt(100000000000), tracing.BalanceChangeUnspecified)
+	futureTxs := types.Transactions{}
+	for j := 0; j < int(pool.config.GlobalSlots+pool.config.GlobalQueue); j++ {
+		futureTxs = append(futureTxs, pricedTransaction(1000+uint64(j), 100000, big.NewInt(500), key))
+	}
+
+	reheapDone := make(chan struct{})
+
+	// Concurrent Reheap — if it tried to acquire pool.mu it would deadlock
+	// with the addRemotesSync goroutines holding pool.mu in the add() path.
+	go func() {
+		defer close(reheapDone)
+		for i := 0; i < 500; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		pool.addRemotesSync(futureTxs)
+	}
+
+	select {
+	case <-reheapDone:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected in replacesPending code path")
+	}
+}
+
+// TestLockOrdering_RemovedNoDeadlock proves that routines using pool.mu and
+// Removed (which acquires reheapMu) does not deadlock. Removed is called under
+// pool.mu and should follow a one way order for acquiring lock. Removed is
+// called under various path in internal tx arrangement stage.
+func TestLockOrdering_RemovedNoDeadlock(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	blockchain := newTestBlockChain(eip1559Config, 1000000, statedb, new(event.Feed))
+	config := testTxPoolConfig
+	config.GlobalSlots = 100
+	config.GlobalQueue = 100
+	pool := New(config, blockchain)
+	pool.Init(config.PriceLimit, blockchain.CurrentBlock(), newReserver())
+	defer pool.Close()
+	fillPool(t, pool)
+
+	const iterations = 2000 // Removed is a brief lock; use more iterations for coverage
+	done := make(chan struct{})
+
+	// Thread B: Reheap holds reheapMu and accesses lookup.lock — never pool.mu.
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			pool.priced.Reheap()
+		}
+	}()
+
+	// Thread A: hold pool.mu (write lock) while calling Removed (acquires reheapMu
+	// briefly and may internally trigger Reheap if stales threshold is crossed).
+	for i := 0; i < iterations; i++ {
+		pool.mu.Lock()
+		pool.priced.Removed(1)
+		pool.mu.Unlock()
+	}
+
+	select {
+	case <-done:
+		// success: no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle in Removed path")
+	}
+}
+
+// TestPricedListPut_ReheapAfterSnapshot verifies that Put is a no-op when a
+// Reheap occurred after the snapshot was captured. This is the deduplication
+// mechanism that prevents the same tx from appearing in the priced heap twice
+// (once from Reheap reading pool.all, once from the explicit Put).
+func TestPricedListPut_ReheapAfterSnapshot(t *testing.T) {
+	t.Parallel()
+
+	all := newLookup()
+	priced := newPricedList(all)
+
+	key, _ := crypto.GenerateKey()
+	tx := pricedTransaction(0, 100000, big.NewInt(1), key)
+
+	// Add tx to lookup and capture the reheap counter before any reheap runs.
+	all.Add(tx)
+	snapshot := priced.reheaps.Load()
+	require.Equal(t, uint64(0), snapshot)
+
+	// Reheap rebuilds the heap from pool.all (which now includes tx) and
+	// bumps the reheap counter, invalidating the snapshot taken above.
+	priced.Reheap()
+	require.Equal(t, uint64(1), priced.reheaps.Load())
+
+	priced.reheapMu.Lock()
+	afterReheap := priced.urgent.Len() + priced.floating.Len()
+	priced.reheapMu.Unlock()
+	require.Equal(t, 1, afterReheap)
+
+	// Put with the stale snapshot must be a no-op — the tx is already in the
+	// heap from Reheap.
+	priced.Put(tx, snapshot)
+
+	priced.reheapMu.Lock()
+	heapLen := priced.urgent.Len() + priced.floating.Len()
+	priced.reheapMu.Unlock()
+
+	require.Equal(t, 1, heapLen, "Put should not have inserted a duplicate")
+	require.Equal(t, heapLen, all.Count(), "heap and lookup must stay in sync")
+}
+
+// TestPricedListPut_ConcurrentReheapAfterSnapshot is the concurrent variant
+// of TestPricedListPut_ReheapAfterSnapshot. A goroutine runs Reheap after
+// `pool.all` is updated and the test ensures that duplicate entries into
+// the heap are prevented.
+func TestPricedListPut_ConcurrentReheapAfterSnapshot(t *testing.T) {
+	t.Parallel()
+
+	all := newLookup()
+	priced := newPricedList(all)
+
+	key, _ := crypto.GenerateKey()
+	tx := pricedTransaction(0, 100000, big.NewInt(1), key)
+
+	addDone := make(chan struct{})
+	reheapDone := make(chan struct{})
+
+	// Goroutine starts first, waiting for the Add signal.
+	go func() {
+		<-addDone
+		priced.Reheap()
+		close(reheapDone)
+	}()
+
+	all.Add(tx)
+	// Signal the goroutine to run Reheap now that Add is done and later take a snapshot.
+	close(addDone)
+	snapshot := priced.reheaps.Load()
+	require.Equal(t, uint64(0), snapshot)
+
+	<-reheapDone
+
+	priced.reheapMu.Lock()
+	afterReheap := priced.urgent.Len() + priced.floating.Len()
+	priced.reheapMu.Unlock()
+	require.Equal(t, 1, afterReheap)
+
+	// Put with the stale snapshot must be a no-op.
+	priced.Put(tx, snapshot)
+
+	priced.reheapMu.Lock()
+	heapLen := priced.urgent.Len() + priced.floating.Len()
+	priced.reheapMu.Unlock()
+
+	require.Equal(t, 1, heapLen, "Put should not have inserted a duplicate")
+	require.Equal(t, heapLen, all.Count(), "heap and lookup must stay in sync")
+}
+
+// TestPricedListPut_ReheapBeforeAdd verifies the happy path: Reheap runs
+// before the tx is added to the lookup, so Put with a matching snapshot
+// correctly inserts the tx exactly once — no duplicates.
+func TestPricedListPut_ReheapBeforeAdd(t *testing.T) {
+	t.Parallel()
+
+	all := newLookup()
+	priced := newPricedList(all)
+
+	key, _ := crypto.GenerateKey()
+	tx := pricedTransaction(0, 100000, big.NewInt(1), key)
+
+	// Reheap on an empty lookup — the tx doesn't exist yet, so it won't
+	// appear in the heap. This bumps the reheap counter to 1.
+	priced.Reheap()
+	require.Equal(t, uint64(1), priced.reheaps.Load())
+
+	priced.reheapMu.Lock()
+	require.Equal(t, 0, priced.urgent.Len()+priced.floating.Len())
+	priced.reheapMu.Unlock()
+
+	// Add tx to lookup and capture snapshot — it matches the current reheap
+	// counter since no new reheap has happened.
+	all.Add(tx)
+	snapshot := priced.reheaps.Load()
+	require.Equal(t, uint64(1), snapshot)
+
+	// Put with a valid (non-stale) snapshot must insert the tx.
+	priced.Put(tx, snapshot)
+
+	priced.reheapMu.Lock()
+	heapLen := priced.urgent.Len() + priced.floating.Len()
+	priced.reheapMu.Unlock()
+
+	require.Equal(t, 1, heapLen, "Put should have inserted the tx")
+	require.Equal(t, heapLen, all.Count(), "heap and lookup must stay in sync")
 }
 
 func BenchmarkFutureAttack(b *testing.B) {

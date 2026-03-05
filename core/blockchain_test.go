@@ -6135,7 +6135,7 @@ func TestWitnessCache(t *testing.T) {
 	// Test 8: Test HasWitness with cache hit
 	testHash3 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 	testWitness4 := []byte("test witness data 4")
-	chain.WriteWitness(chain.db, testHash3, testWitness4)
+	chain.WriteWitness(testHash3, testWitness4)
 
 	// HasWitness should return true (from cache)
 	require.True(t, chain.HasWitness(testHash3), "HasWitness should return true for cached witness")
@@ -6158,7 +6158,7 @@ func TestWitnessCache(t *testing.T) {
 	testWitness6 := []byte("test witness data 6")
 
 	// Use WriteWitness wrapper
-	chain.WriteWitness(chain.db, testHash6, testWitness6)
+	chain.WriteWitness(testHash6, testWitness6)
 
 	// Verify it's in both DB and cache
 	require.True(t, chain.HasWitness(testHash6), "HasWitness should return true after WriteWitness")
@@ -6202,7 +6202,7 @@ func TestWitnessCachePurgeOnReorg(t *testing.T) {
 	// Manually add witnesses to cache and DB for these blocks
 	for i, block := range blocks {
 		witnessData := []byte(fmt.Sprintf("witness data for block %d", i))
-		chain.WriteWitness(db, block.Hash(), witnessData)
+		chain.WriteWitness(block.Hash(), witnessData)
 	}
 
 	// Verify witnesses are in cache

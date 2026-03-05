@@ -304,6 +304,63 @@ func TestFilterTxConditionalTimestamp(t *testing.T) {
 	require.Equal(t, tx2, drops[0], "Got %x, expected %x", drops[0].Hash(), tx2.Hash())
 }
 
+// TestPricedListReheapSnapshot validates the reheap snapshot mechanism:
+//   - Reheap increments the reheaps counter
+//   - Put/PutMany insert when the snapshot matches the current counter
+//   - Put/PutMany skip when the snapshot is stale
+func TestPricedListReheapSnapshot(t *testing.T) {
+	t.Parallel()
+
+	all := newLookup()
+	priced := newPricedList(all)
+
+	key, _ := crypto.GenerateKey()
+	tx1 := pricedTransaction(0, 100000, big.NewInt(1), key)
+	tx2 := pricedTransaction(1, 100000, big.NewInt(2), key)
+	tx3 := pricedTransaction(2, 100000, big.NewInt(3), key)
+
+	heapLen := func() int {
+		priced.reheapMu.Lock()
+		defer priced.reheapMu.Unlock()
+		return priced.urgent.Len() + priced.floating.Len()
+	}
+
+	// Initial counter is 0.
+	require.Equal(t, uint64(0), priced.reheaps.Load())
+
+	// Put with matching snapshot inserts.
+	priced.Put(tx1, 0)
+	require.Equal(t, 1, heapLen())
+
+	// PutMany with matching snapshot inserts.
+	priced.PutMany(types.Transactions{tx2, tx3}, 0)
+	require.Equal(t, 3, heapLen())
+
+	// Reheap increments the counter.
+	all.Add(tx1)
+	priced.Reheap()
+	require.Equal(t, uint64(1), priced.reheaps.Load())
+
+	// After Reheap, only tx1 is in lookup so heap has 1 entry.
+	require.Equal(t, 1, heapLen())
+
+	// Put with stale snapshot (0) is a no-op.
+	priced.Put(tx1, 0)
+	require.Equal(t, 1, heapLen())
+
+	// PutMany with stale snapshot (0) is a no-op.
+	priced.PutMany(types.Transactions{tx2, tx3}, 0)
+	require.Equal(t, 1, heapLen())
+
+	// Put with current snapshot (1) inserts.
+	priced.Put(tx2, 1)
+	require.Equal(t, 2, heapLen())
+
+	// PutMany with current snapshot (1) inserts.
+	priced.PutMany(types.Transactions{tx3}, 1)
+	require.Equal(t, 3, heapLen())
+}
+
 func BenchmarkListCapOneTx(b *testing.B) {
 	// Generate a list of transactions to insert
 	key, _ := crypto.GenerateKey()
