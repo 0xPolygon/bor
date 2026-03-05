@@ -196,4 +196,3 @@ devfakeauthor = false
   addr = "127.0.0.1"
   memprofilerate = 524288
   blockprofilerate = 0
-  cpuprofile = ""
