@@ -206,7 +206,7 @@ func TestWitnessCacheUsageInAPIBackend(t *testing.T) {
 	// First, manually store a witness using blockchain.WriteWitness so we have something to retrieve
 	// This tests that the APIs work with the cache
 	testWitnessBytes := []byte("test witness RLP bytes")
-	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockHash, testWitnessBytes)
+	b.eth.blockchain.WriteWitness(blockHash, testWitnessBytes)
 
 	// Test StoreWitness - this uses blockchain.WriteWitness() [Line 640 in api_backend.go]
 	err := b.StoreWitness(ctx, blockHash, witness)

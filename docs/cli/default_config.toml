@@ -9,6 +9,10 @@ identity = ""
 verbosity = 3
 # Record information useful for VM and contract debugging
 vmdebug = false
+# VMTrace enables live VM tracing at startup
+vmtrace = ""
+# VMTraceJsonConfig is the JSON config for the VM tracer
+"vmtrace.jsonconfig" = ""
 # Enable state size tracking
 "state.size-tracking" = false
 # DataDir is the directory to store the state in
@@ -19,8 +23,10 @@ ancient = ""
 "db.engine" = "pebble"
 # KeyStoreDir is the directory to store keystores
 keystore = ""
-# Maximum number of messages in a batch (default=100, use 0 for no limits)
-"rpc.batchlimit" = 100
+# Maximum number of requests in a batch (default=1000, use 0 for no limits)
+"rpc.batch-request-limit" = 1000
+# Maximum number of response bytes across all requests in a batch (default=25MB, use 0 for no limits)
+"rpc.batch-response-max-size" = 25000000
 # Maximum size (in bytes) a result of an rpc request could have (default=100000, use 0 for no limits)
 "rpc.returndatalimit" = 100000
 # SyncMode selects the sync protocol

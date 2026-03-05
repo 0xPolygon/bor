@@ -94,7 +94,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```pprof.port```: pprof HTTP server listening port (default: 6060)
 
-- ```rpc.batchlimit```: Maximum number of messages in a batch (use 0 for no limits) (default: 100)
+- ```rpc.batch-request-limit```: Maximum number of requests in a batch (use 0 for no limits) (default: 1000)
+
+- ```rpc.batch-response-max-size```: Maximum number of response bytes across all requests in a batch (use 0 for no limits) (default: 25000000)
 
 - ```rpc.returndatalimit```: Maximum size (in bytes) a result of an rpc request could have (use 0 for no limits) (default: 100000)
 
@@ -107,6 +109,10 @@ The ```bor server``` command runs the Bor client.
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
+
+- ```vmtrace```: Name of tracer which should observe internal VM operations (e.g. 'json')
+
+- ```vmtrace.jsonconfig```: Tracer configuration (JSON)
 
 - ```witness.enable```: Enable witness protocol (default: false)
 
