@@ -1230,6 +1230,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	// txpool options
 	{
+		for _, addrStr := range c.TxPool.Locals {
+			n.TxPool.Locals = append(n.TxPool.Locals, common.HexToAddress(addrStr))
+		}
 		n.TxPool.NoLocals = c.TxPool.NoLocals
 		n.TxPool.Journal = c.TxPool.Journal
 		n.TxPool.Rejournal = c.TxPool.Rejournal
