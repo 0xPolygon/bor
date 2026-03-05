@@ -611,6 +611,11 @@ func (api *BorAPI) GetBalanceChangesInBlock(ctx context.Context, blockNrOrHash r
 	// Process all transactions to collect explicit addresses
 	signer := types.MakeSigner(api.b.ChainConfig(), block.Number(), block.Time())
 	for _, tx := range block.Transactions() {
+		// skip state-sync transactions (no sender/recipient)
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
+
 		// Add sender
 		if sender, err := types.Sender(signer, tx); err == nil {
 			modifiedAddresses[sender] = true
@@ -697,6 +702,11 @@ func (api *BorAPI) getBalanceChangesForPending(ctx context.Context) (map[common.
 	// Process all pending transactions
 	signer := types.MakeSigner(api.b.ChainConfig(), pendingBlock.Number(), pendingBlock.Time())
 	for _, tx := range pendingBlock.Transactions() {
+		// skip state-sync txs (no sender/recipient)
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
+
 		if sender, err := types.Sender(signer, tx); err == nil {
 			modifiedAddresses[sender] = true
 		}

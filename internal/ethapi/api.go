@@ -2784,6 +2784,10 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 
 	for idx := uint64(0); idx <= lastTxIdx && idx < uint64(len(block.Transactions())); idx++ {
 		tx := block.Transactions()[idx]
+		// Skip state-sync transactions
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
 		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())
 		if err != nil {
 			return nil, fmt.Errorf("transaction %#x failed to convert to message: %v", tx.Hash(), err)
