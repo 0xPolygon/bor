@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
@@ -220,6 +221,44 @@ func newTestHandlerWithBlocks(blocks int) *testHandler {
 		Sync:       downloader.SnapSync,
 		BloomCache: 1,
 	})
+	handler.Start(1000)
+
+	return &testHandler{
+		db:      db,
+		chain:   chain,
+		txpool:  txpool,
+		handler: handler,
+	}
+}
+
+func newTestHandlerWithConfig(updateConfig func(*handlerConfig) *handlerConfig) *testHandler {
+	// Create a database pre-initialize with a genesis block
+	db := rawdb.NewMemoryDatabase()
+	gspec := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: big.NewInt(1000000)}},
+	}
+	chain, _ := core.NewBlockChain(db, gspec, ethash.NewFaker(), nil)
+
+	_, bs, _ := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), 0, nil)
+	if _, err := chain.InsertChain(bs, false); err != nil {
+		panic(err)
+	}
+
+	txpool := newTestTxPool()
+
+	config := &handlerConfig{
+		Database:   db,
+		Chain:      chain,
+		TxPool:     txpool,
+		Network:    1,
+		Sync:       downloader.SnapSync,
+		BloomCache: 1,
+	}
+	if updateConfig != nil {
+		config = updateConfig(config)
+	}
+	handler, _ := newHandler(config)
 	handler.Start(1000)
 
 	return &testHandler{
@@ -509,5 +548,50 @@ func createTestPeers(rand *rand.Rand, n int) []*ethPeer {
 func closePeers(peers []*ethPeer) {
 	for _, p := range peers {
 		p.Close()
+	}
+}
+
+// TestSealToBroadcastTimer verifies that the sealToBroadcastTimer metric is
+// updated when minedBroadcastLoop processes a NewMinedBlockEvent with SealedAt set.
+func TestSealToBroadcastTimer(t *testing.T) {
+	t.Parallel()
+	metrics.Enable()
+
+	handler := newTestHandlerWithBlocks(1)
+	defer handler.close()
+
+	countBefore := sealToBroadcastTimer.Snapshot().Count()
+
+	// Get a valid block from the chain to use in the event
+	block := handler.chain.GetBlockByNumber(1)
+	if block == nil {
+		t.Fatal("failed to get block 1")
+	}
+
+	// Post a NewMinedBlockEvent with SealedAt set
+	handler.handler.eventMux.Post(core.NewMinedBlockEvent{
+		Block:    block,
+		SealedAt: time.Now(),
+	})
+
+	// Give the broadcast loop time to process
+	time.Sleep(200 * time.Millisecond)
+
+	if sealToBroadcastTimer.Snapshot().Count() <= countBefore {
+		t.Error("sealToBroadcastTimer should have been updated after NewMinedBlockEvent with SealedAt")
+	}
+
+	// Test that zero SealedAt does NOT update the timer
+	countAfterFirst := sealToBroadcastTimer.Snapshot().Count()
+
+	handler.handler.eventMux.Post(core.NewMinedBlockEvent{
+		Block: block,
+		// SealedAt is zero (default)
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	if sealToBroadcastTimer.Snapshot().Count() != countAfterFirst {
+		t.Error("sealToBroadcastTimer should NOT be updated when SealedAt is zero")
 	}
 }

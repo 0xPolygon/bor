@@ -133,6 +133,9 @@ type Config struct {
 
 	// TxAnnouncementOnly is used to only announce transactions to peers
 	TxAnnouncementOnly bool
+
+	// DisableTxPropagation disables transaction broadcast and announcement completely to its peers
+	DisableTxPropagation bool
 }
 
 type configMarshaling struct {
