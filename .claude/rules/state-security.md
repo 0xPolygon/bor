@@ -34,7 +34,7 @@ BlockSTM executes transactions in parallel and detects conflicts. This is one of
 
 3. **Abort/re-execution must fully reset state** — when a transaction is re-executed, all its previous writes must be invalidated. Partial cleanup causes phantom state.
 
-4. **Sequential fallback must produce identical results** — if parallel execution is disabled or falls back to sequential, the state root must be byte-identical.
+4. **Sequential fallback must produce identical results** — serial and parallel execution are not mutually exclusive; BlockSTM can run both paths during the same block (parallel first, serial re-execution on conflict). The state root must be byte-identical regardless of which path produced the final result. Any divergence between parallel and sequential output is a consensus-splitting bug.
 
 ## Patterns to Flag
 

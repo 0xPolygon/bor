@@ -47,16 +47,16 @@ txs := make([]*types.Transaction, msg.TxCount)
 
 ## Patterns to Flag
 
-| Pattern | Severity | Why |
-|---------|----------|-----|
-| `make([]T, peerValue)` without upper bound check | CRITICAL | OOM from malicious peer |
-| `rlp.Decode` into unbounded slice without `rlp:"maxcount"` | CRITICAL | Memory bomb |
-| Missing `context.WithTimeout` on peer request | HIGH | Hung peer blocks goroutine forever |
-| Peer banned/disconnected without logging reason | MEDIUM | Makes incident investigation difficult |
-| `io.ReadAll` on peer connection | CRITICAL | Unbounded read → OOM |
-| New protocol message type without rate limiting | HIGH | Flood attack vector |
-| Discovery response used without signature verification | CRITICAL | Sybil attack on peer table |
-| Hardcoded bootnode keys in non-config files | MEDIUM | Difficult to rotate if compromised |
+| Pattern | Severity | Trigger | Why |
+|---------|----------|---------|-----|
+| `make([]T, peerValue)` without upper bound check | CRITICAL | Peer | OOM from malicious peer — any node on the network can trigger |
+| `rlp.Decode` into unbounded slice without `rlp:"maxcount"` | CRITICAL | Peer | Memory bomb from crafted message |
+| Missing `context.WithTimeout` on peer request | HIGH→CRITICAL | Peer | Hung peer blocks goroutine forever — externally triggerable |
+| Peer banned/disconnected without logging reason | MEDIUM | Self | Makes incident investigation difficult |
+| `io.ReadAll` on peer connection | CRITICAL | Peer | Unbounded read → OOM from any peer |
+| New protocol message type without rate limiting | HIGH→CRITICAL | Peer | Flood attack from any peer on the network |
+| Discovery response used without signature verification | CRITICAL | Peer | Sybil attack on peer table |
+| Hardcoded bootnode keys in non-config files | MEDIUM | Self | Difficult to rotate if compromised |
 
 ## Sync Security
 

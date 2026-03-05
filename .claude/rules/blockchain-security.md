@@ -47,7 +47,7 @@ The blockchain layer manages chain insertion, reorgs, fork choice, genesis initi
 
 4. **Genesis state root must match genesis block** — the alloc accounts, their balances, code, and storage must hash to exactly the genesis state root. A single wei difference means nodes disagree from block 0.
 
-5. **RLP encoding must be round-trip stable** — `Encode(Decode(data)) == data` for all valid inputs. Any asymmetry causes consensus splits when blocks are relayed.
+5. **RLP encoding must be round-trip stable and consistent across transaction types** — `Encode(Decode(data)) == data` for all valid inputs. Any asymmetry causes consensus splits when blocks are relayed. Additionally, encoding must be consistent across all transaction types (legacy, EIP-2930, EIP-1559, EIP-4844 blob). Inconsistent encoding between tx types causes peers running different clients (e.g., Erigon) to reject blocks or disconnect — a real production issue that has caused network-level incidents. When adding or modifying tx type encoding, verify that both Bor and Erigon produce identical wire format.
 
 6. **Fork activation parameters must be immutable after genesis** — changing `params.ChainConfig` fork blocks/timestamps after chain start creates a stealth hard fork.
 
@@ -63,6 +63,7 @@ The blockchain layer manages chain insertion, reorgs, fork choice, genesis initi
 | Freezer write without fsync or ordering guarantee | HIGH | Data loss on crash |
 | `ChainConfig` fork field compared with `==` instead of `.Cmp()` | HIGH | Nil-safe comparison needed for `*big.Int` |
 | New transaction type without RLP encode/decode + hash tests | CRITICAL | Consensus split on tx inclusion |
+| RLP encoding inconsistency between tx types (e.g., legacy vs typed envelope) | CRITICAL | Cross-client peer drops, network partition between Bor and Erigon nodes |
 | `genesis.Alloc` modified without updating expected state root | CRITICAL | Genesis mismatch across nodes |
 | Panic in `blockchain.go` reorg path | CRITICAL | Node crash during chain reorganization |
 | `rawdb.ReadHeader` result used without nil check | HIGH | Nil dereference on missing data |
@@ -90,3 +91,4 @@ The blockchain layer manages chain insertion, reorgs, fork choice, genesis initi
 - [ ] Does the change affect genesis initialization? If yes, verify state root matches expected value for all networks (mainnet, amoy).
 - [ ] Does the change touch freezer/ancient data? If yes, verify append-only semantics and crash recovery.
 - [ ] Does the change add a new transaction type? If yes, verify RLP codec, signature scheme, hash computation, and signer support.
+- [ ] Does the change affect RLP encoding of any tx type? If yes, verify encoding is consistent across all tx types and matches Erigon's encoding for the same type. Cross-client encoding mismatches cause peer disconnections at the network level.
