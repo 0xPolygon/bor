@@ -438,6 +438,8 @@ devfakeauthor = false
   parallel-stateless-import-workers = 0
   # WitnessAPI enables witness API endpoints
   witnessapi = false
+  # FileStore enables storing witness blobs on the filesystem instead of Pebble
+  filestore = true
   # Minimum necessary distance between local header and peer to fast forward
   fastforwardthreshold = 6400
 

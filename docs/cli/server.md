@@ -118,6 +118,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
 
+- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: true)
+
 - ```witness.parallelstatelessimport```: Enable parallel stateless block import (default: false)
 
 - ```witness.parallelstatelessimportworkers```: Number of workers to use for parallel stateless import (0 = GOMAXPROCS) (default: 0)
