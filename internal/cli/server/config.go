@@ -241,8 +241,6 @@ type PprofConfig struct {
 	// Turn on block profiling with the given rate
 	BlockProfileRate int `hcl:"blockprofilerate,optional" toml:"blockprofilerate,optional"`
 
-	// Write CPU profile to the given file
-	CPUProfile string `hcl:"cpuprofile,optional" toml:"cpuprofile,optional"`
 }
 
 type P2PConfig struct {
@@ -1028,7 +1026,6 @@ func DefaultConfig() *Config {
 			Addr:             "127.0.0.1",
 			MemProfileRate:   512 * 1024,
 			BlockProfileRate: 0,
-			CPUProfile:       "",
 		},
 		ParallelEVM: &ParallelEVMConfig{
 			Enable:               true,

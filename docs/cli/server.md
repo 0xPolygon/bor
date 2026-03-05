@@ -90,8 +90,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```pprof.blockprofilerate```: Turn on block profiling with the given rate (default: 0)
 
-- ```pprof.cpuprofile```: Write CPU profile to the given file
-
 - ```pprof.memprofilerate```: Turn on memory profiling with the given rate (default: 524288)
 
 - ```pprof.port```: pprof HTTP server listening port (default: 6060)

@@ -1327,13 +1327,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Pprof.BlockProfileRate,
 		Default: c.cliConfig.Pprof.BlockProfileRate,
 	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "pprof.cpuprofile",
-		Usage:   "Write CPU profile to the given file",
-		Value:   &c.cliConfig.Pprof.CPUProfile,
-		Default: c.cliConfig.Pprof.CPUProfile,
-	})
-
 	// Historical data retention related flags
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "history.transactions",

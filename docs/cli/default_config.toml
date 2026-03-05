@@ -453,8 +453,6 @@ devfakeauthor = false
   memprofilerate = 524288
   # Turn on block profiling with the given rate
   blockprofilerate = 0
-  # Write CPU profile to the given file
-  cpuprofile = ""
 
 # HistoryConfig has historical data retention related settings
 [history]
