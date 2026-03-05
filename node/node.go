@@ -122,9 +122,6 @@ func New(conf *Config) (*Node, error) {
 		databases:     make(map[*closeTrackingDB]struct{}),
 	}
 
-	// set RPC batch limit
-	node.inprocHandler.SetRPCBatchLimit(conf.RPCBatchLimit)
-
 	// Register built-in APIs.
 	node.rpcAPIs = append(node.rpcAPIs, node.apis()...)
 
@@ -163,10 +160,10 @@ func New(conf *Config) (*Node, error) {
 	}
 
 	// Configure RPC servers.
-	node.http = newHTTPServer(node.log, conf.HTTPTimeouts, conf.RPCBatchLimit)
-	node.httpAuth = newHTTPServer(node.log, conf.HTTPTimeouts, conf.RPCBatchLimit)
-	node.ws = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts, conf.RPCBatchLimit)
-	node.wsAuth = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts, conf.RPCBatchLimit)
+	node.http = newHTTPServer(node.log, conf.HTTPTimeouts)
+	node.httpAuth = newHTTPServer(node.log, conf.HTTPTimeouts)
+	node.ws = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
+	node.wsAuth = newHTTPServer(node.log, rpc.DefaultHTTPTimeouts)
 	node.ipc = newIPCServer(node.log, conf.IPCEndpoint())
 
 	return node, nil

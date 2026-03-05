@@ -61,6 +61,15 @@ type Config struct {
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
 
+	// VMTrace enables live VM tracing at startup
+	VMTrace string `hcl:"vmtrace,optional" toml:"vmtrace,optional"`
+
+	// VMTraceJsonConfig is the JSON config for the VM tracer
+	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
+
+	// EnableWitnessStats enables collection of witness trie access statistics
+	EnableWitnessStats bool `hcl:"vmwitnessstats,optional" toml:"vmwitnessstats,optional"`
+
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
@@ -76,8 +85,11 @@ type Config struct {
 	// KeyStoreDir is the directory to store keystores
 	KeyStoreDir string `hcl:"keystore,optional" toml:"keystore,optional"`
 
-	// Maximum number of messages in a batch (default=100, use 0 for no limits)
-	RPCBatchLimit uint64 `hcl:"rpc.batchlimit,optional" toml:"rpc.batchlimit,optional"`
+	// Maximum number of requests in a batch (default=1000, use 0 for no limits)
+	BatchRequestLimit int `hcl:"rpc.batch-request-limit,optional" toml:"rpc.batch-request-limit,optional"`
+
+	// Maximum number of response bytes across all requests in a batch (default=25MB, use 0 for no limits)
+	BatchResponseMaxSize int `hcl:"rpc.batch-response-max-size,optional" toml:"rpc.batch-response-max-size,optional"`
 
 	// Maximum size (in bytes) a result of an rpc request could have (default=100000, use 0 for no limits)
 	RPCReturnDataLimit uint64 `hcl:"rpc.returndatalimit,optional" toml:"rpc.returndatalimit,optional"`
@@ -232,8 +244,8 @@ type PprofConfig struct {
 	// Turn on block profiling with the given rate
 	BlockProfileRate int `hcl:"blockprofilerate,optional" toml:"blockprofilerate,optional"`
 
-	// // Write CPU profile to the given file
-	// CPUProfile string `hcl:"cpuprofile,optional" toml:"cpuprofile,optional"`
+	// Write CPU profile to the given file
+	CPUProfile string `hcl:"cpuprofile,optional" toml:"cpuprofile,optional"`
 }
 
 type P2PConfig struct {
@@ -814,8 +826,9 @@ func DefaultConfig() *Config {
 			Debug:               false,
 			EnableBlockTracking: false,
 		},
-		RPCBatchLimit:      100,
-		RPCReturnDataLimit: 100000,
+		BatchRequestLimit:    node.DefaultConfig.BatchRequestLimit,
+		BatchResponseMaxSize: node.DefaultConfig.BatchResponseMaxSize,
+		RPCReturnDataLimit:   100000,
 		P2P: &P2PConfig{
 			MaxPeers:             50,
 			MaxPendPeers:         50,
@@ -1018,7 +1031,7 @@ func DefaultConfig() *Config {
 			Addr:             "127.0.0.1",
 			MemProfileRate:   512 * 1024,
 			BlockProfileRate: 0,
-			// CPUProfile:       "",
+			CPUProfile:       "",
 		},
 		ParallelEVM: &ParallelEVMConfig{
 			Enable:               true,
@@ -1215,6 +1228,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
 	n.EnableStateSizeTracking = c.StateSizeTracking
+	n.VMTrace = c.VMTrace
+	n.VMTraceJsonConfig = c.VMTraceJsonConfig
+	n.EnableWitnessStats = c.EnableWitnessStats
 
 	// txpool options
 	{
@@ -1655,7 +1671,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.EnableParallelStatelessImportWorkers = c.Witness.ParallelStatelessImportWorkers
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
-
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit
 
 	if c.Ancient != "" {
@@ -1919,7 +1934,8 @@ func (c *Config) buildNode() (*node.Config, error) {
 		AuthPort:                               int(c.JsonRPC.Auth.Port),
 		AuthAddr:                               c.JsonRPC.Auth.Addr,
 		AuthVirtualHosts:                       c.JsonRPC.Auth.VHosts,
-		RPCBatchLimit:                          c.RPCBatchLimit,
+		BatchRequestLimit:                      c.BatchRequestLimit,
+		BatchResponseMaxSize:                   c.BatchResponseMaxSize,
 		WSJsonRPCExecutionPoolSize:             c.JsonRPC.Ws.ExecutionPoolSize,
 		WSJsonRPCExecutionPoolRequestTimeout:   c.JsonRPC.Ws.ExecutionPoolRequestTimeout,
 		HTTPJsonRPCExecutionPoolSize:           c.JsonRPC.Http.ExecutionPoolSize,

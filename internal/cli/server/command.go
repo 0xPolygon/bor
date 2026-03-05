@@ -219,6 +219,12 @@ func (c *Command) Run(args []string) int {
 		}()
 	}
 
+	if err := StartCPUProfile(c.config.Pprof.CPUProfile); err != nil {
+		c.UI.Error(err.Error())
+		return 1
+	}
+	defer StopCPUProfile()
+
 	srv, err := NewServer(c.config)
 	if err != nil {
 		c.UI.Error(err.Error())

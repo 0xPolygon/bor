@@ -46,6 +46,24 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.EnablePreimageRecording,
 	})
 	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace",
+		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
+		Value:   &c.cliConfig.VMTrace,
+		Default: c.cliConfig.VMTrace,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace.jsonconfig",
+		Usage:   "Tracer configuration (JSON)",
+		Value:   &c.cliConfig.VMTraceJsonConfig,
+		Default: c.cliConfig.VMTraceJsonConfig,
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "vmwitnessstats",
+		Usage:   "Enable collection of witness trie access statistics",
+		Value:   &c.cliConfig.EnableWitnessStats,
+		Default: c.cliConfig.EnableWitnessStats,
+	})
+	f.StringFlag(&flagset.StringFlag{
 		Name:    "datadir.ancient",
 		Usage:   "Data directory for ancient chain segments (default = inside chaindata)",
 		Value:   &c.cliConfig.Ancient,
@@ -63,11 +81,17 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.KeyStoreDir,
 		Default: c.cliConfig.KeyStoreDir,
 	})
-	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "rpc.batchlimit",
-		Usage:   "Maximum number of messages in a batch (use 0 for no limits)",
-		Value:   &c.cliConfig.RPCBatchLimit,
-		Default: c.cliConfig.RPCBatchLimit,
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.batch-request-limit",
+		Usage:   "Maximum number of requests in a batch (use 0 for no limits)",
+		Value:   &c.cliConfig.BatchRequestLimit,
+		Default: c.cliConfig.BatchRequestLimit,
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.batch-response-max-size",
+		Usage:   "Maximum number of response bytes across all requests in a batch (use 0 for no limits)",
+		Value:   &c.cliConfig.BatchResponseMaxSize,
+		Default: c.cliConfig.BatchResponseMaxSize,
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "rpc.returndatalimit",
@@ -1271,7 +1295,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.FastForwardThreshold,
 		Default: c.cliConfig.Witness.FastForwardThreshold,
 	})
-
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "dev.gaslimit",
 		Usage:   "Initial block gas limit",
@@ -1310,12 +1333,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Pprof.BlockProfileRate,
 		Default: c.cliConfig.Pprof.BlockProfileRate,
 	})
-	// f.StringFlag(&flagset.StringFlag{
-	// 	Name:    "pprof.cpuprofile",
-	// 	Usage:   "Write CPU profile to the given file",
-	// 	Value:   &c.cliConfig.Pprof.CPUProfile,
-	// 	Default: c.cliConfig.Pprof.CPUProfile,
-	// })
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "pprof.cpuprofile",
+		Usage:   "Write CPU profile to the given file",
+		Value:   &c.cliConfig.Pprof.CPUProfile,
+		Default: c.cliConfig.Pprof.CPUProfile,
+	})
 
 	// Historical data retention related flags
 	f.Uint64Flag(&flagset.Uint64Flag{

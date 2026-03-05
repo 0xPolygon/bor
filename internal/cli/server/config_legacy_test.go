@@ -19,7 +19,7 @@ func TestConfigLegacy(t *testing.T) {
 		testConfig.DataDir = "./data"
 		testConfig.KeyStoreDir = "./keystore"
 		testConfig.Verbosity = 3
-		testConfig.RPCBatchLimit = 0
+		testConfig.BatchRequestLimit = 0
 		testConfig.Snapshot = true
 		testConfig.BorLogs = false
 		testConfig.RequiredBlocks = map[string]string{

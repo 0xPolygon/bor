@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	rpprof "runtime/pprof"
 	"strings"
 	"time"
 
@@ -52,6 +53,8 @@ import (
 
 	protobor "github.com/0xPolygon/polyproto/bor"
 )
+
+var cpuProfileFile *os.File
 
 type Server struct {
 	proto.UnimplementedBorServer
@@ -307,6 +310,38 @@ func (s *Server) Stop() {
 		if err := s.tracer.Shutdown(context.Background()); err != nil {
 			log.Error("Failed to shutdown open telemetry tracer")
 		}
+	}
+}
+
+// StartCPUProfile starts CPU profiling, writing to the given file.
+// Call StopCPUProfile to flush and close the file.
+func StartCPUProfile(file string) error {
+	if file == "" {
+		return nil
+	}
+
+	f, err := os.Create(file)
+	if err != nil {
+		return fmt.Errorf("could not create CPU profile file: %w", err)
+	}
+
+	if err := rpprof.StartCPUProfile(f); err != nil {
+		f.Close()
+		return fmt.Errorf("could not start CPU profile: %w", err)
+	}
+
+	cpuProfileFile = f
+	log.Info("CPU profiling started", "file", file)
+
+	return nil
+}
+
+// StopCPUProfile stops an ongoing CPU profile, flushing output to file.
+func StopCPUProfile() {
+	if cpuProfileFile != nil {
+		rpprof.StopCPUProfile()
+		cpuProfileFile.Close()
+		cpuProfileFile = nil
 	}
 }
 
