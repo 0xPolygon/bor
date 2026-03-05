@@ -67,9 +67,6 @@ type Config struct {
 	// VMTraceJsonConfig is the JSON config for the VM tracer
 	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
 
-	// EnableWitnessStats enables collection of witness trie access statistics
-	EnableWitnessStats bool `hcl:"vmwitnessstats,optional" toml:"vmwitnessstats,optional"`
-
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
 
@@ -1230,7 +1227,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.EnableStateSizeTracking = c.StateSizeTracking
 	n.VMTrace = c.VMTrace
 	n.VMTraceJsonConfig = c.VMTraceJsonConfig
-	n.EnableWitnessStats = c.EnableWitnessStats
 
 	// txpool options
 	{

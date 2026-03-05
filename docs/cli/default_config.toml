@@ -13,8 +13,6 @@ vmdebug = false
 vmtrace = ""
 # VMTraceJsonConfig is the JSON config for the VM tracer
 "vmtrace.jsonconfig" = ""
-# EnableWitnessStats enables collection of witness trie access statistics
-vmwitnessstats = false
 # Enable state size tracking
 "state.size-tracking" = false
 # DataDir is the directory to store the state in

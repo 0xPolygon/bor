@@ -57,12 +57,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.VMTraceJsonConfig,
 		Default: c.cliConfig.VMTraceJsonConfig,
 	})
-	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "vmwitnessstats",
-		Usage:   "Enable collection of witness trie access statistics",
-		Value:   &c.cliConfig.EnableWitnessStats,
-		Default: c.cliConfig.EnableWitnessStats,
-	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "datadir.ancient",
 		Usage:   "Data directory for ancient chain segments (default = inside chaindata)",

@@ -116,8 +116,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```vmtrace.jsonconfig```: Tracer configuration (JSON)
 
-- ```vmwitnessstats```: Enable collection of witness trie access statistics (default: false)
-
 - ```witness.enable```: Enable witness protocol (default: false)
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
