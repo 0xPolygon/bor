@@ -17,6 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+const tipConfirmationOffset uint64 = 16
+
 var (
 	errBorEngineNotAvailable = errors.New("Only available in Bor engine")
 	errInvalidBlockNumber    = errors.New("end block number is out of safe range")
@@ -47,7 +49,7 @@ func (b *EthAPIBackend) GetRootHash(_ context.Context, starBlockNr uint64, endBl
 // GetVoteOnHash returns the vote on hash
 func (b *EthAPIBackend) GetVoteOnHash(ctx context.Context, _ uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
 	// Reject invalid block numbers (overflowing with the confirmation offset or exceeding the valid range).
-	if endBlockNr > math.MaxInt64-16 {
+	if endBlockNr > math.MaxInt64-tipConfirmationOffset {
 		return false, errInvalidBlockNumber
 	}
 
@@ -63,8 +65,8 @@ func (b *EthAPIBackend) GetVoteOnHash(ctx context.Context, _ uint64, endBlockNr 
 		return false, errBorEngineNotAvailable
 	}
 
-	// Confirmation of 16 blocks on the endblock
-	tipConfirmationBlockNr := endBlockNr + uint64(16)
+	// Confirmation of tipConfirmationOffset blocks on the endblock
+	tipConfirmationBlockNr := endBlockNr + tipConfirmationOffset
 
 	// Check if the tipConfirmation block exists
 	tipBlock, err := b.BlockByNumber(ctx, rpc.BlockNumber(tipConfirmationBlockNr))

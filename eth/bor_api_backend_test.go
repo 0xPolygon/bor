@@ -13,7 +13,7 @@ func TestGetVoteOnHashRejectsOutOfRangeBlockNumbers(t *testing.T) {
 
 	backend := &EthAPIBackend{}
 
-	tests := []struct {
+	rejectCases := []struct {
 		name       string
 		endBlockNr uint64
 	}{
@@ -23,7 +23,7 @@ func TestGetVoteOnHashRejectsOutOfRangeBlockNumbers(t *testing.T) {
 		{"max int64 minus 15", math.MaxInt64 - 15},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range rejectCases {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -36,4 +36,26 @@ func TestGetVoteOnHashRejectsOutOfRangeBlockNumbers(t *testing.T) {
 			}
 		})
 	}
+
+	// Boundary value: math.MaxInt64 - tipConfirmationOffset is the highest accepted endBlockNr.
+	// The call passes the range guard and then panics on nil backend internals,
+	// which confirms the guard did not reject it.
+	t.Run("max int64 minus tipConfirmationOffset (boundary, should pass guard)", func(t *testing.T) {
+		t.Parallel()
+
+		defer func() {
+			if r := recover(); r == nil {
+				// No panic means the function returned normally — check that
+				// the error is not errInvalidBlockNumber.
+			}
+			// A panic here means the boundary value passed the guard and
+			// proceeded into backend logic (which is nil in this test). That's
+			// the expected outcome.
+		}()
+
+		_, err := backend.GetVoteOnHash(context.Background(), 0, math.MaxInt64-tipConfirmationOffset, "0x00", "test")
+		if errors.Is(err, errInvalidBlockNumber) {
+			t.Fatal("expected boundary value to pass the range check, but got errInvalidBlockNumber")
+		}
+	})
 }
