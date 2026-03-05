@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,10 +17,13 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-var errBorEngineNotAvailable error = errors.New("Only available in Bor engine")
+var (
+	errBorEngineNotAvailable = errors.New("Only available in Bor engine")
+	errInvalidBlockNumber    = errors.New("end block number is out of safe range")
+)
 
 // GetRootHash returns root hash for given start and end block
-func (b *EthAPIBackend) GetRootHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64) (string, error) {
+func (b *EthAPIBackend) GetRootHash(_ context.Context, starBlockNr uint64, endBlockNr uint64) (string, error) {
 	var api *bor.API
 
 	for _, _api := range b.eth.Engine().APIs(b.eth.BlockChain()) {
@@ -41,7 +45,12 @@ func (b *EthAPIBackend) GetRootHash(ctx context.Context, starBlockNr uint64, end
 }
 
 // GetVoteOnHash returns the vote on hash
-func (b *EthAPIBackend) GetVoteOnHash(ctx context.Context, starBlockNr uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
+func (b *EthAPIBackend) GetVoteOnHash(ctx context.Context, _ uint64, endBlockNr uint64, hash string, milestoneId string) (bool, error) {
+	// Reject invalid block numbers (overflowing with the confirmation offset or exceeding the valid range).
+	if endBlockNr > math.MaxInt64-16 {
+		return false, errInvalidBlockNumber
+	}
+
 	var api *bor.API
 
 	for _, _api := range b.eth.Engine().APIs(b.eth.BlockChain()) {
@@ -57,13 +66,13 @@ func (b *EthAPIBackend) GetVoteOnHash(ctx context.Context, starBlockNr uint64, e
 	// Confirmation of 16 blocks on the endblock
 	tipConfirmationBlockNr := endBlockNr + uint64(16)
 
-	// Check if tipConfirmation block exit
-	_, err := b.BlockByNumber(ctx, rpc.BlockNumber(tipConfirmationBlockNr))
-	if err != nil {
+	// Check if the tipConfirmation block exists
+	tipBlock, err := b.BlockByNumber(ctx, rpc.BlockNumber(tipConfirmationBlockNr))
+	if err != nil || tipBlock == nil {
 		return false, errTipConfirmationBlock
 	}
 
-	// Check if end block exist
+	// Check if the end block exists
 	localEndBlock, err := b.BlockByNumber(ctx, rpc.BlockNumber(endBlockNr))
 	if err != nil || localEndBlock == nil {
 		return false, errEndBlock
