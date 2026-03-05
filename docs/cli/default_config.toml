@@ -173,6 +173,10 @@ devfakeauthor = false
   gasLimitMax = 65000000
   targetBaseFee = 500000000000
   baseFeeBuffer = 300000000000
+  # Dynamic target gas percentage configuration (post-Lisovo, mutually exclusive with EnableDynamicGasLimit) Shares TargetBaseFee and BaseFeeBuffer with dynamic gas limit configuration.
+  enableDynamicTargetGas = false
+  targetGasMinPercentage = 50
+  targetGasMaxPercentage = 80
   # GasPrice is the minimum gas price for mining a transaction
   gasprice = "25000000000"
   # The time interval for miner to re-create mining work.

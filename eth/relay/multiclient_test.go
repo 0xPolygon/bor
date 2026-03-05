@@ -499,7 +499,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error in submitting private tx to all healthy BPs")
 	})
 
@@ -508,7 +508,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		defer mc.close()
 
 		invalidRawTx := []byte{0x01, 0x02, 0x03}
-		err := mc.submitPrivateTx(invalidRawTx, common.Hash{}, false, nil)
+		err, _ := mc.submitPrivateTx(invalidRawTx, common.Hash{}, false, nil)
 		require.Error(t, err, "expected error in submitting invalid private tx")
 	})
 
@@ -521,7 +521,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP fails")
 		require.ErrorContains(t, err, "internal server error", "expected internal server error")
 	})
@@ -539,7 +539,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP times out")
 		require.ErrorContains(t, err, "context deadline exceeded", "expected context deadline exceeded error")
 	})
@@ -557,7 +557,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		defer mc.close()
 
 		start := time.Now()
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		elapsed := time.Since(start)
 
 		require.NoError(t, err, "expected no error in submitting private tx")
@@ -582,7 +582,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when multiple BPs fail")
 	})
 
@@ -597,7 +597,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when all BPs fail")
 		require.ErrorContains(t, err, "internal server error", "expected error message from failing BPs")
 	})
@@ -616,7 +616,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error when one BP returns already known")
 	})
 
@@ -631,7 +631,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.NoError(t, err, "expected no error when all BPs return already known")
 	})
 
@@ -649,7 +649,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		mc := newMultiClient(urls)
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when one BP returns non-already-known error")
 		require.ErrorContains(t, err, "internal server error", "expected internal server error")
 	})
@@ -667,7 +667,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		// Close one server to simulate failure after initialization
 		rpcServers[0].close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when BP fails after initialization")
 	})
 
@@ -680,7 +680,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 		rpcServers[2].close()
 		rpcServers[3].close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), false, nil)
 		require.Error(t, err, "expected error when all BPs fail")
 	})
 }
@@ -913,13 +913,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for retries to complete (2 retries * 2s interval + buffer)
-		time.Sleep(2*privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retries to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Verify that failing servers were called multiple times including initial submission
 		require.Equal(t, int32(3), callCounts[0].Load(), "expected server 0 to be called 3 times")
@@ -947,6 +952,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
 		// Set up txGetter that will return the transaction as found (simulating it got included)
@@ -957,11 +963,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 			return false, nil, common.Hash{}, 0, 0
 		}
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for one retry attempt
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry goroutine to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Since tx is found in local database, retry should stop early
 		// Server 0 should be called only once during initial submission (no retries)
@@ -990,13 +1000,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for all retries to complete (5 retries * 2s interval + buffer)
-		time.Sleep(5*privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for all retries to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Server 0 should be called 6 times (1 for initial submission and 5 retries)
 		require.Equal(t, int32(6), callCounts[0].Load(), "expected server 0 to be called 6 times (1 initial + 5 retries)")
@@ -1033,13 +1048,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for all retries to complete (5 retries * 2s interval + buffer)
-		time.Sleep(5*privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for all retries to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Server 0 should be called twice (initial + 1 retry that succeeds)
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to succeed on second attempt")
@@ -1068,13 +1088,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission when all BPs fail")
 
-		// Wait for retry to complete
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// All servers should be called exactly twice (initial + 1 successful retry)
 		for i := 0; i < 4; i++ {
@@ -1102,14 +1127,19 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected timeout error on initial submission")
 		require.ErrorContains(t, err, "context deadline exceeded", "expected timeout error")
 
-		// Wait for retry
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Server 0 should be retried and succeed
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be retried after timeout")
@@ -1141,19 +1171,22 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for one retry attempt
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry goroutine to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Server 0 should be called twice (initial + 1 retry with already known)
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
-
-		// No further retries should happen after already known
-		time.Sleep(privateTxRetryInterval)
+		// Goroutine is done (confirmed by <-done above), so no further retries are possible
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected no further retries after already known")
 	})
 
@@ -1181,13 +1214,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for retry
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Servers 0 and 1 should be called twice (initial + retry)
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
@@ -1214,15 +1252,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		// When "already known" is returned on the initial submission, it counts as success,
+		// so no retry goroutine is started and the done channel will be nil.
+		err, _ := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.NoError(t, err, "expected no error when all submissions succeed or return already known")
 
-		// Wait to ensure no retries happen
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
-
-		// Server 0 should be called only once (no retry needed as already known treated as success)
+		// No retry goroutine was started (no failed indices), assert directly
 		require.Equal(t, int32(1), callCounts[0].Load(), "expected server 0 to be called only once")
 	})
 
@@ -1257,19 +1295,23 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, nil)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for retry
-		time.Sleep(privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for retry to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Both servers 0 and 1 should be called twice
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected server 0 to be called twice")
 		require.Equal(t, int32(2), callCounts[1].Load(), "expected server 1 to be called twice")
-		// No further retries should happen
-		time.Sleep(privateTxRetryInterval)
+		// Goroutine is done (confirmed by <-done above), so no further retries are possible
 		require.Equal(t, int32(2), callCounts[0].Load(), "expected no further retries")
 		require.Equal(t, int32(2), callCounts[1].Load(), "expected no further retries")
 	})
@@ -1291,6 +1333,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		}
 
 		mc := newMultiClient(urls)
+		mc.retryInterval = 10 * time.Millisecond
 		defer mc.close()
 
 		// Set up txGetter that doesn't find the transaction
@@ -1300,11 +1343,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 			return false, nil, common.Hash{}, 0, 0
 		}
 
-		err := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
+		err, done := mc.submitPrivateTx(rawTx, tx1.Hash(), true, txGetter)
 		require.Error(t, err, "expected error on initial submission")
 
-		// Wait for all retries to complete
-		time.Sleep(5*privateTxRetryInterval + 100*time.Millisecond)
+		// Wait for all retries to complete deterministically
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry goroutine did not complete in time")
+		}
 
 		// Server 0 should be called 6 times (1 initial + 5 retries)
 		require.Equal(t, int32(6), callCounts[0].Load(), "expected server 0 to be called 6 times")

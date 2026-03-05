@@ -463,6 +463,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.BaseFeeChangeDenominator,
 		Group:   "Sealer",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.enableDynamicTargetGas",
+		Usage:   "Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit)",
+		Value:   &c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Default: c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMinPercentage",
+		Usage:   "Minimum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMinPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMinPercentage,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMaxPercentage",
+		Usage:   "Maximum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMaxPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMaxPercentage,
+		Group:   "Sealer",
+	})
 
 	// ethstats
 	f.StringFlag(&flagset.StringFlag{

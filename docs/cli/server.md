@@ -326,6 +326,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
 
+- ```miner.enableDynamicTargetGas```: Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit) (default: false)
+
 - ```miner.etherbase```: Public address for block mining rewards
 
 - ```miner.extradata```: Block extra data set by the miner (default = client version)
@@ -347,6 +349,10 @@ The ```bor server``` command runs the Bor client.
 - ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
 
 - ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 500000000000)
+
+- ```miner.targetGasMaxPercentage```: Maximum target gas percentage (1-100) when dynamic target gas is enabled (default: 80)
+
+- ```miner.targetGasMinPercentage```: Minimum target gas percentage (1-100) when dynamic target gas is enabled (default: 50)
 
 - ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks (default: 0)
 
