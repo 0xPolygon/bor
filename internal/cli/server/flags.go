@@ -33,12 +33,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Verbosity,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "log-level",
-		Usage:   "Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead",
-		Value:   &c.cliConfig.LogLevel,
-		Default: c.cliConfig.LogLevel,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:               "datadir",
 		Usage:              "Path of the data directory to store information",
 		Value:              &c.cliConfig.DataDir,
@@ -135,7 +129,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.MaxBlindForkValidationLimit,
 	})
 
-	// logging related flags (log-level and verbosity is present above, it will be removed soon)
+	// logging related flags
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmodule",
 		Usage:   "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
@@ -467,6 +461,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks",
 		Value:   &c.cliConfig.Sealer.BaseFeeChangeDenominator,
 		Default: c.cliConfig.Sealer.BaseFeeChangeDenominator,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.enableDynamicTargetGas",
+		Usage:   "Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit)",
+		Value:   &c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Default: c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMinPercentage",
+		Usage:   "Minimum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMinPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMinPercentage,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMaxPercentage",
+		Usage:   "Maximum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMaxPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMaxPercentage,
 		Group:   "Sealer",
 	})
 

@@ -89,32 +89,6 @@ func WithGRPCListener(lis net.Listener) serverOption {
 	}
 }
 
-func VerbosityIntToString(verbosity int) string {
-	mapIntToString := map[int]string{
-		5: "trace",
-		4: "debug",
-		3: "info",
-		2: "warn",
-		1: "error",
-		0: "crit",
-	}
-
-	return mapIntToString[verbosity]
-}
-
-func VerbosityStringToInt(loglevel string) int {
-	mapStringToInt := map[string]int{
-		"trace": 5,
-		"debug": 4,
-		"info":  3,
-		"warn":  2,
-		"error": 1,
-		"crit":  0,
-	}
-
-	return mapStringToInt[loglevel]
-}
-
 //nolint:gocognit
 func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 	// Enable metric collection if requested
