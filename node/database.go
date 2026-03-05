@@ -71,7 +71,7 @@ func openDatabase(o internalOpenOptions) (ethdb.Database, error) {
 	}
 	// Resolve witness store directory relative to the database directory.
 	var witnessStoreDir string
-	if o.WitnessFileStore && o.directory != "" {
+	if o.directory != "" {
 		witnessStoreDir = filepath.Join(o.directory, "witnesses")
 	}
 
