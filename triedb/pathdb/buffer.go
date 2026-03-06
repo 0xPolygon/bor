@@ -35,10 +35,12 @@ import (
 // must be checked before diving into disk (since it basically is not yet written
 // data).
 type buffer struct {
-	layers uint64    // The number of diff layers aggregated inside
-	limit  uint64    // The maximum memory allowance in bytes
-	nodes  *nodeSet  // Aggregated trie node set
-	states *stateSet // Aggregated state set
+	layers     uint64    // The number of diff layers aggregated inside
+	limit      uint64    // The maximum total memory allowance in bytes
+	nodeLimit  uint64    // Trie node memory threshold that triggers a flush
+	stateLimit uint64    // State memory threshold (hard cap)
+	nodes      *nodeSet  // Aggregated trie node set
+	states     *stateSet // Aggregated state set
 
 	// done is the notifier whether the content in buffer has been flushed or not.
 	// This channel is nil if the buffer is not frozen.
@@ -49,7 +51,7 @@ type buffer struct {
 }
 
 // newBuffer initializes the buffer with the provided states and trie nodes.
-func newBuffer(limit int, nodes *nodeSet, states *stateSet, layers uint64) *buffer {
+func newBuffer(limit int, stateReservation int, nodes *nodeSet, states *stateSet, layers uint64) *buffer {
 	// Don't panic for lazy users if any provided set is nil
 	if nodes == nil {
 		nodes = newNodeSet(nil)
@@ -57,11 +59,19 @@ func newBuffer(limit int, nodes *nodeSet, states *stateSet, layers uint64) *buff
 	if states == nil {
 		states = newStates(nil, nil, false)
 	}
+	if stateReservation <= 0 || stateReservation > 100 {
+		stateReservation = defaultStateReservation
+	}
+	stateLimit := uint64(limit) * uint64(stateReservation) / 100
+	nodeLimit := uint64(limit) - stateLimit
+
 	return &buffer{
-		layers: layers,
-		limit:  uint64(limit),
-		nodes:  nodes,
-		states: states,
+		layers:     layers,
+		limit:      uint64(limit),
+		nodeLimit:  nodeLimit,
+		stateLimit: stateLimit,
+		nodes:      nodes,
+		states:     states,
 	}
 }
 
@@ -120,10 +130,18 @@ func (b *buffer) empty() bool {
 	return b.layers == 0
 }
 
-// full returns an indicator if the size of accumulated content exceeds the
-// configured threshold.
+// full returns an indicator if the buffer should be flushed.
+// A flush is triggered when trie nodes exceed their allocation or when
+// the total buffer size exceeds the hard limit.
 func (b *buffer) full() bool {
-	return b.size() > b.limit
+	return b.nodes.size > b.nodeLimit || b.size() > b.limit
+}
+
+// shouldCarryStates returns true if states should be carried over to the new
+// buffer after a flush. States are carried over when the flush was triggered
+// by trie nodes exceeding their allocation (not by states exceeding theirs).
+func (b *buffer) shouldCarryStates() bool {
+	return b.states.size <= b.stateLimit
 }
 
 // size returns the approximate memory size of the held content.

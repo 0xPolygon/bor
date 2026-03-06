@@ -49,6 +49,13 @@ const (
 	// enabled, otherwise the system pause time will increase when the
 	// database writes happen.
 	defaultBufferSize = 64 * 1024 * 1024
+
+	// defaultStateReservation is the percentage of the write buffer reserved
+	// for state data (accounts + storage slots). The remaining portion is for
+	// trie nodes. When trie nodes exceed their allocation, the buffer is
+	// flushed but states are carried over to the new buffer, allowing state
+	// data to accumulate across flush cycles for a higher dirty hit rate.
+	defaultStateReservation = 80
 )
 
 var (
@@ -63,6 +70,7 @@ var Defaults = &Config{
 	TrieCleanSize:       defaultTrieCleanSize,
 	StateCleanSize:      defaultStateCleanSize,
 	WriteBufferSize:     defaultBufferSize,
+	StateReservation:    defaultStateReservation,
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -79,6 +87,7 @@ type Config struct {
 	TrieCleanSize       int    // Maximum memory allowance (in bytes) for caching clean trie data
 	StateCleanSize      int    // Maximum memory allowance (in bytes) for caching clean state data
 	WriteBufferSize     int    // Maximum memory allowance (in bytes) for write buffer
+	StateReservation    int    // Percentage of write buffer reserved for states (0-100, default 80)
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
 	JournalDirectory    string // Absolute path of journal directory (null means the journal data is persisted in key-value store)
 
@@ -101,6 +110,10 @@ func (c *Config) sanitize() *Config {
 		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.WriteBufferSize), "updated", common.StorageSize(maxBufferSize))
 		conf.WriteBufferSize = maxBufferSize
 	}
+	if conf.StateReservation <= 0 || conf.StateReservation > 100 {
+		log.Warn("Sanitizing invalid state reservation", "provided", conf.StateReservation, "updated", defaultStateReservation)
+		conf.StateReservation = defaultStateReservation
+	}
 	return &conf
 }
 
@@ -113,6 +126,7 @@ func (c *Config) fields() []interface{} {
 	list = append(list, "triecache", common.StorageSize(c.TrieCleanSize))
 	list = append(list, "statecache", common.StorageSize(c.StateCleanSize))
 	list = append(list, "buffer", common.StorageSize(c.WriteBufferSize))
+	list = append(list, "statereservation", fmt.Sprintf("%d%%", c.StateReservation))
 
 	if c.StateHistory == 0 {
 		list = append(list, "state-history", "entire chain")
