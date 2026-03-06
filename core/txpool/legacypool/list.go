@@ -626,6 +626,10 @@ type pricedList struct {
 	// Number of stale price points to (re-heap trigger).
 	stales atomic.Int64
 
+	// Number of reheaps done. This counter should be incremented during every re-heap
+	// operation. It prevents in adding duplicate values to the heap later on.
+	reheaps atomic.Uint64
+
 	all              *lookup    // Pointer to the map of all transactions
 	urgent, floating priceHeap  // Heaps of prices of all the stored **remote** transactions
 	reheapMu         sync.Mutex // Mutex asserts that only one routine is reheaping the list
@@ -644,19 +648,33 @@ func newPricedList(all *lookup) *pricedList {
 	}
 }
 
-// Put inserts a new transaction into the heap.
-func (l *pricedList) Put(tx *types.Transaction) {
+// Put inserts a new transaction into the heap. The `reheapSnapshot` field
+// denotes a counter of last re-heap to prevent duplicate entry.
+func (l *pricedList) Put(tx *types.Transaction, reheapSnapshot uint64) {
 	l.reheapMu.Lock()
 	defer l.reheapMu.Unlock()
+
+	// If the last re-heap snapshot count doesn't match with current one, skip
+	// adding the transaction as re-heap would have already done that.
+	if reheapSnapshot != l.reheaps.Load() {
+		return
+	}
 
 	// Insert every new transaction to the urgent heap first; Discard will balance the heaps
 	heap.Push(&l.urgent, tx)
 }
 
-// PutMany inserts an array of new transactions into the heap.
-func (l *pricedList) PutMany(txs types.Transactions) {
+// PutMany inserts an array of new transactions into the heap. The `reheapSnapshot` field
+// denotes a counter of last re-heap to prevent duplicate entry.
+func (l *pricedList) PutMany(txs types.Transactions, reheapSnapshot uint64) {
 	l.reheapMu.Lock()
 	defer l.reheapMu.Unlock()
+
+	// If the last re-heap snapshot count doesn't match with current one, skip
+	// adding the transactions as re-heap would have already done that.
+	if reheapSnapshot != l.reheaps.Load() {
+		return
+	}
 
 	for _, tx := range txs {
 		// Insert every new transaction to the urgent heap first; Discard will balance the heaps
@@ -670,7 +688,12 @@ func (l *pricedList) PutMany(txs types.Transactions) {
 func (l *pricedList) Removed(count int) {
 	// Bump the stale counter, but exit if still too low (< 25%)
 	stales := l.stales.Add(int64(count))
-	if int(stales) <= (len(l.urgent.list)+len(l.floating.list))/4 {
+
+	l.reheapMu.Lock()
+	totalLen := len(l.urgent.list) + len(l.floating.list)
+	l.reheapMu.Unlock()
+
+	if int(stales) <= totalLen/4 {
 		return
 	}
 	reheapDueToStaleCounter.Inc(1)
@@ -718,7 +741,7 @@ func (l *pricedList) underpricedFor(h *priceHeap, tx *types.Transaction) bool {
 // Discard finds a number of most underpriced transactions, removes them from the
 // priced list and returns them for further removal from the entire pool.
 // If noPending is set to true, we will only consider the floating list
-func (l *pricedList) Discard(slots int) (types.Transactions, bool) {
+func (l *pricedList) Discard(slots int) (types.Transactions, bool, uint64) {
 	l.reheapMu.Lock()
 	defer l.reheapMu.Unlock()
 
@@ -759,10 +782,10 @@ func (l *pricedList) Discard(slots int) (types.Transactions, bool) {
 			heap.Push(&l.urgent, tx)
 		}
 
-		return nil, false
+		return nil, false, l.reheaps.Load()
 	}
 
-	return drop, true
+	return drop, true, l.reheaps.Load()
 }
 
 // Reheap forcibly rebuilds the heap based on the current remote transaction set.
@@ -778,6 +801,9 @@ func (l *pricedList) Reheap() {
 		l.urgent.list = append(l.urgent.list, tx)
 		return true
 	})
+	// Increment the reheap counter just after we've finished reading everything from `l.all`
+	// to denote a snapshot of transactions being used for re-heap.
+	l.reheaps.Add(1)
 
 	urgentHeapInitStart := time.Now()
 	heap.Init(&l.urgent)
@@ -811,6 +837,8 @@ func (l *pricedList) SetBaseFee(baseFee *big.Int) {
 	if baseFee != nil {
 		base.SetFromBig(baseFee)
 	}
+	l.reheapMu.Lock()
 	l.urgent.baseFee = base
+	l.reheapMu.Unlock()
 	l.Reheap()
 }

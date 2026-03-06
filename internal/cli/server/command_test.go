@@ -19,7 +19,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 		"--identity", "",
 		"--datadir", "./data",
 		"--verbosity", "3",
-		"--rpc.batchlimit", "0",
+		"--rpc.batch-request-limit", "0",
 		"--snapshot",
 		"--bor.logs=false",
 		"--eth.requiredblocks", "a=b",
@@ -44,7 +44,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "./data")
 	require.Equal(t, c.config.KeyStoreDir, "")
 	require.Equal(t, c.config.Verbosity, 3)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(0))
+	require.Equal(t, c.config.BatchRequestLimit, 0)
 	require.Equal(t, c.config.Snapshot, true)
 	require.Equal(t, c.config.BorLogs, false)
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"a": "b"})
@@ -78,7 +78,7 @@ func TestFlagsWithConfig(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "./data")
 	require.Equal(t, c.config.KeyStoreDir, "./keystore")
 	require.Equal(t, c.config.Verbosity, 3)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(0))
+	require.Equal(t, c.config.BatchRequestLimit, 0)
 	require.Equal(t, c.config.Snapshot, true)
 	require.Equal(t, c.config.BorLogs, false)
 	require.Equal(t, c.config.RequiredBlocks,
@@ -110,7 +110,7 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 		"--datadir", "",
 		"--keystore", "",
 		"--verbosity", "0",
-		"--rpc.batchlimit", "5",
+		"--rpc.batch-request-limit", "5",
 		"--snapshot=false",
 		"--bor.logs=true",
 		"--eth.requiredblocks", "x=y",
@@ -135,7 +135,7 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "")
 	require.Equal(t, c.config.KeyStoreDir, "")
 	require.Equal(t, c.config.Verbosity, 0)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(5))
+	require.Equal(t, c.config.BatchRequestLimit, 5)
 	require.Equal(t, c.config.Snapshot, false)
 	require.Equal(t, c.config.BorLogs, true)
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"x": "y"})

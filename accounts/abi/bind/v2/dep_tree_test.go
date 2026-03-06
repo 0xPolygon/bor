@@ -287,7 +287,7 @@ func TestContractLinking(t *testing.T) {
 			},
 		},
 		// test two contracts can be deployed which don't share deps
-		linkTestCaseInput{
+		{
 			map[rune][]rune{
 				'a': {'b', 'c', 'd', 'e'},
 				'f': {'g', 'h', 'i', 'j'}},
@@ -297,7 +297,7 @@ func TestContractLinking(t *testing.T) {
 			},
 		},
 		// test two contracts can be deployed which share deps
-		linkTestCaseInput{
+		{
 			map[rune][]rune{
 				'a': {'b', 'c', 'd', 'e'},
 				'f': {'g', 'c', 'd', 'h'}},
@@ -307,7 +307,7 @@ func TestContractLinking(t *testing.T) {
 			},
 		},
 		// test one contract with overrides for all lib deps
-		linkTestCaseInput{
+		{
 			map[rune][]rune{
 				'a': {'b', 'c', 'd', 'e'}},
 			map[rune]struct{}{'b': {}, 'c': {}, 'd': {}, 'e': {}},
@@ -315,7 +315,7 @@ func TestContractLinking(t *testing.T) {
 				'a': {}},
 		},
 		// test one contract with overrides for some lib deps
-		linkTestCaseInput{
+		{
 			map[rune][]rune{
 				'a': {'b', 'c'}},
 			map[rune]struct{}{'b': {}, 'c': {}},
@@ -323,7 +323,7 @@ func TestContractLinking(t *testing.T) {
 				'a': {}},
 		},
 		// test deployment of a contract with overrides
-		linkTestCaseInput{
+		{
 			map[rune][]rune{
 				'a': {}},
 			map[rune]struct{}{'a': {}},
@@ -331,7 +331,7 @@ func TestContractLinking(t *testing.T) {
 		},
 		// two contracts ('a' and 'f') share some dependencies.  contract 'a' is marked as an override.  expect that any of
 		// its dependencies that aren't shared with 'f' are not deployed.
-		linkTestCaseInput{map[rune][]rune{
+		{map[rune][]rune{
 			'a': {'b', 'c', 'd', 'e'},
 			'f': {'g', 'c', 'd', 'h'}},
 			map[rune]struct{}{'a': {}},

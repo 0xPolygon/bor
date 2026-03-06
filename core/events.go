@@ -17,6 +17,8 @@
 package core
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -29,8 +31,9 @@ type StuckTxsEvent struct{ Txs []*types.Transaction }
 
 // NewMinedBlockEvent is posted when a block has been imported.
 type NewMinedBlockEvent struct {
-	Block   *types.Block
-	Witness *stateless.Witness
+	Block    *types.Block
+	Witness  *stateless.Witness
+	SealedAt time.Time // time when WriteBlockAndSetHead completed, used to measure broadcast latency
 }
 
 // RemovedLogsEvent is posted when a reorg happens

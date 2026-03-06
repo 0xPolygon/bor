@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -77,7 +79,7 @@ func testTransactionMarshal(t *testing.T, tests []txData, config *params.ChainCo
 		if data, err := json.Marshal(tx); err != nil {
 			t.Fatalf("test %d: marshalling failed; %v", i, err)
 		} else if err = tx2.UnmarshalJSON(data); err != nil {
-			t.Fatalf("test %d: sunmarshal failed: %v", i, err)
+			t.Fatalf("test %d: unmarshal failed: %v", i, err)
 		} else if want, have := tx.Hash(), tx2.Hash(); want != have {
 			t.Fatalf("test %d: stx changed, want %x have %x", i, want, have)
 		}
@@ -449,6 +451,23 @@ type testBackend struct {
 
 	syncDefaultTimeout time.Duration
 	syncMaxTimeout     time.Duration
+
+	// Relay / preconf / private tx mock controls
+	preconfEnabled   bool
+	privateTxEnabled bool
+	acceptPreconfTxs bool
+	acceptPrivateTxs bool
+
+	// Callback overrides (nil = use default)
+	txStatusFn           func(common.Hash) txpool.TxStatus
+	submitTxForPreconfFn func(*types.Transaction) error
+	checkPreconfStatusFn func(common.Hash) (bool, error)
+	submitPrivateTxFn    func(*types.Transaction) error
+	recordPrivateTxFn    func(common.Hash)
+	purgePrivateTxFn     func(common.Hash)
+
+	// Error to inject from SendTx (nil = existing logic)
+	sendTxErr error
 }
 
 func fakeBlockHash(txh common.Hash) common.Hash {
@@ -482,6 +501,40 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 		chainFeed:       new(event.Feed),
 	}
 	return backend
+}
+
+func (b testBackend) PreconfEnabled() bool   { return b.preconfEnabled }
+func (b testBackend) PrivateTxEnabled() bool { return b.privateTxEnabled }
+func (b testBackend) AcceptPreconfTxs() bool { return b.acceptPreconfTxs }
+func (b testBackend) AcceptPrivateTxs() bool { return b.acceptPrivateTxs }
+
+func (b testBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	if b.submitTxForPreconfFn != nil {
+		return b.submitTxForPreconfFn(tx)
+	}
+	return nil
+}
+func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	if b.checkPreconfStatusFn != nil {
+		return b.checkPreconfStatusFn(hash)
+	}
+	return false, nil
+}
+func (b testBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	if b.submitPrivateTxFn != nil {
+		return b.submitPrivateTxFn(tx)
+	}
+	return nil
+}
+func (b testBackend) RecordPrivateTx(hash common.Hash) {
+	if b.recordPrivateTxFn != nil {
+		b.recordPrivateTxFn(hash)
+	}
+}
+func (b testBackend) PurgePrivateTx(hash common.Hash) {
+	if b.purgePrivateTxFn != nil {
+		b.purgePrivateTxFn(hash)
+	}
 }
 
 func (b testBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
@@ -524,8 +577,17 @@ func (b testBackend) HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc
 	panic("unknown type rpc.BlockNumberOrHash")
 }
 
-func (b testBackend) CurrentHeader() *types.Header { return b.chain.CurrentHeader() }
-func (b testBackend) CurrentBlock() *types.Header  { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentHeader() *types.Header    { return b.chain.CurrentHeader() }
+func (b testBackend) CurrentBlock() *types.Header     { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentSafeBlock() *types.Header { return b.chain.CurrentSafeBlock() }
+func (b testBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	// For tests, return a fixed finalized block number
+	current := b.chain.CurrentBlock().Number.Uint64()
+	if current < 10 {
+		return 0, nil
+	}
+	return current - 10, nil
+}
 func (b testBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	if number == rpc.LatestBlockNumber {
 		head := b.chain.CurrentBlock()
@@ -617,6 +679,9 @@ func (b testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) even
 	panic("implement me")
 }
 func (b *testBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
+	if b.sendTxErr != nil {
+		return b.sendTxErr
+	}
 	b.sentTx = tx
 	b.sentTxHash = tx.Hash()
 
@@ -687,6 +752,12 @@ func (b testBackend) TxPoolContent() (map[common.Address][]*types.Transaction, m
 }
 func (b testBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
 	panic("implement me")
+}
+func (b testBackend) TxStatus(hash common.Hash) txpool.TxStatus {
+	if b.txStatusFn != nil {
+		return b.txStatusFn(hash)
+	}
+	return txpool.TxStatusUnknown
 }
 func (b testBackend) SubscribeNewTxsEvent(events chan<- core.NewTxsEvent) event.Subscription {
 	panic("implement me")
@@ -1161,7 +1232,7 @@ func TestCall(t *testing.T) {
 					Balance: big.NewInt(params.Ether),
 					Nonce:   1,
 					Storage: map[common.Hash]common.Hash{
-						common.Hash{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+						{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
 					},
 				},
 			},
@@ -1377,7 +1448,7 @@ func TestCall(t *testing.T) {
 			},
 			expectErr: core.ErrBlobTxCreate,
 		},
-		// BOR Doens't support blob tx
+		// BOR Doesn't support blob tx
 		// BLOBHASH opcode
 		// {
 		// 	blockNumber: rpc.LatestBlockNumber,
@@ -4091,7 +4162,8 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 	}
 	outputFile := filepath.Join("testdata", fmt.Sprintf("%s-%s.json", rpc, file))
 	if os.Getenv("WRITE_TEST_FILES") != "" {
-		os.WriteFile(outputFile, data, 0644)
+		err = os.WriteFile(outputFile, data, 0644)
+		require.NoError(t, err, "failed to write test output file: %s", outputFile)
 	}
 	want, err := os.ReadFile(outputFile)
 	if err != nil {
@@ -4458,7 +4530,7 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 				Balance: (*hexutil.Big)(big.NewInt(1000000000000000000)),
 				Nonce:   &nonce,
 				State: map[common.Hash]common.Hash{
-					common.Hash{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
+					{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
 				},
 			},
 		}
@@ -4495,99 +4567,489 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 	require.Equal(t, expected, result.Accesslist)
 }
 
-func TestBorWitnessAPI_Integration(t *testing.T) {
+func TestSendRawTransactionForPreconf(t *testing.T) {
 	t.Parallel()
-	genesis := &core.Genesis{
-		Config: params.TestChainConfig,
-		Alloc: types.GenesisAlloc{
-			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
-		},
-	}
-	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
 
-	testBlock, err := backend.BlockByNumber(t.Context(), rpc.BlockNumber(1))
-	require.NoError(t, err)
-	require.NotNil(t, testBlock)
-	testBlockHash := testBlock.Hash()
+	t.Run("rejected when AcceptPreconfTxs is false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	mockWitness, err := stateless.NewWitness(testBlock.Header(), backend.chain)
-	require.NoError(t, err)
-	require.NotNil(t, mockWitness)
-
-	var witBuf bytes.Buffer
-	err = mockWitness.EncodeRLP(&witBuf)
-	require.NoError(t, err)
-	rawdb.WriteWitness(backend.ChainDb(), testBlockHash, witBuf.Bytes())
-
-	t.Run("Database_WitnessStorage", func(t *testing.T) {
-		witnessData := rawdb.ReadWitness(backend.ChainDb(), testBlockHash)
-		require.NotEmpty(t, witnessData, "Witness data should be stored in database")
-
-		witness, err := stateless.GetWitnessFromRlp(witnessData)
-		require.NoError(t, err)
-		require.NotNil(t, witness.Header())
-		require.Equal(t, testBlockHash, witness.Header().Hash())
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "preconf transactions are not accepted")
 	})
 
-	borApi := NewBorAPI(backend)
+	t.Run("invalid raw tx bytes", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
 
-	t.Run("BorAPI_GetWitnessByNumber_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(1))
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness")
-		require.NotNil(t, result["context"], "Witness should have a context header")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.SendRawTransactionForPreconf(context.Background(), hexutil.Bytes{0xde, 0xad})
+		require.Nil(t, result)
+		require.Error(t, err)
 	})
 
-	t.Run("BorAPI_GetWitnessByHash_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByHash(t.Context(), testBlockHash)
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	t.Run("SubmitTransaction fails with non-ErrAlreadyKnown", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = errors.New("nonce too low")
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "nonce too low")
 	})
 
-	t.Run("BorAPI_GetWitnessByBlockNumberOrHash_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(1)))
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness by number")
+	t.Run("success with TxStatusPending returns preconfirmed true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
 
-		result, err = borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithHash(testBlockHash, false))
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
 		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness by hash")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, true, result["preconfirmed"])
 	})
 
-	t.Run("BorAPI_GetWitnessByNumber_NoWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(2))
+	t.Run("success with TxStatusQueued returns preconfirmed false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusQueued }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
 		require.NoError(t, err)
-		require.Nil(t, result, "Should return nil for block without witness")
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, false, result["preconfirmed"])
 	})
 
-	t.Run("BorAPI_GetWitnessByHash_NonExistentBlock", func(t *testing.T) {
-		fakeHash := common.HexToHash("0xdeadbeef")
-		result, err := borApi.GetWitnessByHash(t.Context(), fakeHash)
+	t.Run("ErrAlreadyKnown with TxStatusPending returns preconfirmed true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
 		require.NoError(t, err)
-		require.Nil(t, result, "Should return nil for non-existent block")
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"], "hash should be tx.Hash() not zero hash")
+		require.Equal(t, true, result["preconfirmed"])
+	})
+
+	t.Run("ErrAlreadyKnown with TxStatusUnknown returns preconfirmed false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusUnknown }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, false, result["preconfirmed"])
 	})
 }
 
-func (b *testBackend) RPCTxSyncDefaultTimeout() time.Duration {
-	if b.syncDefaultTimeout != 0 {
-		return b.syncDefaultTimeout
-	}
-	return 2 * time.Second
+func TestSendRawTransactionPrivate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected when both AcceptPrivateTxs and PrivateTxEnabled are false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Equal(t, common.Hash{}, hash)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "private transactions are not accepted")
+	})
+
+	t.Run("invalid raw tx bytes", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		hash, err := api.SendRawTransactionPrivate(context.Background(), hexutil.Bytes{0xde, 0xad})
+		require.Equal(t, common.Hash{}, hash)
+		require.Error(t, err)
+	})
+
+	t.Run("accepted via AcceptPrivateTxs, RecordPrivateTx called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+
+		var recordCount atomic.Int32
+		var submitPrivateCount atomic.Int32
+		b.recordPrivateTxFn = func(hash common.Hash) { recordCount.Add(1) }
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { submitPrivateCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called once")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should NOT be called when PrivateTxEnabled is false")
+	})
+
+	t.Run("SendTx fails, PurgePrivateTx called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.sendTxErr = errors.New("pool full")
+
+		var recordCount atomic.Int32
+		var purgeCount atomic.Int32
+		b.recordPrivateTxFn = func(hash common.Hash) { recordCount.Add(1) }
+		b.purgePrivateTxFn = func(hash common.Hash) { purgeCount.Add(1) }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pool full")
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called before SendTx")
+		require.Equal(t, int32(1), purgeCount.Load(), "PurgePrivateTx should be called on SendTx failure")
+	})
+
+	t.Run("ErrAlreadyKnown does not purge", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+
+		var purgeCount atomic.Int32
+		b.purgePrivateTxFn = func(hash common.Hash) { purgeCount.Add(1) }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.ErrorIs(t, err, txpool.ErrAlreadyKnown)
+		require.Equal(t, int32(0), purgeCount.Load(), "PurgePrivateTx should NOT be called for ErrAlreadyKnown")
+	})
+
+	t.Run("PrivateTxEnabled, SubmitPrivateTx succeeds", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.privateTxEnabled = true
+
+		var submitCount atomic.Int32
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { submitCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), submitCount.Load(), "SubmitPrivateTx should be called once")
+	})
+
+	t.Run("PrivateTxEnabled, SubmitPrivateTx fails returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.privateTxEnabled = true
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { return errors.New("relay down") }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "private tx accepted locally, submission failed")
+		require.Contains(t, err.Error(), "relay down")
+		require.Equal(t, tx.Hash(), hash, "hash should be returned even on SubmitPrivateTx failure")
+	})
+
+	t.Run("accepted via PrivateTxEnabled only", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true // acceptPrivateTxs is false
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash, "should succeed via PrivateTxEnabled OR condition")
+	})
 }
-func (b *testBackend) RPCTxSyncMaxTimeout() time.Duration {
-	if b.syncMaxTimeout != 0 {
-		return b.syncMaxTimeout
-	}
-	return 5 * time.Minute
+
+func TestCheckPreconfStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected when PreconfEnabled is false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.False(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "preconf transactions are not accepted")
+	})
+
+	t.Run("delegates to backend and returns true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) { return true, nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.NoError(t, err)
+		require.True(t, result)
+	})
+
+	t.Run("delegates to backend and returns false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) { return false, nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.NoError(t, err)
+		require.False(t, result)
+	})
+
+	t.Run("delegates to backend and returns error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) {
+			return false, errors.New("relay unreachable")
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.False(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "relay unreachable")
+	})
+
+	t.Run("passes correct hash to backend", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+
+		var capturedHash common.Hash
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) {
+			capturedHash = hash
+			return true, nil
+		}
+
+		targetHash := common.HexToHash("0xabcdef")
+		api := NewTransactionAPI(b, new(AddrLocker))
+		_, _ = api.CheckPreconfStatus(context.Background(), targetHash)
+		require.Equal(t, targetHash, capturedHash, "backend should receive the exact hash passed to API")
+	})
 }
-func (b *backendMock) RPCTxSyncDefaultTimeout() time.Duration { return 2 * time.Second }
-func (b *backendMock) RPCTxSyncMaxTimeout() time.Duration     { return 5 * time.Minute }
+
+func TestTxPoolAPI_TxStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns TxStatusUnknown", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusUnknown }
+
+		api := NewTxPoolAPI(b)
+		require.Equal(t, txpool.TxStatusUnknown, api.TxStatus(common.HexToHash("0x1")))
+	})
+
+	t.Run("returns TxStatusPending", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
+
+		api := NewTxPoolAPI(b)
+		require.Equal(t, txpool.TxStatusPending, api.TxStatus(common.HexToHash("0x1")))
+	})
+
+	t.Run("passes correct hash to backend", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+
+		var capturedHash common.Hash
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus {
+			capturedHash = hash
+			return txpool.TxStatusPending
+		}
+
+		targetHash := common.HexToHash("0xabcdef")
+		api := NewTxPoolAPI(b)
+		api.TxStatus(targetHash)
+		require.Equal(t, targetHash, capturedHash)
+	})
+}
+
+func TestSendRawTransaction_PreconfPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("preconf disabled, SubmitTxForPreconf not called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		// preconfEnabled defaults to false
+
+		var preconfCount atomic.Int32
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			preconfCount.Add(1)
+			return nil
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should NOT be called when preconf is disabled")
+	})
+
+	t.Run("preconf enabled, SubmitTxForPreconf called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+
+		var preconfCount atomic.Int32
+		var capturedTxHash common.Hash
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			preconfCount.Add(1)
+			capturedTxHash = tx.Hash()
+			return nil
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), preconfCount.Load(), "SubmitTxForPreconf should be called once")
+		require.Equal(t, tx.Hash(), capturedTxHash, "SubmitTxForPreconf should receive the correct tx")
+	})
+
+	t.Run("preconf enabled, SubmitTxForPreconf fails, error not propagated", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			return errors.New("relay down")
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err, "SendRawTransaction should NOT propagate SubmitTxForPreconf errors")
+		require.Equal(t, tx.Hash(), hash)
+	})
+}
+func (b *testBackend) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *testBackend) GetWork() ([4]string, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) Etherbase() (common.Address, error) {
+	return common.Address{}, nil
+}
+
+func (b *backendMock) Hashrate() (uint64, error) {
+	return 0, nil
+}
+
+func (b *backendMock) Mining() (bool, error) {
+	return false, nil
+}
+
+func (b *backendMock) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *backendMock) GetWork() ([4]string, error) {
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
 
 func makeSignedRaw(t *testing.T, api *TransactionAPI, from, to common.Address, value *big.Int) (hexutil.Bytes, *types.Transaction) {
 	t.Helper()
@@ -4678,4 +5140,377 @@ func TestSendRawTransactionSync_Timeout(t *testing.T) {
 	if got, want := de.ErrorData(), tx.Hash().Hex(); got != want {
 		t.Fatalf("expected ErrorData=%s, got %v", want, got)
 	}
+}
+
+func TestCoinbase(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks        = 5
+		expectedCoinbase = common.HexToAddress("0x1234567890123456789012345678901234567890")
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Etherbase to return our expected address
+	customBackend := &testBackendWithCoinbase{
+		testBackend: backend,
+		coinbase:    expectedCoinbase,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	coinbase, err := api.Coinbase()
+	if err != nil {
+		t.Fatalf("Coinbase() failed: %v", err)
+	}
+
+	if coinbase != expectedCoinbase {
+		t.Errorf("Coinbase() = %v, want %v", coinbase, expectedCoinbase)
+	}
+}
+
+func TestHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks               = 5
+		expectedHashrate uint64 = 12345678
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Hashrate to return our expected value
+	customBackend := &testBackendWithHashrate{
+		testBackend: backend,
+		hashrate:    expectedHashrate,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	hashrate, err := api.Hashrate()
+	if err != nil {
+		t.Fatalf("Hashrate() error = %v", err)
+	}
+
+	if uint64(hashrate) != expectedHashrate {
+		t.Errorf("Hashrate() = %v, want %v", hashrate, expectedHashrate)
+	}
+}
+
+func TestMining(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	// test "node not mining"
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithMining{
+		testBackend: backend,
+		mining:      false,
+	}
+	api := NewEthereumAPI(customBackend)
+
+	mining, err := api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != false {
+		t.Errorf("Mining() = %v, want false", mining)
+	}
+
+	// test "node mining"
+	customBackend.mining = true
+	mining, err = api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != true {
+		t.Errorf("Mining() = %v, want true", mining)
+	}
+}
+
+func TestProtocolVersion(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+		// Expected protocol version (ETH69)
+		expectedVersion uint = 69
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithProtocolVersion{
+		testBackend:     backend,
+		protocolVersion: expectedVersion,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	version := api.ProtocolVersion()
+
+	if uint(version) != expectedVersion {
+		t.Errorf("ProtocolVersion() = %v, want %v", version, expectedVersion)
+	}
+}
+
+func TestGetWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// ethash.NewFaker() is a PoW engine, but Bor's mining backend doesn't implement GetWork
+	work, err := api.GetWork()
+	if err == nil {
+		t.Errorf("GetWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("GetWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if work != [4]string{} {
+		t.Errorf("GetWork() work = %v, want empty array", work)
+	}
+}
+
+func TestSubmitWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitWork with PoW consensus (bor doesn't implement mining work)
+	nonce := types.BlockNonce{}
+	hash := common.Hash{}
+	digest := common.Hash{}
+
+	result, err := api.SubmitWork(nonce, hash, digest)
+	if err == nil {
+		t.Errorf("SubmitWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitWork() = %v, want false", result)
+	}
+}
+
+func TestSubmitHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitHashrate with PoW consensus (bor doesn't implement mining work)
+	rate := hexutil.Uint64(123456)
+	id := common.Hash{}
+
+	result, err := api.SubmitHashrate(rate, id)
+	if err == nil {
+		t.Errorf("SubmitHashrate() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitHashrate() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitHashrate() = %v, want false", result)
+	}
+}
+
+func TestAccountAt(t *testing.T) {
+	t.Parallel()
+
+	// Setup backend with some blocks
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr    = crypto.PubkeyToAddress(key.PublicKey)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		signer = types.LatestSigner(genesis.Config)
+	)
+
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		// Create a transaction that changes the account state
+		toAddr := common.Address{0x01}
+		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+			Nonce:    b.TxNonce(addr),
+			To:       &toAddr,
+			Value:    big.NewInt(1000),
+			Gas:      21000,
+			GasPrice: b.BaseFee(),
+			Data:     nil,
+		}), signer, key)
+		b.AddTx(tx)
+	})
+	api := NewDebugAPI(backend)
+
+	// Get the block 1 hash
+	block, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(1))
+	if err != nil {
+		t.Fatalf("Failed to get block: %v", err)
+	}
+	blockHash := block.Hash()
+
+	t.Run("valid block and transaction", func(t *testing.T) {
+		// Query account state after the first transaction
+		result, err := api.AccountAt(context.Background(), blockHash, 0, addr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+
+		// Check that nonce increased
+		if result.Nonce != 1 {
+			t.Errorf("Expected nonce 1, got %d", result.Nonce)
+		}
+
+		// Check that the balance decreased
+		expectedBalance := new(big.Int).Sub(big.NewInt(params.Ether), big.NewInt(1000))
+		gasUsed := new(big.Int).Mul(big.NewInt(21000), block.BaseFee())
+		expectedBalance.Sub(expectedBalance, gasUsed)
+
+		if result.Balance.ToInt().Cmp(expectedBalance) != 0 {
+			t.Logf("Expected balance %s, got %s", expectedBalance.String(), result.Balance.ToInt().String())
+		}
+
+		// Check that the code is empty (not a contract)
+		if len(result.Code) != 0 {
+			t.Errorf("Expected empty code, got %d bytes", len(result.Code))
+		}
+	})
+
+	t.Run("non-existent block", func(t *testing.T) {
+		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		result, err := api.AccountAt(context.Background(), nonExistentHash, 0, addr)
+		if err != nil {
+			t.Fatalf("Expected no error for non-existent block, got: %v", err)
+		}
+		if result != nil {
+			t.Error("Expected nil result for non-existent block")
+		}
+	})
+
+	t.Run("invalid transaction index", func(t *testing.T) {
+		// Query with an out-of-bounds index
+		resultOutOfBounds, err := api.AccountAt(context.Background(), blockHash, 999, addr)
+		if err != nil {
+			t.Fatalf("AccountAt with out-of-bounds index failed: %v", err)
+		}
+		if resultOutOfBounds == nil {
+			t.Fatal("Expected non-nil result even for out-of-range txIndex")
+		}
+
+		// Get the last transaction index (block has at least 1 tx)
+		lastTxIdx := uint64(len(block.Transactions()) - 1)
+		resultAtLast, err := api.AccountAt(context.Background(), blockHash, lastTxIdx, addr)
+		if err != nil {
+			t.Fatalf("AccountAt at last tx index failed: %v", err)
+		}
+
+		// Both queries should return the same state
+		if resultOutOfBounds.Balance.ToInt().Cmp(resultAtLast.Balance.ToInt()) != 0 {
+			t.Errorf("Out-of-bounds query balance mismatch: got %v, want %v",
+				resultOutOfBounds.Balance.ToInt(), resultAtLast.Balance.ToInt())
+		}
+		if resultOutOfBounds.Nonce != resultAtLast.Nonce {
+			t.Errorf("Out-of-bounds query nonce mismatch: got %v, want %v",
+				resultOutOfBounds.Nonce, resultAtLast.Nonce)
+		}
+	})
+
+	t.Run("non-existent account", func(t *testing.T) {
+		// Query account that doesn't exist
+		nonExistentAddr := common.HexToAddress("0x0000000000000000000000000000000000000099")
+		result, err := api.AccountAt(context.Background(), blockHash, 0, nonExistentAddr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result even for non-existent account")
+		}
+
+		// Non-existent account should have zero balance and nonce
+		if result.Balance.ToInt().Cmp(big.NewInt(0)) != 0 {
+			t.Errorf("Expected zero balance for non-existent account, got %s", result.Balance.ToInt().String())
+		}
+		if result.Nonce != 0 {
+			t.Errorf("Expected zero nonce for non-existent account, got %d", result.Nonce)
+		}
+	})
 }

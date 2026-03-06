@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -44,20 +45,25 @@ type AddressBiasedCache struct {
 	ctx    stdcontext.Context
 	cancel stdcontext.CancelFunc
 	wg     sync.WaitGroup // Wait for all preloads to finish
+
+	// Rate limiting for preload operations (bytes per second, 0 = unlimited)
+	rateLimitBPS int64
 }
 
 // NewAddressBiasedCache creates a new address-biased cache with preloading.
 // It scans the database for storage trie nodes of the specified addresses and
 // loads them into dedicated caches. The addressCacheSizes maps each address to
 // its desired cache size in bytes. The commonCacheSize specifies the size
-// of the cache for non-preloaded data.
+// of the cache for non-preloaded data. The rateLimitBPS limits preload I/O
+// in bytes per second (0 = unlimited).
 // Preloading happens asynchronously in the background.
-func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int) (*AddressBiasedCache, error) {
+func NewAddressBiasedCache(db ethdb.Database, addressCacheSizes map[common.Address]int, commonCacheSize int, rateLimitBPS int64) (*AddressBiasedCache, error) {
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	cache := &AddressBiasedCache{
-		commonCache: fastcache.New(commonCacheSize),
-		ctx:         ctx,
-		cancel:      cancel,
+		commonCache:  fastcache.New(commonCacheSize),
+		ctx:          ctx,
+		cancel:       cancel,
+		rateLimitBPS: rateLimitBPS,
 	}
 
 	// Initialize caches synchronously, but preload asynchronously
@@ -86,6 +92,7 @@ func (c *AddressBiasedCache) initAddressCache(addr common.Address, cacheSize int
 // BFS traversal, prioritizing shallow nodes (most frequently accessed) until
 // the cache is full. This naturally loads nodes by depth, filling the cache
 // with as many upper-level nodes as possible. This function runs asynchronously.
+// Rate limiting is applied to prevent overwhelming the disk during sync.
 func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.Address, cacheSize int) {
 	defer c.wg.Done()
 	startTime := time.Now()
@@ -100,14 +107,25 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 	}
 	addrCache := cacheValue.(*fastcache.Cache)
 
+	// Create rate limiter if configured (burst of 64KB for smoother throttling)
+	var limiter *rate.Limiter
+	if c.rateLimitBPS > 0 {
+		limiter = rate.NewLimiter(rate.Limit(c.rateLimitBPS), 64*1024)
+	}
+
 	// Local stats for logging progress
 	var entriesLoaded int
 	var totalBytesLoaded uint64
 
+	rateLimitStr := "unlimited"
+	if c.rateLimitBPS > 0 {
+		rateLimitStr = fmt.Sprintf("%s/s", common.StorageSize(c.rateLimitBPS))
+	}
 	log.Info("Starting storage trie preload",
 		"address", addr.Hex(),
 		"account hash", accountHash.Hex(),
-		"cache size", common.StorageSize(cacheSize).String())
+		"cache size", common.StorageSize(cacheSize).String(),
+		"rate limit", rateLimitStr)
 
 	var maxDepthReached int
 	const logInterval = 100000
@@ -154,6 +172,27 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		if len(nodeData) == 0 {
 			// Node doesn't exist, skip
 			continue
+		}
+
+		// Apply rate limiting after reading, based on actual bytes read
+		if limiter != nil {
+			if err := limiter.WaitN(c.ctx, len(nodeData)); err != nil {
+				if c.ctx.Err() != nil {
+					log.Info("Preload interrupted during shutdown",
+						"account hash", accountHash.Hex(),
+						"entries", entriesLoaded,
+						"max depth", maxDepthReached,
+						"size", common.StorageSize(totalBytesLoaded).String(),
+						"elapsed", time.Since(startTime))
+					return
+				}
+				// Node exceeds burst size — skip it and continue preloading
+				log.Warn("Preload skipping oversized node",
+					"account hash", accountHash.Hex(),
+					"node size", len(nodeData),
+					"burst", limiter.Burst())
+				continue
+			}
 		}
 
 		// Check if adding this node would exceed cache size

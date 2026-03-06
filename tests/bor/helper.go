@@ -347,7 +347,7 @@ func (b *blockGen) addTxWithChain(bc *core.BlockChain, statedb *state.StateDB, t
 
 	context := core.NewEVMBlockContext(b.header, bc, nil)
 	evm := vm.NewEVM(context, statedb, bc.Config(), vm.Config{})
-	receipt, err := core.ApplyTransaction(evm, b.gasPool, statedb, b.header, tx, &b.header.GasUsed, nil)
+	receipt, err := core.ApplyTransaction(evm, b.gasPool, statedb, b.header, tx, &b.header.GasUsed)
 	if err != nil {
 		panic(err)
 	}

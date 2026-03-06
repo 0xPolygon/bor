@@ -50,6 +50,10 @@ const (
 	// database writes happen.
 	defaultBufferSize = 64 * 1024 * 1024
 
+	// defaultPreloadRateLimit is the default rate limit for address cache preloading
+	// in bytes per second. 1 MB/s balances sync impact with preload performance.
+	defaultPreloadRateLimit = 1024 * 1024
+
 	// defaultStateReservation is the percentage of the write buffer reserved
 	// for state data (accounts + storage slots). The remaining portion is for
 	// trie nodes. When trie nodes exceed their allocation, the buffer is
@@ -70,6 +74,7 @@ var Defaults = &Config{
 	TrieCleanSize:       defaultTrieCleanSize,
 	StateCleanSize:      defaultStateCleanSize,
 	WriteBufferSize:     defaultBufferSize,
+	PreloadRateLimit:    defaultPreloadRateLimit,
 	StateReservation:    defaultStateReservation,
 }
 
@@ -94,6 +99,11 @@ type Config struct {
 	// Address-specific cache configuration for biased caching
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
+
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// 0 = unlimited (legacy behavior), default = 1MB/s
+	PreloadRateLimit int64
 
 	// Testing configurations
 	SnapshotNoBuild   bool   // Flag Whether the state generation is disabled
@@ -138,6 +148,11 @@ func (c *Config) fields() []interface{} {
 	}
 	if c.JournalDirectory != "" {
 		list = append(list, "journal-dir", c.JournalDirectory)
+	}
+	if c.PreloadRateLimit > 0 {
+		list = append(list, "preload-rate-limit", fmt.Sprintf("%s/s", common.StorageSize(c.PreloadRateLimit)))
+	} else {
+		list = append(list, "preload-rate-limit", "unlimited")
 	}
 	return list
 }
