@@ -311,3 +311,51 @@ func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64
 
 	return forksByBlock, forksByTime
 }
+
+// GatherForks gathers all the known forks and creates a sorted list out of them.
+// Returns heightForks (block number forks) and timeForks (timestamp forks, which are not supported in bor).
+// Returns nil for empty fork lists.
+// This extends the internal gatherForks with Bor-specific fork handling.
+func GatherForks(config *params.ChainConfig, genesisTime uint64) (heightForks []uint64, timeForks []uint64) {
+	// Use the existing internal fork gathering logic
+	heightForks, timeForks = gatherForks(config, genesisTime)
+
+	// Add Bor-specific fork blocks (explicit list to avoid reflection fragility)
+	if config.Bor != nil {
+		for _, fork := range []*big.Int{
+			config.Bor.JaipurBlock,
+			config.Bor.DelhiBlock,
+			config.Bor.IndoreBlock,
+			config.Bor.AhmedabadBlock,
+			config.Bor.BhilaiBlock,
+			config.Bor.RioBlock,
+			config.Bor.MadhugiriBlock,
+			config.Bor.MadhugiriProBlock,
+			config.Bor.DandeliBlock,
+			config.Bor.LisovoBlock,
+		} {
+			if fork != nil {
+				heightForks = append(heightForks, fork.Uint64())
+			}
+		}
+
+		// Re-sort and deduplicate after adding Bor forks
+		slices.Sort(heightForks)
+		heightForks = slices.Compact(heightForks)
+
+		// Re-apply filtering for block 0
+		if len(heightForks) > 0 && heightForks[0] == 0 {
+			heightForks = heightForks[1:]
+		}
+	}
+
+	// Ensure empty slices are nil
+	if len(heightForks) == 0 {
+		heightForks = nil
+	}
+	if len(timeForks) == 0 {
+		timeForks = nil
+	}
+
+	return heightForks, timeForks
+}

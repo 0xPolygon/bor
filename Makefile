@@ -96,7 +96,7 @@ goimports:
 
 docs:
 	$(GORUN) cmd/clidoc/main.go -d ./docs/cli
-	$(GORUN) cmd/generate-default-config/main.go
+	$(GORUN) cmd/cli/main.go dumpconfig > ./docs/cli/default_config.toml
 
 #? fmt: Ensure consistent code formatting.
 fmt:

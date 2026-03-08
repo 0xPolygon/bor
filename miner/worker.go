@@ -1834,7 +1834,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		isRio = w.chainConfig.Bor.IsRio(work.header.Number)
 	}
 	if !noempty && !w.noempty.Load() && !isRio {
-		_ = w.commit(work.copy(), nil, false, start, genParams)
+		emptyWork := work.copy()
+		emptyWork.state.ResetPrefetcher()
+		_ = w.commit(emptyWork, nil, false, start, genParams)
 	}
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)

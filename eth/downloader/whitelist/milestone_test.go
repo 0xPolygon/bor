@@ -1,6 +1,7 @@
 package whitelist
 
 import (
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -57,6 +58,66 @@ func TestUnlockSprintThreshold(t *testing.T) {
 		t.Fatalf("expected LockedMilestoneIDs to be cleared when unlocking sprint")
 	}
 	m.finality.RUnlock()
+}
+
+// TestIsReorgAllowedWithMaxLockedNumber verifies that IsReorgAllowed correctly
+// handles the case where LockedMilestoneNumber is set to an extremely large value.
+// No real chain tip can exceed such a number, so IsReorgAllowed must return false.
+func TestIsReorgAllowedWithMaxLockedNumber(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	if !ok {
+		t.Fatalf("expected milestoneService to be *milestone, got %T", svc.milestoneService)
+	}
+
+	chain := []*types.Header{
+		{Number: new(big.Int).SetUint64(100)},
+		{Number: new(big.Int).SetUint64(200)},
+		{Number: new(big.Int).SetUint64(300)},
+	}
+
+	// With a normal locked milestone below the chain tip and not in the chain, reorg is allowed
+	if !m.IsReorgAllowed(chain, 50, common.Hash{}) {
+		t.Fatal("expected reorg to be allowed when chain tip exceeds locked milestone not in chain")
+	}
+
+	// With max uint64 as the locked milestone, no chain tip can exceed it, so the reorg is blocked
+	if m.IsReorgAllowed(chain, math.MaxUint64, common.Hash{}) {
+		t.Fatal("expected reorg to be blocked when locked milestone is max uint64")
+	}
+}
+
+// TestIsValidChainWithMaxLockedNumber verifies that a milestone locked at an
+// unreachable block number causes IsValidChain to reject all chains.
+func TestIsValidChainWithMaxLockedNumber(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	if !ok {
+		t.Fatalf("expected milestoneService to be *milestone, got %T", svc.milestoneService)
+	}
+
+	chain := []*types.Header{
+		{Number: new(big.Int).SetUint64(100)},
+		{Number: new(big.Int).SetUint64(200)},
+	}
+	currentHeader := chain[len(chain)-1]
+
+	// Set locked milestone to max uint64 under write lock
+	m.finality.Lock()
+	m.Locked = true
+	m.LockedMilestoneNumber = math.MaxUint64
+	m.LockedMilestoneHash = common.Hash{0x01}
+	m.LockedMilestoneIDs = map[string]struct{}{"test": {}}
+	m.finality.Unlock()
+
+	valid, _ := m.IsValidChain(currentHeader, chain)
+	if valid {
+		t.Fatal("expected chain to be invalid when locked milestone number is max uint64")
+	}
 }
 
 // TestMilestoneUnlockSprintRace exercises concurrent readers and writers

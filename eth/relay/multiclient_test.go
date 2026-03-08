@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,12 +20,37 @@ import (
 
 type mockRpcServer struct {
 	server *httptest.Server
+	mu     sync.RWMutex
 
 	handleBlockNumber   func(w http.ResponseWriter, id int)
 	handleSendPreconfTx func(w http.ResponseWriter, id int, params json.RawMessage)
 	handleSendPrivateTx func(w http.ResponseWriter, id int, params json.RawMessage)
 	handleTxStatus      func(w http.ResponseWriter, id int, params json.RawMessage)
 	sendError           func(w http.ResponseWriter, id int, code int, message string)
+}
+
+func (m *mockRpcServer) setHandleBlockNumber(h func(w http.ResponseWriter, id int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handleBlockNumber = h
+}
+
+func (m *mockRpcServer) setHandleSendPreconfTx(h func(w http.ResponseWriter, id int, params json.RawMessage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handleSendPreconfTx = h
+}
+
+func (m *mockRpcServer) setHandleSendPrivateTx(h func(w http.ResponseWriter, id int, params json.RawMessage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handleSendPrivateTx = h
+}
+
+func (m *mockRpcServer) setHandleTxStatus(h func(w http.ResponseWriter, id int, params json.RawMessage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.handleTxStatus = h
 }
 
 func newMockRpcServer() *mockRpcServer {
@@ -55,18 +81,27 @@ func (m *mockRpcServer) handleRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Snapshot handlers under read lock to avoid races with test goroutines
+	m.mu.RLock()
+	handleBlockNumber := m.handleBlockNumber
+	handleSendPrivateTx := m.handleSendPrivateTx
+	handleSendPreconfTx := m.handleSendPreconfTx
+	handleTxStatus := m.handleTxStatus
+	sendError := m.sendError
+	m.mu.RUnlock()
+
 	// Handle different RPC methods
 	switch req.Method {
 	case "eth_blockNumber":
-		m.handleBlockNumber(w, req.ID)
+		handleBlockNumber(w, req.ID)
 	case "eth_sendRawTransactionPrivate":
-		m.handleSendPrivateTx(w, req.ID, req.Params)
+		handleSendPrivateTx(w, req.ID, req.Params)
 	case "eth_sendRawTransactionForPreconf":
-		m.handleSendPreconfTx(w, req.ID, req.Params)
+		handleSendPreconfTx(w, req.ID, req.Params)
 	case "txpool_txStatus":
-		m.handleTxStatus(w, req.ID, req.Params)
+		handleTxStatus(w, req.ID, req.Params)
 	default:
-		m.sendError(w, req.ID, -32601, "method not found")
+		sendError(w, req.ID, -32601, "method not found")
 	}
 }
 
@@ -240,9 +275,9 @@ func TestNewMulticlient(t *testing.T) {
 	t.Run("initialise multiclient with failing call in rpc server", func(t *testing.T) {
 		// Mock the `eth_blockNumber` call in one of the servers to send
 		// an error instead of correct response simulating failure.
-		rpcServers[1].handleBlockNumber = func(w http.ResponseWriter, id int) {
+		rpcServers[1].setHandleBlockNumber(func(w http.ResponseWriter, id int) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 		mc := newMultiClient(urls)
 		require.NotNil(t, mc, "expected non-nil multiclient given some healthy urls")
 		require.Equal(t, 2, len(mc.clients), "expected 2 clients given 2 healthy urls")
@@ -252,10 +287,10 @@ func TestNewMulticlient(t *testing.T) {
 	t.Run("initialise multiclient with timeout in rpc server", func(t *testing.T) {
 		// Mock the `eth_blockNumber` call in one of the servers to sleep
 		// for more than `rpcTimeout` duration simulating failure.
-		rpcServers[1].handleBlockNumber = func(w http.ResponseWriter, id int) {
+		rpcServers[1].setHandleBlockNumber(func(w http.ResponseWriter, id int) {
 			time.Sleep(rpcTimeout + 100*time.Millisecond)
 			defaultHandleBlockNumber(w, id)
-		}
+		})
 		mc := newMultiClient(urls)
 		require.NotNil(t, mc, "expected non-nil multiclient given some healthy urls")
 		require.Equal(t, 2, len(mc.clients), "expected 2 clients given 2 healthy urls")
@@ -308,7 +343,7 @@ func TestSubmitPreconfTx(t *testing.T) {
 
 	t.Run("submitPreconfTx with no preconfirmation", func(t *testing.T) {
 		// Mock one of the server to reject preconfirmation
-		rpcServers[0].handleSendPreconfTx = handleSendPreconfTxWithRejection
+		rpcServers[0].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -320,9 +355,9 @@ func TestSubmitPreconfTx(t *testing.T) {
 
 	t.Run("submitPreconfTx with error in rpc server", func(t *testing.T) {
 		// Mock one of the servers to return an error
-		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -335,10 +370,10 @@ func TestSubmitPreconfTx(t *testing.T) {
 
 	t.Run("submitPreconfTx with timeout in rpc server", func(t *testing.T) {
 		// Mock one of the servers to timeout
-		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			time.Sleep(rpcTimeout + 100*time.Millisecond)
 			defaultHandleSendPreconfTx(w, id, params)
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -352,10 +387,10 @@ func TestSubmitPreconfTx(t *testing.T) {
 	t.Run("submitPreconfTx runs in parallel", func(t *testing.T) {
 		// Ensure all calls take almost 2s of time but don't exceed rpcTimeout
 		for i := range rpcServers {
-			rpcServers[i].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				time.Sleep(rpcTimeout - 100*time.Millisecond)
 				defaultHandleSendPreconfTx(w, id, params)
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -374,13 +409,13 @@ func TestSubmitPreconfTx(t *testing.T) {
 	t.Run("submitPreconfTx with already known error from one BP", func(t *testing.T) {
 		// Reset all handlers to default
 		for i := range rpcServers {
-			rpcServers[i].handleSendPreconfTx = defaultHandleSendPreconfTx
+			rpcServers[i].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 		}
 
 		// Mock server 0 to return "already known" error
-		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32000, "already known")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -393,9 +428,9 @@ func TestSubmitPreconfTx(t *testing.T) {
 	t.Run("submitPreconfTx with already known error from all BPs", func(t *testing.T) {
 		// Mock all servers to return "already known" error
 		for i := range rpcServers {
-			rpcServers[i].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				defaultSendError(w, id, -32000, "already known")
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -408,14 +443,14 @@ func TestSubmitPreconfTx(t *testing.T) {
 
 	t.Run("submitPreconfTx with already known and different error", func(t *testing.T) {
 		// Some BPs return already known, one returns a different error, rest succeed
-		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32000, "already known")
-		}
-		rpcServers[1].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		})
+		rpcServers[1].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
-		rpcServers[2].handleSendPreconfTx = defaultHandleSendPreconfTx
-		rpcServers[3].handleSendPreconfTx = defaultHandleSendPreconfTx
+		})
+		rpcServers[2].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
+		rpcServers[3].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -428,12 +463,12 @@ func TestSubmitPreconfTx(t *testing.T) {
 
 	t.Run("submitPreconfTx with already known and rejection", func(t *testing.T) {
 		// Some BPs return already known, one rejects preconf
-		rpcServers[0].handleSendPreconfTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32000, "already known")
-		}
-		rpcServers[1].handleSendPreconfTx = handleSendPreconfTxWithRejection
-		rpcServers[2].handleSendPreconfTx = defaultHandleSendPreconfTx
-		rpcServers[3].handleSendPreconfTx = defaultHandleSendPreconfTx
+		})
+		rpcServers[1].setHandleSendPreconfTx(handleSendPreconfTxWithRejection)
+		rpcServers[2].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
+		rpcServers[3].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -446,7 +481,7 @@ func TestSubmitPreconfTx(t *testing.T) {
 	t.Run("submitPreconfTx with some failing servers", func(t *testing.T) {
 		// Set handlers back to default
 		for i := range rpcServers {
-			rpcServers[i].handleSendPreconfTx = defaultHandleSendPreconfTx
+			rpcServers[i].setHandleSendPreconfTx(defaultHandleSendPreconfTx)
 		}
 
 		// Initialise multiclient with healthy servers
@@ -514,9 +549,9 @@ func TestSubmitPrivateTx(t *testing.T) {
 
 	t.Run("submitPrivateTx with error in one RPC server", func(t *testing.T) {
 		// Mock one of the servers to return an error
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -528,13 +563,13 @@ func TestSubmitPrivateTx(t *testing.T) {
 
 	t.Run("submitPrivateTx with timeout in one RPC server", func(t *testing.T) {
 		// Reset server 0 to default first
-		rpcServers[0].handleSendPrivateTx = defaultHandleSendPrivateTx
+		rpcServers[0].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 
 		// Mock one server to timeout
-		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[1].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			time.Sleep(rpcTimeout + 100*time.Millisecond)
 			defaultHandleSendPrivateTx(w, id, params)
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -547,10 +582,10 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx runs in parallel", func(t *testing.T) {
 		// Reset all handlers and make each call take almost rpcTimeout
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				time.Sleep(rpcTimeout - 100*time.Millisecond)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -568,16 +603,16 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx with multiple BPs failing", func(t *testing.T) {
 		// Reset handlers first
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = defaultHandleSendPrivateTx
+			rpcServers[i].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 		}
 
 		// Make 2 servers fail
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
-		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		})
+		rpcServers[1].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32602, "another error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -589,9 +624,9 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx with all BPs failing", func(t *testing.T) {
 		// Make all servers fail
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				defaultSendError(w, id, -32601, "internal server error")
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -605,13 +640,13 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx with already known error from one BP", func(t *testing.T) {
 		// Reset all handlers to default
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = defaultHandleSendPrivateTx
+			rpcServers[i].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 		}
 
 		// Mock one server to return "already known" error
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32000, "already known")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -623,9 +658,9 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx with already known error from all BPs", func(t *testing.T) {
 		// Mock all servers to return "already known" error
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				defaultSendError(w, id, -32000, "already known")
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -637,14 +672,14 @@ func TestSubmitPrivateTx(t *testing.T) {
 
 	t.Run("submitPrivateTx with already known and different error", func(t *testing.T) {
 		// Some BPs return already known, one returns a different error, rest succeed
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32000, "already known")
-		}
-		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		})
+		rpcServers[1].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
-		rpcServers[2].handleSendPrivateTx = defaultHandleSendPrivateTx
-		rpcServers[3].handleSendPrivateTx = defaultHandleSendPrivateTx
+		})
+		rpcServers[2].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
+		rpcServers[3].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -657,7 +692,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 	t.Run("submitPrivateTx with some BPs failing after initialization", func(t *testing.T) {
 		// Reset all handlers to default
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = defaultHandleSendPrivateTx
+			rpcServers[i].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
 		}
 
 		// Initialize multiclient with all healthy servers
@@ -697,9 +732,9 @@ func TestCheckTxStatus(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		rpcServers[i] = newMockRpcServer()
 		// Mock all servers to return pending status for tx1
-		rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+		rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 			tx1.Hash(): txpool.TxStatusPending,
-		})
+		}))
 		urls[i] = rpcServers[i].server.URL
 	}
 
@@ -723,14 +758,14 @@ func TestCheckTxStatus(t *testing.T) {
 
 	t.Run("checkTxStatus with mixed statuses across BPs", func(t *testing.T) {
 		// Some BPs have pending, some have unknown
-		rpcServers[0].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+		rpcServers[0].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 			tx1.Hash(): txpool.TxStatusPending,
-		})
-		rpcServers[1].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+		}))
+		rpcServers[1].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 			tx1.Hash(): txpool.TxStatusPending,
-		})
-		rpcServers[2].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
-		rpcServers[3].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
+		}))
+		rpcServers[2].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{}))
+		rpcServers[3].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{}))
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -743,7 +778,7 @@ func TestCheckTxStatus(t *testing.T) {
 	t.Run("checkTxStatus with all BPs returning unknown status", func(t *testing.T) {
 		// All servers return unknown status
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{}))
 		}
 
 		mc := newMultiClient(urls)
@@ -757,9 +792,9 @@ func TestCheckTxStatus(t *testing.T) {
 	t.Run("checkTxStatus with tx queued in all BPs", func(t *testing.T) {
 		// All servers return queued status (should not count as valid)
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				tx1.Hash(): txpool.TxStatusQueued,
-			})
+			}))
 		}
 
 		mc := newMultiClient(urls)
@@ -773,15 +808,15 @@ func TestCheckTxStatus(t *testing.T) {
 	t.Run("checkTxStatus with error in one RPC server", func(t *testing.T) {
 		// Reset to all pending
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				tx1.Hash(): txpool.TxStatusPending,
-			})
+			}))
 		}
 
 		// One server returns error
-		rpcServers[0].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -794,12 +829,12 @@ func TestCheckTxStatus(t *testing.T) {
 
 	t.Run("checkTxStatus with timeout in one RPC server", func(t *testing.T) {
 		// One server times out
-		rpcServers[0].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			time.Sleep(rpcTimeout + 100*time.Millisecond)
 			makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				tx1.Hash(): txpool.TxStatusPending,
 			})(w, id, params)
-		}
+		})
 
 		mc := newMultiClient(urls)
 		defer mc.close()
@@ -813,12 +848,12 @@ func TestCheckTxStatus(t *testing.T) {
 	t.Run("checkTxStatus runs in parallel", func(t *testing.T) {
 		// All calls take almost rpcTimeout but don't exceed it
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				time.Sleep(rpcTimeout - 100*time.Millisecond)
 				makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 					tx1.Hash(): txpool.TxStatusPending,
 				})(w, id, params)
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -837,9 +872,9 @@ func TestCheckTxStatus(t *testing.T) {
 	t.Run("checkTxStatus with some failing servers after initialization", func(t *testing.T) {
 		// Reset all handlers to default
 		for i := range rpcServers {
-			rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
+			rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 				tx1.Hash(): txpool.TxStatusPending,
-			})
+			}))
 		}
 
 		// Initialize multiclient with all healthy servers
@@ -882,7 +917,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 	var urls []string = make([]string, 4)
 	for i := 0; i < 4; i++ {
 		rpcServers[i] = newMockRpcServer()
-		rpcServers[i].handleTxStatus = makeTxStatusHandler(map[common.Hash]txpool.TxStatus{})
+		rpcServers[i].setHandleTxStatus(makeTxStatusHandler(map[common.Hash]txpool.TxStatus{}))
 		urls[i] = rpcServers[i].server.URL
 	}
 
@@ -892,7 +927,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 
 		// Servers 0 and 1 fail twice, then succeed
 		for i := 0; i < 2; i++ {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				count := callCounts[i].Add(1)
 				if count <= 2 {
 					// Fail first 2 attempts
@@ -901,15 +936,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 					// Succeed on 3rd attempt
 					defaultHandleSendPrivateTx(w, id, params)
 				}
-			}
+			})
 		}
 
 		// Servers 2 and 3 always succeed. Just track call counts.
 		for i := 2; i < 4; i++ {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -939,17 +974,17 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 fails always
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			callCounts[0].Add(1)
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -986,18 +1021,18 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
-			rpcServers[i].handleTxStatus = defaultHandleTxStatus
+			})
+			rpcServers[i].setHandleTxStatus(defaultHandleTxStatus)
 		}
 
 		// Server 0 always fails
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			callCounts[0].Add(1)
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1025,27 +1060,27 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 fails once, then succeeds
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			count := callCounts[0].Add(1)
 			if count == 1 {
 				defaultSendError(w, id, -32601, "temporary failure")
 			} else {
 				defaultHandleSendPrivateTx(w, id, params)
 			}
-		}
+		})
 
 		// Server 1 always fails
-		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[1].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			callCounts[1].Add(1)
 			defaultSendError(w, id, -32602, "permanent failure")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1077,14 +1112,14 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 
 		// All servers fail once, then succeed
 		for i := 0; i < 4; i++ {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				count := callCounts[i].Add(1)
 				if count == 1 {
 					defaultSendError(w, id, -32601, "temporary failure")
 				} else {
 					defaultHandleSendPrivateTx(w, id, params)
 				}
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -1111,20 +1146,20 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 times out on first call, succeeds on retry
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			count := callCounts[0].Add(1)
 			if count == 1 {
 				time.Sleep(rpcTimeout + 100*time.Millisecond)
 			}
 			defaultHandleSendPrivateTx(w, id, params)
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1152,15 +1187,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
-			rpcServers[i].handleTxStatus = defaultHandleTxStatus
+			})
+			rpcServers[i].setHandleTxStatus(defaultHandleTxStatus)
 		}
 
 		// Server 0 fails first, then returns already known on retry
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			count := callCounts[0].Add(1)
 			if count == 1 {
 				defaultSendError(w, id, -32601, "internal server error")
@@ -1168,7 +1203,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 				// On retry, return already known
 				defaultSendError(w, id, -32000, "already known")
 			}
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1194,15 +1229,15 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Servers 0 and 1 fail initially, then return already known on retry
 		for i := 0; i < 2; i++ {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				count := callCounts[i].Add(1)
 				if count == 1 {
 					defaultSendError(w, id, -32601, "temporary failure")
@@ -1210,7 +1245,7 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 					// On retry, return already known
 					defaultSendError(w, id, -32000, "already known")
 				}
-			}
+			})
 		}
 
 		mc := newMultiClient(urls)
@@ -1239,17 +1274,17 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 returns already known on initial submission
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			callCounts[0].Add(1)
 			defaultSendError(w, id, -32000, "already known")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1268,31 +1303,31 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 fails, then returns already known
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			count := callCounts[0].Add(1)
 			if count == 1 {
 				defaultSendError(w, id, -32601, "temporary failure")
 			} else {
 				defaultSendError(w, id, -32000, "already known")
 			}
-		}
+		})
 
 		// Server 1 fails, then succeeds normally
-		rpcServers[1].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[1].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			count := callCounts[1].Add(1)
 			if count == 1 {
 				defaultSendError(w, id, -32602, "temporary failure")
 			} else {
 				defaultHandleSendPrivateTx(w, id, params)
 			}
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond
@@ -1320,17 +1355,17 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		// Reset handlers to default first
 		var callCounts [4]atomic.Int32
 		for i := range rpcServers {
-			rpcServers[i].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 				callCounts[i].Add(1)
 				defaultHandleSendPrivateTx(w, id, params)
-			}
+			})
 		}
 
 		// Server 0 always fails
-		rpcServers[0].handleSendPrivateTx = func(w http.ResponseWriter, id int, params json.RawMessage) {
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
 			callCounts[0].Add(1)
 			defaultSendError(w, id, -32601, "internal server error")
-		}
+		})
 
 		mc := newMultiClient(urls)
 		mc.retryInterval = 10 * time.Millisecond

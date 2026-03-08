@@ -29,6 +29,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
+// Timestamp represents a Unix timestamp that can be unmarshaled from both decimal and hex strings.
+type Timestamp uint64
+
 // API describes the set of methods offered over the RPC interface
 type API struct {
 	Namespace     string      // namespace under which the rpc methods of Service are exposed
@@ -309,5 +312,27 @@ func (dh *DecimalOrHex) UnmarshalJSON(data []byte) error {
 
 	*dh = DecimalOrHex(value)
 
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Timestamp.
+// It accepts both decimal strings ("1765270056") and hex strings ("0x6939f628").
+func (ts *Timestamp) UnmarshalJSON(data []byte) error {
+	input := strings.TrimSpace(string(data))
+	if len(input) >= 2 && input[0] == '"' && input[len(input)-1] == '"' {
+		input = input[1 : len(input)-1]
+	}
+
+	// Try parsing as decimal first
+	timestamp, err := strconv.ParseUint(input, 10, 64)
+	if err != nil {
+		// If decimal fails, try hex
+		timestamp, err = hexutil.DecodeUint64(input)
+		if err != nil {
+			return err
+		}
+	}
+
+	*ts = Timestamp(timestamp)
 	return nil
 }
