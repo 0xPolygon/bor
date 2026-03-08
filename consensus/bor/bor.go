@@ -1114,8 +1114,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		}
 	}
 
-	// Wait before start the block production if needed (previsously this wait was on Seal)
-	if c.config.IsBhilai(header.Number) && waitOnPrepare {
+	// Wait before start the block production if needed (previously this wait was on Seal)
+	if c.config.IsNewHardfork(header.Number) && waitOnPrepare {
 		var successionNumber int
 		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
@@ -1394,8 +1394,8 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsBhilai(header.Number) && successionNumber == 0 {
-		delay = 0 // delay was moved to Prepare for bhilai and later
+	if c.config.IsNewHardfork(header.Number) && successionNumber == 0 {
+		delay = 0 // delay was moved to Prepare for newHardfork and later
 	} else {
 		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}

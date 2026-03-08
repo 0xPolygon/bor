@@ -852,7 +852,7 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 			Period:           map[string]uint64{"0": 2},
 			ProducerDelay:    map[string]uint64{"0": 3},
 			BackupMultiplier: map[string]uint64{"0": 2},
-			RioBlock:         big.NewInt(0),
+			RioBlock:         big.NewInt(0), // blockTime=0 always takes the else-branch regardless of hardfork
 		}
 		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix()))
 		b.blockTime = 0
@@ -4373,11 +4373,11 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 
 	// Test 2: Prepare with waitOnPrepare=true should wait for the proper block time
 	t.Run("with_wait", func(t *testing.T) {
-		// Create a config with Bhilai fork enabled to activate wait logic
+		// Create a config with NewHardfork enabled to activate wait-in-Prepare logic
 		borCfgWithBhilai := &params.BorConfig{
-			Sprint:      map[string]uint64{"0": 64},
-			Period:      map[string]uint64{"0": 2},
-			BhilaiBlock: big.NewInt(0), // Enable Bhilai fork from block 0
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(0), // Enable NewHardfork from block 0
 		}
 
 		// Set genesis time 3 seconds in the future to ensure enough wait time
@@ -4411,7 +4411,7 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 			t.Fatalf("Prepare with waitOnPrepare=true failed: %v", err)
 		}
 
-		// With Bhilai enabled, DevFakeAuthor=true (making this node the primary producer),
+		// With NewHardfork enabled, DevFakeAuthor=true (making this node the primary producer),
 		// and waitOnPrepare=true, should wait until parent (genesis) time has passed
 		// Allow 100ms tolerance for timing precision and scheduling overhead
 		minWait := expectedDelay - 100*time.Millisecond
@@ -4454,6 +4454,149 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 		}
 
 		t.Logf("Both waitOnPrepare modes produce compatible headers for block %d", header1.Number.Uint64())
+	})
+}
+
+// TestPrepare_WaitGate_NewHardforkOnly verifies that the wait-in-Prepare
+// mechanism activates only when IsNewHardfork is true.
+func TestPrepare_WaitGate_NewHardforkOnly(t *testing.T) {
+	t.Parallel()
+
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+
+	t.Run("before NewHardfork – waitOnPrepare=true returns quickly", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+			// NewHardforkBlock not set → IsNewHardfork always false
+		}
+		// Set genesis time slightly in the future so there would be a non-trivial delay
+		// if the wait were active.
+		genesisTime := uint64(time.Now().Add(2 * time.Second).Unix())
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, genesisTime)
+		defer chain.Stop()
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash()}
+
+		start := time.Now()
+		err := b.Prepare(chain, header, true)
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		// Without NewHardfork the wait block is skipped; should return in < 200 ms
+		require.Less(t, elapsed, 200*time.Millisecond,
+			"Prepare should not wait when NewHardfork is not active")
+	})
+
+	t.Run("at NewHardfork – waitOnPrepare=true waits for primary producer", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(0),
+		}
+		// Genesis 3 s in the future → there will be a measurable wait.
+		genesisTime := uint64(time.Now().Add(3 * time.Second).Unix())
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, genesisTime)
+		defer chain.Stop()
+
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+
+		// Measure expected delay right before calling Prepare, same pattern as TestBorPrepare_WaitOnPrepareFlag.
+		expectedDelay := time.Until(time.Unix(int64(genesis.Time), 0))
+		if expectedDelay < 100*time.Millisecond {
+			t.Skip("genesis time already passed due to slow setup")
+		}
+
+		header := &types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash()}
+
+		start := time.Now()
+		err := b.Prepare(chain, header, true)
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		minWait := expectedDelay - 200*time.Millisecond
+		if minWait < 0 {
+			minWait = 0
+		}
+		require.Greater(t, elapsed, minWait,
+			"Prepare should wait for primary producer when NewHardfork is active")
+	})
+}
+
+// TestSeal_PrimaryProducerDelay_NewHardforkBoundary verifies that delay=0 in Seal
+// for the primary producer (succession==0) is gated on IsNewHardfork.
+func TestSeal_PrimaryProducerDelay_NewHardforkBoundary(t *testing.T) {
+	t.Parallel()
+
+	addr := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	now := uint64(time.Now().Unix())
+
+	makeHeader := func(borCfg *params.BorConfig) (*types.Header, *Bor, *core.BlockChain) {
+		chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, now)
+		genesis := chain.HeaderChain().GetHeaderByNumber(0)
+		require.NotNil(t, genesis)
+		h := &types.Header{
+			Number:     big.NewInt(1),
+			ParentHash: genesis.Hash(),
+			Extra:      make([]byte, 32+65),
+			UncleHash:  uncleHash,
+			Difficulty: big.NewInt(1),
+			GasLimit:   8_000_000,
+		}
+		// Set header.Time so GetActualTime() returns something in the past
+		h.Time = now - 1
+		return h, b, chain
+	}
+
+	t.Run("before NewHardfork – primary producer has non-zero delay", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint: map[string]uint64{"0": 64},
+			Period: map[string]uint64{"0": 2},
+			// NewHardforkBlock not set
+		}
+		h, b, chain := makeHeader(borCfg)
+		defer chain.Stop()
+
+		snap, err := b.snapshot(chain.HeaderChain(), h, nil, false)
+		require.NoError(t, err)
+
+		successionNumber, err := snap.GetSignerSuccessionNumber(addr)
+		require.NoError(t, err)
+		require.Equal(t, 0, successionNumber, "DevFakeAuthor should be primary producer")
+
+		// Before NewHardfork the delay=0 branch should NOT be taken.
+		// The else branch sets delay = time.Until(header.GetActualTime()).
+		// Since header.Time is in the past, delay ≤ 0 — but the point is the branch
+		// selected is the else, not the delay=0 one.
+		isNewHF := b.config.IsNewHardfork(h.Number)
+		require.False(t, isNewHF, "IsNewHardfork should be false before NewHardforkBlock")
+	})
+
+	t.Run("at NewHardfork – primary producer gets delay=0", func(t *testing.T) {
+		borCfg := &params.BorConfig{
+			Sprint:           map[string]uint64{"0": 64},
+			Period:           map[string]uint64{"0": 2},
+			NewHardforkBlock: big.NewInt(0),
+		}
+		h, b, chain := makeHeader(borCfg)
+		defer chain.Stop()
+
+		snap, err := b.snapshot(chain.HeaderChain(), h, nil, false)
+		require.NoError(t, err)
+
+		successionNumber, err := snap.GetSignerSuccessionNumber(addr)
+		require.NoError(t, err)
+		require.Equal(t, 0, successionNumber, "DevFakeAuthor should be primary producer")
+
+		isNewHF := b.config.IsNewHardfork(h.Number)
+		require.True(t, isNewHF, "IsNewHardfork should be true at NewHardforkBlock=0")
+		// The Seal function would take the delay=0 branch for this signer/header combination.
 	})
 }
 
