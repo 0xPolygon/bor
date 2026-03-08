@@ -68,7 +68,12 @@ const (
 	txMaxBroadcastSize = 4096
 )
 
-var syncChallengeTimeout = 15 * time.Second // Time allowance for a node to reply to the sync progress challenge
+var (
+	syncChallengeTimeout = 15 * time.Second // Time allowance for a node to reply to the sync progress challenge
+	// sealToBroadcastTimer measures latency from seal+write completion to broadcast start.
+	// This captures event delivery delay through the TypeMux subscription channel.
+	sealToBroadcastTimer = metrics.NewRegisteredTimer("eth/seal2broadcast", nil)
+)
 
 // txPool defines the methods needed from a transaction pool implementation to
 // support all the operations needed by the Ethereum chain protocols.
@@ -233,17 +238,14 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		// * the last snap sync is not finished while user specifies a full sync this
 		//   time. But we don't have any recent state for full sync.
 		// In these cases however it's safe to reenable snap sync.
-		// Disable switching to snap sync as it's disabled momentarily.
-		/*
-			fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
-			if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
-				h.snapSync.Store(true)
-				log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-			} else if !h.chain.HasState(fullBlock.Root) {
-				h.snapSync.Store(true)
-				log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
-			}
-		*/
+		fullBlock, snapBlock := h.chain.CurrentBlock(), h.chain.CurrentSnapBlock()
+		if fullBlock.Number.Uint64() == 0 && snapBlock.Number.Uint64() > 0 {
+			h.snapSync.Store(true)
+			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
+		} else if !h.chain.HasState(fullBlock.Root) {
+			h.snapSync.Store(true)
+			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
+		}
 	} else {
 		// This is snap sync mode
 		head := h.chain.CurrentBlock()
@@ -299,11 +301,6 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		} else {
 			return h.chain.InsertChainWithWitnesses(blocks, config.witnessProtocol, witnesses)
 		}
-	}
-
-	// If snap sync is requested but snapshots are disabled, fail loudly
-	if h.snapSync.Load() && config.Chain.Snapshots() == nil {
-		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 
 	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
@@ -818,10 +815,16 @@ func (h *handler) minedBroadcastLoop() {
 
 	for obj := range h.minedBlockSub.Chan() {
 		if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
+			now := time.Now()
+			var sealToBcast time.Duration
+			if !ev.SealedAt.IsZero() {
+				sealToBcast = now.Sub(ev.SealedAt)
+				sealToBroadcastTimer.Update(sealToBcast)
+			}
 			if h.enableBlockTracking {
-				delayInMs := time.Now().UnixMilli() - int64(ev.Block.Time())*1000
+				delayInMs := now.UnixMilli() - int64(ev.Block.Time())*1000
 				delay := common.PrettyDuration(time.Millisecond * time.Duration(delayInMs))
-				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", time.Now().Unix(), "delay", delay, "delayInMs", delayInMs)
+				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
 			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
 			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest

@@ -48,6 +48,7 @@ import (
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/live"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 
 	protobor "github.com/0xPolygon/polyproto/bor"
@@ -87,32 +88,6 @@ func WithGRPCListener(lis net.Listener) serverOption {
 	return func(srv *Server, _ *Config) error {
 		return srv.gRPCServerByListener(lis)
 	}
-}
-
-func VerbosityIntToString(verbosity int) string {
-	mapIntToString := map[int]string{
-		5: "trace",
-		4: "debug",
-		3: "info",
-		2: "warn",
-		1: "error",
-		0: "crit",
-	}
-
-	return mapIntToString[verbosity]
-}
-
-func VerbosityStringToInt(loglevel string) int {
-	mapStringToInt := map[string]int{
-		"trace": 5,
-		"debug": 4,
-		"info":  3,
-		"warn":  2,
-		"error": 1,
-		"crit":  0,
-	}
-
-	return mapStringToInt[loglevel]
 }
 
 //nolint:gocognit

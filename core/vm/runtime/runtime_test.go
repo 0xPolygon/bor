@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -138,6 +139,66 @@ func TestExecuteWithInterrupt(t *testing.T) {
 	if err != vm.ErrInterrupt {
 		t.Fatalf("invalid error, expected: %v, got: %v", vm.ErrInterrupt, err)
 	}
+}
+
+func TestInterruptNestedCall(t *testing.T) {
+	// Callee: infinite loop burning gas
+	callee := program.New()
+	_, loop := callee.Jumpdest()
+	callee.Push(0).Op(vm.POP)
+	callee.Jump(loop)
+
+	calleeAddr := common.HexToAddress("0xCAFE")
+	gasLimit := uint64(1_000_000_000)
+
+	t.Run("TopLevel", func(t *testing.T) {
+		var interrupt atomic.Bool
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			interrupt.Store(true)
+		}()
+
+		start := time.Now()
+		_, _, err := Execute(callee.Bytes(), nil, &Config{GasLimit: gasLimit}, &interrupt)
+		elapsed := time.Since(start)
+
+		if err != vm.ErrInterrupt {
+			t.Fatalf("expected ErrInterrupt, got %v", err)
+		}
+		if elapsed > 200*time.Millisecond {
+			t.Fatalf("top-level interrupt too slow: %v", elapsed)
+		}
+	})
+
+	t.Run("NestedCall", func(t *testing.T) {
+		// Caller: STATICCALL to callee forwarding all gas
+		caller := program.New()
+		caller.StaticCall(nil, calleeAddr, 0, 0, 0, 0)
+
+		cfg := &Config{GasLimit: gasLimit}
+		setDefaults(cfg)
+		cfg.State, _ = state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+		cfg.State.CreateAccount(calleeAddr)
+		cfg.State.SetCode(calleeAddr, callee.Bytes(), tracing.CodeChangeUnspecified)
+
+		var interrupt atomic.Bool
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			interrupt.Store(true)
+		}()
+
+		start := time.Now()
+		_, _, err := Execute(caller.Bytes(), nil, cfg, &interrupt)
+		elapsed := time.Since(start)
+
+		// FIX: nested call IS interrupted promptly via EVM struct field
+		if err != vm.ErrInterrupt {
+			t.Fatalf("expected ErrInterrupt, got %v", err)
+		}
+		if elapsed > 200*time.Millisecond {
+			t.Fatalf("nested call not interrupted promptly: %v (expected < 200ms)", elapsed)
+		}
+	})
 }
 
 func TestCall(t *testing.T) {

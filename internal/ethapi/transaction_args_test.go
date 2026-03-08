@@ -364,7 +364,19 @@ func (b *backendMock) HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rp
 	//nolint:nilnil
 	return nil, nil
 }
-func (b *backendMock) CurrentBlock() *types.Header { return nil }
+func (b *backendMock) CurrentBlock() *types.Header     { return nil }
+func (b *backendMock) CurrentSafeBlock() *types.Header { return b.current }
+func (b *backendMock) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	if b.current == nil || b.current.Number == nil {
+		return 0, nil
+	}
+	// Return a fixed finalized block for testing
+	num := b.current.Number.Uint64()
+	if num < 10 {
+		return 0, nil
+	}
+	return num - 10, nil
+}
 func (b *backendMock) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	//nolint:nilnil
 	return nil, nil

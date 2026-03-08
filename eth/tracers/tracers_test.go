@@ -92,7 +92,7 @@ func BenchmarkTransactionTraceV2(b *testing.B) {
 		evm.Config.Tracer = tracer
 
 		snap := state.StateDB.Snapshot()
-		_, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()), nil)
+		_, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()))
 		if err != nil {
 			b.Fatal(err)
 		}

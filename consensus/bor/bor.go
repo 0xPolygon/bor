@@ -58,6 +58,7 @@ const (
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
 	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	minBlockBuildTime  = 1 * time.Second // Minimum remaining time before extending the block deadline to avoid empty blocks
 )
 
 // Bor protocol constants.
@@ -433,6 +434,12 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		// ahead of the local clock is rejected.
 		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
 			log.Error("Block timestamp too far in future post newHardfork", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+		}
+		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
+		// ahead of the local clock is rejected.
+		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
+			log.Error("Block timestamp too far in future post rio", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 	} else if c.config.IsBhilai(header.Number) {
@@ -1103,14 +1110,17 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	}
 
 	now := time.Now()
-	if now.After(header.GetActualTime()) {
-		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
+	blockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
+	if c.blockTime > 0 && c.config.IsRio(header.Number) {
+		blockTime = c.blockTime
+	}
+	// Ensure minimum build time so the block has enough time to include transactions.
+	// The interrupt timer reserves 500ms for state root computation, so without
+	// sufficient remaining time the block would end up empty.
+	if time.Until(header.GetActualTime()) < minBlockBuildTime {
+		header.Time = uint64(now.Add(blockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
-			additionalBlockTime = c.blockTime
-		}
-		header.Time = uint64(now.Add(additionalBlockTime).Unix())
-		if c.blockTime > 0 && c.config.IsRio(header.Number) {
-			header.ActualTime = now.Add(additionalBlockTime)
+			header.ActualTime = now.Add(blockTime)
 		}
 	}
 

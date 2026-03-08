@@ -48,7 +48,7 @@ func TestWitnessPruner_HappyPath_GenericPruner(t *testing.T) {
 	}
 
 	// Strategy: keep only last 5 blocks -> cutoff = 20 - 5 = 15
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 
 	// Generic pruner; interval irrelevant since we invoke runOnce directly.
 	p := NewPruner(db, ws)
@@ -110,7 +110,7 @@ func TestWitnessPruner_FindCursor_FirstWitnessBeforeCutoff(t *testing.T) {
 	}
 
 	// Keep only last 10 blocks -> cutoff = 60 - 10 = 50.
-	ws := &WitnessStrategy{retention: 10}
+	ws := &WitnessStrategy{retention: 10, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// Sanity: no prior cursor.
@@ -326,7 +326,7 @@ func TestWitnessPruner_Reorg_Shallow_CursorBelowNewHead(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xAA, 0xBB})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// First prune: establish cursor and delete old data.
@@ -403,7 +403,7 @@ func TestWitnessPruner_Reorg_Deep_CursorAboveNewHead(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xCA, 0xFE})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 	p := NewPruner(db, ws)
 
 	// Simulate prior pruning state:
@@ -469,7 +469,7 @@ func TestWitnessPruner_Reorg_Offline(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xBE, 0xEF})
 	}
 
-	ws := &WitnessStrategy{retention: 5}
+	ws := &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)}
 
 	// --- First run: normal pruning at oldHead ---
 	p1 := NewPruner(db, ws)
@@ -585,7 +585,7 @@ func TestWitnessPruner_CursorBeyondHead_Clamping(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xDE, 0xAD})
 	}
 
-	ws := &WitnessStrategy{retention: 10}
+	ws := &WitnessStrategy{retention: 10, witnessStore: NewDBWitnessStore(db)}
 
 	// Manually set cursor to a value beyond the head (simulates corrupted state or edge case).
 	invalidCursor := head + 20
@@ -679,7 +679,7 @@ func TestDeleteRange_ShutdownInterrupt(t *testing.T) {
 		WriteWitness(db, hashes[i], []byte{0xAB})
 	}
 
-	p := NewPruner(db, &WitnessStrategy{retention: 5})
+	p := NewPruner(db, &WitnessStrategy{retention: 5, witnessStore: NewDBWitnessStore(db)})
 	close(p.quit)
 
 	err := p.deleteRange(0, chainLen)
@@ -692,5 +692,44 @@ func TestDeleteRange_ShutdownInterrupt(t *testing.T) {
 		if !HasWitness(db, hashes[i]) {
 			t.Fatalf("witness at block %d was deleted despite shutdown", i)
 		}
+	}
+}
+
+func TestNewWitnessStrategy_Defaults(t *testing.T) {
+	db := NewMemoryDatabase()
+	ws := NewDBWitnessStore(db)
+	s := NewWitnessStrategy(ws)
+
+	if s.Name() != "witness pruner" {
+		t.Fatalf("unexpected name: %q", s.Name())
+	}
+	if s.RetentionBlocks() != WitnessRetentionBlocks {
+		t.Fatalf("expected retention %d, got %d", WitnessRetentionBlocks, s.RetentionBlocks())
+	}
+	if s.Interval() != WitnessPruneInterval {
+		t.Fatalf("expected interval %v, got %v", WitnessPruneInterval, s.Interval())
+	}
+	if s.witnessStore != ws {
+		t.Fatal("expected witnessStore to be the same instance passed to constructor")
+	}
+}
+
+func TestNewWitnessStrategy_DeletePerHashUsesStore(t *testing.T) {
+	db := NewMemoryDatabase()
+	ws := NewDBWitnessStore(db)
+	s := NewWitnessStrategy(ws)
+
+	hash := common.HexToHash("0xdeadbeef")
+	WriteWitness(db, hash, []byte("data"))
+
+	if !ws.HasWitness(hash) {
+		t.Fatal("witness should exist before delete")
+	}
+
+	// DeletePerHash should delegate to the witness store.
+	s.DeletePerHash(db, 1, hash)
+
+	if ws.HasWitness(hash) {
+		t.Fatal("witness should be deleted via witness store")
 	}
 }

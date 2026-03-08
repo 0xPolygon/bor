@@ -106,6 +106,10 @@ var (
 	intermediateRootTimer = metrics.NewRegisteredTimer("worker/intermediateRoot", nil)
 	// commitTimer measures total time for complete block building (tx execution + finalization + state root)
 	commitTimer = metrics.NewRegisteredTimer("worker/commit", nil)
+	// writeBlockAndSetHeadTimer measures total time for WriteBlockAndSetHead in the seal result loop.
+	// This covers the entire gap between block sealing and event posting: witness encoding, batch write,
+	// state commit, and (in hashdb mode) trie GC. Spikes here directly delay block broadcasting.
+	writeBlockAndSetHeadTimer = metrics.NewRegisteredTimer("worker/writeBlockAndSetHead", nil)
 
 	// Cache hit/miss metrics for block production (miner path)
 	// These are the same meters used by the import path in blockchain.go
@@ -153,9 +157,8 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
-	depsMVFullWriteList [][]blockstm.WriteDescriptor
-	mvReadMapList       []map[blockstm.Key]blockstm.ReadDescriptor
-	witness             *stateless.Witness
+	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
+	witness       *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
@@ -165,16 +168,15 @@ type environment struct {
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
-		signer:              env.signer,
-		state:               env.state.Copy(),
-		tcount:              env.tcount,
-		coinbase:            env.coinbase,
-		header:              types.CopyHeader(env.header),
-		receipts:            copyReceipts(env.receipts),
-		depsMVFullWriteList: env.depsMVFullWriteList,
-		mvReadMapList:       env.mvReadMapList,
-		prefetchReader:      env.prefetchReader,
-		processReader:       env.processReader,
+		signer:         env.signer,
+		state:          env.state.Copy(),
+		tcount:         env.tcount,
+		coinbase:       env.coinbase,
+		header:         types.CopyHeader(env.header),
+		receipts:       copyReceipts(env.receipts),
+		mvReadMapList:  env.mvReadMapList,
+		prefetchReader: env.prefetchReader,
+		processReader:  env.processReader,
 	}
 
 	if env.gasPool != nil {
@@ -999,7 +1001,9 @@ func (w *worker) resultLoop() {
 			}
 
 			// Commit block and state to database.
+			writeStart := time.Now()
 			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+			writeBlockAndSetHeadTimer.Update(time.Since(writeStart))
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
@@ -1014,7 +1018,7 @@ func (w *worker) resultLoop() {
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
 			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness})
+			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: time.Now()})
 
 			sealedBlocksCounter.Inc(1)
 
@@ -1075,10 +1079,10 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchReader: genParams.prefetchReader,
 		processReader:  genParams.processReader,
 	}
+	env.evm.SetInterrupt(&w.interruptBlockBuilding)
+
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
-
-	env.depsMVFullWriteList = [][]blockstm.WriteDescriptor{}
 	env.mvReadMapList = []map[blockstm.Key]blockstm.ReadDescriptor{}
 
 	return env, nil
@@ -1108,7 +1112,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 		gp   = env.gasPool.Gas()
 	)
 
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, &w.interruptBlockBuilding)
+	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
@@ -1136,7 +1140,8 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var deps map[int]map[int]bool
 
-	chDeps := make(chan blockstm.TxDep)
+	var depsBuilder *blockstm.DepsBuilder
+	var chDeps chan blockstm.TxReadWriteSet
 
 	var depsWg sync.WaitGroup
 	var once sync.Once
@@ -1145,9 +1150,8 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	// create and add empty mvHashMap in statedb
 	if EnableMVHashMap && w.IsRunning() {
-		deps = map[int]map[int]bool{}
-
-		chDeps = make(chan blockstm.TxDep)
+		depsBuilder = blockstm.NewDepsBuilder()
+		chDeps = make(chan blockstm.TxReadWriteSet)
 
 		// Make sure we safely close the channel in case of interrupt
 		defer once.Do(func() {
@@ -1156,11 +1160,17 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 		depsWg.Add(1)
 
-		go func(chDeps chan blockstm.TxDep) {
+		go func(chDeps chan blockstm.TxReadWriteSet) {
 			for t := range chDeps {
-				deps = blockstm.UpdateDeps(deps, t)
+				if err := depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList); err != nil {
+					// Non-sequential index indicates a systematic bug, not a transient error.
+					// Drain the channel so the sender never blocks, then stop processing.
+					log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", t.Index, "err", err)
+					for range chDeps {
+					}
+					break
+				}
 			}
-
 			depsWg.Done()
 		}(chDeps)
 	}
@@ -1315,18 +1325,17 @@ mainloop:
 			coalescedLogs = append(coalescedLogs, logs...)
 
 			if EnableMVHashMap && w.IsRunning() {
-				env.depsMVFullWriteList = append(env.depsMVFullWriteList, env.state.MVFullWriteList())
 				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
 
-				if env.tcount > len(env.depsMVFullWriteList) {
-					log.Warn("blockstm - env.tcount > len(env.depsMVFullWriteList)", "env.tcount", env.tcount, "len(depsMVFullWriteList)", len(env.depsMVFullWriteList))
+				if env.tcount > len(env.mvReadMapList) {
+					log.Warn("blockstm - env.tcount > len(env.mvReadMapList)", "env.tcount", env.tcount, "len(mvReadMapList)", len(env.mvReadMapList))
 					return errors.New("transaction count exceeds dependency list length")
 				}
 
-				temp := blockstm.TxDep{
-					Index:         env.tcount - 1,
-					ReadList:      env.state.MVReadList(),
-					FullWriteList: env.depsMVFullWriteList,
+				temp := blockstm.TxReadWriteSet{
+					Index:     env.tcount - 1,
+					ReadList:  env.state.MVReadList(),
+					WriteList: env.state.MVFullWriteList(),
 				}
 
 				// Send with timeout to prevent deadlock
@@ -1367,12 +1376,24 @@ mainloop:
 		})
 		depsWg.Wait()
 
+		deps = depsBuilder.GetDeps()
+		if deps == nil {
+			log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
+		}
+
 		var blockExtraData types.BlockExtraData
 
 		tempVanity := env.header.Extra[:types.ExtraVanityLength]
 		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
 
-		if len(env.mvReadMapList) > 0 {
+		// Always decode header extra data before overwriting TxDependency.
+		if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
+			log.Error("error while decoding block extra data", "err", err)
+			return err
+		}
+
+		// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
+		if deps != nil && len(env.mvReadMapList) > 0 {
 			tempDeps := make([][]uint64, len(env.mvReadMapList))
 
 			for j := range deps[0] {
@@ -1382,11 +1403,11 @@ mainloop:
 			delayFlag := true
 
 			for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-				reads := env.mvReadMapList[i-1]
+				reads := env.mvReadMapList[i]
 
+				// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
 				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
 				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
-
 				if ok1 || ok2 {
 					delayFlag = false
 					break
@@ -1395,11 +1416,6 @@ mainloop:
 				for j := range deps[i] {
 					tempDeps[i] = append(tempDeps[i], uint64(j))
 				}
-			}
-
-			if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-				log.Error("error while decoding block extra data", "err", err)
-				return err
 			}
 
 			if delayFlag {
@@ -1418,9 +1434,7 @@ mainloop:
 		}
 
 		env.header.Extra = []byte{}
-
 		env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-
 		env.header.Extra = append(env.header.Extra, tempSeal...)
 	}
 
@@ -1820,7 +1834,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		isRio = w.chainConfig.Bor.IsRio(work.header.Number)
 	}
 	if !noempty && !w.noempty.Load() && !isRio {
-		_ = w.commit(work.copy(), nil, false, start, genParams)
+		emptyWork := work.copy()
+		emptyWork.state.ResetPrefetcher()
+		_ = w.commit(emptyWork, nil, false, start, genParams)
 	}
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)

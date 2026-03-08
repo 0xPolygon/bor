@@ -285,7 +285,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 
 	uniquePrivateTxRequestMeter.Mark(1)
 	start := time.Now()
-	err = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry, s.txGetter)
+	err, _ = s.multiclient.submitPrivateTx(rawTx, tx.Hash(), retry, s.txGetter)
 	privateTxSubmitTimer.UpdateSince(start)
 	if err != nil {
 		privateTxSubmissionFailureMeter.Mark(1)

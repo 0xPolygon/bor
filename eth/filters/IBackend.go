@@ -10,9 +10,12 @@ import (
 	reflect "reflect"
 	time "time"
 
+	gomock "go.uber.org/mock/gomock"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	accounts "github.com/ethereum/go-ethereum/accounts"
 	common "github.com/ethereum/go-ethereum/common"
+	hexutil "github.com/ethereum/go-ethereum/common/hexutil"
 	consensus "github.com/ethereum/go-ethereum/consensus"
 	core "github.com/ethereum/go-ethereum/core"
 	filtermaps "github.com/ethereum/go-ethereum/core/filtermaps"
@@ -24,7 +27,6 @@ import (
 	event "github.com/ethereum/go-ethereum/event"
 	params "github.com/ethereum/go-ethereum/params"
 	rpc "github.com/ethereum/go-ethereum/rpc"
-	gomock "go.uber.org/mock/gomock"
 )
 
 // MockBackend is a mock of Backend interface.
@@ -179,6 +181,20 @@ func (mr *MockBackendMockRecorder) CurrentHeader() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentHeader", reflect.TypeOf((*MockBackend)(nil).CurrentHeader))
 }
 
+// CurrentSafeBlock mocks base method.
+func (m *MockBackend) CurrentSafeBlock() *types.Header {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentSafeBlock")
+	ret0, _ := ret[0].(*types.Header)
+	return ret0
+}
+
+// CurrentSafeBlock indicates an expected call of CurrentSafeBlock.
+func (mr *MockBackendMockRecorder) CurrentSafeBlock() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentSafeBlock", reflect.TypeOf((*MockBackend)(nil).CurrentSafeBlock))
+}
+
 // CurrentView mocks base method.
 func (m *MockBackend) CurrentView() *filtermaps.ChainView {
 	m.ctrl.T.Helper()
@@ -205,6 +221,21 @@ func (m *MockBackend) Engine() consensus.Engine {
 func (mr *MockBackendMockRecorder) Engine() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Engine", reflect.TypeOf((*MockBackend)(nil).Engine))
+}
+
+// Etherbase mocks base method.
+func (m *MockBackend) Etherbase() (common.Address, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Etherbase")
+	ret0, _ := ret[0].(common.Address)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Etherbase indicates an expected call of Etherbase.
+func (mr *MockBackendMockRecorder) Etherbase() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Etherbase", reflect.TypeOf((*MockBackend)(nil).Etherbase))
 }
 
 // ExtRPCEnabled mocks base method.
@@ -367,6 +398,21 @@ func (m *MockBackend) GetEVM(arg0 context.Context, arg1 *state.StateDB, arg2 *ty
 func (mr *MockBackendMockRecorder) GetEVM(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEVM", reflect.TypeOf((*MockBackend)(nil).GetEVM), arg0, arg1, arg2, arg3, arg4)
+}
+
+// GetFinalizedBlockNumber mocks base method.
+func (m *MockBackend) GetFinalizedBlockNumber(arg0 context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFinalizedBlockNumber", arg0)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFinalizedBlockNumber indicates an expected call of GetFinalizedBlockNumber.
+func (mr *MockBackendMockRecorder) GetFinalizedBlockNumber(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFinalizedBlockNumber", reflect.TypeOf((*MockBackend)(nil).GetFinalizedBlockNumber), arg0)
 }
 
 // GetLogs mocks base method.
@@ -548,6 +594,36 @@ func (mr *MockBackendMockRecorder) GetWitnesses(arg0, arg1, arg2 interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWitnesses", reflect.TypeOf((*MockBackend)(nil).GetWitnesses), arg0, arg1, arg2)
 }
 
+// GetWork mocks base method.
+func (m *MockBackend) GetWork() ([4]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWork")
+	ret0, _ := ret[0].([4]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWork indicates an expected call of GetWork.
+func (mr *MockBackendMockRecorder) GetWork() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWork", reflect.TypeOf((*MockBackend)(nil).GetWork))
+}
+
+// Hashrate mocks base method.
+func (m *MockBackend) Hashrate() (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Hashrate")
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Hashrate indicates an expected call of Hashrate.
+func (mr *MockBackendMockRecorder) Hashrate() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Hashrate", reflect.TypeOf((*MockBackend)(nil).Hashrate))
+}
+
 // HeaderByHash mocks base method.
 func (m *MockBackend) HeaderByHash(arg0 context.Context, arg1 common.Hash) (*types.Header, error) {
 	m.ctrl.T.Helper()
@@ -621,6 +697,21 @@ func (mr *MockBackendMockRecorder) IsParallelImportActive() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsParallelImportActive", reflect.TypeOf((*MockBackend)(nil).IsParallelImportActive))
 }
 
+// Mining mocks base method.
+func (m *MockBackend) Mining() (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Mining")
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Mining indicates an expected call of Mining.
+func (mr *MockBackendMockRecorder) Mining() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Mining", reflect.TypeOf((*MockBackend)(nil).Mining))
+}
+
 // NewMatcherBackend mocks base method.
 func (m *MockBackend) NewMatcherBackend() filtermaps.MatcherBackend {
 	m.ctrl.T.Helper()
@@ -663,6 +754,20 @@ func (m *MockBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
 func (mr *MockBackendMockRecorder) Pending() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pending", reflect.TypeOf((*MockBackend)(nil).Pending))
+}
+
+// ProtocolVersion mocks base method.
+func (m *MockBackend) ProtocolVersion() uint {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ProtocolVersion")
+	ret0, _ := ret[0].(uint)
+	return ret0
+}
+
+// ProtocolVersion indicates an expected call of ProtocolVersion.
+func (mr *MockBackendMockRecorder) ProtocolVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProtocolVersion", reflect.TypeOf((*MockBackend)(nil).ProtocolVersion))
 }
 
 // PurgeWhitelistedCheckpoint mocks base method.
@@ -858,6 +963,36 @@ func (m *MockBackend) StoreWitness(arg0 context.Context, arg1 common.Hash, arg2 
 func (mr *MockBackendMockRecorder) StoreWitness(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreWitness", reflect.TypeOf((*MockBackend)(nil).StoreWitness), arg0, arg1, arg2)
+}
+
+// SubmitHashrate mocks base method.
+func (m *MockBackend) SubmitHashrate(arg0 hexutil.Uint64, arg1 common.Hash) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitHashrate", arg0, arg1)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubmitHashrate indicates an expected call of SubmitHashrate.
+func (mr *MockBackendMockRecorder) SubmitHashrate(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitHashrate", reflect.TypeOf((*MockBackend)(nil).SubmitHashrate), arg0, arg1)
+}
+
+// SubmitWork mocks base method.
+func (m *MockBackend) SubmitWork(arg0 types.BlockNonce, arg1, arg2 common.Hash) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitWork", arg0, arg1, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubmitWork indicates an expected call of SubmitWork.
+func (mr *MockBackendMockRecorder) SubmitWork(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitWork", reflect.TypeOf((*MockBackend)(nil).SubmitWork), arg0, arg1, arg2)
 }
 
 // SubscribeChain2HeadEvent mocks base method.

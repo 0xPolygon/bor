@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sync/atomic"
 
 	"github.com/holiman/uint256"
 
@@ -227,16 +226,16 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 // the gas used (which includes gas refunds) and an error if it failed. An error always
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
-func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool, interrupt *atomic.Bool) (*ExecutionResult, error) {
+func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
 	evm.SetTxContext(NewEVMTxContext(msg))
-	return newStateTransition(evm, msg, gp).execute(interrupt)
+	return newStateTransition(evm, msg, gp).execute()
 }
 
-func ApplyMessageNoFeeBurnOrTip(evm *vm.EVM, msg Message, gp *GasPool, interrupt *atomic.Bool) (*ExecutionResult, error) {
+func ApplyMessageNoFeeBurnOrTip(evm *vm.EVM, msg Message, gp *GasPool) (*ExecutionResult, error) {
 	st := newStateTransition(evm, &msg, gp)
 	st.noFeeBurnAndTip = true
 
-	return st.execute(interrupt)
+	return st.execute()
 }
 
 // stateTransition represents a state transition.
@@ -455,7 +454,7 @@ func (st *stateTransition) preCheck() error {
 //
 // However if any consensus issue encountered, return the error directly with
 // nil evm execution result.
-func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, error) {
+func (st *stateTransition) execute() (*ExecutionResult, error) {
 	input1 := st.state.GetBalance(st.msg.From)
 
 	var input2 *uint256.Int
@@ -565,7 +564,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 		}
 
 		// Execute the transaction's call.
-		ret, st.gasRemaining, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining, value, interrupt)
+		ret, st.gasRemaining, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining, value)
 	}
 
 	// Record the gas used excluding gas refunds. This value represents the actual

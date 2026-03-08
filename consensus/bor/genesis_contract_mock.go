@@ -8,13 +8,14 @@ import (
 	big "math/big"
 	reflect "reflect"
 
+	gomock "go.uber.org/mock/gomock"
+
 	common "github.com/ethereum/go-ethereum/common"
 	clerk "github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	statefull "github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	state "github.com/ethereum/go-ethereum/core/state"
 	types "github.com/ethereum/go-ethereum/core/types"
 	vm "github.com/ethereum/go-ethereum/core/vm"
-	gomock "go.uber.org/mock/gomock"
 )
 
 // MockGenesisContract is a mock of GenesisContract interface.

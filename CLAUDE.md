@@ -63,6 +63,12 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
    make test
    ```
 
+5. **Docs**: Regenerate CLI docs and default config
+
+   ```bash
+   make docs
+   ```
+
 ## Testing Guidelines
 
 1. **Unit Tests**: Test individual functions

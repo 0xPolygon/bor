@@ -33,12 +33,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Verbosity,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "log-level",
-		Usage:   "Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead",
-		Value:   &c.cliConfig.LogLevel,
-		Default: c.cliConfig.LogLevel,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:               "datadir",
 		Usage:              "Path of the data directory to store information",
 		Value:              &c.cliConfig.DataDir,
@@ -50,6 +44,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Record information useful for VM and contract debugging",
 		Value:   &c.cliConfig.EnablePreimageRecording,
 		Default: c.cliConfig.EnablePreimageRecording,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace",
+		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
+		Value:   &c.cliConfig.VMTrace,
+		Default: c.cliConfig.VMTrace,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "vmtrace.jsonconfig",
+		Usage:   "Tracer configuration (JSON)",
+		Value:   &c.cliConfig.VMTraceJsonConfig,
+		Default: c.cliConfig.VMTraceJsonConfig,
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "datadir.ancient",
@@ -69,11 +75,17 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.KeyStoreDir,
 		Default: c.cliConfig.KeyStoreDir,
 	})
-	f.Uint64Flag(&flagset.Uint64Flag{
-		Name:    "rpc.batchlimit",
-		Usage:   "Maximum number of messages in a batch (use 0 for no limits)",
-		Value:   &c.cliConfig.RPCBatchLimit,
-		Default: c.cliConfig.RPCBatchLimit,
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.batch-request-limit",
+		Usage:   "Maximum number of requests in a batch (use 0 for no limits)",
+		Value:   &c.cliConfig.BatchRequestLimit,
+		Default: c.cliConfig.BatchRequestLimit,
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "rpc.batch-response-max-size",
+		Usage:   "Maximum number of response bytes across all requests in a batch (use 0 for no limits)",
+		Value:   &c.cliConfig.BatchResponseMaxSize,
+		Default: c.cliConfig.BatchResponseMaxSize,
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "rpc.returndatalimit",
@@ -88,7 +100,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "syncmode",
-		Usage:   `Blockchain sync mode (only "full" or "stateless" sync supported)`,
+		Usage:   `Blockchain sync mode ("full", "snap" or "stateless")`,
 		Value:   &c.cliConfig.SyncMode,
 		Default: c.cliConfig.SyncMode,
 	})
@@ -135,7 +147,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.MaxBlindForkValidationLimit,
 	})
 
-	// logging related flags (log-level and verbosity is present above, it will be removed soon)
+	// logging related flags
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmodule",
 		Usage:   "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
@@ -175,7 +187,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// heimdall
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdall",
-		Usage:   "URL of Heimdall service",
+		Usage:   "URL of Heimdall service (comma-separated for failover: \"url1,url2\")",
 		Value:   &c.cliConfig.Heimdall.URL,
 		Default: c.cliConfig.Heimdall.URL,
 	})
@@ -199,13 +211,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallgRPC",
-		Usage:   "Address of Heimdall gRPC service",
+		Usage:   "Address of Heimdall gRPC service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.GRPCAddress,
 		Default: c.cliConfig.Heimdall.GRPCAddress,
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "bor.heimdallWS",
-		Usage:   "Address of Heimdall ws subscription service",
+		Usage:   "Address of Heimdall WS subscription service (comma-separated for failover: \"addr1,addr2\")",
 		Value:   &c.cliConfig.Heimdall.WSAddress,
 		Default: c.cliConfig.Heimdall.WSAddress,
 	})
@@ -467,6 +479,27 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Base fee change rate denominator (must be >0, default 64) for post-Lisovo blocks",
 		Value:   &c.cliConfig.Sealer.BaseFeeChangeDenominator,
 		Default: c.cliConfig.Sealer.BaseFeeChangeDenominator,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.enableDynamicTargetGas",
+		Usage:   "Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit)",
+		Value:   &c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Default: c.cliConfig.Sealer.EnableDynamicTargetGas,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMinPercentage",
+		Usage:   "Minimum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMinPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMinPercentage,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.targetGasMaxPercentage",
+		Usage:   "Maximum target gas percentage (1-100) when dynamic target gas is enabled",
+		Value:   &c.cliConfig.Sealer.TargetGasMaxPercentage,
+		Default: c.cliConfig.Sealer.TargetGasMaxPercentage,
 		Group:   "Sealer",
 	})
 
@@ -1250,13 +1283,18 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Witness.WitnessAPI,
 		Default: c.cliConfig.Witness.WitnessAPI,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "witness.filestore",
+		Usage:   "Store witness blobs on the filesystem instead of the key-value database",
+		Value:   &c.cliConfig.Witness.FileStore,
+		Default: c.cliConfig.Witness.FileStore,
+	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "witness.fastforwardthreshold",
 		Usage:   "Minimum necessary distance between local header and chain tip to trigger fast forward",
 		Value:   &c.cliConfig.Witness.FastForwardThreshold,
 		Default: c.cliConfig.Witness.FastForwardThreshold,
 	})
-
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "dev.gaslimit",
 		Usage:   "Initial block gas limit",
@@ -1295,13 +1333,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.Pprof.BlockProfileRate,
 		Default: c.cliConfig.Pprof.BlockProfileRate,
 	})
-	// f.StringFlag(&flagset.StringFlag{
-	// 	Name:    "pprof.cpuprofile",
-	// 	Usage:   "Write CPU profile to the given file",
-	// 	Value:   &c.cliConfig.Pprof.CPUProfile,
-	// 	Default: c.cliConfig.Pprof.CPUProfile,
-	// })
-
 	// Historical data retention related flags
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "history.transactions",

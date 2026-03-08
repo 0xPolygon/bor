@@ -43,7 +43,7 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@2316a9a8dbe4e7ac26008088f966f8c290e9a2e1
+        uses: anthropics/claude-code-action@1fc90f3ed982521116d8ff6d85b948c9b12cae3e
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
 
@@ -51,7 +51,7 @@ jobs:
           additional_permissions: |
             actions: read
 
-          claude_args: '--model claude-opus-4-5-20251101'
+          claude_args: '--comment --model claude-opus-4-5-20251101'
 
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
