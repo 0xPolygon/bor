@@ -437,12 +437,6 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			log.Error("Block timestamp too far in future post giugliano", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
-		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
-		// ahead of the local clock is rejected.
-		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
-			log.Error("Block timestamp too far in future post giugliano", "number", number, "headerTime", header.Time, "now", now)
-			return consensus.ErrFutureBlock
-		}
 	} else if c.config.IsBhilai(header.Number) {
 		// TODO: Once Amoy and Mainnet supports Giugliano HF, we are safe to remove this check (since it only works for block future blocks)
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
