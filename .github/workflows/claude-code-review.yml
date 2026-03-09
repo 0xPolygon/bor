@@ -28,11 +28,17 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.18
+          echo "CLAUDE_PATH=$(which claude)" >> $GITHUB_ENV
+
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@1fc90f3ed982521116d8ff6d85b948c9b12cae3e
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
+          path_to_claude_code_executable: ${{ env.CLAUDE_PATH }}          
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
