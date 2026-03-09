@@ -33,7 +33,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
-          show_full_output: true          
+          show_full_output: false
           claude_args: |
             --model claude-opus-4-6
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
