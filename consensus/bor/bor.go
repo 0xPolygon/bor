@@ -416,9 +416,10 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	now := uint64(time.Now().Unix())
 
 	if c.config.IsGiugliano(header.Number) {
-		// Giugliano introduced flexible blocktime (can be set larger than consensus without approval).
-		// Using strict CalcProducerDelay would reject valid blocks, so we just ensure announcement
-		// time comes after parent time to allow for flexible blocktime.
+		// Rio introduced flexible blocktime (can be set larger than consensus without approval).
+		// Using strict CalcProducerDelay for early block announcement (introduced back in Giugliano)
+		// would reject valid blocks, so we just ensure announcement time comes after parent time to
+		// allow for flexible blocktime.
 		var parent *types.Header
 
 		if len(parents) > 0 {
@@ -439,11 +440,11 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
 		// ahead of the local clock is rejected.
 		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
-			log.Error("Block timestamp too far in future post rio", "number", number, "headerTime", header.Time, "now", now)
+			log.Error("Block timestamp too far in future post giugliano", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 	} else if c.config.IsBhilai(header.Number) {
-		// Allow early blocks if Bhilai HF is enabled
+		// TODO: Once Amoy and Mainnet supports Giugliano HF, we are safe to remove this check (since it only works for block future blocks)
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
@@ -523,7 +524,7 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	cacheTTL := veblopBlockTimeout
 	nowTime := time.Now()
 	headerTime := time.Unix(int64(header.Time), 0)
-	if headerTime.After(nowTime) {
+	if headerTime.After(nowTime) && c.config.IsGiugliano(header.Number) {
 		// Add the time from now until header time as extra to the base timeout
 		extraTime := headerTime.Sub(nowTime)
 		cacheTTL = veblopBlockTimeout + extraTime
