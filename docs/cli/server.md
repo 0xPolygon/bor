@@ -356,6 +356,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
 
+- ```miner.slowtxthreshold```: Warn if a single tx apply time exceeds this threshold (e.g., 500ms). 0 = disabled (default: 0s)
+
 - ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 500000000000)
 
 - ```miner.targetGasMaxPercentage```: Maximum target gas percentage (1-100) when dynamic target gas is enabled (default: 80)

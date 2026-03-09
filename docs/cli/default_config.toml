@@ -104,6 +104,7 @@ devfakeauthor = false
   base-fee-change-denominator = 0
   prefetch = false
   prefetch-gaslimit-percent = 100
+  slowtxthreshold = ""
 
 [jsonrpc]
   ipcdisable = false
