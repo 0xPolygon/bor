@@ -1250,7 +1250,7 @@ mainloop:
 				logCtx = append(logCtx, "flagToTxInterruptDelay", common.PrettyDuration(flagToTxInterruptDelay))
 			}
 			if !lastCommitStart.IsZero() {
-				logCtx = append(logCtx, "txHash", lastTxHash)
+				logCtx = append(logCtx, "txHash", lastTxHash.Hex())
 				logCtx = append(logCtx, "txIndex", env.tcount)
 				logCtx = append(logCtx, "sender", lastTxSender)
 				logCtx = append(logCtx, "txElapsed", common.PrettyDuration(time.Since(lastCommitStart)))
