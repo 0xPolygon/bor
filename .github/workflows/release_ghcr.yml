@@ -1,4 +1,4 @@
-name: build_and_publish_to_ghcr.yml
+name: Release GHCR
 
 on:
   push:
