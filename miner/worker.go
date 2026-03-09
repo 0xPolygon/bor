@@ -372,7 +372,8 @@ type worker struct {
 	// Interrupt commit to stop block building on time
 	interruptCommitFlag    bool        // Denotes whether interrupt commit is enabled or not
 	interruptBlockBuilding atomic.Bool // A toggle to denote whether to stop block building or not
-	mockTxDelay            uint        // A mock delay for transaction execution, only used in tests
+	interruptFlagSetAt     atomic.Int64
+	mockTxDelay            uint // A mock delay for transaction execution, only used in tests
 
 	blockTime       time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 	slowTxThreshold time.Duration // Warn when a single tx apply time exceeds this. 0 = disabled.
@@ -848,7 +849,12 @@ func (w *worker) mainLoop() {
 
 				stopFn := func() {}
 				if w.interruptCommitFlag {
-					stopFn = createInterruptTimer(w.current.header.Number.Uint64(), w.current.header.GetActualTime(), &w.interruptBlockBuilding)
+					stopFn = createInterruptTimer(
+						w.current.header.Number.Uint64(),
+						w.current.header.GetActualTime(),
+						&w.interruptBlockBuilding,
+						&w.interruptFlagSetAt,
+					)
 				}
 
 				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, &w.interruptBlockBuilding) // Mixed bag of everrything, yolo
@@ -1209,9 +1215,11 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	var lastTxHash common.Hash
 
 	var (
-		slowTxs         []txTimingEntry // slow txs for this block (duration above threshold)
-		lastCommitStart time.Time       // start of the most recent commitTransaction call
-		lastTxSender    common.Address  // sender of the last attempted tx (for interrupt context)
+		slowTxs                []txTimingEntry // slow txs for this block (duration above threshold)
+		lastCommitStart        time.Time       // start of the most recent commitTransaction call
+		lastTxSender           common.Address  // sender of the last attempted tx (for interrupt context)
+		flagToTxInterruptDelay time.Duration   // delay from setting interrupt flag to tx interruption
+		hasTxInterruptDelay    bool
 	)
 
 mainloop:
@@ -1232,6 +1240,14 @@ mainloop:
 			txCommitInterruptCounter.Inc(1)
 			logCtx := []interface{}{
 				"number", env.header.Number.Uint64(),
+			}
+			if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
+				flagSetTime := time.Unix(0, flagSetAt)
+				logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
+				logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
+			}
+			if hasTxInterruptDelay {
+				logCtx = append(logCtx, "flagToTxInterruptDelay", common.PrettyDuration(flagToTxInterruptDelay))
 			}
 			if !lastCommitStart.IsZero() {
 				logCtx = append(logCtx, "txHash", lastTxHash)
@@ -1411,6 +1427,17 @@ mainloop:
 			}
 
 			txs.Shift()
+
+		case errors.Is(err, vm.ErrInterrupt):
+			// Timeout interrupt surfaced from EVM execution for this tx.
+			if !hasTxInterruptDelay {
+				if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
+					flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
+					hasTxInterruptDelay = true
+				}
+			}
+			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
+			txs.Pop()
 
 		default:
 			// Transaction is regarded as invalid, drop all consecutive transactions from
@@ -1892,7 +1919,12 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
-		stopFn = createInterruptTimer(work.header.Number.Uint64(), work.header.GetActualTime(), &w.interruptBlockBuilding)
+		stopFn = createInterruptTimer(
+			work.header.Number.Uint64(),
+			work.header.GetActualTime(),
+			&w.interruptBlockBuilding,
+			&w.interruptFlagSetAt,
+		)
 	}
 
 	// Create an empty block based on temporary copied state for
@@ -2081,7 +2113,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
 // and toggles the flag when the timer expires.
-func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool) func() {
+func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64) func() {
 	delay := time.Until(actualTimestamp)
 
 	// Reduce the timeout by 500ms to give some buffer for state root computation
@@ -2093,6 +2125,7 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 
 	// Reset the flag when timer starts for building a new block.
 	interruptBlockBuilding.Store(false)
+	interruptFlagSetAt.Store(0)
 
 	go func() {
 		// Wait for timeout
@@ -2100,6 +2133,9 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 
 		// Toggle the flag to indicate commit transactions loop and EVM interpreter loop
 		// to stop block building.
+		if interruptCtx.Err() != context.Canceled {
+			interruptFlagSetAt.Store(time.Now().UnixNano())
+		}
 		interruptBlockBuilding.Store(true)
 
 		if interruptCtx.Err() != context.Canceled {
