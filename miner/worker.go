@@ -185,11 +185,11 @@ type txTimingEntry struct {
 	duration time.Duration
 }
 
-// formatSlowTxs returns a compact string of slow txs in order, e.g. "0xabc(250ms) 0xdef(100ms)".
+// formatSlowTxs returns a compact string of slow txs in order, e.g. "0xabc...(250ms) 0xdef...(100ms)".
 func formatSlowTxs(entries []txTimingEntry) string {
 	parts := make([]string, 0, len(entries))
 	for i := range entries {
-		parts = append(parts, fmt.Sprintf("%s(%s)", entries[i].hash.Hex()[:10], common.PrettyDuration(entries[i].duration)))
+		parts = append(parts, fmt.Sprintf("%s(%s)", entries[i].hash.Hex(), common.PrettyDuration(entries[i].duration)))
 	}
 	return strings.Join(parts, " ")
 }
