@@ -91,7 +91,7 @@ func hasAllBlocks(chain *core.BlockChain, bs []*types.Block) bool {
 
 // ImportChain imports a blockchain from a local file.
 func (api *AdminAPI) ImportChain(file string) (bool, error) {
-	// Make sure the can access the file to import
+	// Open the file to import
 	in, err := os.Open(file)
 	if err != nil {
 		return false, err
@@ -100,44 +100,48 @@ func (api *AdminAPI) ImportChain(file string) (bool, error) {
 
 	var reader io.Reader = in
 	if strings.HasSuffix(file, ".gz") {
-		if reader, err = gzip.NewReader(reader); err != nil {
+		gzReader, err := gzip.NewReader(in)
+		if err != nil {
 			return false, err
 		}
+		defer gzReader.Close()
+		reader = gzReader
 	}
 
-	// Run actual the import in pre-configured batches
 	stream := rlp.NewStream(reader, 0)
 
-	blocks, index := make([]*types.Block, 0, 2500), 0
+	const batchSize = 2500
+	blocks := make([]*types.Block, 0, batchSize)
+	index := 0
 	for batch := 0; ; batch++ {
-		// Load a batch of blocks from the input file
-		for len(blocks) < cap(blocks) {
+		blocks = blocks[:0] // reset block buffer for each batch
+
+		// Decode up to batchSize blocks per batch
+		for i := 0; i < batchSize; i++ {
 			block := new(types.Block)
-			if err := stream.Decode(block); err == io.EOF {
+			err := stream.Decode(block)
+			if err == io.EOF {
 				break
 			} else if err != nil {
 				return false, fmt.Errorf("block %d: failed to parse: %v", index, err)
 			}
-			// ignore the genesis block when importing blocks
 			if block.NumberU64() == 0 {
-				continue
+				continue // skip genesis block
 			}
 			blocks = append(blocks, block)
 			index++
 		}
+
 		if len(blocks) == 0 {
-			break
+			break // nothing more to import
 		}
 
-		if hasAllBlocks(api.eth.BlockChain(), blocks) {
-			blocks = blocks[:0]
-			continue
+		// Only insert blocks if not already present
+		if !hasAllBlocks(api.eth.BlockChain(), blocks) {
+			if _, err := api.eth.BlockChain().InsertChain(blocks, false); err != nil {
+				return false, fmt.Errorf("batch %d: failed to insert: %v", batch, err)
+			}
 		}
-		// Import the batch and reset the buffer
-		if _, err := api.eth.BlockChain().InsertChain(blocks, false); err != nil {
-			return false, fmt.Errorf("batch %d: failed to insert: %v", batch, err)
-		}
-		blocks = blocks[:0]
 	}
 	return true, nil
 }
