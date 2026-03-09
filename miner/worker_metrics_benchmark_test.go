@@ -59,8 +59,6 @@ func benchmarkTxTimingLoop(b *testing.B, txPerBlock int, timer *metrics.Timer, s
 // txs to mirror production ranges like 200-800 tx per block.
 func BenchmarkTxTimingAndMetricsImpact(b *testing.B) {
 	for _, txPerBlock := range []int{200, 800, 2000} {
-		txPerBlock := txPerBlock
-
 		b.Run(fmt.Sprintf("TimingOnly/%dtx", txPerBlock), func(b *testing.B) {
 			benchmarkTxTimingLoop(b, txPerBlock, nil, -1)
 		})
@@ -72,8 +70,6 @@ func BenchmarkTxTimingAndMetricsImpact(b *testing.B) {
 
 	// Run all disabled cases first because metrics.Enable() is a one-way global switch.
 	for _, txPerBlock := range []int{200, 800, 2000} {
-		txPerBlock := txPerBlock
-
 		b.Run(fmt.Sprintf("TimingPlusTimerUpdateDisabledRes1028/%dtx", txPerBlock), func(b *testing.B) {
 			timer := metrics.NewTimer()
 			b.Cleanup(timer.Stop)
@@ -90,8 +86,6 @@ func BenchmarkTxTimingAndMetricsImpact(b *testing.B) {
 	// Enable metrics once, then run enabled cases.
 	enableMetricsForBenchmark()
 	for _, txPerBlock := range []int{200, 800, 2000} {
-		txPerBlock := txPerBlock
-
 		b.Run(fmt.Sprintf("TimingPlusTimerUpdateEnabledRes1028/%dtx", txPerBlock), func(b *testing.B) {
 			timer := metrics.NewTimer()
 			b.Cleanup(timer.Stop)
@@ -125,8 +119,6 @@ func BenchmarkTxTimingAndMetricsAlloc(b *testing.B) {
 			return newCustomTimerWithReservoir(8192)
 		}},
 	} {
-		tc := tc
-
 		b.Run(tc.name, func(b *testing.B) {
 			timer := tc.makeTimer()
 			b.Cleanup(timer.Stop)
