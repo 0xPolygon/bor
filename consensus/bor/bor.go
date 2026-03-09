@@ -415,8 +415,8 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
 
-	if c.config.IsNewHardfork(header.Number) {
-		// NewHardfork introduced flexible blocktime (can be set larger than consensus without approval).
+	if c.config.IsGiugliano(header.Number) {
+		// Giugliano introduced flexible blocktime (can be set larger than consensus without approval).
 		// Using strict CalcProducerDelay would reject valid blocks, so we just ensure announcement
 		// time comes after parent time to allow for flexible blocktime.
 		var parent *types.Header
@@ -427,13 +427,13 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 			parent = chain.GetHeader(header.ParentHash, number-1)
 		}
 		if parent == nil || now < parent.Time {
-			log.Error("Block announced too early post newHardfork", "number", number, "headerTime", header.Time, "now", now)
+			log.Error("Block announced too early post giugliano", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
 		// ahead of the local clock is rejected.
 		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
-			log.Error("Block timestamp too far in future post newHardfork", "number", number, "headerTime", header.Time, "now", now)
+			log.Error("Block timestamp too far in future post giugliano", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
 		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
@@ -1125,7 +1125,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	}
 
 	// Wait before start the block production if needed (previously this wait was on Seal)
-	if c.config.IsNewHardfork(header.Number) && waitOnPrepare {
+	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
 		var successionNumber int
 		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
@@ -1404,8 +1404,8 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsNewHardfork(header.Number) && successionNumber == 0 {
-		delay = 0 // delay was moved to Prepare for newHardfork and later
+	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
+		delay = 0 // delay was moved to Prepare for giugliano and later
 	} else {
 		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}

@@ -1759,45 +1759,45 @@ func TestVerifyHeader_RequestsHash(t *testing.T) {
 	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
 }
 
-// TestVerifyHeader_NewHardfork_Boundary verifies that the flexible blocktime
-// timestamp validation in verifyHeader activates exactly at NewHardforkBlock.
+// TestVerifyHeader_Giugliano_Boundary verifies that the flexible blocktime
+// timestamp validation in verifyHeader activates exactly at GiuglianoBlock.
 //
-// Before NewHardforkBlock the old code-path is used (header.Time > now fails),
-// at and after NewHardforkBlock the new path is used (parent-time check +
+// Before GiuglianoBlock the old code-path is used (header.Time > now fails),
+// at and after GiuglianoBlock the new path is used (parent-time check +
 // upper-bound check instead of a strict now comparison).
-func TestVerifyHeader_NewHardfork_Boundary(t *testing.T) {
+func TestVerifyHeader_Giugliano_Boundary(t *testing.T) {
 	t.Parallel()
 
 	addr1 := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
-	const newHardforkBlock = 100
+	const giuglianoBlock = 100
 
 	now := uint64(time.Now().Unix())
 
-	t.Run("before NewHardforkBlock – future timestamp is rejected", func(t *testing.T) {
-		// NewHardforkBlock is far in the future, so the legacy path is taken.
+	t.Run("before GiuglianoBlock – future timestamp is rejected", func(t *testing.T) {
+		// GiuglianoBlock is far in the future, so the legacy path is taken.
 		borCfg := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(1_000_000),
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(1_000_000),
 		}
 		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
 
 		h := &types.Header{
-			Number: big.NewInt(newHardforkBlock - 1),
+			Number: big.NewInt(giuglianoBlock - 1),
 			Time:   now + 3600, // 1 hour in the future – must be rejected
 			Extra:  make([]byte, 32+65),
 		}
 		err := b.VerifyHeader(chain.HeaderChain(), h)
-		require.ErrorIs(t, err, consensus.ErrFutureBlock, "pre-NewHardfork: future timestamp should be rejected")
+		require.ErrorIs(t, err, consensus.ErrFutureBlock, "pre-Giugliano: future timestamp should be rejected")
 	})
 
-	t.Run("at NewHardforkBlock – timestamp within upper bound is accepted", func(t *testing.T) {
-		// NewHardforkBlock active from genesis so every block uses the new path.
+	t.Run("at GiuglianoBlock – timestamp within upper bound is accepted", func(t *testing.T) {
+		// GiuglianoBlock active from genesis so every block uses the new path.
 		borCfg := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(0),
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(0),
 		}
 		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
 
@@ -1806,7 +1806,7 @@ func TestVerifyHeader_NewHardfork_Boundary(t *testing.T) {
 
 		// Timestamp slightly in the future but within maxAllowedFutureBlockTimeSeconds.
 		h := &types.Header{
-			Number:     big.NewInt(newHardforkBlock),
+			Number:     big.NewInt(giuglianoBlock),
 			ParentHash: genesis.Hash(),
 			Time:       now + maxAllowedFutureBlockTimeSeconds - 1,
 			Extra:      make([]byte, 32+65),
@@ -1814,14 +1814,14 @@ func TestVerifyHeader_NewHardfork_Boundary(t *testing.T) {
 		// verifyHeader will proceed past the timestamp check; subsequent checks
 		// (mixDigest, difficulty, etc.) may still fail, but ErrFutureBlock must not.
 		err := b.VerifyHeader(chain.HeaderChain(), h)
-		require.NotErrorIs(t, err, consensus.ErrFutureBlock, "post-NewHardfork: timestamp within bound should not return ErrFutureBlock")
+		require.NotErrorIs(t, err, consensus.ErrFutureBlock, "post-Giugliano: timestamp within bound should not return ErrFutureBlock")
 	})
 
-	t.Run("at NewHardforkBlock – timestamp beyond upper bound is rejected", func(t *testing.T) {
+	t.Run("at GiuglianoBlock – timestamp beyond upper bound is rejected", func(t *testing.T) {
 		borCfg := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(0),
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(0),
 		}
 		chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, now)
 
@@ -1829,13 +1829,13 @@ func TestVerifyHeader_NewHardfork_Boundary(t *testing.T) {
 		require.NotNil(t, genesis)
 
 		h := &types.Header{
-			Number:     big.NewInt(newHardforkBlock),
+			Number:     big.NewInt(giuglianoBlock),
 			ParentHash: genesis.Hash(),
 			Time:       now + maxAllowedFutureBlockTimeSeconds + 10, // beyond upper bound
 			Extra:      make([]byte, 32+65),
 		}
 		err := b.VerifyHeader(chain.HeaderChain(), h)
-		require.ErrorIs(t, err, consensus.ErrFutureBlock, "post-NewHardfork: timestamp beyond upper bound must be rejected")
+		require.ErrorIs(t, err, consensus.ErrFutureBlock, "post-Giugliano: timestamp beyond upper bound must be rejected")
 	})
 }
 
@@ -4423,11 +4423,11 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 
 	// Test 2: Prepare with waitOnPrepare=true should wait for the proper block time
 	t.Run("with_wait", func(t *testing.T) {
-		// Create a config with NewHardfork enabled to activate wait-in-Prepare logic
+		// Create a config with Giugliano enabled to activate wait-in-Prepare logic
 		borCfgWithBhilai := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(0), // Enable NewHardfork from block 0
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(0), // Enable Giugliano from block 0
 		}
 
 		// Set genesis time 3 seconds in the future to ensure enough wait time
@@ -4461,7 +4461,7 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 			t.Fatalf("Prepare with waitOnPrepare=true failed: %v", err)
 		}
 
-		// With NewHardfork enabled, DevFakeAuthor=true (making this node the primary producer),
+		// With Giugliano enabled, DevFakeAuthor=true (making this node the primary producer),
 		// and waitOnPrepare=true, should wait until parent (genesis) time has passed
 		// Allow 100ms tolerance for timing precision and scheduling overhead
 		minWait := expectedDelay - 100*time.Millisecond
@@ -4507,19 +4507,19 @@ func TestBorPrepare_WaitOnPrepareFlag(t *testing.T) {
 	})
 }
 
-// TestPrepare_WaitGate_NewHardforkOnly verifies that the wait-in-Prepare
-// mechanism activates only when IsNewHardfork is true.
-func TestPrepare_WaitGate_NewHardforkOnly(t *testing.T) {
+// TestPrepare_WaitGate_GiuglianoOnly verifies that the wait-in-Prepare
+// mechanism activates only when IsGiugliano is true.
+func TestPrepare_WaitGate_GiuglianoOnly(t *testing.T) {
 	t.Parallel()
 
 	addr := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
 
-	t.Run("before NewHardfork – waitOnPrepare=true returns quickly", func(t *testing.T) {
+	t.Run("before Giugliano – waitOnPrepare=true returns quickly", func(t *testing.T) {
 		borCfg := &params.BorConfig{
 			Sprint: map[string]uint64{"0": 64},
 			Period: map[string]uint64{"0": 2},
-			// NewHardforkBlock not set → IsNewHardfork always false
+			// GiuglianoBlock not set → IsGiugliano always false
 		}
 		// Set genesis time slightly in the future so there would be a non-trivial delay
 		// if the wait were active.
@@ -4537,16 +4537,16 @@ func TestPrepare_WaitGate_NewHardforkOnly(t *testing.T) {
 		elapsed := time.Since(start)
 
 		require.NoError(t, err)
-		// Without NewHardfork the wait block is skipped; should return in < 200 ms
+		// Without Giugliano the wait block is skipped; should return in < 200 ms
 		require.Less(t, elapsed, 200*time.Millisecond,
-			"Prepare should not wait when NewHardfork is not active")
+			"Prepare should not wait when Giugliano is not active")
 	})
 
-	t.Run("at NewHardfork – waitOnPrepare=true waits for primary producer", func(t *testing.T) {
+	t.Run("at Giugliano – waitOnPrepare=true waits for primary producer", func(t *testing.T) {
 		borCfg := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(0),
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(0),
 		}
 		// Genesis 3 s in the future → there will be a measurable wait.
 		genesisTime := uint64(time.Now().Add(3 * time.Second).Unix())
@@ -4574,13 +4574,13 @@ func TestPrepare_WaitGate_NewHardforkOnly(t *testing.T) {
 			minWait = 0
 		}
 		require.Greater(t, elapsed, minWait,
-			"Prepare should wait for primary producer when NewHardfork is active")
+			"Prepare should wait for primary producer when Giugliano is active")
 	})
 }
 
-// TestSeal_PrimaryProducerDelay_NewHardforkBoundary verifies that delay=0 in Seal
-// for the primary producer (succession==0) is gated on IsNewHardfork.
-func TestSeal_PrimaryProducerDelay_NewHardforkBoundary(t *testing.T) {
+// TestSeal_PrimaryProducerDelay_GiuglianoBoundary verifies that delay=0 in Seal
+// for the primary producer (succession==0) is gated on IsGiugliano.
+func TestSeal_PrimaryProducerDelay_GiuglianoBoundary(t *testing.T) {
 	t.Parallel()
 
 	addr := common.HexToAddress("0x1")
@@ -4604,11 +4604,11 @@ func TestSeal_PrimaryProducerDelay_NewHardforkBoundary(t *testing.T) {
 		return h, b, chain
 	}
 
-	t.Run("before NewHardfork – primary producer has non-zero delay", func(t *testing.T) {
+	t.Run("before Giugliano – primary producer has non-zero delay", func(t *testing.T) {
 		borCfg := &params.BorConfig{
 			Sprint: map[string]uint64{"0": 64},
 			Period: map[string]uint64{"0": 2},
-			// NewHardforkBlock not set
+			// GiuglianoBlock not set
 		}
 		h, b, chain := makeHeader(borCfg)
 		defer chain.Stop()
@@ -4620,19 +4620,19 @@ func TestSeal_PrimaryProducerDelay_NewHardforkBoundary(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, successionNumber, "DevFakeAuthor should be primary producer")
 
-		// Before NewHardfork the delay=0 branch should NOT be taken.
+		// Before Giugliano the delay=0 branch should NOT be taken.
 		// The else branch sets delay = time.Until(header.GetActualTime()).
 		// Since header.Time is in the past, delay ≤ 0 — but the point is the branch
 		// selected is the else, not the delay=0 one.
-		isNewHF := b.config.IsNewHardfork(h.Number)
-		require.False(t, isNewHF, "IsNewHardfork should be false before NewHardforkBlock")
+		isNewHF := b.config.IsGiugliano(h.Number)
+		require.False(t, isNewHF, "IsGiugliano should be false before GiuglianoBlock")
 	})
 
-	t.Run("at NewHardfork – primary producer gets delay=0", func(t *testing.T) {
+	t.Run("at Giugliano – primary producer gets delay=0", func(t *testing.T) {
 		borCfg := &params.BorConfig{
-			Sprint:           map[string]uint64{"0": 64},
-			Period:           map[string]uint64{"0": 2},
-			NewHardforkBlock: big.NewInt(0),
+			Sprint:         map[string]uint64{"0": 64},
+			Period:         map[string]uint64{"0": 2},
+			GiuglianoBlock: big.NewInt(0),
 		}
 		h, b, chain := makeHeader(borCfg)
 		defer chain.Stop()
@@ -4644,8 +4644,8 @@ func TestSeal_PrimaryProducerDelay_NewHardforkBoundary(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, successionNumber, "DevFakeAuthor should be primary producer")
 
-		isNewHF := b.config.IsNewHardfork(h.Number)
-		require.True(t, isNewHF, "IsNewHardfork should be true at NewHardforkBlock=0")
+		isNewHF := b.config.IsGiugliano(h.Number)
+		require.True(t, isNewHF, "IsGiugliano should be true at GiuglianoBlock=0")
 		// The Seal function would take the delay=0 branch for this signer/header combination.
 	})
 }
