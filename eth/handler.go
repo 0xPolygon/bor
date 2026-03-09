@@ -73,6 +73,9 @@ var (
 	// sealToBroadcastTimer measures latency from seal+write completion to broadcast start.
 	// This captures event delivery delay through the TypeMux subscription channel.
 	sealToBroadcastTimer = metrics.NewRegisteredTimer("eth/seal2broadcast", nil)
+	// broadcastLoopTimer measures the time spent in each iteration of minedBroadcastLoop,
+	// covering both block propagation and witness hash announcement to all peers.
+	broadcastLoopTimer = metrics.NewRegisteredTimer("eth/broadcast_loop_duration", nil)
 )
 
 // txPool defines the methods needed from a transaction pool implementation to
@@ -826,8 +829,10 @@ func (h *handler) minedBroadcastLoop() {
 				delay := common.PrettyDuration(time.Millisecond * time.Duration(delayInMs))
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
+			loopStart := time.Now()
 			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
 			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
+			broadcastLoopTimer.Update(time.Since(loopStart))
 		}
 	}
 }

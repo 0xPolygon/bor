@@ -1,6 +1,13 @@
 package wit
 
-import "github.com/ethereum/go-ethereum/log"
+import (
+	"time"
+
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
+)
+
+var witnessSendTimer = metrics.NewRegisteredTimer("wit/peer/send_witness_duration", nil)
 
 // broadcastWitness is a write loop that multiplexes witness and witness announcements
 // to the remote peer. The goal is to have an async writer that does not lock up
@@ -11,9 +18,11 @@ func (p *Peer) broadcastWitness() {
 	for {
 		select {
 		case witness := <-p.queuedWitness:
+			start := time.Now()
 			if err := p.sendNewWitness(witness); err != nil {
 				return
 			}
+			witnessSendTimer.Update(time.Since(start))
 			p.logger.Debug("propagated witness", "hash", witness.Header().Hash())
 
 		case packet := <-p.queuedWitnessAnns:
