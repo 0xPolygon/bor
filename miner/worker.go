@@ -1217,10 +1217,12 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	var (
 		slowTxs                []txTimingEntry // slow txs for this block (duration above threshold)
 		lastCommitStart        time.Time       // start of the most recent commitTransaction call
+		lastTxIndex            int             // index of the last attempted tx (for interrupt context)
 		lastTxSender           common.Address  // sender of the last attempted tx (for interrupt context)
 		flagToTxInterruptDelay time.Duration   // delay from setting interrupt flag to tx interruption
 		hasTxInterruptDelay    bool
 	)
+	lastTxIndex = -1
 
 mainloop:
 	for {
@@ -1251,7 +1253,7 @@ mainloop:
 			}
 			if !lastCommitStart.IsZero() {
 				logCtx = append(logCtx, "txHash", lastTxHash.Hex())
-				logCtx = append(logCtx, "txIndex", env.tcount)
+				logCtx = append(logCtx, "txIndex", lastTxIndex)
 				logCtx = append(logCtx, "sender", lastTxSender)
 				logCtx = append(logCtx, "txElapsed", common.PrettyDuration(time.Since(lastCommitStart)))
 			}
@@ -1301,7 +1303,6 @@ mainloop:
 		if ltx == nil {
 			break
 		}
-		lastTxHash = ltx.Hash
 		// If we don't have enough space for the next transaction, skip the account.
 		if env.gasPool.Gas() < ltx.Gas {
 			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
@@ -1376,6 +1377,8 @@ mainloop:
 		}
 		// Start executing the transaction
 		lastCommitStart = time.Now()
+		lastTxHash = tx.Hash()
+		lastTxIndex = env.tcount
 		lastTxSender = from
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
