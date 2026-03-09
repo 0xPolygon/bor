@@ -42,39 +42,54 @@ func NewAdminAPI(eth *Ethereum) *AdminAPI {
 
 // ExportChain exports the current blockchain into a local file,
 // or a range of blocks if first and last are non-nil.
-func (api *AdminAPI) ExportChain(file string, first *uint64, last *uint64) (bool, error) {
+func (api *AdminAPI) ExportChain(file string, first, last *uint64) (bool, error) {
+	// Validate input: last cannot be specified without first
 	if first == nil && last != nil {
 		return false, errors.New("last cannot be specified without first")
 	}
-	if first != nil && last == nil {
-		head := api.eth.BlockChain().CurrentHeader().Number.Uint64()
-		last = &head
+
+	// If first is provided but last isn't, use current chain head as last
+	var exportFirst, exportLast *uint64
+	if first != nil {
+		exportFirst = first
+		if last != nil {
+			exportLast = last
+		} else {
+			head := api.eth.BlockChain().CurrentHeader().Number.Uint64()
+			exportLast = &head
+		}
 	}
+
+	// Prevent overwriting an existing file
 	if _, err := os.Stat(file); err == nil {
-		// File already exists. Allowing overwrite could be a DoS vector,
-		// since the 'file' may point to arbitrary paths on the drive.
 		return false, errors.New("location would overwrite an existing file")
 	}
-	// Make sure we can create the file to export into
+
+	// Defer cleanup and resource closure
 	out, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return false, err
 	}
 	defer out.Close()
 
-	var writer io.Writer = out
+	// Handle gzip compression transparently
+	writer := io.Writer(out)
+	var gzWriter *gzip.Writer
 	if strings.HasSuffix(file, ".gz") {
-		writer = gzip.NewWriter(writer)
-		defer writer.(*gzip.Writer).Close()
+		gzWriter = gzip.NewWriter(out)
+		writer = gzWriter
+		defer gzWriter.Close()
 	}
 
-	// Export the blockchain
-	if first != nil {
-		if err := api.eth.BlockChain().ExportN(writer, *first, *last); err != nil {
-			return false, err
-		}
-	} else if err := api.eth.BlockChain().Export(writer); err != nil {
-		return false, err
+	// Export blockchain data
+	var exportErr error
+	if exportFirst != nil {
+		exportErr = api.eth.BlockChain().ExportN(writer, *exportFirst, *exportLast)
+	} else {
+		exportErr = api.eth.BlockChain().Export(writer)
+	}
+	if exportErr != nil {
+		return false, exportErr
 	}
 	return true, nil
 }
