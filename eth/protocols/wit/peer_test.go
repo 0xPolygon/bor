@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
@@ -544,4 +545,23 @@ func TestKnownCacheEviction(t *testing.T) {
 	}
 
 	assert.LessOrEqual(t, cache.Cardinality(), 5, "Cache should not exceed max capacity")
+}
+
+// TestBroadcastWitnessSendTimer verifies that the witnessSendTimer metric is
+// updated when broadcastWitness sends a witness via sendNewWitness.
+func TestBroadcastWitnessSendTimer(t *testing.T) {
+	metrics.Enable()
+
+	peer := setupPeer()
+	defer peer.Close()
+
+	countBefore := witnessSendTimer.Snapshot().Count()
+
+	// Queue a witness — broadcastWitness goroutine (started by NewPeer) will pick it up
+	peer.AsyncSendNewWitness(testWitness1)
+
+	// Give the broadcast goroutine time to process
+	assert.Eventually(t, func() bool {
+		return witnessSendTimer.Snapshot().Count() > countBefore
+	}, 2*time.Second, 50*time.Millisecond, "witnessSendTimer should be updated after sending a witness")
 }
