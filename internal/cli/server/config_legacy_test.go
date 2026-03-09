@@ -28,6 +28,7 @@ func TestConfigLegacy(t *testing.T) {
 		}
 		testConfig.Sealer.GasPrice = big.NewInt(25000000000)
 		testConfig.Sealer.Recommit = 20 * time.Second
+		testConfig.Sealer.SlowTxThreshold = 1500 * time.Millisecond
 		testConfig.JsonRPC.RPCEVMTimeout = 5 * time.Second
 		testConfig.JsonRPC.TxFeeCap = 6.0
 		testConfig.JsonRPC.LogQueryLimit = 1000
