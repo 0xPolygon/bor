@@ -102,6 +102,9 @@ var (
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
+	// txApplyDurationTimer captures per-transaction apply latency during block building.
+	// Uses a larger reservoir to preserve tail visibility on high-throughput blocks.
+	txApplyDurationTimer = newRegisteredCustomTimer("worker/txApplyDuration", 8192)
 	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
 	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
 	// intermediateRootTimer measures time taken to calculate intermediate root
@@ -141,6 +144,15 @@ var (
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
 )
+
+func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
+	return metrics.GetOrRegister(name, func() interface{} {
+		return metrics.NewCustomTimer(
+			metrics.NewHistogram(metrics.NewExpDecaySample(reservoirSize, 0.015)),
+			metrics.NewMeter(),
+		)
+	}).(*metrics.Timer)
+}
 
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
@@ -1360,6 +1372,9 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+			if metrics.Enabled() {
+				txApplyDurationTimer.Update(txDuration)
+			}
 
 			if w.slowTxThreshold > 0 && txDuration > w.slowTxThreshold {
 				slowTxs = append(slowTxs, txTimingEntry{hash: tx.Hash(), duration: txDuration})
