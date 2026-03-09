@@ -1255,7 +1255,13 @@ mainloop:
 				logCtx = append(logCtx, "sender", lastTxSender)
 				logCtx = append(logCtx, "txElapsed", common.PrettyDuration(time.Since(lastCommitStart)))
 			}
-			log.Info("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
+
+			if w.IsRunning() {
+				log.Info("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
+			} else {
+				log.Debug("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
+			}
+
 			break mainloop
 		}
 
