@@ -41,23 +41,23 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install Claude Code
-        run: |
-          npm install -g @anthropic-ai/claude-code@2.1.18
-          echo "CLAUDE_PATH=$(which claude)" >> $GITHUB_ENV
+      # - name: Install Claude Code
+      #   run: |
+      #     npm install -g @anthropic-ai/claude-code@2.1.18
+      #     echo "CLAUDE_PATH=$(which claude)" >> $GITHUB_ENV
 
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
-          path_to_claude_code_executable: ${{ env.CLAUDE_PATH }}          
-          model: "claude-opus-4-6"
-          allowed_tools: "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+          # path_to_claude_code_executable: ${{ env.CLAUDE_PATH }}          
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
-
+          claude_args: |
+            --model claude-opus-4-6
+            --allowed-tools Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 
