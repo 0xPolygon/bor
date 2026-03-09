@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"math/big"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -163,6 +165,21 @@ type environment struct {
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
+}
+
+// txTimingEntry records how long a single transaction took to apply during block building.
+type txTimingEntry struct {
+	hash     common.Hash
+	duration time.Duration
+}
+
+// formatSlowTxs returns a compact string of slow txs in order, e.g. "0xabc(250ms) 0xdef(100ms)".
+func formatSlowTxs(entries []txTimingEntry) string {
+	parts := make([]string, 0, len(entries))
+	for i := range entries {
+		parts = append(parts, fmt.Sprintf("%s(%s)", entries[i].hash.Hex()[:10], common.PrettyDuration(entries[i].duration)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // copy creates a deep copy of environment.
@@ -345,7 +362,8 @@ type worker struct {
 	interruptBlockBuilding atomic.Bool // A toggle to denote whether to stop block building or not
 	mockTxDelay            uint        // A mock delay for transaction execution, only used in tests
 
-	blockTime time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	blockTime       time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	slowTxThreshold time.Duration // Warn when a single tx apply time exceeds this. 0 = disabled.
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -383,6 +401,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:    make(chan *intervalAdjust, resubmitAdjustChanSize),
 		interruptCommitFlag: config.CommitInterruptFlag,
 		blockTime:           config.BlockTime,
+		slowTxThreshold:     config.SlowTxThreshold,
 		makeWitness:         makeWitness,
 	}
 	worker.noempty.Store(true)
@@ -1177,6 +1196,12 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var lastTxHash common.Hash
 
+	var (
+		slowTxs         []txTimingEntry // slow txs for this block (duration above threshold)
+		lastCommitStart time.Time       // start of the most recent commitTransaction call
+		lastTxSender    common.Address  // sender of the last attempted tx (for interrupt context)
+	)
+
 mainloop:
 	for {
 		// Check interruption signal and abort building if it's fired.
@@ -1193,7 +1218,16 @@ mainloop:
 		// Check for the flag to interrupt block building on timeout.
 		if w.interruptBlockBuilding.Load() {
 			txCommitInterruptCounter.Inc(1)
-			log.Info("Block building interrupted due to timeout, aborting new transaction commits", "number", env.header.Number.Uint64(), "hash", lastTxHash)
+			logCtx := []interface{}{
+				"number", env.header.Number.Uint64(),
+			}
+			if !lastCommitStart.IsZero() {
+				logCtx = append(logCtx, "txHash", lastTxHash)
+				logCtx = append(logCtx, "txIndex", env.tcount)
+				logCtx = append(logCtx, "sender", lastTxSender)
+				logCtx = append(logCtx, "txElapsed", common.PrettyDuration(time.Since(lastCommitStart)))
+			}
+			log.Info("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
 			break mainloop
 		}
 
@@ -1307,9 +1341,12 @@ mainloop:
 			continue
 		}
 		// Start executing the transaction
+		lastCommitStart = time.Now()
+		lastTxSender = from
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
 		logs, err := w.commitTransaction(env, tx)
+		txDuration := time.Since(lastCommitStart)
 
 		// Set mock delay (if any) between transactions for tests
 		time.Sleep(time.Duration(w.mockTxDelay) * time.Millisecond)
@@ -1323,6 +1360,10 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+
+			if w.slowTxThreshold > 0 && txDuration > w.slowTxThreshold {
+				slowTxs = append(slowTxs, txTimingEntry{hash: tx.Hash(), duration: txDuration})
+			}
 
 			if EnableMVHashMap && w.IsRunning() {
 				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
@@ -1452,6 +1493,19 @@ mainloop:
 		}
 
 		w.pendingLogsFeed.Send(cpy)
+	}
+
+	if len(slowTxs) > 0 {
+		sort.Slice(slowTxs, func(i, j int) bool {
+			return slowTxs[i].duration > slowTxs[j].duration
+		})
+
+		log.Warn("Slow transactions detected while building block",
+			"number", env.header.Number.Uint64(),
+			"slowTxCount", len(slowTxs),
+			"threshold", common.PrettyDuration(w.slowTxThreshold),
+			"slowTxs", formatSlowTxs(slowTxs),
+		)
 	}
 
 	return nil

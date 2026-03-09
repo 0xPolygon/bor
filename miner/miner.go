@@ -62,6 +62,7 @@ type Config struct {
 	Recommit            time.Duration // The time interval for miner to re-create mining work.
 	CommitInterruptFlag bool          // Interrupt commit when time is up ( default = true)
 	BlockTime           time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	SlowTxThreshold     time.Duration // Warn if a single tx apply time exceeds this threshold. 0 = disabled.
 
 	NewPayloadTimeout       time.Duration  // The maximum time allowance for creating a new payload
 	PendingFeeRecipient     common.Address `toml:"-"` // Address for pending block rewards.
