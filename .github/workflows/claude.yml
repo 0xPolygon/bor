@@ -49,7 +49,6 @@ jobs:
           # This is an optional setting that allows Claude to read CI results on PRs
           claude_args: |
             --model claude-opus-4-6
-            --max-turns 10
           additional_permissions: |
             actions: read
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
