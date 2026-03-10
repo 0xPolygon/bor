@@ -3845,23 +3845,29 @@ func newGasParamsTestAPI(t *testing.T, cfg *params.ChainConfig, headers ...*type
 	return NewBorAPI(backend)
 }
 
-func TestGetBlockGasParams_PostGiugliano(t *testing.T) {
-	t.Parallel()
-	gasTarget := uint64(15_000_000)
-	bfcd := uint64(64)
+// newPostGiuglianoGasParamsAPI creates a BorAPI with a post-Giugliano header at block 10
+// containing the given gas target and base fee change denominator.
+func newPostGiuglianoGasParamsAPI(t *testing.T, gasTarget, bfcd uint64) (*BorAPI, *types.Header) {
+	t.Helper()
 	header := &types.Header{
 		Number:   big.NewInt(10),
 		GasLimit: 30_000_000,
 		Extra:    buildExtraWithGiuglianoFields(&gasTarget, &bfcd),
 	}
-
 	cfg := &params.ChainConfig{
 		ChainID:     big.NewInt(1),
 		CancunBlock: big.NewInt(0),
 		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
 	}
+	return newGasParamsTestAPI(t, cfg, header), header
+}
 
-	api := newGasParamsTestAPI(t, cfg, header)
+func TestGetBlockGasParams_PostGiugliano(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	api, _ := newPostGiuglianoGasParamsAPI(t, gasTarget, bfcd)
+
 	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(10))
 	require.NoError(t, err)
 	require.NotNil(t, result.GasTarget)
@@ -3874,19 +3880,8 @@ func TestGetBlockGasParams_PostGiugliano_ByHash(t *testing.T) {
 	t.Parallel()
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
-	header := &types.Header{
-		Number:   big.NewInt(10),
-		GasLimit: 30_000_000,
-		Extra:    buildExtraWithGiuglianoFields(&gasTarget, &bfcd),
-	}
+	api, header := newPostGiuglianoGasParamsAPI(t, gasTarget, bfcd)
 
-	cfg := &params.ChainConfig{
-		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(0),
-		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
-	}
-
-	api := newGasParamsTestAPI(t, cfg, header)
 	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithHash(header.Hash(), false))
 	require.NoError(t, err)
 	require.NotNil(t, result.GasTarget)
@@ -4004,37 +3999,45 @@ func makeBlockWithExtra(number int64, extra []byte) *types.Block {
 
 func boolPtr(b bool) *bool { return &b }
 
+// postCancunCfg returns a ChainConfig with Cancun and Giugliano at genesis.
+func postCancunCfg() *params.ChainConfig {
+	return &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+}
+
+// newBlockExtraTestAPI creates a BlockChainAPI backed by a testBackendWithBlockExtra.
+func newBlockExtraTestAPI(t *testing.T, block *types.Block, cfg *params.ChainConfig) *BlockChainAPI {
+	t.Helper()
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	return NewBlockChainAPI(backend)
+}
+
+// makeBlockWithBorExtra creates a block with RLP-encoded BlockExtraData in the header Extra field.
+func makeBlockWithBorExtra(number int64, bed *types.BlockExtraData) *types.Block {
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+	return makeBlockWithExtra(number, extra)
+}
+
 func TestGetBlockByNumber_BorExtraFlag_PostCancun(t *testing.T) {
 	t.Parallel()
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
 	txDep := [][]uint64{{0}, {0, 1}, {}}
 
-	bed := &types.BlockExtraData{
+	block := makeBlockWithBorExtra(10, &types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
 		TxDependency:             txDep,
-	}
-	bedBytes, _ := rlp.EncodeToBytes(bed)
-	extra := make([]byte, types.ExtraVanityLength)
-	extra = append(extra, bedBytes...)
-	extra = append(extra, make([]byte, types.ExtraSealLength)...)
-
-	block := makeBlockWithExtra(10, extra)
-	cfg := &params.ChainConfig{
-		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(0),
-		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
-	}
-
-	genesis := &core.Genesis{
-		Config: params.TestChainConfig,
-		Alloc:  types.GenesisAlloc{},
-	}
-	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-
-	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
-	api := NewBlockChainAPI(backend)
+	})
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
 
 	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(true))
 	require.NoError(t, err)
@@ -4056,30 +4059,11 @@ func TestGetBlockByHash_BorExtraFlag(t *testing.T) {
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
 
-	bed := &types.BlockExtraData{
+	block := makeBlockWithBorExtra(10, &types.BlockExtraData{
 		GasTarget:                &gasTarget,
 		BaseFeeChangeDenominator: &bfcd,
-	}
-	bedBytes, _ := rlp.EncodeToBytes(bed)
-	extra := make([]byte, types.ExtraVanityLength)
-	extra = append(extra, bedBytes...)
-	extra = append(extra, make([]byte, types.ExtraSealLength)...)
-
-	block := makeBlockWithExtra(10, extra)
-	cfg := &params.ChainConfig{
-		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(0),
-		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
-	}
-
-	genesis := &core.Genesis{
-		Config: params.TestChainConfig,
-		Alloc:  types.GenesisAlloc{},
-	}
-	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-
-	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
-	api := NewBlockChainAPI(backend)
+	})
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
 
 	result, err := api.GetBlockByHash(context.Background(), block.Hash(), false, boolPtr(true))
 	require.NoError(t, err)
@@ -4095,19 +4079,8 @@ func TestGetBlockByHash_BorExtraFlag(t *testing.T) {
 
 func TestGetBlockByNumber_BorExtraFlag_Nil(t *testing.T) {
 	t.Parallel()
-	// borExtra=nil (not provided) — should not include blockExtraData
 	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(nil, nil))
-	cfg := &params.ChainConfig{
-		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(0),
-		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
-	}
-
-	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
-	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-
-	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
-	api := NewBlockChainAPI(backend)
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
 
 	result, err := api.GetBlockByNumber(context.Background(), 10, false, nil)
 	require.NoError(t, err)
@@ -4118,21 +4091,10 @@ func TestGetBlockByNumber_BorExtraFlag_Nil(t *testing.T) {
 
 func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
 	t.Parallel()
-	// borExtra=false — should not include blockExtraData
 	gasTarget := uint64(15_000_000)
 	bfcd := uint64(64)
 	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(&gasTarget, &bfcd))
-	cfg := &params.ChainConfig{
-		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(0),
-		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
-	}
-
-	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
-	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-
-	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
-	api := NewBlockChainAPI(backend)
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
 
 	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(false))
 	require.NoError(t, err)
@@ -4143,19 +4105,13 @@ func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
 
 func TestGetBlockByNumber_BorExtraFlag_PreCancun(t *testing.T) {
 	t.Parallel()
-	// Pre-Cancun block with borExtra=true — should not include blockExtraData
 	block := makeBlockWithExtra(5, make([]byte, types.ExtraVanityLength+types.ExtraSealLength))
 	cfg := &params.ChainConfig{
 		ChainID:     big.NewInt(1),
-		CancunBlock: big.NewInt(100), // Cancun at block 100
+		CancunBlock: big.NewInt(100),
 		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(100)},
 	}
-
-	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
-	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-
-	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
-	api := NewBlockChainAPI(backend)
+	api := newBlockExtraTestAPI(t, block, cfg)
 
 	result, err := api.GetBlockByNumber(context.Background(), 5, false, boolPtr(true))
 	require.NoError(t, err)
