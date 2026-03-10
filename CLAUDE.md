@@ -10,6 +10,14 @@ Bor is the **execution client** of Polygon PoS, forked from go-ethereum. It hand
 
 Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 
+**Bor vs upstream go-ethereum**: Bor is a fork of geth with significant modifications. Key differences:
+- **Consensus**: Bor uses PoA (Proof of Authority) with sprint-based block production, not PoW or PoS beacon chain. The `consensus/bor/` package is entirely Bor-specific.
+- **Block production**: Sprint/span model with validator rotation coordinated by Heimdall. Primary producer (succession 0) has priority; backups have increasing delays.
+- **State sync**: L1→L2 state transfer via system contract calls in `Finalize`, not via beacon chain deposits.
+- **Parallel execution**: BlockSTM (`core/blockstm/`) for parallel transaction execution — not present in upstream geth.
+- **Hard forks**: Bor has its own fork schedule (`Delhi`, `Indore`, `Aalborg`, `Agra`, `Napoli`, `Bhilai`, `Rio`) independent of Ethereum forks, though it also adopts some Ethereum forks.
+- **Inherited but unused**: Some geth packages (e.g., `eth/catalyst/` Engine API, `consensus/ethash/`) exist but are not used in Bor's production consensus.
+
 ## Architecture Overview
 
 ### Core Components
@@ -103,6 +111,28 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 4. **Context**: Always propagate for cancellation
 5. **Database**: Use `ethdb` interfaces, batch writes when possible
 
+## Security Review
+
+Bor manages real user funds on Polygon PoS. Security is not optional.
+
+Detailed, path-scoped security rules are in `.claude/rules/`:
+
+| Rule File | Scope | What It Covers |
+|-----------|-------|----------------|
+| `security-common.md` | All code | Severity classification, mandatory pre-commit checks, Go security patterns |
+| `consensus-security.md` | `consensus/`, `miner/` | Validator auth, sprint logic, Heimdall trust, fork choice |
+| `contract-interaction-security.md` | `accounts/abi/`, `consensus/bor/contract/`, `consensus/bor/statefull/` | ABI encoding, system contract calls, return value validation |
+| `blockchain-security.md` | `core/blockchain*.go`, `core/types/`, `core/rawdb/`, `rlp/`, `params/` | Chain insertion, reorgs, fork choice, genesis, RLP, fork activation |
+| `eth-backend-security.md` | `eth/`, `ethdb/`, `ethstats/` | Engine API, fetcher, filters, gas estimation, tracers, database |
+| `crypto-security.md` | `crypto/`, `keystore/`, `signer/` | Key handling, constant-time ops, signature validation |
+| `p2p-security.md` | `p2p/`, `eth/protocols/`, `downloader/` | Message bounds, peer DoS, eclipse attacks, sync safety |
+| `rpc-security.md` | `rpc/`, `node/`, `ethapi/`, `graphql/` | Input validation, auth, resource limits, API exposure |
+| `evm-security.md` | `core/vm/` | Gas accounting, opcode correctness, precompile safety, EIP gating |
+| `txpool-security.md` | `core/txpool/` | Pool limits, validation ordering, eviction gaming, blob handling |
+| `state-security.md` | `core/state/`, `blockstm/`, `trie/` | Parallel execution safety, state root determinism, journal correctness |
+
+These rules load automatically when Claude works on files matching their path patterns. Some files match multiple rules (e.g., `consensus/bor/contract/` matches both `consensus-security.md` and `contract-interaction-security.md`) — all matching rules apply simultaneously.
+
 ## Before Making Changes
 
 1. **Identify impact**: What other components depend on this code?
@@ -136,8 +166,9 @@ Bor focuses on high throughput, low gas fees, and full EVM compatibility.
 - **Why simpler alternatives don't work**
 
 ```go
-// Sprint length must match Heimdall config, otherwise block production halts.
-const SprintLength = 16
+// Sprint length is read from BorConfig.Sprint map (keyed by fork block).
+// Never hardcode — use config.CalculateSprint(blockNumber) instead.
+sprintLen := c.config.CalculateSprint(blockNumber)
 
 // Fetch validator set at sprint start, not current block, to ensure
 // all nodes agree on the producer for this sprint.
