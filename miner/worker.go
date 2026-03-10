@@ -1234,6 +1234,7 @@ mainloop:
 			txCommitInterruptCounter.Inc(1)
 			logCtx := []interface{}{
 				"number", env.header.Number.Uint64(),
+				"headerTime", common.PrettyTime(time.Unix(int64(env.header.Time), 0)),
 			}
 			if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
 				flagSetTime := time.Unix(0, flagSetAt)
