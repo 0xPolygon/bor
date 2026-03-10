@@ -987,11 +987,12 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 }
 
 // setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
-// fields in BlockExtraData for post-Giugliano blocks.
-func (c *Bor) setGiuglianoExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
+// fields in BlockExtraData for post-Giugliano blocks. CalcGasTarget and
+// BaseFeeChangeDenominator both operate on the parent header's values.
+func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header, blockExtraData *types.BlockExtraData) {
 	if c.config.IsGiugliano(header.Number) {
-		gasTarget := eip1559.CalcGasTarget(c.chainConfig, header)
-		bfcd := params.BaseFeeChangeDenominator(c.config, header.Number)
+		gasTarget := eip1559.CalcGasTarget(c.chainConfig, parent)
+		bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
 		blockExtraData.GasTarget = &gasTarget
 		blockExtraData.BaseFeeChangeDenominator = &bfcd
 	}
@@ -1023,6 +1024,12 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	header.Extra = header.Extra[:types.ExtraVanityLength]
 
+	// Fetch parent early — needed for Giugliano extra fields and timestamp calculation
+	parent := chain.GetHeader(header.ParentHash, number-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+
 	// get validator set if number
 	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsRio(header.Number) {
 		newValidators, err := c.spanner.GetCurrentValidatorsByHash(context.Background(), header.ParentHash, number+1)
@@ -1045,7 +1052,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				TxDependency:   nil,
 			}
 
-			c.setGiuglianoExtraFields(header, blockExtraData)
+			c.setGiuglianoExtraFields(header, parent, blockExtraData)
 
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
@@ -1065,7 +1072,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			TxDependency:   nil,
 		}
 
-		c.setGiuglianoExtraFields(header, blockExtraData)
+		c.setGiuglianoExtraFields(header, parent, blockExtraData)
 
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {
@@ -1083,11 +1090,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	header.MixDigest = common.Hash{}
 
 	// Ensure the timestamp has the correct delay
-	parent := chain.GetHeader(header.ParentHash, number-1)
-	if parent == nil {
-		return consensus.ErrUnknownAncestor
-	}
-
 	var succession int
 	// if signer is not empty
 	if currentSigner.signer != (common.Address{}) {
