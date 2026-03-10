@@ -862,3 +862,72 @@ func TestGetBaseFeeParams(t *testing.T) {
 		t.Errorf("expected nil for short extra data, got gasTarget=%v, bfcd=%v", gt, d)
 	}
 }
+
+func TestDecodeBlockExtraData(t *testing.T) {
+	t.Parallel()
+
+	cancunBlock := big.NewInt(100)
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: cancunBlock,
+	}
+
+	buildExtra := func(bed *BlockExtraData) []byte {
+		vanity := make([]byte, ExtraVanityLength)
+		seal := make([]byte, ExtraSealLength)
+		encoded, _ := rlp.EncodeToBytes(bed)
+		extra := append(vanity, encoded...)
+		extra = append(extra, seal...)
+		return extra
+	}
+
+	// Pre-Cancun block → nil
+	preCancun := &Header{Number: big.NewInt(50), Extra: buildExtra(&BlockExtraData{})}
+	if preCancun.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for pre-Cancun block")
+	}
+
+	// Short Extra → nil
+	shortExtra := &Header{Number: big.NewInt(200), Extra: []byte{0x01, 0x02}}
+	if shortExtra.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for short Extra")
+	}
+
+	// Invalid RLP between vanity and seal → nil
+	badRLP := make([]byte, ExtraVanityLength+ExtraSealLength+3)
+	badRLP[ExtraVanityLength] = 0xff // invalid RLP prefix
+	badRLP[ExtraVanityLength+1] = 0xff
+	badRLP[ExtraVanityLength+2] = 0xff
+	invalidRLP := &Header{Number: big.NewInt(200), Extra: badRLP}
+	if invalidRLP.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for invalid RLP")
+	}
+
+	// Valid decode with all fields
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	txDep := [][]uint64{{0}, {1, 2}}
+	bed := &BlockExtraData{
+		ValidatorBytes:           []byte{0xaa, 0xbb},
+		TxDependency:             txDep,
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	valid := &Header{Number: big.NewInt(200), Extra: buildExtra(bed)}
+	result := valid.DecodeBlockExtraData(chainConfig)
+	if result == nil {
+		t.Fatal("expected non-nil result for valid extra data")
+	}
+	if !bytes.Equal(result.ValidatorBytes, bed.ValidatorBytes) {
+		t.Errorf("ValidatorBytes mismatch: got %x, want %x", result.ValidatorBytes, bed.ValidatorBytes)
+	}
+	if result.GasTarget == nil || *result.GasTarget != gasTarget {
+		t.Errorf("GasTarget mismatch: got %v, want %d", result.GasTarget, gasTarget)
+	}
+	if result.BaseFeeChangeDenominator == nil || *result.BaseFeeChangeDenominator != bfcd {
+		t.Errorf("BaseFeeChangeDenominator mismatch: got %v, want %d", result.BaseFeeChangeDenominator, bfcd)
+	}
+	if len(result.TxDependency) != 2 || len(result.TxDependency[0]) != 1 || result.TxDependency[0][0] != 0 {
+		t.Errorf("TxDependency mismatch: got %v, want %v", result.TxDependency, txDep)
+	}
+}
