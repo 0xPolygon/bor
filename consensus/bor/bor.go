@@ -475,6 +475,14 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return errInvalidSpanValidators
 	}
 
+	// Post-Giugliano: verify that gas target and base fee change denominator are present
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
+		if gasTarget == nil || bfcd == nil {
+			return fmt.Errorf("post-Giugliano block %d missing gas target or base fee change denominator in extra data", number)
+		}
+	}
+
 	// Ensure that the mix digest is zero as we don't have fork protection currently
 	if header.MixDigest != (common.Hash{}) {
 		return errInvalidMixDigest
@@ -978,6 +986,17 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 	return parent != nil && header.Time < parent.Time+CalcProducerDelay(number, succession, cfg)
 }
 
+// setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
+// fields in BlockExtraData for post-Giugliano blocks.
+func (c *Bor) setGiuglianoExtraFields(header *types.Header, blockExtraData *types.BlockExtraData) {
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget := eip1559.CalcGasTarget(c.chainConfig, header)
+		bfcd := params.BaseFeeChangeDenominator(c.config, header.Number)
+		blockExtraData.GasTarget = &gasTarget
+		blockExtraData.BaseFeeChangeDenominator = &bfcd
+	}
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
 func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
@@ -1026,6 +1045,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				TxDependency:   nil,
 			}
 
+			c.setGiuglianoExtraFields(header, blockExtraData)
+
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
 				log.Error("error while encoding block extra data: %v", err)
@@ -1043,6 +1064,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			ValidatorBytes: nil,
 			TxDependency:   nil,
 		}
+
+		c.setGiuglianoExtraFields(header, blockExtraData)
 
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {

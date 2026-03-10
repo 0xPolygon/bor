@@ -314,6 +314,50 @@ func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockN
 	return header, nil
 }
 
+// BlockGasParamsResult contains the EIP-1559 gas parameters stored in a block header.
+type BlockGasParamsResult struct {
+	GasTarget                *hexutil.Uint64 `json:"gasTarget"`
+	BaseFeeChangeDenominator *hexutil.Uint64 `json:"baseFeeChangeDenominator"`
+}
+
+// GetBlockGasParams returns the EIP-1559 gas target and base fee change denominator
+// stored in the block header's extra field. Only available for post-Giugliano blocks.
+func (api *BorAPI) GetBlockGasParams(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*BlockGasParamsResult, error) {
+	var header *types.Header
+
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		var err error
+		header, err = api.b.HeaderByNumber(ctx, blockNr)
+		if err != nil {
+			return nil, err
+		}
+	} else if hash, ok := blockNrOrHash.Hash(); ok {
+		var err error
+		header, err = api.b.HeaderByHash(ctx, hash)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if header == nil {
+		return nil, fmt.Errorf("header not found")
+	}
+
+	gasTarget, bfcd := header.GetBaseFeeParams(api.b.ChainConfig())
+
+	result := &BlockGasParamsResult{}
+	if gasTarget != nil {
+		gt := hexutil.Uint64(*gasTarget)
+		result.GasTarget = &gt
+	}
+	if bfcd != nil {
+		d := hexutil.Uint64(*bfcd)
+		result.BaseFeeChangeDenominator = &d
+	}
+
+	return result, nil
+}
+
 // BlockNumber returns the block number for the given block tag:
 // - nil input → latest executed (CurrentBlock)
 // - "latest" → the latest head (CurrentHeader)
