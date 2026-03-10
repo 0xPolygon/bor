@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -3774,4 +3775,294 @@ func TestDecodeAddressAndTopic(t *testing.T) {
 		_, err := decodeTopic("not-hex")
 		require.Error(t, err)
 	})
+}
+
+// testBackendWithGiuglianoExtra wraps testBackend to return headers with
+// Giugliano extra data and a Cancun-enabled ChainConfig.
+type testBackendWithGiuglianoExtra struct {
+	*testBackend
+	giuglianoHeader    *types.Header
+	preGiuglianoHeader *types.Header
+	chainCfg           *params.ChainConfig
+}
+
+func (b *testBackendWithGiuglianoExtra) ChainConfig() *params.ChainConfig {
+	return b.chainCfg
+}
+
+func (b *testBackendWithGiuglianoExtra) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
+	if number == rpc.BlockNumber(b.giuglianoHeader.Number.Int64()) || number == rpc.LatestBlockNumber {
+		return b.giuglianoHeader, nil
+	}
+	if b.preGiuglianoHeader != nil && number == rpc.BlockNumber(b.preGiuglianoHeader.Number.Int64()) {
+		return b.preGiuglianoHeader, nil
+	}
+	return b.testBackend.HeaderByNumber(ctx, number)
+}
+
+func (b *testBackendWithGiuglianoExtra) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	if hash == b.giuglianoHeader.Hash() {
+		return b.giuglianoHeader, nil
+	}
+	if b.preGiuglianoHeader != nil && hash == b.preGiuglianoHeader.Hash() {
+		return b.preGiuglianoHeader, nil
+	}
+	return b.testBackend.HeaderByHash(ctx, hash)
+}
+
+// buildExtraWithGiuglianoFields builds a header Extra field containing RLP-encoded BlockExtraData.
+func buildExtraWithGiuglianoFields(gasTarget, bfcd *uint64) []byte {
+	bed := &types.BlockExtraData{
+		ValidatorBytes:           nil,
+		TxDependency:             nil,
+		GasTarget:                gasTarget,
+		BaseFeeChangeDenominator: bfcd,
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+	return extra
+}
+
+func TestGetBlockGasParams_PostGiugliano(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(0),
+		},
+	}
+
+	giuglianoHeader := &types.Header{
+		Number:   big.NewInt(10),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(&gasTarget, &bfcd),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:     base,
+		giuglianoHeader: giuglianoHeader,
+		chainCfg:        cfg,
+	}
+
+	api := NewBorAPI(backend)
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(10))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.GasTarget)
+	require.NotNil(t, result.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(gasTarget), *result.GasTarget)
+	require.Equal(t, hexutil.Uint64(bfcd), *result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_PostGiugliano_ByHash(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(0),
+		},
+	}
+
+	giuglianoHeader := &types.Header{
+		Number:   big.NewInt(10),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(&gasTarget, &bfcd),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:     base,
+		giuglianoHeader: giuglianoHeader,
+		chainCfg:        cfg,
+	}
+
+	api := NewBorAPI(backend)
+	hash := giuglianoHeader.Hash()
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithHash(hash, false))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.GasTarget)
+	require.NotNil(t, result.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(gasTarget), *result.GasTarget)
+	require.Equal(t, hexutil.Uint64(bfcd), *result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_PreGiugliano(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(100), // Giugliano at block 100
+		},
+	}
+
+	// Block 5 is pre-Giugliano — extra without Giugliano fields
+	preGiuglianoHeader := &types.Header{
+		Number:   big.NewInt(5),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(nil, nil),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:        base,
+		giuglianoHeader:    preGiuglianoHeader, // reuse field for the header we return
+		preGiuglianoHeader: preGiuglianoHeader,
+		chainCfg:           cfg,
+	}
+
+	api := NewBorAPI(backend)
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(5))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.GasTarget, "GasTarget should be nil for pre-Giugliano block")
+	require.Nil(t, result.BaseFeeChangeDenominator, "BaseFeeChangeDenominator should be nil for pre-Giugliano block")
+}
+
+func TestGetBlockGasParams_PreCancun(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(100), // Cancun at block 100
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(100),
+		},
+	}
+
+	// Block 5 is pre-Cancun
+	preCancunHeader := &types.Header{
+		Number:   big.NewInt(5),
+		GasLimit: 30_000_000,
+		Extra:    make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:     base,
+		giuglianoHeader: preCancunHeader,
+		chainCfg:        cfg,
+	}
+
+	api := NewBorAPI(backend)
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(5))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Nil(t, result.GasTarget)
+	require.Nil(t, result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_HeaderNotFound(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(0),
+		},
+	}
+
+	// Header at block 10 exists in our wrapper, but query block 999
+	giuglianoHeader := &types.Header{
+		Number:   big.NewInt(10),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(nil, nil),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:     base,
+		giuglianoHeader: giuglianoHeader,
+		chainCfg:        cfg,
+	}
+
+	api := NewBorAPI(backend)
+	// Query a block number that doesn't exist in the chain (beyond block 5)
+	_, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(999))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "header not found")
+}
+
+func TestGetBlockGasParams_HeaderNotFound_ByHash(t *testing.T) {
+	t.Parallel()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor: &params.BorConfig{
+			GiuglianoBlock: big.NewInt(0),
+		},
+	}
+
+	giuglianoHeader := &types.Header{
+		Number:   big.NewInt(10),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(nil, nil),
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend:     base,
+		giuglianoHeader: giuglianoHeader,
+		chainCfg:        cfg,
+	}
+
+	api := NewBorAPI(backend)
+	// Query with a random hash that doesn't exist
+	fakeHash := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithHash(fakeHash, false))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "header not found")
 }

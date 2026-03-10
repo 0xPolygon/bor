@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -4741,5 +4742,408 @@ func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
 	}
 	if !errors.Is(err, consensus.ErrInvalidNumber) {
 		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
+	}
+}
+
+// giuglianoBorConfig returns a BorConfig with Giugliano enabled at genesis.
+func giuglianoBorConfig() *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:           map[string]uint64{"0": 16},
+		Period:           map[string]uint64{"0": 2},
+		ProducerDelay:    map[string]uint64{"0": 4},
+		BackupMultiplier: map[string]uint64{"0": 2},
+		GiuglianoBlock:   big.NewInt(0),
+	}
+}
+
+// giuglianoChainConfig returns a ChainConfig with all forks + Cancun + Giugliano enabled.
+func giuglianoChainConfig(borCfg *params.BorConfig) *params.ChainConfig {
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+	return cfg
+}
+
+func TestSetGiuglianoExtraFields_PreGiugliano(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	// No GiuglianoBlock set — pre-Giugliano
+	borCfg := borConfigWithDelays(16)
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+
+	header := &types.Header{Number: big.NewInt(1)}
+	parent := &types.Header{Number: big.NewInt(0), GasLimit: 30_000_000}
+	bed := &types.BlockExtraData{}
+
+	b.setGiuglianoExtraFields(header, parent, bed)
+
+	require.Nil(t, bed.GasTarget, "GasTarget should be nil for pre-Giugliano blocks")
+	require.Nil(t, bed.BaseFeeChangeDenominator, "BaseFeeChangeDenominator should be nil for pre-Giugliano blocks")
+}
+
+func TestSetGiuglianoExtraFields_PostGiugliano(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+
+	parent := &types.Header{
+		Number:   big.NewInt(0),
+		GasLimit: 30_000_000,
+		BaseFee:  big.NewInt(1000000000),
+	}
+	header := &types.Header{Number: big.NewInt(1)}
+	bed := &types.BlockExtraData{}
+
+	b.setGiuglianoExtraFields(header, parent, bed)
+
+	require.NotNil(t, bed.GasTarget, "GasTarget should be set for post-Giugliano blocks")
+	require.NotNil(t, bed.BaseFeeChangeDenominator, "BaseFeeChangeDenominator should be set for post-Giugliano blocks")
+	require.True(t, *bed.GasTarget > 0, "GasTarget should be non-zero")
+	require.True(t, *bed.BaseFeeChangeDenominator > 0, "BaseFeeChangeDenominator should be non-zero")
+}
+
+func TestSetGiuglianoExtraFields_UsesParentNotCurrent(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+
+	parent := &types.Header{
+		Number:   big.NewInt(5),
+		GasLimit: 30_000_000,
+		BaseFee:  big.NewInt(1000000000),
+	}
+	// Current header has a different gas limit (as it would in practice after CalcGasLimit)
+	header := &types.Header{
+		Number:   big.NewInt(6),
+		GasLimit: 30_000_100, // adjusted
+		BaseFee:  big.NewInt(875000000),
+	}
+
+	bed1 := &types.BlockExtraData{}
+	b.setGiuglianoExtraFields(header, parent, bed1)
+
+	// Compute using parent directly to verify
+	bed2 := &types.BlockExtraData{}
+	b.setGiuglianoExtraFields(header, parent, bed2)
+
+	require.Equal(t, *bed1.GasTarget, *bed2.GasTarget)
+
+	// Now verify it's based on parent, not current header
+	bedWrong := &types.BlockExtraData{}
+	// If we passed header as "parent", it would compute from the wrong gas limit
+	b.setGiuglianoExtraFields(header, header, bedWrong)
+
+	// With parent.GasLimit=30_000_000 vs header.GasLimit=30_000_100, gas targets should differ
+	require.NotEqual(t, *bed1.GasTarget, *bedWrong.GasTarget,
+		"GasTarget should differ when using parent vs current header")
+}
+
+func TestPrepare_GiuglianoExtraFields_SprintEnd(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	// Block 15 is sprint-end for sprint=16 (IsSprintStart(16, 16)=true)
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(15),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+
+	err := b.Prepare(chain.HeaderChain(), h, false)
+	require.NoError(t, err)
+
+	// Decode BlockExtraData from the header
+	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
+	require.NotNil(t, gasTarget, "GasTarget should be present in sprint-end header")
+	require.NotNil(t, bfcd, "BaseFeeChangeDenominator should be present in sprint-end header")
+	require.True(t, *gasTarget > 0)
+	require.True(t, *bfcd > 0)
+}
+
+func TestPrepare_GiuglianoExtraFields_NonSprint(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	// Block 1 is a non-sprint block
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+
+	err := b.Prepare(chain.HeaderChain(), h, false)
+	require.NoError(t, err)
+
+	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
+	require.NotNil(t, gasTarget, "GasTarget should be present in non-sprint header")
+	require.NotNil(t, bfcd, "BaseFeeChangeDenominator should be present in non-sprint header")
+	require.True(t, *gasTarget > 0)
+	require.True(t, *bfcd > 0)
+}
+
+func TestPrepare_PreGiugliano_NoExtraFields(t *testing.T) {
+	t.Parallel()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	// Cancun enabled but no Giugliano
+	borCfg := borConfigWithDelays(16)
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+
+	err := b.Prepare(chain.HeaderChain(), h, false)
+	require.NoError(t, err)
+
+	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
+	require.Nil(t, gasTarget, "GasTarget should be nil for pre-Giugliano blocks")
+	require.Nil(t, bfcd, "BaseFeeChangeDenominator should be nil for pre-Giugliano blocks")
+}
+
+func TestVerifyHeader_GiuglianoMissingFields(t *testing.T) {
+	t.Parallel()
+	privKey, _ := crypto.GenerateKey()
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, false, signerAddr, uint64(time.Now().Unix())-200)
+
+	db := rawdb.NewMemoryDatabase()
+	genesisTime := uint64(time.Now().Unix()) - 200
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       genesisTime,
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	sigHash := SealHash(genesis, borCfg)
+	sig, _ := crypto.Sign(sigHash.Bytes(), privKey)
+	copy(genesis.Extra[len(genesis.Extra)-types.ExtraSealLength:], sig)
+
+	rawdb.WriteHeader(db, genesis)
+	rawdb.WriteCanonicalHash(db, genesis.Hash(), 0)
+
+	// Block 1 with Cancun-encoded extra but NO Giugliano fields
+	bed := &types.BlockExtraData{
+		ValidatorBytes: nil,
+		TxDependency:   nil,
+		// GasTarget and BaseFeeChangeDenominator intentionally omitted
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+
+	// With parent baseFee=1000000000, gasUsed=0, gasLimit=8000000, elasticity=2:
+	// gasTarget = 4000000, delta = 1000000000 * 4000000 / 4000000 / 8 = 125000000
+	// expectedBaseFee = 1000000000 - 125000000 = 875000000
+	childBaseFee := big.NewInt(875000000)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       genesisTime + borCfg.Period["0"],
+		GasLimit:   8_000_000,
+		BaseFee:    childBaseFee,
+		Difficulty: big.NewInt(1),
+		Extra:      extra,
+		UncleHash:  uncleHash,
+	}
+	sigHash1 := SealHash(h, borCfg)
+	sig1, _ := crypto.Sign(sigHash1.Bytes(), privKey)
+	copy(h.Extra[len(h.Extra)-types.ExtraSealLength:], sig1)
+
+	rawdb.WriteHeader(db, h)
+	rawdb.WriteCanonicalHash(db, h.Hash(), 1)
+
+	chain := newRawDBChain(db, cfg, h, nil, nil)
+
+	err := b.verifyHeader(chain, h, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing gas target or base fee change denominator")
+}
+
+func TestVerifyHeader_GiuglianoFieldsPresent(t *testing.T) {
+	t.Parallel()
+	privKey, _ := crypto.GenerateKey()
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
+	borCfg := giuglianoBorConfig()
+	cfg := giuglianoChainConfig(borCfg)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, false, signerAddr, uint64(time.Now().Unix())-200)
+
+	db := rawdb.NewMemoryDatabase()
+	genesisTime := uint64(time.Now().Unix()) - 200
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       genesisTime,
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	sigHash := SealHash(genesis, borCfg)
+	sig, _ := crypto.Sign(sigHash.Bytes(), privKey)
+	copy(genesis.Extra[len(genesis.Extra)-types.ExtraSealLength:], sig)
+
+	rawdb.WriteHeader(db, genesis)
+	rawdb.WriteCanonicalHash(db, genesis.Hash(), 0)
+
+	// Block 1 with Giugliano fields present
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	bed := &types.BlockExtraData{
+		ValidatorBytes:           nil,
+		TxDependency:             nil,
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       genesisTime + borCfg.Period["0"],
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      extra,
+		UncleHash:  uncleHash,
+	}
+	sigHash1 := SealHash(h, borCfg)
+	sig1, _ := crypto.Sign(sigHash1.Bytes(), privKey)
+	copy(h.Extra[len(h.Extra)-types.ExtraSealLength:], sig1)
+
+	rawdb.WriteHeader(db, h)
+	rawdb.WriteCanonicalHash(db, h.Hash(), 1)
+
+	chain := newRawDBChain(db, cfg, h, nil, nil)
+
+	err := b.verifyHeader(chain, h, nil)
+	// Should not fail on the Giugliano check (may fail on other checks like difficulty)
+	if err != nil {
+		require.NotContains(t, err.Error(), "missing gas target or base fee change denominator")
+	}
+}
+
+func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
+	t.Parallel()
+	privKey, _ := crypto.GenerateKey()
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
+	// No GiuglianoBlock — pre-Giugliano
+	borCfg := borConfigWithDelays(16)
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, false, signerAddr, uint64(time.Now().Unix())-200)
+
+	db := rawdb.NewMemoryDatabase()
+	genesisTime := uint64(time.Now().Unix()) - 200
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       genesisTime,
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	sigHash := SealHash(genesis, borCfg)
+	sig, _ := crypto.Sign(sigHash.Bytes(), privKey)
+	copy(genesis.Extra[len(genesis.Extra)-types.ExtraSealLength:], sig)
+
+	rawdb.WriteHeader(db, genesis)
+	rawdb.WriteCanonicalHash(db, genesis.Hash(), 0)
+
+	// Block 1 with Cancun-encoded extra but NO Giugliano fields — should be fine pre-Giugliano
+	bed := &types.BlockExtraData{ValidatorBytes: nil, TxDependency: nil}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       genesisTime + borCfg.Period["0"],
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      extra,
+		UncleHash:  uncleHash,
+	}
+	sigHash1 := SealHash(h, borCfg)
+	sig1, _ := crypto.Sign(sigHash1.Bytes(), privKey)
+	copy(h.Extra[len(h.Extra)-types.ExtraSealLength:], sig1)
+
+	rawdb.WriteHeader(db, h)
+	rawdb.WriteCanonicalHash(db, h.Hash(), 1)
+
+	chain := newRawDBChain(db, cfg, h, nil, nil)
+
+	err := b.verifyHeader(chain, h, nil)
+	// Should NOT fail with Giugliano error — pre-Giugliano blocks don't require the fields
+	if err != nil {
+		require.NotContains(t, err.Error(), "missing gas target or base fee change denominator")
 	}
 }
