@@ -13,7 +13,6 @@ snapshot = true
 [miner]
   gasprice = "25000000000"
   recommit = "20s"
-  slowtxthreshold = "1500ms"
 
 [jsonrpc]
   evmtimeout = "5s"

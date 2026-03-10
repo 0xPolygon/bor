@@ -24,50 +24,6 @@ func TestConfigDefault(t *testing.T) {
 	assertBorDefaultGasPrice(t, ethConfig)
 }
 
-func TestSealerSlowTxThresholdConfig(t *testing.T) {
-	t.Run("Valid value is propagated to miner config", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Sealer.SlowTxThreshold = 500 * time.Millisecond
-
-		assert.NoError(t, config.loadChain())
-
-		_, err := config.buildNode()
-		assert.NoError(t, err)
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, 500*time.Millisecond, ethConfig.Miner.SlowTxThreshold)
-	})
-
-	t.Run("Zero is allowed", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Sealer.SlowTxThreshold = 0
-
-		assert.NoError(t, config.loadChain())
-
-		_, err := config.buildNode()
-		assert.NoError(t, err)
-
-		ethConfig, err := config.buildEth(nil, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, time.Duration(0), ethConfig.Miner.SlowTxThreshold)
-	})
-
-	t.Run("Negative value returns error", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Sealer.SlowTxThreshold = -1 * time.Millisecond
-
-		assert.NoError(t, config.loadChain())
-
-		_, err := config.buildNode()
-		assert.NoError(t, err)
-
-		_, err = config.buildEth(nil, nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "miner.slowtxthreshold")
-	})
-}
-
 // assertBorDefaultGasPrice asserts the bor default gas price is set correctly.
 func assertBorDefaultGasPrice(t *testing.T, ethConfig *ethconfig.Config) {
 	assert.NotNil(t, ethConfig)

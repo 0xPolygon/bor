@@ -1,10 +1,12 @@
 package server
 
 import (
+	"io"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/mitchellh/cli"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +27,6 @@ func TestFlagsWithoutConfig(t *testing.T) {
 		"--eth.requiredblocks", "a=b",
 		"--miner.gasprice", "30000000000",
 		"--miner.recommit", "20s",
-		"--miner.slowtxthreshold", "750ms",
 		"--rpc.evmtimeout", "5s",
 		"--rpc.txfeecap", "6.0",
 		"--rpc.logquerylimit", "1000",
@@ -39,7 +40,6 @@ func TestFlagsWithoutConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	recommit, _ := time.ParseDuration("20s")
-	slowTxThreshold, _ := time.ParseDuration("750ms")
 	evmTimeout, _ := time.ParseDuration("5s")
 
 	require.Equal(t, c.config.Identity, "")
@@ -52,7 +52,6 @@ func TestFlagsWithoutConfig(t *testing.T) {
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"a": "b"})
 	require.Equal(t, c.config.Sealer.GasPrice, big.NewInt(30000000000))
 	require.Equal(t, c.config.Sealer.Recommit, recommit)
-	require.Equal(t, c.config.Sealer.SlowTxThreshold, slowTxThreshold)
 	require.Equal(t, c.config.JsonRPC.RPCEVMTimeout, evmTimeout)
 	require.Equal(t, c.config.JsonRPC.Http.API, []string{"eth", "bor"})
 	require.Equal(t, c.config.JsonRPC.Ws.API, []string(nil))
@@ -75,7 +74,6 @@ func TestFlagsWithConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	recommit, _ := time.ParseDuration("20s")
-	slowTxThreshold, _ := time.ParseDuration("1500ms")
 	evmTimeout, _ := time.ParseDuration("5s")
 
 	require.Equal(t, c.config.Identity, "")
@@ -93,7 +91,6 @@ func TestFlagsWithConfig(t *testing.T) {
 	)
 	require.Equal(t, c.config.Sealer.GasPrice, big.NewInt(25000000000))
 	require.Equal(t, c.config.Sealer.Recommit, recommit)
-	require.Equal(t, c.config.Sealer.SlowTxThreshold, slowTxThreshold)
 	require.Equal(t, c.config.JsonRPC.RPCEVMTimeout, evmTimeout)
 	require.Equal(t, c.config.JsonRPC.Http.API, []string{"eth", "bor"})
 	require.Equal(t, c.config.JsonRPC.Ws.API, []string{""})
@@ -121,7 +118,6 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 		"--eth.requiredblocks", "x=y",
 		"--miner.gasprice", "60000000000",
 		"--miner.recommit", "30s",
-		"--miner.slowtxthreshold", "250ms",
 		"--rpc.evmtimeout", "0s",
 		"--rpc.txfeecap", "0",
 		"--rpc.logquerylimit", "1000",
@@ -135,7 +131,6 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.NoError(t, err)
 
 	recommit, _ := time.ParseDuration("30s")
-	slowTxThreshold, _ := time.ParseDuration("250ms")
 	evmTimeout, _ := time.ParseDuration("0s")
 
 	require.Equal(t, c.config.Identity, "Anon")
@@ -148,9 +143,26 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"x": "y"})
 	require.Equal(t, c.config.Sealer.GasPrice, big.NewInt(60000000000))
 	require.Equal(t, c.config.Sealer.Recommit, recommit)
-	require.Equal(t, c.config.Sealer.SlowTxThreshold, slowTxThreshold)
 	require.Equal(t, c.config.JsonRPC.RPCEVMTimeout, evmTimeout)
 	require.Equal(t, c.config.JsonRPC.Http.API, []string(nil))
 	require.Equal(t, c.config.JsonRPC.Ws.API, []string{"eth", "bor", "web3"})
 	require.Equal(t, c.config.Gpo.MaxPrice, big.NewInt(0))
+}
+
+func TestRemovedSlowTxThresholdFlag(t *testing.T) {
+	t.Parallel()
+
+	c := Command{
+		UI: &cli.BasicUi{
+			Writer:      io.Discard,
+			ErrorWriter: io.Discard,
+		},
+	}
+
+	err := c.extractFlags([]string{
+		"--miner.slowtxthreshold", "750ms",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "miner.slowtxthreshold")
 }

@@ -17,6 +17,7 @@
 package miner
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -86,6 +87,10 @@ const (
 	// so there are no competing miners and no uncle block concept. Any non-canonical block
 	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
 	staleThreshold = 0
+
+	// Top-K slow transaction tracking configuration.
+	slowTxTopKSize     = 10
+	slowTxWindowPeriod = 10 * time.Minute
 )
 
 var (
@@ -185,6 +190,76 @@ type txTimingEntry struct {
 	duration time.Duration
 }
 
+type txTimingMinHeap []txTimingEntry
+
+func (h txTimingMinHeap) Len() int { return len(h) }
+
+func (h txTimingMinHeap) Less(i, j int) bool {
+	return h[i].duration < h[j].duration
+}
+
+func (h txTimingMinHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *txTimingMinHeap) Push(x interface{}) {
+	*h = append(*h, x.(txTimingEntry))
+}
+
+func (h *txTimingMinHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+// slowTxTopTracker tracks the top K slowest txs using a bounded min-heap.
+// Fast path rejects in O(1), accepted updates are O(log K).
+type slowTxTopTracker struct {
+	data txTimingMinHeap
+}
+
+func newSlowTxTopTracker() *slowTxTopTracker {
+	return &slowTxTopTracker{
+		data: make(txTimingMinHeap, 0, slowTxTopKSize),
+	}
+}
+
+func (t *slowTxTopTracker) Add(entry txTimingEntry) {
+	if len(t.data) < slowTxTopKSize {
+		heap.Push(&t.data, entry)
+		return
+	}
+	// O(1) reject for non-qualifying entries.
+	if entry.duration <= t.data[0].duration {
+		return
+	}
+	// Replace current minimum and restore heap.
+	t.data[0] = entry
+	heap.Fix(&t.data, 0)
+}
+
+func (t *slowTxTopTracker) SnapshotAndReset() []txTimingEntry {
+	if len(t.data) == 0 {
+		return nil
+	}
+
+	entries := make([]txTimingEntry, len(t.data))
+	copy(entries, t.data)
+	t.data = t.data[:0]
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].duration > entries[j].duration
+	})
+
+	return entries
+}
+
+func (t *slowTxTopTracker) Reset() {
+	t.data = t.data[:0]
+}
+
 // formatSlowTxs returns a compact string of slow txs in order, e.g. "0xabc...(250ms) 0xdef...(100ms)".
 func formatSlowTxs(entries []txTimingEntry) string {
 	parts := make([]string, 0, len(entries))
@@ -243,6 +318,20 @@ type task struct {
 // txFits reports whether the transaction fits into the block size limit.
 func (env *environment) txFitsSize(tx *types.Transaction) bool {
 	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
+}
+
+func (w *worker) flushSlowTxWindow(windowEnd time.Time) {
+	entries := w.slowTxTracker.SnapshotAndReset()
+	if len(entries) == 0 {
+		return
+	}
+
+	log.Warn("Slow transactions detected in the last 10 minutes",
+		"windowStart", common.PrettyTime(windowEnd.Add(-slowTxWindowPeriod)),
+		"windowEnd", common.PrettyTime(windowEnd),
+		"slowTxCount", len(entries),
+		"slowTxs", formatSlowTxs(entries),
+	)
 }
 
 const (
@@ -375,8 +464,8 @@ type worker struct {
 	interruptFlagSetAt     atomic.Int64
 	mockTxDelay            uint // A mock delay for transaction execution, only used in tests
 
-	blockTime       time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
-	slowTxThreshold time.Duration // Warn when a single tx apply time exceeds this. 0 = disabled.
+	blockTime     time.Duration     // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	slowTxTracker *slowTxTopTracker // Tracks top slow transactions for periodic reporting.
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -414,7 +503,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:    make(chan *intervalAdjust, resubmitAdjustChanSize),
 		interruptCommitFlag: config.CommitInterruptFlag,
 		blockTime:           config.BlockTime,
-		slowTxThreshold:     config.SlowTxThreshold,
+		slowTxTracker:       newSlowTxTopTracker(),
 		makeWitness:         makeWitness,
 	}
 	worker.noempty.Store(true)
@@ -789,6 +878,8 @@ func (w *worker) mainLoop() {
 	defer w.wg.Done()
 	defer w.txsSub.Unsubscribe()
 	defer w.chainHeadSub.Unsubscribe()
+	slowTxWindowTicker := time.NewTicker(slowTxWindowPeriod)
+	defer slowTxWindowTicker.Stop()
 	defer func() {
 		w.currentMu.Lock()
 		if w.current != nil {
@@ -880,6 +971,14 @@ func (w *worker) mainLoop() {
 			}
 
 			w.newTxs.Add(int32(len(ev.Txs)))
+
+		case tickAt := <-slowTxWindowTicker.C:
+			if w.IsRunning() {
+				w.flushSlowTxWindow(tickAt)
+			} else {
+				// Avoid carrying stale data across non-producer windows.
+				w.slowTxTracker.Reset()
+			}
 
 		// System stopped
 		case <-w.exitCh:
@@ -1215,11 +1314,10 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	var lastTxHash common.Hash
 
 	var (
-		slowTxs                []txTimingEntry // slow txs for this block (duration above threshold)
-		lastCommitStart        time.Time       // start of the most recent commitTransaction call
-		lastTxIndex            int             // index of the last attempted tx (for interrupt context)
-		lastTxSender           common.Address  // sender of the last attempted tx (for interrupt context)
-		flagToTxInterruptDelay time.Duration   // delay from setting interrupt flag to tx interruption
+		lastCommitStart        time.Time      // start of the most recent commitTransaction call
+		lastTxIndex            int            // index of the last attempted tx (for interrupt context)
+		lastTxSender           common.Address // sender of the last attempted tx (for interrupt context)
+		flagToTxInterruptDelay time.Duration  // delay from setting interrupt flag to tx interruption
 		hasTxInterruptDelay    bool
 	)
 	lastTxIndex = -1
@@ -1400,9 +1498,8 @@ mainloop:
 			if metrics.Enabled() {
 				txApplyDurationTimer.Update(txDuration)
 			}
-
-			if w.slowTxThreshold > 0 && txDuration > w.slowTxThreshold {
-				slowTxs = append(slowTxs, txTimingEntry{hash: tx.Hash(), duration: txDuration})
+			if w.IsRunning() {
+				w.slowTxTracker.Add(txTimingEntry{hash: tx.Hash(), duration: txDuration})
 			}
 
 			if EnableMVHashMap && w.IsRunning() {
@@ -1544,19 +1641,6 @@ mainloop:
 		}
 
 		w.pendingLogsFeed.Send(cpy)
-	}
-
-	if len(slowTxs) > 0 {
-		sort.Slice(slowTxs, func(i, j int) bool {
-			return slowTxs[i].duration > slowTxs[j].duration
-		})
-
-		log.Warn("Slow transactions detected while building block",
-			"number", env.header.Number.Uint64(),
-			"slowTxCount", len(slowTxs),
-			"threshold", common.PrettyDuration(w.slowTxThreshold),
-			"slowTxs", formatSlowTxs(slowTxs),
-		)
 	}
 
 	return nil

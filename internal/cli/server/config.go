@@ -447,10 +447,6 @@ type SealerConfig struct {
 
 	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
-
-	// SlowTxThreshold warns if a single tx apply time exceeds this threshold. 0 = disabled.
-	SlowTxThreshold    time.Duration `hcl:"-,optional" toml:"-"`
-	SlowTxThresholdRaw string        `hcl:"slowtxthreshold,optional" toml:"slowtxthreshold,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -1112,7 +1108,6 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.evmtimeout", &c.JsonRPC.RPCEVMTimeout, &c.JsonRPC.RPCEVMTimeoutRaw},
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
 		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
-		{"miner.slowtxthreshold", &c.Sealer.SlowTxThreshold, &c.Sealer.SlowTxThresholdRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
 		{"jsonrpc.timeouts.readheader", &c.JsonRPC.HttpTimeout.ReadHeaderTimeout, &c.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
@@ -1275,11 +1270,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
-		n.Miner.SlowTxThreshold = c.Sealer.SlowTxThreshold
-
-		if c.Sealer.SlowTxThreshold < 0 {
-			return nil, fmt.Errorf("miner.slowtxthreshold (%s) must be >= 0", c.Sealer.SlowTxThreshold)
-		}
 
 		// Validate prefetch gas limit percentage
 		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {

@@ -432,13 +432,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Sealer.PrefetchGasLimitPercent,
 		Group:   "Sealer",
 	})
-	f.DurationFlag(&flagset.DurationFlag{
-		Name:    "miner.slowtxthreshold",
-		Usage:   "Warn if a single tx apply time exceeds this threshold (e.g., 500ms). 0 = disabled",
-		Value:   &c.cliConfig.Sealer.SlowTxThreshold,
-		Default: c.cliConfig.Sealer.SlowTxThreshold,
-		Group:   "Sealer",
-	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
