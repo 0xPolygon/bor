@@ -3965,3 +3965,201 @@ func TestGetBlockGasParams_HeaderNotFound_ByHash(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "header not found")
 }
+
+// testBackendWithBlockExtra wraps testBackend to return blocks with custom Extra data
+// and a custom ChainConfig for GetBlockByNumber/GetBlockByHash tests.
+type testBackendWithBlockExtra struct {
+	*testBackend
+	block    *types.Block
+	chainCfg *params.ChainConfig
+}
+
+func (b *testBackendWithBlockExtra) ChainConfig() *params.ChainConfig {
+	return b.chainCfg
+}
+
+func (b *testBackendWithBlockExtra) BlockByNumber(_ context.Context, number rpc.BlockNumber) (*types.Block, error) {
+	if b.block != nil && number == rpc.BlockNumber(b.block.NumberU64()) {
+		return b.block, nil
+	}
+	return nil, nil
+}
+
+func (b *testBackendWithBlockExtra) BlockByHash(_ context.Context, hash common.Hash) (*types.Block, error) {
+	if b.block != nil && hash == b.block.Hash() {
+		return b.block, nil
+	}
+	return nil, nil
+}
+
+// makeBlockWithExtra creates a minimal block with the given extra data in its header.
+func makeBlockWithExtra(number int64, extra []byte) *types.Block {
+	header := &types.Header{
+		Number:   big.NewInt(number),
+		GasLimit: 30_000_000,
+		Extra:    extra,
+	}
+	return types.NewBlockWithHeader(header)
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestGetBlockByNumber_BorExtraFlag_PostCancun(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	txDep := [][]uint64{{0}, {0, 1}, {}}
+
+	bed := &types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TxDependency:             txDep,
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+
+	block := makeBlockWithExtra(10, extra)
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	api := NewBlockChainAPI(backend)
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	extraData, ok := result["blockExtraData"]
+	require.True(t, ok, "response should contain blockExtraData")
+
+	rpcExtra := extraData.(*RPCBlockExtraData)
+	require.NotNil(t, rpcExtra.GasTarget)
+	require.Equal(t, hexutil.Uint64(gasTarget), *rpcExtra.GasTarget)
+	require.NotNil(t, rpcExtra.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(bfcd), *rpcExtra.BaseFeeChangeDenominator)
+	require.Equal(t, txDep, rpcExtra.TxDependency)
+}
+
+func TestGetBlockByHash_BorExtraFlag(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+
+	bed := &types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+
+	block := makeBlockWithExtra(10, extra)
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	api := NewBlockChainAPI(backend)
+
+	result, err := api.GetBlockByHash(context.Background(), block.Hash(), false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	extraData, ok := result["blockExtraData"]
+	require.True(t, ok, "response should contain blockExtraData")
+
+	rpcExtra := extraData.(*RPCBlockExtraData)
+	require.NotNil(t, rpcExtra.GasTarget)
+	require.Equal(t, hexutil.Uint64(gasTarget), *rpcExtra.GasTarget)
+}
+
+func TestGetBlockByNumber_BorExtraFlag_Nil(t *testing.T) {
+	t.Parallel()
+	// borExtra=nil (not provided) — should not include blockExtraData
+	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(nil, nil))
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	api := NewBlockChainAPI(backend)
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["blockExtraData"]
+	require.False(t, ok, "blockExtraData should not be present when borExtra is nil")
+}
+
+func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
+	t.Parallel()
+	// borExtra=false — should not include blockExtraData
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(&gasTarget, &bfcd))
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	api := NewBlockChainAPI(backend)
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(false))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["blockExtraData"]
+	require.False(t, ok, "blockExtraData should not be present when borExtra is false")
+}
+
+func TestGetBlockByNumber_BorExtraFlag_PreCancun(t *testing.T) {
+	t.Parallel()
+	// Pre-Cancun block with borExtra=true — should not include blockExtraData
+	block := makeBlockWithExtra(5, make([]byte, types.ExtraVanityLength+types.ExtraSealLength))
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(100), // Cancun at block 100
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(100)},
+	}
+
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	api := NewBlockChainAPI(backend)
+
+	result, err := api.GetBlockByNumber(context.Background(), 5, false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["blockExtraData"]
+	require.False(t, ok, "blockExtraData should not be present for pre-Cancun blocks")
+}

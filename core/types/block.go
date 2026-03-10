@@ -539,6 +539,25 @@ func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *u
 	return blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
 }
 
+// DecodeBlockExtraData decodes the full BlockExtraData struct from the header's
+// Extra field in a single RLP decode. Returns nil for pre-Cancun blocks or on error.
+func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExtraData {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil
+	}
+
+	var blockExtraData BlockExtraData
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil
+	}
+
+	return &blockExtraData
+}
+
 func (b *Block) BaseFee() *big.Int {
 	if b.header.BaseFee == nil {
 		return nil

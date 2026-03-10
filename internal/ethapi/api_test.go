@@ -3878,7 +3878,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 				result = api.GetHeaderByHash(t.Context(), *tt.blockHash)
 				rpc = "eth_getHeaderByHash"
 			} else {
-				result, err = api.GetBlockByHash(t.Context(), *tt.blockHash, tt.fullTx)
+				result, err = api.GetBlockByHash(t.Context(), *tt.blockHash, tt.fullTx, nil)
 				rpc = "eth_getBlockByHash"
 			}
 		} else {
@@ -3886,7 +3886,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 				result, err = api.GetHeaderByNumber(t.Context(), tt.blockNumber)
 				rpc = "eth_getHeaderByNumber"
 			} else {
-				result, err = api.GetBlockByNumber(t.Context(), tt.blockNumber, tt.fullTx)
+				result, err = api.GetBlockByNumber(t.Context(), tt.blockNumber, tt.fullTx, nil)
 				rpc = "eth_getBlockByNumber"
 			}
 		}

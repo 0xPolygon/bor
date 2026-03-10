@@ -314,6 +314,48 @@ func (api *BorAPI) GetHeaderByNumber(ctx context.Context, blockNumber rpc.BlockN
 	return header, nil
 }
 
+// RPCBlockExtraData contains the parsed fields from the block header's Extra field.
+// Only populated for post-Cancun blocks that use RLP-encoded BlockExtraData.
+type RPCBlockExtraData struct {
+	GasTarget                *hexutil.Uint64 `json:"gasTarget"`
+	BaseFeeChangeDenominator *hexutil.Uint64 `json:"baseFeeChangeDenominator"`
+	TxDependency             [][]uint64      `json:"txDependency"`
+}
+
+// marshalBlockExtraData decodes the BlockExtraData from a header's Extra field
+// and returns it as an RPC-marshalable struct. Returns nil for pre-Cancun blocks.
+func marshalBlockExtraData(header *types.Header, chainConfig *params.ChainConfig) *RPCBlockExtraData {
+	bed := header.DecodeBlockExtraData(chainConfig)
+	if bed == nil {
+		return nil
+	}
+
+	result := &RPCBlockExtraData{TxDependency: bed.TxDependency}
+
+	if bed.GasTarget != nil {
+		gt := hexutil.Uint64(*bed.GasTarget)
+		result.GasTarget = &gt
+	}
+
+	if bed.BaseFeeChangeDenominator != nil {
+		d := hexutil.Uint64(*bed.BaseFeeChangeDenominator)
+		result.BaseFeeChangeDenominator = &d
+	}
+
+	return result
+}
+
+// appendBorExtraData adds the parsed block extra data to the response map if borExtra is true.
+func appendBorExtraData(response map[string]interface{}, block *types.Block, borExtra *bool, chainConfig *params.ChainConfig) {
+	if borExtra == nil || !*borExtra || response == nil {
+		return
+	}
+
+	if extraData := marshalBlockExtraData(block.Header(), chainConfig); extraData != nil {
+		response["blockExtraData"] = extraData
+	}
+}
+
 // BlockGasParamsResult contains the EIP-1559 gas parameters stored in a block header.
 type BlockGasParamsResult struct {
 	GasTarget                *hexutil.Uint64 `json:"gasTarget"`
