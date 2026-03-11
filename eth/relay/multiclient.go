@@ -40,8 +40,9 @@ func isAlreadyKnownError(err error) bool {
 // multiClient holds multiple rpc client instances for each block producer
 // to perform certain queries across all of them and make a unified decision.
 type multiClient struct {
-	clients []*rpc.Client // rpc client instances dialed to each block producer
-	closed  atomic.Bool
+	clients       []*rpc.Client // rpc client instances dialed to each block producer
+	closed        atomic.Bool
+	retryInterval time.Duration // 0 means use privateTxRetryInterval; configurable for testing
 }
 
 func newMultiClient(urls []string) *multiClient {
@@ -156,7 +157,11 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 	return false, firstErr
 }
 
-func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool, txGetter TxGetter) error {
+// submitPrivateTx submits a raw private transaction to all block producers. When retry is
+// true and some producers fail, a background goroutine retries those producers. The
+// returned channel (non-nil only when a retry goroutine is started) is closed when the
+// goroutine finishes, allowing callers to wait for completion deterministically.
+func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry bool, txGetter TxGetter) (error, <-chan struct{}) {
 	// Submit tx to all block producers in parallel (initial attempt)
 	hexTx := hexutil.Encode(rawTx)
 
@@ -205,17 +210,22 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 	// If all submissions successful, return immediately
 	if len(failedIndices) == 0 {
 		log.Debug("[tx-relay] Successfully submitted private tx to all producers", "hash", hash)
-		return nil
+		return nil, nil
 	}
 
 	if retry && !mc.closed.Load() {
 		// Some submissions failed, start background retry
 		log.Debug("[tx-relay] Failed to submit private tx to one or more block producers, starting retry",
 			"err", firstErr, "failed", len(failedIndices), "successful", len(successfulIndices), "total", len(mc.clients), "hash", hash)
-		go mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, txGetter)
+		done := make(chan struct{})
+		go func() {
+			mc.retryPrivateTxSubmission(hexTx, hash, failedIndices, txGetter)
+			close(done)
+		}()
+		return firstErr, done
 	}
 
-	return firstErr
+	return firstErr, nil
 }
 
 // retryPrivateTxSubmission runs in background to retry private tx submission to producers
@@ -234,7 +244,11 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 		}
 
 		// Sleep before retry
-		time.Sleep(privateTxRetryInterval)
+		interval := mc.retryInterval
+		if interval == 0 {
+			interval = privateTxRetryInterval
+		}
+		time.Sleep(interval)
 
 		log.Debug("[tx-relay] Retrying private tx submission", "producers", len(currentFailedIndices), "attempt", retry+1, "hash", hash)
 

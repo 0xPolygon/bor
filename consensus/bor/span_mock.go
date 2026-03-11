@@ -8,6 +8,8 @@ import (
 	context "context"
 	reflect "reflect"
 
+	gomock "go.uber.org/mock/gomock"
+
 	types "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	types0 "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	common "github.com/ethereum/go-ethereum/common"
@@ -17,7 +19,6 @@ import (
 	types1 "github.com/ethereum/go-ethereum/core/types"
 	vm "github.com/ethereum/go-ethereum/core/vm"
 	rpc "github.com/ethereum/go-ethereum/rpc"
-	gomock "go.uber.org/mock/gomock"
 )
 
 // MockSpanner is a mock of Spanner interface.

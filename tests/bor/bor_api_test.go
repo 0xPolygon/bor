@@ -92,7 +92,7 @@ func testGetTransactionReceiptsByBlock(t *testing.T, publicBlockchainAPI *ethapi
 	assert.True(t, areDifferentHashes(receiptsOut))
 
 	// check 5: Tx hash for state sync txn
-	block, err := publicBlockchainAPI.GetBlockByNumber(context.Background(), rpc.BlockNumber(4), false)
+	block, err := publicBlockchainAPI.GetBlockByNumber(context.Background(), rpc.BlockNumber(4), false, nil)
 	assert.Nil(t, err)
 	blockHash := block["hash"].(common.Hash)
 	txHash := types.GetDerivedBorTxHash(types.BorReceiptKey(4, blockHash))

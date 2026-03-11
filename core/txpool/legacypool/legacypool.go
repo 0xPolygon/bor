@@ -1053,8 +1053,10 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		}
 
 		// New transaction is better than our worse ones, make room for it.
-		// If we can't make enough room for new one, abort the operation.
-		drop, success := pool.priced.Discard(pool.all.Slots() - int(pool.config.GlobalSlots+pool.config.GlobalQueue) + numSlots(tx))
+		// If we can't make enough room for new one, abort the operation. Also,
+		// take a snapshot of reheap count as we've finished re-arrangements in
+		// the priced list.
+		drop, success, reheapCount := pool.priced.Discard(pool.all.Slots() - int(pool.config.GlobalSlots+pool.config.GlobalQueue) + numSlots(tx))
 
 		// Special case, we still can't make the room for the new remote one.
 		if !success {
@@ -1090,16 +1092,14 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 					break
 				}
 			}
-			// Add all transactions back to the priced queue
+			// Add all transactions back to the priced queue.
 			if replacesPending {
 				if async {
 					// We don't want to get blocked on this due to internal lock, so
 					// call the function to insert transactions into the heap async.
-					go pool.priced.PutMany(drop)
+					go pool.priced.PutMany(drop, reheapCount)
 				} else {
-					for _, dropTx := range drop {
-						pool.priced.Put(dropTx)
-					}
+					pool.priced.PutMany(drop, reheapCount)
 				}
 				log.Trace("Discarding future transaction replacing pending tx", "hash", hash)
 				stage2Duration = time.Since(stage2Time)
@@ -1134,17 +1134,22 @@ func (pool *LegacyPool) add(tx *types.Transaction, async bool) (replaced bool, e
 		// New transaction is better, replace old one
 		if old != nil {
 			pool.all.Remove(old.Hash())
-			pool.priced.Removed(1)
+			if async {
+				go pool.priced.Removed(1)
+			} else {
+				pool.priced.Removed(1)
+			}
 			pendingReplaceMeter.Mark(1)
 			delete(pool.lastRebroadcast, old.Hash())
 		}
 		pool.all.Add(tx)
+		reheapCount := pool.priced.reheaps.Load()
 		if async {
 			// We don't want to get blocked on this due to internal lock, so
 			// call the function to insert transactions into the heap async.
-			go pool.priced.Put(tx)
+			go pool.priced.Put(tx, reheapCount)
 		} else {
-			pool.priced.Put(tx)
+			pool.priced.Put(tx, reheapCount)
 		}
 		pool.queueTxEvent(tx)
 		log.Trace("Pooled new executable transaction", "hash", hash, "from", from, "to", tx.To())
@@ -1208,9 +1213,7 @@ func (pool *LegacyPool) enqueueTx(hash common.Hash, tx *types.Transaction, addAl
 	}
 	if addAll {
 		pool.all.Add(tx)
-		// We don't want to get blocked on this due to internal lock, so
-		// call the function to insert transactions into the heap async.
-		go pool.priced.Put(tx)
+		go pool.priced.Put(tx, pool.priced.reheaps.Load())
 	}
 	return replaced != nil, nil
 }

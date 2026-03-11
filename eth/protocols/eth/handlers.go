@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -27,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/tracker"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -34,7 +36,15 @@ import (
 )
 
 // requestTracker is a singleton tracker for eth/66 and newer request times.
-var requestTracker = tracker.New(ProtocolName, 5*time.Minute)
+var (
+	requestTracker = tracker.New(ProtocolName, 5*time.Minute)
+
+	// newBlockPushIntervalTimer tracks time deltas between consecutive inbound NewBlock pushes.
+	newBlockPushIntervalTimer = metrics.NewRegisteredTimer("eth/protocols/eth/newblock/push_interval", nil)
+
+	// lastNewBlockPushUnix holds the timestamp (unix nanos) when the last push arrived.
+	lastNewBlockPushUnix atomic.Int64
+)
 
 func handleGetBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the complex header query
@@ -491,7 +501,14 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 	}
 
 	msgTime := msg.Time()
-	ann.Block.ReceivedAt = msg.Time()
+	if prev := lastNewBlockPushUnix.Load(); prev > 0 {
+		if delta := msgTime.Sub(time.Unix(0, prev)); delta > 0 {
+			newBlockPushIntervalTimer.Update(delta)
+		}
+	}
+	lastNewBlockPushUnix.Store(msgTime.UnixNano())
+
+	ann.Block.ReceivedAt = msgTime
 	ann.Block.ReceivedFrom = peer
 	ann.Block.AnnouncedAt = &msgTime
 
@@ -630,13 +647,13 @@ func encodeReceiptsAndPrepareHasher[L ReceiptsList](receipts []L, borCfg *params
 
 	hasher := trie.NewStackTrie(nil)
 	calculateReceiptHashes := func(index int, number *big.Int) common.Hash {
-		// Don't exclude state-sync receipts for post hardfork blocks
-		if borCfg.IsMadhugiri(number) {
-			return types.DeriveSha(receipts[index], hasher)
-		} else {
-			receipts[index].ExcludeStateSyncReceipt()
+		// For non-bor chains or post-Madhugiri blocks, include all receipts in hash
+		if borCfg == nil || borCfg.IsMadhugiri(number) {
 			return types.DeriveSha(receipts[index], hasher)
 		}
+		// Pre-Madhugiri bor blocks: exclude state-sync receipt from hash calculation
+		receipts[index].ExcludeStateSyncReceipt()
+		return types.DeriveSha(receipts[index], hasher)
 	}
 
 	return encodedReceipts, calculateReceiptHashes

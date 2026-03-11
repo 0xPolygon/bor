@@ -8,12 +8,13 @@ import (
 	context "context"
 	reflect "reflect"
 
+	gomock "go.uber.org/mock/gomock"
+
 	types "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	clerk "github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	checkpoint "github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	milestone "github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
-	gomock "go.uber.org/mock/gomock"
 )
 
 // MockIHeimdallClient is a mock of IHeimdallClient interface.

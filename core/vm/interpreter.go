@@ -102,9 +102,10 @@ func (ctx *ScopeContext) ContractCode() []byte {
 // considered a revert-and-consume-all-gas operation except for
 // ErrExecutionReverted which means revert-and-keep-gas-left.
 // nolint:gocognit
-func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool, interrupt *atomic.Bool) (ret []byte, err error) {
-	// If `interrupt` is nil (which can be the case for some tests), set it to false to avoid
-	// checking it for every opcode.
+func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte, err error) {
+	// Use the EVM-level interrupt flag set via SetInterrupt. If nil (tests or
+	// non-mining contexts), use a dummy to avoid checking nil on every opcode.
+	interrupt := evm.interrupt
 	if interrupt == nil {
 		interrupt = new(atomic.Bool)
 	}

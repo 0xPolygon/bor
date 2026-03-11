@@ -6,11 +6,11 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.devfakeauthor```: Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
-- ```bor.heimdall```: URL of Heimdall service (default: http://localhost:1317)
+- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2") (default: http://localhost:1317)
 
-- ```bor.heimdallWS```: Address of Heimdall ws subscription service
+- ```bor.heimdallWS```: Address of Heimdall WS subscription service (comma-separated for failover: "addr1,addr2")
 
-- ```bor.heimdallgRPC```: Address of Heimdall gRPC service
+- ```bor.heimdallgRPC```: Address of Heimdall gRPC service (comma-separated for failover: "addr1,addr2")
 
 - ```bor.heimdalltimeout```: Timeout period for bor's outgoing requests to heimdall (default: 5s)
 
@@ -76,8 +76,6 @@ The ```bor server``` command runs the Bor client.
 
 - ```keystore```: Path of the directory where keystores are located
 
-- ```log-level```: Log level for the server (trace|debug|info|warn|error|crit), will be deprecated soon. Use verbosity instead
-
 - ```max-blind-fork-validation-limit```: Maximum number of blocks to traverse back in the database when validating blind forks (default: 256)
 
 - ```parallelevm.enable```: Enable Block STM (default: true)
@@ -96,7 +94,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```pprof.port```: pprof HTTP server listening port (default: 6060)
 
-- ```rpc.batchlimit```: Maximum number of messages in a batch (use 0 for no limits) (default: 100)
+- ```rpc.batch-request-limit```: Maximum number of requests in a batch (use 0 for no limits) (default: 1000)
+
+- ```rpc.batch-response-max-size```: Maximum number of response bytes across all requests in a batch (use 0 for no limits) (default: 25000000)
 
 - ```rpc.returndatalimit```: Maximum size (in bytes) a result of an rpc request could have (use 0 for no limits) (default: 100000)
 
@@ -104,15 +104,21 @@ The ```bor server``` command runs the Bor client.
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
 
-- ```syncmode```: Blockchain sync mode (only "full" or "stateless" sync supported) (default: full)
+- ```syncmode```: Blockchain sync mode ("full", "snap" or "stateless") (default: full)
 
 - ```verbosity```: Logging verbosity for the server (5=trace|4=debug|3=info|2=warn|1=error|0=crit) (default: 3)
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
 
+- ```vmtrace```: Name of tracer which should observe internal VM operations (e.g. 'json')
+
+- ```vmtrace.jsonconfig```: Tracer configuration (JSON)
+
 - ```witness.enable```: Enable witness protocol (default: false)
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
+
+- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: true)
 
 - ```witness.parallelstatelessimport```: Enable parallel stateless block import (default: false)
 
@@ -332,6 +338,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
 
+- ```miner.enableDynamicTargetGas```: Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit) (default: false)
+
 - ```miner.etherbase```: Public address for block mining rewards
 
 - ```miner.extradata```: Block extra data set by the miner (default = client version)
@@ -353,6 +361,10 @@ The ```bor server``` command runs the Bor client.
 - ```miner.recommit```: The time interval for miner to re-create mining work (default: 2m5s)
 
 - ```miner.targetBaseFee```: Target base fee in wei for dynamic gas limit (e.g., 30000000000 for 30 gwei) (default: 500000000000)
+
+- ```miner.targetGasMaxPercentage```: Maximum target gas percentage (1-100) when dynamic target gas is enabled (default: 80)
+
+- ```miner.targetGasMinPercentage```: Minimum target gas percentage (1-100) when dynamic target gas is enabled (default: 50)
 
 - ```miner.targetGasPercentage```: Target gas as percentage of gas limit (1-100, default 65) for post-Lisovo blocks (default: 0)
 

@@ -19,6 +19,7 @@ package state
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -63,6 +64,9 @@ type triePrefetcher struct {
 	storageDupCrossMeter  *metrics.Meter
 	storageWasteMeter     *metrics.Meter
 
+	accountFetchTimer *metrics.ResettingTimer
+	storageFetchTimer *metrics.ResettingTimer
+
 	lock sync.RWMutex // Use RWMutex for better read/write locking
 }
 
@@ -91,6 +95,9 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 		storageDupWriteMeter:  metrics.GetOrRegisterMeter(prefix+"/storage/dup/write", nil),
 		storageDupCrossMeter:  metrics.GetOrRegisterMeter(prefix+"/storage/dup/cross", nil),
 		storageWasteMeter:     metrics.GetOrRegisterMeter(prefix+"/storage/waste", nil),
+
+		accountFetchTimer: metrics.GetOrRegisterResettingTimer(prefix+"/account/fetch", nil),
+		storageFetchTimer: metrics.GetOrRegisterResettingTimer(prefix+"/storage/fetch", nil),
 	}
 }
 
@@ -122,8 +129,16 @@ func (p *triePrefetcher) report() {
 	if !metrics.Enabled() {
 		return
 	}
+	var accountFetchTime time.Duration
+	var maxStorageFetchTime time.Duration
 	for _, fetcher := range p.fetchers {
 		fetcher.wait() // ensure the fetcher's idle before poking in its internals
+
+		if fetcher.root == p.root {
+			accountFetchTime = fetcher.fetchTime
+		} else if fetcher.fetchTime > maxStorageFetchTime {
+			maxStorageFetchTime = fetcher.fetchTime
+		}
 
 		fetcher.usedLock.Lock()
 		if fetcher.root == p.root {
@@ -155,6 +170,8 @@ func (p *triePrefetcher) report() {
 		}
 		fetcher.usedLock.Unlock()
 	}
+	p.accountFetchTimer.Update(accountFetchTime)
+	p.storageFetchTimer.Update(maxStorageFetchTime)
 }
 
 // prefetch schedules a batch of trie items to prefetch. After the prefetcher is
@@ -267,6 +284,8 @@ type subfetcher struct {
 	usedAddr []common.Address // Tracks the accounts used in the end
 	usedSlot []common.Hash    // Tracks the storage used in the end
 	usedLock sync.Mutex       // Lock protecting usedAddr/usedSlot appends
+
+	fetchTime time.Duration // Cumulative time spent in PrefetchAccount/PrefetchStorage
 }
 
 // subfetcherTask is a trie path to prefetch, tagged with whether it originates
@@ -477,14 +496,18 @@ func (sf *subfetcher) loop() {
 				}
 			}
 			if len(addresses) != 0 {
+				start := time.Now()
 				if err := sf.trie.PrefetchAccount(addresses); err != nil {
 					log.Error("Failed to prefetch accounts", "err", err)
 				}
+				sf.fetchTime += time.Since(start)
 			}
 			if len(slots) != 0 {
+				start := time.Now()
 				if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
 					log.Error("Failed to prefetch storage", "err", err)
 				}
+				sf.fetchTime += time.Since(start)
 			}
 
 		case <-sf.stop:

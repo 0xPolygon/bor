@@ -84,7 +84,7 @@ lint:
 
 lint-deps:
 	rm -f ./build/bin/golangci-lint
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./build/bin v2.10.1
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./build/bin v2.11.2
 
 .PHONY: vulncheck
 
@@ -96,6 +96,7 @@ goimports:
 
 docs:
 	$(GORUN) cmd/clidoc/main.go -d ./docs/cli
+	$(GORUN) cmd/cli/main.go dumpconfig > ./docs/cli/default_config.toml
 
 #? fmt: Ensure consistent code formatting.
 fmt:

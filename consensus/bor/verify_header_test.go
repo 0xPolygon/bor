@@ -215,6 +215,54 @@ func TestVerifyHeader(t *testing.T) {
 			},
 			expectedError: consensus.ErrFutureBlock,
 		},
+		// Rio timestamp upper-bound tests: verify that far-future timestamps are rejected.
+		{
+			// A header with a timestamp set 100 years in the future must be
+			// rejected by the upper-bound check introduced in Rio.
+			name: "far-future timestamp in Rio mode is rejected",
+			setupChain: makeSetupChain(signerAddr, func(opts *chainSetupOptions) {
+				opts.rioBlock = big.NewInt(0)
+			}),
+			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
+				genesis := chain.HeaderChain().GetHeaderByNumber(0)
+				farFuture := uint64(time.Now().Unix()) + 100*365*24*3600 // year ~2126
+				return newStandardTestHeader(genesis, func(opts *headerOptions) {
+					opts.time = farFuture
+				})
+			},
+			expectedError: consensus.ErrFutureBlock,
+		},
+		{
+			// Boundary test: a timestamp just beyond the allowed future window is rejected.
+			name: "timestamp beyond allowed future bound in Rio mode is rejected",
+			setupChain: makeSetupChain(signerAddr, func(opts *chainSetupOptions) {
+				opts.rioBlock = big.NewInt(0)
+			}),
+			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
+				genesis := chain.HeaderChain().GetHeaderByNumber(0)
+				beyondBound := uint64(time.Now().Unix()) + maxAllowedFutureBlockTimeSeconds + 5
+				return newStandardTestHeader(genesis, func(opts *headerOptions) {
+					opts.time = beyondBound
+				})
+			},
+			expectedError: consensus.ErrFutureBlock,
+		},
+		{
+			// Regression: a normal block (timestamp slightly in the past) must still be
+			// accepted in Rio mode after the upper-bound check is added.
+			name: "normal timestamp in Rio mode is accepted",
+			setupChain: makeSetupChain(signerAddr, func(opts *chainSetupOptions) {
+				opts.rioBlock = big.NewInt(0)
+			}),
+			createHeader: func(t *testing.T, chain *core.BlockChain) *types.Header {
+				genesis := chain.HeaderChain().GetHeaderByNumber(0)
+				return newSignedStandardTestHeader(t, genesis, privKey, chain.Config().Bor, func(opts *headerOptions) {
+					opts.uncleHash = uncleHash
+					opts.mixDigest = common.Hash{}
+				})
+			},
+			expectedError: nil,
+		},
 		{
 			name:       "missing vanity in extra data",
 			setupChain: makeSetupChain(addr1),

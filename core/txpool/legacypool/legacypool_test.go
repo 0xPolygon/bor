@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -278,6 +279,10 @@ func validatePoolInternals(pool *LegacyPool) error {
 	}
 
 	pool.priced.Reheap()
+	// Yield to any goroutines launched by go pool.priced.Put/PutMany that may
+	// be waiting to acquire reheapMu. While the issue of double adding items
+	// in the heap is fixed, this may expose other race conditions if any.
+	runtime.Gosched()
 	pool.priced.reheapMu.Lock()
 	priced := pool.priced.urgent.Len() + pool.priced.floating.Len()
 	pool.priced.reheapMu.Unlock()
@@ -824,15 +829,15 @@ func TestDropping(t *testing.T) {
 		tx12 = transaction(12, 300, key)
 	)
 	pool.all.Add(tx0)
-	pool.priced.Put(tx0)
+	pool.priced.Put(tx0, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx0.Hash(), tx0)
 
 	pool.all.Add(tx1)
-	pool.priced.Put(tx1)
+	pool.priced.Put(tx1, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx1.Hash(), tx1)
 
 	pool.all.Add(tx2)
-	pool.priced.Put(tx2)
+	pool.priced.Put(tx2, pool.priced.reheaps.Load())
 	pool.promoteTx(account, tx2.Hash(), tx2)
 
 	pool.enqueueTx(tx10.Hash(), tx10, true)
@@ -5339,7 +5344,7 @@ func TestRebroadcastCleanupAllPaths(t *testing.T) {
 		tx2 := pricedTransaction(0, 100000, big.NewInt(50), key)
 		pool.mu.Lock()
 		pool.all.Add(tx2)
-		pool.priced.Put(tx2)
+		pool.priced.Put(tx2, pool.priced.reheaps.Load())
 		pool.lastRebroadcast[tx2.Hash()] = time.Now()
 		sizeBefore := len(pool.lastRebroadcast)
 		pool.promoteTx(from, tx2.Hash(), tx2)

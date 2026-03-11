@@ -183,11 +183,17 @@ func CalcBaseFee(config *params.ChainConfig, parent *types.Header) *big.Int {
 // calcParentGasTarget calculates the target gas based on parent block gas limit. Earlier
 // it was derived by `ElasticityMultiplier` as it had an integer multiplier value. Post
 // Dandeli HF, a percentage value is used to calculate the gas target (validated with fallback to default).
+// Post-Lisovo, if EnableDynamicTargetGas is configured, the percentage adjusts dynamically based on parent base fee.
 func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
 	if config.Bor != nil && config.Bor.IsDandeli(parent.Number) {
-		// Use helper function which validates and provides defaults
-		targetPercentage := config.Bor.GetTargetGasPercentage(parent.Number)
+		// Use dynamic helper which falls back to static GetTargetGasPercentage when feature is disabled
+		targetPercentage := config.Bor.GetDynamicTargetGasPercentage(parent.BaseFee, parent.Number)
 		return parent.GasLimit * targetPercentage / 100
 	}
 	return parent.GasLimit / config.ElasticityMultiplier()
+}
+
+// CalcGasTarget exports calcParentGasTarget for use by consensus code (e.g. Prepare).
+func CalcGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
+	return calcParentGasTarget(config, parent)
 }
