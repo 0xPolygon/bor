@@ -4997,8 +4997,7 @@ func TestVerifyHeader_GiuglianoMissingFields(t *testing.T) {
 
 	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
 	err := s.b.verifyHeader(chain, h, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "missing gas target or base fee change denominator")
+	require.ErrorIs(t, err, errMissingGiuglianoFields)
 }
 
 func TestVerifyHeader_GiuglianoFieldsPresent(t *testing.T) {
@@ -5016,7 +5015,7 @@ func TestVerifyHeader_GiuglianoFieldsPresent(t *testing.T) {
 	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
 	err := s.b.verifyHeader(chain, h, nil)
 	if err != nil {
-		require.NotContains(t, err.Error(), "missing gas target or base fee change denominator")
+		require.NotErrorIs(t, err, errMissingGiuglianoFields)
 	}
 }
 
@@ -5030,6 +5029,6 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
 	err := s.b.verifyHeader(chain, h, nil)
 	if err != nil {
-		require.NotContains(t, err.Error(), "missing gas target or base fee change denominator")
+		require.NotErrorIs(t, err, errMissingGiuglianoFields)
 	}
 }

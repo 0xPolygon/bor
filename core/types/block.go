@@ -500,6 +500,9 @@ func (b *Block) GetTxDependency() [][]uint64 {
 	return blockExtraData.TxDependency
 }
 
+// GetValidatorBytes extracts validator bytes from the header's Extra field.
+// If you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData
+// to avoid redundant RLP decodes.
 func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 	if !chainConfig.IsCancun(h.Number) {
 		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
@@ -520,7 +523,9 @@ func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 }
 
 // GetBaseFeeParams extracts the EIP-1559 gas target and base fee change denominator
-// from the block header's extra field. Only available for post-Cancun blocks that use
+// from the block header's extra field. If you need multiple fields from BlockExtraData,
+// prefer DecodeBlockExtraData to avoid redundant RLP decodes.
+// Only available for post-Cancun blocks that use
 // RLP-encoded BlockExtraData (post-Giugliano).
 func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *uint64, baseFeeChangeDenom *uint64) {
 	if !chainConfig.IsCancun(h.Number) {

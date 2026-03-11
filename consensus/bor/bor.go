@@ -97,6 +97,10 @@ var (
 	// invalid list of validators (i.e. non divisible by 40 bytes).
 	errInvalidSpanValidators = errors.New("invalid validator list on sprint end block")
 
+	// errMissingGiuglianoFields is returned if a post-Giugliano block is missing
+	// the gas target or base fee change denominator in its extra data.
+	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
+
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
 
@@ -475,11 +479,15 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return errInvalidSpanValidators
 	}
 
-	// Post-Giugliano: verify that gas target and base fee change denominator are present
+	// Post-Giugliano: verify that gas target and base fee change denominator are present.
+	// We only check presence, not correctness, because post-Lisovo these parameters are
+	// configurable per-node via CLI flags. Validating values would cause nodes with
+	// different configurations to reject each other's blocks. The actual base fee
+	// calculation in CalcBaseFee uses its own computation and does not read these fields.
 	if c.config.IsGiugliano(header.Number) {
 		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
 		if gasTarget == nil || bfcd == nil {
-			return fmt.Errorf("post-Giugliano block %d missing gas target or base fee change denominator in extra data", number)
+			return errMissingGiuglianoFields
 		}
 	}
 
@@ -1056,7 +1064,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
-				log.Error("error while encoding block extra data: %v", err)
+				log.Error("error while encoding block extra data", "err", err)
 				return fmt.Errorf("error while encoding block extra data: %v", err)
 			}
 
@@ -1076,7 +1084,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {
-			log.Error("error while encoding block extra data: %v", err)
+			log.Error("error while encoding block extra data", "err", err)
 			return fmt.Errorf("error while encoding block extra data: %v", err)
 		}
 
