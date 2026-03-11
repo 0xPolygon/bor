@@ -4944,8 +4944,8 @@ func TestPrepare_GiuglianoExtraFields_SprintEnd(t *testing.T) {
 	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
 	require.NotNil(t, gasTarget, "GasTarget should be present in sprint-end header")
 	require.NotNil(t, bfcd, "BaseFeeChangeDenominator should be present in sprint-end header")
-	require.True(t, *gasTarget > 0)
-	require.True(t, *bfcd > 0)
+	require.Equal(t, eip1559.CalcGasTarget(cfg, genesis), *gasTarget)
+	require.Equal(t, params.BaseFeeChangeDenominator(cfg.Bor, genesis.Number), *bfcd)
 }
 
 func TestPrepare_GiuglianoExtraFields_NonSprint(t *testing.T) {
@@ -4966,8 +4966,8 @@ func TestPrepare_GiuglianoExtraFields_NonSprint(t *testing.T) {
 	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
 	require.NotNil(t, gasTarget, "GasTarget should be present in non-sprint header")
 	require.NotNil(t, bfcd, "BaseFeeChangeDenominator should be present in non-sprint header")
-	require.True(t, *gasTarget > 0)
-	require.True(t, *bfcd > 0)
+	require.Equal(t, eip1559.CalcGasTarget(cfg, genesis), *gasTarget)
+	require.Equal(t, params.BaseFeeChangeDenominator(cfg.Bor, genesis.Number), *bfcd)
 }
 
 func TestPrepare_PreGiugliano_NoExtraFields(t *testing.T) {
