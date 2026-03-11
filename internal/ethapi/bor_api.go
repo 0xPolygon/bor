@@ -352,7 +352,7 @@ func appendBorExtraData(response map[string]interface{}, block *types.Block, bor
 	}
 
 	if extraData := marshalBlockExtraData(block.Header(), chainConfig); extraData != nil {
-		response["blockExtraData"] = extraData
+		response["decodedExtra"] = extraData
 	}
 }
 

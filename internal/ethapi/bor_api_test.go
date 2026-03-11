@@ -4043,8 +4043,8 @@ func TestGetBlockByNumber_BorExtraFlag_PostCancun(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	extraData, ok := result["blockExtraData"]
-	require.True(t, ok, "response should contain blockExtraData")
+	extraData, ok := result["decodedExtra"]
+	require.True(t, ok, "response should contain decodedExtra")
 
 	rpcExtra := extraData.(*RPCBlockExtraData)
 	require.NotNil(t, rpcExtra.GasTarget)
@@ -4069,8 +4069,8 @@ func TestGetBlockByHash_BorExtraFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	extraData, ok := result["blockExtraData"]
-	require.True(t, ok, "response should contain blockExtraData")
+	extraData, ok := result["decodedExtra"]
+	require.True(t, ok, "response should contain decodedExtra")
 
 	rpcExtra := extraData.(*RPCBlockExtraData)
 	require.NotNil(t, rpcExtra.GasTarget)
@@ -4085,8 +4085,8 @@ func TestGetBlockByNumber_BorExtraFlag_Nil(t *testing.T) {
 	result, err := api.GetBlockByNumber(context.Background(), 10, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	_, ok := result["blockExtraData"]
-	require.False(t, ok, "blockExtraData should not be present when borExtra is nil")
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present when borExtra is nil")
 }
 
 func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
@@ -4099,8 +4099,8 @@ func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
 	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(false))
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	_, ok := result["blockExtraData"]
-	require.False(t, ok, "blockExtraData should not be present when borExtra is false")
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present when borExtra is false")
 }
 
 func TestGetBlockByNumber_BorExtraFlag_PreCancun(t *testing.T) {
@@ -4116,6 +4116,6 @@ func TestGetBlockByNumber_BorExtraFlag_PreCancun(t *testing.T) {
 	result, err := api.GetBlockByNumber(context.Background(), 5, false, boolPtr(true))
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	_, ok := result["blockExtraData"]
-	require.False(t, ok, "blockExtraData should not be present for pre-Cancun blocks")
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present for pre-Cancun blocks")
 }

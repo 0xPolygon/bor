@@ -590,7 +590,7 @@ func (api *BlockChainAPI) GetHeaderByHash(ctx context.Context, hash common.Hash)
 //   - When number is -4 the chain safe block is returned.
 //   - When fullTx is true all transactions in the block are returned, otherwise
 //     only the transaction hash is returned.
-//   - When borExtra is true, the response includes a "blockExtraData" object with
+//   - When borExtra is true, the response includes a "decodedExtra" object with
 //     parsed EIP-1559 gas parameters and transaction dependency metadata from the
 //     block header's Extra field. This parameter is optional.
 func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool, borExtra *bool) (map[string]interface{}, error) {
