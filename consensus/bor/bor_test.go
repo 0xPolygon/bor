@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -4889,7 +4890,7 @@ func TestSetGiuglianoExtraFields_PreGiugliano(t *testing.T) {
 
 func TestSetGiuglianoExtraFields_PostGiugliano(t *testing.T) {
 	t.Parallel()
-	_, b, _ := newGiuglianoBorForTest(t, true)
+	_, b, cfg := newGiuglianoBorForTest(t, true)
 
 	parent := &types.Header{Number: big.NewInt(0), GasLimit: 30_000_000, BaseFee: big.NewInt(1000000000)}
 	header := &types.Header{Number: big.NewInt(1)}
@@ -4897,10 +4898,13 @@ func TestSetGiuglianoExtraFields_PostGiugliano(t *testing.T) {
 
 	b.setGiuglianoExtraFields(header, parent, bed)
 
-	require.NotNil(t, bed.GasTarget, "GasTarget should be set for post-Giugliano blocks")
-	require.NotNil(t, bed.BaseFeeChangeDenominator, "BaseFeeChangeDenominator should be set for post-Giugliano blocks")
-	require.True(t, *bed.GasTarget > 0, "GasTarget should be non-zero")
-	require.True(t, *bed.BaseFeeChangeDenominator > 0, "BaseFeeChangeDenominator should be non-zero")
+	expectedGasTarget := eip1559.CalcGasTarget(cfg, parent)
+	expectedBFCD := params.BaseFeeChangeDenominator(cfg.Bor, parent.Number)
+
+	require.NotNil(t, bed.GasTarget)
+	require.Equal(t, expectedGasTarget, *bed.GasTarget)
+	require.NotNil(t, bed.BaseFeeChangeDenominator)
+	require.Equal(t, expectedBFCD, *bed.BaseFeeChangeDenominator)
 }
 
 func TestSetGiuglianoExtraFields_UsesParentNotCurrent(t *testing.T) {
