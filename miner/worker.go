@@ -257,11 +257,12 @@ func (env *environment) discard() {
 
 // task contains all information for consensus engine sealing and result submitting.
 type task struct {
-	receipts          []*types.Receipt
-	state             *state.StateDB
-	block             *types.Block
-	createdAt         time.Time
-	productionElapsed time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
+	receipts             []*types.Receipt
+	state                *state.StateDB
+	block                *types.Block
+	createdAt            time.Time
+	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
+	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 }
 
 // txFits reports whether the transaction fits into the block size limit.
@@ -1087,11 +1088,12 @@ func (w *worker) resultLoop() {
 				workerBorConsensusTimer.Update(task.state.BorConsensusTime)
 				trieRead := task.state.SnapshotAccountReads + task.state.AccountReads +
 					task.state.SnapshotStorageReads + task.state.StorageReads
-				// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads and
-				// Bor consensus time to isolate pure EVM time, same structure as the import path.
-				// Deliberately clamped to zero (import path emits raw negatives) to avoid polluting
-				// the histogram with negative latency samples on measurement anomalies.
-				execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime
+				// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads,
+				// Bor consensus time, and IntermediateRoot time to isolate pure EVM execution time.
+				// Mirrors the import path formula in blockchain.go (writeBlockAndSetHead),
+				// where ptime already excludes vtime (IntermediateRoot) via explicit subtraction.
+				// Clamped to zero to avoid negative histogram samples from measurement jitter.
+				execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime - task.intermediateRootTime
 				if execTime < 0 {
 					execTime = 0
 				}
@@ -2306,7 +2308,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start))}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),

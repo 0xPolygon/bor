@@ -1139,6 +1139,14 @@ func (s *StateDB) Copy() *StateDB {
 		logSize:              s.logSize,
 		preimages:            maps.Clone(s.preimages),
 
+		// Timing fields — must be carried over so metrics in resultLoop see
+		// the values accumulated during fillTransactions, not zero.
+		AccountReads:         s.AccountReads,
+		StorageReads:         s.StorageReads,
+		SnapshotAccountReads: s.SnapshotAccountReads,
+		SnapshotStorageReads: s.SnapshotStorageReads,
+		BorConsensusTime:     s.BorConsensusTime,
+
 		// Do we need to copy the access list and transient storage?
 		// In practice: No. At the start of a transaction, these two lists are empty.
 		// In practice, we only ever copy state _between_ transactions/blocks, never
