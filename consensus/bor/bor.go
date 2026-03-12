@@ -1214,7 +1214,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 						core.NewEVMBlockContext(header, cx, &header.Coinbase),
 						wrappedState, c.chainConfig, vmCfg,
 					)
-					hooks.OnTxStart(vmenv.GetVMContext(), lastTx, statefull.SystemAddress)
+					hooks.OnTxStart(vmenv.GetVMContext(), lastTx, statefull.GetSystemAddress())
 				}
 			}
 		}
