@@ -141,7 +141,47 @@ var (
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
+
+	// Trie read/hash/execution metrics for block production (mirroring blockchain.go import path).
+	// Namespaced under worker/chain/ to distinguish from import-path chain/ metrics.
+	workerAccountReadTimer         = metrics.NewRegisteredResettingTimer("worker/chain/account/reads", nil)
+	workerStorageReadTimer         = metrics.NewRegisteredResettingTimer("worker/chain/storage/reads", nil)
+	workerSnapshotAccountReadTimer = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/account/reads", nil)
+	workerSnapshotStorageReadTimer = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/storage/reads", nil)
+	workerAccountUpdateTimer       = metrics.NewRegisteredResettingTimer("worker/chain/account/updates", nil)
+	workerStorageUpdateTimer       = metrics.NewRegisteredResettingTimer("worker/chain/storage/updates", nil)
+	workerAccountHashTimer         = metrics.NewRegisteredResettingTimer("worker/chain/account/hashes", nil)
+	workerStorageHashTimer         = metrics.NewRegisteredTimer("worker/chain/storage/hashes", nil)
+	workerBorConsensusTimer        = metrics.NewRegisteredTimer("worker/chain/bor/consensus", nil)
+	workerBlockExecutionTimer      = metrics.NewRegisteredTimer("worker/chain/execution", nil)
+	workerMgaspsTimer              = metrics.NewRegisteredResettingTimer("worker/chain/mgasps", nil)
+
+	// Trie commit metrics for block production (populated after WriteBlockAndSetHead → CommitWithUpdate).
+	workerAccountCommitTimer     = metrics.NewRegisteredResettingTimer("worker/chain/account/commits", nil)
+	workerStorageCommitTimer     = metrics.NewRegisteredResettingTimer("worker/chain/storage/commits", nil)
+	workerSnapshotCommitTimer    = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/commits", nil)
+	workerTriedbCommitTimer      = metrics.NewRegisteredResettingTimer("worker/chain/triedb/commits", nil)
+	workerWitnessCollectionTimer = metrics.NewRegisteredTimer("worker/chain/witness/collection", nil)
 )
+
+// firstNonZeroTime returns a if non-zero, otherwise b.
+func firstNonZeroTime(a, b time.Time) time.Time {
+	if !a.IsZero() {
+		return a
+	}
+	return b
+}
+
+// productionStartFrom extracts the productionStart time from genParams.
+// Returns zero time if genParams is nil, matching the guarded access pattern
+// already used elsewhere in commit() (e.g. the genParams != nil check at the
+// prefetch coverage block).
+func productionStartFrom(genParams *generateParams) time.Time {
+	if genParams == nil {
+		return time.Time{}
+	}
+	return genParams.productionStart
+}
 
 func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
 	return metrics.GetOrRegister(name, func() interface{} {
@@ -217,10 +257,11 @@ func (env *environment) discard() {
 
 // task contains all information for consensus engine sealing and result submitting.
 type task struct {
-	receipts  []*types.Receipt
-	state     *state.StateDB
-	block     *types.Block
-	createdAt time.Time
+	receipts          []*types.Receipt
+	state             *state.StateDB
+	block             *types.Block
+	createdAt         time.Time
+	productionElapsed time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 }
 
 // txFits reports whether the transaction fits into the block size limit.
@@ -1030,10 +1071,38 @@ func (w *worker) resultLoop() {
 				witness.SetHeader(block.Header())
 			}
 
+			// Execution metrics: emitted before write because these values are final after
+			// FinalizeAndAssemble and do not depend on write success — matching the import path
+			// which emits read/update/hash/execution/bor metrics before writeBlockAndSetHead.
+			// Emitting here avoids losing these observations on a rare write failure.
+			if metrics.Enabled() {
+				workerAccountReadTimer.Update(task.state.AccountReads)
+				workerStorageReadTimer.Update(task.state.StorageReads)
+				workerSnapshotAccountReadTimer.Update(task.state.SnapshotAccountReads)
+				workerSnapshotStorageReadTimer.Update(task.state.SnapshotStorageReads)
+				workerAccountUpdateTimer.Update(task.state.AccountUpdates)
+				workerStorageUpdateTimer.Update(task.state.StorageUpdates)
+				workerAccountHashTimer.Update(task.state.AccountHashes)
+				workerStorageHashTimer.Update(task.state.StorageHashes)
+				workerBorConsensusTimer.Update(task.state.BorConsensusTime)
+				trieRead := task.state.SnapshotAccountReads + task.state.AccountReads +
+					task.state.SnapshotStorageReads + task.state.StorageReads
+				// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads and
+				// Bor consensus time to isolate pure EVM time, same structure as the import path.
+				// Deliberately clamped to zero (import path emits raw negatives) to avoid polluting
+				// the histogram with negative latency samples on measurement anomalies.
+				execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime
+				if execTime < 0 {
+					execTime = 0
+				}
+				workerBlockExecutionTimer.Update(execTime)
+			}
+
 			// Commit block and state to database.
 			writeStart := time.Now()
 			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
-			writeBlockAndSetHeadTimer.Update(time.Since(writeStart))
+			writeElapsed := time.Since(writeStart)
+			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
@@ -1042,6 +1111,25 @@ func (w *worker) resultLoop() {
 				delete(w.pendingTasks, sealhash)
 				w.pendingMu.Unlock()
 				continue
+			}
+
+			// Commit metrics: emitted only after a successful write because these values are
+			// populated by WriteBlockAndSetHead → CommitWithUpdate. Emitting on failure would
+			// record zeroes or stale data — matching the import path which also gates commit
+			// metrics after a successful writeBlockAndSetHead.
+			if metrics.Enabled() {
+				workerAccountCommitTimer.Update(task.state.AccountCommits)
+				workerStorageCommitTimer.Update(task.state.StorageCommits)
+				workerSnapshotCommitTimer.Update(task.state.SnapshotCommits)
+				workerTriedbCommitTimer.Update(task.state.TrieDBCommits)
+				workerWitnessCollectionTimer.Update(task.state.WitnessCollection)
+
+				// MGas/s: denominator includes both production and write time, matching blockchain.go
+				// which measures elapsed after writeBlockAndSetHead returns
+				// (gas * 1000 / elapsed_nanoseconds stores milli-gas/ns = MGas/s as a Duration value).
+				if total := task.productionElapsed + writeElapsed; total > 0 {
+					workerMgaspsTimer.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(total)))
+				}
 			}
 
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
@@ -1555,6 +1643,7 @@ type generateParams struct {
 	prefetchReader     state.ReaderWithStats // The prefetch reader to use for statistics
 	processReader      state.ReaderWithStats // The process reader to use for statistics
 	prefetchedTxHashes *sync.Map             // Map of successfully prefetched transaction hashes
+	productionStart    time.Time             // Start of full-block building (after optional empty pre-seal); used for productionElapsed
 }
 
 // makeHeader creates a new block header for sealing.
@@ -1927,6 +2016,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		emptyWork.state.ResetPrefetcher()
 		_ = w.commit(emptyWork, nil, false, start, genParams)
 	}
+	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
+	// productionElapsed for the full block does not include empty-block overhead.
+	genParams.productionStart = time.Now()
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)
 
@@ -2214,7 +2306,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start))}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
