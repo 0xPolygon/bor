@@ -1986,7 +1986,6 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	w.mu.RUnlock()
 
 	if err != nil {
-		log.Warn("Prefetch failed to create header", "err", err)
 		return
 	}
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
