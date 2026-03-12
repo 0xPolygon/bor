@@ -134,10 +134,10 @@ var (
 	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
 	prefetchPanicMeter                = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
 
-	// prefetchCoverageHistogram tracks percentage of block transactions that were prefetched.
-	// Values range 0-100. High percentiles indicate effective prefetching.
-	prefetchCoverageHistogram = metrics.NewRegisteredHistogram(
-		"worker/prefetch/coverage_percent",
+	// prefetchMissRateHistogram tracks percentage of block transactions that were NOT prefetched.
+	// Values range 0-100. High percentiles indicate prefetch degradation.
+	prefetchMissRateHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/miss_rate_percent",
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
@@ -2275,9 +2275,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 					}
 				}
 
-				// Calculate percentage (0-100)
-				percentage := int64(prefetchedCount * 100 / len(env.txs))
-				prefetchCoverageHistogram.Update(percentage)
+				// Calculate miss rate (0-100): higher = worse
+				missRate := int64((len(env.txs) - prefetchedCount) * 100 / len(env.txs))
+				prefetchMissRateHistogram.Update(missRate)
 			}
 		}
 	}()
