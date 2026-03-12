@@ -86,7 +86,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		}
 	} else {
 		// in case of milestone(isCheckpoint==false) get the hash of endBlock
-		block, err := handler.ethAPI.GetBlockByNumber(ctx, rpc.BlockNumber(end), false)
+		block, err := handler.ethAPI.GetBlockByNumber(ctx, rpc.BlockNumber(end), false, nil)
 		if err != nil || block == nil || block["hash"] == nil {
 			log.Debug("Failed to get end block hash while whitelisting milestone", "number", end, "err", err)
 			return hash, fmt.Errorf("%w: %v", errEndBlock, err)
@@ -183,7 +183,7 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	}
 
 	// fetch the end block hash
-	block, err := handler.ethAPI.GetBlockByNumber(ctx, rpc.BlockNumber(end), false)
+	block, err := handler.ethAPI.GetBlockByNumber(ctx, rpc.BlockNumber(end), false, nil)
 	if err != nil {
 		log.Debug("Failed to get end block hash while whitelisting", "err", err)
 		return hash, fmt.Errorf("%w: %v", errEndBlock, err)

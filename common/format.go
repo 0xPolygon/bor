@@ -29,6 +29,8 @@ type PrettyDuration time.Duration
 
 var prettyDurationRe = regexp.MustCompile(`\.[0-9]{4,}`)
 
+const prettyTimeFormat = "01-02|15:04:05.000"
+
 // String implements the Stringer interface, allowing pretty printing of duration
 // values rounded to three decimals.
 func (d PrettyDuration) String() string {
@@ -38,6 +40,16 @@ func (d PrettyDuration) String() string {
 	}
 
 	return label
+}
+
+// PrettyTime is a pretty printed version of a time.Time value.
+// It formats timestamps in UTC as "MM-DD|HH:MM:SS.mmm".
+type PrettyTime time.Time
+
+// String implements the Stringer interface, allowing consistent UTC timestamp
+// rendering in log-friendly form.
+func (t PrettyTime) String() string {
+	return time.Time(t).UTC().Format(prettyTimeFormat)
 }
 
 // PrettyAge is a pretty printed version of a time.Duration value that rounds

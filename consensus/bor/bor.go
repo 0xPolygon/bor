@@ -97,6 +97,10 @@ var (
 	// invalid list of validators (i.e. non divisible by 40 bytes).
 	errInvalidSpanValidators = errors.New("invalid validator list on sprint end block")
 
+	// errMissingGiuglianoFields is returned if a post-Giugliano block is missing
+	// the gas target or base fee change denominator in its extra data.
+	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
+
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
 
@@ -474,6 +478,18 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	if isSprintEnd && signersBytes%validatorHeaderBytesLength != 0 {
 		log.Warn("Invalid validator set", "number", number, "signersBytes", signersBytes)
 		return errInvalidSpanValidators
+	}
+
+	// Post-Giugliano: verify that gas target and base fee change denominator are present.
+	// We only check presence, not correctness, because post-Lisovo these parameters are
+	// configurable per-node via CLI flags. Validating values would cause nodes with
+	// different configurations to reject each other's blocks. The actual base fee
+	// calculation in CalcBaseFee uses its own computation and does not read these fields.
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
+		if gasTarget == nil || bfcd == nil {
+			return errMissingGiuglianoFields
+		}
 	}
 
 	// Ensure that the mix digest is zero as we don't have fork protection currently
@@ -979,6 +995,18 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 	return parent != nil && header.Time < parent.Time+CalcProducerDelay(number, succession, cfg)
 }
 
+// setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
+// fields in BlockExtraData for post-Giugliano blocks. CalcGasTarget and
+// BaseFeeChangeDenominator both operate on the parent header's values.
+func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header, blockExtraData *types.BlockExtraData) {
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget := eip1559.CalcGasTarget(c.chainConfig, parent)
+		bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
+		blockExtraData.GasTarget = &gasTarget
+		blockExtraData.BaseFeeChangeDenominator = &bfcd
+	}
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
 func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
@@ -1005,6 +1033,12 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	header.Extra = header.Extra[:types.ExtraVanityLength]
 
+	// Fetch parent early — needed for Giugliano extra fields and timestamp calculation
+	parent := chain.GetHeader(header.ParentHash, number-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+
 	// get validator set if number
 	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsRio(header.Number) {
 		newValidators, err := c.spanner.GetCurrentValidatorsByHash(context.Background(), header.ParentHash, number+1)
@@ -1027,9 +1061,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 				TxDependency:   nil,
 			}
 
+			c.setGiuglianoExtraFields(header, parent, blockExtraData)
+
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
-				log.Error("error while encoding block extra data: %v", err)
+				log.Error("error while encoding block extra data", "err", err)
 				return fmt.Errorf("error while encoding block extra data: %v", err)
 			}
 
@@ -1045,9 +1081,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 			TxDependency:   nil,
 		}
 
+		c.setGiuglianoExtraFields(header, parent, blockExtraData)
+
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {
-			log.Error("error while encoding block extra data: %v", err)
+			log.Error("error while encoding block extra data", "err", err)
 			return fmt.Errorf("error while encoding block extra data: %v", err)
 		}
 
@@ -1061,11 +1099,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	header.MixDigest = common.Hash{}
 
 	// Ensure the timestamp has the correct delay
-	parent := chain.GetHeader(header.ParentHash, number-1)
-	if parent == nil {
-		return consensus.ErrUnknownAncestor
-	}
-
 	var succession int
 	// if signer is not empty
 	if currentSigner.signer != (common.Address{}) {

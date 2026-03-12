@@ -1233,7 +1233,7 @@ func (c *ChainConfig) Description() string {
 			banner += fmt.Sprintf(" - Lisovo Pro:                  #%-8v\n", c.Bor.LisovoProBlock)
 		}
 		if c.Bor.GiuglianoBlock != nil {
-			banner += fmt.Sprintf(" - Giugliano:                 #%-8v\n", c.Bor.GiuglianoBlock)
+			banner += fmt.Sprintf(" - Giugliano:                   #%-8v\n", c.Bor.GiuglianoBlock)
 		}
 		return banner
 	}

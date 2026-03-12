@@ -1,10 +1,12 @@
 package server
 
 import (
+	"io"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/mitchellh/cli"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,4 +147,22 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.Equal(t, c.config.JsonRPC.Http.API, []string(nil))
 	require.Equal(t, c.config.JsonRPC.Ws.API, []string{"eth", "bor", "web3"})
 	require.Equal(t, c.config.Gpo.MaxPrice, big.NewInt(0))
+}
+
+func TestRemovedSlowTxThresholdFlag(t *testing.T) {
+	t.Parallel()
+
+	c := Command{
+		UI: &cli.BasicUi{
+			Writer:      io.Discard,
+			ErrorWriter: io.Discard,
+		},
+	}
+
+	err := c.extractFlags([]string{
+		"--miner.slowtxthreshold", "750ms",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "miner.slowtxthreshold")
 }
