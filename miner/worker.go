@@ -1871,7 +1871,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	var interruptPrefetch atomic.Bool
-	if w.config.EnablePrefetch {
+	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
+	if w.config.EnablePrefetch && w.chainConfig.Bor != nil && w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
