@@ -119,6 +119,7 @@ var (
 	blockExecutionParallelErrorCounter = metrics.NewRegisteredCounter("chain/execution/parallel/error", nil)
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
+	blockMgaspsMeter                   = metrics.NewRegisteredTimer("chain/execution/mgasps", nil)
 
 	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
 	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
@@ -811,6 +812,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	resultChan := make(chan Result, resultChanLen)
 
 	processorCount := 0
+	execStart := time.Now()
 
 	if bc.parallelProcessor != nil {
 		processorCount++
@@ -866,6 +868,14 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	}
 
 	result.counter.Inc(1)
+
+	// Report per-block mgasps for the winning processor.
+	// Value is scaled by 1000 (stored as µgasps) to preserve 3 decimal places,
+	// e.g. 210.357 mgasps → 210357. Divide by 1000 when reading.
+	if elapsed := time.Since(execStart); elapsed > 0 && result.usedGas > 0 {
+		mgasps := float64(result.usedGas) * 1e6 / float64(elapsed) // mgasps * 1000
+		blockMgaspsMeter.Update(time.Duration(mgasps))
+	}
 
 	// Make sure we are not leaking any prefetchers
 	if processorCount == 2 {
