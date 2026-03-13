@@ -123,15 +123,13 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 			return blockstm.ErrExecAbortError{Dependency: task.statedb.DepTxIndex(), OriginError: err}
 		}
 
-		reads := task.statedb.MVReadMap()
-
-		if _, ok := reads[blockstm.NewSubpathKey(task.blockContext.Coinbase, state.BalancePath)]; ok {
+		if task.statedb.HasRead(blockstm.NewSubpathKey(task.blockContext.Coinbase, state.BalancePath)) {
 			log.Info("Coinbase is in MVReadMap", "address", task.blockContext.Coinbase)
 
 			task.shouldRerunWithoutFeeDelay = true
 		}
 
-		if _, ok := reads[blockstm.NewSubpathKey(task.result.BurntContractAddress, state.BalancePath)]; ok {
+		if task.statedb.HasRead(blockstm.NewSubpathKey(task.result.BurntContractAddress, state.BalancePath)) {
 			log.Info("BurntContractAddress is in MVReadMap", "address", task.result.BurntContractAddress)
 
 			task.shouldRerunWithoutFeeDelay = true
@@ -175,6 +173,14 @@ func (task *ExecutionTask) Dependencies() []int {
 }
 
 func (task *ExecutionTask) Settle() {
+	// Disable MVHashMap during settlement so Get*/Set* calls bypass MVRead/MVWrite.
+	// This is safe because finalStateDB is exclusively owned by the settlement
+	// goroutine — worker goroutines operate on their own task.statedb (a Copy of
+	// cleanStateDB), never finalStateDB. The executor's single settle goroutine
+	// processes tasks sequentially via chSettle (see executor.go:381-386).
+	mvhm := task.finalStateDB.GetMVHashmap()
+	task.finalStateDB.SetMVHashmap(nil)
+
 	task.finalStateDB.SetTxContext(task.tx.Hash(), task.index)
 
 	coinbaseBalance := task.finalStateDB.GetBalance(task.coinbase)
@@ -222,6 +228,9 @@ func (task *ExecutionTask) Settle() {
 	} else {
 		root = task.finalStateDB.IntermediateRoot(task.config.IsEIP158(task.blockNumber)).Bytes()
 	}
+
+	// Restore MVHashMap after settlement is complete
+	task.finalStateDB.SetMVHashmap(mvhm)
 
 	*task.totalUsedGas += task.result.UsedGas
 

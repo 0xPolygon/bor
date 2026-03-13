@@ -2,9 +2,8 @@ package blockstm
 
 import (
 	"fmt"
+	"sort"
 	"sync"
-
-	"github.com/emirpasic/gods/maps/treemap"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -32,12 +31,14 @@ func (k Key) IsSubpath() bool {
 	return k[KeyLength-1] == subpathType
 }
 
-func (k Key) GetAddress() common.Address {
-	return common.BytesToAddress(k[:common.AddressLength])
+func (k Key) GetAddress() (addr common.Address) {
+	copy(addr[:], k[:common.AddressLength])
+	return
 }
 
-func (k Key) GetStateKey() common.Hash {
-	return common.BytesToHash(k[common.AddressLength : KeyLength-2])
+func (k Key) GetStateKey() (hash common.Hash) {
+	copy(hash[:], k[common.AddressLength:KeyLength-2])
+	return
 }
 
 func (k Key) GetSubpath() byte {
@@ -47,8 +48,8 @@ func (k Key) GetSubpath() byte {
 func newKey(addr common.Address, hash common.Hash, subpath byte, keyType byte) Key {
 	var k Key
 
-	copy(k[:common.AddressLength], addr.Bytes())
-	copy(k[common.AddressLength:KeyLength-2], hash.Bytes())
+	copy(k[:common.AddressLength], addr[:])
+	copy(k[common.AddressLength:KeyLength-2], hash[:])
 	k[KeyLength-2] = subpath
 	k[KeyLength-1] = keyType
 
@@ -56,29 +57,51 @@ func newKey(addr common.Address, hash common.Hash, subpath byte, keyType byte) K
 }
 
 func NewAddressKey(addr common.Address) Key {
-	return newKey(addr, common.Hash{}, 0, addressType)
-}
-
-func NewStateKey(addr common.Address, hash common.Hash) Key {
-	k := newKey(addr, hash, 0, stateType)
-	if !k.IsState() {
-		panic(fmt.Errorf("key is not a state key"))
-	}
+	var k Key
+	copy(k[:common.AddressLength], addr[:])
+	k[KeyLength-1] = addressType
 
 	return k
 }
 
+func NewStateKey(addr common.Address, hash common.Hash) Key {
+	return newKey(addr, hash, 0, stateType)
+}
+
 func NewSubpathKey(addr common.Address, subpath byte) Key {
-	return newKey(addr, common.Hash{}, subpath, subpathType)
+	var k Key
+	copy(k[:common.AddressLength], addr[:])
+	k[KeyLength-2] = subpath
+	k[KeyLength-1] = subpathType
+
+	return k
+}
+
+const numShards = 16
+
+type mapShard struct {
+	mu sync.RWMutex
+	m  map[Key]*TxnIndexCells
 }
 
 type MVHashMap struct {
-	m sync.Map
-	s sync.Map
+	shards [numShards]mapShard
 }
 
 func MakeMVHashMap() *MVHashMap {
-	return &MVHashMap{}
+	mv := &MVHashMap{}
+	for i := range mv.shards {
+		mv.shards[i].m = make(map[Key]*TxnIndexCells)
+	}
+
+	return mv
+}
+
+func (mv *MVHashMap) getShard(k Key) *mapShard {
+	// Use first bytes of key for shard selection. The key starts with address
+	// bytes which have good entropy for distribution.
+	h := uint(k[0])<<8 | uint(k[1])
+	return &mv.shards[h%numShards]
 }
 
 type WriteCell struct {
@@ -87,9 +110,18 @@ type WriteCell struct {
 	data        interface{}
 }
 
+type txnEntry struct {
+	index int
+	cell  *WriteCell
+}
+
+// TxnIndexCells stores write cells sorted by transaction index.
+// Uses a sorted slice for cache-friendly Floor queries on small N.
+// Typical per-key writer count is 1-5 in a block, making linear/binary
+// search on a contiguous slice faster than tree or bitmap alternatives.
 type TxnIndexCells struct {
-	rw sync.RWMutex
-	tm *treemap.Map
+	rw      sync.RWMutex
+	entries []txnEntry
 }
 
 type Version struct {
@@ -98,56 +130,76 @@ type Version struct {
 }
 
 func (mv *MVHashMap) getKeyCells(k Key, fNoKey func(kenc Key) *TxnIndexCells) (cells *TxnIndexCells) {
-	val, ok := mv.m.Load(k)
+	shard := mv.getShard(k)
+	shard.mu.RLock()
+	cells, ok := shard.m[k]
+	shard.mu.RUnlock()
 
 	if !ok {
 		cells = fNoKey(k)
-	} else {
-		cells = val.(*TxnIndexCells)
 	}
 
 	return
 }
 
+// find returns the index in the sorted slice where txIdx is or would be inserted.
+func (c *TxnIndexCells) find(txIdx int) (int, bool) {
+	i := sort.Search(len(c.entries), func(j int) bool { return c.entries[j].index >= txIdx })
+	if i < len(c.entries) && c.entries[i].index == txIdx {
+		return i, true
+	}
+
+	return i, false
+}
+
+// floor returns the entry with the largest index <= txIdx, or nil if none.
+func (c *TxnIndexCells) floor(txIdx int) *txnEntry {
+	i := sort.Search(len(c.entries), func(j int) bool { return c.entries[j].index > txIdx })
+	if i == 0 {
+		return nil
+	}
+
+	return &c.entries[i-1]
+}
+
 func (mv *MVHashMap) Write(k Key, v Version, data interface{}) {
 	cells := mv.getKeyCells(k, func(kenc Key) (cells *TxnIndexCells) {
-		n := &TxnIndexCells{
-			rw: sync.RWMutex{},
-			tm: treemap.NewWithIntComparator(),
+		shard := mv.getShard(kenc)
+		shard.mu.Lock()
+		cells, ok := shard.m[kenc]
+		if !ok {
+			cells = &TxnIndexCells{}
+			shard.m[kenc] = cells
 		}
-		val, _ := mv.m.LoadOrStore(kenc, n)
-		cells = val.(*TxnIndexCells)
+		shard.mu.Unlock()
 
 		return
 	})
 
 	cells.rw.Lock()
-	if ci, ok := cells.tm.Get(v.TxnIndex); !ok {
-		cells.tm.Put(v.TxnIndex, &WriteCell{
-			flag:        FlagDone,
-			incarnation: v.Incarnation,
-			data:        data,
-		})
+	if pos, found := cells.find(v.TxnIndex); !found {
+		// Insert at sorted position
+		cells.entries = append(cells.entries, txnEntry{})
+		copy(cells.entries[pos+1:], cells.entries[pos:])
+		cells.entries[pos] = txnEntry{
+			index: v.TxnIndex,
+			cell: &WriteCell{
+				flag:        FlagDone,
+				incarnation: v.Incarnation,
+				data:        data,
+			},
+		}
 	} else {
-		if ci.(*WriteCell).incarnation > v.Incarnation {
+		ci := cells.entries[pos].cell
+		if ci.incarnation > v.Incarnation {
 			panic(fmt.Errorf("existing transaction value does not have lower incarnation: %v, %v",
 				k, v.TxnIndex))
 		}
-		ci.(*WriteCell).flag = FlagDone
-		ci.(*WriteCell).incarnation = v.Incarnation
-		ci.(*WriteCell).data = data
+		ci.flag = FlagDone
+		ci.incarnation = v.Incarnation
+		ci.data = data
 	}
 	cells.rw.Unlock()
-}
-
-func (mv *MVHashMap) ReadStorage(k Key, fallBack func() any) any {
-	data, ok := mv.s.Load(string(k[:]))
-	if !ok {
-		data = fallBack()
-		data, _ = mv.s.LoadOrStore(string(k[:]), data)
-	}
-
-	return data
 }
 
 func (mv *MVHashMap) MarkEstimate(k Key, txIdx int) {
@@ -156,14 +208,19 @@ func (mv *MVHashMap) MarkEstimate(k Key, txIdx int) {
 	})
 
 	cells.rw.Lock()
-	if ci, ok := cells.tm.Get(txIdx); !ok {
-		panic(fmt.Sprintf("should not happen - cell should be present for path. TxIdx: %v, path, %x, cells keys: %v", txIdx, k, cells.tm.Keys()))
+	if pos, found := cells.find(txIdx); !found {
+		keys := make([]int, len(cells.entries))
+		for i, e := range cells.entries {
+			keys[i] = e.index
+		}
+		panic(fmt.Sprintf("should not happen - cell should be present for path. TxIdx: %v, path, %x, cells keys: %v", txIdx, k, keys))
 	} else {
-		ci.(*WriteCell).flag = FlagEstimate
+		cells.entries[pos].cell.flag = FlagEstimate
 	}
 	cells.rw.Unlock()
 }
 
+// Delete removes the entry for txIdx.
 func (mv *MVHashMap) Delete(k Key, txIdx int) {
 	cells := mv.getKeyCells(k, func(_ Key) *TxnIndexCells {
 		panic(fmt.Errorf("path must already exist"))
@@ -171,7 +228,10 @@ func (mv *MVHashMap) Delete(k Key, txIdx int) {
 
 	cells.rw.Lock()
 	defer cells.rw.Unlock()
-	cells.tm.Remove(txIdx)
+
+	if pos, found := cells.find(txIdx); found {
+		cells.entries = append(cells.entries[:pos], cells.entries[pos+1:]...)
+	}
 }
 
 const (
@@ -223,20 +283,16 @@ func (mv *MVHashMap) Read(k Key, txIdx int) (res MVReadResult) {
 
 	cells.rw.RLock()
 
-	fk, fv := cells.tm.Floor(txIdx - 1)
-
-	if fk != nil && fv != nil {
-		c := fv.(*WriteCell)
+	if entry := cells.floor(txIdx - 1); entry != nil {
+		c := entry.cell
 		switch c.flag {
 		case FlagEstimate:
-			res.depIdx = fk.(int)
+			res.depIdx = entry.index
 			res.value = c.data
 		case FlagDone:
-			{
-				res.depIdx = fk.(int)
-				res.incarnation = c.incarnation
-				res.value = c.data
-			}
+			res.depIdx = entry.index
+			res.incarnation = c.incarnation
+			res.value = c.data
 		default:
 			panic(fmt.Errorf("should not happen - unknown flag value"))
 		}

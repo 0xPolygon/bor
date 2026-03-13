@@ -109,8 +109,11 @@ type StateDB struct {
 	// Block-stm related fields
 	mvHashmap    *blockstm.MVHashMap
 	incarnation  int
-	readMap      map[blockstm.Key]blockstm.ReadDescriptor
-	writeMap     map[blockstm.Key]blockstm.WriteDescriptor
+	readList     []blockstm.ReadDescriptor // append-only read set, returned directly by MVReadList
+	readIndex    map[uint64]uint32         // cheap hash of Key → index in readList (for dedup)
+	writeList    []blockstm.WriteDescriptor   // append-only write set
+	writeIndex   map[uint64]uint32           // cheap hash of Key → index in writeList
+	writeAddrs   map[common.Address]struct{} // fast filter: addresses touched by writes
 	revertedKeys map[blockstm.Key]struct{}
 	dep          int
 
@@ -229,12 +232,17 @@ func (s *StateDB) GetMVHashmap() *blockstm.MVHashMap {
 	return s.mvHashmap
 }
 
-func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
-	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeMap))
 
-	for _, v := range s.writeMap {
-		if _, ok := s.revertedKeys[v.Path]; !ok {
-			writes = append(writes, v)
+func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
+	if len(s.revertedKeys) == 0 {
+		return s.writeList
+	}
+
+	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeList))
+
+	for i := range s.writeList {
+		if _, ok := s.revertedKeys[s.writeList[i].Path]; !ok {
+			writes = append(writes, s.writeList[i])
 		}
 	}
 
@@ -242,47 +250,85 @@ func (s *StateDB) MVWriteList() []blockstm.WriteDescriptor {
 }
 
 func (s *StateDB) MVFullWriteList() []blockstm.WriteDescriptor {
-	writes := make([]blockstm.WriteDescriptor, 0, len(s.writeMap))
-
-	for _, v := range s.writeMap {
-		writes = append(writes, v)
-	}
-
-	return writes
+	return s.writeList
 }
 
+// readKeyHash computes a cheap hash of a blockstm.Key for the read index.
+// XORs two uint64s from address and state-hash portions of the key for good
+// distribution across both same-address/different-slot and different-address reads.
+func readKeyHash(k blockstm.Key) uint64 {
+	_ = k[27] // bounds check hint
+	a := uint64(k[0]) | uint64(k[1])<<8 | uint64(k[2])<<16 | uint64(k[3])<<24 |
+		uint64(k[4])<<32 | uint64(k[5])<<40 | uint64(k[6])<<48 | uint64(k[7])<<56
+	b := uint64(k[20]) | uint64(k[21])<<8 | uint64(k[22])<<16 | uint64(k[23])<<24 |
+		uint64(k[24])<<32 | uint64(k[25])<<40 | uint64(k[26])<<48 | uint64(k[27])<<56
+	return a ^ b
+}
+
+// MVReadMap builds a map from the read list for callers that need key-based lookup.
+// This is only called after execution (not on the hot path).
 func (s *StateDB) MVReadMap() map[blockstm.Key]blockstm.ReadDescriptor {
-	return s.readMap
+	m := make(map[blockstm.Key]blockstm.ReadDescriptor, len(s.readList))
+	for i := range s.readList {
+		m[s.readList[i].Path] = s.readList[i]
+	}
+	return m
+}
+
+// HasRead returns true if the given key was read during this tx execution.
+func (s *StateDB) HasRead(k blockstm.Key) bool {
+	if s.readIndex == nil {
+		return false
+	}
+	h := readKeyHash(k)
+	idx, ok := s.readIndex[h]
+	if !ok {
+		return false
+	}
+	if s.readList[idx].Path == k {
+		return true
+	}
+	// Hash collision — linear scan (extremely rare)
+	for i := range s.readList {
+		if s.readList[i].Path == k {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *StateDB) MVReadList() []blockstm.ReadDescriptor {
-	reads := make([]blockstm.ReadDescriptor, 0, len(s.readMap))
-
-	for _, v := range s.MVReadMap() {
-		reads = append(reads, v)
-	}
-
-	return reads
+	return s.readList
 }
 
-func (s *StateDB) ensureReadMap() {
-	if s.readMap == nil {
-		s.readMap = make(map[blockstm.Key]blockstm.ReadDescriptor)
+// readListInitCap is the initial capacity for per-tx read tracking.
+// Most txs touch 20-80 state keys; pre-allocating avoids early growth.
+const readListInitCap = 32
+
+func (s *StateDB) ensureReadList() {
+	if s.readIndex == nil {
+		s.readList = make([]blockstm.ReadDescriptor, 0, readListInitCap)
+		s.readIndex = make(map[uint64]uint32, readListInitCap)
 	}
 }
 
-func (s *StateDB) ensureWriteMap() {
-	if s.writeMap == nil {
-		s.writeMap = make(map[blockstm.Key]blockstm.WriteDescriptor)
+func (s *StateDB) ensureWriteList() {
+	if s.writeIndex == nil {
+		s.writeList = make([]blockstm.WriteDescriptor, 0, readListInitCap)
+		s.writeIndex = make(map[uint64]uint32, readListInitCap)
+		s.writeAddrs = make(map[common.Address]struct{}, 8)
 	}
 }
 
 func (s *StateDB) ClearReadMap() {
-	s.readMap = make(map[blockstm.Key]blockstm.ReadDescriptor)
+	s.readList = make([]blockstm.ReadDescriptor, 0, readListInitCap)
+	s.readIndex = make(map[uint64]uint32, readListInitCap)
 }
 
 func (s *StateDB) ClearWriteMap() {
-	s.writeMap = make(map[blockstm.Key]blockstm.WriteDescriptor)
+	s.writeList = make([]blockstm.WriteDescriptor, 0, readListInitCap)
+	s.writeIndex = make(map[uint64]uint32, readListInitCap)
+	s.writeAddrs = make(map[common.Address]struct{}, 8)
 }
 
 func (s *StateDB) HadInvalidRead() bool {
@@ -306,19 +352,38 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 		return readStorage(s)
 	}
 
-	s.ensureReadMap()
+	s.ensureReadList()
 
-	if s.writeMap != nil {
-		if _, ok := s.writeMap[k]; ok {
-			return readStorage(s)
+	// Extract address once for non-address keys (used by writeAddrs filter + stateObjects check)
+	addr := k.GetAddress()
+
+	if s.writeIndex != nil {
+		// Fast filter: skip the full key lookup if the address has no writes at all
+		if _, addrWritten := s.writeAddrs[addr]; addrWritten {
+			if writeHasKey(s, k) {
+				return readStorage(s)
+			}
 		}
 	}
 
 	if !k.IsAddress() {
-		// If we are reading subpath from a deleted account, return default value instead of reading from MVHashmap
-		addr := k.GetAddress()
-		if s.getStateObject(addr) == nil {
-			return defaultV
+		// If the account was deleted by another tx, return the default value
+		// instead of reading stale data from MVHashMap.
+		//
+		// On first access, getStateObject triggers a nested MVRead for the
+		// address key, which is necessary to detect cross-tx deletions.
+		// On subsequent accesses, the stateObject is already cached locally.
+		//
+		// Safety: stateObjects may be pre-populated from system calls (e.g.
+		// BeaconRoot) via cleanStateDB.Copy(), but those are system contract
+		// addresses that cannot be self-destructed by user txs. For user-
+		// accessed addresses, the first getStateObject call performs the
+		// MVRead guard and caches the result. Validation catches any missed
+		// cross-tx conflicts via read-set version checking.
+		if s.stateObjects[addr] == nil {
+			if s.getStateObject(addr) == nil {
+				return defaultV
+			}
 		}
 	}
 
@@ -354,13 +419,36 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 		return defaultV
 	}
 
-	if prevRd, ok := s.readMap[k]; !ok {
-		s.readMap[k] = rd
-	} else {
-		if prevRd.Kind != rd.Kind || prevRd.V.TxnIndex != rd.V.TxnIndex || prevRd.V.Incarnation != rd.V.Incarnation {
-			s.dep = rd.V.TxnIndex
-			panic("Read conflict detected")
+	h := readKeyHash(k)
+	if idx, ok := s.readIndex[h]; ok {
+		prev := &s.readList[idx]
+		if prev.Path == k {
+			// Same key seen before — check for version conflict
+			if prev.Kind != rd.Kind || prev.V.TxnIndex != rd.V.TxnIndex || prev.V.Incarnation != rd.V.Incarnation {
+				s.dep = rd.V.TxnIndex
+				panic("Read conflict detected")
+			}
+		} else {
+			// Hash collision (different key, same hash) — check via linear scan
+			found := false
+			for i := range s.readList {
+				if s.readList[i].Path == k {
+					prev := &s.readList[i]
+					if prev.Kind != rd.Kind || prev.V.TxnIndex != rd.V.TxnIndex || prev.V.Incarnation != rd.V.Incarnation {
+						s.dep = rd.V.TxnIndex
+						panic("Read conflict detected")
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				s.readList = append(s.readList, rd)
+			}
 		}
+	} else {
+		s.readIndex[h] = uint32(len(s.readList))
+		s.readList = append(s.readList, rd)
 	}
 
 	return
@@ -368,12 +456,42 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 
 func MVWrite(s *StateDB, k blockstm.Key) {
 	if s.mvHashmap != nil {
-		s.ensureWriteMap()
-		s.writeMap[k] = blockstm.WriteDescriptor{
-			Path: k,
-			V:    s.Version(),
-			Val:  s,
+		s.ensureWriteList()
+
+		h := readKeyHash(k)
+		if idx, ok := s.writeIndex[h]; ok && s.writeList[idx].Path == k {
+			// Update existing entry in place
+			s.writeList[idx].V = s.Version()
+		} else if ok {
+			// Hash collision — linear scan for existing key
+			found := false
+
+			for i := range s.writeList {
+				if s.writeList[i].Path == k {
+					s.writeList[i].V = s.Version()
+					found = true
+
+					break
+				}
+			}
+
+			if !found {
+				s.writeList = append(s.writeList, blockstm.WriteDescriptor{
+					Path: k,
+					V:    s.Version(),
+					Val:  s,
+				})
+			}
+		} else {
+			s.writeIndex[h] = uint32(len(s.writeList))
+			s.writeList = append(s.writeList, blockstm.WriteDescriptor{
+				Path: k,
+				V:    s.Version(),
+				Val:  s,
+			})
 		}
+
+		s.writeAddrs[k.GetAddress()] = struct{}{}
 	}
 }
 
@@ -381,19 +499,44 @@ func RevertWrite(s *StateDB, k blockstm.Key) {
 	s.revertedKeys[k] = struct{}{}
 }
 
-func MVWritten(s *StateDB, k blockstm.Key) bool {
-	if s.mvHashmap == nil || s.writeMap == nil {
+// writeHasKey checks if a key exists in the write list using the hash index.
+func writeHasKey(s *StateDB, k blockstm.Key) bool {
+	h := readKeyHash(k)
+
+	idx, ok := s.writeIndex[h]
+	if !ok {
 		return false
 	}
 
-	_, ok := s.writeMap[k]
+	if s.writeList[idx].Path == k {
+		return true
+	}
 
-	return ok
+	// Hash collision — linear scan (extremely rare)
+	for i := range s.writeList {
+		if s.writeList[i].Path == k {
+			return true
+		}
+	}
+
+	return false
+}
+
+func MVWritten(s *StateDB, k blockstm.Key) bool {
+	if s.mvHashmap == nil || s.writeIndex == nil {
+		return false
+	}
+
+	if _, addrWritten := s.writeAddrs[k.GetAddress()]; !addrWritten {
+		return false
+	}
+
+	return writeHasKey(s, k)
 }
 
 // FlushMVWriteSet applies entries in the write set to MVHashMap. Note that this function does not clear the write set.
 func (s *StateDB) FlushMVWriteSet() {
-	if s.mvHashmap != nil && s.writeMap != nil {
+	if s.mvHashmap != nil && s.writeIndex != nil {
 		s.mvHashmap.FlushMVWriteSet(s.MVFullWriteList())
 	}
 }
@@ -401,6 +544,34 @@ func (s *StateDB) FlushMVWriteSet() {
 // ApplyMVWriteSet applies entries in a given write set to StateDB. Note that this function does not change MVHashMap nor write set
 // of the current StateDB.
 func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
+	// Cache stateObject lookups per address to avoid repeated getOrNewStateObject
+	// calls for the same address across multiple storage writes.
+	type objPair struct {
+		src *stateObject // source worker statedb
+		dst *stateObject // target final statedb
+	}
+
+	objCache := make(map[common.Address]objPair, 8)
+
+	// getObjects returns the cached src/dst stateObject pair for an address.
+	// The source stateObject should exist in the worker's stateObjects because
+	// the worker executed the tx and accessed this address. It can be nil if
+	// Finalise(true) deleted an empty account, in which case we fall back to
+	// the public Get* API for the source reads.
+	getObjects := func(addr common.Address, sr *StateDB) objPair {
+		if pair, ok := objCache[addr]; ok {
+			return pair
+		}
+
+		pair := objPair{
+			src: sr.stateObjects[addr],
+			dst: s.getOrNewStateObject(addr),
+		}
+		objCache[addr] = pair
+
+		return pair
+	}
+
 	for i := range writes {
 		path := writes[i].Path
 		sr := writes[i].Val.(*StateDB)
@@ -408,24 +579,46 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 		if path.IsState() {
 			addr := path.GetAddress()
 			stateKey := path.GetStateKey()
-			state := sr.GetState(addr, stateKey)
-			s.SetState(addr, stateKey, state)
+			pair := getObjects(addr, sr)
+
+			if pair.src != nil {
+				pair.dst.SetState(stateKey, pair.src.GetState(stateKey))
+			} else {
+				// Fallback: source object was finalized away (empty account).
+				s.SetState(addr, stateKey, sr.GetState(addr, stateKey))
+			}
 		} else if path.IsAddress() {
 			continue
 		} else {
 			addr := path.GetAddress()
+			pair := getObjects(addr, sr)
 
 			switch path.GetSubpath() {
 			case BalancePath:
-				s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
+				if pair.src != nil {
+					s.SetBalance(addr, pair.src.Balance(), tracing.BalanceChangeUnspecified)
+				} else {
+					s.SetBalance(addr, sr.GetBalance(addr), tracing.BalanceChangeUnspecified)
+				}
 			case NoncePath:
-				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
+				if pair.src != nil {
+					s.SetNonce(addr, pair.src.Nonce(), tracing.NonceChangeUnspecified)
+				} else {
+					s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
+				}
 			case CodePath:
-				s.SetCode(addr, sr.GetCode(addr), tracing.CodeChangeUnspecified)
+				if pair.src != nil {
+					s.SetCode(addr, pair.src.Code(), tracing.CodeChangeUnspecified)
+				} else {
+					s.SetCode(addr, sr.GetCode(addr), tracing.CodeChangeUnspecified)
+				}
 			case SuicidePath:
 				stateObject := s.getStateObject(addr)
-				if stateObject != nil && sr.HasSelfDestructed(addr) {
-					s.SelfDestruct(addr)
+				if stateObject != nil {
+					hasSelfDestructed := (pair.src != nil && pair.src.selfDestructed) || sr.HasSelfDestructed(addr)
+					if hasSelfDestructed {
+						s.SelfDestruct(addr)
+					}
 				}
 			default:
 				panic(fmt.Errorf("unknown key type: %d", path.GetSubpath()))
@@ -465,7 +658,7 @@ func (s *StateDB) GetReadMapDump() []DumpStruct {
 
 // GetWriteMapDump gets writeMap Dump of format: "TxIdx, Inc, Path, Write"
 func (s *StateDB) GetWriteMapDump() []DumpStruct {
-	writeList := s.MVReadList()
+	writeList := s.MVWriteList()
 	res := make([]DumpStruct, 0, len(writeList))
 
 	for _, val := range writeList {

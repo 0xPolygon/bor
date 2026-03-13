@@ -245,34 +245,138 @@ func BenchmarkWriteTimeSameLocationDifferentTxIdx(b *testing.B) {
 	mvh2 := MakeMVHashMap()
 	ap2 := NewAddressKey(getCommonAddress(2))
 
-	randInts := []int{}
-	for i := 0; i < b.N; i++ {
-		randInts = append(randInts, rand.Intn(1000000000000000))
-	}
+	// Use bounded tx indices matching realistic block size (300 txs)
+	const maxTxIdx = 300
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		mvh2.Write(ap2, Version{randInts[i], 1}, valueFor(randInts[i], 1))
+		mvh2.Write(ap2, Version{i % maxTxIdx, i/maxTxIdx + 1}, valueFor(i%maxTxIdx, i/maxTxIdx+1))
 	}
 }
 
 func BenchmarkReadTimeSameLocationDifferentTxIdx(b *testing.B) {
 	mvh2 := MakeMVHashMap()
 	ap2 := NewAddressKey(getCommonAddress(2))
-	txIdxSlice := []int{}
 
-	for i := 0; i < b.N; i++ {
-		txIdx := rand.Intn(1000000000000000)
-		txIdxSlice = append(txIdxSlice, txIdx)
-		mvh2.Write(ap2, Version{txIdx, 1}, valueFor(txIdx, 1))
+	// Pre-populate with realistic block size
+	const maxTxIdx = 300
+	for i := 0; i < maxTxIdx; i++ {
+		mvh2.Write(ap2, Version{i, 1}, valueFor(i, 1))
 	}
 
 	b.ResetTimer()
 
-	for _, value := range txIdxSlice {
-		mvh2.Read(ap2, value)
+	for i := 0; i < b.N; i++ {
+		mvh2.Read(ap2, i%maxTxIdx)
 	}
+}
+
+// BenchmarkFloorQuery benchmarks Floor queries which are the hot path in MVHashMap.Read
+func BenchmarkFloorQuery(b *testing.B) {
+	for _, numTx := range []int{100, 300} {
+		b.Run(fmt.Sprintf("numTx=%d", numTx), func(b *testing.B) {
+			mvh := MakeMVHashMap()
+			ap := NewAddressKey(getCommonAddress(1))
+
+			for i := 0; i < numTx; i++ {
+				mvh.Write(ap, Version{i, 1}, valueFor(i, 1))
+			}
+
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				mvh.Read(ap, i%numTx)
+			}
+		})
+	}
+}
+
+// BenchmarkKeyConstruction benchmarks key creation
+func BenchmarkKeyConstruction(b *testing.B) {
+	addr := getCommonAddress(1)
+	hash := common.BigToHash(big.NewInt(42))
+
+	b.Run("AddressKey", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			NewAddressKey(addr)
+		}
+	})
+	b.Run("StateKey", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			NewStateKey(addr, hash)
+		}
+	})
+	b.Run("SubpathKey", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			NewSubpathKey(addr, 1)
+		}
+	})
+}
+
+// BenchmarkHotSlot simulates 1000 txs/block where 100 txs write to the same
+// hot storage slot. Measures the cost of Read, Write, and re-execution
+// (MarkEstimate + Delete + Write) on a high-contention key.
+func BenchmarkHotSlot(b *testing.B) {
+	addr := common.BytesToAddress([]byte{0xDE, 0xAD})
+	hash := common.BigToHash(big.NewInt(42))
+	hotKey := NewStateKey(addr, hash)
+
+	const totalTxs = 1000
+	const hotWriters = 100
+
+	// Pre-populate: 100 txs have written to the hot slot
+	setup := func() *MVHashMap {
+		mvh := MakeMVHashMap()
+		for i := 0; i < hotWriters; i++ {
+			txIdx := i * (totalTxs / hotWriters) // spread across block
+			mvh.Write(hotKey, Version{txIdx, 1}, valueFor(txIdx, 1))
+		}
+		return mvh
+	}
+
+	b.Run("Read_HotSlot", func(b *testing.B) {
+		mvh := setup()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			mvh.Read(hotKey, (i%totalTxs)+1)
+		}
+	})
+
+	b.Run("Write_HotSlot", func(b *testing.B) {
+		mvh := setup()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			txIdx := i % hotWriters * (totalTxs / hotWriters)
+			mvh.Write(hotKey, Version{txIdx, i/hotWriters + 2}, valueFor(txIdx, i/hotWriters+2))
+		}
+	})
+
+	b.Run("ReExecution_HotSlot", func(b *testing.B) {
+		// Simulates abort + re-execute cycle:
+		// 1. MarkEstimate (flag as stale)
+		// 2. Delete old write set entries that are no longer produced
+		// 3. Write with new incarnation
+		mvh := setup()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			txIdx := i % hotWriters * (totalTxs / hotWriters)
+			incarnation := i/hotWriters + 2
+			mvh.MarkEstimate(hotKey, txIdx)
+			mvh.Delete(hotKey, txIdx)
+			mvh.Write(hotKey, Version{txIdx, incarnation}, valueFor(txIdx, incarnation))
+		}
+	})
+
+	b.Run("Read_ColdSlot_1000txBlock", func(b *testing.B) {
+		// Contrast: reading a key that has NO writes (the common case)
+		mvh := setup()
+		coldKey := NewStateKey(addr, common.BigToHash(big.NewInt(999)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			mvh.Read(coldKey, (i%totalTxs)+1)
+		}
+	})
 }
 
 func TestTimeComplexity(t *testing.T) {
