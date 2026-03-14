@@ -590,7 +590,10 @@ func (api *BlockChainAPI) GetHeaderByHash(ctx context.Context, hash common.Hash)
 //   - When number is -4 the chain safe block is returned.
 //   - When fullTx is true all transactions in the block are returned, otherwise
 //     only the transaction hash is returned.
-func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool) (map[string]interface{}, error) {
+//   - When borExtra is true, the response includes a "decodedExtra" object with
+//     parsed EIP-1559 gas parameters and transaction dependency metadata from the
+//     block header's Extra field. This parameter is optional.
+func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool, borExtra *bool) (map[string]interface{}, error) {
 	block, err := api.b.BlockByNumber(ctx, number)
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
@@ -604,6 +607,7 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
 		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
+			appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 			return response, nil
 		}
 
@@ -611,6 +615,8 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 		if response != nil {
 			response = api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx)
 		}
+
+		appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 
 		return response, nil
 	}
@@ -620,7 +626,8 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 
 // GetBlockByHash returns the requested block. When fullTx is true all transactions in the block are returned in full
 // detail, otherwise only the transaction hash is returned.
-func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error) {
+// When borExtra is true, the response includes parsed block extra data. This parameter is optional.
+func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool, borExtra *bool) (map[string]interface{}, error) {
 	block, err := api.b.BlockByHash(ctx, hash)
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
@@ -628,13 +635,16 @@ func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, 
 		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
 		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
+			appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 			return response, nil
 		}
 
 		// append marshalled bor transaction
 		if response != nil {
-			return api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx), err
+			response = api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx)
 		}
+
+		appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 
 		return response, nil
 	}

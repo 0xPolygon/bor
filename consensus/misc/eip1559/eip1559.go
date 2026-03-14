@@ -192,3 +192,8 @@ func calcParentGasTarget(config *params.ChainConfig, parent *types.Header) uint6
 	}
 	return parent.GasLimit / config.ElasticityMultiplier()
 }
+
+// CalcGasTarget exports calcParentGasTarget for use by consensus code (e.g. Prepare).
+func CalcGasTarget(config *params.ChainConfig, parent *types.Header) uint64 {
+	return calcParentGasTarget(config, parent)
+}

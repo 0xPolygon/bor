@@ -951,6 +951,7 @@ type BorConfig struct {
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
+	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1020,6 +1021,10 @@ func (c *BorConfig) IsLisovo(number *big.Int) bool {
 
 func (c *BorConfig) IsLisovoPro(number *big.Int) bool {
 	return isBlockForked(c.LisovoProBlock, number)
+}
+
+func (c *BorConfig) IsGiugliano(number *big.Int) bool {
+	return isBlockForked(c.GiuglianoBlock, number)
 }
 
 // GetTargetGasPercentage returns the target gas percentage for gas limit calculation.
@@ -1226,6 +1231,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.LisovoProBlock != nil {
 			banner += fmt.Sprintf(" - Lisovo Pro:                  #%-8v\n", c.Bor.LisovoProBlock)
+		}
+		if c.Bor.GiuglianoBlock != nil {
+			banner += fmt.Sprintf(" - Giugliano:                   #%-8v\n", c.Bor.GiuglianoBlock)
 		}
 		return banner
 	}

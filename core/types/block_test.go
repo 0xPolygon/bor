@@ -733,3 +733,201 @@ func TestHeaderSanityRejectsBitlenOver64(t *testing.T) {
 		t.Fatalf("expected sanity check to reject difficulty bitlen > 64")
 	}
 }
+
+func TestBlockExtraDataRLPBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	// Pre-Giugliano: 2-field struct without optional fields
+	preGiugliano := &BlockExtraData{
+		ValidatorBytes: []byte{0x01, 0x02},
+		TxDependency:   [][]uint64{{1, 2}, {3}},
+	}
+	encoded, err := rlp.EncodeToBytes(preGiugliano)
+	if err != nil {
+		t.Fatalf("failed to encode pre-Giugliano BlockExtraData: %v", err)
+	}
+
+	var decoded BlockExtraData
+	if err := rlp.DecodeBytes(encoded, &decoded); err != nil {
+		t.Fatalf("failed to decode pre-Giugliano BlockExtraData: %v", err)
+	}
+
+	if !bytes.Equal(decoded.ValidatorBytes, preGiugliano.ValidatorBytes) {
+		t.Errorf("ValidatorBytes mismatch: got %x, want %x", decoded.ValidatorBytes, preGiugliano.ValidatorBytes)
+	}
+	if decoded.GasTarget != nil {
+		t.Errorf("GasTarget should be nil for pre-Giugliano, got %d", *decoded.GasTarget)
+	}
+	if decoded.BaseFeeChangeDenominator != nil {
+		t.Errorf("BaseFeeChangeDenominator should be nil for pre-Giugliano, got %d", *decoded.BaseFeeChangeDenominator)
+	}
+
+	// Post-Giugliano: 4-field struct with optional fields populated
+	gasTarget := uint64(15000000)
+	bfcd := uint64(64)
+	postGiugliano := &BlockExtraData{
+		ValidatorBytes:           []byte{0x03, 0x04},
+		TxDependency:             [][]uint64{{5}},
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	encoded, err = rlp.EncodeToBytes(postGiugliano)
+	if err != nil {
+		t.Fatalf("failed to encode post-Giugliano BlockExtraData: %v", err)
+	}
+
+	var decoded2 BlockExtraData
+	if err := rlp.DecodeBytes(encoded, &decoded2); err != nil {
+		t.Fatalf("failed to decode post-Giugliano BlockExtraData: %v", err)
+	}
+
+	if decoded2.GasTarget == nil || *decoded2.GasTarget != gasTarget {
+		t.Errorf("GasTarget mismatch: got %v, want %d", decoded2.GasTarget, gasTarget)
+	}
+	if decoded2.BaseFeeChangeDenominator == nil || *decoded2.BaseFeeChangeDenominator != bfcd {
+		t.Errorf("BaseFeeChangeDenominator mismatch: got %v, want %d", decoded2.BaseFeeChangeDenominator, bfcd)
+	}
+}
+
+func TestGetBaseFeeParams(t *testing.T) {
+	t.Parallel()
+
+	cancunBlock := big.NewInt(100)
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: cancunBlock,
+	}
+
+	// Helper to build extra data with BlockExtraData
+	buildExtra := func(bed *BlockExtraData) []byte {
+		vanity := make([]byte, ExtraVanityLength)
+		seal := make([]byte, ExtraSealLength)
+		encoded, _ := rlp.EncodeToBytes(bed)
+		extra := append(vanity, encoded...)
+		extra = append(extra, seal...)
+		return extra
+	}
+
+	// Post-Cancun header with Giugliano fields
+	gasTarget := uint64(15000000)
+	bfcd := uint64(64)
+	header := &Header{
+		Number: big.NewInt(200),
+		Extra: buildExtra(&BlockExtraData{
+			ValidatorBytes:           nil,
+			TxDependency:             nil,
+			GasTarget:                &gasTarget,
+			BaseFeeChangeDenominator: &bfcd,
+		}),
+	}
+
+	gt, d := header.GetBaseFeeParams(chainConfig)
+	if gt == nil || *gt != gasTarget {
+		t.Errorf("expected gasTarget %d, got %v", gasTarget, gt)
+	}
+	if d == nil || *d != bfcd {
+		t.Errorf("expected baseFeeChangeDenominator %d, got %v", bfcd, d)
+	}
+
+	// Pre-Cancun header should return nil, nil
+	preCancunHeader := &Header{
+		Number: big.NewInt(50),
+		Extra:  header.Extra,
+	}
+	gt, d = preCancunHeader.GetBaseFeeParams(chainConfig)
+	if gt != nil || d != nil {
+		t.Errorf("expected nil for pre-Cancun, got gasTarget=%v, bfcd=%v", gt, d)
+	}
+
+	// Pre-Giugliano data (no optional fields) should return nil, nil
+	preGiuglianoHeader := &Header{
+		Number: big.NewInt(200),
+		Extra: buildExtra(&BlockExtraData{
+			ValidatorBytes: nil,
+			TxDependency:   nil,
+		}),
+	}
+	gt, d = preGiuglianoHeader.GetBaseFeeParams(chainConfig)
+	if gt != nil || d != nil {
+		t.Errorf("expected nil for pre-Giugliano extra data, got gasTarget=%v, bfcd=%v", gt, d)
+	}
+
+	// Short extra data should return nil, nil
+	shortHeader := &Header{
+		Number: big.NewInt(200),
+		Extra:  []byte{0x01, 0x02},
+	}
+	gt, d = shortHeader.GetBaseFeeParams(chainConfig)
+	if gt != nil || d != nil {
+		t.Errorf("expected nil for short extra data, got gasTarget=%v, bfcd=%v", gt, d)
+	}
+}
+
+func TestDecodeBlockExtraData(t *testing.T) {
+	t.Parallel()
+
+	cancunBlock := big.NewInt(100)
+	chainConfig := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: cancunBlock,
+	}
+
+	buildExtra := func(bed *BlockExtraData) []byte {
+		vanity := make([]byte, ExtraVanityLength)
+		seal := make([]byte, ExtraSealLength)
+		encoded, _ := rlp.EncodeToBytes(bed)
+		extra := append(vanity, encoded...)
+		extra = append(extra, seal...)
+		return extra
+	}
+
+	// Pre-Cancun block → nil
+	preCancun := &Header{Number: big.NewInt(50), Extra: buildExtra(&BlockExtraData{})}
+	if preCancun.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for pre-Cancun block")
+	}
+
+	// Short Extra → nil
+	shortExtra := &Header{Number: big.NewInt(200), Extra: []byte{0x01, 0x02}}
+	if shortExtra.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for short Extra")
+	}
+
+	// Invalid RLP between vanity and seal → nil
+	badRLP := make([]byte, ExtraVanityLength+ExtraSealLength+3)
+	badRLP[ExtraVanityLength] = 0xff // invalid RLP prefix
+	badRLP[ExtraVanityLength+1] = 0xff
+	badRLP[ExtraVanityLength+2] = 0xff
+	invalidRLP := &Header{Number: big.NewInt(200), Extra: badRLP}
+	if invalidRLP.DecodeBlockExtraData(chainConfig) != nil {
+		t.Error("expected nil for invalid RLP")
+	}
+
+	// Valid decode with all fields
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	txDep := [][]uint64{{0}, {1, 2}}
+	bed := &BlockExtraData{
+		ValidatorBytes:           []byte{0xaa, 0xbb},
+		TxDependency:             txDep,
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	}
+	valid := &Header{Number: big.NewInt(200), Extra: buildExtra(bed)}
+	result := valid.DecodeBlockExtraData(chainConfig)
+	if result == nil {
+		t.Fatal("expected non-nil result for valid extra data")
+	}
+	if !bytes.Equal(result.ValidatorBytes, bed.ValidatorBytes) {
+		t.Errorf("ValidatorBytes mismatch: got %x, want %x", result.ValidatorBytes, bed.ValidatorBytes)
+	}
+	if result.GasTarget == nil || *result.GasTarget != gasTarget {
+		t.Errorf("GasTarget mismatch: got %v, want %d", result.GasTarget, gasTarget)
+	}
+	if result.BaseFeeChangeDenominator == nil || *result.BaseFeeChangeDenominator != bfcd {
+		t.Errorf("BaseFeeChangeDenominator mismatch: got %v, want %d", result.BaseFeeChangeDenominator, bfcd)
+	}
+	if len(result.TxDependency) != 2 || len(result.TxDependency[0]) != 1 || result.TxDependency[0][0] != 0 {
+		t.Errorf("TxDependency mismatch: got %v, want %v", result.TxDependency, txDep)
+	}
+}

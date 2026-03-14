@@ -78,7 +78,7 @@ jobs:
         run: rm -rf packaging/deb/bor/DEBIAN/control
 
       - name: Building bor for arm64
-        run: GOARCH=arm64 GOOS=linux CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ CGO_ENABLED=1 go build -o build/bin/bor ./cmd/cli/main.go
+        run: GOARCH=arm64 GOOS=linux CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ CGO_ENABLED=1 go build -o build/bin/bor -pgo=prod.pprof ./cmd/cli/main.go
 
       - name: Copying necessary binary post arm64 build
         run: cp -rp build/bin/bor packaging/deb/bor/usr/bin/
