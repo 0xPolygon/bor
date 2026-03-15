@@ -119,7 +119,7 @@ var (
 	blockExecutionParallelErrorCounter = metrics.NewRegisteredCounter("chain/execution/parallel/error", nil)
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
-	blockMgaspsMeter                   = metrics.NewRegisteredTimer("chain/execution/mgasps", nil)
+	blockMgaspsMeter                   = metrics.NewRegisteredHistogram("chain/execution/mgasps", nil, metrics.NewUniformSample(10240))
 
 	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
 	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
@@ -873,8 +873,8 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	// Value is scaled by 1000 (stored as µgasps) to preserve 3 decimal places,
 	// e.g. 210.357 mgasps → 210357. Divide by 1000 when reading.
 	if elapsed := time.Since(execStart); elapsed > 0 && result.usedGas > 0 {
-		mgasps := float64(result.usedGas) * 1e6 / float64(elapsed) // mgasps * 1000
-		blockMgaspsMeter.Update(time.Duration(mgasps))
+		mgasps := int64(float64(result.usedGas) * 1e6 / float64(elapsed)) // µgasps (mgasps * 1000)
+		blockMgaspsMeter.Update(mgasps)
 	}
 
 	// Make sure we are not leaking any prefetchers
