@@ -4,9 +4,69 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 )
+
+// writeBloom is a lock-free bloom filter that tracks which keys have been
+// written to the MVHashMap. Reads that miss the bloom filter skip the shard
+// lock + map lookup entirely. The filter uses 3 hash functions over a 32Kbit
+// (4KB) bit array that fits in L1 cache.
+//
+// False positive rate at typical block sizes:
+//   - 500 unique keys:  ~0.01%
+//   - 1000 unique keys: ~0.07%
+//   - 5000 unique keys: ~5%
+const (
+	bloomBits  = 1 << 15             // 32768 bits
+	bloomWords = bloomBits / 64      // 512 uint64s = 4KB
+	bloomMask  = bloomBits - 1       // bitmask for modulo
+)
+
+type writeBloom struct {
+	bits [bloomWords]uint64
+}
+
+// bloomHashes computes 3 independent bit positions from a Key.
+// h1 uses address bytes [0:4], h2 uses hash bytes [20:24], h3 mixes [8:12]^[28:32].
+// For state keys (address+hash) all three have good entropy. For address-only
+// keys (hash bytes are zero) h2 degrades but h1 and h3 still distinguish keys.
+func bloomHashes(k Key) (uint, uint, uint) {
+	_ = k[31] // bounds check hint
+	h1 := uint(k[0]) | uint(k[1])<<8 | uint(k[2])<<16 | uint(k[3])<<24
+	h2 := uint(k[20]) | uint(k[21])<<8 | uint(k[22])<<16 | uint(k[23])<<24
+	h3 := (uint(k[8]) ^ uint(k[28])) | (uint(k[9])^uint(k[29]))<<8 |
+		(uint(k[10])^uint(k[30]))<<16 | (uint(k[11])^uint(k[31]))<<24
+	return h1 & bloomMask, h2 & bloomMask, h3 & bloomMask
+}
+
+func (b *writeBloom) add(k Key) {
+	h1, h2, h3 := bloomHashes(k)
+	atomicSetBit(&b.bits[h1/64], h1%64)
+	atomicSetBit(&b.bits[h2/64], h2%64)
+	atomicSetBit(&b.bits[h3/64], h3%64)
+}
+
+func (b *writeBloom) mayContain(k Key) bool {
+	h1, h2, h3 := bloomHashes(k)
+	return atomic.LoadUint64(&b.bits[h1/64])&(uint64(1)<<(h1%64)) != 0 &&
+		atomic.LoadUint64(&b.bits[h2/64])&(uint64(1)<<(h2%64)) != 0 &&
+		atomic.LoadUint64(&b.bits[h3/64])&(uint64(1)<<(h3%64)) != 0
+}
+
+func atomicSetBit(word *uint64, bit uint) {
+	mask := uint64(1) << bit
+	for {
+		old := atomic.LoadUint64(word)
+		if old&mask != 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint64(word, old, old|mask) {
+			return
+		}
+	}
+}
 
 const FlagDone = 0
 const FlagEstimate = 1
@@ -86,6 +146,7 @@ type mapShard struct {
 
 type MVHashMap struct {
 	shards [numShards]mapShard
+	bloom  writeBloom
 }
 
 func MakeMVHashMap() *MVHashMap {
@@ -163,6 +224,8 @@ func (c *TxnIndexCells) floor(txIdx int) *txnEntry {
 }
 
 func (mv *MVHashMap) Write(k Key, v Version, data interface{}) {
+	mv.bloom.add(k)
+
 	cells := mv.getKeyCells(k, func(kenc Key) (cells *TxnIndexCells) {
 		shard := mv.getShard(kenc)
 		shard.mu.Lock()
@@ -273,6 +336,11 @@ func (res MVReadResult) Status() int {
 func (mv *MVHashMap) Read(k Key, txIdx int) (res MVReadResult) {
 	res.depIdx = -1
 	res.incarnation = -1
+
+	// Fast path: if bloom filter says key was never written, skip shard lock + map lookup.
+	if !mv.bloom.mayContain(k) {
+		return
+	}
 
 	cells := mv.getKeyCells(k, func(_ Key) *TxnIndexCells {
 		return nil
