@@ -120,6 +120,7 @@ var (
 	blockExecutionParallelTimer        = metrics.NewRegisteredTimer("chain/execution/parallel/timer", nil)
 	blockExecutionSerialTimer          = metrics.NewRegisteredTimer("chain/execution/serial/timer", nil)
 	blockMgaspsMeter                   = metrics.NewRegisteredHistogram("chain/execution/mgasps", nil, metrics.NewUniformSample(10240))
+	blockGasAtHighMgasps               = metrics.NewRegisteredHistogram("chain/execution/gas_at_high_mgasps", nil, metrics.NewUniformSample(10240))
 
 	statelessParallelImportTimer           = metrics.NewRegisteredTimer("chain/imports/stateless/parallel", nil)
 	statelessSequentialImportTimer         = metrics.NewRegisteredTimer("chain/imports/stateless/sequential", nil)
@@ -875,6 +876,10 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if elapsed := time.Since(execStart); elapsed > 0 && result.usedGas > 0 {
 		mgasps := int64(float64(result.usedGas) * 1e6 / float64(elapsed)) // µgasps (mgasps * 1000)
 		blockMgaspsMeter.Update(mgasps)
+
+		if mgasps > 300_000 { // > 300 mgasps
+			blockGasAtHighMgasps.Update(int64(result.usedGas))
+		}
 	}
 
 	// Make sure we are not leaking any prefetchers
