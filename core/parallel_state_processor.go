@@ -331,7 +331,8 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		ProcessParentBlockHash(block.ParentHash(), vmenv)
 	}
 	// Iterate over and process the individual transactions
-	for i, tx := range block.Transactions() {
+	txs := block.Transactions()
+	for i, tx := range txs {
 		if tx.Type() == types.StateSyncTxType {
 			continue
 		}
@@ -421,6 +422,12 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		return nil, err
 	}
 
+	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
+		if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
+			hooks.OnTxStart(vmenv.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
+		}
+	}
+
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	var requests [][]byte
 
@@ -440,6 +447,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+		if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
+			hooks.OnTxEnd(receipts[len(receipts)-1], nil)
 		}
 	}
 

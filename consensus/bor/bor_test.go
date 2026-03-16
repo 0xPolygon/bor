@@ -2102,7 +2102,7 @@ func TestInsertStateSyncTransactionAndCalculateReceipt(t *testing.T) {
 		},
 	}
 
-	receipts := insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, mockState, existingReceipts, vm.Config{})
+	receipts := insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, mockState, existingReceipts)
 	require.Len(t, receipts, 2)
 
 	ssReceipt := receipts[1]
@@ -2673,7 +2673,7 @@ func TestFetchAndCommitSpan_WithHeimdallClient(t *testing.T) {
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 }
 
@@ -2707,7 +2707,7 @@ func TestFetchAndCommitSpan_ChainIDMismatch(t *testing.T) {
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "doesn't match")
 }
@@ -2726,7 +2726,7 @@ func TestFetchAndCommitSpan_NilResponse(t *testing.T) {
 
 	h := &types.Header{Number: big.NewInt(64), ParentHash: genesis.Hash()}
 
-	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	err := b.FetchAndCommitSpan(context.Background(), 1, statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.Error(t, err)
 }
 
@@ -2771,7 +2771,7 @@ func TestCommitStates_WithOverrideSkip(t *testing.T) {
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32}
 
 	// CommitStates with override that sets records to 0 should skip
-	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Empty(t, result)
 }
@@ -2803,7 +2803,7 @@ func TestCommitStates_WithIndore(t *testing.T) {
 
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32}
 
-	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Empty(t, result) // no events
 }
@@ -2846,7 +2846,7 @@ func TestCommitStates_WithEvents(t *testing.T) {
 
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
 
-	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	require.Equal(t, uint64(1), result[0].ID)
@@ -3282,7 +3282,7 @@ func TestCommitStates_WithIndore_EventProcessing(t *testing.T) {
 		Time:       uint64(now.Unix()),
 	}
 
-	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Len(t, result, 2) // both events should be processed
 }
@@ -3336,7 +3336,7 @@ func TestCommitStates_NonIndore(t *testing.T) {
 		Time:       uint64(time.Now().Unix()),
 	}
 
-	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	result, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 }
@@ -3861,7 +3861,7 @@ func TestCommitStates_WithOverrideStateSyncRecords(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 	}
 
-	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	// With OverrideStateSyncRecords truncating to 0, should get empty data
 	require.Empty(t, data)
@@ -4121,7 +4121,7 @@ func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 	}
 
-	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Empty(t, data) // truncated to 0 by range override
 }
@@ -4160,7 +4160,7 @@ func TestCommitStates_StateSyncEventsError(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 	}
 
-	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err) // error is logged but returns empty data
 	require.Empty(t, data)
 }
@@ -4210,7 +4210,7 @@ func TestCommitStates_EventIdLessThanLastStateId(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 	}
 
-	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	// Event ID=3 should be skipped (3 <= 5), event ID=6 should be processed
 	require.Len(t, data, 1)
@@ -4259,7 +4259,7 @@ func TestCommitStates_EventValidationError(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 	}
 
-	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b}, vm.Config{})
+	data, err := b.CommitStates(statedb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err) // validation error is logged but returned data should be empty
 	require.Empty(t, data)
 }

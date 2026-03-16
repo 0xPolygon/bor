@@ -105,7 +105,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Iterate over and process the individual transactions
-	for i, tx := range block.Transactions() {
+	txs := block.Transactions()
+	for i, tx := range txs {
 		// Check if execution should be cancelled or not
 		select {
 		case <-interruptCtx.Done():
@@ -130,6 +131,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+	}
+
+	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
+		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
+		}
 	}
 
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
@@ -167,6 +174,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
+			hooks.OnTxEnd(receipts[len(receipts)-1], nil)
 		}
 	}
 
