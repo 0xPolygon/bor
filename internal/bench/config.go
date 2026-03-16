@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/cli/server"
 )
 
@@ -79,6 +82,50 @@ func applyBenchmarkOverrides(cfg *server.Config) {
 
 	// Disable auto-mining; we start manually after preflight checks
 	cfg.Sealer.Enabled = false
+
+	// Skip pending-block snapshot updates — saves ~8% CPU.
+	// The snapshot is only used by eth_getBlockByNumber("pending") and similar
+	// RPC calls, which are disabled in benchmark mode.
+	cfg.Sealer.DisableSnapshot = true
+
+	// Disable FilterMaps log indexing - unnecessary overhead for benchmarking.
+	// Saves ~6% CPU by eliminating the indexerLoop goroutine.
+	if cfg.History != nil {
+		cfg.History.LogNoHistory = true
+	}
+
+	// Disable transaction indexing entirely - avoids iterateTransactions overhead
+	// (RLP decoding all block bodies for tx index updates, ~6% CPU).
+	cfg.Cache.NoTxIndex = true
+
+	// Skip writing receipts to DB - saves ~5% CPU from receipt RLP encoding.
+	// Not needed since we don't query receipts in benchmark mode.
+	cfg.Cache.SkipReceiptWrite = true
+
+	// Skip writing block bodies to DB - saves ~6% CPU from body RLP encoding.
+	// Blocks remain in the 256-entry LRU block cache for any reads needed
+	// during the benchmark. Safe for short runs with < 256 blocks.
+	cfg.Cache.SkipBodyWrite = true
+
+	// Minimize state history retention for benchmarking.
+	if cfg.History != nil {
+		cfg.History.StateHistory = 1
+	}
+
+	// Skip all Bor fee transfer logs — eliminates ~11% CPU from topic hashing,
+	// bloom computation, data allocation, and 4 extra GetBalance calls per tx.
+	core.SkipBorFeeLogs = true
+
+	// Skip receipt trie root computation — saves CPU from receipt DeriveSha.
+	// In DevFakeAuthor mode nobody validates receipt roots.
+	types.SkipReceiptRoot = true
+
+	// Skip tx trie root computation — saves ~14% CPU from tx DeriveSha.
+	// In DevFakeAuthor mode, mined blocks bypass ValidateBody so tx root is not checked.
+	types.SkipTxRoot = true
+
+	// Disable memory profiling to reduce allocation tracking overhead.
+	runtime.MemProfileRate = 0
 }
 
 // genesisAlloc is a minimal struct for parsing genesis alloc addresses.

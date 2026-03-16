@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -432,6 +431,9 @@ type SealerConfig struct {
 
 	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Lisovo blocks
 	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
+
+	// DisableSnapshot skips pending-block snapshot updates (saves CPU when RPC is disabled)
+	DisableSnapshot bool `hcl:"disable-snapshot,optional" toml:"disable-snapshot,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -668,6 +670,18 @@ type CacheConfig struct {
 
 	// TxLookupLimit sets the maximum number of blocks from head whose tx indices are reserved.
 	TxLookupLimit uint64 `hcl:"txlookuplimit,optional" toml:"txlookuplimit,optional"`
+
+	// NoTxIndex disables transaction indexing entirely when set to true.
+	// This avoids the overhead of iterating and decoding block bodies for tx index updates.
+	NoTxIndex bool `hcl:"notxindex,optional" toml:"notxindex,optional"`
+
+	// SkipReceiptWrite skips writing receipts to the DB during block insertion.
+	// Saves ~5% CPU by avoiding receipt RLP encoding and writes.
+	SkipReceiptWrite bool `hcl:"skipreceiptwrite,optional" toml:"skipreceiptwrite,optional"`
+
+	// SkipBodyWrite skips writing block bodies to the DB during block insertion.
+	// Saves ~6% CPU by avoiding block body RLP encoding and writes.
+	SkipBodyWrite bool `hcl:"skipbodywrite,optional" toml:"skipbodywrite,optional"`
 
 	// Number of block states to keep in memory (default = 128)
 	TriesInMemory uint64 `hcl:"triesinmemory,optional" toml:"triesinmemory,optional"`
@@ -1237,6 +1251,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 
 		// Dynamic gas limit configuration
+		n.Miner.DisableSnapshot = c.Sealer.DisableSnapshot
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
 		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
 		n.Miner.GasLimitMax = c.Sealer.GasLimitMax
@@ -1419,11 +1434,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		// Apply configurable garbage collection settings with validation
 		if c.Cache.GoMemLimit != "" {
-			if err := validateGoMemLimit(c.Cache.GoMemLimit); err != nil {
+			if limit, err := parseGoMemLimit(c.Cache.GoMemLimit); err != nil {
 				log.Warn("Invalid GOMEMLIMIT value, skipping", "value", c.Cache.GoMemLimit, "error", err)
 			} else {
-				os.Setenv("GOMEMLIMIT", c.Cache.GoMemLimit)
-				log.Info("Set GOMEMLIMIT", "value", c.Cache.GoMemLimit)
+				godebug.SetMemoryLimit(limit)
+				log.Info("Set GOMEMLIMIT", "value", c.Cache.GoMemLimit, "bytes", limit)
 			}
 		}
 
@@ -1434,7 +1449,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		if sanitizedGoGC != 100 { // Only set if different from default
 			godebug.SetGCPercent(sanitizedGoGC)
-			log.Info("Set GOGC", "percent", sanitizedGoGC)
+			if sanitizedGoGC == -1 {
+				log.Info("Disabled GC (GOGC=-1)")
+			} else {
+				log.Info("Set GOGC", "percent", sanitizedGoGC)
+			}
 		}
 
 		if c.Cache.GoDebug != "" {
@@ -1454,6 +1473,9 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Preimages = c.Cache.Preimages
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
+		n.NoTxIndex = c.Cache.NoTxIndex
+		n.SkipReceiptWrite = c.Cache.SkipReceiptWrite
+		n.SkipBodyWrite = c.Cache.SkipBodyWrite
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
@@ -1989,30 +2011,70 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	return lines, nil
 }
 
-// validateGoMemLimit validates GOMEMLIMIT values
-func validateGoMemLimit(value string) error {
-	// GOMEMLIMIT can be:
-	// - A number followed by optional unit (B, KB, MB, GB, TB, PB)
-	// - "off" to disable soft limit
+// parseGoMemLimit parses a GOMEMLIMIT string value into bytes.
+// Accepts formats like "48GB", "48GiB", "1024MB", "51539607552", or "off" (-1).
+func parseGoMemLimit(value string) (int64, error) {
 	if value == "off" {
-		return nil
+		return -1, nil // math.MaxInt64 effectively disables the limit
 	}
 
-	// Parse the value to validate format
-	if matched, _ := regexp.MatchString(`^[0-9]+(\.[0-9]+)?[KMGTPE]?[iB]?$`, value); !matched {
-		return fmt.Errorf("invalid GOMEMLIMIT format, expected number with optional unit (e.g., '8GB', '1024MB')")
+	// Try parsing as pure number (bytes)
+	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return n, nil
 	}
 
-	return nil
+	// Parse number + unit suffix
+	// Strip optional "iB" or "B" suffix, then match unit prefix
+	s := strings.TrimSpace(value)
+
+	// Find where the numeric part ends
+	i := 0
+	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+		i++
+	}
+	if i == 0 {
+		return 0, fmt.Errorf("invalid GOMEMLIMIT format: %q", value)
+	}
+
+	numStr := s[:i]
+	unit := s[i:]
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid GOMEMLIMIT number: %q", numStr)
+	}
+
+	var multiplier float64
+	switch strings.ToUpper(strings.TrimSuffix(strings.TrimSuffix(unit, "B"), "i")) {
+	case "", "B":
+		multiplier = 1
+	case "K":
+		multiplier = 1024
+	case "M":
+		multiplier = 1024 * 1024
+	case "G":
+		multiplier = 1024 * 1024 * 1024
+	case "T":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("invalid GOMEMLIMIT unit: %q", unit)
+	}
+
+	return int64(num * multiplier), nil
 }
 
-// sanitizeGoGC clamps GOGC values to reasonable bounds
+// sanitizeGoGC clamps GOGC values to reasonable bounds.
+// -1 disables GC entirely (useful for short benchmarks with GOMEMLIMIT set).
 func sanitizeGoGC(value int) int {
 	const (
 		minGoGC = 10
 		maxGoGC = 2000
 	)
 
+	// Allow -1 to disable GC (runtime/debug.SetGCPercent(-1))
+	if value == -1 {
+		return -1
+	}
 	if value < minGoGC {
 		return minGoGC
 	}
