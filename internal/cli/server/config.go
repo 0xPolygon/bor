@@ -173,12 +173,6 @@ type Config struct {
 
 	// Relay has transaction relay related settings
 	Relay *RelayConfig `hcl:"relay,block" toml:"relay,block"`
-
-	// VMTrace Name of tracer which should record internal VM operations (costly)
-	VMTrace string `hcl:"vmtrace,optional" toml:"vmtrace,optional"`
-
-	// VMTraceJsonConfig Tracer configuration (JSON)
-	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
 }
 
 type HistoryConfig struct {
@@ -811,6 +805,7 @@ type RelayConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
+		Ethstats:                    "",
 		Identity:                    Hostname(),
 		RequiredBlocks:              map[string]string{},
 		Verbosity:                   3,
@@ -822,6 +817,17 @@ func DefaultConfig() *Config {
 		KeyStoreDir:                 "",
 		DisableBlindForkValidation:  false,
 		MaxBlindForkValidationLimit: whitelist.DefaultMaxForkCorrectnessLimit,
+		VMTrace:                     "",
+		VMTraceJsonConfig:           "{}",
+		BatchRequestLimit:           node.DefaultConfig.BatchRequestLimit,
+		BatchResponseMaxSize:        node.DefaultConfig.BatchResponseMaxSize,
+		RPCReturnDataLimit:          100000,
+		SyncMode:                    "full",
+		GcMode:                      "full",
+		StateScheme:                 "path",
+		Snapshot:                    true,
+		BorLogs:                     false,
+		DevFakeAuthor:               false,
 		Logging: &LoggingConfig{
 			Vmodule:             "",
 			Json:                false,
@@ -829,9 +835,6 @@ func DefaultConfig() *Config {
 			Debug:               false,
 			EnableBlockTracking: false,
 		},
-		BatchRequestLimit:    node.DefaultConfig.BatchRequestLimit,
-		BatchResponseMaxSize: node.DefaultConfig.BatchResponseMaxSize,
-		RPCReturnDataLimit:   100000,
 		P2P: &P2PConfig{
 			MaxPeers:             50,
 			MaxPendPeers:         50,
@@ -861,12 +864,6 @@ func DefaultConfig() *Config {
 			GRPCAddress: "",
 			WSAddress:   "",
 		},
-		SyncMode:    "full",
-		GcMode:      "full",
-		StateScheme: "path",
-		Snapshot:    true,
-		BorLogs:     false,
-
 		TxPool: &TxPoolConfig{
 			Locals:               []string{},
 			NoLocals:             false,
@@ -967,7 +964,6 @@ func DefaultConfig() *Config {
 				VHosts:    node.DefaultAuthVhosts,
 			},
 		},
-		Ethstats: "",
 		Telemetry: &TelemetryConfig{
 			Enabled:               false,
 			Expensive:             false,
@@ -1027,7 +1023,6 @@ func DefaultConfig() *Config {
 			Period:   0,
 			GasLimit: 11500000,
 		},
-		DevFakeAuthor: false,
 		Pprof: &PprofConfig{
 			Enabled:          false,
 			Port:             6060,
@@ -1056,8 +1051,6 @@ func DefaultConfig() *Config {
 			LogNoHistory:       ethconfig.Defaults.LogNoHistory,
 			StateHistory:       params.FullImmutabilityThreshold,
 		},
-		VMTrace:           "",
-		VMTraceJsonConfig: "{}",
 		Health: &HealthConfig{
 			MaxGoRoutineThreshold:  0,
 			WarnGoRoutineThreshold: 0,
@@ -1686,8 +1679,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnableBlockTracking = c.Logging.EnableBlockTracking
-	n.VMTrace = c.VMTrace
-	n.VMTraceJsonConfig = c.VMTraceJsonConfig
 
 	// Blind fork acceptance configs
 	n.DisableBlindForkValidation = c.DisableBlindForkValidation

@@ -47,7 +47,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
-		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
+		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
 		Value:   &c.cliConfig.VMTrace,
 		Default: c.cliConfig.VMTrace,
 	})
@@ -153,20 +153,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
 		Value:   &c.cliConfig.Logging.Vmodule,
 		Default: c.cliConfig.Logging.Vmodule,
-		Group:   "Logging",
-	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "vmtrace",
-		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly)",
-		Value:   &c.cliConfig.VMTrace,
-		Default: c.cliConfig.VMTrace,
-		Group:   "Logging",
-	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "vmtrace.jsonconfig",
-		Usage:   "Tracer configuration (JSON)",
-		Value:   &c.cliConfig.VMTraceJsonConfig,
-		Default: c.cliConfig.VMTraceJsonConfig,
 		Group:   "Logging",
 	})
 	f.BoolFlag(&flagset.BoolFlag{

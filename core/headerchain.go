@@ -108,11 +108,6 @@ func NewHeaderChain(chainDb ethdb.Database, config *params.ChainConfig, engine c
 	return hc, nil
 }
 
-// GetVMConfig returns the VM config propagated from BlockChain, or nil if not set.
-func (hc *HeaderChain) GetVMConfig() *vm.Config {
-	return hc.vmConfig
-}
-
 // GetBlockNumber retrieves the block number belonging to the given hash
 // from the cache or database
 func (hc *HeaderChain) GetBlockNumber(hash common.Hash) (uint64, bool) {

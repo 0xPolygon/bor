@@ -110,9 +110,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```vmdebug```: Record information useful for VM and contract debugging (default: false)
 
-- ```vmtrace```: Name of tracer which should observe internal VM operations (e.g. 'json')
+- ```vmtrace```: Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')
 
-- ```vmtrace.jsonconfig```: Tracer configuration (JSON)
+- ```vmtrace.jsonconfig```: Tracer configuration (JSON) (default: {})
 
 - ```witness.enable```: Enable witness protocol (default: false)
 
@@ -279,10 +279,6 @@ The ```bor server``` command runs the Bor client.
 - ```log.json```: Format logs with JSON (default: false)
 
 - ```vmodule```: Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
-
-- ```vmtrace```: Name of a tracer to record internal VM operations during blockchain synchronization (costly)
-
-- ```vmtrace.jsonconfig```: Tracer configuration (JSON) (default: {})
 
 ### P2P Options
 
