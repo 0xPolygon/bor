@@ -109,11 +109,10 @@ type StateDB struct {
 	// Block-stm related fields
 	mvHashmap    *blockstm.MVHashMap
 	incarnation  int
-	readList     []blockstm.ReadDescriptor // append-only read set, returned directly by MVReadList
-	readIndex    map[uint64]uint32         // cheap hash of Key → index in readList (for dedup)
+	readList     []blockstm.ReadDescriptor    // append-only read set, returned directly by MVReadList
 	writeList    []blockstm.WriteDescriptor   // append-only write set
-	writeIndex   map[uint64]uint32           // cheap hash of Key → index in writeList
-	writeAddrs   map[common.Address]struct{} // fast filter: addresses touched by writes
+	writeIndex   map[uint64]uint32            // cheap hash of Key → index in writeList
+	writeAddrs   map[common.Address]struct{}  // fast filter: addresses touched by writes
 	revertedKeys map[blockstm.Key]struct{}
 	dep          int
 
@@ -276,19 +275,8 @@ func (s *StateDB) MVReadMap() map[blockstm.Key]blockstm.ReadDescriptor {
 }
 
 // HasRead returns true if the given key was read during this tx execution.
+// Only called post-execution (at most 2x for coinbase/burnt address checks).
 func (s *StateDB) HasRead(k blockstm.Key) bool {
-	if s.readIndex == nil {
-		return false
-	}
-	h := readKeyHash(k)
-	idx, ok := s.readIndex[h]
-	if !ok {
-		return false
-	}
-	if s.readList[idx].Path == k {
-		return true
-	}
-	// Hash collision — linear scan (extremely rare)
 	for i := range s.readList {
 		if s.readList[i].Path == k {
 			return true
@@ -306,9 +294,8 @@ func (s *StateDB) MVReadList() []blockstm.ReadDescriptor {
 const readListInitCap = 32
 
 func (s *StateDB) ensureReadList() {
-	if s.readIndex == nil {
+	if s.readList == nil {
 		s.readList = make([]blockstm.ReadDescriptor, 0, readListInitCap)
-		s.readIndex = make(map[uint64]uint32, readListInitCap)
 	}
 }
 
@@ -322,7 +309,6 @@ func (s *StateDB) ensureWriteList() {
 
 func (s *StateDB) ClearReadMap() {
 	s.readList = make([]blockstm.ReadDescriptor, 0, readListInitCap)
-	s.readIndex = make(map[uint64]uint32, readListInitCap)
 }
 
 func (s *StateDB) ClearWriteMap() {
@@ -354,11 +340,8 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 
 	s.ensureReadList()
 
-	// Extract address once for non-address keys (used by writeAddrs filter + stateObjects check)
-	addr := k.GetAddress()
-
 	if s.writeIndex != nil {
-		// Fast filter: skip the full key lookup if the address has no writes at all
+		addr := k.GetAddress()
 		if _, addrWritten := s.writeAddrs[addr]; addrWritten {
 			if writeHasKey(s, k) {
 				return readStorage(s)
@@ -367,19 +350,7 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 	}
 
 	if !k.IsAddress() {
-		// If the account was deleted by another tx, return the default value
-		// instead of reading stale data from MVHashMap.
-		//
-		// On first access, getStateObject triggers a nested MVRead for the
-		// address key, which is necessary to detect cross-tx deletions.
-		// On subsequent accesses, the stateObject is already cached locally.
-		//
-		// Safety: stateObjects may be pre-populated from system calls (e.g.
-		// BeaconRoot) via cleanStateDB.Copy(), but those are system contract
-		// addresses that cannot be self-destructed by user txs. For user-
-		// accessed addresses, the first getStateObject call performs the
-		// MVRead guard and caches the result. Validation catches any missed
-		// cross-tx conflicts via read-set version checking.
+		addr := k.GetAddress()
 		if s.stateObjects[addr] == nil {
 			if s.getStateObject(addr) == nil {
 				return defaultV
@@ -387,6 +358,21 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 		}
 	}
 
+	// Fast path: bloom filter says no tx wrote this key. Skip the full
+	// MVHashMap.Read (shard lock + map lookup + floor) and construct
+	// the ReadDescriptor directly with known values.
+	if !s.mvHashmap.BloomMayContain(k) {
+		v = readStorage(s)
+		s.readList = append(s.readList, blockstm.ReadDescriptor{
+			Path: k,
+			Kind: blockstm.ReadKindStorage,
+			V:    blockstm.Version{TxnIndex: -1, Incarnation: -1},
+		})
+
+		return
+	}
+
+	// Slow path: key might have been written by another tx.
 	res := s.mvHashmap.Read(k, s.txIndex)
 
 	var rd blockstm.ReadDescriptor
@@ -400,56 +386,19 @@ func MVRead[T any](s *StateDB, k blockstm.Key, defaultV T, readStorage func(s *S
 
 	switch res.Status() {
 	case blockstm.MVReadResultDone:
-		{
-			v = readStorage(res.Value().(*StateDB))
-			rd.Kind = blockstm.ReadKindMap
-		}
+		v = readStorage(res.Value().(*StateDB))
+		rd.Kind = blockstm.ReadKindMap
 	case blockstm.MVReadResultDependency:
-		{
-			s.dep = res.DepIdx()
-
-			panic("Found dependency")
-		}
+		s.dep = res.DepIdx()
+		panic("Found dependency")
 	case blockstm.MVReadResultNone:
-		{
-			v = readStorage(s)
-			rd.Kind = blockstm.ReadKindStorage
-		}
+		v = readStorage(s)
+		rd.Kind = blockstm.ReadKindStorage
 	default:
 		return defaultV
 	}
 
-	h := readKeyHash(k)
-	if idx, ok := s.readIndex[h]; ok {
-		prev := &s.readList[idx]
-		if prev.Path == k {
-			// Same key seen before — check for version conflict
-			if prev.Kind != rd.Kind || prev.V.TxnIndex != rd.V.TxnIndex || prev.V.Incarnation != rd.V.Incarnation {
-				s.dep = rd.V.TxnIndex
-				panic("Read conflict detected")
-			}
-		} else {
-			// Hash collision (different key, same hash) — check via linear scan
-			found := false
-			for i := range s.readList {
-				if s.readList[i].Path == k {
-					prev := &s.readList[i]
-					if prev.Kind != rd.Kind || prev.V.TxnIndex != rd.V.TxnIndex || prev.V.Incarnation != rd.V.Incarnation {
-						s.dep = rd.V.TxnIndex
-						panic("Read conflict detected")
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				s.readList = append(s.readList, rd)
-			}
-		}
-	} else {
-		s.readIndex[h] = uint32(len(s.readList))
-		s.readList = append(s.readList, rd)
-	}
+	s.readList = append(s.readList, rd)
 
 	return
 }

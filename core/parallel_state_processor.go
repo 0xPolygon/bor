@@ -345,12 +345,44 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		// EIP-2935
 		ProcessParentBlockHash(block.ParentHash(), vmenv)
 	}
+	// Pre-warm the shared reader cache with sender/recipient accounts.
+	// Workers share the reader (Copy passes it by reference), so warming
+	// it here avoids concurrent cache misses when multiple workers first
+	// access the same accounts.
+	signer := types.MakeSigner(config, header.Number, header.Time)
+
+	reader := statedb.Reader()
+
+	seen := make(map[common.Address]struct{}, len(block.Transactions())*2)
+	for _, tx := range block.Transactions() {
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
+
+		sender, err := types.Sender(signer, tx)
+		if err != nil {
+			continue
+		}
+
+		if _, ok := seen[sender]; !ok {
+			seen[sender] = struct{}{}
+			reader.Account(sender) //nolint:errcheck
+		}
+
+		if to := tx.To(); to != nil {
+			if _, ok := seen[*to]; !ok {
+				seen[*to] = struct{}{}
+				reader.Account(*to) //nolint:errcheck
+			}
+		}
+	}
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
 		if tx.Type() == types.StateSyncTxType {
 			continue
 		}
-		msg, err := TransactionToMessage(tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
+		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			log.Error("error creating message", "err", err)
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)

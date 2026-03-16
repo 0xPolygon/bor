@@ -333,6 +333,12 @@ func (res MVReadResult) Status() int {
 	return MVReadResultNone
 }
 
+// BloomMayContain returns true if the key might have been written to the MVHashMap.
+// A false return guarantees no transaction has written this key.
+func (mv *MVHashMap) BloomMayContain(k Key) bool {
+	return mv.bloom.mayContain(k)
+}
+
 func (mv *MVHashMap) Read(k Key, txIdx int) (res MVReadResult) {
 	res.depIdx = -1
 	res.incarnation = -1
