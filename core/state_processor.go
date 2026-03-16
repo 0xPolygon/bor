@@ -133,12 +133,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		allLogs = append(allLogs, receipt.Logs...)
 	}
 
-	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
-		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
-			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
-		}
-	}
-
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	// Read requests if Prague is enabled.
 	var requests [][]byte
@@ -155,6 +149,13 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		// EIP-7251
 		if err := ProcessConsolidationQueue(&requests, evm); err != nil {
 			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
+		}
+	}
+
+	// Trace state-sync transaction (if present and if tracer is enabled)
+	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
+		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
 		}
 	}
 
