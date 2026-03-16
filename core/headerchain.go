@@ -28,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -72,7 +71,6 @@ type HeaderChain struct {
 	procInterrupt func() bool
 	engine        consensus.Engine
 
-	vmConfig      *vm.Config             // VM configuration (propagated from BlockChain)
 	stateSyncData []*types.StateSyncData // State sync data
 }
 
