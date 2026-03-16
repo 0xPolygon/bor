@@ -9,7 +9,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
+
+var settleWaitTimer = metrics.NewRegisteredTimer("blockstm/settle/wait", nil)
 
 type ExecResult struct {
 	err      error
@@ -410,7 +413,9 @@ func (pe *ParallelExecutor) Close(wait bool) {
 	}
 
 	if wait {
+		settleWaitStart := time.Now()
 		pe.settleWg.Wait()
+		settleWaitTimer.UpdateSince(settleWaitStart)
 	}
 }
 

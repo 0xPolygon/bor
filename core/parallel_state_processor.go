@@ -90,6 +90,7 @@ type ExecutionTask struct {
 	dependencies []int
 	coinbase     common.Address
 	blockContext vm.BlockContext
+	jumpDests    vm.JumpDestCache
 }
 
 func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (err error) {
@@ -99,6 +100,10 @@ func (task *ExecutionTask) Execute(mvh *blockstm.MVHashMap, incarnation int) (er
 	task.statedb.SetIncarnation(incarnation)
 
 	evm := vm.NewEVM(task.blockContext, task.statedb, task.config, task.evmConfig)
+
+	if task.jumpDests != nil {
+		evm.SetJumpDestCache(task.jumpDests)
+	}
 
 	// Create a new context to be used in the EVM environment.
 	txContext := NewEVMTxContext(&task.msg)
@@ -309,6 +314,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	tasks := make([]blockstm.ExecTask, 0, len(block.Transactions()))
+	sharedJumpDests := vm.NewSyncJumpDestCache()
 
 	shouldDelayFeeCal := true
 
@@ -378,6 +384,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			dependencies:      deps[i],
 			coinbase:          coinbase,
 			blockContext:      blockContext,
+			jumpDests:         sharedJumpDests,
 		}
 
 		tasks = append(tasks, task)
