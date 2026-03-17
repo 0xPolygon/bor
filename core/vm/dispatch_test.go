@@ -123,10 +123,10 @@ var diffChainConfig = &params.ChainConfig{
 	// and force both paths into the slow Run() loop, defeating the test.
 }
 
-// execPath runs bytecode through the EVM. When useTracer is false the
-// interpreter takes the runSwitch fast path; when true a no-op tracer
-// forces the traditional Run() loop.
-func execPath(code []byte, gas uint64, useTracer bool) ([]byte, uint64, error) {
+// execPath runs bytecode through the EVM. When switchDispatch is true the
+// interpreter takes the runSwitch fast path; when false it uses the
+// traditional Run() loop.
+func execPath(code []byte, gas uint64, switchDispatch bool) ([]byte, uint64, error) {
 	addr := common.BytesToAddress([]byte("contract"))
 	caller := common.BytesToAddress([]byte("caller"))
 
@@ -152,12 +152,7 @@ func execPath(code []byte, gas uint64, useTracer bool) ([]byte, uint64, error) {
 	rules := diffChainConfig.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 	db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
-	var cfg Config
-	if useTracer {
-		cfg.Tracer = &tracing.Hooks{
-			OnOpcode: func(uint64, byte, uint64, uint64, tracing.OpContext, []byte, int, error) {},
-		}
-	}
+	cfg := Config{EnableSwitchDispatch: switchDispatch}
 
 	evm := NewEVM(bctx, db, diffChainConfig, cfg)
 	evm.SetTxContext(TxContext{
@@ -172,8 +167,8 @@ func execPath(code []byte, gas uint64, useTracer bool) ([]byte, uint64, error) {
 func runDiff(t *testing.T, code []byte, gas uint64) {
 	t.Helper()
 
-	retFast, gasFast, errFast := execPath(code, gas, false)
-	retSlow, gasSlow, errSlow := execPath(code, gas, true)
+	retFast, gasFast, errFast := execPath(code, gas, true)
+	retSlow, gasSlow, errSlow := execPath(code, gas, false)
 
 	cFast, cSlow := classifyErr(errFast), classifyErr(errSlow)
 	if cFast != cSlow {
@@ -1129,7 +1124,7 @@ func TestPreShanghaiForkGate(t *testing.T) {
 		// ShanghaiBlock intentionally nil — PUSH0 should be invalid.
 	}
 
-	execWithConfig := func(code []byte, gas uint64, useTracer bool, cfg *params.ChainConfig) ([]byte, uint64, error) {
+	execWithConfig := func(code []byte, gas uint64, switchDispatch bool, chainCfg *params.ChainConfig) ([]byte, uint64, error) {
 		addr := common.BytesToAddress([]byte("contract"))
 		caller := common.BytesToAddress([]byte("caller"))
 
@@ -1152,17 +1147,12 @@ func TestPreShanghaiForkGate(t *testing.T) {
 			Random:      &common.Hash{},
 		}
 
-		rules := cfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
+		rules := chainCfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 		db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
-		var evmCfg Config
-		if useTracer {
-			evmCfg.Tracer = &tracing.Hooks{
-				OnOpcode: func(uint64, byte, uint64, uint64, tracing.OpContext, []byte, int, error) {},
-			}
-		}
+		evmCfg := Config{EnableSwitchDispatch: switchDispatch}
 
-		evm := NewEVM(bctx, db, cfg, evmCfg)
+		evm := NewEVM(bctx, db, chainCfg, evmCfg)
 		evm.SetTxContext(TxContext{
 			Origin:   caller,
 			GasPrice: big.NewInt(1),
@@ -1176,15 +1166,15 @@ func TestPreShanghaiForkGate(t *testing.T) {
 	code := cc(op1(PUSH0), retSeq)
 	gas := uint64(100_000)
 
-	// Slow path (tracer attached) — should reject PUSH0 as invalid opcode.
-	_, _, errSlow := execWithConfig(code, gas, true, preShanghaiConfig)
+	// Slow path (switch dispatch disabled) — should reject PUSH0 as invalid opcode.
+	_, _, errSlow := execWithConfig(code, gas, false, preShanghaiConfig)
 	slowClass := classifyErr(errSlow)
 	if slowClass != "invalid_opcode" {
 		t.Fatalf("slow path: expected invalid_opcode, got %q (%v)", slowClass, errSlow)
 	}
 
-	// Fast path (no tracer) — without the IsShanghai gate, this incorrectly succeeds.
-	_, _, errFast := execWithConfig(code, gas, false, preShanghaiConfig)
+	// Fast path (switch dispatch enabled) — without the IsShanghai gate, this incorrectly succeeds.
+	_, _, errFast := execWithConfig(code, gas, true, preShanghaiConfig)
 	fastClass := classifyErr(errFast)
 
 	if fastClass != slowClass {
