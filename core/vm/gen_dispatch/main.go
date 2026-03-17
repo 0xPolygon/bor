@@ -522,7 +522,7 @@ op = code[pc]
 switch OpCode(op) {
 `)
 	e.emitAllCases()
-	e.p("}\n")   // switch
+	e.p("}\n")    // switch
 	e.p("pc++\n") // increment PC after each opcode
 	e.p("}\n")    // for
 	e.p("}\n")    // func

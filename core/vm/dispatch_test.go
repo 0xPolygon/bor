@@ -545,7 +545,6 @@ func TestDispatchDifferential(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			runDiff(t, tc.code, tc.gas)
@@ -556,7 +555,6 @@ func TestDispatchDifferential(t *testing.T) {
 	//  PUSH5 – PUSH32: programmatic happy-path + truncated
 	// =================================================================
 	for n := 5; n <= 32; n++ {
-		n := n
 		opByte := byte(PUSH1) + byte(n-1) // PUSH1=0x60 .. PUSH32=0x7F
 
 		t.Run(fmt.Sprintf("PUSH%d/happy", n), func(t *testing.T) {
@@ -584,7 +582,6 @@ func TestDispatchDifferential(t *testing.T) {
 	//  DUP1 – DUP16: happy path + underflow
 	// =================================================================
 	for n := 1; n <= 16; n++ {
-		n := n
 		dupByte := byte(DUP1) + byte(n-1)
 
 		t.Run(fmt.Sprintf("DUP%d/happy", n), func(t *testing.T) {
@@ -612,7 +609,6 @@ func TestDispatchDifferential(t *testing.T) {
 	//  SWAP1 – SWAP16: happy path + underflow
 	// =================================================================
 	for n := 1; n <= 16; n++ {
-		n := n
 		swapByte := byte(SWAP1) + byte(n-1)
 
 		t.Run(fmt.Sprintf("SWAP%d/happy", n), func(t *testing.T) {
@@ -735,44 +731,6 @@ func TestDispatchDifferential(t *testing.T) {
 		t.Parallel()
 		// Counts down from 3 to 0 using JUMP/JUMPI loop, returns final counter
 		code := []byte{
-			// offset 0: PUSH1 3  (counter)
-			byte(PUSH1), 3,
-			// offset 2: JUMPDEST
-			byte(JUMPDEST),
-			// offset 3: DUP1
-			byte(DUP1),
-			// offset 4: ISZERO
-			byte(ISZERO),
-			// offset 5: PUSH1 14 (exit target)
-			byte(PUSH1), 14,
-			// offset 7: JUMPI (if counter==0 jump to exit)
-			byte(JUMPI),
-			// offset 8: PUSH1 1
-			byte(PUSH1), 1,
-			// offset 10: SWAP1
-			byte(SWAP1),
-			// offset 11: SUB  (counter - 1)
-			byte(SUB),
-			// offset 12: PUSH1 2  (loop target)
-			byte(PUSH1), 2,
-			// offset 14: JUMP  -- wait, this is at offset 14 not 13
-		}
-		// Let me recalculate offsets:
-		// 0: PUSH1  1: 3      → 2 bytes
-		// 2: JUMPDEST         → 1 byte
-		// 3: DUP1             → 1 byte
-		// 4: ISZERO           → 1 byte
-		// 5: PUSH1  6: <exit> → 2 bytes
-		// 7: JUMPI            → 1 byte
-		// 8: PUSH1  9: 1      → 2 bytes
-		// 10: SWAP1           → 1 byte
-		// 11: SUB             → 1 byte
-		// 12: PUSH1 13: 2     → 2 bytes
-		// 14: JUMP            → 1 byte
-		// exit is at offset 15
-		// 15: JUMPDEST        → 1 byte
-		// 16+: MSTORE+RETURN
-		code = []byte{
 			byte(PUSH1), 3, // 0-1
 			byte(JUMPDEST),  // 2
 			byte(DUP1),      // 3
