@@ -20,12 +20,17 @@ var (
 )
 
 // runSwitch is the fast-path EVM interpreter loop using a direct switch
-// dispatch for hot opcodes. It inlines ~65 hot opcodes directly in the
-// switch body (eliminating indirect function calls) and accumulates
-// static gas costs in a local variable (eliminating per-opcode heap writes).
+// dispatch for hot opcodes. Inlines hot opcodes directly in the switch body
+// (eliminating indirect function calls) and accumulates static gas costs in
+// a local variable (eliminating per-opcode heap writes).
 //
 // This function is only called when no tracer is attached and EIP-4762
 // (Verkle) is not active. The existing Run() loop handles those cases.
+//
+// gasAccum is flushed at control flow points (JUMP, JUMPI, JUMPDEST, STOP,
+// INVALID) and the default fallback. Unflushed gasAccum on error is safe:
+// non-REVERT errors consume all gas in EVM.Call; REVERT hits the default
+// path which flushes first.
 //
 //nolint:gocognit
 func (evm *EVM) runSwitch(

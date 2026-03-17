@@ -11,7 +11,7 @@
 //   - No Host interface / needsHost / needsOp (Bor accesses state directly)
 //   - No tracing path / RunWithTracing / DebugGasTable (existing Run() handles tracing)
 //   - No LOG emission (dynamic gas; handled by jumpTable fallback)
-//   - Only hot-path opcodes inlined (~35 vs GEVM's ~80); rest use jumpTable fallback
+//   - Inlines hot opcodes; rest use jumpTable fallback
 //   - Different gas constants (spec.GasVerylow → GasFastestStep, etc.)
 //   - Return-based errors instead of Halt methods
 //   - Different variable names (gas.remaining→contract.Gas, gasCounter→gasAccum)
@@ -487,12 +487,17 @@ func (e *emitter) emitAllCases() {
 
 func (e *emitter) emitRunFunc() {
 	e.p(`// runSwitch is the fast-path EVM interpreter loop using a direct switch
-// dispatch for hot opcodes. It inlines ~65 hot opcodes directly in the
-// switch body (eliminating indirect function calls) and accumulates
-// static gas costs in a local variable (eliminating per-opcode heap writes).
+// dispatch for hot opcodes. Inlines hot opcodes directly in the switch body
+// (eliminating indirect function calls) and accumulates static gas costs in
+// a local variable (eliminating per-opcode heap writes).
 //
 // This function is only called when no tracer is attached and EIP-4762
 // (Verkle) is not active. The existing Run() loop handles those cases.
+//
+// gasAccum is flushed at control flow points (JUMP, JUMPI, JUMPDEST, STOP,
+// INVALID) and the default fallback. Unflushed gasAccum on error is safe:
+// non-REVERT errors consume all gas in EVM.Call; REVERT hits the default
+// path which flushes first.
 //
 //nolint:gocognit
 func (evm *EVM) runSwitch(
