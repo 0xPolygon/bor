@@ -1031,7 +1031,7 @@ func TestRangeLimit(t *testing.T) {
 	backend.startFilterMaps(0, false, filtermaps.RangeTestParams)
 	defer backend.stopFilterMaps()
 
-	// Ranges exceeding the limit must be rejected with errExceedBlockRangeLimit.
+	// Numeric ranges exceeding the limit must be rejected.
 	overLimitCases := []FilterCriteria{
 		{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit) + 1)},
 		{FromBlock: big.NewInt(0), ToBlock: big.NewInt(10000)},
@@ -1049,13 +1049,35 @@ func TestRangeLimit(t *testing.T) {
 		}
 	}
 
-	// A range within the limit must succeed (no errExceedBlockRangeLimit).
-	withinCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit))}
-	if _, err := api.GetLogs(t.Context(), withinCrit); errors.Is(err, errExceedBlockRangeLimit) {
-		t.Error("GetLogs within limit should not return errExceedBlockRangeLimit")
+	// Symbolic "latest" as toBlock must also be caught when the chain is longer than the limit.
+	// The chain has 200 blocks, limit is 100, so fromBlock=0 to toBlock=latest spans 200 > 100.
+	latestCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(rpc.LatestBlockNumber.Int64())}
+	if _, err := api.GetLogs(t.Context(), latestCrit); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetLogs with fromBlock=0 toBlock=latest on 200-block chain: got %v, want errExceedBlockRangeLimit", err)
 	}
-	if _, err := api.GetBorBlockLogs(t.Context(), withinCrit); errors.Is(err, errExceedBlockRangeLimit) {
-		t.Error("GetBorBlockLogs within limit should not return errExceedBlockRangeLimit")
+	if _, err := api.GetBorBlockLogs(t.Context(), latestCrit); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetBorBlockLogs with fromBlock=0 toBlock=latest on 200-block chain: got %v, want errExceedBlockRangeLimit", err)
+	}
+
+	// GetFilterLogs (eth_getFilterLogs) must also respect the limit.
+	filterID, err := api.NewFilter(FilterCriteria{
+		FromBlock: big.NewInt(0),
+		ToBlock:   big.NewInt(int64(limit) + 1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.GetFilterLogs(t.Context(), filterID); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetFilterLogs over-limit: got %v, want errExceedBlockRangeLimit", err)
+	}
+
+	// A range exactly at the limit (end - begin == limit) must succeed.
+	atLimitCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit))}
+	if _, err := api.GetLogs(t.Context(), atLimitCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetLogs at exact limit should not return errExceedBlockRangeLimit")
+	}
+	if _, err := api.GetBorBlockLogs(t.Context(), atLimitCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetBorBlockLogs at exact limit should not return errExceedBlockRangeLimit")
 	}
 
 	// With RangeLimit=0 (unlimited), large ranges must not trigger errExceedBlockRangeLimit.
