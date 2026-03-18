@@ -246,6 +246,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```rpc.logquerylimit```: Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap) (default: 1000)
 
+- ```rpc.rangelimit```: Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit) (default: 0)
+
 - ```rpc.txfeecap```: Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap) (default: 1)
 
 - ```rpc.txsync.defaulttimeout```: Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms) (default: 20s)

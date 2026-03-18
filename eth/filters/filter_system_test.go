@@ -996,3 +996,120 @@ func TestTransactionReceiptsSubscription(t *testing.T) {
 		})
 	}
 }
+
+// TestRangeLimit verifies that RangeLimit is enforced for both GetLogs and GetBorBlockLogs.
+func TestRangeLimit(t *testing.T) {
+	t.Parallel()
+
+	const limit = 100
+
+	gspec := &core.Genesis{
+		Config:  params.TestChainConfig,
+		Alloc:   types.GenesisAlloc{},
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+
+	// Shared setup: small chain with limit=100.
+	db := rawdb.NewMemoryDatabase()
+	_, err := gspec.Commit(db, triedb.NewDatabase(db, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, _ := core.GenerateChain(gspec.Config, gspec.ToBlock(), ethash.NewFaker(), db, 200, func(i int, gen *core.BlockGen) {})
+	bc, err := core.NewBlockChain(db, gspec, ethash.NewFaker(), core.DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bc.InsertChain(chain[:200], false); err != nil {
+		t.Fatal(err)
+	}
+
+	backend, sys := newTestFilterSystem(db, Config{RangeLimit: limit})
+	api := NewFilterAPI(sys, true)
+	api.SetChainConfig(params.BorUnittestChainConfig)
+
+	backend.startFilterMaps(0, false, filtermaps.RangeTestParams)
+	defer backend.stopFilterMaps()
+
+	// Numeric ranges exceeding the limit must be rejected.
+	overLimitCases := []FilterCriteria{
+		{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit) + 1)},
+		{FromBlock: big.NewInt(0), ToBlock: big.NewInt(10000)},
+	}
+
+	for i, crit := range overLimitCases {
+		_, err := api.GetLogs(t.Context(), crit)
+		if !errors.Is(err, errExceedBlockRangeLimit) {
+			t.Errorf("GetLogs over-limit case %d: got %v, want errExceedBlockRangeLimit", i, err)
+		}
+
+		_, err = api.GetBorBlockLogs(t.Context(), crit)
+		if !errors.Is(err, errExceedBlockRangeLimit) {
+			t.Errorf("GetBorBlockLogs over-limit case %d: got %v, want errExceedBlockRangeLimit", i, err)
+		}
+	}
+
+	// Symbolic "latest" as toBlock must also be caught when the chain is longer than the limit.
+	// The chain has 200 blocks, limit is 100, so fromBlock=0 to toBlock=latest spans 200 > 100.
+	latestCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(rpc.LatestBlockNumber.Int64())}
+	if _, err := api.GetLogs(t.Context(), latestCrit); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetLogs with fromBlock=0 toBlock=latest on 200-block chain: got %v, want errExceedBlockRangeLimit", err)
+	}
+	if _, err := api.GetBorBlockLogs(t.Context(), latestCrit); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetBorBlockLogs with fromBlock=0 toBlock=latest on 200-block chain: got %v, want errExceedBlockRangeLimit", err)
+	}
+
+	// GetFilterLogs (eth_getFilterLogs) must also respect the limit.
+	filterID, err := api.NewFilter(FilterCriteria{
+		FromBlock: big.NewInt(0),
+		ToBlock:   big.NewInt(int64(limit) + 1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.GetFilterLogs(t.Context(), filterID); !errors.Is(err, errExceedBlockRangeLimit) {
+		t.Errorf("GetFilterLogs over-limit: got %v, want errExceedBlockRangeLimit", err)
+	}
+
+	// A range exactly at the limit (end - begin == limit) must succeed.
+	atLimitCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit))}
+	if _, err := api.GetLogs(t.Context(), atLimitCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetLogs at exact limit should not return errExceedBlockRangeLimit")
+	}
+	if _, err := api.GetBorBlockLogs(t.Context(), atLimitCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetBorBlockLogs at exact limit should not return errExceedBlockRangeLimit")
+	}
+
+	// With RangeLimit=0 (unlimited), large ranges must not trigger errExceedBlockRangeLimit.
+	db2 := rawdb.NewMemoryDatabase()
+	if _, err = gspec.Commit(db2, triedb.NewDatabase(db2, nil)); err != nil {
+		t.Fatal(err)
+	}
+	chain2, _ := core.GenerateChain(gspec.Config, gspec.ToBlock(), ethash.NewFaker(), db2, 200, func(i int, gen *core.BlockGen) {})
+	bc2, err := core.NewBlockChain(db2, gspec, ethash.NewFaker(), core.DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bc2.InsertChain(chain2[:200], false); err != nil {
+		t.Fatal(err)
+	}
+
+	backend2, sys2 := newTestFilterSystem(db2, Config{RangeLimit: 0})
+	api2 := NewFilterAPI(sys2, true)
+	api2.SetChainConfig(params.BorUnittestChainConfig)
+
+	backend2.startFilterMaps(0, false, filtermaps.RangeTestParams)
+	defer backend2.stopFilterMaps()
+
+	bigRangeCrit := FilterCriteria{FromBlock: big.NewInt(0), ToBlock: big.NewInt(int64(limit) * 10)}
+	if _, err := api2.GetLogs(t.Context(), bigRangeCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetLogs with RangeLimit=0 should not return errExceedBlockRangeLimit")
+	}
+	if _, err := api2.GetBorBlockLogs(t.Context(), bigRangeCrit); errors.Is(err, errExceedBlockRangeLimit) {
+		t.Error("GetBorBlockLogs with RangeLimit=0 should not return errExceedBlockRangeLimit")
+	}
+
+	// Suppress unused variable warnings.
+	_ = bc
+	_ = bc2
+}
