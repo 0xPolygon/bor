@@ -45,6 +45,7 @@ var (
 	errExceedMaxTopics        = errors.New("exceed max topics")
 	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
+	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
 )
 
 const (
@@ -489,6 +490,10 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		}
 		if begin >= 0 && begin < int64(api.events.backend.HistoryPruningCutoff()) {
 			return nil, &history.PrunedHistoryError{}
+		}
+		rangeLimit := api.sys.cfg.RangeLimit
+		if rangeLimit > 0 && begin >= 0 && end >= 0 && uint64(end-begin) > rangeLimit {
+			return nil, errExceedBlockRangeLimit
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)

@@ -39,6 +39,10 @@ func (api *FilterAPI) GetBorBlockLogs(ctx context.Context, crit FilterCriteria) 
 		if crit.ToBlock != nil {
 			end = crit.ToBlock.Int64()
 		}
+		rangeLimit := api.sys.cfg.RangeLimit
+		if rangeLimit > 0 && begin >= 0 && end >= 0 && uint64(end-begin) > rangeLimit {
+			return nil, errExceedBlockRangeLimit
+		}
 		// Construct the range filter
 		filter = NewBorBlockLogsRangeFilter(api.sys.backend, borConfig, begin, end, crit.Addresses, crit.Topics)
 	}
