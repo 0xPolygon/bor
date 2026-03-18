@@ -469,6 +469,9 @@ type JsonRPCConfig struct {
 	// LogQueryLimit is the max number of addresses or topics allowed in filter criteria for eth_getLogs.
 	LogQueryLimit int `hcl:"logquerylimit,optional" toml:"logquerylimit,optional"`
 
+	// RangeLimit is the maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit).
+	RangeLimit uint64 `hcl:"rangelimit,optional" toml:"rangelimit,optional"`
+
 	// Http has the json-rpc http related settings
 	Http *APIConfig `hcl:"http,block" toml:"http,block"`
 
@@ -1602,6 +1605,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
 
 	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
 
 	// Choose the sync mode
 	switch c.SyncMode {
