@@ -16,10 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// ---------------------------------------------------------------------------
-// Bytecode construction helpers
-// ---------------------------------------------------------------------------
-
+// Bytecode helpers.
 func cc(parts ...[]byte) []byte {
 	var out []byte
 	for _, p := range parts {
@@ -27,10 +24,11 @@ func cc(parts ...[]byte) []byte {
 	}
 	return out
 }
-
 func p1(v byte) []byte    { return []byte{byte(PUSH1), v} }
 func op1(o OpCode) []byte { return []byte{byte(o)} }
-
+func m8(offset, value byte) []byte {
+	return cc(p1(value), p1(offset), op1(MSTORE8))
+}
 func p32(v *uint256.Int) []byte {
 	b := v.Bytes32()
 	out := make([]byte, 33)
@@ -39,33 +37,29 @@ func p32(v *uint256.Int) []byte {
 	return out
 }
 
-// retSeq: PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN
+// PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN.
 var retSeq = cc(p1(0), op1(MSTORE), p1(32), p1(0), op1(RETURN))
 
 func withRet(code []byte) []byte { return cc(code, retSeq) }
 
-// binary: push b, push a, OP → result, then MSTORE+RETURN
+// Binary op with small immediates.
 func binSmall(a, b byte, op OpCode) []byte { return withRet(cc(p1(b), p1(a), op1(op))) }
 
-// binary with big values
+// Binary op with 256-bit immediates.
 func binBig(a, b *uint256.Int, op OpCode) []byte { return withRet(cc(p32(b), p32(a), op1(op))) }
 
-// ternary: push c, push b, push a, OP → result, then MSTORE+RETURN
+// Ternary op with small immediates.
 func ternSmall(a, b, c byte, op OpCode) []byte {
 	return withRet(cc(p1(c), p1(b), p1(a), op1(op)))
 }
 
-// unary with small value
+// Unary op with a small immediate.
 func unSmall(a byte, op OpCode) []byte { return withRet(cc(p1(a), op1(op))) }
 
-// unary with big value
+// Unary op with a 256-bit immediate.
 func unBig(a *uint256.Int, op OpCode) []byte { return withRet(cc(p32(a), op1(op))) }
 
-// ---------------------------------------------------------------------------
-// Error classification – compares error *category* so that minor string
-// differences between paths don't cause false positives.
-// ---------------------------------------------------------------------------
-
+// Compare error class instead of exact strings.
 func classifyErr(err error) string {
 	if err == nil {
 		return ""
@@ -91,13 +85,43 @@ func classifyErr(err error) string {
 	if errors.Is(err, ErrExecutionReverted) {
 		return "execution_reverted"
 	}
+	if errors.Is(err, ErrReturnDataOutOfBounds) {
+		return "return_data_out_of_bounds"
+	}
 	return "other:" + err.Error()
 }
 
-// ---------------------------------------------------------------------------
-// Chain config that enables all forks through Cancun (no Verkle / EIP-4762).
-// ---------------------------------------------------------------------------
+type execResult struct {
+	ret  []byte
+	gas  uint64
+	err  error
+	logs []*types.Log
+}
 
+func sameLogs(a, b []*types.Log) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Address != b[i].Address || a[i].BlockNumber != b[i].BlockNumber {
+			return false
+		}
+		if !bytes.Equal(a[i].Data, b[i].Data) {
+			return false
+		}
+		if len(a[i].Topics) != len(b[i].Topics) {
+			return false
+		}
+		for j := range a[i].Topics {
+			if a[i].Topics[j] != b[i].Topics[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Enable all forks through Cancun; keep Verkle disabled.
 var diffChainConfig = &params.ChainConfig{
 	ChainID:             big.NewInt(1),
 	HomesteadBlock:      new(big.Int),
@@ -119,74 +143,137 @@ var diffChainConfig = &params.ChainConfig{
 	CancunBlock:         new(big.Int),
 	PragueBlock:         new(big.Int),
 	OsakaBlock:          new(big.Int),
-	// VerkleBlock intentionally nil — enabling it would activate EIP-4762
-	// and force both paths into the slow Run() loop, defeating the test.
+	// Keep Verkle disabled so both paths remain comparable.
 }
 
-// execPath runs bytecode through the EVM. When switchDispatch is true the
-// interpreter takes the runSwitch fast path; when false it uses the
-// traditional Run() loop.
-func execPath(code []byte, gas uint64, switchDispatch bool) ([]byte, uint64, error) {
+// Execute code on one interpreter path.
+func execPathResultWithConfig(
+	code []byte,
+	input []byte,
+	gas uint64,
+	switchDispatch bool,
+	chainCfg *params.ChainConfig,
+	setup func(*state.StateDB),
+) execResult {
 	addr := common.BytesToAddress([]byte("contract"))
 	caller := common.BytesToAddress([]byte("caller"))
+	origin := common.BytesToAddress([]byte("origin"))
+	coinbase := common.BytesToAddress([]byte("coinbase"))
+	random := common.BigToHash(big.NewInt(99))
+	blobHashes := []common.Hash{
+		common.BigToHash(big.NewInt(0xB10B)),
+		common.BigToHash(big.NewInt(0xB10C)),
+	}
 
 	db, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 	db.CreateAccount(addr)
 	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 	db.CreateAccount(caller)
+	db.CreateAccount(origin)
+	db.SetBalance(addr, uint256.NewInt(0x1234), tracing.BalanceChangeUnspecified)
+	db.SetBalance(caller, uint256.NewInt(0x5678), tracing.BalanceChangeUnspecified)
+	if setup != nil {
+		setup(db)
+	}
 	db.Finalise(true)
 
 	bctx := BlockContext{
 		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
 		Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int) {},
-		GetHash:     func(uint64) common.Hash { return common.Hash{} },
-		BlockNumber: big.NewInt(1),
-		Time:        1,
-		Difficulty:  big.NewInt(1),
+		GetHash:     func(n uint64) common.Hash { return common.BigToHash(new(big.Int).SetUint64(n + 0x1000)) },
+		Coinbase:    coinbase,
+		BlockNumber: big.NewInt(11),
+		Time:        22,
+		Difficulty:  big.NewInt(33),
 		GasLimit:    gas,
-		BaseFee:     big.NewInt(1),
-		BlobBaseFee: big.NewInt(1),
-		Random:      &common.Hash{},
+		BaseFee:     big.NewInt(44),
+		BlobBaseFee: big.NewInt(55),
+		Random:      &random,
 	}
 
-	rules := diffChainConfig.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
+	rules := chainCfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 	db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
 	cfg := Config{EnableSwitchDispatch: switchDispatch}
 
-	evm := NewEVM(bctx, db, diffChainConfig, cfg)
+	evm := NewEVM(bctx, db, chainCfg, cfg)
 	evm.SetTxContext(TxContext{
-		Origin:   caller,
-		GasPrice: big.NewInt(1),
+		Origin:     origin,
+		GasPrice:   big.NewInt(66),
+		BlobHashes: blobHashes,
 	})
-	return evm.Call(caller, addr, nil, gas, new(uint256.Int))
+	ret, gasLeft, err := evm.Call(caller, addr, input, gas, uint256.NewInt(77))
+	return execResult{
+		ret:  ret,
+		gas:  gasLeft,
+		err:  err,
+		logs: db.Logs(),
+	}
 }
 
-// runDiff runs code through both interpreter paths and asserts that the
-// return data, remaining gas, and error category are identical.
+func execPathWithConfig(
+	code []byte,
+	input []byte,
+	gas uint64,
+	switchDispatch bool,
+	chainCfg *params.ChainConfig,
+	setup func(*state.StateDB),
+) ([]byte, uint64, error) {
+	res := execPathResultWithConfig(code, input, gas, switchDispatch, chainCfg, setup)
+	return res.ret, res.gas, res.err
+}
+
+func setCode(db *state.StateDB, addr common.Address, code []byte) {
+	db.CreateAccount(addr)
+	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
+}
+
+func execPath(code []byte, gas uint64, switchDispatch bool) ([]byte, uint64, error) {
+	return execPathWithConfig(code, nil, gas, switchDispatch, diffChainConfig, nil)
+}
+
+// Assert both paths agree on returndata, gas, and error class.
 func runDiff(t *testing.T, code []byte, gas uint64) {
 	t.Helper()
 
-	retFast, gasFast, errFast := execPath(code, gas, true)
-	retSlow, gasSlow, errSlow := execPath(code, gas, false)
+	runDiffWithSetupAndInput(t, code, nil, gas, nil)
+}
 
-	cFast, cSlow := classifyErr(errFast), classifyErr(errSlow)
+func runDiffWithSetup(t *testing.T, code []byte, gas uint64, setup func(*state.StateDB)) {
+	t.Helper()
+
+	runDiffWithSetupAndInput(t, code, nil, gas, setup)
+}
+
+func runDiffWithInput(t *testing.T, code []byte, input []byte, gas uint64) {
+	t.Helper()
+
+	runDiffWithSetupAndInput(t, code, input, gas, nil)
+}
+
+func runDiffWithSetupAndInput(t *testing.T, code []byte, input []byte, gas uint64, setup func(*state.StateDB)) {
+	t.Helper()
+
+	fast := execPathResultWithConfig(code, input, gas, true, diffChainConfig, setup)
+	slow := execPathResultWithConfig(code, input, gas, false, diffChainConfig, setup)
+
+	cFast, cSlow := classifyErr(fast.err), classifyErr(slow.err)
 	if cFast != cSlow {
-		t.Fatalf("error class mismatch: fast=%q (%v) slow=%q (%v)", cFast, errFast, cSlow, errSlow)
+		t.Fatalf("error class mismatch: fast=%q (%v) slow=%q (%v)", cFast, fast.err, cSlow, slow.err)
 	}
-	if !bytes.Equal(retFast, retSlow) {
+	if !bytes.Equal(fast.ret, slow.ret) {
 		t.Fatalf("return data mismatch:\n  fast(%d): %x\n  slow(%d): %x",
-			len(retFast), retFast, len(retSlow), retSlow)
+			len(fast.ret), fast.ret, len(slow.ret), slow.ret)
 	}
-	if gasFast != gasSlow {
-		t.Fatalf("gas mismatch: fast=%d slow=%d", gasFast, gasSlow)
+	if fast.gas != slow.gas {
+		t.Fatalf("gas mismatch: fast=%d slow=%d", fast.gas, slow.gas)
+	}
+	if !sameLogs(fast.logs, slow.logs) {
+		t.Fatalf("logs mismatch:\n  fast=%v\n  slow=%v", fast.logs, slow.logs)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Commonly used uint256 values
-// ---------------------------------------------------------------------------
-
+// Common uint256 fixtures.
 var (
 	maxU256  = new(uint256.Int).SetAllOne()                               // 2^256 − 1
 	minI256  = new(uint256.Int).Lsh(uint256.NewInt(1), 255)               // 2^255  (most-negative signed)
@@ -195,13 +282,40 @@ var (
 	negThree = new(uint256.Int).Sub(new(uint256.Int), uint256.NewInt(3))  // −3
 )
 
-// ---------------------------------------------------------------------------
-// TestDispatchDifferential — the main differential test suite.
-// ---------------------------------------------------------------------------
-
+// Main differential suite.
 func TestDispatchDifferential(t *testing.T) {
 	t.Parallel()
 	const G = uint64(100_000)
+	revertCalleeAddr := common.BytesToAddress([]byte{0x42})
+	stopCalleeAddr := common.BytesToAddress([]byte{0x43})
+	transientRevertCalleeAddr := common.BytesToAddress([]byte{0x44})
+	transientSuccessCalleeAddr := common.BytesToAddress([]byte{0x45})
+	revertCalleeCode := cc(
+		p1(0xDE), p1(0), op1(MSTORE8),
+		p1(0xAD), p1(1), op1(MSTORE8),
+		p1(2), p1(0), op1(REVERT),
+	)
+	transientRevertCalleeCode := cc(
+		p1(0xAA), p1(0), op1(TSTORE),
+		p1(0), p1(0), op1(REVERT),
+	)
+	transientSuccessCalleeCode := cc(
+		p1(0xAA), p1(0), op1(TSTORE),
+		op1(STOP),
+	)
+	setupRevertCallee := func(db *state.StateDB) {
+		setCode(db, revertCalleeAddr, revertCalleeCode)
+	}
+	setupRevertAndStopCallees := func(db *state.StateDB) {
+		setupRevertCallee(db)
+		setCode(db, stopCalleeAddr, op1(STOP))
+	}
+	setupTransientRevertCallee := func(db *state.StateDB) {
+		setCode(db, transientRevertCalleeAddr, transientRevertCalleeCode)
+	}
+	setupTransientSuccessCallee := func(db *state.StateDB) {
+		setCode(db, transientSuccessCalleeAddr, transientSuccessCalleeCode)
+	}
 
 	type dc struct {
 		name string
@@ -690,33 +804,30 @@ func TestDispatchDifferential(t *testing.T) {
 	// =================================================================
 	t.Run("compound/arithmetic_chain", func(t *testing.T) {
 		t.Parallel()
-		// (((5 + 3) * 2) - 1) / 3  →  15/3 = 5
 		code := withRet(cc(
 			p1(3), p1(2), p1(1), p1(3), p1(5),
-			op1(ADD), // 5+3=8
-			op1(MUL), // 8*2=16
-			op1(SUB), // 16-1=15
-			op1(DIV), // 15/3=5
+			op1(ADD),
+			op1(MUL),
+			op1(SUB),
+			op1(DIV),
 		))
 		runDiff(t, code, G)
 	})
 
 	t.Run("compound/logic_chain", func(t *testing.T) {
 		t.Parallel()
-		// (0xff AND 0x0f) OR 0xf0 → 0xff, XOR 0xff → 0, ISZERO → 1
 		code := withRet(cc(
 			p1(0xff), p1(0xf0), p1(0x0f), p1(0xff),
-			op1(AND),    // 0xff & 0x0f = 0x0f
-			op1(OR),     // 0x0f | 0xf0 = 0xff
-			op1(XOR),    // 0xff ^ 0xff = 0
-			op1(ISZERO), // iszero(0) = 1
+			op1(AND),
+			op1(OR),
+			op1(XOR),
+			op1(ISZERO),
 		))
 		runDiff(t, code, G)
 	})
 
 	t.Run("compound/dup_swap_pop", func(t *testing.T) {
 		t.Parallel()
-		// push 10, push 20, DUP2 → [10,20,10], SWAP1 → [10,10,20], POP → [10,10], ADD → 20
 		code := withRet(cc(
 			p1(20), p1(10),
 			op1(DUP2),
@@ -729,20 +840,19 @@ func TestDispatchDifferential(t *testing.T) {
 
 	t.Run("compound/jump_loop_3_iters", func(t *testing.T) {
 		t.Parallel()
-		// Counts down from 3 to 0 using JUMP/JUMPI loop, returns final counter
 		code := []byte{
-			byte(PUSH1), 3, // 0-1
-			byte(JUMPDEST),  // 2
-			byte(DUP1),      // 3
-			byte(ISZERO),    // 4
-			byte(PUSH1), 15, // 5-6 (exit at 15)
-			byte(JUMPI),    // 7
-			byte(PUSH1), 1, // 8-9
-			byte(SWAP1),    // 10
-			byte(SUB),      // 11
-			byte(PUSH1), 2, // 12-13 (loop at 2)
-			byte(JUMP),     // 14
-			byte(JUMPDEST), // 15 (exit)
+			byte(PUSH1), 3,
+			byte(JUMPDEST),
+			byte(DUP1),
+			byte(ISZERO),
+			byte(PUSH1), 15,
+			byte(JUMPI),
+			byte(PUSH1), 1,
+			byte(SWAP1),
+			byte(SUB),
+			byte(PUSH1), 2,
+			byte(JUMP),
+			byte(JUMPDEST),
 			byte(PUSH1), 0, byte(MSTORE),
 			byte(PUSH1), 32, byte(PUSH1), 0, byte(RETURN),
 		}
@@ -751,19 +861,16 @@ func TestDispatchDifferential(t *testing.T) {
 
 	t.Run("compound/shifts_combined", func(t *testing.T) {
 		t.Parallel()
-		// SHL 4 on 0x0F = 0xF0, then SHR 2 = 0x3C
 		code := withRet(cc(
 			p1(2), p1(4), p1(0x0F),
-			op1(SHL), // 0x0F << 4 = 0xF0
-			op1(SHR), // 0xF0 >> 2 = 0x3C
+			op1(SHL),
+			op1(SHR),
 		))
 		runDiff(t, code, G)
 	})
 
 	t.Run("compound/signextend_then_sar", func(t *testing.T) {
 		t.Parallel()
-		// SIGNEXTEND byte 0 of 0x80 → 0xFFFF...FF80 (sign-extended)
-		// Then SAR 4 → arithmetic right shift
 		code := withRet(cc(
 			p1(4), p1(0), p1(0x80),
 			op1(SIGNEXTEND),
@@ -773,11 +880,10 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// =================================================================
-	//  Non-inlined opcodes through default path (verifies fallthrough)
+	//  Non-inlined opcodes through default path (verifies handoff)
 	// =================================================================
 
 	// --- Memory ---
-
 	t.Run("default_path/MLOAD", func(t *testing.T) {
 		t.Parallel()
 		code := cc(p1(42), p1(0), op1(MSTORE), p1(0), op1(MLOAD), retSeq)
@@ -800,8 +906,42 @@ func TestDispatchDifferential(t *testing.T) {
 		runDiff(t, code, G)
 	})
 
-	// --- Closure state (0x30 range) ---
+	t.Run("default_path/MCOPY/overlap_forward_after_accumulated_fast_gas", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			m8(0, 0x00), m8(1, 0x01), m8(2, 0x02), m8(3, 0x03), m8(4, 0x04),
+			m8(5, 0x05), m8(6, 0x06), m8(7, 0x07), m8(8, 0x08),
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(8), p1(0), p1(1), op1(MCOPY),
+			p1(32), p1(0), op1(RETURN),
+		)
+		runDiff(t, code, G)
+	})
 
+	t.Run("default_path/MCOPY/overlap_backward_after_accumulated_fast_gas", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			m8(0, 0x00), m8(1, 0x01), m8(2, 0x02), m8(3, 0x03), m8(4, 0x04),
+			m8(5, 0x05), m8(6, 0x06), m8(7, 0x07), m8(8, 0x08),
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(8), p1(1), p1(0), op1(MCOPY),
+			p1(32), p1(0), op1(RETURN),
+		)
+		runDiff(t, code, G)
+	})
+
+	t.Run("default_path/MCOPY/zero_length_huge_offsets", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			m8(0, 0x11),
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(0), p32(maxU256), p32(maxU256), op1(MCOPY),
+			p1(32), p1(0), op1(RETURN),
+		)
+		runDiff(t, code, G)
+	})
+
+	// --- Closure state (0x30 range) ---
 	t.Run("default_path/ADDRESS", func(t *testing.T) {
 		t.Parallel()
 		runDiff(t, withRet(op1(ADDRESS)), G)
@@ -831,12 +971,12 @@ func TestDispatchDifferential(t *testing.T) {
 	t.Run("default_path/CALLDATALOAD", func(t *testing.T) {
 		t.Parallel()
 		code := withRet(cc(p1(0), op1(CALLDATALOAD)))
-		runDiff(t, code, G)
+		runDiffWithInput(t, code, []byte{0xDE, 0xAD}, G)
 	})
 
 	t.Run("default_path/CALLDATASIZE", func(t *testing.T) {
 		t.Parallel()
-		runDiff(t, withRet(op1(CALLDATASIZE)), G)
+		runDiffWithInput(t, withRet(op1(CALLDATASIZE)), []byte{0xDE, 0xAD}, G)
 	})
 
 	t.Run("default_path/CALLDATACOPY", func(t *testing.T) {
@@ -845,7 +985,7 @@ func TestDispatchDifferential(t *testing.T) {
 			p1(32), p1(0), p1(0), op1(CALLDATACOPY),
 			p1(32), p1(0), op1(RETURN),
 		)
-		runDiff(t, code, G)
+		runDiffWithInput(t, code, []byte{0xDE, 0xAD}, G)
 	})
 
 	t.Run("default_path/CODESIZE", func(t *testing.T) {
@@ -895,7 +1035,6 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// --- Block operations (0x40 range) ---
-
 	t.Run("default_path/BLOCKHASH", func(t *testing.T) {
 		t.Parallel()
 		code := withRet(cc(p1(0), op1(BLOCKHASH)))
@@ -954,7 +1093,6 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// --- Storage (0x54–0x55) ---
-
 	t.Run("default_path/SSTORE_SLOAD", func(t *testing.T) {
 		t.Parallel()
 		code := cc(
@@ -966,7 +1104,6 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// --- Transient storage (0x5c–0x5d, EIP-1153) ---
-
 	t.Run("default_path/TSTORE_TLOAD", func(t *testing.T) {
 		t.Parallel()
 		code := cc(
@@ -977,8 +1114,31 @@ func TestDispatchDifferential(t *testing.T) {
 		runDiff(t, code, G)
 	})
 
-	// --- GAS ---
+	t.Run("default_path/DELEGATECALL/TSTORE_persists_on_success", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(0), p1(0), p1(0), p1(0), p1(0x45), p1(0xFF), op1(DELEGATECALL),
+			op1(POP),
+			p1(0), op1(TLOAD),
+			retSeq,
+		)
+		runDiffWithSetup(t, code, G, setupTransientSuccessCallee)
+	})
 
+	t.Run("default_path/DELEGATECALL/TSTORE_revert_rolls_back", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(0), p1(0), p1(0), p1(0), p1(0x44), p1(0xFF), op1(DELEGATECALL),
+			op1(POP),
+			p1(0), op1(TLOAD),
+			retSeq,
+		)
+		runDiffWithSetup(t, code, G, setupTransientRevertCallee)
+	})
+
+	// --- GAS ---
 	t.Run("default_path/GAS/simple", func(t *testing.T) {
 		t.Parallel()
 		runDiff(t, withRet(op1(GAS)), G)
@@ -986,21 +1146,17 @@ func TestDispatchDifferential(t *testing.T) {
 
 	t.Run("default_path/GAS/after_accumulated_gas", func(t *testing.T) {
 		t.Parallel()
-		// ADD+ADD accumulate gas in runSwitch without flushing to contract.Gas.
-		// GAS (default path) must flush before reading contract.Gas, otherwise
-		// it would report a higher value than the old Run() path.
 		code := withRet(cc(
 			p1(1), p1(2), p1(3), p1(4),
-			op1(ADD), // gasAccum += 3
-			op1(ADD), // gasAccum += 3
-			op1(POP), // gasAccum += 2
-			op1(GAS), // default: flush gasAccum, charge GAS cost, push contract.Gas
+			op1(ADD),
+			op1(ADD),
+			op1(POP),
+			op1(GAS),
 		))
 		runDiff(t, code, G)
 	})
 
 	// --- Crypto ---
-
 	t.Run("default_path/KECCAK256", func(t *testing.T) {
 		t.Parallel()
 		code := cc(p1(32), p1(0), op1(KECCAK256), retSeq)
@@ -1008,7 +1164,6 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// --- Logging (0xa0–0xa4) ---
-
 	t.Run("default_path/LOG0", func(t *testing.T) {
 		t.Parallel()
 		code := cc(p1(42), p1(0), op1(MSTORE), p1(32), p1(0), op1(LOG0), op1(STOP))
@@ -1040,7 +1195,6 @@ func TestDispatchDifferential(t *testing.T) {
 	})
 
 	// --- REVERT ---
-
 	t.Run("default_path/REVERT/empty", func(t *testing.T) {
 		t.Parallel()
 		code := cc(p1(0), p1(0), op1(REVERT))
@@ -1049,19 +1203,69 @@ func TestDispatchDifferential(t *testing.T) {
 
 	t.Run("default_path/REVERT/with_data", func(t *testing.T) {
 		t.Parallel()
-		// Store 0xDEAD at memory offset 0, then REVERT with offset=0 size=32.
-		// The revert data should be returned to the caller.
 		code := cc(p1(0xDE), p1(0), op1(MSTORE8), p1(0xAD), p1(1), op1(MSTORE8),
 			p1(32), p1(0), op1(REVERT))
 		runDiff(t, code, G)
 	})
+
+	t.Run("default_path/REVERT/after_accumulated_fast_gas", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(0), p1(0), op1(REVERT),
+		)
+		runDiff(t, code, G)
+	})
+
+	t.Run("default_path/REVERT/with_data_after_accumulated_fast_gas", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(0xDE), p1(0), op1(MSTORE8),
+			p1(0xAD), p1(1), op1(MSTORE8),
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(2), p1(0), op1(REVERT),
+		)
+		runDiff(t, code, G)
+	})
+
+	t.Run("default_path/CALL/revert_then_returndatacopy", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(1), p1(2), op1(ADD), op1(POP),
+			p1(0), p1(0), p1(0), p1(0), p1(0), p1(0x42), p1(0xFF), op1(CALL),
+			op1(POP),
+			p1(2), p1(0), p1(0), op1(RETURNDATACOPY),
+			p1(32), p1(0), op1(RETURN),
+		)
+		runDiffWithSetup(t, code, G, setupRevertCallee)
+	})
+
+	t.Run("default_path/CALL/revert_then_returndatacopy_out_of_bounds", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(0), p1(0), p1(0), p1(0), p1(0), p1(0x42), p1(0xFF), op1(CALL),
+			op1(POP),
+			p1(3), p1(0), p1(0), op1(RETURNDATACOPY),
+			op1(STOP),
+		)
+		runDiffWithSetup(t, code, G, setupRevertCallee)
+	})
+
+	t.Run("default_path/CALL/revert_then_success_clears_returndata", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(0), p1(0), p1(0), p1(0), p1(0), p1(0x42), p1(0xFF), op1(CALL),
+			op1(POP),
+			p1(0), p1(0), p1(0), p1(0), p1(0), p1(0x43), p1(0xFF), op1(CALL),
+			op1(POP),
+			withRet(op1(RETURNDATASIZE)),
+		)
+		runDiffWithSetup(t, code, G, setupRevertAndStopCallees)
+	})
 }
 
-// TestPreShanghaiForkGate verifies that PUSH0 is correctly rejected on a
-// pre-Shanghai chain config. Without the IsShanghai gate on runSwitch, the
-// fast path inlines PUSH0 unconditionally and incorrectly executes it.
+// Verify PUSH0 stays fork-gated pre-Shanghai.
 func TestPreShanghaiForkGate(t *testing.T) {
-	// Chain config with all forks through Merge, but Shanghai NOT activated.
 	preShanghaiConfig := &params.ChainConfig{
 		ChainID:             big.NewInt(1),
 		HomesteadBlock:      new(big.Int),
@@ -1079,60 +1283,19 @@ func TestPreShanghaiForkGate(t *testing.T) {
 		ArrowGlacierBlock:   new(big.Int),
 		GrayGlacierBlock:    new(big.Int),
 		MergeNetsplitBlock:  new(big.Int),
-		// ShanghaiBlock intentionally nil — PUSH0 should be invalid.
+		// Shanghai disabled.
 	}
 
-	execWithConfig := func(code []byte, gas uint64, switchDispatch bool, chainCfg *params.ChainConfig) ([]byte, uint64, error) {
-		addr := common.BytesToAddress([]byte("contract"))
-		caller := common.BytesToAddress([]byte("caller"))
-
-		db, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-		db.CreateAccount(addr)
-		db.SetCode(addr, code, tracing.CodeChangeUnspecified)
-		db.CreateAccount(caller)
-		db.Finalise(true)
-
-		bctx := BlockContext{
-			CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
-			Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int) {},
-			GetHash:     func(uint64) common.Hash { return common.Hash{} },
-			BlockNumber: big.NewInt(1),
-			Time:        1,
-			Difficulty:  big.NewInt(1),
-			GasLimit:    gas,
-			BaseFee:     big.NewInt(1),
-			BlobBaseFee: big.NewInt(1),
-			Random:      &common.Hash{},
-		}
-
-		rules := chainCfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
-		db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
-
-		evmCfg := Config{EnableSwitchDispatch: switchDispatch}
-
-		evm := NewEVM(bctx, db, chainCfg, evmCfg)
-		evm.SetTxContext(TxContext{
-			Origin:   caller,
-			GasPrice: big.NewInt(1),
-		})
-		return evm.Call(caller, addr, nil, gas, new(uint256.Int))
-	}
-
-	// PUSH0, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN
-	// If PUSH0 is allowed this returns 32 bytes of zeros.
-	// If PUSH0 is rejected this should return an invalid_opcode error.
 	code := cc(op1(PUSH0), retSeq)
 	gas := uint64(100_000)
 
-	// Slow path (switch dispatch disabled) — should reject PUSH0 as invalid opcode.
-	_, _, errSlow := execWithConfig(code, gas, false, preShanghaiConfig)
+	_, _, errSlow := execPathWithConfig(code, nil, gas, false, preShanghaiConfig, nil)
 	slowClass := classifyErr(errSlow)
 	if slowClass != "invalid_opcode" {
 		t.Fatalf("slow path: expected invalid_opcode, got %q (%v)", slowClass, errSlow)
 	}
 
-	// Fast path (switch dispatch enabled) — without the IsShanghai gate, this incorrectly succeeds.
-	_, _, errFast := execWithConfig(code, gas, true, preShanghaiConfig)
+	_, _, errFast := execPathWithConfig(code, nil, gas, true, preShanghaiConfig, nil)
 	fastClass := classifyErr(errFast)
 
 	if fastClass != slowClass {
