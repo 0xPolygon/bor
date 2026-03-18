@@ -2366,10 +2366,9 @@ func (w *worker) clearPending(number uint64) {
 	w.pendingMu.Unlock()
 }
 
-// vmConfig returns blockchain's vm config with tracing disabled, suitable for block production.
+// vmConfig returns the VM config.
 func (w *worker) vmConfig() vm.Config {
 	cfg := *w.chain.GetVMConfig()
-	cfg.Tracer = nil
 	return cfg
 }
 

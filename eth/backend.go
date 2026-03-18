@@ -287,8 +287,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			PreloadRateLimit:  config.PreloadRateLimit,
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
-				EnableWitnessStats:      config.EnableWitnessStats,
 				StatelessSelfValidation: config.StatelessSelfValidation,
+				EnableWitnessStats:      config.EnableWitnessStats,
 				EnableSwitchDispatch:    config.EnableSwitchDispatch,
 			},
 			Stateless: config.SyncMode == downloader.StatelessSync,
@@ -300,10 +300,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
-
-	if config.EnableSwitchDispatch {
-		log.Info("EVM switch dispatch fast path enabled")
-	}
 
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
