@@ -205,6 +205,9 @@ type Config struct {
 	// position in eth_getLogs filter criteria (0 = no cap)
 	RPCLogQueryLimit int
 
+	// RPCBlockRangeLimit is the maximum block range allowed in eth_getLogs / bor_getLogs (0 = unlimited)
+	RPCBlockRangeLimit uint64
+
 	// URL to connect to Heimdall node
 	HeimdallURL string
 
