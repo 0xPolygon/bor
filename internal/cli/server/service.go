@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -14,8 +13,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/internal/cli/server/pprof"
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -229,31 +226,7 @@ func headerToProtoHeader(h *types.Header) *proto.Header {
 }
 
 func (s *Server) DebugBlock(req *proto.DebugBlockRequest, stream proto.Bor_DebugBlockServer) error {
-	traceReq := &tracers.TraceBlockRequest{
-		Number: req.Number,
-		Config: &tracers.TraceConfig{
-			Config: &logger.Config{
-				EnableMemory: true,
-			},
-		},
-	}
-
-	res, err := s.tracerAPI.TraceBorBlock(traceReq)
-	if err != nil {
-		return err
-	}
-
-	// this is memory heavy
-	data, err := json.Marshal(res)
-	if err != nil {
-		return err
-	}
-
-	if err := sendStreamDebugFile(stream, map[string]string{}, data); err != nil {
-		return err
-	}
-
-	return nil
+	return errors.New("debug block via gRPC is not supported, use debug_traceBlockByNumber RPC instead")
 }
 
 var bigIntT = reflect.TypeOf(new(big.Int)).Kind()

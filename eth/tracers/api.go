@@ -19,18 +19,14 @@ package tracers
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
-
-	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -40,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
@@ -74,21 +69,13 @@ const (
 	// for tracing. The creation of trace state will be paused if the unused
 	// trace states exceed this limit.
 	maximumPendingTraceStates = 128
-
-	defaultPath = string(".")
-
-	defaultIOFlag = false
 )
-
-var defaultBorTraceEnabled = newBoolPtr(false)
 
 var errTxNotFound = errors.New("transaction not found")
 
 // StateReleaseFunc is used to deallocate resources held by constructing a
 // historical state for tracing purposes.
 type StateReleaseFunc func()
-
-var allowIOTracing = false // Change this to true to enable IO tracing for debugging
 
 // Backend interface provides the common API services (that are provided by
 // both full and light clients) with access to necessary functions.
@@ -106,9 +93,6 @@ type Backend interface {
 	ChainDb() ethdb.Database
 	StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (*state.StateDB, StateReleaseFunc, error)
 	StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, StateReleaseFunc, error)
-
-	// Bor related APIs
-	GetBorBlockTransactionWithBlockHash(ctx context.Context, txHash common.Hash, blockHash common.Hash) (*types.Transaction, common.Hash, uint64, uint64, error)
 }
 
 // API is the collection of tracing APIs exposed over the private debugging endpoint.
@@ -175,38 +159,6 @@ func (api *API) blockByNumberAndHash(ctx context.Context, number rpc.BlockNumber
 	return api.blockByHash(ctx, hash)
 }
 
-// getAllBlockTransactions returns all blocks transactions including state-sync transaction if present
-// along with a flag and it's hash (which is calculated differently than regular transactions)
-func (api *API) getAllBlockTransactions(ctx context.Context, block *types.Block) (types.Transactions, bool, common.Hash) {
-	var (
-		txs              types.Transactions = block.Transactions()
-		stateSyncPresent bool
-		stateSyncHash    common.Hash
-	)
-
-	isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
-	if isMadhugiri {
-		if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
-			stateSyncPresent = true
-			stateSyncHash = txs[len(txs)-1].Hash()
-		}
-		return txs, stateSyncPresent, stateSyncHash
-	}
-
-	borReceipt := rawdb.ReadBorReceipt(api.backend.ChainDb(), block.Hash(), block.NumberU64(), api.backend.ChainConfig())
-	if borReceipt != nil {
-		txHash := types.GetDerivedBorTxHash(types.BorReceiptKey(block.Number().Uint64(), block.Hash()))
-		if txHash != (common.Hash{}) {
-			borTx, _, _, _, _ := api.backend.GetBorBlockTransactionWithBlockHash(ctx, txHash, block.Hash())
-			txs = append(txs, borTx)
-			stateSyncPresent = true
-			stateSyncHash = txHash
-		}
-	}
-
-	return txs, stateSyncPresent, stateSyncHash
-}
-
 // TraceConfig holds extra parameters to trace functions.
 type TraceConfig struct {
 	*logger.Config
@@ -217,29 +169,7 @@ type TraceConfig struct {
 	IOFlag  *bool
 	// Config specific to given tracer. Note struct logger
 	// config are historically embedded in main object.
-	TracerConfig    json.RawMessage
-	BorTraceEnabled *bool
-	BorTx           *bool
-}
-
-// deepCopyTraceConfig returns a deep copy of the given TraceConfig so that
-// each goroutine can safely mutate its own copy without racing.
-func deepCopyTraceConfig(config *TraceConfig) TraceConfig {
-	cpy := *config
-	if config.Config != nil {
-		loggerCfg := *config.Config
-		cpy.Config = &loggerCfg
-	}
-	if config.BorTx != nil {
-		cpy.BorTx = newBoolPtr(*config.BorTx)
-	}
-	if config.BorTraceEnabled != nil {
-		cpy.BorTraceEnabled = newBoolPtr(*config.BorTraceEnabled)
-	}
-	if config.TracerConfig != nil {
-		cpy.TracerConfig = append(json.RawMessage{}, config.TracerConfig...)
-	}
-	return cpy
+	TracerConfig json.RawMessage
 }
 
 // TraceCallConfig is the config for traceCall API. It holds one more
@@ -254,9 +184,8 @@ type TraceCallConfig struct {
 // StdTraceConfig holds extra parameters to standard-json trace functions.
 type StdTraceConfig struct {
 	logger.Config
-	Reexec          *uint64
-	TxHash          common.Hash
-	BorTraceEnabled *bool
+	Reexec *uint64
+	TxHash common.Hash
 }
 
 // txTraceResult is the result of a single transaction trace.
@@ -548,11 +477,6 @@ func (api *API) traceChain(start, end *types.Block, config *TraceConfig, closed 
 	return retCh
 }
 
-func newBoolPtr(bb bool) *bool {
-	b := bb
-	return &b
-}
-
 // TraceBlockByNumber returns the structured logs created during the execution of
 // EVM and returns them as a JSON object.
 func (api *API) TraceBlockByNumber(ctx context.Context, number rpc.BlockNumber, config *TraceConfig) ([]*txTraceResult, error) {
@@ -698,7 +622,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 			callmsg := prepareCallMessage(*msg)
 			_, err = statefull.ApplyBorMessage(evm, callmsg)
 		} else {
-			_, err = core.ApplyMessage(evm, msg, nil)
+			_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		}
 
 		if err != nil {
@@ -879,7 +803,7 @@ txloop:
 		// Generate the next state snapshot fast without tracing
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
-		res, err := core.ApplyMessage(evm, msg, nil)
+		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		if err != nil {
 			failed = err
 			break txloop
@@ -915,275 +839,6 @@ txloop:
 		} else {
 			results[txctx.TxIndex] = &txTraceResult{TxHash: tx.Hash(), Result: res}
 		}
-	}
-
-	return results, nil
-}
-
-// traceBlock configures a new tracer according to the provided configuration, and
-// executes all the transactions contained within. The return value will be one item
-// per transaction, dependent on the requested tracer.
-// We always run parallel execution
-// One thread runs along and executes txs without tracing enabled to generate their prestate.
-// Worker threads take the tasks and the prestate and trace them.
-func (api *API) traceBlock2(ctx context.Context, block *types.Block, config *TraceConfig) ([]*txTraceResult, error) {
-	if config == nil {
-		config = &TraceConfig{
-			BorTraceEnabled: defaultBorTraceEnabled,
-			BorTx:           newBoolPtr(false),
-		}
-	}
-
-	if config.BorTraceEnabled == nil {
-		config.BorTraceEnabled = defaultBorTraceEnabled
-	}
-
-	if block.NumberU64() == 0 {
-		return nil, errors.New("genesis is not traceable")
-	}
-	// Prepare base state
-	parent, err := api.blockByNumberAndHash(ctx, rpc.BlockNumber(block.NumberU64()-1), block.ParentHash())
-	if err != nil {
-		return nil, err
-	}
-
-	reexec := defaultTraceReexec
-	if config != nil && config.Reexec != nil {
-		reexec = *config.Reexec
-	}
-
-	path := defaultPath
-	if config != nil && config.Path != nil {
-		path = *config.Path
-	}
-
-	ioflag := defaultIOFlag
-	if allowIOTracing && config != nil && config.IOFlag != nil {
-		ioflag = *config.IOFlag
-	}
-
-	statedb, release, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true, false)
-	if err != nil {
-		return nil, err
-	}
-
-	defer release()
-
-	// create and add empty mvHashMap in statedb as StateAtBlock does not have mvHashmap in it.
-	if ioflag {
-		statedb.AddEmptyMVHashMap()
-	}
-
-	// Execute all the transaction contained within the block concurrently
-	var (
-		txs, stateSyncPresent, stateSyncHash = api.getAllBlockTransactions(ctx, block)
-		blockHash                            = block.Hash()
-		signer                               = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
-		results                              = make([]*txTraceResult, len(txs))
-		pend                                 sync.WaitGroup
-	)
-
-	threads := runtime.NumCPU()
-	if threads > len(txs) {
-		threads = len(txs)
-	}
-
-	jobs := make(chan *txTraceTask, threads)
-
-	for th := 0; th < threads; th++ {
-		pend.Add(1)
-
-		go func() {
-			defer pend.Done()
-			// Fetch and execute the next transaction trace tasks
-			for task := range jobs {
-				msg, _ := core.TransactionToMessage(txs[task.index], signer, block.BaseFee())
-				txHash := txs[task.index].Hash()
-				if stateSyncPresent && task.index == len(txs)-1 {
-					txHash = stateSyncHash
-				}
-				txctx := &Context{
-					BlockHash:   blockHash,
-					BlockNumber: block.Number(),
-					TxIndex:     task.index,
-					TxHash:      txHash,
-				}
-
-				var res interface{}
-
-				var err error
-
-				// Deep copy config for this transaction to avoid race conditions
-				txConfig := deepCopyTraceConfig(config)
-				// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
-				if stateSyncPresent && task.index == len(txs)-1 {
-					isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
-					if isMadhugiri || *config.BorTraceEnabled {
-						txConfig.BorTx = newBoolPtr(true)
-					}
-				}
-
-				// Reconstruct the block context for each transaction
-				// as the GetHash function of BlockContext is not safe for
-				// concurrent use.
-				// See: https://github.com/ethereum/go-ethereum/issues/29114
-				blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-				res, _, err = api.traceTx(ctx, txs[task.index], msg, txctx, blockCtx, task.statedb, &txConfig, nil)
-				if err != nil {
-					results[task.index] = &txTraceResult{TxHash: txHash, Error: err.Error()}
-					continue
-				}
-				results[task.index] = &txTraceResult{TxHash: txHash, Result: res}
-			}
-		}()
-	}
-
-	var IOdump string
-
-	var RWstruct []state.DumpStruct
-
-	var london bool
-
-	if ioflag {
-		IOdump = "TransactionIndex, Incarnation, VersionTxIdx, VersionInc, Path, Operation\n"
-		RWstruct = []state.DumpStruct{}
-	}
-	// Feed the transactions into the tracers and return
-	var failed error
-
-	if ioflag {
-		london = api.backend.ChainConfig().IsLondon(block.Number())
-	}
-
-	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
-	evm := vm.NewEVM(blockCtx, statedb, api.backend.ChainConfig(), vm.Config{})
-
-	// Process beacon block root (EIP-4788) and parent block hash (EIP-2935)
-	// before executing transactions, matching stateAtTransaction behavior.
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if api.backend.ChainConfig().IsPrague(block.Number()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
-
-txloop:
-	for i, tx := range txs {
-		if ioflag {
-			// copy of statedb
-			statedb = statedb.Copy()
-		}
-
-		// Send the trace task over for execution
-		task := &txTraceTask{statedb: statedb.Copy(), index: i}
-		select {
-		case <-ctx.Done():
-			failed = ctx.Err()
-			break txloop
-		case jobs <- task:
-		}
-
-		// Generate the next state snapshot fast without tracing
-		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
-		statedb.SetTxContext(tx.Hash(), i)
-
-		// nolint:nestif
-		if !ioflag {
-			//nolint:nestif
-			if stateSyncPresent && i == len(txs)-1 {
-				if *config.BorTraceEnabled {
-					callmsg := prepareCallMessage(*msg)
-					// Set TxContext so opcodes like GASPRICE don't panic on nil GasPrice.
-					evm.SetTxContext(core.NewEVMTxContext(msg))
-					// nolint : contextcheck
-					if _, err := statefull.ApplyBorMessage(evm, callmsg); err != nil {
-						failed = err
-						break txloop
-					}
-				} else {
-					break txloop
-				}
-			} else {
-				// nolint : contextcheck
-				if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit)); err != nil {
-					failed = err
-					break txloop
-				}
-				// Finalize the state so any modifications are written to the trie
-				// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-				statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
-			}
-		} else {
-			coinbaseBalance := big.NewInt(statedb.GetBalance(blockCtx.Coinbase).ToBig().Int64())
-			// nolint : contextcheck
-			result, err := core.ApplyMessageNoFeeBurnOrTip(evm, *msg, new(core.GasPool).AddGas(msg.GasLimit))
-
-			if err != nil {
-				failed = err
-				break
-			}
-
-			if london {
-				statedb.AddBalance(result.BurntContractAddress, uint256.NewInt(result.FeeBurnt.Uint64()), tracing.BalanceChangeTransfer)
-			}
-
-			statedb.AddBalance(blockCtx.Coinbase, uint256.NewInt(result.FeeTipped.Uint64()), tracing.BalanceChangeTransfer)
-			output1 := new(big.Int).SetBytes(result.SenderInitBalance.Bytes())
-			output2 := new(big.Int).SetBytes(coinbaseBalance.Bytes())
-
-			// Deprecating transfer log and will be removed in future fork. PLEASE DO NOT USE this transfer log going forward. Parameters won't get updated as expected going forward with EIP1559
-			// add transfer log
-			core.AddFeeTransferLog(
-				statedb,
-
-				msg.From,
-				blockCtx.Coinbase,
-
-				result.FeeTipped,
-				result.SenderInitBalance,
-				coinbaseBalance,
-				output1.Sub(output1, result.FeeTipped),
-				output2.Add(output2, result.FeeTipped),
-			)
-
-			// Finalize the state so any modifications are written to the trie
-			// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
-			statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
-			statedb.FlushMVWriteSet()
-
-			structRead := statedb.GetReadMapDump()
-			structWrite := statedb.GetWriteMapDump()
-
-			RWstruct = append(RWstruct, structRead...)
-			RWstruct = append(RWstruct, structWrite...)
-		}
-	}
-
-	if ioflag {
-		for _, val := range RWstruct {
-			IOdump += fmt.Sprintf("%v , %v, %v , %v, ", val.TxIdx, val.TxInc, val.VerIdx, val.VerInc) + hex.EncodeToString(val.Path) + ", " + val.Op
-		}
-
-		// make sure that the file exists and write IOdump
-		err = os.WriteFile(filepath.Join(path, "data.csv"), []byte(fmt.Sprint(IOdump)), 0600)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	close(jobs)
-	pend.Wait()
-
-	// If execution failed in between, abort
-	if failed != nil {
-		return nil, failed
-	}
-
-	// Include state sync tx if canonical (post-Madhugiri) or BorTraceEnabled (pre-Madhugiri).
-	isMadhugiri := api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number())
-	includeStateSyncTx := isMadhugiri || *config.BorTraceEnabled
-	if stateSyncPresent && !includeStateSyncTx {
-		return results[:len(results)-1], nil
 	}
 
 	return results, nil
@@ -1302,6 +957,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		// Execute the transaction and flush any traces to disk
 		statedb.SetTxContext(tx.Hash(), i)
 		// Handle differently for state sync transactions
+		var vmResult *core.ExecutionResult
 		if tx.Type() == types.StateSyncTxType {
 			// Set tx context so that opcodes like GASPRICE don't panic.
 			evm.SetTxContext(core.NewEVMTxContext(msg))
@@ -1309,12 +965,19 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			if tracer.OnTxStart != nil {
 				tracer.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 			}
-			_, err = statefull.ApplyBorMessage(evm, callmsg)
+			vmResult, err = statefull.ApplyBorMessage(evm, callmsg)
 		} else {
 			if tracer.OnTxStart != nil {
 				tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
 			}
-			_, err = core.ApplyMessage(evm, msg, nil)
+			vmResult, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
+		}
+		if tracer.OnTxEnd != nil {
+			var receipt *types.Receipt
+			if vmResult != nil {
+				receipt = &types.Receipt{GasUsed: vmResult.UsedGas}
+			}
+			tracer.OnTxEnd(receipt, err)
 		}
 		if writer != nil {
 			_ = writer.Flush()
