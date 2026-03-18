@@ -228,10 +228,6 @@ func setCode(db *state.StateDB, addr common.Address, code []byte) {
 	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 }
 
-func execPath(code []byte, gas uint64, switchDispatch bool) ([]byte, uint64, error) {
-	return execPathWithConfig(code, nil, gas, switchDispatch, diffChainConfig, nil)
-}
-
 // Assert both paths agree on returndata, gas, and error class.
 func runDiff(t *testing.T, code []byte, gas uint64) {
 	t.Helper()
