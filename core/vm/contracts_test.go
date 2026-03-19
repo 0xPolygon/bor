@@ -595,6 +595,7 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	t.Parallel()
 
 	kzgPointEvaluationAddr := common.BytesToAddress([]byte{0x0a})
+	kzgPointEvaluationPrecompile := &kzgPointEvaluation{}
 
 	// We verify a few things in this test:
 	//   - Madhugiri, MadhugiriPro, and Lisovo have the kzg precompile enabled
@@ -615,12 +616,15 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	}
 	for _, tc := range cases {
 		precompiles := ActivePrecompiledContracts(tc.rules)
-		_, exists := precompiles[kzgPointEvaluationAddr]
+		pc, exists := precompiles[kzgPointEvaluationAddr]
 		if tc.shouldHaveKzg && !exists {
 			t.Errorf("kzgPointEvaluation (0x0a) should exist in %v precompiles", tc.name)
 		}
 		if !tc.shouldHaveKzg && exists {
 			t.Errorf("kzgPointEvaluation (0x0a) should not exist in %v precompiles", tc.name)
+		}
+		if exists && pc.Name() != kzgPointEvaluationPrecompile.Name() {
+			t.Errorf("invalid precompile loaded instead of kzgPointEvaluation (0x0a). expected name: %s, got name: %s, test case: %s", kzgPointEvaluationPrecompile.Name(), pc.Name(), tc.name)
 		}
 	}
 }
