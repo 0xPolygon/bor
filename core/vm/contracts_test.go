@@ -589,7 +589,8 @@ func TestLisovoCLZOpcode(t *testing.T) {
 }
 
 // TestKZGPointEvaluationPrecompileRemoval verifies that the kzgPointEvaluation precompile
-// is present before LisovoPro up until Madhugiri and is removed starting with LisovoPro.
+// is present from Madhugiri through Lisovo, and is not present before Madhugiri and starting
+// with LisovoPro.
 func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	t.Parallel()
 
@@ -598,13 +599,14 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	// We verify few things in this test:
 	//   - Madhugiri, MadhugiriPro and Lisovo has kzg precompile enabled
 	//   - LisovoPro removes it so it shouldn't be enabled
-	//   - HFs before Madhigiri, i.e. Prague should not have kzg enabled
+	//   - HFs before Madhugiri, i.e. Prague should not have kzg enabled
 	type testCase struct {
 		name          string
 		rules         params.Rules
 		shouldHaveKzg bool
 	}
 	cases := []testCase{
+		{name: "Cancun (Pre-Madhugiri)", rules: params.Rules{IsCancun: true}, shouldHaveKzg: false},
 		{name: "Prague (Pre-Madhugiri)", rules: params.Rules{IsPrague: true}, shouldHaveKzg: false},
 		{name: "Madhugiri", rules: params.Rules{IsMadhugiri: true}, shouldHaveKzg: true},
 		{name: "MadhugiriPro", rules: params.Rules{IsMadhugiriPro: true}, shouldHaveKzg: true},
