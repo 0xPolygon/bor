@@ -112,6 +112,7 @@ devfakeauthor = false
   evmtimeout = "5s"
   txfeecap = 1.0
   logquerylimit = 1000
+  rangelimit = 0
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
   "txsync.defaulttimeout" = "20s"
