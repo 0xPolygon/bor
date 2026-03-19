@@ -722,6 +722,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.JsonRPC.LogQueryLimit,
 		Group:   "JsonRPC",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "rpc.rangelimit",
+		Usage:   "Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit)",
+		Value:   &c.cliConfig.JsonRPC.RangeLimit,
+		Default: c.cliConfig.JsonRPC.RangeLimit,
+		Group:   "JsonRPC",
+	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "rpc.allow-unprotected-txs",
 		Usage:   "Allow for unprotected (non EIP155 signed) transactions to be submitted via RPC",

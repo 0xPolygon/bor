@@ -118,7 +118,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
 
-- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: true)
+- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: false)
 
 - ```witness.parallelstatelessimport```: Enable parallel stateless block import (default: false)
 
@@ -245,6 +245,8 @@ The ```bor server``` command runs the Bor client.
 - ```rpc.gascap```: Sets a cap on gas that can be used in eth_call/estimateGas (0=infinite) (default: 50000000)
 
 - ```rpc.logquerylimit```: Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap) (default: 1000)
+
+- ```rpc.rangelimit```: Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit) (default: 0)
 
 - ```rpc.txfeecap```: Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap) (default: 1)
 

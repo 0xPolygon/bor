@@ -663,6 +663,12 @@ var (
 		Value:    ethconfig.Defaults.LogQueryLimit,
 		Category: flags.APICategory,
 	}
+	RPCGlobalRangeLimitFlag = &cli.Uint64Flag{
+		Name:     "rpc.rangelimit",
+		Usage:    "Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit)",
+		Value:    ethconfig.Defaults.RPCBlockRangeLimit,
+		Category: flags.APICategory,
+	}
 	RPCTxSyncDefaultTimeoutFlag = &cli.DurationFlag{
 		Name:     "rpc.txsync.defaulttimeout",
 		Usage:    "Default timeout for eth_sendRawTransactionSync (e.g. 2s, 500ms)",
@@ -1878,6 +1884,10 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(RPCGlobalLogQueryLimit.Name) {
 		cfg.LogQueryLimit = ctx.Int(RPCGlobalLogQueryLimit.Name)
+		cfg.RPCLogQueryLimit = ctx.Int(RPCGlobalLogQueryLimit.Name)
+	}
+	if ctx.IsSet(RPCGlobalRangeLimitFlag.Name) {
+		cfg.RPCBlockRangeLimit = ctx.Uint64(RPCGlobalRangeLimitFlag.Name)
 	}
 	if ctx.IsSet(RPCTxSyncDefaultTimeoutFlag.Name) {
 		cfg.TxSyncDefaultTimeout = ctx.Duration(RPCTxSyncDefaultTimeoutFlag.Name)
@@ -2230,7 +2240,8 @@ func RegisterGraphQLService(stack *node.Node, backend ethapi.Backend, filterSyst
 func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconfig.Config) *filters.FilterSystem {
 	filterSystem := filters.NewFilterSystem(backend, filters.Config{
 		LogCacheSize:  ethcfg.FilterLogCacheSize,
-		LogQueryLimit: ethcfg.LogQueryLimit,
+		LogQueryLimit: ethcfg.RPCLogQueryLimit,
+		RangeLimit:    ethcfg.RPCBlockRangeLimit,
 	})
 
 	filterAPI := filters.NewFilterAPI(filterSystem, ethcfg.BorLogs)
