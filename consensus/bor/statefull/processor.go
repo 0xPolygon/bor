@@ -3,18 +3,23 @@ package statefull
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/bor/abi"
+	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 type ChainContext struct {
@@ -154,5 +159,64 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 		UsedGas:    gasUsed,
 		Err:        err,
 		ReturnData: ret,
+	}, nil
+}
+
+// ApplyStateSyncEvents replays all state-sync events from a StateSyncTx against the EVM. This
+// method is generally used for tracing. It tries to mimic the exact things which happen when
+// a state-sync is processed in a live network (via CommitState).
+func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Message, stateReceiverContract common.Address) (*core.ExecutionResult, error) {
+	events := tx.GetStateSyncData()
+	if len(events) == 0 {
+		return &core.ExecutionResult{UsedGas: 0, ReturnData: nil}, nil
+	}
+
+	// Set tx context so that opcodes like GASPRICE don't panic.
+	vmenv.SetTxContext(core.NewEVMTxContext(message))
+
+	stateReceiverABI := abi.StateReceiver()
+	var totalGasUsed uint64
+
+	const method = "commitState"
+	now := time.Now().Unix()
+
+	for _, event := range events {
+		// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord)
+		record := &clerk.EventRecord{
+			ID:       event.ID,
+			Contract: event.Contract,
+			Data:     event.Data,
+			TxHash:   event.TxHash,
+			// Dummy fields, not really needed for execution but required for encoding
+			LogIndex: 0,
+			ChainID:  "",
+		}
+
+		recordBytes, err := rlp.EncodeToBytes(record)
+		if err != nil {
+			return nil, fmt.Errorf("failed to RLP encode state-sync event %d: %w", event.ID, err)
+		}
+
+		// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
+		data, err := stateReceiverABI.Pack(method, big.NewInt(0).SetInt64(now), recordBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
+		}
+
+		// Build system message with proper gas and target contract
+		msg := GetSystemMessage(stateReceiverContract, data)
+
+		// Execute
+		result, err := ApplyBorMessage(vmenv, msg)
+		if err != nil {
+			return nil, fmt.Errorf("state-sync event %d execution failed: %w", event.ID, err)
+		}
+
+		totalGasUsed += result.UsedGas
+	}
+
+	return &core.ExecutionResult{
+		UsedGas: totalGasUsed,
+		Err:     nil,
 	}, nil
 }

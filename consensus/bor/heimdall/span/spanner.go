@@ -11,8 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/bor/abi"
+	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
-	"github.com/ethereum/go-ethereum/consensus/bor/contract"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core"
@@ -70,7 +70,7 @@ func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Has
 	toAddress := c.validatorContractAddress
 
 	result, err := c.ethAPI.CallWithState(ctx, ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &blockNr, state, nil, nil)
@@ -169,7 +169,7 @@ func (c *ChainSpanner) getSpanByBlock(ctx context.Context, blockNrOrHash rpc.Blo
 	spanMsgData := (hexutil.Bytes)(spanData)
 
 	spanResult, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &spanMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -195,7 +195,7 @@ func (c *ChainSpanner) getProducersBySpanAndIndexMethod(ctx context.Context, blo
 	producerMsgData := (hexutil.Bytes)(producerData)
 
 	result, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &producerMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -221,7 +221,7 @@ func (c *ChainSpanner) getFirstEndBlock(ctx context.Context, blockNrOrHash rpc.B
 	firstEndBlockMsgData := (hexutil.Bytes)(firstEndBlockData)
 
 	firstEndBlockResult, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &firstEndBlockMsgData,
 	}, &blockNrOrHash, nil, nil)
@@ -250,7 +250,7 @@ func (c *ChainSpanner) getBorValidatorsWithoutId(ctx context.Context, blockNrOrH
 	msgData := (hexutil.Bytes)(data)
 
 	result, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
-		Gas:  &contract.SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &blockNrOrHash, nil, nil)

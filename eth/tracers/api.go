@@ -615,12 +615,10 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
 		var err error
-		// State sync transactions are processed differently than normal transactions
 		if tx.Type() == types.StateSyncTxType {
-			// Set tx context so that opcodes like GASPRICE don't panic.
-			evm.SetTxContext(core.NewEVMTxContext(msg))
-			callmsg := prepareCallMessage(*msg)
-			_, err = statefull.ApplyBorMessage(evm, callmsg)
+			// State sync transactions are processed differently than normal transactions
+			stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
+			_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 		} else {
 			_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		}
@@ -918,10 +916,8 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			// Process the tx to update state, but don't trace it.
 			var err error
 			if tx.Type() == types.StateSyncTxType {
-				// Set tx context so that opcodes like GASPRICE don't panic.
-				evm.SetTxContext(core.NewEVMTxContext(msg))
-				callmsg := prepareCallMessage(*msg)
-				_, err = statefull.ApplyBorMessage(evm, callmsg)
+				stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
+				_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 			} else {
 				_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 			}
@@ -959,13 +955,11 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		// Handle differently for state sync transactions
 		var vmResult *core.ExecutionResult
 		if tx.Type() == types.StateSyncTxType {
-			// Set tx context so that opcodes like GASPRICE don't panic.
-			evm.SetTxContext(core.NewEVMTxContext(msg))
-			callmsg := prepareCallMessage(*msg)
 			if tracer.OnTxStart != nil {
 				tracer.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 			}
-			vmResult, err = statefull.ApplyBorMessage(evm, callmsg)
+			stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
+			vmResult, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 		} else {
 			if tracer.OnTxStart != nil {
 				tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
@@ -1224,18 +1218,12 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	// Handle state-sync transactions separately. They're part of block body post Madhugiri so we can replay them
 	// and gather traces.
 	if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(txctx.BlockNumber) {
-		// We need to do some additional work as ApplyBorMessage directly applies message skipping some steps
-		// needed for tracing.
-
-		// Set tx context so that opcodes like GASPRICE don't panic.
-		evm.SetTxContext(core.NewEVMTxContext(message))
-
 		// Call `OnTxStart` and `OnTxEnd` hooks before and after applying message.
-		callmsg := prepareCallMessage(*message)
 		if tracer.Hooks.OnTxStart != nil {
 			tracer.Hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 		}
-		res, err := statefull.ApplyBorMessage(evm, callmsg)
+		stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
+		res, err := statefull.ApplyStateSyncEvents(evm, tx, message, common.HexToAddress(stateReceiverAddress))
 		if err != nil {
 			if tracer.Hooks.OnTxEnd != nil {
 				tracer.Hooks.OnTxEnd(nil, err)
