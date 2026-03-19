@@ -596,10 +596,10 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 
 	kzgPointEvaluationAddr := common.BytesToAddress([]byte{0x0a})
 
-	// We verify few things in this test:
-	//   - Madhugiri, MadhugiriPro and Lisovo has kzg precompile enabled
-	//   - LisovoPro removes it so it shouldn't be enabled
-	//   - HFs before Madhugiri, i.e. Prague should not have kzg enabled
+	// We verify a few things in this test:
+	//   - Madhugiri, MadhugiriPro, and Lisovo have the kzg precompile enabled
+	//   - LisovoPro removes it, so it should not be enabled
+	//   - Hard forks before Madhugiri (for example, Prague) should not have kzg enabled
 	type testCase struct {
 		name          string
 		rules         params.Rules
