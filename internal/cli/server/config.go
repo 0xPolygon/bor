@@ -1041,7 +1041,7 @@ func DefaultConfig() *Config {
 			EnableParallelStatelessImport:  false,
 			ParallelStatelessImportWorkers: 0,
 			WitnessAPI:                     false,
-			FileStore:                      true,
+			FileStore:                      false,
 			FastForwardThreshold:           6400,
 		},
 		History: &HistoryConfig{

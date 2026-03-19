@@ -235,7 +235,7 @@ devfakeauthor = false
   parallel-stateless-import = false
   parallel-stateless-import-workers = 0
   witnessapi = false
-  filestore = true
+  filestore = false
   fastforwardthreshold = 6400
 
 [pprof]
