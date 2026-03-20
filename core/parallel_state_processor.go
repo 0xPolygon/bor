@@ -237,6 +237,11 @@ func (task *ExecutionTask) Settle() {
 	receipt.TxHash = task.tx.Hash()
 	receipt.GasUsed = task.result.UsedGas
 
+	if task.tx.Type() == types.BlobTxType {
+		receipt.BlobGasUsed = uint64(len(task.tx.BlobHashes()) * params.BlobTxBlobGasPerBlob)
+		receipt.BlobGasPrice = task.blockContext.BlobBaseFee
+	}
+
 	// If the transaction created a contract, store the creation address in the receipt.
 	if task.msg.To == nil {
 		receipt.ContractAddress = crypto.CreateAddress(task.msg.From, task.tx.Nonce())
