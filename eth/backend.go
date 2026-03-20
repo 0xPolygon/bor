@@ -504,7 +504,7 @@ func (s *Ethereum) APIs() []rpc.API {
 	// BOR change starts
 	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{
 		LogCacheSize:  s.config.FilterLogCacheSize,
-		LogQueryLimit: s.config.RPCLogQueryLimit,
+		LogQueryLimit: s.config.LogQueryLimit,
 		RangeLimit:    s.config.RPCBlockRangeLimit,
 	})
 	// set genesis to public filter api

@@ -916,7 +916,7 @@ func DefaultConfig() *Config {
 			IPCPath:              "",
 			GasCap:               ethconfig.Defaults.RPCGasCap,
 			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
-			LogQueryLimit:        ethconfig.Defaults.RPCLogQueryLimit,
+			LogQueryLimit:        ethconfig.Defaults.LogQueryLimit,
 			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
 			AllowUnprotectedTxs:  false,
 			EnablePersonal:       false,
@@ -1603,7 +1603,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
 
-	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
 	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
 
 	// Choose the sync mode

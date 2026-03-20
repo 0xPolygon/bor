@@ -1884,7 +1884,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(RPCGlobalLogQueryLimit.Name) {
 		cfg.LogQueryLimit = ctx.Int(RPCGlobalLogQueryLimit.Name)
-		cfg.RPCLogQueryLimit = ctx.Int(RPCGlobalLogQueryLimit.Name)
 	}
 	if ctx.IsSet(RPCGlobalRangeLimitFlag.Name) {
 		cfg.RPCBlockRangeLimit = ctx.Uint64(RPCGlobalRangeLimitFlag.Name)
@@ -2240,7 +2239,7 @@ func RegisterGraphQLService(stack *node.Node, backend ethapi.Backend, filterSyst
 func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconfig.Config) *filters.FilterSystem {
 	filterSystem := filters.NewFilterSystem(backend, filters.Config{
 		LogCacheSize:  ethcfg.FilterLogCacheSize,
-		LogQueryLimit: ethcfg.RPCLogQueryLimit,
+		LogQueryLimit: ethcfg.LogQueryLimit,
 		RangeLimit:    ethcfg.RPCBlockRangeLimit,
 	})
 
