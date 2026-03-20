@@ -1059,6 +1059,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.P2P.DisableTxPropagation,
 		Group:   "P2P",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "p2p.nosnap",
+		Usage:   "Disable serving snap sync requests to peers (snap/1 protocol is not advertised)",
+		Value:   &c.cliConfig.P2P.NoSnapServing,
+		Default: c.cliConfig.P2P.NoSnapServing,
+		Group:   "P2P",
+	})
 	f.SliceStringFlag(&flagset.SliceStringFlag{
 		Name:    "discovery.dns",
 		Usage:   "Comma separated list of enrtree:// URLs which will be queried for nodes to connect to",

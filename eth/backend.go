@@ -693,7 +693,7 @@ func (s *Ethereum) SetAuthorized(authorized bool) {
 // network protocols to start.
 func (s *Ethereum) Protocols() []p2p.Protocol {
 	protos := eth.MakeProtocols((*ethHandler)(s.handler), s.networkID, s.discmix)
-	if s.config.SnapshotCache > 0 {
+	if s.config.SnapshotCache > 0 && !s.config.NoSnapServing {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler))...)
 	}
 	if s.config.WitnessProtocol {

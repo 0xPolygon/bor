@@ -304,6 +304,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```nodiscover```: Disables the peer discovery mechanism (manual peer addition) (default: false)
 
+- ```p2p.nosnap```: Disable serving snap sync requests to peers (snap/1 protocol is not advertised) (default: false)
+
 - ```port```: Network listening port (default: 30303)
 
 - ```relay.bp-rpc-endpoints```: Comma separated rpc endpoints of all block producers
