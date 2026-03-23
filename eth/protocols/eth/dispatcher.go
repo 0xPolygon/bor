@@ -75,12 +75,15 @@ func (r *Request) Close() error {
 	}
 
 	// Always close Cancel channel, even for shim requests (peer == nil).
-	// Use select to prevent double-close panic.
-	select {
-	case <-r.Cancel:
-		// Already closed
-	default:
-		close(r.Cancel)
+	// Guard against nil (tests may create Request without Cancel) and
+	// use select to prevent double-close panic.
+	if r.Cancel != nil {
+		select {
+		case <-r.Cancel:
+			// Already closed
+		default:
+			close(r.Cancel)
+		}
 	}
 
 	return nil
