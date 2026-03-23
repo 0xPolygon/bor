@@ -757,8 +757,17 @@ func (p *ethPeer) doWitnessRequest(
 			return
 		}
 
+		// Unblock the wit dispatcher now that we've received the response.
+		// Select with cancel to avoid blocking if Done is unbuffered and
+		// the dispatcher has already exited.
 		if witRes != nil && witRes.Done != nil {
-			witRes.Done <- nil
+			select {
+			case witRes.Done <- nil:
+			case <-cancel:
+				witReqsWg.Done()
+				<-witReqSem
+				return
+			}
 		}
 
 		select {
