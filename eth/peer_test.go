@@ -1799,6 +1799,180 @@ func TestRequestCloseShimClosesCancelChannel(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestRequestCloseNilCancelNoPanic verifies that Close() on an eth.Request
+// with a nil Cancel channel does not panic.
+func TestRequestCloseNilCancelNoPanic(t *testing.T) {
+	req := &eth.Request{Peer: "test-peer"}
+	assert.NotPanics(t, func() {
+		err := req.Close()
+		assert.NoError(t, err)
+	})
+}
+
+// TestDoWitnessRequestErrorReleasesSemaphore verifies that when RequestWitness
+// returns an error, the semaphore slot is properly released.
+func TestDoWitnessRequestErrorReleasesSemaphore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("peer disconnected")).
+		Times(1)
+
+	var witReqs []*wit.Request
+	var witReqsWg sync.WaitGroup
+	var mapsMu sync.RWMutex
+	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	witTotalRequest := make(map[common.Hash]uint64)
+	cancel := make(chan struct{})
+
+	err := p.doWitnessRequest(
+		common.Hash{1}, 0, &witReqs, &witReqsWg,
+		witReqResCh, witReqSem, &mapsMu, witTotalRequest, cancel,
+	)
+	assert.Error(t, err)
+
+	// Semaphore should have been released — verify by filling it completely
+	for i := 0; i < DefaultConcurrentRequestsPerPeer; i++ {
+		select {
+		case witReqSem <- 1:
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("semaphore slot %d not available — slot was leaked on error", i)
+		}
+	}
+}
+
+// TestDoWitnessRequestCancelDuringDoneSend verifies that if cancel fires while
+// the producer is sending to witRes.Done, the goroutine exits cleanly.
+func TestDoWitnessRequestCancelDuringDoneSend(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	// Use an UNBUFFERED Done channel that nobody reads — Done send will block
+	blockingDone := make(chan error)
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res:  &wit.WitnessPacketRLPPacket{},
+					Done: blockingDone,
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		Times(1)
+
+	var witReqs []*wit.Request
+	var witReqsWg sync.WaitGroup
+	var mapsMu sync.RWMutex
+	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	witTotalRequest := make(map[common.Hash]uint64)
+	cancel := make(chan struct{})
+
+	err := p.doWitnessRequest(
+		common.Hash{1}, 0, &witReqs, &witReqsWg,
+		witReqResCh, witReqSem, &mapsMu, witTotalRequest, cancel,
+	)
+	assert.NoError(t, err)
+
+	// Give the goroutine time to receive from witResCh and block on Done send
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel should unblock the goroutine stuck on Done <- nil
+	close(cancel)
+
+	done := make(chan struct{})
+	go func() {
+		witReqsWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine did not exit after cancel during Done send")
+	}
+}
+
+// TestDoWitnessRequestCancelDuringForward verifies that if cancel fires while
+// the producer is forwarding to witReqResCh, the goroutine exits cleanly.
+func TestDoWitnessRequestCancelDuringForward(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res:  &wit.WitnessPacketRLPPacket{},
+					Done: make(chan error, 1), // buffered — Done send won't block
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	var witReqs []*wit.Request
+	var witReqsWg sync.WaitGroup
+	var mapsMu sync.RWMutex
+	// ZERO buffer — forward will block immediately
+	witReqResCh := make(chan *witReqRes)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	witTotalRequest := make(map[common.Hash]uint64)
+	cancel := make(chan struct{})
+
+	err := p.doWitnessRequest(
+		common.Hash{1}, 0, &witReqs, &witReqsWg,
+		witReqResCh, witReqSem, &mapsMu, witTotalRequest, cancel,
+	)
+	assert.NoError(t, err)
+
+	// Give goroutine time to receive response and block on witReqResCh send
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel should unblock the goroutine stuck on witReqResCh <- ...
+	close(cancel)
+
+	done := make(chan struct{})
+	go func() {
+		witReqsWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine did not exit after cancel during forward")
+	}
+}
+
 // TestDoWitnessRequestExitsOnCancel verifies that the goroutine spawned by
 // doWitnessRequest exits when the cancel channel is closed, even if the peer
 // never responds. This was the primary goroutine leak.
@@ -2000,6 +2174,164 @@ func TestRequestWitnessesDoneChannelBuffered(t *testing.T) {
 			"unexpected goroutine created for Done channel draining")
 
 	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for response")
+	}
+}
+
+// TestRequestWitnessesAdapterCancelDuringForward verifies that if the adapter
+// successfully reconstructs witnesses but cancel fires while sending to dlResCh,
+// the adapter exits cleanly without leaking goroutines.
+func TestRequestWitnessesAdapterCancelDuringForward(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hashToRequest := common.Hash{77}
+	witness, _ := stateless.NewWitness(&types.Header{}, nil)
+	FillWitnessWithDeterministicRandomState(witness, 10*1024)
+	var witBuf bytes.Buffer
+	witness.EncodeRLP(&witBuf)
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+	// UNBUFFERED dlResCh — adapter will block on send
+	dlCh := make(chan *eth.Response)
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{
+						WitnessPacketResponse: []wit.WitnessPageResponse{{
+							Page: 0, TotalPages: 1, Hash: hashToRequest, Data: witBuf.Bytes(),
+						}},
+					},
+					Done: make(chan error, 10),
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		Times(1)
+
+	goroutinesBefore := runtime.NumGoroutine()
+
+	req, err := p.RequestWitnesses([]common.Hash{hashToRequest}, dlCh)
+	assert.NoError(t, err)
+	assert.NotNil(t, req)
+
+	// Don't read from dlCh — adapter will block on send.
+	// Give it time to process the response and reach the send.
+	time.Sleep(200 * time.Millisecond)
+
+	// Cancel — adapter should exit via case <-wrapperReq.Request.Cancel
+	err = req.Close()
+	assert.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+	goroutinesAfter := runtime.NumGoroutine()
+
+	assert.LessOrEqual(t, goroutinesAfter, goroutinesBefore+2,
+		"goroutine leak after adapter cancel during forward (before=%d, after=%d)",
+		goroutinesBefore, goroutinesAfter)
+}
+
+// TestBuildWitnessRequestsInitialError verifies that when the initial
+// buildWitnessRequests call fails, RequestWitnessesWithVerification returns
+// the error properly.
+func TestBuildWitnessRequestsInitialError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+	dlCh := make(chan *eth.Response, 1)
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	// First RequestWitness call fails — buildWitnessRequests should propagate error
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("connection reset")).
+		Times(1)
+
+	req, err := p.RequestWitnesses([]common.Hash{{1}}, dlCh)
+	assert.Nil(t, req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "connection reset")
+}
+
+// TestRequestWitnessesPartialWitnessCount verifies the path where fewer
+// witnesses are reconstructed than requested (len(witnesses) != len(hashes)).
+func TestRequestWitnessesPartialWitnessCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hash1 := common.Hash{1}
+	hash2 := common.Hash{2}
+	witness, _ := stateless.NewWitness(&types.Header{}, nil)
+	FillWitnessWithDeterministicRandomState(witness, 10*1024)
+	var witBuf bytes.Buffer
+	witness.EncodeRLP(&witBuf)
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+	dlCh := make(chan *eth.Response, 1)
+
+	callCount := 0
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			callCount++
+			go func() {
+				if wpr[0].Hash == hash1 {
+					// Only respond for hash1 with valid data
+					ch <- &wit.Response{
+						Res: &wit.WitnessPacketRLPPacket{
+							WitnessPacketResponse: []wit.WitnessPageResponse{{
+								Page: wpr[0].Page, TotalPages: 1, Hash: hash1, Data: witBuf.Bytes(),
+							}},
+						},
+						Done: make(chan error, 1),
+					}
+				} else {
+					// hash2 gets empty data — won't reconstruct
+					ch <- &wit.Response{
+						Res: &wit.WitnessPacketRLPPacket{
+							WitnessPacketResponse: []wit.WitnessPageResponse{{
+								Page: 0, TotalPages: 1, Hash: hash2, Data: []byte{},
+							}},
+						},
+						Done: make(chan error, 1),
+					}
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	req, err := p.RequestWitnesses([]common.Hash{hash1, hash2}, dlCh)
+	assert.NoError(t, err)
+	assert.NotNil(t, req)
+
+	select {
+	case response := <-dlCh:
+		assert.NotNil(t, response)
+		witnesses, ok := response.Res.([]*stateless.Witness)
+		assert.True(t, ok)
+		// Only hash1 should have been reconstructed
+		assert.Equal(t, 1, len(witnesses), "should have partial witness count")
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for response")
 	}
 }
