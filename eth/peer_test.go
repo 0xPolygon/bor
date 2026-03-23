@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1477,6 +1478,7 @@ func TestBuildWitnessRequests_ConcurrentFailedRequestsAccess(t *testing.T) {
 				}
 			}()
 
+			cancel := make(chan struct{})
 			err := p.buildWitnessRequests(
 				hashes,
 				&witReqs,
@@ -1488,6 +1490,7 @@ func TestBuildWitnessRequests_ConcurrentFailedRequestsAccess(t *testing.T) {
 				&mapsMu,
 				&buildRequestMu,
 				failedRequests,
+				cancel,
 			)
 			if err != nil {
 				errCh <- err
@@ -1730,6 +1733,7 @@ func TestDoWitnessRequest_RaceCondition_WitTotalRequest(t *testing.T) {
 				// 1. Read witTotalRequest[hash] (unprotected) at line 731
 				// 2. Compare page >= witTotalRequest[hash]
 				// 3. Write witTotalRequest[hash]++ (protected) at line 733
+				cancel := make(chan struct{})
 				err := p.doWitnessRequest(
 					hash,
 					pg,
@@ -1739,6 +1743,7 @@ func TestDoWitnessRequest_RaceCondition_WitTotalRequest(t *testing.T) {
 					witReqSem,
 					&mapsMu,
 					witTotalRequest,
+					cancel,
 				)
 
 				// Consume from semaphore to prevent blocking
@@ -1765,4 +1770,236 @@ func TestDoWitnessRequest_RaceCondition_WitTotalRequest(t *testing.T) {
 	// The race detector will catch the unprotected read if run with -race flag
 	t.Logf("Test completed %d iterations with %d concurrent requests each", iterations, 20)
 	t.Log("If running with -race flag, any data race will be reported by the race detector")
+}
+
+// TestRequestCloseShimClosesCancelChannel verifies that calling Close() on an
+// eth.Request shim (peer == nil) properly closes the Cancel channel. This was
+// the root cause of adapter goroutine leaks — the concurrent fetcher called
+// Close() but Cancel was never closed.
+func TestRequestCloseShimClosesCancelChannel(t *testing.T) {
+	req := &eth.Request{
+		Peer:   "test-peer",
+		Cancel: make(chan struct{}),
+	}
+
+	// Close should work without panic even with peer == nil
+	err := req.Close()
+	assert.NoError(t, err)
+
+	// Cancel channel should be closed
+	select {
+	case <-req.Cancel:
+		// OK — channel is closed
+	default:
+		t.Fatal("Cancel channel was not closed after Close() on shim request")
+	}
+
+	// Second Close should not panic (double-close protection)
+	err = req.Close()
+	assert.NoError(t, err)
+}
+
+// TestDoWitnessRequestExitsOnCancel verifies that the goroutine spawned by
+// doWitnessRequest exits when the cancel channel is closed, even if the peer
+// never responds. This was the primary goroutine leak.
+func TestDoWitnessRequestExitsOnCancel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	// Mock RequestWitness to NEVER respond — simulates peer disconnect
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			// Never send on ch — simulates unresponsive peer
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	var witReqs []*wit.Request
+	var witReqsWg sync.WaitGroup
+	var mapsMu sync.RWMutex
+	witReqResCh := make(chan *witReqRes, DefaultConcurrentResponsesHandled)
+	witReqSem := make(chan int, DefaultConcurrentRequestsPerPeer)
+	witTotalRequest := make(map[common.Hash]uint64)
+	cancel := make(chan struct{})
+
+	goroutinesBefore := runtime.NumGoroutine()
+
+	// Launch 3 requests that will never get responses
+	for i := 0; i < 3; i++ {
+		err := p.doWitnessRequest(
+			common.Hash{byte(i)},
+			0,
+			&witReqs,
+			&witReqsWg,
+			witReqResCh,
+			witReqSem,
+			&mapsMu,
+			witTotalRequest,
+			cancel,
+		)
+		assert.NoError(t, err)
+	}
+
+	// Give goroutines time to start and block on <-witResCh
+	time.Sleep(50 * time.Millisecond)
+
+	// Close cancel to signal all goroutines to exit
+	close(cancel)
+
+	// Wait for WaitGroup to complete (goroutines should call Done on cancel)
+	done := make(chan struct{})
+	go func() {
+		witReqsWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK — all goroutines exited
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitGroup did not complete after cancel — goroutines are leaked")
+	}
+
+	// Verify goroutines were cleaned up
+	time.Sleep(50 * time.Millisecond) // let runtime clean up
+	runtime.GC()
+	goroutinesAfter := runtime.NumGoroutine()
+
+	// Allow some slack for runtime goroutines, but should be close to before
+	assert.LessOrEqual(t, goroutinesAfter, goroutinesBefore+2,
+		"goroutine count should return to baseline after cancel (before=%d, after=%d)",
+		goroutinesBefore, goroutinesAfter)
+}
+
+// TestRequestWitnessesNoGoroutineLeakOnCancel verifies the full
+// RequestWitnessesWithVerification flow: when the Cancel channel is closed
+// (simulating concurrent fetcher timeout), all internal goroutines exit.
+func TestRequestWitnessesNoGoroutineLeakOnCancel(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hashToRequest := common.Hash{42}
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+	dlCh := make(chan *eth.Response, 1)
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+
+	// Mock RequestWitness to never respond — simulates unresponsive peer
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			return &wit.Request{}, nil
+		}).
+		AnyTimes()
+
+	goroutinesBefore := runtime.NumGoroutine()
+
+	req, err := p.RequestWitnesses([]common.Hash{hashToRequest}, dlCh)
+	assert.NoError(t, err)
+	assert.NotNil(t, req)
+
+	// Give internal goroutines time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Simulate the concurrent fetcher closing the request (timeout/disconnect)
+	err = req.Close()
+	assert.NoError(t, err)
+
+	// Give goroutines time to wind down
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+
+	goroutinesAfter := runtime.NumGoroutine()
+
+	// All internal goroutines (closer, adapter, doWitnessRequest) should have exited.
+	// Allow small slack for runtime goroutines.
+	assert.LessOrEqual(t, goroutinesAfter, goroutinesBefore+2,
+		"goroutine leak detected after cancel (before=%d, after=%d)",
+		goroutinesBefore, goroutinesAfter)
+}
+
+// TestRequestWitnessesDoneChannelBuffered verifies that the Done channel on
+// the eth.Response returned by the adapter is buffered, so the consumer can
+// write to it without blocking and without needing a drainer goroutine.
+func TestRequestWitnessesDoneChannelBuffered(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	hashToRequest := common.Hash{99}
+	witness, _ := stateless.NewWitness(&types.Header{}, nil)
+	FillWitnessWithDeterministicRandomState(witness, 10*1024)
+	var witBuf bytes.Buffer
+	witness.EncodeRLP(&witBuf)
+
+	mockWitPeer := NewMockWitnessPeer(ctrl)
+	p := &ethPeer{
+		Peer:    eth.NewPeer(1, p2p.NewPeer(enode.ID{0x01, 0x02}, "test-peer", []p2p.Cap{}), nil, nil),
+		witPeer: &witPeer{Peer: mockWitPeer},
+	}
+	dlCh := make(chan *eth.Response, 1)
+
+	mockWitPeer.EXPECT().Log().Return(log.New()).AnyTimes()
+	mockWitPeer.EXPECT().
+		RequestWitness(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(wpr []wit.WitnessPageRequest, ch chan *wit.Response) (*wit.Request, error) {
+			go func() {
+				ch <- &wit.Response{
+					Res: &wit.WitnessPacketRLPPacket{
+						WitnessPacketResponse: []wit.WitnessPageResponse{{
+							Page: 0, TotalPages: 1, Hash: hashToRequest, Data: witBuf.Bytes(),
+						}},
+					},
+					Done: make(chan error, 10),
+				}
+			}()
+			return &wit.Request{}, nil
+		}).
+		Times(1)
+
+	_, err := p.RequestWitnesses([]common.Hash{hashToRequest}, dlCh)
+	assert.NoError(t, err)
+
+	select {
+	case response := <-dlCh:
+		assert.NotNil(t, response)
+		assert.NotNil(t, response.Done)
+
+		// Writing to Done must not block (buffered channel, no drainer goroutine)
+		goroutinesBefore := runtime.NumGoroutine()
+
+		done := make(chan struct{})
+		go func() {
+			response.Done <- nil
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// OK — write did not block
+		case <-time.After(1 * time.Second):
+			t.Fatal("writing to Done channel blocked — channel is not buffered")
+		}
+
+		// No new goroutine should have been spawned to drain Done
+		time.Sleep(50 * time.Millisecond)
+		goroutinesAfter := runtime.NumGoroutine()
+		assert.LessOrEqual(t, goroutinesAfter, goroutinesBefore+1,
+			"unexpected goroutine created for Done channel draining")
+
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for response")
+	}
 }
