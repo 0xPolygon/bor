@@ -1220,6 +1220,17 @@ func (api *BorAPI) getBlockAndReceipts(ctx context.Context, blockNum uint64) (*t
 		return nil, nil, fmt.Errorf("failed to get receipts for block %d: %w", blockNum, err)
 	}
 
+	chainConfig := api.b.ChainConfig()
+	if chainConfig.Bor != nil && !chainConfig.Bor.IsMadhugiri(block.Number()) {
+		stateSyncReceipt, err := api.b.GetBorBlockReceipt(ctx, block.Hash())
+		if err != nil && !errors.Is(err, ethereum.NotFound) {
+			return nil, nil, fmt.Errorf("failed to get Bor receipt for block %d: %w", blockNum, err)
+		}
+		if stateSyncReceipt != nil {
+			receipts = append(receipts, stateSyncReceipt)
+		}
+	}
+
 	return block, receipts, nil
 }
 
