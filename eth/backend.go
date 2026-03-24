@@ -1029,10 +1029,10 @@ func (s *Ethereum) Stop() error {
 	// block processing.
 	s.engine.Close()
 	s.dropper.Stop()
-	s.handler.Stop()
 
 	// Stop the dial scheduler to suppress "Looking for peers" during shutdown.
 	s.p2pServer.StopDialing()
+	s.handler.Stop()
 
 	// Then stop everything else.
 	// Close all bg processes
