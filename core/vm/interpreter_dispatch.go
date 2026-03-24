@@ -360,14 +360,14 @@ func (evm *EVM) runSwitch(
 			}
 		case PC:
 			gasAccum += GasQuickStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].SetUint64(pc)
 			stack.top++
 		case MSIZE:
 			gasAccum += GasQuickStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].SetUint64(uint64(mem.Len()))
@@ -388,14 +388,14 @@ func (evm *EVM) runSwitch(
 			return nil, &ErrInvalidOpCode{opcode: INVALID}
 		case PUSH0:
 			gasAccum += GasQuickStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].Clear()
 			stack.top++
 		case PUSH1:
 			gasAccum += GasFastestStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			pc++
@@ -407,7 +407,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case PUSH2:
 			gasAccum += GasFastestStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			if pc+2 < codeLen {
@@ -421,7 +421,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case PUSH3:
 			gasAccum += GasFastestStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			start := min(codeLen, pc+1)
@@ -434,7 +434,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case PUSH4:
 			gasAccum += GasFastestStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			start := min(codeLen, pc+1)
@@ -447,7 +447,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case PUSH5, PUSH6, PUSH7, PUSH8, PUSH9, PUSH10, PUSH11, PUSH12, PUSH13, PUSH14, PUSH15, PUSH16, PUSH17, PUSH18, PUSH19, PUSH20, PUSH21, PUSH22, PUSH23, PUSH24, PUSH25, PUSH26, PUSH27, PUSH28, PUSH29, PUSH30, PUSH31, PUSH32:
 			gasAccum += GasFastestStep
-			if stack.top >= 1024 {
+			if stack.top >= int(params.StackLimit) {
 				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			n := uint64(op - byte(PUSH0))
@@ -461,7 +461,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP1:
 			gasAccum += GasFastestStep
-			if stack.top < 1 || stack.top >= 1024 {
+			if stack.top < 1 || stack.top >= int(params.StackLimit) {
 				if stack.top < 1 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 1}
 				}
@@ -471,7 +471,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP2:
 			gasAccum += GasFastestStep
-			if stack.top < 2 || stack.top >= 1024 {
+			if stack.top < 2 || stack.top >= int(params.StackLimit) {
 				if stack.top < 2 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 2}
 				}
@@ -481,7 +481,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP3:
 			gasAccum += GasFastestStep
-			if stack.top < 3 || stack.top >= 1024 {
+			if stack.top < 3 || stack.top >= int(params.StackLimit) {
 				if stack.top < 3 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 3}
 				}
@@ -491,7 +491,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP4:
 			gasAccum += GasFastestStep
-			if stack.top < 4 || stack.top >= 1024 {
+			if stack.top < 4 || stack.top >= int(params.StackLimit) {
 				if stack.top < 4 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 4}
 				}
@@ -501,7 +501,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP5:
 			gasAccum += GasFastestStep
-			if stack.top < 5 || stack.top >= 1024 {
+			if stack.top < 5 || stack.top >= int(params.StackLimit) {
 				if stack.top < 5 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 5}
 				}
@@ -511,7 +511,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP6:
 			gasAccum += GasFastestStep
-			if stack.top < 6 || stack.top >= 1024 {
+			if stack.top < 6 || stack.top >= int(params.StackLimit) {
 				if stack.top < 6 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 6}
 				}
@@ -521,7 +521,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP7:
 			gasAccum += GasFastestStep
-			if stack.top < 7 || stack.top >= 1024 {
+			if stack.top < 7 || stack.top >= int(params.StackLimit) {
 				if stack.top < 7 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 7}
 				}
@@ -531,7 +531,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP8:
 			gasAccum += GasFastestStep
-			if stack.top < 8 || stack.top >= 1024 {
+			if stack.top < 8 || stack.top >= int(params.StackLimit) {
 				if stack.top < 8 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 8}
 				}
@@ -541,7 +541,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP9:
 			gasAccum += GasFastestStep
-			if stack.top < 9 || stack.top >= 1024 {
+			if stack.top < 9 || stack.top >= int(params.StackLimit) {
 				if stack.top < 9 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 9}
 				}
@@ -551,7 +551,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP10:
 			gasAccum += GasFastestStep
-			if stack.top < 10 || stack.top >= 1024 {
+			if stack.top < 10 || stack.top >= int(params.StackLimit) {
 				if stack.top < 10 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 10}
 				}
@@ -561,7 +561,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP11:
 			gasAccum += GasFastestStep
-			if stack.top < 11 || stack.top >= 1024 {
+			if stack.top < 11 || stack.top >= int(params.StackLimit) {
 				if stack.top < 11 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 11}
 				}
@@ -571,7 +571,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP12:
 			gasAccum += GasFastestStep
-			if stack.top < 12 || stack.top >= 1024 {
+			if stack.top < 12 || stack.top >= int(params.StackLimit) {
 				if stack.top < 12 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 12}
 				}
@@ -581,7 +581,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP13:
 			gasAccum += GasFastestStep
-			if stack.top < 13 || stack.top >= 1024 {
+			if stack.top < 13 || stack.top >= int(params.StackLimit) {
 				if stack.top < 13 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 13}
 				}
@@ -591,7 +591,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP14:
 			gasAccum += GasFastestStep
-			if stack.top < 14 || stack.top >= 1024 {
+			if stack.top < 14 || stack.top >= int(params.StackLimit) {
 				if stack.top < 14 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 14}
 				}
@@ -601,7 +601,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP15:
 			gasAccum += GasFastestStep
-			if stack.top < 15 || stack.top >= 1024 {
+			if stack.top < 15 || stack.top >= int(params.StackLimit) {
 				if stack.top < 15 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 15}
 				}
@@ -611,7 +611,7 @@ func (evm *EVM) runSwitch(
 			stack.top++
 		case DUP16:
 			gasAccum += GasFastestStep
-			if stack.top < 16 || stack.top >= 1024 {
+			if stack.top < 16 || stack.top >= int(params.StackLimit) {
 				if stack.top < 16 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 16}
 				}

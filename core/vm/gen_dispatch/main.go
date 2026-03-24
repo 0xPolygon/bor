@@ -317,7 +317,7 @@ func (e *emitter) emitShapedBody(op opDef) {
 		e.emitBody(op)
 
 	case shapePushVal:
-		e.p("if stack.top >= 1024 {\n")
+		e.p("if stack.top >= int(params.StackLimit) {\n")
 		e.p("return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}\n")
 		e.p("}\n")
 		e.emitBody(op)
@@ -337,7 +337,7 @@ func (e *emitter) emitShapedBody(op opDef) {
 func (e *emitter) emitDup(n int) {
 	e.p("case DUP%d:\n", n)
 	e.emitGas("GasFastestStep")
-	e.p("if stack.top < %d || stack.top >= 1024 {\n", n)
+	e.p("if stack.top < %d || stack.top >= int(params.StackLimit) {\n", n)
 	e.p("if stack.top < %d {\n", n)
 	e.p("return nil, &ErrStackUnderflow{stackLen: stack.top, required: %d}\n", n)
 	e.p("}\n")
@@ -371,7 +371,7 @@ func (e *emitter) emitPushGeneric() {
 	}
 	e.p(":\n")
 	e.emitGas("GasFastestStep")
-	e.p("if stack.top >= 1024 {\n")
+	e.p("if stack.top >= int(params.StackLimit) {\n")
 	e.p("return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}\n")
 	e.p("}\n")
 	e.p("n := uint64(op - byte(PUSH0))\n")
@@ -389,7 +389,7 @@ func (e *emitter) emitPushGeneric() {
 func (e *emitter) emitPush(op opDef) {
 	e.p("case %s:\n", op.name)
 	e.emitGas(op.gas)
-	e.p("if stack.top >= 1024 {\n")
+	e.p("if stack.top >= int(params.StackLimit) {\n")
 	e.p("return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}\n")
 	e.p("}\n")
 	e.emitBody(op)

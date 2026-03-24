@@ -207,6 +207,9 @@ type Config struct {
 	// Generate execution witnesses and self-check against them (testing purpose)
 	StatelessSelfValidation bool
 
+	// Use switch-based fast path interpreter
+	EnableEVMSwitchDispatch bool
+
 	// Enables tracking of state size
 	EnableStateSizeTracking bool
 

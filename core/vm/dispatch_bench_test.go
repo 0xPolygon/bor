@@ -20,21 +20,26 @@ import (
 var snailtracerHex string
 
 // BenchmarkSnailtracer runs the snailtracer Benchmark() function through
-// the EVM with no tracer attached. The interpreter takes whichever path
-// is active in interpreter.go — runSwitch when enabled, the traditional
-// Run() loop when commented out.
+// both the switch dispatch fast path and the standard interpreter loop.
 //
 // Usage:
 //
-//	# With runSwitch enabled:
-//	go test -run=^$ -bench=BenchmarkSnailtracer -benchmem -count=10 ./core/vm/ | tee new.txt
-//
-//	# With runSwitch disabled:
-//	go test -run=^$ -bench=BenchmarkSnailtracer -benchmem -count=10 ./core/vm/ | tee old.txt
-//
-//	# Compare:
-//	benchstat old.txt new.txt
+//	go test -run=^$ -bench=BenchmarkSnailtracer -benchmem -count=10 ./core/vm/
 func BenchmarkSnailtracer(b *testing.B) {
+	for _, tc := range []struct {
+		name           string
+		switchDispatch bool
+	}{
+		{"switch", true},
+		{"standard", false},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			benchSnailtracer(b, tc.switchDispatch)
+		})
+	}
+}
+
+func benchSnailtracer(b *testing.B, switchDispatch bool) {
 	code := hexDecode(strings.TrimSpace(snailtracerHex))
 	addr := common.BytesToAddress([]byte("snailtracer"))
 	caller := common.BytesToAddress([]byte("caller"))
@@ -68,7 +73,7 @@ func BenchmarkSnailtracer(b *testing.B) {
 		rules := benchChainConfig.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 		db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
-		evm := NewEVM(bctx, db, benchChainConfig, Config{EnableEVMSwitchDispatch: true})
+		evm := NewEVM(bctx, db, benchChainConfig, Config{EnableEVMSwitchDispatch: switchDispatch})
 		evm.SetTxContext(TxContext{
 			Origin:   caller,
 			GasPrice: big.NewInt(1),
@@ -85,10 +90,7 @@ func hexDecode(s string) []byte {
 	return b
 }
 
-// ---------------------------------------------------------------------------
-// Chain config that enables all forks through Cancun (no Verkle / EIP-4762).
-// ---------------------------------------------------------------------------
-
+// Chain config that enables all forks through Osaka (no Verkle / EIP-4762).
 var benchChainConfig = &params.ChainConfig{
 	ChainID:             big.NewInt(1),
 	HomesteadBlock:      new(big.Int),
@@ -110,5 +112,5 @@ var benchChainConfig = &params.ChainConfig{
 	CancunBlock:         new(big.Int),
 	PragueBlock:         new(big.Int),
 	OsakaBlock:          new(big.Int),
-	// VerkleBlock intentionally nil — enabling it would activate EIP-4762.
+	// VerkleBlock intentionally nil - enabling it would activate EIP-4762.
 }
