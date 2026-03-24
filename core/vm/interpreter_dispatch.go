@@ -361,14 +361,14 @@ func (evm *EVM) runSwitch(
 		case PC:
 			gasAccum += GasQuickStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].SetUint64(pc)
 			stack.top++
 		case MSIZE:
 			gasAccum += GasQuickStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].SetUint64(uint64(mem.Len()))
 			stack.top++
@@ -389,14 +389,14 @@ func (evm *EVM) runSwitch(
 		case PUSH0:
 			gasAccum += GasQuickStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top].Clear()
 			stack.top++
 		case PUSH1:
 			gasAccum += GasFastestStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			pc++
 			if pc < codeLen {
@@ -408,7 +408,7 @@ func (evm *EVM) runSwitch(
 		case PUSH2:
 			gasAccum += GasFastestStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			if pc+2 < codeLen {
 				stack.data[stack.top].SetBytes2(code[pc+1 : pc+3])
@@ -422,7 +422,7 @@ func (evm *EVM) runSwitch(
 		case PUSH3:
 			gasAccum += GasFastestStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			start := min(codeLen, pc+1)
 			end := min(codeLen, pc+4)
@@ -435,7 +435,7 @@ func (evm *EVM) runSwitch(
 		case PUSH4:
 			gasAccum += GasFastestStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			start := min(codeLen, pc+1)
 			end := min(codeLen, pc+5)
@@ -448,7 +448,7 @@ func (evm *EVM) runSwitch(
 		case PUSH5, PUSH6, PUSH7, PUSH8, PUSH9, PUSH10, PUSH11, PUSH12, PUSH13, PUSH14, PUSH15, PUSH16, PUSH17, PUSH18, PUSH19, PUSH20, PUSH21, PUSH22, PUSH23, PUSH24, PUSH25, PUSH26, PUSH27, PUSH28, PUSH29, PUSH30, PUSH31, PUSH32:
 			gasAccum += GasFastestStep
 			if stack.top >= 1024 {
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			n := uint64(op - byte(PUSH0))
 			start := min(codeLen, pc+1)
@@ -465,7 +465,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 1 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 1}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-1]
 			stack.top++
@@ -475,7 +475,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 2 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 2}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-2]
 			stack.top++
@@ -485,7 +485,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 3 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 3}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-3]
 			stack.top++
@@ -495,7 +495,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 4 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 4}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-4]
 			stack.top++
@@ -505,7 +505,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 5 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 5}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-5]
 			stack.top++
@@ -515,7 +515,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 6 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 6}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-6]
 			stack.top++
@@ -525,7 +525,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 7 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 7}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-7]
 			stack.top++
@@ -535,7 +535,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 8 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 8}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-8]
 			stack.top++
@@ -545,7 +545,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 9 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 9}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-9]
 			stack.top++
@@ -555,7 +555,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 10 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 10}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-10]
 			stack.top++
@@ -565,7 +565,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 11 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 11}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-11]
 			stack.top++
@@ -575,7 +575,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 12 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 12}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-12]
 			stack.top++
@@ -585,7 +585,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 13 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 13}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-13]
 			stack.top++
@@ -595,7 +595,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 14 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 14}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-14]
 			stack.top++
@@ -605,7 +605,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 15 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 15}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-15]
 			stack.top++
@@ -615,7 +615,7 @@ func (evm *EVM) runSwitch(
 				if stack.top < 16 {
 					return nil, &ErrStackUnderflow{stackLen: stack.top, required: 16}
 				}
-				return nil, &ErrStackOverflow{stackLen: stack.top, limit: 1024}
+				return nil, &ErrStackOverflow{stackLen: stack.top, limit: int(params.StackLimit) - 1}
 			}
 			stack.data[stack.top] = stack.data[stack.top-16]
 			stack.top++

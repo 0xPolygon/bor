@@ -43,7 +43,7 @@ type Config struct {
 
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
 	EnableWitnessStats      bool // Whether trie access statistics collection is enabled
-	EnableSwitchDispatch    bool // Use switch-based fast path interpreter
+	EnableEVMSwitchDispatch bool // Use switch-based fast path interpreter
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,
@@ -182,7 +182,7 @@ func (evm *EVM) Run(contract *Contract, input []byte, readOnly bool) (ret []byte
 
 	// Fast path: switch dispatch with inlined hot opcodes and gas accumulation.
 	// Requires Shanghai+ because PUSH0 is the latest fork-gated inlined opcode.
-	if evm.Config.EnableSwitchDispatch && isShanghai && !isEIP4762 && !debug {
+	if evm.Config.EnableEVMSwitchDispatch && isShanghai && !isEIP4762 && !debug {
 		ret, err = evm.runSwitch(contract, stack, mem, callContext, jumpTable, interrupt)
 		if err == errStopToken {
 			err = nil

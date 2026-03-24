@@ -68,7 +68,7 @@ func BenchmarkSnailtracer(b *testing.B) {
 		rules := benchChainConfig.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 		db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
-		evm := NewEVM(bctx, db, benchChainConfig, Config{EnableSwitchDispatch: true})
+		evm := NewEVM(bctx, db, benchChainConfig, Config{EnableEVMSwitchDispatch: true})
 		evm.SetTxContext(TxContext{
 			Origin:   caller,
 			GasPrice: big.NewInt(1),

@@ -48,6 +48,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```ethstats```: Reporting URL of a ethstats service (nodename:secret@host:port)
 
+- ```evm-switch-dispatch```: Enable switch-based fast path EVM interpreter (default: false)
+
 - ```gcmode```: Blockchain garbage collection mode ("full", "archive") (default: full)
 
 - ```gpo.blocks```: Number of recent blocks to check for gas prices (default: 20)
@@ -103,8 +105,6 @@ The ```bor server``` command runs the Bor client.
 - ```snapshot```: Enables the snapshot-database mode (default: true)
 
 - ```state.scheme```: Scheme to use for storing ethereum state ('hash' or 'path') (default: path)
-
-- ```switch-dispatch```: Enable switch-based fast path EVM interpreter (default: false)
 
 - ```syncmode```: Blockchain sync mode ("full", "snap" or "stateless") (default: full)
 

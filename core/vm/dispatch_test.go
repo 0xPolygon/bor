@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -194,7 +196,7 @@ func execPathResultWithConfig(
 	rules := chainCfg.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
 	db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
 
-	cfg := Config{EnableSwitchDispatch: switchDispatch}
+	cfg := Config{EnableEVMSwitchDispatch: switchDispatch}
 
 	evm := NewEVM(bctx, db, chainCfg, cfg)
 	evm.SetTxContext(TxContext{
@@ -253,9 +255,9 @@ func runDiffWithSetupAndInput(t *testing.T, code []byte, input []byte, gas uint6
 	fast := execPathResultWithConfig(code, input, gas, true, diffChainConfig, setup)
 	slow := execPathResultWithConfig(code, input, gas, false, diffChainConfig, setup)
 
-	cFast, cSlow := classifyErr(fast.err), classifyErr(slow.err)
-	if cFast != cSlow {
-		t.Fatalf("error class mismatch: fast=%q (%v) slow=%q (%v)", cFast, fast.err, cSlow, slow.err)
+	fastErrStr, slowErrStr := fmt.Sprint(fast.err), fmt.Sprint(slow.err)
+	if fastErrStr != slowErrStr {
+		t.Fatalf("error mismatch:\n  fast: %v\n  slow: %v", fast.err, slow.err)
 	}
 	if !bytes.Equal(fast.ret, slow.ret) {
 		t.Fatalf("return data mismatch:\n  fast(%d): %x\n  slow(%d): %x",
@@ -646,12 +648,48 @@ func TestDispatchDifferential(t *testing.T) {
 		{"undefined/0x0D", []byte{0x0D}, G},
 
 		// ============================================================
-		//  Out-of-gas edge cases
+		//  SHL/SHR/SAR with shift >= 256 (must clear or sign-extend)
+		// ============================================================
+		{"SHL/clear/shift_256", binBig(uint256.NewInt(256), uint256.NewInt(0xff), SHL), G},
+		{"SHL/clear/shift_1000", binBig(uint256.NewInt(1000), uint256.NewInt(0xff), SHL), G},
+		{"SHR/clear/shift_256", binBig(uint256.NewInt(256), uint256.NewInt(0xff), SHR), G},
+		{"SHR/clear/shift_1000", binBig(uint256.NewInt(1000), uint256.NewInt(0xff), SHR), G},
+		{"SAR/clear/positive_shift_257", binBig(uint256.NewInt(257), uint256.NewInt(42), SAR), G},
+		{"SAR/allone/negative_shift_257", binBig(uint256.NewInt(257), negOne, SAR), G},
+
+		// ============================================================
+		//  Out-of-gas at gas-flush points (STOP, JUMP, JUMPI, JUMPDEST, INVALID)
+		//
+		//  The switch dispatch accumulates gas across cheap ops and only
+		//  flushes at control-flow boundaries. These test OOG during flush.
 		// ============================================================
 		{"out_of_gas/mul_tight", binSmall(3, 5, MUL), 5},
 		{"out_of_gas/jump", []byte{
 			byte(PUSH1), 4, byte(JUMP), byte(INVALID), byte(JUMPDEST), byte(STOP),
 		}, 5},
+
+		// OOG when STOP flushes accumulated gas from prior ADDs.
+		{"out_of_gas/stop_flush", cc(p1(1), p1(2), op1(ADD), p1(3), op1(ADD), op1(POP), op1(STOP)), 10},
+		// OOG when JUMPDEST flushes (PUSH1 + JUMP + JUMPDEST = 8+8+1 gas).
+		{"out_of_gas/jumpdest_flush", []byte{
+			byte(PUSH1), 4, byte(JUMP), byte(INVALID), byte(JUMPDEST), byte(STOP),
+		}, 10},
+		// OOG when JUMPI flushes.
+		{"out_of_gas/jumpi_flush", []byte{
+			byte(PUSH1), 1, byte(PUSH1), 8, byte(JUMPI), byte(INVALID), byte(INVALID), byte(INVALID),
+			byte(JUMPDEST), byte(STOP),
+		}, 12},
+		// OOG when INVALID flushes accumulated gas.
+		{"out_of_gas/invalid_flush", cc(p1(1), p1(2), op1(ADD), op1(POP), op1(INVALID)), 10},
+
+		// ============================================================
+		//  PUSH3/PUSH4 with truncated code (padding branch)
+		// ============================================================
+		{"PUSH3/edge/partial_1byte", []byte{byte(PUSH3), 0xAB}, G},
+		{"PUSH3/edge/partial_2byte", []byte{byte(PUSH3), 0xAB, 0xCD}, G},
+		{"PUSH4/edge/partial_1byte", []byte{byte(PUSH4), 0xAB}, G},
+		{"PUSH4/edge/partial_2byte", []byte{byte(PUSH4), 0xAB, 0xCD}, G},
+		{"PUSH4/edge/partial_3byte", []byte{byte(PUSH4), 0xAB, 0xCD, 0xEF}, G},
 	}
 
 	for _, tc := range cases {
@@ -1301,4 +1339,318 @@ func TestPreShanghaiForkGate(t *testing.T) {
 			fastClass, slowClass, errFast, errSlow)
 	}
 	t.Logf("both paths correctly reject PUSH0 pre-Shanghai: %q", fastClass)
+}
+
+// Verify stack overflow on every inlined PUSH/DUP variant.
+// The bug this catches: PUSH/DUP overflow checks must use consistent
+// limit values between the switch dispatch and the standard interpreter.
+func TestStackOverflowAllPushDupVariants(t *testing.T) {
+	t.Parallel()
+	const gas = uint64(1_000_000)
+
+	// Fill stack to 1024 with PUSH0, then try one more push/dup.
+	fullStack := make([]byte, 1024)
+	for i := range fullStack {
+		fullStack[i] = byte(PUSH0)
+	}
+
+	// Every PUSH variant should overflow on a full stack.
+	pushOps := []struct {
+		name string
+		tail []byte
+	}{
+		{"PUSH0", []byte{byte(PUSH0)}},
+		{"PUSH1", []byte{byte(PUSH1), 0x42}},
+		{"PUSH2", []byte{byte(PUSH2), 0x00, 0x42}},
+		{"PUSH3", []byte{byte(PUSH3), 0x00, 0x00, 0x42}},
+		{"PUSH4", []byte{byte(PUSH4), 0x00, 0x00, 0x00, 0x42}},
+		{"PUSH5", []byte{byte(PUSH5), 0, 0, 0, 0, 0x42}},
+		{"PUSH32", append([]byte{byte(PUSH32)}, make([]byte, 32)...)},
+	}
+	for _, tc := range pushOps {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			code := cc(fullStack, tc.tail, op1(STOP))
+			runDiff(t, code, gas)
+		})
+	}
+
+	// DUP1-DUP16: fill stack to 1024, then DUP should overflow.
+	for n := 1; n <= 16; n++ {
+		t.Run(fmt.Sprintf("DUP%d", n), func(t *testing.T) {
+			t.Parallel()
+			code := cc(fullStack, op1(OpCode(byte(DUP1)+byte(n-1))), op1(STOP))
+			runDiff(t, code, gas)
+		})
+	}
+
+	// PC and MSIZE on a full stack should also overflow.
+	for _, op := range []OpCode{PC, MSIZE} {
+		t.Run(op.String(), func(t *testing.T) {
+			t.Parallel()
+			code := cc(fullStack, op1(op), op1(STOP))
+			runDiff(t, code, gas)
+		})
+	}
+}
+
+// Exercise the default fallback path in the switch dispatch for ops
+// that aren't inlined (CREATE, SELFDESTRUCT, etc). These go through
+// the jumpTable lookup instead of a dedicated case.
+func TestDefaultFallbackPath(t *testing.T) {
+	t.Parallel()
+	const G = uint64(500_000)
+
+	// CREATE: deploy minimal contract (STOP), check both paths agree.
+	t.Run("CREATE", func(t *testing.T) {
+		t.Parallel()
+		// Store STOP opcode at memory[0], then CREATE with 1-byte initcode.
+		code := cc(
+			p1(byte(STOP)), p1(0), op1(MSTORE8),
+			p1(1), p1(0), p1(0), op1(CREATE),
+			retSeq,
+		)
+		runDiff(t, code, G)
+	})
+
+	// SELFDESTRUCT: exercises fallback dynamic gas + state mutation.
+	t.Run("SELFDESTRUCT", func(t *testing.T) {
+		t.Parallel()
+		code := cc(op1(ADDRESS), op1(SELFDESTRUCT))
+		runDiff(t, code, G)
+	})
+
+	// SHA3/KECCAK256 with dynamic memory expansion.
+	t.Run("KECCAK256/large_offset", func(t *testing.T) {
+		t.Parallel()
+		code := cc(p1(64), p1(0), op1(KECCAK256), retSeq)
+		runDiff(t, code, G)
+	})
+
+	// RETURNDATACOPY out of bounds (requires a prior CALL to set returndata).
+	t.Run("RETURNDATACOPY/oob_no_call", func(t *testing.T) {
+		t.Parallel()
+		// No prior call → returndata is empty → copying 1 byte is out of bounds.
+		code := cc(p1(1), p1(0), p1(0), op1(RETURNDATACOPY), op1(STOP))
+		runDiff(t, code, G)
+	})
+
+	// STATICCALL to an empty address (exercises fallback with dynamic gas).
+	t.Run("STATICCALL/empty_target", func(t *testing.T) {
+		t.Parallel()
+		code := cc(
+			p1(0), p1(0), p1(0), p1(0),
+			p1(0xEE), // target address (empty account)
+			p1(0xFF), // gas
+			op1(STATICCALL),
+			retSeq,
+		)
+		runDiff(t, code, G)
+	})
+}
+
+// Test fallback-path edge cases: stack overflow on non-inlined ops,
+// constant gas OOG, dynamic gas OOG, and memory size overflow.
+func TestDefaultFallbackEdgeCases(t *testing.T) {
+	t.Parallel()
+	const G = uint64(500_000)
+
+	// GAS opcode (not inlined) on a full stack → fallback stack overflow.
+	t.Run("stack_overflow/GAS", func(t *testing.T) {
+		t.Parallel()
+		fullStack := make([]byte, 1024)
+		for i := range fullStack {
+			fullStack[i] = byte(PUSH0)
+		}
+		code := cc(fullStack, op1(GAS), op1(STOP))
+		runDiff(t, code, 1_000_000)
+	})
+
+	// MLOAD with zero gas → fallback constant gas OOG.
+	t.Run("oog/constant_gas", func(t *testing.T) {
+		t.Parallel()
+		code := cc(p1(0), op1(MLOAD), op1(STOP))
+		runDiff(t, code, 2) // MLOAD costs 3 constant gas
+	})
+
+	// MSTORE to a huge offset → fallback dynamic gas OOG from memory expansion.
+	t.Run("oog/dynamic_gas_memory", func(t *testing.T) {
+		t.Parallel()
+		code := cc(p1(0), p32(uint256.NewInt(0xFFFFFF)), op1(MSTORE), op1(STOP))
+		runDiff(t, code, 100)
+	})
+
+	// MSTORE to max uint256 offset → memory size overflow (GasUintOverflow).
+	t.Run("oog/memory_size_overflow", func(t *testing.T) {
+		t.Parallel()
+		code := cc(p1(0), p32(maxU256), op1(MSTORE), op1(STOP))
+		runDiff(t, code, G)
+	})
+
+	// Bare JUMPDEST with only 0 gas → OOG on JUMPDEST gas flush.
+	t.Run("oog/jumpdest_zero_gas", func(t *testing.T) {
+		t.Parallel()
+		code := []byte{byte(JUMPDEST), byte(STOP)}
+		runDiff(t, code, 0)
+	})
+}
+
+// Test that fast and slow dispatch return the same stack overflow error text.
+func TestStackOverflowErrorMessageParity(t *testing.T) {
+	const gas = uint64(1_000_000)
+
+	code := make([]byte, 0, 1025)
+	for i := 0; i < 1024; i++ {
+		code = append(code, byte(PUSH0))
+	}
+	code = append(code, byte(PUSH0))
+
+	_, _, errFast := execPathWithConfig(code, nil, gas, true, diffChainConfig, nil)
+	_, _, errSlow := execPathWithConfig(code, nil, gas, false, diffChainConfig, nil)
+
+	if fastClass, slowClass := classifyErr(errFast), classifyErr(errSlow); fastClass != "stack_overflow" || slowClass != "stack_overflow" {
+		t.Fatalf("expected stack_overflow from both paths, got fast=%q (%v) slow=%q (%v)", fastClass, errFast, slowClass, errSlow)
+	}
+	if errFast == nil || errSlow == nil {
+		t.Fatalf("expected concrete overflow errors, got fast=%v slow=%v", errFast, errSlow)
+	}
+	if errFast.Error() != errSlow.Error() {
+		t.Fatalf("stack overflow message mismatch:\n  fast: %q\n  slow: %q", errFast.Error(), errSlow.Error())
+	}
+}
+
+// makeEVM creates an EVM with the given code deployed, returning the EVM and
+// the contract address. The caller can set interrupt/abort before or during Call.
+func makeEVM(code []byte, gas uint64, switchDispatch bool) (*EVM, common.Address) {
+	addr := common.BytesToAddress([]byte("contract"))
+	caller := common.BytesToAddress([]byte("caller"))
+	origin := common.BytesToAddress([]byte("origin"))
+	coinbase := common.BytesToAddress([]byte("coinbase"))
+	random := common.BigToHash(big.NewInt(99))
+
+	db, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	db.CreateAccount(addr)
+	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
+	db.CreateAccount(caller)
+	db.SetBalance(caller, uint256.NewInt(0x5678), tracing.BalanceChangeUnspecified)
+	db.Finalise(true)
+
+	bctx := BlockContext{
+		CanTransfer: func(StateDB, common.Address, *uint256.Int) bool { return true },
+		Transfer:    func(StateDB, common.Address, common.Address, *uint256.Int) {},
+		GetHash:     func(n uint64) common.Hash { return common.BigToHash(new(big.Int).SetUint64(n + 0x1000)) },
+		Coinbase:    coinbase,
+		BlockNumber: big.NewInt(11),
+		Time:        22,
+		Difficulty:  big.NewInt(33),
+		GasLimit:    gas,
+		BaseFee:     big.NewInt(44),
+		BlobBaseFee: big.NewInt(55),
+		Random:      &random,
+	}
+
+	rules := diffChainConfig.Rules(bctx.BlockNumber, bctx.Random != nil, bctx.Time)
+	db.Prepare(rules, caller, common.Address{}, &addr, ActivePrecompiles(rules), nil)
+
+	evm := NewEVM(bctx, db, diffChainConfig, Config{EnableEVMSwitchDispatch: switchDispatch})
+	evm.SetTxContext(TxContext{Origin: origin, GasPrice: big.NewInt(66)})
+	return evm, addr
+}
+
+// runWithInterrupt runs code on a single path and fires the interrupt flag
+// after a short delay. Returns the error from EVM.Call.
+func runWithInterrupt(code []byte, gas uint64, switchDispatch bool) error {
+	evm, addr := makeEVM(code, gas, switchDispatch)
+	interrupt := new(atomic.Bool)
+	evm.SetInterrupt(interrupt)
+
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		interrupt.Store(true)
+	}()
+
+	caller := common.BytesToAddress([]byte("caller"))
+	_, _, err := evm.Call(caller, addr, nil, gas, uint256.NewInt(0))
+	return err
+}
+
+// runWithAbort runs code on a single path and fires the abort flag
+// after a short delay. Returns the error from EVM.Call.
+func runWithAbort(code []byte, gas uint64, switchDispatch bool) error {
+	evm, addr := makeEVM(code, gas, switchDispatch)
+
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		evm.abort.Store(true)
+	}()
+
+	caller := common.BytesToAddress([]byte("caller"))
+	_, _, err := evm.Call(caller, addr, nil, gas, uint256.NewInt(0))
+	return err
+}
+
+// TestInterruptDuringExecution verifies that setting the interrupt flag
+// mid-execution stops both paths and both return the same error.
+func TestInterruptDuringExecution(t *testing.T) {
+	t.Parallel()
+	const gas = uint64(10_000_000)
+
+	// Infinite loop — only the interrupt can stop it.
+	loop := []byte{
+		byte(JUMPDEST), // pc=0
+		byte(PUSH1), 0, // pc=1,2
+		byte(JUMP), // pc=3 → back to 0
+	}
+
+	errFast := runWithInterrupt(loop, gas, true)
+	errSlow := runWithInterrupt(loop, gas, false)
+
+	if fmt.Sprint(errFast) != fmt.Sprint(errSlow) {
+		t.Fatalf("interrupt error mismatch:\n  fast: %v\n  slow: %v", errFast, errSlow)
+	}
+	if !errors.Is(errFast, ErrInterrupt) {
+		t.Fatalf("expected ErrInterrupt, got %v", errFast)
+	}
+}
+
+// TestAbortDuringJump verifies that setting evm.abort mid-execution causes
+// JUMP/JUMPI to stop, and both paths produce the same result.
+func TestAbortDuringJump(t *testing.T) {
+	t.Parallel()
+	const gas = uint64(10_000_000)
+
+	jumpLoop := []byte{
+		byte(JUMPDEST), // pc=0
+		byte(PUSH1), 0, // pc=1,2
+		byte(JUMP), // pc=3 → back to 0
+	}
+	jumpiLoop := []byte{
+		byte(JUMPDEST), // pc=0
+		byte(PUSH1), 1, // pc=1,2 → condition (true)
+		byte(PUSH1), 0, // pc=3,4 → dest
+		byte(JUMPI), // pc=5 → back to 0
+	}
+
+	for _, tc := range []struct {
+		name string
+		code []byte
+	}{
+		{"JUMP", jumpLoop},
+		{"JUMPI", jumpiLoop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			errFast := runWithAbort(tc.code, gas, true)
+			errSlow := runWithAbort(tc.code, gas, false)
+
+			if fmt.Sprint(errFast) != fmt.Sprint(errSlow) {
+				t.Fatalf("abort error mismatch:\n  fast: %v\n  slow: %v", errFast, errSlow)
+			}
+			// abort → errStopToken → Run() converts to nil.
+			if errFast != nil {
+				t.Fatalf("expected nil error after abort, got %v", errFast)
+			}
+		})
+	}
 }
