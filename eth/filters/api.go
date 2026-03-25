@@ -471,13 +471,100 @@ func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 	return logsSub.ID, nil
 }
 
+func (api *FilterAPI) borLogsFilterForHistoricalQuery(ctx context.Context, blockHash *common.Hash, begin, end int64, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
+	borConfig := api.sys.backend.ChainConfig().Bor
+	if blockHash != nil {
+		return api.borLogsFilterForBlock(ctx, borConfig, *blockHash, addresses, topics)
+	}
+
+	return api.borLogsFilterForRange(ctx, borConfig, begin, end, addresses, topics)
+}
+
+func (api *FilterAPI) borLogsFilterForBlock(ctx context.Context, borConfig *params.BorConfig, blockHash common.Hash, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
+	if !api.borLogs {
+		if borConfig == nil || borConfig.MadhugiriBlock == nil {
+			return nil
+		}
+
+		header, err := api.sys.backend.HeaderByHash(ctx, blockHash)
+		if err != nil || header == nil || borConfig.IsMadhugiri(header.Number) {
+			return nil
+		}
+	} else if borConfig != nil && borConfig.MadhugiriBlock != nil {
+		header, err := api.sys.backend.HeaderByHash(ctx, blockHash)
+		if err != nil || header == nil || borConfig.IsMadhugiri(header.Number) {
+			return nil
+		}
+	}
+
+	return NewBorBlockLogsFilter(api.sys.backend, borConfig, blockHash, addresses, topics)
+}
+
+func (api *FilterAPI) borLogsFilterForRange(ctx context.Context, borConfig *params.BorConfig, begin, end int64, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
+	if !api.borLogs && (borConfig == nil || borConfig.MadhugiriBlock == nil) {
+		return nil
+	}
+
+	resolvedBegin, ok := api.resolveHistoricalLogBlockNumber(ctx, begin)
+	if !ok {
+		return nil
+	}
+	resolvedEnd, ok := api.resolveHistoricalLogBlockNumber(ctx, end)
+	if !ok || resolvedBegin > resolvedEnd {
+		return nil
+	}
+
+	if borConfig != nil && borConfig.MadhugiriBlock != nil {
+		madhugiriBlock := borConfig.MadhugiriBlock.Uint64()
+		if resolvedBegin >= madhugiriBlock {
+			return nil
+		}
+		if resolvedEnd >= madhugiriBlock {
+			resolvedEnd = madhugiriBlock - 1
+		}
+	}
+
+	return NewBorBlockLogsRangeFilter(api.sys.backend, borConfig, int64(resolvedBegin), int64(resolvedEnd), addresses, topics)
+}
+
+// resolveHistoricalLogBlockNumber mirrors the standard filter's block-tag handling
+// closely enough for Bor sidecar compatibility decisions, while keeping the
+// canonical filter path authoritative for public RPC errors.
+func (api *FilterAPI) resolveHistoricalLogBlockNumber(ctx context.Context, number int64) (uint64, bool) {
+	switch number {
+	case rpc.LatestBlockNumber.Int64():
+		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.LatestBlockNumber)
+		if err != nil || header == nil {
+			return 0, false
+		}
+		return header.Number.Uint64(), true
+	case rpc.FinalizedBlockNumber.Int64():
+		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.FinalizedBlockNumber)
+		if err != nil || header == nil {
+			return 0, false
+		}
+		return header.Number.Uint64(), true
+	case rpc.SafeBlockNumber.Int64():
+		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.SafeBlockNumber)
+		if err != nil || header == nil {
+			return 0, false
+		}
+		return header.Number.Uint64(), true
+	case rpc.EarliestBlockNumber.Int64():
+		return api.sys.backend.HistoryPruningCutoff(), true
+	default:
+		if number < 0 {
+			return 0, false
+		}
+		return uint64(number), true
+	}
+}
+
 // GetLogs returns logs matching the given argument that are stored within the state.
 func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.Log, error) {
 	if len(crit.Topics) > maxTopics {
 		return nil, errExceedMaxTopics
 	}
-
-	borConfig := api.sys.backend.ChainConfig().Bor
 
 	if api.logQueryLimit != 0 {
 		if len(crit.Addresses) > api.logQueryLimit {
@@ -492,8 +579,6 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 
 	var filter *Filter
 
-	var borLogsFilter *BorBlockLogsFilter
-
 	if crit.BlockHash != nil {
 		if crit.FromBlock != nil || crit.ToBlock != nil {
 			return nil, errBlockHashWithRange
@@ -501,10 +586,6 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 
 		// Block filter requested, construct a single-shot filter
 		filter = api.sys.NewBlockFilter(*crit.BlockHash, crit.Addresses, crit.Topics)
-		// Block bor filter
-		if api.borLogs {
-			borLogsFilter = NewBorBlockLogsFilter(api.sys.backend, borConfig, *crit.BlockHash, crit.Addresses, crit.Topics)
-		}
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -529,10 +610,6 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
-		// Block bor filter
-		if api.borLogs {
-			borLogsFilter = NewBorBlockLogsRangeFilter(api.sys.backend, borConfig, begin, end, crit.Addresses, crit.Topics)
-		}
 	}
 
 	// Run the filter and return all the logs
@@ -541,6 +618,7 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		return nil, err
 	}
 
+	borLogsFilter := api.borLogsFilterForHistoricalQuery(ctx, crit.BlockHash, filter.begin, filter.end, crit.Addresses, crit.Topics)
 	if borLogsFilter != nil {
 		// Run the filter and return all the logs
 		borBlockLogs, err := borLogsFilter.Logs(ctx)
@@ -583,20 +661,11 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		return nil, errFilterNotFound
 	}
 
-	borConfig := api.sys.backend.ChainConfig().Bor
-
 	var filter *Filter
-
-	var borLogsFilter *BorBlockLogsFilter
 
 	if f.crit.BlockHash != nil {
 		// Block filter requested, construct a single-shot filter
 		filter = api.sys.NewBlockFilter(*f.crit.BlockHash, f.crit.Addresses, f.crit.Topics)
-
-		// Block bor filter
-		if api.borLogs {
-			borLogsFilter = NewBorBlockLogsFilter(api.sys.backend, borConfig, *f.crit.BlockHash, f.crit.Addresses, f.crit.Topics)
-		}
 	} else {
 		// Convert the RPC block numbers into internal representations
 		begin := rpc.LatestBlockNumber.Int64()
@@ -614,10 +683,6 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, f.crit.Addresses, f.crit.Topics)
-
-		if api.borLogs {
-			borLogsFilter = NewBorBlockLogsRangeFilter(api.sys.backend, borConfig, begin, end, f.crit.Addresses, f.crit.Topics)
-		}
 	}
 	// Run the filter and return all the logs
 	logs, err := filter.Logs(ctx)
@@ -625,6 +690,7 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		return nil, err
 	}
 
+	borLogsFilter := api.borLogsFilterForHistoricalQuery(ctx, f.crit.BlockHash, filter.begin, filter.end, f.crit.Addresses, f.crit.Topics)
 	if borLogsFilter != nil {
 		// Run the filter and return all the logs
 		borBlockLogs, err := borLogsFilter.Logs(ctx)

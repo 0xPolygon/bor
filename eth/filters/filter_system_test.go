@@ -51,7 +51,15 @@ type testBackend struct {
 	pendingBlock    *types.Block
 	pendingReceipts types.Receipts
 
-	stateSyncFeed event.Feed
+	stateSyncFeed  event.Feed
+	chainConfig    *params.ChainConfig
+	historyCutoff  uint64
+	headersByHash  map[common.Hash]*types.Header
+	headersByNum   map[uint64]*types.Header
+	receiptsByHash map[common.Hash]types.Receipts
+	borReceipts    map[common.Hash]*types.Receipt
+	headHash       common.Hash
+	finalizedHash  common.Hash
 }
 
 func (b *testBackend) SubscribeStateSyncEvent(ch chan<- core.StateSyncEvent) event.Subscription {
@@ -59,6 +67,10 @@ func (b *testBackend) SubscribeStateSyncEvent(ch chan<- core.StateSyncEvent) eve
 }
 
 func (b *testBackend) ChainConfig() *params.ChainConfig {
+	if b.chainConfig != nil {
+		return b.chainConfig
+	}
+
 	return params.TestChainConfig
 }
 
@@ -76,6 +88,12 @@ func (b *testBackend) ChainDb() ethdb.Database {
 }
 
 func (b *testBackend) GetCanonicalHash(number uint64) common.Hash {
+	if b.headersByNum != nil {
+		if header := b.headersByNum[number]; header != nil {
+			return header.Hash()
+		}
+	}
+
 	return rawdb.ReadCanonicalHash(b.db, number)
 }
 
@@ -94,6 +112,25 @@ func (b *testBackend) GetRawReceipts(hash common.Hash, number uint64) types.Rece
 }
 
 func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error) {
+	if b.headersByNum != nil {
+		switch blockNr {
+		case rpc.LatestBlockNumber:
+			return b.headersByHash[b.headHash], nil
+		case rpc.FinalizedBlockNumber:
+			if b.finalizedHash == (common.Hash{}) {
+				return nil, nil
+			}
+			return b.headersByHash[b.finalizedHash], nil
+		case rpc.SafeBlockNumber:
+			return nil, errors.New("safe block not found")
+		default:
+			if blockNr < 0 {
+				return nil, nil
+			}
+			return b.headersByNum[uint64(blockNr)], nil
+		}
+	}
+
 	var (
 		hash common.Hash
 		num  uint64
@@ -127,6 +164,10 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 }
 
 func (b *testBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
+	if b.headersByHash != nil {
+		return b.headersByHash[hash], nil
+	}
+
 	number, ok := rawdb.ReadHeaderNumber(b.db, hash)
 	if !ok {
 		//nolint:nilnil
@@ -144,6 +185,10 @@ func (b *testBackend) GetBody(ctx context.Context, hash common.Hash, number rpc.
 }
 
 func (b *testBackend) GetReceipts(_ context.Context, hash common.Hash) (types.Receipts, error) {
+	if b.receiptsByHash != nil {
+		return b.receiptsByHash[hash], nil
+	}
+
 	if number, ok := rawdb.ReadHeaderNumber(b.db, hash); ok {
 		if header := rawdb.ReadHeader(b.db, hash, number); header != nil {
 			return rawdb.ReadReceipts(b.db, hash, number, header.Time, params.TestChainConfig), nil
@@ -154,6 +199,15 @@ func (b *testBackend) GetReceipts(_ context.Context, hash common.Hash) (types.Re
 }
 
 func (b *testBackend) GetLogs(_ context.Context, hash common.Hash, number uint64) ([][]*types.Log, error) {
+	if b.receiptsByHash != nil {
+		receipts := b.receiptsByHash[hash]
+		logs := make([][]*types.Log, len(receipts))
+		for i, receipt := range receipts {
+			logs[i] = receipt.Logs
+		}
+		return logs, nil
+	}
+
 	logs := rawdb.ReadLogs(b.db, hash, number)
 	return logs, nil
 }
@@ -188,12 +242,26 @@ func (b *testBackend) NewMatcherBackend() filtermaps.MatcherBackend {
 }
 
 func (b *testBackend) GetBorBlockReceipt(_ context.Context, blockHash common.Hash) (*types.Receipt, error) {
+	if b.borReceipts != nil {
+		number, ok := rawdb.ReadHeaderNumber(b.db, blockHash)
+		if !ok {
+			return &types.Receipt{}, nil
+		}
+		if cfg := b.ChainConfig(); cfg != nil && cfg.Bor != nil && cfg.Bor.Sprint != nil && !cfg.Bor.IsSprintStart(number) {
+			return &types.Receipt{}, nil
+		}
+		if receipt := b.borReceipts[blockHash]; receipt != nil {
+			return receipt, nil
+		}
+		return &types.Receipt{}, nil
+	}
+
 	number, ok := rawdb.ReadHeaderNumber(b.db, blockHash)
 	if !ok {
 		return &types.Receipt{}, nil
 	}
 
-	receipt := rawdb.ReadBorReceipt(b.db, blockHash, number, nil)
+	receipt := rawdb.ReadBorReceipt(b.db, blockHash, number, b.ChainConfig())
 	if receipt == nil {
 		return &types.Receipt{}, nil
 	}
@@ -238,7 +306,7 @@ func (b *testBackend) setPending(block *types.Block, receipts types.Receipts) {
 }
 
 func (b *testBackend) HistoryPruningCutoff() uint64 {
-	return 0
+	return b.historyCutoff
 }
 
 func newTestFilterSystem(db ethdb.Database, cfg Config) (*testBackend, *FilterSystem) {
@@ -246,6 +314,160 @@ func newTestFilterSystem(db ethdb.Database, cfg Config) (*testBackend, *FilterSy
 	sys := NewFilterSystem(backend, cfg)
 
 	return backend, sys
+}
+
+type historicalBorLogsHarness struct {
+	api             *FilterAPI
+	preBlock        *types.Block
+	missingBorBlock *types.Block
+	postBlock       *types.Block
+	preBorAddr      common.Address
+	preBorTopic     common.Hash
+	postAddr        common.Address
+	postTopic       common.Hash
+	postBorAddr     common.Address
+}
+
+func makeReceiptWithTopic(addr common.Address, topic common.Hash) *types.Receipt {
+	receipt := types.NewReceipt(nil, false, 0)
+	receipt.Logs = []*types.Log{{
+		Address: addr,
+		Topics:  []common.Hash{topic},
+	}}
+	receipt.Bloom = types.CreateBloom(receipt)
+
+	return receipt
+}
+
+func makeBorLogs(addr common.Address, topic common.Hash) []*types.Log {
+	return []*types.Log{{
+		Address: addr,
+		Topics:  []common.Hash{topic},
+	}}
+}
+
+func cloneBorHistoricalTestConfig(madhugiriBlock uint64) *params.ChainConfig {
+	cfgCopy := *params.BorTestChainConfig
+	borCopy := *params.BorTestChainConfig.Bor
+	sprintCopy := make(map[string]uint64, len(borCopy.Sprint))
+	for k, v := range borCopy.Sprint {
+		sprintCopy[k] = v
+	}
+	borCopy.Sprint = sprintCopy
+	borCopy.Sprint["0"] = 1
+	borCopy.MadhugiriBlock = new(big.Int).SetUint64(madhugiriBlock)
+	cfgCopy.Bor = &borCopy
+
+	return &cfgCopy
+}
+
+func writeBorReceiptForTest(t *testing.T, db ethdb.Database, _ *params.ChainConfig, block *types.Block, receipts types.Receipts, logs []*types.Log) {
+	t.Helper()
+
+	logIndex := uint(0)
+	for _, receipt := range receipts {
+		logIndex += uint(len(receipt.Logs))
+	}
+
+	types.DeriveFieldsForBorLogs(logs, block.Hash(), block.NumberU64(), uint(len(block.Transactions())), logIndex)
+
+	batch := db.NewBatch()
+	rawdb.WriteBorReceipt(batch, block.Hash(), block.NumberU64(), &types.ReceiptForStorage{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   logs,
+	})
+	rawdb.WriteBorTxLookupEntry(batch, block.Hash(), block.NumberU64())
+
+	if err := batch.Write(); err != nil {
+		t.Fatalf("failed to write bor receipt: %v", err)
+	}
+}
+
+func newHistoricalBorLogsHarness(t *testing.T, enableBorLogs bool) *historicalBorLogsHarness {
+	t.Helper()
+
+	var (
+		db           = rawdb.NewMemoryDatabase()
+		backend, sys = newTestFilterSystem(db, Config{})
+		api          = NewFilterAPI(sys, enableBorLogs)
+		cfg          = cloneBorHistoricalTestConfig(4)
+
+		preBorAddr  = common.HexToAddress("0x1000000000000000000000000000000000000001")
+		postAddr    = common.HexToAddress("0x2000000000000000000000000000000000000002")
+		postBorAddr = common.HexToAddress("0x3000000000000000000000000000000000000003")
+
+		preBorTopic  = common.HexToHash("0x1000000000000000000000000000000000000000000000000000000000000001")
+		postTopic    = common.HexToHash("0x2000000000000000000000000000000000000000000000000000000000000002")
+		postBorTopic = common.HexToHash("0x3000000000000000000000000000000000000000000000000000000000000003")
+
+		gspec = &core.Genesis{
+			Config:  cfg,
+			Alloc:   types.GenesisAlloc{},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+	)
+
+	backend.chainConfig = cfg
+	api.SetChainConfig(cfg)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, chain, receipts := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), 5, func(i int, gen *core.BlockGen) {
+		if i == 3 {
+			receipt := makeReceiptWithTopic(postAddr, postTopic)
+			gen.AddUncheckedReceipt(receipt)
+			gen.AddUncheckedTx(types.NewTransaction(999, common.HexToAddress("0x999"), big.NewInt(999), 999, gen.BaseFee(), nil))
+		}
+	})
+
+	gspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
+
+	for i, block := range chain {
+		rawdb.WriteBlock(db, block)
+		rawdb.WriteCanonicalHash(db, block.Hash(), block.NumberU64())
+		rawdb.WriteHeadBlockHash(db, block.Hash())
+		rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), receipts[i])
+	}
+
+	backend.headersByHash = make(map[common.Hash]*types.Header, len(chain))
+	backend.headersByNum = make(map[uint64]*types.Header, len(chain))
+	backend.receiptsByHash = make(map[common.Hash]types.Receipts, len(chain))
+	backend.borReceipts = make(map[common.Hash]*types.Receipt, 2)
+	for i, block := range chain {
+		backend.headersByHash[block.Hash()] = block.Header()
+		backend.headersByNum[block.NumberU64()] = block.Header()
+		backend.receiptsByHash[block.Hash()] = receipts[i]
+	}
+	backend.headHash = chain[len(chain)-1].Hash()
+	backend.finalizedHash = chain[3].Hash()
+
+	preBorLogs := makeBorLogs(preBorAddr, preBorTopic)
+	writeBorReceiptForTest(t, db, cfg, chain[1], receipts[1], preBorLogs)
+	backend.borReceipts[chain[1].Hash()] = &types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   preBorLogs,
+	}
+
+	postBorLogs := makeBorLogs(postBorAddr, postBorTopic)
+	writeBorReceiptForTest(t, db, cfg, chain[3], receipts[3], postBorLogs)
+	backend.borReceipts[chain[3].Hash()] = &types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs:   postBorLogs,
+	}
+
+	backend.startFilterMaps(16, false, filtermaps.RangeTestParams)
+	t.Cleanup(backend.stopFilterMaps)
+
+	return &historicalBorLogsHarness{
+		api:             api,
+		preBlock:        chain[1],
+		missingBorBlock: chain[2],
+		postBlock:       chain[3],
+		preBorAddr:      preBorAddr,
+		preBorTopic:     preBorTopic,
+		postAddr:        postAddr,
+		postTopic:       postTopic,
+		postBorAddr:     postBorAddr,
+	}
 }
 
 // TestBlockSubscription tests if a block subscription returns block hashes for posted chain events.
@@ -588,6 +810,146 @@ func TestInvalidGetRangeLogsRequest(t *testing.T) {
 
 	if _, err := api.GetLogs(t.Context(), FilterCriteria{FromBlock: big.NewInt(2), ToBlock: big.NewInt(1)}); err != errInvalidBlockRange {
 		t.Errorf("Expected Logs for invalid range return error, but got: %v", err)
+	}
+}
+
+func TestGetLogsAutoMergesPreMadhugiriBorLogs(t *testing.T) {
+	t.Parallel()
+
+	harness := newHistoricalBorLogsHarness(t, false)
+	preBlockHash := harness.preBlock.Hash()
+	missingBorBlockHash := harness.missingBorBlock.Hash()
+
+	logs, err := harness.api.GetLogs(t.Context(), FilterCriteria{
+		BlockHash: &preBlockHash,
+	})
+	if err != nil {
+		t.Fatalf("GetLogs blockHash returned error: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 merged pre-fork bor log, got %d", len(logs))
+	}
+	if logs[0].Address != harness.preBorAddr {
+		t.Fatalf("expected pre-fork bor log address %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
+	}
+	if len(logs[0].Topics) != 1 || logs[0].Topics[0] != harness.preBorTopic {
+		t.Fatalf("expected pre-fork bor log topic %s, got %v", harness.preBorTopic.Hex(), logs[0].Topics)
+	}
+
+	logs, err = harness.api.GetLogs(t.Context(), FilterCriteria{
+		BlockHash: &missingBorBlockHash,
+	})
+	if err != nil {
+		t.Fatalf("GetLogs missing-sidecar blockHash returned error: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected no logs when pre-fork bor sidecar data is absent, got %d", len(logs))
+	}
+}
+
+func TestGetLogsKeepsPostMadhugiriResultsCanonical(t *testing.T) {
+	t.Parallel()
+
+	harness := newHistoricalBorLogsHarness(t, false)
+	postBlockHash := harness.postBlock.Hash()
+
+	logs, err := harness.api.GetLogs(t.Context(), FilterCriteria{
+		BlockHash: &postBlockHash,
+	})
+	if err != nil {
+		t.Fatalf("GetLogs post-fork blockHash returned error: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected only canonical post-fork log, got %d", len(logs))
+	}
+	if logs[0].Address != harness.postAddr {
+		t.Fatalf("expected post-fork canonical log address %s, got %s", harness.postAddr.Hex(), logs[0].Address.Hex())
+	}
+
+	logs, err = harness.api.GetLogs(t.Context(), FilterCriteria{
+		FromBlock: new(big.Int).SetUint64(harness.preBlock.NumberU64()),
+		ToBlock:   big.NewInt(rpc.LatestBlockNumber.Int64()),
+	})
+	if err != nil {
+		t.Fatalf("GetLogs range returned error: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected pre-fork bor log plus post-fork canonical log, got %d", len(logs))
+	}
+	if logs[0].Address != harness.preBorAddr {
+		t.Fatalf("expected first log to be pre-fork bor log %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
+	}
+	if logs[1].Address != harness.postAddr {
+		t.Fatalf("expected second log to be post-fork canonical log %s, got %s", harness.postAddr.Hex(), logs[1].Address.Hex())
+	}
+	for _, log := range logs {
+		if log.Address == harness.postBorAddr {
+			t.Fatalf("unexpected post-fork bor sidecar log leaked into standard historical query")
+		}
+	}
+}
+
+func TestGetFilterLogsAutoMergesPreMadhugiriBorLogs(t *testing.T) {
+	t.Parallel()
+
+	harness := newHistoricalBorLogsHarness(t, false)
+	preBlockHash := harness.preBlock.Hash()
+
+	id, err := harness.api.NewFilter(FilterCriteria{
+		BlockHash: &preBlockHash,
+	})
+	if err != nil {
+		t.Fatalf("NewFilter blockHash returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		harness.api.UninstallFilter(id)
+	})
+
+	logs, err := harness.api.GetFilterLogs(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetFilterLogs blockHash returned error: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 merged pre-fork bor log from filter id, got %d", len(logs))
+	}
+	if logs[0].Address != harness.preBorAddr {
+		t.Fatalf("expected pre-fork bor log address %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
+	}
+}
+
+func TestGetFilterLogsKeepsPostMadhugiriResultsCanonical(t *testing.T) {
+	t.Parallel()
+
+	harness := newHistoricalBorLogsHarness(t, false)
+
+	id, err := harness.api.NewFilter(FilterCriteria{
+		FromBlock: new(big.Int).SetUint64(harness.preBlock.NumberU64()),
+		ToBlock:   big.NewInt(rpc.LatestBlockNumber.Int64()),
+	})
+	if err != nil {
+		t.Fatalf("NewFilter range returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		harness.api.UninstallFilter(id)
+	})
+
+	logs, err := harness.api.GetFilterLogs(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetFilterLogs range returned error: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("expected pre-fork bor log plus post-fork canonical log from filter id, got %d", len(logs))
+	}
+	if logs[0].Address != harness.preBorAddr {
+		t.Fatalf("expected first filter log to be pre-fork bor log %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
+	}
+	if logs[1].Address != harness.postAddr {
+		t.Fatalf("expected second filter log to be post-fork canonical log %s, got %s", harness.postAddr.Hex(), logs[1].Address.Hex())
+	}
+	for _, log := range logs {
+		if log.Address == harness.postBorAddr {
+			t.Fatalf("unexpected post-fork bor sidecar log leaked into filter-id historical query")
+		}
 	}
 }
 
