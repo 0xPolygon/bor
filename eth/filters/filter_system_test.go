@@ -464,6 +464,27 @@ func writeBorReceiptForTest(t *testing.T, db ethdb.Database, _ *params.ChainConf
 	}
 }
 
+func writeHistoricalBorChain(t *testing.T, db ethdb.Database, gspec *core.Genesis, chain []*types.Block, receipts []types.Receipts) {
+	t.Helper()
+
+	gspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
+
+	for idx := range chain {
+		block := chain[idx]
+		hash := block.Hash()
+		number := block.NumberU64()
+
+		rawdb.WriteHeader(db, block.Header())
+		rawdb.WriteBody(db, hash, number, block.Body())
+		rawdb.WriteCanonicalHash(db, hash, number)
+		rawdb.WriteReceipts(db, hash, number, receipts[idx])
+	}
+
+	if len(chain) > 0 {
+		rawdb.WriteHeadBlockHash(db, chain[len(chain)-1].Hash())
+	}
+}
+
 func newHistoricalBorLogsHarness(t *testing.T, enableBorLogs bool) *historicalBorLogsHarness {
 	t.Helper()
 
@@ -500,14 +521,7 @@ func newHistoricalBorLogsHarness(t *testing.T, enableBorLogs bool) *historicalBo
 		}
 	})
 
-	gspec.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
-
-	for i, block := range chain {
-		rawdb.WriteBlock(db, block)
-		rawdb.WriteCanonicalHash(db, block.Hash(), block.NumberU64())
-		rawdb.WriteHeadBlockHash(db, block.Hash())
-		rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), receipts[i])
-	}
+	writeHistoricalBorChain(t, db, gspec, chain, receipts)
 
 	backend.headersByHash = make(map[common.Hash]*types.Header, len(chain))
 	backend.headersByNum = make(map[uint64]*types.Header, len(chain))
