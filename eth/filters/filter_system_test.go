@@ -328,6 +328,11 @@ type historicalBorLogsHarness struct {
 	postBorAddr     common.Address
 }
 
+type historicalBorLogsFetcher struct {
+	name  string
+	fetch func(*testing.T, *historicalBorLogsHarness, FilterCriteria) []*types.Log
+}
+
 func makeReceiptWithTopic(addr common.Address, topic common.Hash) *types.Receipt {
 	receipt := types.NewReceipt(nil, false, 0)
 	receipt.Logs = []*types.Log{{
@@ -344,6 +349,82 @@ func makeBorLogs(addr common.Address, topic common.Hash) []*types.Log {
 		Address: addr,
 		Topics:  []common.Hash{topic},
 	}}
+}
+
+func getHistoricalBorLogsFetchers() []historicalBorLogsFetcher {
+	return []historicalBorLogsFetcher{
+		{
+			name: "GetLogs",
+			fetch: func(t *testing.T, harness *historicalBorLogsHarness, crit FilterCriteria) []*types.Log {
+				t.Helper()
+
+				logs, err := harness.api.GetLogs(t.Context(), crit)
+				if err != nil {
+					t.Fatalf("GetLogs returned error: %v", err)
+				}
+
+				return logs
+			},
+		},
+		{
+			name: "GetFilterLogs",
+			fetch: func(t *testing.T, harness *historicalBorLogsHarness, crit FilterCriteria) []*types.Log {
+				t.Helper()
+
+				id, err := harness.api.NewFilter(crit)
+				if err != nil {
+					t.Fatalf("NewFilter returned error: %v", err)
+				}
+				t.Cleanup(func() {
+					harness.api.UninstallFilter(id)
+				})
+
+				logs, err := harness.api.GetFilterLogs(t.Context(), id)
+				if err != nil {
+					t.Fatalf("GetFilterLogs returned error: %v", err)
+				}
+
+				return logs
+			},
+		},
+	}
+}
+
+func requireHistoricalBorLogCount(t *testing.T, logs []*types.Log, want int, context string) {
+	t.Helper()
+
+	if len(logs) != want {
+		t.Fatalf("%s: expected %d logs, got %d", context, want, len(logs))
+	}
+}
+
+func requireHistoricalBorSingleLog(t *testing.T, logs []*types.Log, wantAddr common.Address, wantTopic common.Hash, context string) {
+	t.Helper()
+
+	requireHistoricalBorLogCount(t, logs, 1, context)
+	if logs[0].Address != wantAddr {
+		t.Fatalf("%s: expected log address %s, got %s", context, wantAddr.Hex(), logs[0].Address.Hex())
+	}
+	if len(logs[0].Topics) != 1 || logs[0].Topics[0] != wantTopic {
+		t.Fatalf("%s: expected log topic %s, got %v", context, wantTopic.Hex(), logs[0].Topics)
+	}
+}
+
+func requireHistoricalBorRangeLogs(t *testing.T, logs []*types.Log, harness *historicalBorLogsHarness, context string) {
+	t.Helper()
+
+	requireHistoricalBorLogCount(t, logs, 2, context)
+	if logs[0].Address != harness.preBorAddr {
+		t.Fatalf("%s: expected first log to be pre-fork bor log %s, got %s", context, harness.preBorAddr.Hex(), logs[0].Address.Hex())
+	}
+	if logs[1].Address != harness.postAddr {
+		t.Fatalf("%s: expected second log to be post-fork canonical log %s, got %s", context, harness.postAddr.Hex(), logs[1].Address.Hex())
+	}
+	for _, log := range logs {
+		if log.Address == harness.postBorAddr {
+			t.Fatalf("%s: unexpected post-fork bor sidecar log leaked into standard historical query", context)
+		}
+	}
 }
 
 func cloneBorHistoricalTestConfig(madhugiriBlock uint64) *params.ChainConfig {
@@ -813,143 +894,43 @@ func TestInvalidGetRangeLogsRequest(t *testing.T) {
 	}
 }
 
-func TestGetLogsAutoMergesPreMadhugiriBorLogs(t *testing.T) {
+func TestHistoricalQueriesAutoMergePreMadhugiriBorLogs(t *testing.T) {
 	t.Parallel()
 
-	harness := newHistoricalBorLogsHarness(t, false)
-	preBlockHash := harness.preBlock.Hash()
-	missingBorBlockHash := harness.missingBorBlock.Hash()
+	for _, fetcher := range getHistoricalBorLogsFetchers() {
+		fetcher := fetcher
+		t.Run(fetcher.name, func(t *testing.T) {
+			harness := newHistoricalBorLogsHarness(t, false)
+			preBlockHash := harness.preBlock.Hash()
+			missingBorBlockHash := harness.missingBorBlock.Hash()
 
-	logs, err := harness.api.GetLogs(t.Context(), FilterCriteria{
-		BlockHash: &preBlockHash,
-	})
-	if err != nil {
-		t.Fatalf("GetLogs blockHash returned error: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("expected 1 merged pre-fork bor log, got %d", len(logs))
-	}
-	if logs[0].Address != harness.preBorAddr {
-		t.Fatalf("expected pre-fork bor log address %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
-	}
-	if len(logs[0].Topics) != 1 || logs[0].Topics[0] != harness.preBorTopic {
-		t.Fatalf("expected pre-fork bor log topic %s, got %v", harness.preBorTopic.Hex(), logs[0].Topics)
-	}
+			logs := fetcher.fetch(t, harness, FilterCriteria{BlockHash: &preBlockHash})
+			requireHistoricalBorSingleLog(t, logs, harness.preBorAddr, harness.preBorTopic, fetcher.name+" pre-fork blockHash")
 
-	logs, err = harness.api.GetLogs(t.Context(), FilterCriteria{
-		BlockHash: &missingBorBlockHash,
-	})
-	if err != nil {
-		t.Fatalf("GetLogs missing-sidecar blockHash returned error: %v", err)
-	}
-	if len(logs) != 0 {
-		t.Fatalf("expected no logs when pre-fork bor sidecar data is absent, got %d", len(logs))
+			logs = fetcher.fetch(t, harness, FilterCriteria{BlockHash: &missingBorBlockHash})
+			requireHistoricalBorLogCount(t, logs, 0, fetcher.name+" missing-sidecar blockHash")
+		})
 	}
 }
 
-func TestGetLogsKeepsPostMadhugiriResultsCanonical(t *testing.T) {
+func TestHistoricalQueriesKeepPostMadhugiriResultsCanonical(t *testing.T) {
 	t.Parallel()
 
-	harness := newHistoricalBorLogsHarness(t, false)
-	postBlockHash := harness.postBlock.Hash()
+	for _, fetcher := range getHistoricalBorLogsFetchers() {
+		fetcher := fetcher
+		t.Run(fetcher.name, func(t *testing.T) {
+			harness := newHistoricalBorLogsHarness(t, false)
+			postBlockHash := harness.postBlock.Hash()
 
-	logs, err := harness.api.GetLogs(t.Context(), FilterCriteria{
-		BlockHash: &postBlockHash,
-	})
-	if err != nil {
-		t.Fatalf("GetLogs post-fork blockHash returned error: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("expected only canonical post-fork log, got %d", len(logs))
-	}
-	if logs[0].Address != harness.postAddr {
-		t.Fatalf("expected post-fork canonical log address %s, got %s", harness.postAddr.Hex(), logs[0].Address.Hex())
-	}
+			logs := fetcher.fetch(t, harness, FilterCriteria{BlockHash: &postBlockHash})
+			requireHistoricalBorSingleLog(t, logs, harness.postAddr, harness.postTopic, fetcher.name+" post-fork blockHash")
 
-	logs, err = harness.api.GetLogs(t.Context(), FilterCriteria{
-		FromBlock: new(big.Int).SetUint64(harness.preBlock.NumberU64()),
-		ToBlock:   big.NewInt(rpc.LatestBlockNumber.Int64()),
-	})
-	if err != nil {
-		t.Fatalf("GetLogs range returned error: %v", err)
-	}
-	if len(logs) != 2 {
-		t.Fatalf("expected pre-fork bor log plus post-fork canonical log, got %d", len(logs))
-	}
-	if logs[0].Address != harness.preBorAddr {
-		t.Fatalf("expected first log to be pre-fork bor log %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
-	}
-	if logs[1].Address != harness.postAddr {
-		t.Fatalf("expected second log to be post-fork canonical log %s, got %s", harness.postAddr.Hex(), logs[1].Address.Hex())
-	}
-	for _, log := range logs {
-		if log.Address == harness.postBorAddr {
-			t.Fatalf("unexpected post-fork bor sidecar log leaked into standard historical query")
-		}
-	}
-}
-
-func TestGetFilterLogsAutoMergesPreMadhugiriBorLogs(t *testing.T) {
-	t.Parallel()
-
-	harness := newHistoricalBorLogsHarness(t, false)
-	preBlockHash := harness.preBlock.Hash()
-
-	id, err := harness.api.NewFilter(FilterCriteria{
-		BlockHash: &preBlockHash,
-	})
-	if err != nil {
-		t.Fatalf("NewFilter blockHash returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		harness.api.UninstallFilter(id)
-	})
-
-	logs, err := harness.api.GetFilterLogs(t.Context(), id)
-	if err != nil {
-		t.Fatalf("GetFilterLogs blockHash returned error: %v", err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("expected 1 merged pre-fork bor log from filter id, got %d", len(logs))
-	}
-	if logs[0].Address != harness.preBorAddr {
-		t.Fatalf("expected pre-fork bor log address %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
-	}
-}
-
-func TestGetFilterLogsKeepsPostMadhugiriResultsCanonical(t *testing.T) {
-	t.Parallel()
-
-	harness := newHistoricalBorLogsHarness(t, false)
-
-	id, err := harness.api.NewFilter(FilterCriteria{
-		FromBlock: new(big.Int).SetUint64(harness.preBlock.NumberU64()),
-		ToBlock:   big.NewInt(rpc.LatestBlockNumber.Int64()),
-	})
-	if err != nil {
-		t.Fatalf("NewFilter range returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		harness.api.UninstallFilter(id)
-	})
-
-	logs, err := harness.api.GetFilterLogs(t.Context(), id)
-	if err != nil {
-		t.Fatalf("GetFilterLogs range returned error: %v", err)
-	}
-	if len(logs) != 2 {
-		t.Fatalf("expected pre-fork bor log plus post-fork canonical log from filter id, got %d", len(logs))
-	}
-	if logs[0].Address != harness.preBorAddr {
-		t.Fatalf("expected first filter log to be pre-fork bor log %s, got %s", harness.preBorAddr.Hex(), logs[0].Address.Hex())
-	}
-	if logs[1].Address != harness.postAddr {
-		t.Fatalf("expected second filter log to be post-fork canonical log %s, got %s", harness.postAddr.Hex(), logs[1].Address.Hex())
-	}
-	for _, log := range logs {
-		if log.Address == harness.postBorAddr {
-			t.Fatalf("unexpected post-fork bor sidecar log leaked into filter-id historical query")
-		}
+			logs = fetcher.fetch(t, harness, FilterCriteria{
+				FromBlock: new(big.Int).SetUint64(harness.preBlock.NumberU64()),
+				ToBlock:   big.NewInt(rpc.LatestBlockNumber.Int64()),
+			})
+			requireHistoricalBorRangeLogs(t, logs, harness, fetcher.name+" cross-fork range")
+		})
 	}
 }
 

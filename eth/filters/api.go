@@ -481,20 +481,13 @@ func (api *FilterAPI) borLogsFilterForHistoricalQuery(ctx context.Context, block
 }
 
 func (api *FilterAPI) borLogsFilterForBlock(ctx context.Context, borConfig *params.BorConfig, blockHash common.Hash, addresses []common.Address, topics [][]common.Hash) *BorBlockLogsFilter {
-	if !api.borLogs {
-		if borConfig == nil || borConfig.MadhugiriBlock == nil {
-			return nil
-		}
-
+	if borConfig != nil && borConfig.MadhugiriBlock != nil {
 		header, err := api.sys.backend.HeaderByHash(ctx, blockHash)
 		if err != nil || header == nil || borConfig.IsMadhugiri(header.Number) {
 			return nil
 		}
-	} else if borConfig != nil && borConfig.MadhugiriBlock != nil {
-		header, err := api.sys.backend.HeaderByHash(ctx, blockHash)
-		if err != nil || header == nil || borConfig.IsMadhugiri(header.Number) {
-			return nil
-		}
+	} else if !api.borLogs {
+		return nil
 	}
 
 	return NewBorBlockLogsFilter(api.sys.backend, borConfig, blockHash, addresses, topics)
@@ -531,25 +524,21 @@ func (api *FilterAPI) borLogsFilterForRange(ctx context.Context, borConfig *para
 // closely enough for Bor sidecar compatibility decisions, while keeping the
 // canonical filter path authoritative for public RPC errors.
 func (api *FilterAPI) resolveHistoricalLogBlockNumber(ctx context.Context, number int64) (uint64, bool) {
+	resolveHeaderNumber := func(number rpc.BlockNumber) (uint64, bool) {
+		header, err := api.sys.backend.HeaderByNumber(ctx, number)
+		if err != nil || header == nil {
+			return 0, false
+		}
+		return header.Number.Uint64(), true
+	}
+
 	switch number {
 	case rpc.LatestBlockNumber.Int64():
-		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.LatestBlockNumber)
-		if err != nil || header == nil {
-			return 0, false
-		}
-		return header.Number.Uint64(), true
+		return resolveHeaderNumber(rpc.LatestBlockNumber)
 	case rpc.FinalizedBlockNumber.Int64():
-		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.FinalizedBlockNumber)
-		if err != nil || header == nil {
-			return 0, false
-		}
-		return header.Number.Uint64(), true
+		return resolveHeaderNumber(rpc.FinalizedBlockNumber)
 	case rpc.SafeBlockNumber.Int64():
-		header, err := api.sys.backend.HeaderByNumber(ctx, rpc.SafeBlockNumber)
-		if err != nil || header == nil {
-			return 0, false
-		}
-		return header.Number.Uint64(), true
+		return resolveHeaderNumber(rpc.SafeBlockNumber)
 	case rpc.EarliestBlockNumber.Int64():
 		return api.sys.backend.HistoryPruningCutoff(), true
 	default:
