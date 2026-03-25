@@ -68,6 +68,40 @@ The generator uses shape templates to emit stack checks and pointer arithmetic:
 
 4. The tests run every case through BOTH `runSwitch` and the standard interpreter and assert identical: return data, gas remaining, error messages, and logs
 
+## Testing and validation
+
+After any change to the generator, the generated dispatch code, or the standard interpreter, run through these steps:
+
+### 1. Regenerate and build
+
+```bash
+go generate ./core/vm/
+go build ./core/vm/
+```
+
+### 2. Differential tests
+
+Every test runs the same bytecode through both `runSwitch` and the standard `Run()` loop, then asserts identical results: return data, gas remaining, error messages, and emitted logs.
+
+**Any change to the generator or inlined opcode bodies MUST have a corresponding test in `dispatch_test.go`.** Use `runDiff()` - it runs both paths and fails if they diverge on anything. Never test `runSwitch` in isolation.
+
+```bash
+go test -v -count=1 ./core/vm/ -run "TestDispatch|TestPreShanghai|TestStackOverflow|TestDefaultFallback|TestInterrupt|TestAbort"
+make lint
+```
+
+### 3. Benchmark (optional, for performance changes)
+
+Runs the snailtracer contract through both paths side by side:
+
+```bash
+go test -run='^$' -bench=BenchmarkSnailtracer -benchmem -count=10 ./core/vm/
+```
+
+### 4. Execution spec tests (optional, for major changes)
+
+Run the ethereum execution spec tests against a devnet with `evm-switch-dispatch = true` in the node config. See the main `CLAUDE.md` for the full test command. These catch any divergence from the Ethereum spec that unit tests might miss.
+
 ## SOP: When the EVM changes
 
 ### New opcode added by a hard fork
