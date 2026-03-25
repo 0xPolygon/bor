@@ -35,7 +35,7 @@ import (
 type gasMode int
 
 const (
-	modeAccumulate gasMode = iota // gas counter accumulated, flushed on error only
+	modeAccumulate gasMode = iota // gas counter accumulated, flushed at control-flow boundaries and on error
 	modeFlush                     // gas counter flushed before body
 )
 
@@ -241,7 +241,7 @@ type emitter struct {
 	buf *bytes.Buffer
 }
 
-func (e *emitter) p(format string, args ...interface{}) {
+func (e *emitter) p(format string, args ...any) {
 	fmt.Fprintf(e.buf, format, args...)
 }
 

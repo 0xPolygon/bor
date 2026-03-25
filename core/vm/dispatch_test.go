@@ -123,7 +123,7 @@ func sameLogs(a, b []*types.Log) bool {
 	return true
 }
 
-// Enable all forks through Cancun; keep Verkle disabled.
+// Enable all forks through Osaka; keep Verkle disabled.
 var diffChainConfig = &params.ChainConfig{
 	ChainID:             big.NewInt(1),
 	HomesteadBlock:      new(big.Int),
@@ -230,7 +230,7 @@ func setCode(db *state.StateDB, addr common.Address, code []byte) {
 	db.SetCode(addr, code, tracing.CodeChangeUnspecified)
 }
 
-// Assert both paths agree on returndata, gas, and error class.
+// Assert both paths agree on returndata, gas, errors, and logs.
 func runDiff(t *testing.T, code []byte, gas uint64) {
 	t.Helper()
 
