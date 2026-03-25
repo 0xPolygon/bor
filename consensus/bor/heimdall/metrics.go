@@ -29,6 +29,8 @@ const (
 	MilestoneLastNoAckRequest requestType = "milestone-last-no-ack"
 	MilestoneIDRequest        requestType = "milestone-id"
 	StatusRequest             requestType = "status"
+	BlockHeightByTimeRequest    requestType = "block-height-by-time"
+	StateSyncAtHeightRequest    requestType = "state-sync-at-height"
 )
 
 func WithRequestType(ctx context.Context, reqType requestType) context.Context {
@@ -111,6 +113,20 @@ var (
 				false: metrics.NewRegisteredMeter("client/requests/milestoneid/invalid", nil),
 			},
 			timer: metrics.NewRegisteredTimer("client/requests/milestoneid/duration", nil),
+		},
+		BlockHeightByTimeRequest: {
+			request: map[bool]*metrics.Meter{
+				true:  metrics.NewRegisteredMeter("client/requests/blockheightbytime/valid", nil),
+				false: metrics.NewRegisteredMeter("client/requests/blockheightbytime/invalid", nil),
+			},
+			timer: metrics.NewRegisteredTimer("client/requests/blockheightbytime/duration", nil),
+		},
+		StateSyncAtHeightRequest: {
+			request: map[bool]*metrics.Meter{
+				true:  metrics.NewRegisteredMeter("client/requests/statesyncatheight/valid", nil),
+				false: metrics.NewRegisteredMeter("client/requests/statesyncatheight/invalid", nil),
+			},
+			timer: metrics.NewRegisteredTimer("client/requests/statesyncatheight/duration", nil),
 		},
 	}
 )

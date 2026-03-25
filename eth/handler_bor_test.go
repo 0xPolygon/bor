@@ -65,6 +65,13 @@ func (m *mockHeimdall) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 
+func (m *mockHeimdall) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (m *mockHeimdall) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+
 func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
 	t.Parallel()
 

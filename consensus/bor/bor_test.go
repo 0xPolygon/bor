@@ -119,6 +119,12 @@ func (f *failingHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64,
 func (f *failingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return nil, errors.New("fetch status failed")
 }
+func (f *failingHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64) (int64, error) {
+	return 0, errors.New("get block height by time failed")
+}
+func (f *failingHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, errors.New("state sync events at height failed")
+}
 
 // newStateDBForTest creates a fresh state database for testing.
 func newStateDBForTest(t *testing.T, root common.Hash) *state.StateDB {
@@ -2974,6 +2980,12 @@ func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, er
 func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
+func (m *mockHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+func (m *mockHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
 	t.Parallel()
 	h := &types.Header{
@@ -4969,7 +4981,6 @@ func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
 		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
 	}
 }
-
 // giuglianoBorConfig returns a BorConfig with Giugliano enabled at genesis.
 func giuglianoBorConfig() *params.BorConfig {
 	return &params.BorConfig{
@@ -5258,4 +5269,197 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 	if err != nil {
 		require.NotErrorIs(t, err, errMissingGiuglianoFields)
 	}
+}
+
+// trackingHeimdallClient records which IHeimdallClient methods were called.
+// It returns configurable results and tracks call counts for assertions.
+type trackingHeimdallClient struct {
+	// Call counters
+	stateSyncEventsCalled       int
+	getBlockHeightByTimeCalled  int
+	stateSyncEventsAtHeightCalled int
+
+	// Configurable return values
+	blockHeight    int64
+	blockHeightErr error
+	events         []*clerk.EventRecordWithTime
+	eventsErr      error
+	eventsAtHeight []*clerk.EventRecordWithTime
+	eventsAtHeightErr error
+}
+
+func (t *trackingHeimdallClient) Close() {}
+func (t *trackingHeimdallClient) StateSyncEvents(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
+	t.stateSyncEventsCalled++
+	return t.events, t.eventsErr
+}
+func (t *trackingHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	t.stateSyncEventsAtHeightCalled++
+	return t.eventsAtHeight, t.eventsAtHeightErr
+}
+func (t *trackingHeimdallClient) GetSpan(context.Context, uint64) (*borTypes.Span, error) {
+	return nil, nil
+}
+func (t *trackingHeimdallClient) GetLatestSpan(context.Context) (*borTypes.Span, error) {
+	return nil, nil
+}
+func (t *trackingHeimdallClient) FetchCheckpoint(context.Context, int64) (*checkpoint.Checkpoint, error) {
+	return nil, nil
+}
+func (t *trackingHeimdallClient) FetchCheckpointCount(context.Context) (int64, error) {
+	return 0, nil
+}
+func (t *trackingHeimdallClient) FetchMilestone(context.Context) (*milestone.Milestone, error) {
+	return nil, nil
+}
+func (t *trackingHeimdallClient) FetchMilestoneCount(context.Context) (int64, error) {
+	return 0, nil
+}
+func (t *trackingHeimdallClient) FetchStatus(context.Context) (*ctypes.SyncInfo, error) {
+	return &ctypes.SyncInfo{CatchingUp: false}, nil
+}
+func (t *trackingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	t.getBlockHeightByTimeCalled++
+	return t.blockHeight, t.blockHeightErr
+}
+
+// deterministicBorConfig returns a BorConfig with DeterministicStateSyncBlock set.
+func deterministicBorConfig(forkBlock int64) *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:                        map[string]uint64{"0": 16},
+		Period:                        map[string]uint64{"0": 2},
+		IndoreBlock:                   big.NewInt(0),
+		StateSyncConfirmationDelay:    map[string]uint64{"0": 0},
+		RioBlock:                      big.NewInt(1000000),
+		DeterministicStateSyncBlock:   big.NewInt(forkBlock),
+	}
+}
+
+func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
+
+	// Fork activates at block 100
+	borCfg := deterministicBorConfig(100)
+	genesisTime := uint64(time.Now().Unix()) - 200
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+	b.GenesisContractsClient = mockGC
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	now := time.Now()
+
+	// Pre-fork: block 16 should use StateSyncEvents (old legacy path)
+	tracker := &trackingHeimdallClient{
+		events: []*clerk.EventRecordWithTime{},
+	}
+	b.SetHeimdallClient(tracker)
+
+	stateDb := newStateDBForTest(t, genesis.Root)
+	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	require.NoError(t, err)
+	require.Equal(t, 1, tracker.stateSyncEventsCalled, "pre-fork should call StateSyncEvents")
+	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled, "pre-fork should not call GetBlockHeightByTime")
+	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled, "pre-fork should not call StateSyncEventsAtHeight")
+
+	// Post-fork: block 112 should use GetBlockHeightByTime + StateSyncEventsAtHeight (deterministi state sync)
+	tracker2 := &trackingHeimdallClient{
+		blockHeight:    500,
+		eventsAtHeight: []*clerk.EventRecordWithTime{},
+	}
+	b.SetHeimdallClient(tracker2)
+
+	stateDb2 := newStateDBForTest(t, genesis.Root)
+	h2 := &types.Header{Number: big.NewInt(112), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+	_, err = b.CommitStates(stateDb2, h2, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	require.NoError(t, err)
+	require.Equal(t, 0, tracker2.stateSyncEventsCalled, "post-fork should not call StateSyncEvents")
+	require.Equal(t, 1, tracker2.getBlockHeightByTimeCalled, "post-fork should call GetBlockHeightByTime")
+	require.Equal(t, 1, tracker2.stateSyncEventsAtHeightCalled, "post-fork should call StateSyncEventsAtHeight")
+}
+
+func TestCommitStates_FailLoudPostFork(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
+
+	// Fork activates at block 0 so all blocks are post-fork
+	borCfg := deterministicBorConfig(0)
+	genesisTime := uint64(time.Now().Unix()) - 200
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+	b.GenesisContractsClient = mockGC
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	now := time.Now()
+
+	// GetBlockHeightByTime returns an error
+	tracker := &trackingHeimdallClient{
+		blockHeightErr: errors.New("heimdall height lookup failed"),
+	}
+	b.SetHeimdallClient(tracker)
+
+	stateDb := newStateDBForTest(t, genesis.Root)
+	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+
+	// Must return a non-nil error
+	require.Error(t, err, "post-fork should fail loudly when GetBlockHeightByTime errors")
+	require.Contains(t, err.Error(), "deterministic state sync")
+
+	// Must not fallback to StateSyncEvents
+	require.Equal(t, 0, tracker.stateSyncEventsCalled,
+		"post-fork should NOT fall back to StateSyncEvents on GetBlockHeightByTime error")
+	require.Equal(t, 1, tracker.getBlockHeightByTimeCalled,
+		"GetBlockHeightByTime should have been called once")
+	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled,
+		"StateSyncEventsAtHeight should NOT be called when GetBlockHeightByTime fails")
+}
+
+func TestCommitStates_FailLoudPostFork_EventsAtHeightError(t *testing.T) {
+	t.Parallel()
+
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
+
+	borCfg := deterministicBorConfig(0)
+	genesisTime := uint64(time.Now().Unix()) - 200
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, genesisTime)
+	b.GenesisContractsClient = mockGC
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+	now := time.Now()
+
+	// GetBlockHeightByTime succeeds, but StateSyncEventsAtHeight fails
+	tracker := &trackingHeimdallClient{
+		blockHeight:       500,
+		eventsAtHeightErr: errors.New("HTTP 503: service unavailable"),
+	}
+	b.SetHeimdallClient(tracker)
+
+	stateDb := newStateDBForTest(t, genesis.Root)
+	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
+
+	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+
+	// Must return a non-nil error (not silently return empty list)
+	require.Error(t, err, "post-fork should fail loudly when StateSyncEventsAtHeight errors")
+	require.Contains(t, err.Error(), "deterministic state sync")
+
+	// Both methods should have been called
+	require.Equal(t, 1, tracker.getBlockHeightByTimeCalled,
+		"GetBlockHeightByTime should have been called")
+	require.Equal(t, 1, tracker.stateSyncEventsAtHeightCalled,
+		"StateSyncEventsAtHeight should have been called")
+	// Old path should not have been called as fallback
+	require.Equal(t, 0, tracker.stateSyncEventsCalled,
+		"post-fork should not fall back to StateSyncEvents")
 }

@@ -95,6 +95,12 @@ const (
 	fetchLatestSpan = "bor/spans/latest"
 
 	fetchStatus = "/status"
+
+	fetchBlockHeightByTimePath   = "clerk/block-height-by-time"
+	fetchBlockHeightByTimeFormat = "cutoff_time=%d"
+
+	fetchStateSyncsAtHeightPath   = "clerk/state-syncs-at-height"
+	fetchStateSyncsAtHeightFormat = "from_id=%d&heimdall_height=%d&to_time=%s&pagination.limit=%d"
 )
 
 // StateSyncEvents fetches the state sync events from heimdall
@@ -263,6 +269,85 @@ func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, err
 	}
 
 	return response, nil
+}
+
+// BlockHeightByTimeResponse is the response from the Heimdall clerk/block-height-by-time endpoint.
+type BlockHeightByTimeResponse struct {
+	Height int64 `json:"height"`
+}
+
+// GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff unix timestamp.
+func (h *HeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
+	heightByTimeURL, err := blockHeightByTimeURL(h.urlString, cutoffTime)
+	if err != nil {
+		return 0, err
+	}
+
+	ctx = WithRequestType(ctx, BlockHeightByTimeRequest)
+
+	response, err := FetchWithRetry[BlockHeightByTimeResponse](ctx, h.client, heightByTimeURL, h.closeCh)
+	if err != nil {
+		return 0, err
+	}
+
+	return response.Height, nil
+}
+
+// RecordListVisibleAtHeightResponse is the response from the Heimdall clerk/state-syncs-at-height endpoint.
+type RecordListVisibleAtHeightResponse struct {
+	EventRecords []clerkTypes.EventRecord `json:"event_records"`
+}
+
+// StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height,
+// using the new query endpoint that queries the latest state with immutable visibility_height indexes.
+func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
+	eventRecords := make([]*clerk.EventRecordWithTime, 0)
+
+	for {
+		u, err := visibleAtHeightURL(h.urlString, fromID, heimdallHeight, toTime)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Info("Fetching state sync events at height", "queryParams", u.RawQuery)
+
+		ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
+
+		request := &Request{client: h.client, url: u, start: time.Now()}
+		response, err := Fetch[RecordListVisibleAtHeightResponse](ctx, request)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, e := range response.EventRecords {
+			if e.Id >= fromID && e.RecordTime.Before(time.Unix(toTime, 0)) {
+				record := &clerk.EventRecordWithTime{
+					EventRecord: clerk.EventRecord{
+						ID:       e.Id,
+						ChainID:  e.BorChainId,
+						Contract: common.HexToAddress(e.Contract),
+						Data:     e.Data,
+						LogIndex: e.LogIndex,
+						TxHash:   common.HexToHash(e.TxHash),
+					},
+					Time: e.RecordTime,
+				}
+				eventRecords = append(eventRecords, record)
+			}
+		}
+
+		if len(response.EventRecords) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
+	}
+
+	sort.SliceStable(eventRecords, func(i, j int) bool {
+		return eventRecords[i].ID < eventRecords[j].ID
+	})
+
+	return eventRecords, nil
 }
 
 func FetchOnce[T any](ctx context.Context, client http.Client, url *url.URL, closeCh chan struct{}) (*T, error) {
@@ -435,6 +520,18 @@ func milestoneCountURL(urlString string) (*url.URL, error) {
 
 func statusURL(urlString string) (*url.URL, error) {
 	return makeURL(urlString, fetchStatus, "")
+}
+
+func blockHeightByTimeURL(urlString string, cutoffTime int64) (*url.URL, error) {
+	queryParams := fmt.Sprintf(fetchBlockHeightByTimeFormat, cutoffTime)
+	return makeURL(urlString, fetchBlockHeightByTimePath, queryParams)
+}
+
+func visibleAtHeightURL(urlString string, fromID uint64, heimdallHeight int64, toTime int64) (*url.URL, error) {
+	t := time.Unix(toTime, 0).UTC()
+	formattedTime := t.Format(time.RFC3339Nano)
+	queryParams := fmt.Sprintf(fetchStateSyncsAtHeightFormat, fromID, heimdallHeight, formattedTime, stateFetchLimit)
+	return makeURL(urlString, fetchStateSyncsAtHeightPath, queryParams)
 }
 
 func makeURL(urlString, rawPath, rawQuery string) (*url.URL, error) {

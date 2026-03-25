@@ -122,6 +122,16 @@ func (m *mockHeimdallClient) Close() {
 	}
 }
 
+func (m *mockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	m.hits.Add(1)
+	return 0, nil
+}
+
+func (m *mockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	m.hits.Add(1)
+	return []*clerk.EventRecordWithTime{}, nil
+}
+
 // testConnErr is a reusable connection-refused error for tests.
 var testConnErr = &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 

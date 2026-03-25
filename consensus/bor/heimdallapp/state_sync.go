@@ -4,10 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/0xPolygon/heimdall-v2/x/clerk/keeper"
+	"github.com/0xPolygon/heimdall-v2/x/clerk/types"
+	"github.com/cosmos/cosmos-sdk/types/query"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
-
-	"github.com/0xPolygon/heimdall-v2/x/clerk/types"
 )
 
 func (h *HeimdallAppClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
@@ -34,6 +35,43 @@ func (h *HeimdallAppClient) StateSyncEvents(ctx context.Context, fromID uint64, 
 	}
 
 	return totalRecords, nil
+}
+
+// StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height.
+// Uses the clerk query server to apply the same visibility_height filtering as gRPC/HTTP paths.
+func (h *HeimdallAppClient) StateSyncEventsAtHeight(_ context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
+	totalRecords := make([]*clerk.EventRecordWithTime, 0)
+
+	queryServer := keeper.NewQueryServer(&h.hApp.ClerkKeeper)
+
+	for {
+		req := &types.RecordListVisibleAtHeightRequest{
+			FromId:         fromID,
+			HeimdallHeight: heimdallHeight,
+			ToTime:         time.Unix(toTime, 0),
+			Pagination:     query.PageRequest{Limit: stateFetchLimit},
+		}
+
+		res, err := queryServer.GetRecordListVisibleAtHeight(h.NewContext(), req)
+		if err != nil {
+			return nil, err
+		}
+
+		totalRecords = append(totalRecords, toEvents(res.EventRecords)...)
+
+		if len(res.EventRecords) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
+	}
+
+	return totalRecords, nil
+}
+
+// GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff unix timestamp.
+func (h *HeimdallAppClient) GetBlockHeightByTime(_ context.Context, cutoffTime int64) (int64, error) {
+	return h.hApp.ClerkKeeper.GetBlockHeightByTime(h.NewContext(), cutoffTime)
 }
 
 func toEvents(hdEvents []types.EventRecord) []*clerk.EventRecordWithTime {

@@ -1329,3 +1329,47 @@ func TestGetDynamicTargetGasPercentage_InvalidMinMax(t *testing.T) {
 		}
 	})
 }
+
+func TestIsDeterministicStateSync(t *testing.T) {
+	t.Parallel()
+
+	config := &BorConfig{
+		DeterministicStateSyncBlock: big.NewInt(100),
+	}
+
+	t.Run("nil block is not active", func(t *testing.T) {
+		t.Parallel()
+		if config.IsDeterministicStateSync(nil) {
+			t.Error("expected IsDeterministicStateSync(nil) to return false")
+		}
+	})
+
+	t.Run("block before fork is not active", func(t *testing.T) {
+		t.Parallel()
+		if config.IsDeterministicStateSync(big.NewInt(99)) {
+			t.Error("expected IsDeterministicStateSync(99) to return false for fork at 100")
+		}
+	})
+
+	t.Run("block at fork is active", func(t *testing.T) {
+		t.Parallel()
+		if !config.IsDeterministicStateSync(big.NewInt(100)) {
+			t.Error("expected IsDeterministicStateSync(100) to return true for fork at 100")
+		}
+	})
+
+	t.Run("block after fork is active", func(t *testing.T) {
+		t.Parallel()
+		if !config.IsDeterministicStateSync(big.NewInt(200)) {
+			t.Error("expected IsDeterministicStateSync(200) to return true for fork at 100")
+		}
+	})
+
+	t.Run("nil fork block means not active", func(t *testing.T) {
+		t.Parallel()
+		noForkConfig := &BorConfig{DeterministicStateSyncBlock: nil}
+		if noForkConfig.IsDeterministicStateSync(big.NewInt(100)) {
+			t.Error("expected IsDeterministicStateSync to return false when fork block is nil")
+		}
+	})
+}

@@ -1760,12 +1760,37 @@ func (c *Bor) CommitStates(
 	// Wait for heimdall to be synced before fetching state sync events
 	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
-	eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())
-	if err != nil {
-		log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
+	queryCtx := c.ctx
 
-		stateSyncs := make([]*types.StateSyncData, 0)
-		return stateSyncs, nil
+	if c.config.IsDeterministicStateSync(header.Number) {
+		heimdallHeight, err := c.HeimdallClient.GetBlockHeightByTime(queryCtx, to.Unix())
+		if err != nil {
+			log.Error("Failed to get Heimdall height for deterministic state sync", "to", to.Unix(), "err", err)
+			// TODO marcello double check: if we silently return “no state syncs” here,
+			//  different validators could end up deriving different state sync sets from different Heimdall views,
+			//  which is what we are trying to solve
+			return nil, fmt.Errorf("deterministic state sync: failed to resolve Heimdall height: %w", err)
+		}
+
+		log.Info("Using deterministic state sync", "cutoff", to.Unix(), "heimdallHeight", heimdallHeight)
+
+		eventRecords, err = c.HeimdallClient.StateSyncEventsAtHeight(queryCtx, from, to.Unix(), heimdallHeight)
+		if err != nil {
+			log.Error("Failed to fetch state sync events at height", "fromID", from, "to", to.Unix(), "heimdallHeight", heimdallHeight, "err", err)
+			// TODO marcello double check: if we silently return “no state syncs” here,
+			//  different validators could end up deriving different state sync sets from different Heimdall views,
+			//  which is what we are trying to solve
+			return nil, fmt.Errorf("deterministic state sync: failed to fetch events at height %d: %w", heimdallHeight, err)
+		}
+	} else {
+		eventRecords, err = c.HeimdallClient.StateSyncEvents(queryCtx, from, to.Unix())
+		if err != nil {
+			// Pre-fork: preserve existing behavior (returning empty, no error)
+			log.Error("Error occurred when fetching state sync events", "fromID", from, "to", to.Unix(), "err", err)
+
+			stateSyncs := make([]*types.StateSyncData, 0)
+			return stateSyncs, nil
+		}
 	}
 
 	// This if statement checks if there are any state sync record overrides configured for the current block number.

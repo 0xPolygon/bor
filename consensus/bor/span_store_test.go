@@ -85,6 +85,13 @@ func (h *MockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo,
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
 
+func (h *MockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (h *MockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+
 func TestSpanStore_SpanById(t *testing.T) {
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
 	defer spanStore.Close()
@@ -396,6 +403,13 @@ func (h *MockOverlappingHeimdallClient) Close() {
 
 func (h *MockOverlappingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
+}
+
+func (h *MockOverlappingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (h *MockOverlappingHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
 }
 
 func TestSpanStore_SpanByBlockNumber_OverlappingSpans(t *testing.T) {
@@ -958,6 +972,12 @@ func (d *dynamicHeimdallClient) Close() {}
 func (d *dynamicHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
+func (d *dynamicHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (d *dynamicHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func makeTestSpan(id, start, end uint64, producerAddr string) *types.Span {
 	producer := stakeTypes.Validator{
@@ -1075,6 +1095,12 @@ func (m *MockSyncStatusClient) FetchMilestoneID(ctx context.Context, milestoneID
 	panic("not implemented")
 }
 func (m *MockSyncStatusClient) Close() {}
+func (m *MockSyncStatusClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (m *MockSyncStatusClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func TestSpanStore_WaitUntilHeimdallIsSynced(t *testing.T) {
 	t.Run("heimdall already synced", func(t *testing.T) {
@@ -1459,6 +1485,12 @@ func (h *TimeoutHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64,
 	panic("not implemented")
 }
 func (h *TimeoutHeimdallClient) Close() {}
+func (h *TimeoutHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (h *TimeoutHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	t.Run("heimdallStatus set to nil on FetchStatus error", func(t *testing.T) {

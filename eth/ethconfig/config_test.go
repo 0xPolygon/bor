@@ -49,6 +49,12 @@ func (m *mockHeimdallClient) FetchMilestoneCount(context.Context) (int64, error)
 func (m *mockHeimdallClient) FetchStatus(context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
+func (m *mockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+	return 0, nil
+}
+func (m *mockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 // newTestBorChainConfig creates a minimal Bor chain config for testing
 func newTestBorChainConfig() *params.ChainConfig {

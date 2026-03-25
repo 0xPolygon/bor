@@ -157,6 +157,36 @@ func (mr *MockIHeimdallClientMockRecorder) GetSpan(ctx, spanID interface{}) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSpan", reflect.TypeOf((*MockIHeimdallClient)(nil).GetSpan), ctx, spanID)
 }
 
+// GetBlockHeightByTime mocks base method.
+func (m *MockIHeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetBlockHeightByTime", ctx, cutoffTime)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetBlockHeightByTime indicates an expected call of GetBlockHeightByTime.
+func (mr *MockIHeimdallClientMockRecorder) GetBlockHeightByTime(ctx, cutoffTime interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockHeightByTime", reflect.TypeOf((*MockIHeimdallClient)(nil).GetBlockHeightByTime), ctx, cutoffTime)
+}
+
+// StateSyncEventsAtHeight mocks base method.
+func (m *MockIHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StateSyncEventsAtHeight", ctx, fromID, toTime, heimdallHeight)
+	ret0, _ := ret[0].([]*clerk.EventRecordWithTime)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StateSyncEventsAtHeight indicates an expected call of StateSyncEventsAtHeight.
+func (mr *MockIHeimdallClientMockRecorder) StateSyncEventsAtHeight(ctx, fromID, toTime, heimdallHeight interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateSyncEventsAtHeight", reflect.TypeOf((*MockIHeimdallClient)(nil).StateSyncEventsAtHeight), ctx, fromID, toTime, heimdallHeight)
+}
+
 // StateSyncEvents mocks base method.
 func (m *MockIHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	m.ctrl.T.Helper()

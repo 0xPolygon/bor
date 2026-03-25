@@ -29,6 +29,7 @@ const (
 // running into Go's covariant-slice restriction.
 type Endpoint interface {
 	StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
+	StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
 	GetSpan(ctx context.Context, spanID uint64) (*types.Span, error)
 	GetLatestSpan(ctx context.Context) (*types.Span, error)
 	FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
@@ -36,6 +37,7 @@ type Endpoint interface {
 	FetchMilestone(ctx context.Context) (*milestone.Milestone, error)
 	FetchMilestoneCount(ctx context.Context) (int64, error)
 	FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error)
+	GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error)
 	Close()
 }
 
@@ -109,6 +111,12 @@ func (f *MultiHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64
 	})
 }
 
+func (f *MultiHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
+		return c.StateSyncEventsAtHeight(ctx, fromID, toTime, heimdallHeight)
+	})
+}
+
 func (f *MultiHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*types.Span, error) {
 		return c.GetSpan(ctx, spanID)
@@ -148,6 +156,12 @@ func (f *MultiHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, e
 func (f *MultiHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (*ctypes.SyncInfo, error) {
 		return c.FetchStatus(ctx)
+	})
+}
+
+func (f *MultiHeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) (int64, error) {
+		return c.GetBlockHeightByTime(ctx, cutoffTime)
 	})
 }
 
