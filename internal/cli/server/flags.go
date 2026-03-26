@@ -46,18 +46,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.EnablePreimageRecording,
 	})
 	f.StringFlag(&flagset.StringFlag{
-		Name:    "vmtrace",
-		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
-		Value:   &c.cliConfig.VMTrace,
-		Default: c.cliConfig.VMTrace,
-	})
-	f.StringFlag(&flagset.StringFlag{
-		Name:    "vmtrace.jsonconfig",
-		Usage:   "Tracer configuration (JSON)",
-		Value:   &c.cliConfig.VMTraceJsonConfig,
-		Default: c.cliConfig.VMTraceJsonConfig,
-	})
-	f.StringFlag(&flagset.StringFlag{
 		Name:    "datadir.ancient",
 		Usage:   "Data directory for ancient chain segments (default = inside chaindata)",
 		Value:   &c.cliConfig.Ancient,
