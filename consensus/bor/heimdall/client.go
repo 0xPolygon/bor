@@ -11,6 +11,7 @@ import (
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
@@ -272,8 +273,9 @@ func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, err
 }
 
 // BlockHeightByTimeResponse is the response from the Heimdall clerk/block-height-by-time endpoint.
+// Note: Cosmos SDK REST gateway serializes int64 fields as JSON strings.
 type BlockHeightByTimeResponse struct {
-	Height int64 `json:"height"`
+	Height string `json:"height"`
 }
 
 // GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff unix timestamp.
@@ -290,7 +292,12 @@ func (h *HeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime in
 		return 0, err
 	}
 
-	return response.Height, nil
+	height, err := strconv.ParseInt(response.Height, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse height %q: %w", response.Height, err)
+	}
+
+	return height, nil
 }
 
 // RecordListVisibleAtHeightResponse is the response from the Heimdall clerk/state-syncs-at-height endpoint.
