@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -2076,4 +2077,49 @@ func TestRevertWriteSelfDestruct(t *testing.T) {
 	// Full list still contains both, filtered excludes both
 	assert.True(t, containsKey(s.MVFullWriteList(), keySuicide))
 	assert.False(t, containsKey(s.MVWriteList(), keySuicide))
+}
+
+// TestWitnessCollectionTiming verifies that IntermediateRoot populates
+// the WitnessCollection duration field when a witness is attached.
+func TestWitnessCollectionTiming(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(db, nil)
+	sdb := NewDatabase(tdb, nil)
+
+	// Test with witness: WitnessCollection should be populated
+	state, _ := New(types.EmptyRootHash, sdb)
+
+	witness := &stateless.Witness{
+		Headers: []*types.Header{},
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+	state.SetWitness(witness)
+
+	for i := byte(0); i < 20; i++ {
+		addr := common.BytesToAddress([]byte{i})
+		state.AddBalance(addr, uint256.NewInt(uint64(100*i+1)), tracing.BalanceChangeUnspecified)
+		state.SetState(addr, common.BytesToHash([]byte{i}), common.BytesToHash([]byte{i, i}))
+	}
+
+	state.IntermediateRoot(true)
+
+	if state.WitnessCollection == 0 {
+		t.Error("WitnessCollection should be > 0 when witness is attached")
+	}
+
+	// Test without witness: WitnessCollection should remain zero
+	state2, _ := New(types.EmptyRootHash, sdb)
+
+	for i := byte(0); i < 20; i++ {
+		addr := common.BytesToAddress([]byte{i})
+		state2.AddBalance(addr, uint256.NewInt(uint64(100*i+1)), tracing.BalanceChangeUnspecified)
+		state2.SetState(addr, common.BytesToHash([]byte{i}), common.BytesToHash([]byte{i, i}))
+	}
+
+	state2.IntermediateRoot(true)
+
+	if state2.WitnessCollection != 0 {
+		t.Errorf("WitnessCollection should be 0 without witness, got %v", state2.WitnessCollection)
+	}
 }

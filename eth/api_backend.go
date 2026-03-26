@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
@@ -39,6 +40,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
+	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/eth/relay"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
@@ -54,6 +57,8 @@ type EthAPIBackend struct {
 	allowUnprotectedTxs bool
 	eth                 *Ethereum
 	gpo                 *gasprice.Oracle
+
+	relay *relay.RelayService
 }
 
 // ChainConfig returns the active chain configuration.
@@ -63,6 +68,14 @@ func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
 
 func (b *EthAPIBackend) CurrentBlock() *types.Header {
 	return b.eth.blockchain.CurrentBlock()
+}
+
+func (b *EthAPIBackend) CurrentSafeBlock() *types.Header {
+	return b.eth.blockchain.CurrentSafeBlock()
+}
+
+func (b *EthAPIBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	return getFinalizedBlockNumber(b.eth)
 }
 
 func (b *EthAPIBackend) SetHead(number uint64) {
@@ -348,17 +361,17 @@ func (b *EthAPIBackend) GetTdByNumber(ctx context.Context, blockNr rpc.BlockNumb
 	return nil
 }
 
-func (b *EthAPIBackend) GetEVM(ctx context.Context, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
+func (b *EthAPIBackend) GetEVM(_ context.Context, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
 	if vmConfig == nil {
 		vmConfig = b.eth.blockchain.GetVMConfig()
 	}
-	var context vm.BlockContext
+	var ctx vm.BlockContext
 	if blockCtx != nil {
-		context = *blockCtx
+		ctx = *blockCtx
 	} else {
-		context = core.NewEVMBlockContext(header, b.eth.BlockChain(), nil)
+		ctx = core.NewEVMBlockContext(header, b.eth.BlockChain(), nil)
 	}
-	return vm.NewEVM(context, state, b.ChainConfig(), *vmConfig)
+	return vm.NewEVM(ctx, state, b.ChainConfig(), *vmConfig)
 }
 
 func (b *EthAPIBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription {
@@ -479,6 +492,10 @@ func (b *EthAPIBackend) TxPoolContent() (map[common.Address][]*types.Transaction
 
 func (b *EthAPIBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
 	return b.eth.txPool.ContentFrom(addr)
+}
+
+func (b *EthAPIBackend) TxStatus(hash common.Hash) txpool.TxStatus {
+	return b.eth.txPool.Status(hash)
 }
 
 func (b *EthAPIBackend) TxPool() *txpool.TxPool {
@@ -637,7 +654,7 @@ func (b *EthAPIBackend) StoreWitness(ctx context.Context, blockhash common.Hash,
 		log.Error("Failed to encode witness", "error", err)
 	}
 
-	b.eth.blockchain.WriteWitness(b.eth.blockchain.DB(), blockhash, witBuf.Bytes())
+	b.eth.blockchain.WriteWitness(blockhash, witBuf.Bytes())
 
 	return nil
 }
@@ -719,4 +736,87 @@ func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
 
 func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
 	return b.eth.config.TxSyncMaxTimeout
+}
+
+// Etherbase returns the address that mining rewards will be sent to.
+func (b *EthAPIBackend) Etherbase() (common.Address, error) {
+	return b.eth.Etherbase()
+}
+
+// Hashrate returns the POW hashrate.
+func (b *EthAPIBackend) Hashrate() (uint64, error) {
+	return b.eth.Miner().Hashrate(), nil
+}
+
+// Mining returns an indication if this node is currently mining.
+func (b *EthAPIBackend) Mining() (bool, error) {
+	return b.eth.IsMining(), nil
+}
+
+// ProtocolVersion returns the current Ethereum protocol version.
+func (b *EthAPIBackend) ProtocolVersion() uint {
+	return eth.ProtocolVersions[0]
+}
+
+// GetWork returns a work package for external miners.
+func (b *EthAPIBackend) GetWork() ([4]string, error) {
+	if _, ok := b.eth.engine.(consensus.PoW); !ok {
+		return [4]string{}, errors.New("not supported, consensus engine is not ethash")
+	}
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+// SubmitWork can be used by external miner to submit their POW solution.
+func (b *EthAPIBackend) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	// Check if the consensus engine is PoW (not our case...)
+	if _, ok := b.eth.engine.(consensus.PoW); !ok {
+		return false, errors.New("not supported, consensus engine is not ethash")
+	}
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+// SubmitHashrate can be used for remote miners to submit their hash rate.
+func (b *EthAPIBackend) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	// Check if the consensus engine is PoW (not our case...)
+	if _, ok := b.eth.engine.(consensus.PoW); !ok {
+		return false, errors.New("not supported, consensus engine is not ethash")
+	}
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+// Preconf / Private tx related API for relay
+func (b *EthAPIBackend) PreconfEnabled() bool {
+	return b.relay.PreconfEnabled()
+}
+func (b *EthAPIBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	return b.relay.SubmitPreconfTransaction(tx)
+}
+
+func (b *EthAPIBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	return b.relay.CheckPreconfStatus(hash)
+}
+
+func (b *EthAPIBackend) PrivateTxEnabled() bool {
+	return b.relay.PrivateTxEnabled()
+}
+
+func (b *EthAPIBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	return b.relay.SubmitPrivateTransaction(tx)
+}
+
+// Preconf / Private tx related API for block producers
+func (b *EthAPIBackend) AcceptPreconfTxs() bool {
+	return b.relay.AcceptPreconfTxs()
+}
+
+func (b *EthAPIBackend) AcceptPrivateTxs() bool {
+	return b.relay.AcceptPrivateTxs()
+}
+
+func (b *EthAPIBackend) RecordPrivateTx(hash common.Hash) {
+	b.relay.RecordPrivateTx(hash)
+}
+
+func (b *EthAPIBackend) PurgePrivateTx(hash common.Hash) {
+	b.relay.PurgePrivateTx(hash)
 }

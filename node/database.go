@@ -18,6 +18,7 @@ package node
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -45,6 +46,7 @@ type DatabaseOptions struct {
 	WitnessPruneEnabled bool
 	BlockPruneEnabled   bool
 	Stateless           bool
+	WitnessFileStore    bool
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -67,6 +69,12 @@ func openDatabase(o internalOpenOptions) (ethdb.Database, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Resolve witness store directory relative to the database directory.
+	var witnessStoreDir string
+	if o.directory != "" {
+		witnessStoreDir = filepath.Join(o.directory, "witnesses")
+	}
+
 	opts := rawdb.OpenOptions{
 		Ancient:             o.AncientsDirectory,
 		Era:                 o.EraDirectory,
@@ -78,6 +86,8 @@ func openDatabase(o internalOpenOptions) (ethdb.Database, error) {
 		BlockPruneEnabled:   o.BlockPruneEnabled,
 		Stateless:           o.Stateless,
 		Ephemeral:           o.Ephemeral,
+		WitnessFileStore:    o.WitnessFileStore,
+		WitnessStoreDir:     witnessStoreDir,
 	}
 	frdb, err := rawdb.Open(kvdb, opts)
 	if err != nil {

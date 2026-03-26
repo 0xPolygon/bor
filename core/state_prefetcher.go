@@ -19,6 +19,7 @@ package core
 import (
 	"bytes"
 	"runtime"
+	"sync"
 	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
@@ -30,33 +31,42 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// statePrefetcher is a basic Prefetcher that executes transactions from a block
+// StatePrefetcher is a basic Prefetcher that executes transactions from a block
 // on top of the parent state, aiming to prefetch potentially useful state data
 // from disk. Transactions are executed in parallel to fully leverage the
 // SSD's read performance.
-type statePrefetcher struct {
+type StatePrefetcher struct {
 	config *params.ChainConfig // Chain configuration options
 	chain  *HeaderChain        // Canonical block chain
 }
 
-// newStatePrefetcher initialises a new statePrefetcher.
-func newStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *statePrefetcher {
-	return &statePrefetcher{
+// NewStatePrefetcher initialises a new statePrefetcher.
+func NewStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *StatePrefetcher {
+	return &StatePrefetcher{
 		config: config,
 		chain:  chain,
 	}
 }
 
+// PrefetchResult contains the results of prefetching transactions
+type PrefetchResult struct {
+	TotalGasUsed  uint64
+	SuccessfulTxs []common.Hash
+}
+
 // Prefetch processes the state changes according to the Ethereum rules by running
 // the transaction messages using the statedb, but any changes are discarded. The
 // only goal is to warm the state caches.
-func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, interrupt *atomic.Bool) {
+func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, intermediateRootPrefetch bool, interrupt *atomic.Bool) *PrefetchResult {
 	var (
-		fails   atomic.Int64
-		header  = block.Header()
-		signer  = types.MakeSigner(p.config, header.Number, header.Time)
-		workers errgroup.Group
-		reader  = statedb.Reader()
+		fails         atomic.Int64
+		totalGasUsed  atomic.Uint64
+		successfulTxs []common.Hash
+		txsMutex      sync.Mutex
+		header        = block.Header()
+		signer        = types.MakeSigner(p.config, header.Number, header.Time)
+		workers       errgroup.Group
+		reader        = statedb.Reader()
 	)
 	workers.SetLimit(max(1, 4*runtime.NumCPU()/5)) // Aggressively run the prefetching
 
@@ -108,10 +118,22 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 			// We attempt to apply a transaction. The goal is not to execute
 			// the transaction successfully, rather to warm up touched data slots.
-			if _, err := ApplyMessage(evm, msg, new(GasPool).AddGas(block.GasLimit()), interrupt); err != nil {
+			evm.SetInterrupt(interrupt)
+			result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(block.GasLimit()))
+			if err != nil {
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
+
+			if intermediateRootPrefetch {
+				stateCpy.IntermediateRoot(true)
+			}
+
+			// Track gas used and successful transaction
+			totalGasUsed.Add(result.UsedGas)
+			txsMutex.Lock()
+			successfulTxs = append(successfulTxs, tx.Hash())
+			txsMutex.Unlock()
 			return nil
 		})
 	}
@@ -119,5 +141,9 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 	blockPrefetchTxsValidMeter.Mark(int64(len(block.Transactions())) - fails.Load())
 	blockPrefetchTxsInvalidMeter.Mark(fails.Load())
-	return
+
+	return &PrefetchResult{
+		TotalGasUsed:  totalGasUsed.Load(),
+		SuccessfulTxs: successfulTxs,
+	}
 }

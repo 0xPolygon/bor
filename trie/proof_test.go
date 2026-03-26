@@ -23,6 +23,7 @@ import (
 	"fmt"
 	mrand "math/rand"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -33,7 +34,10 @@ import (
 
 // Prng is a pseudo random number generator seeded by strong randomness.
 // The randomness is printed on startup in order to make failures reproducible.
-var prng = initRnd()
+var (
+	prng   = initRnd()
+	prngMu sync.Mutex
+)
 
 func initRnd() *mrand.Rand {
 	var seed [8]byte
@@ -47,7 +51,9 @@ func initRnd() *mrand.Rand {
 
 func randBytes(n int) []byte {
 	r := make([]byte, n)
+	prngMu.Lock()
 	prng.Read(r)
+	prngMu.Unlock()
 
 	return r
 }
@@ -1101,7 +1107,7 @@ func TestRangeProofErrors(t *testing.T) {
 	}
 	// Non-increasing paths
 	_, err = VerifyRangeProof((common.Hash{}), []byte{},
-		[][]byte{[]byte{2, 1}, []byte{2, 1}}, make([][]byte, 2), nil)
+		[][]byte{{2, 1}, {2, 1}}, make([][]byte, 2), nil)
 	if have, want := err.Error(), "range is not monotonically increasing"; have != want {
 		t.Fatalf("wrong error, have %q, want %q", err.Error(), want)
 	}
@@ -1109,15 +1115,15 @@ func TestRangeProofErrors(t *testing.T) {
 	// require rewriting/overwriting the previous value-node, thus can only
 	// happen if the data is corrupt.
 	_, err = VerifyRangeProof((common.Hash{}), []byte{},
-		[][]byte{[]byte{2, 1}, []byte{2, 1, 2}},
-		[][]byte{[]byte{1}, []byte{1}}, nil)
+		[][]byte{{2, 1}, {2, 1, 2}},
+		[][]byte{{1}, {1}}, nil)
 	if have, want := err.Error(), "range contains path prefixes"; have != want {
 		t.Fatalf("wrong error, have %q, want %q", err.Error(), want)
 	}
 	// Empty values (deletions)
 	_, err = VerifyRangeProof((common.Hash{}), []byte{},
-		[][]byte{[]byte{2, 1}, []byte{2, 2}},
-		[][]byte{[]byte{1}, []byte{}}, nil)
+		[][]byte{{2, 1}, {2, 2}},
+		[][]byte{{1}, {}}, nil)
 	if have, want := err.Error(), "range contains deletion"; have != want {
 		t.Fatalf("wrong error, have %q, want %q", err.Error(), want)
 	}

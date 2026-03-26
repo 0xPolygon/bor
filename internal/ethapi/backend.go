@@ -25,11 +25,13 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -45,6 +47,7 @@ import (
 type Backend interface {
 	// General Ethereum API
 	SyncProgress(ctx context.Context) ethereum.SyncProgress
+	ProtocolVersion() uint
 
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, []*big.Int, []float64, error)
@@ -60,6 +63,19 @@ type Backend interface {
 	RPCTxSyncDefaultTimeout() time.Duration
 	RPCTxSyncMaxTimeout() time.Duration
 
+	// Preconf / Private tx related API for relay
+	PreconfEnabled() bool
+	SubmitTxForPreconf(tx *types.Transaction) error
+	CheckPreconfStatus(hash common.Hash) (bool, error)
+	PrivateTxEnabled() bool
+	SubmitPrivateTx(tx *types.Transaction) error
+
+	// Preconf / Private tx related API for block producers
+	AcceptPreconfTxs() bool
+	AcceptPrivateTxs() bool
+	RecordPrivateTx(hash common.Hash)
+	PurgePrivateTx(hash common.Hash)
+
 	// Blockchain API
 	SetHead(number uint64)
 	HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error)
@@ -67,6 +83,8 @@ type Backend interface {
 	HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Header, error)
 	CurrentHeader() *types.Header
 	CurrentBlock() *types.Header
+	CurrentSafeBlock() *types.Header
+	GetFinalizedBlockNumber(ctx context.Context) (uint64, error)
 	BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error)
 	BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error)
 	BlockByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Block, error)
@@ -91,6 +109,7 @@ type Backend interface {
 	Stats() (pending int, queued int)
 	TxPoolContent() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction)
 	TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction)
+	TxStatus(hash common.Hash) txpool.TxStatus
 	SubscribeNewTxsEvent(chan<- core.NewTxsEvent) event.Subscription
 
 	ChainConfig() *params.ChainConfig
@@ -136,6 +155,14 @@ type Backend interface {
 	// TODO: remove once we stop relying on previous headers for state sync
 	// IsParallelImportActive returns true if parallel stateless import is currently active
 	IsParallelImportActive() bool
+
+	// Mining related APIs
+	Etherbase() (common.Address, error)
+	Hashrate() (uint64, error)
+	Mining() (bool, error)
+	GetWork() ([4]string, error)
+	SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) (bool, error)
+	SubmitHashrate(rate hexutil.Uint64, id common.Hash) (bool, error)
 }
 
 func GetAPIs(apiBackend Backend) []rpc.API {

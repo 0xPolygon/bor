@@ -165,7 +165,7 @@ func (bc *BlockChain) GetWitness(hash common.Hash) []byte {
 		return cached
 	}
 
-	witness := rawdb.ReadWitness(bc.db, hash)
+	witness := bc.witnessStore.ReadWitness(hash)
 	if len(witness) == 0 {
 		return nil
 	}
@@ -179,13 +179,12 @@ func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 	if bc.witnessCache.Contains(hash) {
 		return true
 	}
-	return rawdb.HasWitness(bc.db, hash)
+	return bc.witnessStore.HasWitness(hash)
 }
 
-// WriteWitness writes the witness to the database and updates the cache.
-// This wrapper ensures consistency between the database and the in-memory cache.
-func (bc *BlockChain) WriteWitness(db ethdb.KeyValueWriter, hash common.Hash, witness []byte) {
-	rawdb.WriteWitness(db, hash, witness)
+// WriteWitness writes the witness to the witness store and updates the cache.
+func (bc *BlockChain) WriteWitness(hash common.Hash, witness []byte) {
+	bc.witnessStore.WriteWitness(hash, witness)
 	bc.witnessCache.Add(hash, witness)
 }
 
@@ -519,16 +518,21 @@ func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
 // The first reader (prefetch) is intended for prefetch operations, and the second (process)
 // is for actual transaction processing. This enables independent cache hit/miss tracking
 // for both phases of block production.
-func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
+func (bc *BlockChain) StateAtWithReaders(root common.Hash) (*state.StateDB, *state.StateDB, state.ReaderWithStats, state.ReaderWithStats, error) {
 	prefetchReader, processReader, err := bc.statedb.ReadersWithCacheStats(root)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	statedb, err := state.NewWithReader(root, bc.statedb, processReader)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return statedb, prefetchReader, processReader, nil
+	throwaway, err := state.NewWithReader(root, bc.statedb, prefetchReader)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	return statedb, throwaway, prefetchReader, processReader, nil
 }
 
 // HistoricState returns a historic state specified by the given root.

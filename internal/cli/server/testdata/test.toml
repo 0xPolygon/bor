@@ -2,7 +2,7 @@ identity = ""
 datadir = "./data"
 keystore = "./keystore"
 verbosity = 3
-"rpc.batchlimit" = 0
+"rpc.batch-request-limit" = 0
 snapshot = true
 "bor.logs" = false
 
