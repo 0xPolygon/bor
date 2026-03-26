@@ -816,9 +816,13 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		processorCount++
 
 		go func() {
+			// Disable tracing for parallel processor to avoid data races on
+			// shared tracer state (txIndex, block.Transactions) with the serial processor.
+			parallelVmCfg := bc.cfg.VmConfig
+			parallelVmCfg.Tracer = nil
 			pstart := time.Now()
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.parallelProcessor.Process(block, parallelStatedb, bc.cfg.VmConfig, nil, ctx)
+			res, err := bc.parallelProcessor.Process(block, parallelStatedb, parallelVmCfg, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
 			if err == nil {
 				vstart := time.Now()
