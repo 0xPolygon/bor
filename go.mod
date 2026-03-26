@@ -351,7 +351,7 @@ require (
 
 replace (
 	cosmossdk.io/client/v2 => github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 // Same as heimdall-v2.
-	github.com/0xPolygon/heimdall-v2 => github.com/0xPolygon/heimdall-v2 v0.6.1-0.20260326084433-ac4da0b53ffa // POS-3441: deterministic state sync proto types
+	github.com/0xPolygon/heimdall-v2 => github.com/0xPolygon/heimdall-v2 v0.6.1-0.20260326111030-b21e4809d0c8 // POS-3441: deterministic state sync proto types
 	github.com/Masterminds/goutils => github.com/Masterminds/goutils v1.1.1
 	github.com/cometbft/cometbft => github.com/0xPolygon/cometbft v0.3.6-polygon
 	github.com/cometbft/cometbft-db => github.com/0xPolygon/cometbft-db v0.14.1-polygon

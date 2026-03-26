@@ -300,10 +300,10 @@ func (h *HeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime in
 	return height, nil
 }
 
-// RecordListVisibleAtHeightResponse is the response from the Heimdall clerk/state-syncs-at-height endpoint.
-type RecordListVisibleAtHeightResponse struct {
-	EventRecords []clerkTypes.EventRecord `json:"event_records"`
-}
+// RecordListVisibleAtHeightResponse uses the proto-generated response type from heimdall-v2.
+// This handles Cosmos SDK's string-encoded integers correctly via gogoproto JSON unmarshaling.
+// Type alias added for readability.
+type RecordListVisibleAtHeightResponse = clerkTypes.RecordListVisibleAtHeightResponse
 
 // StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height,
 // using the new query endpoint that queries the latest state with immutable visibility_height indexes.
