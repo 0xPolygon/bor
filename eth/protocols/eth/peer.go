@@ -45,7 +45,7 @@ const (
 
 	// maxQueuedTxAnns is the maximum number of transaction announcements to queue up
 	// before dropping older announcements.
-	maxQueuedTxAnns = 4096
+	maxQueuedTxAnns = 16384
 
 	// maxQueuedTxAnnsTrusted is the maximum number of transaction announcements to queue up before dropping older announcements for trusted and static peers. Specific to Bor.
 	maxQueuedTxAnnsTrusted = 40960

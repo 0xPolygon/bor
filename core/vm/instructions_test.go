@@ -112,8 +112,8 @@ func testTwoOperandOp(t *testing.T, tests []TwoOperandTestcase, opFn executionFu
 		stack.push(x)
 		stack.push(y)
 		opFn(&pc, evm, &ScopeContext{nil, stack, nil})
-		if len(stack.data) != 1 {
-			t.Errorf("Expected one item on stack after %v, got %d: ", name, len(stack.data))
+		if stack.len() != 1 {
+			t.Errorf("Expected one item on stack after %v, got %d: ", name, stack.len())
 		}
 
 		actual := stack.pop()
@@ -634,6 +634,7 @@ func BenchmarkOpKeccak256(bench *testing.B) {
 		stack.push(uint256.NewInt(32))
 		stack.push(start)
 		opKeccak256(&pc, evm, &ScopeContext{mem, stack, nil})
+		stack.pop()
 	}
 }
 
@@ -728,8 +729,8 @@ func TestRandom(t *testing.T) {
 			pc    = uint64(0)
 		)
 		opRandom(&pc, evm, &ScopeContext{nil, stack, nil})
-		if len(stack.data) != 1 {
-			t.Errorf("Expected one item on stack after %v, got %d: ", tt.name, len(stack.data))
+		if stack.len() != 1 {
+			t.Errorf("Expected one item on stack after %v, got %d: ", tt.name, stack.len())
 		}
 
 		actual := stack.pop()
@@ -773,8 +774,8 @@ func TestBlobHash(t *testing.T) {
 		evm.SetTxContext(TxContext{BlobHashes: tt.hashes})
 		stack.push(uint256.NewInt(tt.idx))
 		opBlobHash(&pc, evm, &ScopeContext{nil, stack, nil})
-		if len(stack.data) != 1 {
-			t.Errorf("Expected one item on stack after %v, got %d: ", tt.name, len(stack.data))
+		if stack.len() != 1 {
+			t.Errorf("Expected one item on stack after %v, got %d: ", tt.name, stack.len())
 		}
 		actual := stack.pop()
 		expected, overflow := uint256.FromBig(new(big.Int).SetBytes(tt.expect.Bytes()))

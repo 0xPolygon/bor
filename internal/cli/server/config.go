@@ -4,11 +4,10 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 
-	// "math"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -66,6 +65,9 @@ type Config struct {
 
 	// VMTraceJsonConfig is the JSON config for the VM tracer
 	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
+
+	// Use switch-based fast path EVM interpreter
+	EnableEVMSwitchDispatch bool `hcl:"evm-switch-dispatch,optional" toml:"evm-switch-dispatch,optional"`
 
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
@@ -469,6 +471,9 @@ type JsonRPCConfig struct {
 	// LogQueryLimit is the max number of addresses or topics allowed in filter criteria for eth_getLogs.
 	LogQueryLimit int `hcl:"logquerylimit,optional" toml:"logquerylimit,optional"`
 
+	// RangeLimit is the maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit).
+	RangeLimit uint64 `hcl:"rangelimit,optional" toml:"rangelimit,optional"`
+
 	// Http has the json-rpc http related settings
 	Http *APIConfig `hcl:"http,block" toml:"http,block"`
 
@@ -809,6 +814,7 @@ func DefaultConfig() *Config {
 		RequiredBlocks:              map[string]string{},
 		Verbosity:                   3,
 		EnablePreimageRecording:     false,
+		EnableEVMSwitchDispatch:     false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
 		Ancient:                     "",
@@ -914,7 +920,7 @@ func DefaultConfig() *Config {
 			IPCPath:              "",
 			GasCap:               ethconfig.Defaults.RPCGasCap,
 			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
-			LogQueryLimit:        ethconfig.Defaults.RPCLogQueryLimit,
+			LogQueryLimit:        ethconfig.Defaults.LogQueryLimit,
 			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
 			AllowUnprotectedTxs:  false,
 			EnablePersonal:       false,
@@ -1041,7 +1047,7 @@ func DefaultConfig() *Config {
 			EnableParallelStatelessImport:  false,
 			ParallelStatelessImportWorkers: 0,
 			WitnessAPI:                     false,
-			FileStore:                      true,
+			FileStore:                      false,
 			FastForwardThreshold:           6400,
 		},
 		History: &HistoryConfig{
@@ -1224,6 +1230,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	}
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
+	n.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
 	n.EnableStateSizeTracking = c.StateSizeTracking
 	n.VMTrace = c.VMTrace
 	n.VMTraceJsonConfig = c.VMTraceJsonConfig
@@ -1508,11 +1515,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		// Apply configurable garbage collection settings with validation
 		if c.Cache.GoMemLimit != "" {
-			if err := validateGoMemLimit(c.Cache.GoMemLimit); err != nil {
+			if bytes, err := parseGoMemLimit(c.Cache.GoMemLimit); err != nil {
 				log.Warn("Invalid GOMEMLIMIT value, skipping", "value", c.Cache.GoMemLimit, "error", err)
 			} else {
-				os.Setenv("GOMEMLIMIT", c.Cache.GoMemLimit)
-				log.Info("Set GOMEMLIMIT", "value", c.Cache.GoMemLimit)
+				prev := godebug.SetMemoryLimit(bytes)
+				log.Info("Set GOMEMLIMIT via runtime", "value", c.Cache.GoMemLimit, "bytes", bytes, "previous", prev)
 			}
 		}
 
@@ -1601,7 +1608,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
 
-	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
 
 	// Choose the sync mode
 	switch c.SyncMode {
@@ -2133,21 +2141,49 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	return lines, nil
 }
 
-// validateGoMemLimit validates GOMEMLIMIT values
-func validateGoMemLimit(value string) error {
-	// GOMEMLIMIT can be:
-	// - A number followed by optional unit (B, KB, MB, GB, TB, PB)
-	// - "off" to disable soft limit
+// parseGoMemLimit parses a GOMEMLIMIT string (e.g. "100GB", "1024MB", "off")
+// into bytes. Returns math.MaxInt64 for "off" (no limit).
+func parseGoMemLimit(value string) (int64, error) {
 	if value == "off" {
-		return nil
+		return math.MaxInt64, nil
 	}
 
-	// Parse the value to validate format
-	if matched, _ := regexp.MatchString(`^[0-9]+(\.[0-9]+)?[KMGTPE]?[iB]?$`, value); !matched {
-		return fmt.Errorf("invalid GOMEMLIMIT format, expected number with optional unit (e.g., '8GB', '1024MB')")
+	// Split numeric prefix from unit suffix
+	i := 0
+	for i < len(value) && (value[i] >= '0' && value[i] <= '9' || value[i] == '.') {
+		i++
 	}
 
-	return nil
+	if i == 0 {
+		return 0, fmt.Errorf("invalid GOMEMLIMIT: no numeric value in %q", value)
+	}
+
+	numStr := value[:i]
+	unit := value[i:]
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid GOMEMLIMIT number %q: %v", numStr, err)
+	}
+
+	var multiplier float64
+
+	switch unit {
+	case "", "B":
+		multiplier = 1
+	case "KB", "KiB":
+		multiplier = 1024
+	case "MB", "MiB":
+		multiplier = 1024 * 1024
+	case "GB", "GiB":
+		multiplier = 1024 * 1024 * 1024
+	case "TB", "TiB":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("invalid GOMEMLIMIT unit %q (expected B, KB, MB, GB, TB)", unit)
+	}
+
+	return int64(num * multiplier), nil
 }
 
 // sanitizeGoGC clamps GOGC values to reasonable bounds

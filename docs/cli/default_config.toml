@@ -4,6 +4,7 @@ verbosity = 3
 vmdebug = false
 vmtrace = ""
 "vmtrace.jsonconfig" = ""
+evm-switch-dispatch = false
 "state.size-tracking" = false
 datadir = "/var/lib/bor"
 ancient = ""
@@ -112,6 +113,7 @@ devfakeauthor = false
   evmtimeout = "5s"
   txfeecap = 1.0
   logquerylimit = 1000
+  rangelimit = 0
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
   "txsync.defaulttimeout" = "20s"
@@ -235,7 +237,7 @@ devfakeauthor = false
   parallel-stateless-import = false
   parallel-stateless-import-workers = 0
   witnessapi = false
-  filestore = true
+  filestore = false
   fastforwardthreshold = 6400
 
 [pprof]

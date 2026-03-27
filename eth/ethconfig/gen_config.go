@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
@@ -52,6 +53,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TriesInMemory                        uint64
 		FilterLogCacheSize                   int
 		LogQueryLimit                        int
+		AddressCacheSizes                    map[common.Address]int
+		PreloadRateLimit                     int64
 		Miner                                miner.Config
 		TxPool                               legacypool.Config
 		BlobPool                             blobpool.Config
@@ -59,6 +62,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		EnablePreimageRecording              bool
 		EnableWitnessStats                   bool
 		StatelessSelfValidation              bool
+		EnableEVMSwitchDispatch              bool
 		EnableStateSizeTracking              bool
 		VMTrace                              string
 		VMTraceJsonConfig                    string
@@ -66,6 +70,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
+		RPCBlockRangeLimit                   uint64
 		HeimdallURL                          string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
@@ -74,22 +79,32 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RunHeimdall                          bool
 		RunHeimdallArgs                      string
 		UseHeimdallApp                       bool
+		OverrideHeimdallClient               bor.IHeimdallClient `toml:"-"`
 		BorLogs                              bool
 		ParallelEVM                          core.ParallelEVMConfig `toml:",omitempty"`
 		WitnessProtocol                      bool
 		SyncWithWitnesses                    bool
 		SyncAndProduceWitnesses              bool
-		DevFakeAuthor                        bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		DevFakeAuthor                        bool     `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  bool
 		FastForwardThreshold                 uint64
 		WitnessPruneThreshold                uint64
 		WitnessPruneInterval                 time.Duration
 		EnableParallelStatelessImport        bool
 		EnableParallelStatelessImportWorkers int
-		OverrideVerkle                       *big.Int      `toml:",omitempty"`
-		OverrideOsaka                        *big.Int      `toml:",omitempty"`
+		WitnessAPIEnabled                    bool
+		WitnessFileStore                     bool
+		DisableBlindForkValidation           bool
+		MaxBlindForkValidationLimit          uint64
 		TxSyncDefaultTimeout                 time.Duration `toml:",omitempty"`
 		TxSyncMaxTimeout                     time.Duration `toml:",omitempty"`
+		EnablePreconfs                       bool
+		EnablePrivateTx                      bool
+		BlockProducerRpcEndpoints            []string
+		AcceptPreconfTx                      bool
+		AcceptPrivateTx                      bool
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -113,6 +128,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.DatabaseCache = c.DatabaseCache
 	enc.DatabaseFreezer = c.DatabaseFreezer
 	enc.DatabaseEra = c.DatabaseEra
+	enc.LevelDbCompactionTableSize = c.LevelDbCompactionTableSize
+	enc.LevelDbCompactionTableSizeMultiplier = c.LevelDbCompactionTableSizeMultiplier
+	enc.LevelDbCompactionTotalSize = c.LevelDbCompactionTotalSize
+	enc.LevelDbCompactionTotalSizeMultiplier = c.LevelDbCompactionTotalSizeMultiplier
 	enc.TrieCleanCache = c.TrieCleanCache
 	enc.TrieDirtyCache = c.TrieDirtyCache
 	enc.TrieTimeout = c.TrieTimeout
@@ -121,6 +140,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TriesInMemory = c.TriesInMemory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
 	enc.LogQueryLimit = c.LogQueryLimit
+	enc.AddressCacheSizes = c.AddressCacheSizes
+	enc.PreloadRateLimit = c.PreloadRateLimit
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
@@ -128,6 +149,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.EnablePreimageRecording = c.EnablePreimageRecording
 	enc.EnableWitnessStats = c.EnableWitnessStats
 	enc.StatelessSelfValidation = c.StatelessSelfValidation
+	enc.EnableEVMSwitchDispatch = c.EnableEVMSwitchDispatch
 	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
@@ -135,6 +157,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
+	enc.RPCBlockRangeLimit = c.RPCBlockRangeLimit
 	enc.HeimdallURL = c.HeimdallURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
@@ -143,6 +166,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RunHeimdall = c.RunHeimdall
 	enc.RunHeimdallArgs = c.RunHeimdallArgs
 	enc.UseHeimdallApp = c.UseHeimdallApp
+	enc.OverrideHeimdallClient = c.OverrideHeimdallClient
 	enc.BorLogs = c.BorLogs
 	enc.ParallelEVM = c.ParallelEVM
 	enc.WitnessProtocol = c.WitnessProtocol
@@ -157,8 +181,17 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.WitnessPruneInterval = c.WitnessPruneInterval
 	enc.EnableParallelStatelessImport = c.EnableParallelStatelessImport
 	enc.EnableParallelStatelessImportWorkers = c.EnableParallelStatelessImportWorkers
+	enc.WitnessAPIEnabled = c.WitnessAPIEnabled
+	enc.WitnessFileStore = c.WitnessFileStore
+	enc.DisableBlindForkValidation = c.DisableBlindForkValidation
+	enc.MaxBlindForkValidationLimit = c.MaxBlindForkValidationLimit
 	enc.TxSyncDefaultTimeout = c.TxSyncDefaultTimeout
 	enc.TxSyncMaxTimeout = c.TxSyncMaxTimeout
+	enc.EnablePreconfs = c.EnablePreconfs
+	enc.EnablePrivateTx = c.EnablePrivateTx
+	enc.BlockProducerRpcEndpoints = c.BlockProducerRpcEndpoints
+	enc.AcceptPreconfTx = c.AcceptPreconfTx
+	enc.AcceptPrivateTx = c.AcceptPrivateTx
 	return &enc, nil
 }
 
@@ -198,6 +231,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TriesInMemory                        *uint64
 		FilterLogCacheSize                   *int
 		LogQueryLimit                        *int
+		AddressCacheSizes                    map[common.Address]int
+		PreloadRateLimit                     *int64
 		Miner                                *miner.Config
 		TxPool                               *legacypool.Config
 		BlobPool                             *blobpool.Config
@@ -205,6 +240,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		EnablePreimageRecording              *bool
 		EnableWitnessStats                   *bool
 		StatelessSelfValidation              *bool
+		EnableEVMSwitchDispatch              *bool
 		EnableStateSizeTracking              *bool
 		VMTrace                              *string
 		VMTraceJsonConfig                    *string
@@ -212,6 +248,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
+		RPCBlockRangeLimit                   *uint64
 		HeimdallURL                          *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
@@ -220,22 +257,32 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RunHeimdall                          *bool
 		RunHeimdallArgs                      *string
 		UseHeimdallApp                       *bool
+		OverrideHeimdallClient               bor.IHeimdallClient `toml:"-"`
 		BorLogs                              *bool
 		ParallelEVM                          *core.ParallelEVMConfig `toml:",omitempty"`
 		WitnessProtocol                      *bool
 		SyncWithWitnesses                    *bool
 		SyncAndProduceWitnesses              *bool
-		DevFakeAuthor                        *bool `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		DevFakeAuthor                        *bool    `hcl:"devfakeauthor,optional" toml:"devfakeauthor,optional"`
+		OverrideOsaka                        *big.Int `toml:",omitempty"`
+		OverrideVerkle                       *big.Int `toml:",omitempty"`
 		EnableBlockTracking                  *bool
 		FastForwardThreshold                 *uint64
 		WitnessPruneThreshold                *uint64
 		WitnessPruneInterval                 *time.Duration
 		EnableParallelStatelessImport        *bool
 		EnableParallelStatelessImportWorkers *int
-		OverrideOsaka                        *big.Int       `toml:",omitempty"`
-		OverrideVerkle                       *big.Int       `toml:",omitempty"`
+		WitnessAPIEnabled                    *bool
+		WitnessFileStore                     *bool
+		DisableBlindForkValidation           *bool
+		MaxBlindForkValidationLimit          *uint64
 		TxSyncDefaultTimeout                 *time.Duration `toml:",omitempty"`
 		TxSyncMaxTimeout                     *time.Duration `toml:",omitempty"`
+		EnablePreconfs                       *bool
+		EnablePrivateTx                      *bool
+		BlockProducerRpcEndpoints            []string
+		AcceptPreconfTx                      *bool
+		AcceptPrivateTx                      *bool
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -304,6 +351,18 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.DatabaseEra != nil {
 		c.DatabaseEra = *dec.DatabaseEra
 	}
+	if dec.LevelDbCompactionTableSize != nil {
+		c.LevelDbCompactionTableSize = *dec.LevelDbCompactionTableSize
+	}
+	if dec.LevelDbCompactionTableSizeMultiplier != nil {
+		c.LevelDbCompactionTableSizeMultiplier = *dec.LevelDbCompactionTableSizeMultiplier
+	}
+	if dec.LevelDbCompactionTotalSize != nil {
+		c.LevelDbCompactionTotalSize = *dec.LevelDbCompactionTotalSize
+	}
+	if dec.LevelDbCompactionTotalSizeMultiplier != nil {
+		c.LevelDbCompactionTotalSizeMultiplier = *dec.LevelDbCompactionTotalSizeMultiplier
+	}
 	if dec.TrieCleanCache != nil {
 		c.TrieCleanCache = *dec.TrieCleanCache
 	}
@@ -328,6 +387,12 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.LogQueryLimit != nil {
 		c.LogQueryLimit = *dec.LogQueryLimit
 	}
+	if dec.AddressCacheSizes != nil {
+		c.AddressCacheSizes = dec.AddressCacheSizes
+	}
+	if dec.PreloadRateLimit != nil {
+		c.PreloadRateLimit = *dec.PreloadRateLimit
+	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
 	}
@@ -349,6 +414,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.StatelessSelfValidation != nil {
 		c.StatelessSelfValidation = *dec.StatelessSelfValidation
 	}
+	if dec.EnableEVMSwitchDispatch != nil {
+		c.EnableEVMSwitchDispatch = *dec.EnableEVMSwitchDispatch
+	}
 	if dec.EnableStateSizeTracking != nil {
 		c.EnableStateSizeTracking = *dec.EnableStateSizeTracking
 	}
@@ -369,6 +437,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.RPCTxFeeCap != nil {
 		c.RPCTxFeeCap = *dec.RPCTxFeeCap
+	}
+	if dec.RPCBlockRangeLimit != nil {
+		c.RPCBlockRangeLimit = *dec.RPCBlockRangeLimit
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
@@ -393,6 +464,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.UseHeimdallApp != nil {
 		c.UseHeimdallApp = *dec.UseHeimdallApp
+	}
+	if dec.OverrideHeimdallClient != nil {
+		c.OverrideHeimdallClient = dec.OverrideHeimdallClient
 	}
 	if dec.BorLogs != nil {
 		c.BorLogs = *dec.BorLogs
@@ -436,11 +510,38 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.EnableParallelStatelessImportWorkers != nil {
 		c.EnableParallelStatelessImportWorkers = *dec.EnableParallelStatelessImportWorkers
 	}
+	if dec.WitnessAPIEnabled != nil {
+		c.WitnessAPIEnabled = *dec.WitnessAPIEnabled
+	}
+	if dec.WitnessFileStore != nil {
+		c.WitnessFileStore = *dec.WitnessFileStore
+	}
+	if dec.DisableBlindForkValidation != nil {
+		c.DisableBlindForkValidation = *dec.DisableBlindForkValidation
+	}
+	if dec.MaxBlindForkValidationLimit != nil {
+		c.MaxBlindForkValidationLimit = *dec.MaxBlindForkValidationLimit
+	}
 	if dec.TxSyncDefaultTimeout != nil {
 		c.TxSyncDefaultTimeout = *dec.TxSyncDefaultTimeout
 	}
 	if dec.TxSyncMaxTimeout != nil {
 		c.TxSyncMaxTimeout = *dec.TxSyncMaxTimeout
+	}
+	if dec.EnablePreconfs != nil {
+		c.EnablePreconfs = *dec.EnablePreconfs
+	}
+	if dec.EnablePrivateTx != nil {
+		c.EnablePrivateTx = *dec.EnablePrivateTx
+	}
+	if dec.BlockProducerRpcEndpoints != nil {
+		c.BlockProducerRpcEndpoints = dec.BlockProducerRpcEndpoints
+	}
+	if dec.AcceptPreconfTx != nil {
+		c.AcceptPreconfTx = *dec.AcceptPreconfTx
+	}
+	if dec.AcceptPrivateTx != nil {
+		c.AcceptPrivateTx = *dec.AcceptPrivateTx
 	}
 	return nil
 }
