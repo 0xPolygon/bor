@@ -345,6 +345,7 @@ var (
 			DandeliBlock:      big.NewInt(31890000),
 			LisovoBlock:       big.NewInt(33634700),
 			LisovoProBlock:    big.NewInt(34062000),
+			GiuglianoBlock:    big.NewInt(35573500),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -431,6 +432,7 @@ var (
 			DandeliBlock:      big.NewInt(81424000),
 			LisovoBlock:       big.NewInt(83756500),
 			LisovoProBlock:    big.NewInt(83756500),
+			GiuglianoBlock:    big.NewInt(85268500),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},

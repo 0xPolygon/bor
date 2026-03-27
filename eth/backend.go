@@ -503,7 +503,11 @@ func (s *Ethereum) APIs() []rpc.API {
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
 
 	// BOR change starts
-	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{})
+	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{
+		LogCacheSize:  s.config.FilterLogCacheSize,
+		LogQueryLimit: s.config.LogQueryLimit,
+		RangeLimit:    s.config.RPCBlockRangeLimit,
+	})
 	// set genesis to public filter api
 	publicFilterAPI := filters.NewFilterAPI(filterSystem, s.config.BorLogs)
 	// avoiding constructor changed by introducing new method to set genesis
