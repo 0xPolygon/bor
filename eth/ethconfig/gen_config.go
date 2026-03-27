@@ -70,7 +70,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RPCReturnDataLimit                   uint64
 		RPCEVMTimeout                        time.Duration
 		RPCTxFeeCap                          float64
-		RPCLogQueryLimit                     int
+		RPCBlockRangeLimit                   uint64
 		HeimdallURL                          string
 		HeimdallTimeout                      time.Duration
 		WithoutHeimdall                      bool
@@ -157,7 +157,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RPCReturnDataLimit = c.RPCReturnDataLimit
 	enc.RPCEVMTimeout = c.RPCEVMTimeout
 	enc.RPCTxFeeCap = c.RPCTxFeeCap
-	enc.RPCLogQueryLimit = c.RPCLogQueryLimit
+	enc.RPCBlockRangeLimit = c.RPCBlockRangeLimit
 	enc.HeimdallURL = c.HeimdallURL
 	enc.HeimdallTimeout = c.HeimdallTimeout
 	enc.WithoutHeimdall = c.WithoutHeimdall
@@ -248,7 +248,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RPCReturnDataLimit                   *uint64
 		RPCEVMTimeout                        *time.Duration
 		RPCTxFeeCap                          *float64
-		RPCLogQueryLimit                     *int
+		RPCBlockRangeLimit                   *uint64
 		HeimdallURL                          *string
 		HeimdallTimeout                      *time.Duration
 		WithoutHeimdall                      *bool
@@ -438,8 +438,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.RPCTxFeeCap != nil {
 		c.RPCTxFeeCap = *dec.RPCTxFeeCap
 	}
-	if dec.RPCLogQueryLimit != nil {
-		c.RPCLogQueryLimit = *dec.RPCLogQueryLimit
+	if dec.RPCBlockRangeLimit != nil {
+		c.RPCBlockRangeLimit = *dec.RPCBlockRangeLimit
 	}
 	if dec.HeimdallURL != nil {
 		c.HeimdallURL = *dec.HeimdallURL
