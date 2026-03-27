@@ -287,8 +287,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			PreloadRateLimit:  config.PreloadRateLimit,
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
-				EnableWitnessStats:      config.EnableWitnessStats,
 				StatelessSelfValidation: config.StatelessSelfValidation,
+				EnableWitnessStats:      config.EnableWitnessStats,
+				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
 			},
 			Stateless: config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
@@ -502,7 +503,11 @@ func (s *Ethereum) APIs() []rpc.API {
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
 
 	// BOR change starts
-	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{})
+	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{
+		LogCacheSize:  s.config.FilterLogCacheSize,
+		LogQueryLimit: s.config.LogQueryLimit,
+		RangeLimit:    s.config.RPCBlockRangeLimit,
+	})
 	// set genesis to public filter api
 	publicFilterAPI := filters.NewFilterAPI(filterSystem, s.config.BorLogs)
 	// avoiding constructor changed by introducing new method to set genesis

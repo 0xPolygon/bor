@@ -99,7 +99,6 @@ var Defaults = Config{
 	RPCEVMTimeout:         5 * time.Second,
 	GPO:                   FullNodeGPO,
 	RPCTxFeeCap:           1, // 1 ether
-	RPCLogQueryLimit:      1000,
 	FastForwardThreshold:  6400,
 	WitnessPruneThreshold: 64000,
 	WitnessPruneInterval:  120 * time.Second,
@@ -207,6 +206,9 @@ type Config struct {
 	// Generate execution witnesses and self-check against them (testing purpose)
 	StatelessSelfValidation bool
 
+	// Use switch-based fast path interpreter
+	EnableEVMSwitchDispatch bool
+
 	// Enables tracking of state size
 	EnableStateSizeTracking bool
 
@@ -227,9 +229,8 @@ type Config struct {
 	// send-transaction variants. The unit is ether.
 	RPCTxFeeCap float64
 
-	// RPCLogQueryLimit is the maximum number of addresses or topics allowed per search
-	// position in eth_getLogs filter criteria (0 = no cap)
-	RPCLogQueryLimit int
+	// RPCBlockRangeLimit is the maximum block range allowed in eth_getLogs / bor_getLogs (0 = unlimited)
+	RPCBlockRangeLimit uint64
 
 	// URL to connect to Heimdall node (comma-separated for failover: "url1,url2,url3")
 	HeimdallURL string

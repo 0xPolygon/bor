@@ -405,7 +405,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 			for _, t := range tasks {
 				t := t.(*ExecutionTask)
-				t.finalStateDB = backupStateDB
+				t.finalStateDB = statedb
 				t.allLogs = &allLogs
 				t.receipts = &receipts
 				t.totalUsedGas = usedGas

@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -3774,4 +3775,347 @@ func TestDecodeAddressAndTopic(t *testing.T) {
 		_, err := decodeTopic("not-hex")
 		require.Error(t, err)
 	})
+}
+
+// testBackendWithGiuglianoExtra wraps testBackend to return headers with
+// Giugliano extra data and a Cancun-enabled ChainConfig.
+type testBackendWithGiuglianoExtra struct {
+	*testBackend
+	headers  map[int64]*types.Header // block number → header
+	hashes   map[common.Hash]*types.Header
+	chainCfg *params.ChainConfig
+}
+
+func (b *testBackendWithGiuglianoExtra) ChainConfig() *params.ChainConfig {
+	return b.chainCfg
+}
+
+func (b *testBackendWithGiuglianoExtra) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
+	if h, ok := b.headers[int64(number)]; ok {
+		return h, nil
+	}
+	return b.testBackend.HeaderByNumber(ctx, number)
+}
+
+func (b *testBackendWithGiuglianoExtra) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	if h, ok := b.hashes[hash]; ok {
+		return h, nil
+	}
+	return b.testBackend.HeaderByHash(ctx, hash)
+}
+
+// buildExtraWithGiuglianoFields builds a header Extra field containing RLP-encoded BlockExtraData.
+func buildExtraWithGiuglianoFields(gasTarget, bfcd *uint64) []byte {
+	bed := &types.BlockExtraData{
+		GasTarget:                gasTarget,
+		BaseFeeChangeDenominator: bfcd,
+	}
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+	return extra
+}
+
+// newGasParamsTestAPI creates a BorAPI backed by a testBackendWithGiuglianoExtra.
+// headers are registered by both number and hash for lookup.
+func newGasParamsTestAPI(t *testing.T, cfg *params.ChainConfig, headers ...*types.Header) *BorAPI {
+	t.Helper()
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
+		},
+	}
+	base := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+
+	byNum := make(map[int64]*types.Header, len(headers))
+	byHash := make(map[common.Hash]*types.Header, len(headers))
+	for _, h := range headers {
+		byNum[h.Number.Int64()] = h
+		byHash[h.Hash()] = h
+	}
+
+	backend := &testBackendWithGiuglianoExtra{
+		testBackend: base,
+		headers:     byNum,
+		hashes:      byHash,
+		chainCfg:    cfg,
+	}
+	return NewBorAPI(backend)
+}
+
+// newPostGiuglianoGasParamsAPI creates a BorAPI with a post-Giugliano header at block 10
+// containing the given gas target and base fee change denominator.
+func newPostGiuglianoGasParamsAPI(t *testing.T, gasTarget, bfcd uint64) (*BorAPI, *types.Header) {
+	t.Helper()
+	header := &types.Header{
+		Number:   big.NewInt(10),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(&gasTarget, &bfcd),
+	}
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+	return newGasParamsTestAPI(t, cfg, header), header
+}
+
+func TestGetBlockGasParams_PostGiugliano(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	api, _ := newPostGiuglianoGasParamsAPI(t, gasTarget, bfcd)
+
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(10))
+	require.NoError(t, err)
+	require.NotNil(t, result.GasTarget)
+	require.NotNil(t, result.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(gasTarget), *result.GasTarget)
+	require.Equal(t, hexutil.Uint64(bfcd), *result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_PostGiugliano_ByHash(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	api, header := newPostGiuglianoGasParamsAPI(t, gasTarget, bfcd)
+
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithHash(header.Hash(), false))
+	require.NoError(t, err)
+	require.NotNil(t, result.GasTarget)
+	require.NotNil(t, result.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(gasTarget), *result.GasTarget)
+	require.Equal(t, hexutil.Uint64(bfcd), *result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_PreGiugliano(t *testing.T) {
+	t.Parallel()
+	header := &types.Header{
+		Number:   big.NewInt(5),
+		GasLimit: 30_000_000,
+		Extra:    buildExtraWithGiuglianoFields(nil, nil),
+	}
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(100)},
+	}
+
+	api := newGasParamsTestAPI(t, cfg, header)
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(5))
+	require.NoError(t, err)
+	require.Nil(t, result.GasTarget)
+	require.Nil(t, result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_PreCancun(t *testing.T) {
+	t.Parallel()
+	header := &types.Header{
+		Number:   big.NewInt(5),
+		GasLimit: 30_000_000,
+		Extra:    make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(100),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(100)},
+	}
+
+	api := newGasParamsTestAPI(t, cfg, header)
+	result, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(5))
+	require.NoError(t, err)
+	require.Nil(t, result.GasTarget)
+	require.Nil(t, result.BaseFeeChangeDenominator)
+}
+
+func TestGetBlockGasParams_HeaderNotFound(t *testing.T) {
+	t.Parallel()
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	api := newGasParamsTestAPI(t, cfg) // no custom headers
+	_, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithNumber(999))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "header not found")
+}
+
+func TestGetBlockGasParams_HeaderNotFound_ByHash(t *testing.T) {
+	t.Parallel()
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+
+	api := newGasParamsTestAPI(t, cfg) // no custom headers
+	fakeHash := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := api.GetBlockGasParams(context.Background(), rpc.BlockNumberOrHashWithHash(fakeHash, false))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "header not found")
+}
+
+// testBackendWithBlockExtra wraps testBackend to return blocks with custom Extra data
+// and a custom ChainConfig for GetBlockByNumber/GetBlockByHash tests.
+type testBackendWithBlockExtra struct {
+	*testBackend
+	block    *types.Block
+	chainCfg *params.ChainConfig
+}
+
+func (b *testBackendWithBlockExtra) ChainConfig() *params.ChainConfig {
+	return b.chainCfg
+}
+
+func (b *testBackendWithBlockExtra) BlockByNumber(_ context.Context, number rpc.BlockNumber) (*types.Block, error) {
+	if b.block != nil && number == rpc.BlockNumber(b.block.NumberU64()) {
+		return b.block, nil
+	}
+	return nil, nil
+}
+
+func (b *testBackendWithBlockExtra) BlockByHash(_ context.Context, hash common.Hash) (*types.Block, error) {
+	if b.block != nil && hash == b.block.Hash() {
+		return b.block, nil
+	}
+	return nil, nil
+}
+
+// makeBlockWithExtra creates a minimal block with the given extra data in its header.
+func makeBlockWithExtra(number int64, extra []byte) *types.Block {
+	header := &types.Header{
+		Number:   big.NewInt(number),
+		GasLimit: 30_000_000,
+		Extra:    extra,
+	}
+	return types.NewBlockWithHeader(header)
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// postCancunCfg returns a ChainConfig with Cancun and Giugliano at genesis.
+func postCancunCfg() *params.ChainConfig {
+	return &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(0),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(0)},
+	}
+}
+
+// newBlockExtraTestAPI creates a BlockChainAPI backed by a testBackendWithBlockExtra.
+func newBlockExtraTestAPI(t *testing.T, block *types.Block, cfg *params.ChainConfig) *BlockChainAPI {
+	t.Helper()
+	genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+	base := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+	backend := &testBackendWithBlockExtra{testBackend: base, block: block, chainCfg: cfg}
+	return NewBlockChainAPI(backend)
+}
+
+// makeBlockWithBorExtra creates a block with RLP-encoded BlockExtraData in the header Extra field.
+func makeBlockWithBorExtra(number int64, bed *types.BlockExtraData) *types.Block {
+	bedBytes, _ := rlp.EncodeToBytes(bed)
+	extra := make([]byte, types.ExtraVanityLength)
+	extra = append(extra, bedBytes...)
+	extra = append(extra, make([]byte, types.ExtraSealLength)...)
+	return makeBlockWithExtra(number, extra)
+}
+
+func TestGetBlockByNumber_BorExtraFlag_PostCancun(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	txDep := [][]uint64{{0}, {0, 1}, {}}
+
+	block := makeBlockWithBorExtra(10, &types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TxDependency:             txDep,
+	})
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	extraData, ok := result["decodedExtra"]
+	require.True(t, ok, "response should contain decodedExtra")
+
+	rpcExtra := extraData.(*RPCBlockExtraData)
+	require.NotNil(t, rpcExtra.GasTarget)
+	require.Equal(t, hexutil.Uint64(gasTarget), *rpcExtra.GasTarget)
+	require.NotNil(t, rpcExtra.BaseFeeChangeDenominator)
+	require.Equal(t, hexutil.Uint64(bfcd), *rpcExtra.BaseFeeChangeDenominator)
+	require.Equal(t, txDep, rpcExtra.TxDependency)
+}
+
+func TestGetBlockByHash_BorExtraFlag(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+
+	block := makeBlockWithBorExtra(10, &types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+	})
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
+
+	result, err := api.GetBlockByHash(context.Background(), block.Hash(), false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	extraData, ok := result["decodedExtra"]
+	require.True(t, ok, "response should contain decodedExtra")
+
+	rpcExtra := extraData.(*RPCBlockExtraData)
+	require.NotNil(t, rpcExtra.GasTarget)
+	require.Equal(t, hexutil.Uint64(gasTarget), *rpcExtra.GasTarget)
+}
+
+func TestGetBlockByNumber_BorExtraFlag_Nil(t *testing.T) {
+	t.Parallel()
+	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(nil, nil))
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present when borExtra is nil")
+}
+
+func TestGetBlockByNumber_BorExtraFlag_False(t *testing.T) {
+	t.Parallel()
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	block := makeBlockWithExtra(10, buildExtraWithGiuglianoFields(&gasTarget, &bfcd))
+	api := newBlockExtraTestAPI(t, block, postCancunCfg())
+
+	result, err := api.GetBlockByNumber(context.Background(), 10, false, boolPtr(false))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present when borExtra is false")
+}
+
+func TestGetBlockByNumber_BorExtraFlag_PreCancun(t *testing.T) {
+	t.Parallel()
+	block := makeBlockWithExtra(5, make([]byte, types.ExtraVanityLength+types.ExtraSealLength))
+	cfg := &params.ChainConfig{
+		ChainID:     big.NewInt(1),
+		CancunBlock: big.NewInt(100),
+		Bor:         &params.BorConfig{GiuglianoBlock: big.NewInt(100)},
+	}
+	api := newBlockExtraTestAPI(t, block, cfg)
+
+	result, err := api.GetBlockByNumber(context.Background(), 5, false, boolPtr(true))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	_, ok := result["decodedExtra"]
+	require.False(t, ok, "decodedExtra should not be present for pre-Cancun blocks")
 }

@@ -100,6 +100,9 @@ var (
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
+	// txApplyDurationTimer captures per-transaction apply latency during block building.
+	// Uses a larger reservoir to preserve tail visibility on high-throughput blocks.
+	txApplyDurationTimer = newRegisteredCustomTimer("worker/txApplyDuration", 8192)
 	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
 	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
 	// intermediateRootTimer measures time taken to calculate intermediate root
@@ -131,14 +134,63 @@ var (
 	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("worker/chain/account/reads/cache/process/prefetch_used_unique", nil)
 	prefetchPanicMeter                = metrics.NewRegisteredMeter("worker/prefetch/panic", nil)
 
-	// prefetchCoverageHistogram tracks percentage of block transactions that were prefetched.
-	// Values range 0-100. High percentiles indicate effective prefetching.
-	prefetchCoverageHistogram = metrics.NewRegisteredHistogram(
-		"worker/prefetch/coverage_percent",
+	// prefetchMissRateHistogram tracks percentage of block transactions that were NOT prefetched.
+	// Values range 0-100. High percentiles indicate prefetch degradation.
+	prefetchMissRateHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/miss_rate_percent",
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
+
+	// Trie read/hash/execution metrics for block production (mirroring blockchain.go import path).
+	// Namespaced under worker/chain/ to distinguish from import-path chain/ metrics.
+	workerAccountReadTimer         = metrics.NewRegisteredResettingTimer("worker/chain/account/reads", nil)
+	workerStorageReadTimer         = metrics.NewRegisteredResettingTimer("worker/chain/storage/reads", nil)
+	workerSnapshotAccountReadTimer = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/account/reads", nil)
+	workerSnapshotStorageReadTimer = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/storage/reads", nil)
+	workerAccountUpdateTimer       = metrics.NewRegisteredResettingTimer("worker/chain/account/updates", nil)
+	workerStorageUpdateTimer       = metrics.NewRegisteredResettingTimer("worker/chain/storage/updates", nil)
+	workerAccountHashTimer         = metrics.NewRegisteredResettingTimer("worker/chain/account/hashes", nil)
+	workerStorageHashTimer         = metrics.NewRegisteredTimer("worker/chain/storage/hashes", nil)
+	workerBorConsensusTimer        = metrics.NewRegisteredTimer("worker/chain/bor/consensus", nil)
+	workerBlockExecutionTimer      = metrics.NewRegisteredTimer("worker/chain/execution", nil)
+	workerMgaspsTimer              = metrics.NewRegisteredResettingTimer("worker/chain/mgasps", nil)
+
+	// Trie commit metrics for block production (populated after WriteBlockAndSetHead → CommitWithUpdate).
+	workerAccountCommitTimer     = metrics.NewRegisteredResettingTimer("worker/chain/account/commits", nil)
+	workerStorageCommitTimer     = metrics.NewRegisteredResettingTimer("worker/chain/storage/commits", nil)
+	workerSnapshotCommitTimer    = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/commits", nil)
+	workerTriedbCommitTimer      = metrics.NewRegisteredResettingTimer("worker/chain/triedb/commits", nil)
+	workerWitnessCollectionTimer = metrics.NewRegisteredTimer("worker/chain/witness/collection", nil)
 )
+
+// firstNonZeroTime returns a if non-zero, otherwise b.
+func firstNonZeroTime(a, b time.Time) time.Time {
+	if !a.IsZero() {
+		return a
+	}
+	return b
+}
+
+// productionStartFrom extracts the productionStart time from genParams.
+// Returns zero time if genParams is nil, matching the guarded access pattern
+// already used elsewhere in commit() (e.g. the genParams != nil check at the
+// prefetch coverage block).
+func productionStartFrom(genParams *generateParams) time.Time {
+	if genParams == nil {
+		return time.Time{}
+	}
+	return genParams.productionStart
+}
+
+func newRegisteredCustomTimer(name string, reservoirSize int) *metrics.Timer {
+	return metrics.GetOrRegister(name, func() interface{} {
+		return metrics.NewCustomTimer(
+			metrics.NewHistogram(metrics.NewExpDecaySample(reservoirSize, 0.015)),
+			metrics.NewMeter(),
+		)
+	}).(*metrics.Timer)
+}
 
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
@@ -205,10 +257,12 @@ func (env *environment) discard() {
 
 // task contains all information for consensus engine sealing and result submitting.
 type task struct {
-	receipts  []*types.Receipt
-	state     *state.StateDB
-	block     *types.Block
-	createdAt time.Time
+	receipts             []*types.Receipt
+	state                *state.StateDB
+	block                *types.Block
+	createdAt            time.Time
+	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
+	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 }
 
 // txFits reports whether the transaction fits into the block size limit.
@@ -343,9 +397,11 @@ type worker struct {
 	// Interrupt commit to stop block building on time
 	interruptCommitFlag    bool        // Denotes whether interrupt commit is enabled or not
 	interruptBlockBuilding atomic.Bool // A toggle to denote whether to stop block building or not
-	mockTxDelay            uint        // A mock delay for transaction execution, only used in tests
+	interruptFlagSetAt     atomic.Int64
+	mockTxDelay            uint // A mock delay for transaction execution, only used in tests
 
-	blockTime time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	blockTime     time.Duration     // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
+	slowTxTracker *slowTxTopTracker // Tracks top slow transactions for periodic reporting.
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -383,6 +439,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:    make(chan *intervalAdjust, resubmitAdjustChanSize),
 		interruptCommitFlag: config.CommitInterruptFlag,
 		blockTime:           config.BlockTime,
+		slowTxTracker:       newSlowTxTopTracker(),
 		makeWitness:         makeWitness,
 	}
 	worker.noempty.Store(true)
@@ -757,6 +814,8 @@ func (w *worker) mainLoop() {
 	defer w.wg.Done()
 	defer w.txsSub.Unsubscribe()
 	defer w.chainHeadSub.Unsubscribe()
+	slowTxWindowTicker := time.NewTicker(slowTxWindowPeriod)
+	defer slowTxWindowTicker.Stop()
 	defer func() {
 		w.currentMu.Lock()
 		if w.current != nil {
@@ -817,7 +876,12 @@ func (w *worker) mainLoop() {
 
 				stopFn := func() {}
 				if w.interruptCommitFlag {
-					stopFn = createInterruptTimer(w.current.header.Number.Uint64(), w.current.header.GetActualTime(), &w.interruptBlockBuilding)
+					stopFn = createInterruptTimer(
+						w.current.header.Number.Uint64(),
+						w.current.header.GetActualTime(),
+						&w.interruptBlockBuilding,
+						&w.interruptFlagSetAt,
+					)
 				}
 
 				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, &w.interruptBlockBuilding) // Mixed bag of everrything, yolo
@@ -843,6 +907,14 @@ func (w *worker) mainLoop() {
 			}
 
 			w.newTxs.Add(int32(len(ev.Txs)))
+
+		case tickAt := <-slowTxWindowTicker.C:
+			if w.IsRunning() {
+				w.flushSlowTxWindow(tickAt)
+			} else {
+				// Avoid carrying stale data across non-producer windows.
+				w.slowTxTracker.Reset()
+			}
 
 		// System stopped
 		case <-w.exitCh:
@@ -1000,10 +1072,39 @@ func (w *worker) resultLoop() {
 				witness.SetHeader(block.Header())
 			}
 
+			// Execution metrics: emitted before write because these values are final after
+			// FinalizeAndAssemble and do not depend on write success — matching the import path
+			// which emits read/update/hash/execution/bor metrics before writeBlockAndSetHead.
+			// Emitting here avoids losing these observations on a rare write failure.
+			if metrics.Enabled() {
+				workerAccountReadTimer.Update(task.state.AccountReads)
+				workerStorageReadTimer.Update(task.state.StorageReads)
+				workerSnapshotAccountReadTimer.Update(task.state.SnapshotAccountReads)
+				workerSnapshotStorageReadTimer.Update(task.state.SnapshotStorageReads)
+				workerAccountUpdateTimer.Update(task.state.AccountUpdates)
+				workerStorageUpdateTimer.Update(task.state.StorageUpdates)
+				workerAccountHashTimer.Update(task.state.AccountHashes)
+				workerStorageHashTimer.Update(task.state.StorageHashes)
+				workerBorConsensusTimer.Update(task.state.BorConsensusTime)
+				trieRead := task.state.SnapshotAccountReads + task.state.AccountReads +
+					task.state.SnapshotStorageReads + task.state.StorageReads
+				// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads,
+				// Bor consensus time, and IntermediateRoot time to isolate pure EVM execution time.
+				// Mirrors the import path formula in blockchain.go (writeBlockAndSetHead),
+				// where ptime already excludes vtime (IntermediateRoot) via explicit subtraction.
+				// Clamped to zero to avoid negative histogram samples from measurement jitter.
+				execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime - task.intermediateRootTime
+				if execTime < 0 {
+					execTime = 0
+				}
+				workerBlockExecutionTimer.Update(execTime)
+			}
+
 			// Commit block and state to database.
 			writeStart := time.Now()
 			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
-			writeBlockAndSetHeadTimer.Update(time.Since(writeStart))
+			writeElapsed := time.Since(writeStart)
+			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
@@ -1012,6 +1113,25 @@ func (w *worker) resultLoop() {
 				delete(w.pendingTasks, sealhash)
 				w.pendingMu.Unlock()
 				continue
+			}
+
+			// Commit metrics: emitted only after a successful write because these values are
+			// populated by WriteBlockAndSetHead → CommitWithUpdate. Emitting on failure would
+			// record zeroes or stale data — matching the import path which also gates commit
+			// metrics after a successful writeBlockAndSetHead.
+			if metrics.Enabled() {
+				workerAccountCommitTimer.Update(task.state.AccountCommits)
+				workerStorageCommitTimer.Update(task.state.StorageCommits)
+				workerSnapshotCommitTimer.Update(task.state.SnapshotCommits)
+				workerTriedbCommitTimer.Update(task.state.TrieDBCommits)
+				workerWitnessCollectionTimer.Update(task.state.WitnessCollection)
+
+				// MGas/s: denominator includes both production and write time, matching blockchain.go
+				// which measures elapsed after writeBlockAndSetHead returns
+				// (gas * 1000 / elapsed_nanoseconds stores milli-gas/ns = MGas/s as a Duration value).
+				if total := task.productionElapsed + writeElapsed; total > 0 {
+					workerMgaspsTimer.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(total)))
+				}
 			}
 
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
@@ -1094,7 +1214,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		coinbase:       coinbase,
 		header:         header,
 		witness:        state.Witness(),
-		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
 		prefetchReader: genParams.prefetchReader,
 		processReader:  genParams.processReader,
 	}
@@ -1196,6 +1316,15 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var lastTxHash common.Hash
 
+	var (
+		lastCommitStart        time.Time      // start of the most recent commitTransaction call
+		lastTxIndex            int            // index of the last attempted tx (for interrupt context)
+		lastTxSender           common.Address // sender of the last attempted tx (for interrupt context)
+		flagToTxInterruptDelay time.Duration  // delay from setting interrupt flag to tx interruption
+		hasTxInterruptDelay    bool
+	)
+	lastTxIndex = -1
+
 mainloop:
 	for {
 		// Check interruption signal and abort building if it's fired.
@@ -1212,7 +1341,31 @@ mainloop:
 		// Check for the flag to interrupt block building on timeout.
 		if w.interruptBlockBuilding.Load() {
 			txCommitInterruptCounter.Inc(1)
-			log.Info("Block building interrupted due to timeout, aborting new transaction commits", "number", env.header.Number.Uint64(), "hash", lastTxHash)
+			logCtx := []interface{}{
+				"number", env.header.Number.Uint64(),
+				"headerTime", common.PrettyTime(time.Unix(int64(env.header.Time), 0)),
+			}
+			if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
+				flagSetTime := time.Unix(0, flagSetAt)
+				logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
+				logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
+			}
+			if hasTxInterruptDelay {
+				logCtx = append(logCtx, "flagToTxInterruptDelay", common.PrettyDuration(flagToTxInterruptDelay))
+			}
+			if !lastCommitStart.IsZero() {
+				logCtx = append(logCtx, "txHash", lastTxHash.Hex())
+				logCtx = append(logCtx, "txIndex", lastTxIndex)
+				logCtx = append(logCtx, "sender", lastTxSender)
+				logCtx = append(logCtx, "txElapsed", common.PrettyDuration(time.Since(lastCommitStart)))
+			}
+
+			if w.IsRunning() {
+				log.Info("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
+			} else {
+				log.Debug("Block building interrupted due to timeout, aborting new transaction commits", logCtx...)
+			}
+
 			break mainloop
 		}
 
@@ -1252,7 +1405,6 @@ mainloop:
 		if ltx == nil {
 			break
 		}
-		lastTxHash = ltx.Hash
 		// If we don't have enough space for the next transaction, skip the account.
 		if env.gasPool.Gas() < ltx.Gas {
 			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
@@ -1326,9 +1478,14 @@ mainloop:
 			continue
 		}
 		// Start executing the transaction
+		lastCommitStart = time.Now()
+		lastTxHash = tx.Hash()
+		lastTxIndex = env.tcount
+		lastTxSender = from
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
 		logs, err := w.commitTransaction(env, tx)
+		txDuration := time.Since(lastCommitStart)
 
 		// Set mock delay (if any) between transactions for tests
 		time.Sleep(time.Duration(w.mockTxDelay) * time.Millisecond)
@@ -1342,6 +1499,12 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+			if metrics.Enabled() {
+				txApplyDurationTimer.Update(txDuration)
+			}
+			if w.IsRunning() {
+				w.slowTxTracker.Add(txTimingEntry{hash: tx.Hash(), duration: txDuration})
+			}
 
 			if EnableMVHashMap && w.IsRunning() {
 				env.mvReadMapList = append(env.mvReadMapList, env.state.MVReadMap())
@@ -1374,6 +1537,17 @@ mainloop:
 			}
 
 			txs.Shift()
+
+		case errors.Is(err, vm.ErrInterrupt):
+			// Timeout interrupt surfaced from EVM execution for this tx.
+			if !hasTxInterruptDelay {
+				if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
+					flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
+					hasTxInterruptDelay = true
+				}
+			}
+			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
+			txs.Pop()
 
 		default:
 			// Transaction is regarded as invalid, drop all consecutive transactions from
@@ -1490,6 +1664,7 @@ type generateParams struct {
 	prefetchReader     state.ReaderWithStats // The prefetch reader to use for statistics
 	processReader      state.ReaderWithStats // The process reader to use for statistics
 	prefetchedTxHashes *sync.Map             // Map of successfully prefetched transaction hashes
+	productionStart    time.Time             // Start of full-block building (after optional empty pre-seal); used for productionElapsed
 }
 
 // makeHeader creates a new block header for sealing.
@@ -1598,13 +1773,13 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	}
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
-		vmenv := vm.NewEVM(context, env.state, w.chainConfig, vm.Config{})
+		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
 		core.ProcessBeaconBlockRoot(*header.ParentBeaconRoot, vmenv)
 	}
 	if w.chainConfig.IsPrague(header.Number) {
 		// EIP-2935
 		context := core.NewEVMBlockContext(header, w.chain, nil)
-		vmenv := vm.NewEVM(context, env.state, w.chainConfig, vm.Config{})
+		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
 		core.ProcessParentBlockHash(header.ParentHash, vmenv)
 	}
 	return env, nil
@@ -1736,7 +1911,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		}
 		// create EVM for system calls
 		blockContext := core.NewEVMBlockContext(work.header, w.chain, &work.header.Coinbase)
-		vmenv := vm.NewEVM(blockContext, work.state, w.chainConfig, vm.Config{})
+		vmenv := vm.NewEVM(blockContext, work.state, w.chainConfig, w.vmConfig())
 		// EIP-7002 withdrawals
 		core.ProcessWithdrawalQueue(&requests, vmenv)
 		// EIP-7251 consolidations
@@ -1816,7 +1991,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	var interruptPrefetch atomic.Bool
-	if w.config.EnablePrefetch {
+	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
+	if w.config.EnablePrefetch && w.chainConfig.Bor != nil && w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -1852,7 +2028,12 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
-		stopFn = createInterruptTimer(work.header.Number.Uint64(), work.header.GetActualTime(), &w.interruptBlockBuilding)
+		stopFn = createInterruptTimer(
+			work.header.Number.Uint64(),
+			work.header.GetActualTime(),
+			&w.interruptBlockBuilding,
+			&w.interruptFlagSetAt,
+		)
 	}
 
 	// Create an empty block based on temporary copied state for
@@ -1867,6 +2048,9 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		emptyWork.state.ResetPrefetcher()
 		_ = w.commit(emptyWork, nil, false, start, genParams)
 	}
+	// Mark the start of full-block building. Set after the optional empty pre-seal commit so that
+	// productionElapsed for the full block does not include empty-block overhead.
+	genParams.productionStart = time.Now()
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work)
 
@@ -1925,7 +2109,6 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	w.mu.RUnlock()
 
 	if err != nil {
-		log.Warn("Prefetch failed to create header", "err", err)
 		return
 	}
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
@@ -2005,7 +2188,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 		}
 
 		block := types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil))
-		result := prefetcher.Prefetch(block, throwaway, vm.Config{}, true, interruptPrefetch)
+		result := prefetcher.Prefetch(block, throwaway, w.vmConfig(), true, interruptPrefetch)
 
 		// Use the actual gas used from prefetch result and mark successful transactions
 		if result != nil {
@@ -2041,7 +2224,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
 // and toggles the flag when the timer expires.
-func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool) func() {
+func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64) func() {
 	delay := time.Until(actualTimestamp)
 
 	// Reduce the timeout by 500ms to give some buffer for state root computation
@@ -2053,6 +2236,7 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 
 	// Reset the flag when timer starts for building a new block.
 	interruptBlockBuilding.Store(false)
+	interruptFlagSetAt.Store(0)
 
 	go func() {
 		// Wait for timeout
@@ -2060,6 +2244,9 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 
 		// Toggle the flag to indicate commit transactions loop and EVM interpreter loop
 		// to stop block building.
+		if interruptCtx.Err() != context.Canceled {
+			interruptFlagSetAt.Store(time.Now().UnixNano())
+		}
 		interruptBlockBuilding.Store(true)
 
 		if interruptCtx.Err() != context.Canceled {
@@ -2117,9 +2304,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 					}
 				}
 
-				// Calculate percentage (0-100)
-				percentage := int64(prefetchedCount * 100 / len(env.txs))
-				prefetchCoverageHistogram.Update(percentage)
+				// Calculate miss rate (0-100): higher = worse
+				missRate := int64((len(env.txs) - prefetchedCount) * 100 / len(env.txs))
+				prefetchMissRateHistogram.Update(missRate)
 			}
 		}
 	}()
@@ -2150,7 +2337,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
@@ -2206,6 +2393,12 @@ func (w *worker) clearPending(number uint64) {
 		}
 	}
 	w.pendingMu.Unlock()
+}
+
+// vmConfig returns the VM config.
+func (w *worker) vmConfig() vm.Config {
+	cfg := *w.chain.GetVMConfig()
+	return cfg
 }
 
 // copyReceipts makes a deep copy of the given receipts.

@@ -129,6 +129,11 @@ type BlockExtraData struct {
 	// length of TxDependency[i]       ->   k (k = a whole number)
 	// k elements in TxDependency[i]   ->   transaction indexes on which transaction i is dependent on
 	TxDependency [][]uint64
+
+	// GasTarget is the EIP-1559 gas target used by the block producer (post-Giugliano)
+	GasTarget *uint64 `rlp:"optional"`
+	// BaseFeeChangeDenominator is the EIP-1559 base fee change denominator used by the block producer (post-Giugliano)
+	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -495,6 +500,9 @@ func (b *Block) GetTxDependency() [][]uint64 {
 	return blockExtraData.TxDependency
 }
 
+// GetValidatorBytes extracts validator bytes from the header's Extra field.
+// If you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData
+// to avoid redundant RLP decodes.
 func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 	if !chainConfig.IsCancun(h.Number) {
 		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
@@ -512,6 +520,47 @@ func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 	}
 
 	return blockExtraData.ValidatorBytes
+}
+
+// GetBaseFeeParams extracts the EIP-1559 gas target and base fee change denominator
+// from the block header's extra field. If you need multiple fields from BlockExtraData,
+// prefer DecodeBlockExtraData to avoid redundant RLP decodes.
+// Only available for post-Cancun blocks that use
+// RLP-encoded BlockExtraData (post-Giugliano).
+func (h *Header) GetBaseFeeParams(chainConfig *params.ChainConfig) (gasTarget *uint64, baseFeeChangeDenom *uint64) {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil, nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil, nil
+	}
+
+	var blockExtraData BlockExtraData
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil, nil
+	}
+
+	return blockExtraData.GasTarget, blockExtraData.BaseFeeChangeDenominator
+}
+
+// DecodeBlockExtraData decodes the full BlockExtraData struct from the header's
+// Extra field in a single RLP decode. Returns nil for pre-Cancun blocks or on error.
+func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExtraData {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil
+	}
+
+	var blockExtraData BlockExtraData
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil
+	}
+
+	return &blockExtraData
 }
 
 func (b *Block) BaseFee() *big.Int {

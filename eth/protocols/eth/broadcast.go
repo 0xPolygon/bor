@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	// This is the target size for the packs of transactions or announcements. A
-	// pack can get larger than this if a single transactions exceeds this size.
-	maxTxPacketSize = 100 * 1024
+	// maxTxPacketSize is the target size for packs of transactions or announcements.
+	// A pack can get larger than this if a single transaction exceeds this size.
+	// Bor: increased from the go-ethereum default of 100 KB to 1 MB.
+	maxTxPacketSize = 1024 * 1024
 )
 
 // blockPropagation is a block propagation event, waiting for its turn in the

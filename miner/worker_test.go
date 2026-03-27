@@ -351,13 +351,25 @@ func newTestWorker(t TensingObject, config *Config, chainConfig *params.ChainCon
 	return w, backend, w.close
 }
 
+// borUnittestChainConfigWithGiugliano returns a shallow copy of BorUnittestChainConfig
+// with GiuglianoBlock activated at block 0. Required for tests that exercise
+// Giugliano-gated features such as prefetchFromPool.
+func borUnittestChainConfigWithGiugliano() *params.ChainConfig {
+	cfg := *params.BorUnittestChainConfig
+	borCfg := *cfg.Bor
+	borCfg.GiuglianoBlock = big.NewInt(0)
+	cfg.Bor = &borCfg
+
+	return &cfg
+}
+
 // setupBorWorkerWithPrefetch sets up a worker with Bor consensus engine and prefetch enabled.
 // Returns worker, backend, consensus engine, and mock controller for cleanup.
 // nolint:thelper
 func setupBorWorkerWithPrefetch(t *testing.T, gasPercent uint64, recommit time.Duration) (*worker, *testWorkerBackend, consensus.Engine, *gomock.Controller) {
 	var (
 		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
+		chainConfig = borUnittestChainConfigWithGiugliano()
 		db          = rawdb.NewMemoryDatabase()
 		ctrl        *gomock.Controller
 	)
@@ -2067,7 +2079,7 @@ func TestPrefetchRaceWithSetExtra(t *testing.T) {
 
 	var (
 		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
+		chainConfig = borUnittestChainConfigWithGiugliano()
 		db          = rawdb.NewMemoryDatabase()
 		ctrl        *gomock.Controller
 	)
@@ -2151,7 +2163,7 @@ func TestPrefetchGoroutineLifecycle(t *testing.T) {
 
 	var (
 		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
+		chainConfig = borUnittestChainConfigWithGiugliano()
 		db          = rawdb.NewMemoryDatabase()
 		ctrl        *gomock.Controller
 	)
@@ -2321,7 +2333,7 @@ func TestStateDBLifecycle_WithoutWait(t *testing.T) {
 
 	var (
 		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
+		chainConfig = borUnittestChainConfigWithGiugliano()
 		db          = rawdb.NewMemoryDatabase()
 		ctrl        *gomock.Controller
 	)
@@ -2696,7 +2708,7 @@ func BenchmarkBlockProductionLatency(b *testing.B) {
 	b.Run("WithPrefetch", func(b *testing.B) {
 		var (
 			engine      consensus.Engine
-			chainConfig = params.BorUnittestChainConfig
+			chainConfig = borUnittestChainConfigWithGiugliano()
 			db          = rawdb.NewMemoryDatabase()
 			ctrl        *gomock.Controller
 		)
@@ -2772,7 +2784,7 @@ func BenchmarkPrefetchMemoryOverhead(b *testing.B) {
 	b.Run("WithPrefetch", func(b *testing.B) {
 		var (
 			engine      consensus.Engine
-			chainConfig = params.BorUnittestChainConfig
+			chainConfig = borUnittestChainConfigWithGiugliano()
 			db          = rawdb.NewMemoryDatabase()
 			ctrl        *gomock.Controller
 		)

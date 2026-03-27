@@ -345,6 +345,7 @@ var (
 			DandeliBlock:      big.NewInt(31890000),
 			LisovoBlock:       big.NewInt(33634700),
 			LisovoProBlock:    big.NewInt(34062000),
+			GiuglianoBlock:    big.NewInt(35573500),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
 			},
@@ -431,6 +432,7 @@ var (
 			DandeliBlock:      big.NewInt(81424000),
 			LisovoBlock:       big.NewInt(83756500),
 			LisovoProBlock:    big.NewInt(83756500),
+			GiuglianoBlock:    big.NewInt(85268500),
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
 			},
@@ -951,6 +953,7 @@ type BorConfig struct {
 	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
 	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
+	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	DelayedSRCBlock            *big.Int          `json:"delayedSRCBlock"`            // DelayedSRC switch block (nil = no fork, 0 = already on delayedSRC)
 }
 
@@ -1021,6 +1024,10 @@ func (c *BorConfig) IsLisovo(number *big.Int) bool {
 
 func (c *BorConfig) IsLisovoPro(number *big.Int) bool {
 	return isBlockForked(c.LisovoProBlock, number)
+}
+
+func (c *BorConfig) IsGiugliano(number *big.Int) bool {
+	return isBlockForked(c.GiuglianoBlock, number)
 }
 
 func (c *BorConfig) IsDelayedSRC(number *big.Int) bool {
@@ -1231,6 +1238,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.LisovoProBlock != nil {
 			banner += fmt.Sprintf(" - Lisovo Pro:                  #%-8v\n", c.Bor.LisovoProBlock)
+		}
+		if c.Bor.GiuglianoBlock != nil {
+			banner += fmt.Sprintf(" - Giugliano:                   #%-8v\n", c.Bor.GiuglianoBlock)
 		}
 		return banner
 	}

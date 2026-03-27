@@ -379,6 +379,80 @@ func testSendTransactions(t *testing.T, protocol uint) {
 	}
 }
 
+// Tests that tx announcements are not dropped for burst sizes above the old 4096
+// limit but within the new 16384 default limit. This is the regression test for
+// POS-3471: during Polymarket spikes and migration events, the 4096 cap caused
+// BP nonce gaps because older hashes were evicted before reaching the peer.
+func TestTxAnnouncementsAboveOldLimit69(t *testing.T) {
+	testTxAnnouncementsAboveOldLimit(t, eth.ETH69)
+}
+func TestTxAnnouncementsAboveOldLimit68(t *testing.T) {
+	testTxAnnouncementsAboveOldLimit(t, eth.ETH68)
+}
+
+func testTxAnnouncementsAboveOldLimit(t *testing.T, protocol uint) {
+	t.Parallel()
+
+	handler := newTestHandler()
+	defer handler.close()
+
+	// 5000 txs: above the old 4096 limit, well within the new 16384 limit.
+	// With the old cap, syncTransactions would queue all 5000 hashes at once
+	// and the announceTransactions goroutine would truncate ~906 of them.
+	const count = 5000
+
+	insert := make([]*types.Transaction, count)
+	for nonce := range insert {
+		tx := types.NewTransaction(uint64(nonce), common.Address{}, big.NewInt(0), 100000, big.NewInt(0), nil)
+		tx, _ = types.SignTx(tx, types.HomesteadSigner{}, testKey)
+		insert[nonce] = tx
+	}
+	// Add in a goroutine to avoid blocking on the feed, then wait for events to
+	// drain before connecting the peer (same pattern as testSendTransactions).
+	go handler.txpool.Add(insert, false)
+	time.Sleep(250 * time.Millisecond)
+
+	p2pSrc, p2pSink := p2p.MsgPipe()
+	defer p2pSrc.Close()
+	defer p2pSink.Close()
+
+	src := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, handler.txpool)
+	sink := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{2}, "", nil, p2pSink), p2pSink, handler.txpool)
+	defer src.Close()
+	defer sink.Close()
+
+	go handler.handler.runEthPeer(src, func(peer *eth.Peer) error {
+		return eth.Handle((*ethHandler)(handler.handler), peer)
+	})
+	if err := sink.Handshake(1, handler.chain, eth.BlockRangeUpdatePacket{
+		EarliestBlock:   0,
+		LatestBlock:     handler.chain.CurrentBlock().Number.Uint64(),
+		LatestBlockHash: handler.chain.CurrentBlock().Hash(),
+	}); err != nil {
+		t.Fatalf("failed to run protocol handshake")
+	}
+
+	backend := new(testEthHandler)
+	anns := make(chan []common.Hash)
+	annSub := backend.txAnnounces.Subscribe(anns)
+	defer annSub.Unsubscribe()
+
+	go eth.Handle(backend, sink)
+
+	seen := make(map[common.Hash]struct{})
+	timeout := time.After(10 * time.Second)
+	for len(seen) < count {
+		select {
+		case hashes := <-anns:
+			for _, hash := range hashes {
+				seen[hash] = struct{}{}
+			}
+		case <-timeout:
+			t.Fatalf("tx announcement timed out: received %d/%d hashes", len(seen), count)
+		}
+	}
+}
+
 // Tests that transactions get propagated to all attached peers, either via direct
 // broadcasts or via announcements/retrievals.
 func TestTransactionPropagation69(t *testing.T) { testTransactionPropagation(t, eth.ETH69) }
