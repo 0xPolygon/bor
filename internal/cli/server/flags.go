@@ -45,6 +45,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.EnablePreimageRecording,
 		Default: c.cliConfig.EnablePreimageRecording,
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "evm-switch-dispatch",
+		Usage:   "Enable switch-based fast path EVM interpreter",
+		Value:   &c.cliConfig.EnableEVMSwitchDispatch,
+		Default: c.cliConfig.EnableEVMSwitchDispatch,
+	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
 		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
@@ -720,6 +726,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Usage:   "Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap)",
 		Value:   &c.cliConfig.JsonRPC.LogQueryLimit,
 		Default: c.cliConfig.JsonRPC.LogQueryLimit,
+		Group:   "JsonRPC",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "rpc.rangelimit",
+		Usage:   "Maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit)",
+		Value:   &c.cliConfig.JsonRPC.RangeLimit,
+		Default: c.cliConfig.JsonRPC.RangeLimit,
 		Group:   "JsonRPC",
 	})
 	f.BoolFlag(&flagset.BoolFlag{

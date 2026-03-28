@@ -45,6 +45,7 @@ var (
 	errExceedMaxTopics        = errors.New("exceed max topics")
 	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
 	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
+	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
 )
 
 const (
@@ -55,6 +56,38 @@ const (
 	// The maximum number of transaction hash criteria allowed in a single subscription
 	maxTxHashes = 200
 )
+
+// resolveBlockNumForRangeCheck converts a raw block number (which may be a negative
+// sentinel for symbolic values like "latest", "earliest", etc.) to a concrete
+// non-negative height suitable for range arithmetic. It is used only for the
+// range-limit guard; the actual filter still receives the original sentinel value.
+//   - earliest (-5) → 0
+//   - all other sentinels (latest, safe, finalized, pending) → head
+//   - concrete non-negative values → unchanged
+func resolveBlockNumForRangeCheck(n int64, head uint64) uint64 {
+	if n >= 0 {
+		return uint64(n)
+	}
+	if n == rpc.EarliestBlockNumber.Int64() {
+		return 0
+	}
+	return head // latest, safe, finalized, pending all treated as head
+}
+
+// checkBlockRangeLimit returns errExceedBlockRangeLimit if the range [begin, end]
+// exceeds the configured limit after resolving any symbolic block numbers.
+// The check is a no-op when limit is 0.
+func checkBlockRangeLimit(begin, end int64, head, limit uint64) error {
+	if limit == 0 {
+		return nil
+	}
+	effectiveBegin := resolveBlockNumForRangeCheck(begin, head)
+	effectiveEnd := resolveBlockNumForRangeCheck(end, head)
+	if effectiveEnd >= effectiveBegin && effectiveEnd-effectiveBegin > limit {
+		return errExceedBlockRangeLimit
+	}
+	return nil
+}
 
 // filter is a helper struct that holds meta information over the filter type
 // and associated subscription in the event system.
@@ -490,6 +523,10 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		if begin >= 0 && begin < int64(api.events.backend.HistoryPruningCutoff()) {
 			return nil, &history.PrunedHistoryError{}
 		}
+		head := api.sys.backend.CurrentHeader().Number.Uint64()
+		if err := checkBlockRangeLimit(begin, end, head, api.sys.cfg.RangeLimit); err != nil {
+			return nil, err
+		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
 		// Block bor filter
@@ -570,6 +607,10 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		end := rpc.LatestBlockNumber.Int64()
 		if f.crit.ToBlock != nil {
 			end = f.crit.ToBlock.Int64()
+		}
+		head := api.sys.backend.CurrentHeader().Number.Uint64()
+		if err := checkBlockRangeLimit(begin, end, head, api.sys.cfg.RangeLimit); err != nil {
+			return nil, err
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, f.crit.Addresses, f.crit.Topics)

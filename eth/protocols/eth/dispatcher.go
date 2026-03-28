@@ -59,26 +59,34 @@ type Request struct {
 // remote peer about the cancellation, this method notifies the dispatcher to
 // discard any late responses.
 func (r *Request) Close() error {
-	if r.peer == nil { // Tests mock out the dispatcher, skip internal cancellation
-		return nil
-	}
-
-	cancelOp := &cancel{
-		id:   r.id,
-		fail: make(chan error),
-	}
-	select {
-	case r.peer.reqCancel <- cancelOp:
-		if err := <-cancelOp.fail; err != nil {
-			return err
+	if r.peer != nil {
+		cancelOp := &cancel{
+			id:   r.id,
+			fail: make(chan error),
 		}
-
-		close(r.Cancel)
-
-		return nil
-	case <-r.peer.term:
-		return errDisconnected
+		select {
+		case r.peer.reqCancel <- cancelOp:
+			if err := <-cancelOp.fail; err != nil {
+				return err
+			}
+		case <-r.peer.term:
+			return errDisconnected
+		}
 	}
+
+	// Always close Cancel channel, even for shim requests (peer == nil).
+	// Guard against nil (tests may create Request without Cancel) and
+	// use select to prevent double-close panic.
+	if r.Cancel != nil {
+		select {
+		case <-r.Cancel:
+			// Already closed
+		default:
+			close(r.Cancel)
+		}
+	}
+
+	return nil
 }
 
 // request is a wrapper around a client Request that has an error channel to

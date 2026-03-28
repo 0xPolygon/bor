@@ -563,7 +563,11 @@ func (pe *ParallelExecutor) Step(res *ExecResult) (result ParallelExecutionResul
 		var deps DAG
 
 		if pe.profile {
-			allDeps = GetDep(*pe.lastTxIO)
+			db := NewDepsBuilder()
+			for i := 0; i < len(pe.lastTxIO.inputs); i++ {
+				db.AddTransaction(i, pe.lastTxIO.inputs[i], pe.lastTxIO.allOutputs[i])
+			}
+			allDeps = db.GetDeps()
 			deps = BuildDAG(*pe.lastTxIO)
 		}
 

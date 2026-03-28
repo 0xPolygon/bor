@@ -1562,7 +1562,22 @@ func TestCall(t *testing.T) {
 	}
 }
 
+func TestSimulateV1Disabled(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	b := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+	api := NewBlockChainAPI(b)
+	result, err := api.SimulateV1(context.Background(), simOpts{}, nil)
+	require.Nil(t, result)
+	require.EqualError(t, err, "eth_simulateV1 is not supported on Bor")
+}
+
 func TestSimulateV1(t *testing.T) {
+	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	t.Parallel()
 	// Initialize test accounts
 	var (
@@ -3014,6 +3029,7 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 }
 
 func TestSimulateV1TxSender(t *testing.T) {
+	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	var (
 		sender    = common.Address{0xaa, 0xaa}
 		sender2   = common.Address{0xaa, 0xab}
