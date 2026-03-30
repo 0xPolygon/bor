@@ -478,16 +478,10 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 		// history-driven flushes which expect a full clear. States are
 		// carried when they are still within their allocation, meaning
 		// trie nodes were the cause of the flush.
-		//
-		// Transfer ownership instead of copying: flush() captured its own
-		// reference to the states before the goroutine started, so the
-		// background flush is unaffected. After carry-over, state reads
-		// always hit the live buffer first (which holds the carried states),
-		// making the frozen buffer's states redundant for lookups. Replacing
-		// them with an empty set avoids duplicating the map overhead.
+		// Use a shallow copy so the live buffer can evolve independently
+		// while the background flush persists the original snapshot.
 		if !force && !flush && combined.shouldCarryStates() {
-			carried := combined.states
-			combined.states = newStates(nil, nil, carried.rawStorageKey)
+			carried := combined.states.copy()
 			combined = newBuffer(dl.db.config.WriteBufferSize, dl.db.config.StateReservation, nil, carried, 0)
 		} else {
 			combined = newBuffer(dl.db.config.WriteBufferSize, dl.db.config.StateReservation, nil, nil, 0)

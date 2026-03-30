@@ -6,7 +6,98 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+var _ ethdb.ResettableAncientStore = (*blockingAncientStore)(nil)
+
+type blockingAncientStore struct {
+	syncStarted chan struct{}
+	releaseSync chan struct{}
+}
+
+func newBlockingAncientStore() *blockingAncientStore {
+	return &blockingAncientStore{
+		syncStarted: make(chan struct{}),
+		releaseSync: make(chan struct{}),
+	}
+}
+
+func (s *blockingAncientStore) Ancient(string, uint64) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *blockingAncientStore) AncientRange(string, uint64, uint64, uint64) ([][]byte, error) {
+	return nil, nil
+}
+
+func (s *blockingAncientStore) AncientBytes(string, uint64, uint64, uint64) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *blockingAncientStore) Ancients() (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) Tail() (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) AncientSize(string) (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) ItemAmountInAncient() (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) AncientOffSet() uint64 {
+	return 0
+}
+
+func (s *blockingAncientStore) ReadAncients(fn func(ethdb.AncientReaderOp) error) error {
+	return fn(s)
+}
+
+func (s *blockingAncientStore) ModifyAncients(fn func(ethdb.AncientWriteOp) error) (int64, error) {
+	return 0, fn(noopAncientWriteOp{})
+}
+
+func (s *blockingAncientStore) SyncAncient() error {
+	close(s.syncStarted)
+	<-s.releaseSync
+	return nil
+}
+
+func (s *blockingAncientStore) TruncateHead(uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) TruncateTail(uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (s *blockingAncientStore) AncientDatadir() (string, error) {
+	return "", nil
+}
+
+func (s *blockingAncientStore) Reset() error {
+	return nil
+}
+
+func (s *blockingAncientStore) Close() error {
+	return nil
+}
+
+type noopAncientWriteOp struct{}
+
+func (noopAncientWriteOp) Append(string, uint64, interface{}) error {
+	return nil
+}
+
+func (noopAncientWriteOp) AppendRaw(string, uint64, []byte) error {
+	return nil
+}
 
 // TestBufferLimitSplit verifies that newBuffer correctly splits the total limit
 // into nodeLimit and stateLimit based on the stateReservation percentage.
@@ -123,10 +214,12 @@ func TestShouldCarryStates(t *testing.T) {
 	}
 }
 
-// TestStateSetCopy verifies that copy() produces an independent deep copy.
+// TestStateSetCopy verifies that copy() preserves snapshot isolation for
+// later mutations.
 func TestStateSetCopy(t *testing.T) {
 	addrHash := common.HexToHash("0x01")
 	slotHash := common.HexToHash("0x02")
+	slotHash2 := common.HexToHash("0x03")
 
 	original := newStates(
 		map[common.Hash][]byte{addrHash: {1, 2, 3}},
@@ -149,15 +242,26 @@ func TestStateSetCopy(t *testing.T) {
 		t.Errorf("copied size %d != original size %d", copied.size, original.size)
 	}
 
-	// Mutate the copy and verify the original is unchanged
-	copied.accountData[addrHash] = []byte{9, 9, 9}
-	copied.storageData[addrHash][slotHash] = []byte{8, 8, 8}
+	// Mutate the copy through the normal merge path and verify the original is unchanged.
+	copied.merge(newStates(
+		map[common.Hash][]byte{addrHash: {9, 9, 9}},
+		map[common.Hash]map[common.Hash][]byte{
+			addrHash: {
+				slotHash:  {8, 8, 8},
+				slotHash2: {7, 7, 7},
+			},
+		},
+		false,
+	))
 
 	if data, _ := original.account(addrHash); data[0] != 1 {
 		t.Error("mutating copy affected original account data")
 	}
 	if data, _ := original.storage(addrHash, slotHash); data[0] != 4 {
 		t.Error("mutating copy affected original storage data")
+	}
+	if _, ok := original.storage(addrHash, slotHash2); ok {
+		t.Error("mutating copy created storage in the original state set")
 	}
 }
 
@@ -372,135 +476,210 @@ func TestRevertToWithLayers(t *testing.T) {
 	}
 }
 
-// TestNoCarryOnForceFlush verifies that states are NOT carried over when
-// the flush is triggered by force or history pressure.
-func TestNoCarryOnForceFlush(t *testing.T) {
-	// Simulate: buffer with node pressure + shouldCarryStates() = true,
-	// but force/flush flags override.
-	b := newBuffer(1000, 80, nil, nil, 0)
+// TestDiskLayerCommitForceFlushDoesNotCarryStates verifies that force=true
+// suppresses carry-over in the real commit path even when the state budget
+// would otherwise allow it.
+func TestDiskLayerCommitForceFlushDoesNotCarryStates(t *testing.T) {
+	diskdb := rawdb.NewMemoryDatabase()
+	db := &Database{
+		config: &Config{
+			WriteBufferSize:  10000,
+			StateReservation: 80,
+			StateHistory:     0,
+			NoAsyncFlush:     true,
+		},
+		diskdb: diskdb,
+	}
 
 	addrHash := common.HexToHash("0x01")
-	b.states.accountData[addrHash] = []byte{1, 2, 3}
-	b.states.size = 500 // under stateLimit (800)
-	b.nodes.size = 250  // over nodeLimit (200)
+	accountBlob := []byte{1, 2, 3}
 
-	// shouldCarryStates is true (states within budget)
-	if !b.shouldCarryStates() {
-		t.Fatal("shouldCarryStates should be true")
-	}
+	dl := newDiskLayer(common.Hash{}, 0, db, nil, nil, newBuffer(10000, 80, nil, nil, 0), nil)
+	bottom := newDiffLayer(
+		dl,
+		common.HexToHash("0x10"),
+		1,
+		1,
+		NewNodeSetWithOrigin(nil, nil),
+		NewStateSetWithOrigin(
+			map[common.Hash][]byte{addrHash: accountBlob},
+			nil,
+			nil,
+			nil,
+			false,
+		),
+	)
 
-	// Simulate force=true path: carry-over is suppressed
-	var newBuf *buffer
-	if b.shouldCarryStates() {
-		carried := b.states.copy()
-		newBuf = newBuffer(1000, 80, nil, carried, 0)
-	} else {
-		newBuf = newBuffer(1000, 80, nil, nil, 0)
+	ndl, err := dl.commit(bottom, true)
+	if err != nil {
+		t.Fatalf("commit failed: %v", err)
 	}
-	if _, ok := newBuf.account(addrHash); ok {
-		t.Error("state should NOT be carried on force flush")
+	if _, ok := ndl.buffer.account(addrHash); ok {
+		t.Fatal("state should not be carried on force flush")
 	}
-
-	// Simulate flush=true (history-driven) path: carry-over is suppressed
-	if b.shouldCarryStates() {
-		carried := b.states.copy()
-		newBuf = newBuffer(1000, 80, nil, carried, 0)
-	} else {
-		newBuf = newBuffer(1000, 80, nil, nil, 0)
-	}
-	if _, ok := newBuf.account(addrHash); ok {
-		t.Error("state should NOT be carried on history-driven flush")
-	}
-
-	// Simulate a normal node-pressure path: carry-over happens
-	if b.shouldCarryStates() {
-		carried := b.states.copy()
-		newBuf = newBuffer(1000, 80, nil, carried, 0)
-	} else {
-		newBuf = newBuffer(1000, 80, nil, nil, 0)
-	}
-	if _, ok := newBuf.account(addrHash); !ok {
-		t.Error("state SHOULD be carried on normal node-pressure flush")
+	if got := rawdb.ReadAccountSnapshot(diskdb, addrHash); len(got) == 0 {
+		t.Fatal("force flush should persist the account snapshot")
 	}
 }
 
-// TestAsyncFlushOwnershipTransfer exercises the real async flush() goroutine
-// together with the ownership-transfer carry-over path. It verifies that:
-//  1. Carried states are readable from the new live buffer during the flush.
-//  2. The frozen buffer's states are emptied (no stale duplicate).
-//  3. The flushed data lands on disk after waitFlush().
-func TestAsyncFlushOwnershipTransfer(t *testing.T) {
-	db := rawdb.NewMemoryDatabase()
+// TestDiskLayerCommitHistoryFlushDoesNotCarryStates verifies that a
+// history-driven flush suppresses carry-over in the real commit path.
+func TestDiskLayerCommitHistoryFlushDoesNotCarryStates(t *testing.T) {
+	diskdb := rawdb.NewMemoryDatabase()
+	freezer, err := rawdb.NewStateFreezer("", false, false)
+	if err != nil {
+		t.Fatalf("failed to create in-memory state freezer: %v", err)
+	}
+	defer freezer.Close()
+
+	db := &Database{
+		config: &Config{
+			WriteBufferSize:  10000,
+			StateReservation: 80,
+			StateHistory:     1,
+			NoAsyncFlush:     true,
+		},
+		diskdb:       diskdb,
+		stateFreezer: freezer,
+	}
+
+	addrHash1 := common.HexToHash("0x01")
+	addrHash2 := common.HexToHash("0x02")
+	accountBlob1 := []byte{1, 2, 3}
+	accountBlob2 := []byte{4, 5, 6}
+
+	dl := newDiskLayer(common.Hash{}, 0, db, nil, nil, newBuffer(10000, 80, nil, nil, 0), nil)
+	first := newDiffLayer(
+		dl,
+		common.HexToHash("0x10"),
+		1,
+		1,
+		NewNodeSetWithOrigin(nil, nil),
+		NewStateSetWithOrigin(
+			map[common.Hash][]byte{addrHash1: accountBlob1},
+			nil,
+			nil,
+			nil,
+			false,
+		),
+	)
+
+	ndl, err := dl.commit(first, false)
+	if err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+
+	second := newDiffLayer(
+		ndl,
+		common.HexToHash("0x20"),
+		2,
+		2,
+		NewNodeSetWithOrigin(nil, nil),
+		NewStateSetWithOrigin(
+			map[common.Hash][]byte{addrHash2: accountBlob2},
+			nil,
+			nil,
+			nil,
+			false,
+		),
+	)
+
+	ndl, err = ndl.commit(second, false)
+	if err != nil {
+		t.Fatalf("second commit failed: %v", err)
+	}
+	if _, ok := ndl.buffer.account(addrHash2); ok {
+		t.Fatal("state should not be carried on history-driven flush")
+	}
+	if got := rawdb.ReadAccountSnapshot(diskdb, addrHash2); len(got) == 0 {
+		t.Fatal("history-driven flush should persist the account snapshot")
+	}
+}
+
+// TestDiskLayerCommitCarryOverIsolation verifies that the live buffer created
+// after a node-pressure flush does not share mutable state with the in-flight
+// async flush. Otherwise, subsequent live-buffer writes or resets could corrupt
+// the persisted state for the older snapshot.
+func TestDiskLayerCommitCarryOverIsolation(t *testing.T) {
+	diskdb := rawdb.NewMemoryDatabase()
+	freezer := newBlockingAncientStore()
+	db := &Database{
+		config: &Config{
+			WriteBufferSize:  10000,
+			StateReservation: 80,
+			StateHistory:     0,
+		},
+		diskdb:       diskdb,
+		stateFreezer: freezer,
+	}
 
 	addrHash := common.HexToHash("0x01")
 	slotHash := common.HexToHash("0x02")
-	accountBlob := []byte{1, 2, 3}
-	storageBlob := []byte{4, 5, 6}
+	originalBlob := []byte{1, 2, 3}
+	originalSlotBlob := []byte{4, 5, 6}
+	mutatedBlob := []byte{9, 9, 9}
+	mutatedSlotBlob := []byte{7, 7, 7}
 
-	// Build a buffer that will trigger a flush via node pressure.
-	// 10'000 byte limit, 80/20 split → nodeLimit=2000, stateLimit=8000.
-	buf := newBuffer(10000, 80, nil, nil, 0)
-	buf.states = newStates(
-		map[common.Hash][]byte{addrHash: accountBlob},
-		map[common.Hash]map[common.Hash][]byte{
-			addrHash: {slotHash: storageBlob},
-		},
-		false,
+	dl := newDiskLayer(common.Hash{}, 0, db, nil, nil, newBuffer(10000, 80, nil, nil, 0), nil)
+	dl.buffer.nodes.size = 2500 // exceed nodeLimit (2000) without needing the real trie nodes
+
+	bottom := newDiffLayer(
+		dl,
+		common.HexToHash("0x10"),
+		1,
+		1,
+		NewNodeSetWithOrigin(nil, nil),
+		NewStateSetWithOrigin(
+			map[common.Hash][]byte{addrHash: originalBlob},
+			map[common.Hash]map[common.Hash][]byte{
+				addrHash: {slotHash: originalSlotBlob},
+			},
+			nil,
+			nil,
+			false,
+		),
 	)
-	buf.nodes.size = 2500 // exceeds nodeLimit (2000) → full()
-	buf.layers = 1        // flush expects layers to match persistent state id
 
-	if !buf.full() {
-		t.Fatal("buffer should be full")
+	ndl, err := dl.commit(bottom, false)
+	if err != nil {
+		t.Fatalf("commit failed: %v", err)
 	}
-	if !buf.shouldCarryStates() {
-		t.Fatal("states should be eligible for carry-over")
+	if ndl.frozen == nil {
+		t.Fatal("expected frozen buffer for async flush")
 	}
-
-	// Seed the persistent state ID so the flush goroutine's sanity check
-	rawdb.WritePersistentStateID(db, 0)
-
-	// Freeze the buffer and start the async flush
-	frozen := buf
-	frozen.flush(common.Hash{}, db, nil, nil, nil, nil, 1, nil)
-
-	// Perform the ownership transfer
-	carried := frozen.states
-	frozen.states = newStates(nil, nil, carried.rawStorageKey)
-	live := newBuffer(10000, 80, nil, carried, 0)
-
-	// 1. Carried states are readable from the live buffer during the flush.
-	if data, ok := live.account(addrHash); !ok {
-		t.Fatal("carried account not readable from live buffer")
-	} else if len(data) != 3 || data[0] != 1 {
-		t.Fatalf("carried account data mismatch: got %v", data)
+	if got, ok := ndl.buffer.account(addrHash); !ok {
+		t.Fatal("expected carried account in live buffer")
+	} else if string(got) != string(originalBlob) {
+		t.Fatalf("carried account mismatch: got %v want %v", got, originalBlob)
 	}
-	if data, ok := live.storage(addrHash, slotHash); !ok {
-		t.Fatal("carried storage not readable from live buffer")
-	} else if len(data) != 3 || data[0] != 4 {
-		t.Fatalf("carried storage data mismatch: got %v", data)
+	if got, ok := ndl.buffer.storage(addrHash, slotHash); !ok {
+		t.Fatal("expected carried storage in live buffer")
+	} else if string(got) != string(originalSlotBlob) {
+		t.Fatalf("carried storage mismatch: got %v want %v", got, originalSlotBlob)
 	}
 
-	// 2. Frozen buffer's states are emptied — no stale duplicate.
-	if _, ok := frozen.account(addrHash); ok {
-		t.Error("frozen buffer should not still hold account after ownership transfer")
-	}
-	if _, ok := frozen.storage(addrHash, slotHash); ok {
-		t.Error("frozen buffer should not still hold storage after ownership transfer")
-	}
+	<-freezer.syncStarted
 
-	// 3. Wait for the async flush to complete and verify data landed on disk.
-	if err := frozen.waitFlush(); err != nil {
+	// Simulate later live-buffer activity while the previous flush is still blocked.
+	ndl.buffer.states.accountData[addrHash] = mutatedBlob
+	ndl.buffer.states.merge(newStates(nil, map[common.Hash]map[common.Hash][]byte{
+		addrHash: {slotHash: mutatedSlotBlob},
+	}, false))
+	ndl.buffer.reset()
+
+	close(freezer.releaseSync)
+
+	if err := ndl.frozen.waitFlush(); err != nil {
 		t.Fatalf("flush failed: %v", err)
 	}
-	if blob := rawdb.ReadAccountSnapshot(db, addrHash); len(blob) == 0 {
-		t.Error("account snapshot not persisted to disk after flush")
-	} else if blob[0] != 1 {
-		t.Errorf("persisted account data mismatch: got %v", blob)
+	if got := rawdb.ReadAccountSnapshot(diskdb, addrHash); len(got) == 0 {
+		t.Fatal("account snapshot not persisted")
+	} else if string(got) != string(originalBlob) {
+		t.Fatalf("persisted account mismatch: got %v want %v", got, originalBlob)
 	}
-	if blob := rawdb.ReadStorageSnapshot(db, addrHash, slotHash); len(blob) == 0 {
-		t.Error("storage snapshot not persisted to disk after flush")
-	} else if blob[0] != 4 {
-		t.Errorf("persisted storage data mismatch: got %v", blob)
+	if got := rawdb.ReadStorageSnapshot(diskdb, addrHash, slotHash); len(got) == 0 {
+		t.Fatal("storage snapshot not persisted")
+	} else if string(got) != string(originalSlotBlob) {
+		t.Fatalf("persisted storage mismatch: got %v want %v", got, originalSlotBlob)
 	}
 }

@@ -75,6 +75,7 @@ var Defaults = &Config{
 	StateCleanSize:      defaultStateCleanSize,
 	WriteBufferSize:     defaultBufferSize,
 	StateReservation:    defaultStateReservation,
+	PreloadRateLimit:    defaultPreloadRateLimit,
 }
 
 // ReadOnly is the config in order to open database in read only mode.
