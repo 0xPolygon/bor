@@ -200,7 +200,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 						// Request has been in flight longer than the grace period
 						// permitted it, consider the peer malicious attempting to
 						// stall the sync.
-						peer.log.Warn("Peer stalling, dropping", "waited", common.PrettyDuration(waited))
+						peer.log.Warn("Peer stalling, dropping", "peer", peer.id, "waited", common.PrettyDuration(waited), "graceperiod", timeoutGracePeriod, "queue kind", queue.kind())
 						d.dropPeer(peer.id)
 					}
 				}
@@ -361,6 +361,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// cancel it, so it's not considered in-flight anymore, but keep
 			// the peer marked busy to prevent assigning a second request and
 			// overloading it further.
+			log.Debug("Downloader: request timed out, marking peer as stale", "peer", req.Peer, "queue kind", queue.kind(), "elapsed", common.PrettyDuration(time.Since(req.Sent)))
 			delete(pending, req.Peer)
 			stales[req.Peer] = req
 
@@ -398,14 +399,16 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 
 			if fails > 2 {
+				peer.log.Debug("Downloader: peer exceeded fail threshold, zeroing capacity", "peer", peer.id, "queue kind", queue.kind(), "fails", fails)
 				queue.updateCapacity(peer, 0, 0)
 			} else {
-				d.dropPeer(peer.id)
-
 				// If this peer was the master peer, abort sync immediately
 				d.cancelLock.RLock()
 				master := peer.id == d.cancelPeer
 				d.cancelLock.RUnlock()
+
+				peer.log.Debug("Downloader: dropping peer on timeout", "peer", peer.id, "queue kind", queue.kind(), "fails", fails, "master", master)
+				d.dropPeer(peer.id)
 
 				if master {
 					d.cancel()

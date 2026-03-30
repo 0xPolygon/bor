@@ -319,6 +319,13 @@ loop:
 		}
 	}
 
+	switch {
+	case remoteRequested:
+		p.log.Debug("Peer disconnected (remote requested)", "peer", p.ID(), "reason", reason, "err", err)
+	default:
+		p.log.Debug("Peer disconnected (local)", "peer", p.ID(), "reason", reason, "err", err)
+	}
+
 	close(p.closed)
 	p.rw.close(reason)
 	p.wg.Wait()
