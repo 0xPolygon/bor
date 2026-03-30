@@ -201,7 +201,7 @@ func waitForHandshake(errc <-chan error, p *Peer) error {
 				return err
 			}
 		case <-timeout.C:
-			p.Log().Debug("ETH handshake timed out", "peer", p.ID(), "timeout", handshakeTimeout)
+			p.Log().Debug("ETH handshake timed out", "timeout", handshakeTimeout)
 			markError(p, p2p.DiscReadTimeout)
 			return p2p.DiscReadTimeout
 		}

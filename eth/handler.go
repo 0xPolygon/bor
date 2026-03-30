@@ -481,7 +481,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 				peer.Log().Debug("Peer required block verified", "number", number, "hash", hash)
 				res.Done <- nil
 			case <-timeout.C:
-				peer.Log().Warn("Required block challenge timed out, dropping", "peer", peer.ID(), "timeout", syncChallengeTimeout, "addr", peer.RemoteAddr(), "type", peer.Name())
+				peer.Log().Warn("Required block challenge timed out, dropping", "timeout", syncChallengeTimeout, "addr", peer.RemoteAddr(), "type", peer.Name())
 				h.removePeer(peer.ID())
 			case <-dead:
 				// Peer handler terminated, abort all goroutines
