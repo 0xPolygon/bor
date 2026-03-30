@@ -92,7 +92,7 @@ type Config struct {
 	TrieCleanSize       int    // Maximum memory allowance (in bytes) for caching clean trie data
 	StateCleanSize      int    // Maximum memory allowance (in bytes) for caching clean state data
 	WriteBufferSize     int    // Maximum memory allowance (in bytes) for write buffer
-	StateReservation    int    // Percentage of write buffer reserved for states (0-100, default 80)
+	StateReservation    int    // Percentage of write buffer reserved for states (1-100, default 80)
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
 	JournalDirectory    string // Absolute path of journal directory (null means the journal data is persisted in key-value store)
 
