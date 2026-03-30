@@ -319,12 +319,7 @@ loop:
 		}
 	}
 
-	switch {
-	case remoteRequested:
-		p.log.Debug("Peer disconnected (remote requested)", "reason", reason, "err", err)
-	default:
-		p.log.Debug("Peer disconnected (local)", "reason", reason, "err", err)
-	}
+	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
 
 	close(p.closed)
 	p.rw.close(reason)
