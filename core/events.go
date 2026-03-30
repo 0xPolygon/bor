@@ -36,13 +36,6 @@ type NewMinedBlockEvent struct {
 	SealedAt time.Time // time when WriteBlockAndSetHead completed, used to measure broadcast latency
 }
 
-// WitnessReadyEvent is posted when a delayed-SRC witness has been fully
-// computed and written to the database, signalling that it can be broadcast.
-type WitnessReadyEvent struct {
-	Block   *types.Block
-	Witness *stateless.Witness
-}
-
 // RemovedLogsEvent is posted when a reorg happens
 type RemovedLogsEvent struct{ Logs []*types.Log }
 

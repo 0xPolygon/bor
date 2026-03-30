@@ -288,9 +288,12 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 		return nil, nil, errors.New("header not found")
 	}
 
-	stateDb, err := b.stateAtHeader(header)
+	stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 	if err != nil {
-		return nil, nil, err
+		stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	return stateDb, header, nil
 }
@@ -314,29 +317,17 @@ func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockN
 			return nil, nil, errors.New("hash is not currently canonical")
 		}
 
-		stateDb, err := b.stateAtHeader(header)
+		stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 		if err != nil {
-			return nil, nil, err
+			stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return stateDb, header, nil
 	}
 
 	return nil, nil, errors.New("invalid arguments; neither block nor hash specified")
-}
-
-// stateAtHeader returns the state database for the given header, correctly
-// resolving the state root under delayed SRC where header.Root stores the
-// parent's state root rather than this block's post-execution root.
-func (b *EthAPIBackend) stateAtHeader(header *types.Header) (*state.StateDB, error) {
-	bc := b.eth.BlockChain()
-	stateDb, err := bc.PostExecutionStateAt(header)
-	if err != nil {
-		stateDb, err = bc.HistoricState(header.Root)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return stateDb, nil
 }
 
 func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {

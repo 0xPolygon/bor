@@ -67,6 +67,8 @@ type Config struct {
 	PendingFeeRecipient     common.Address `toml:"-"` // Address for pending block rewards.
 	EnablePrefetch          bool           // Enable transaction prefetching from pool during block building
 	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	EnablePipelinedSRC      bool           // Enable pipelined state root computation: overlap SRC(N) with block N+1 tx execution
+	PipelinedSRCLogs        bool           // Enable verbose logging for pipelined SRC (spawned SRC, SRC completed, block sealed, etc.)
 }
 
 // DefaultConfig contains default settings for miner.

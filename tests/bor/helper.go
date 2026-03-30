@@ -752,3 +752,70 @@ func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, with
 
 	return stack, ethBackend, err
 }
+
+// InitMinerWithPipelinedSRC creates a miner node with pipelined SRC enabled.
+func InitMinerWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
+	datadir, err := os.MkdirTemp("", "InitMiner-"+uuid.New().String())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	config := &node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    25,
+		},
+		UseLightweightKDF: true,
+	}
+	stack, err := node.New(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend, err := eth.New(stack, &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   256,
+		DatabaseHandles: 256,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase:           crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:             genesis.GasLimit * 11 / 10,
+			GasPrice:            big.NewInt(1),
+			Recommit:            time.Second,
+			CommitInterruptFlag: true,
+			EnablePipelinedSRC:  true,
+			PipelinedSRCLogs:    true,
+		},
+		WithoutHeimdall: withoutHeimdall,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keydir2 := stack.KeyStoreDir()
+	n2, p2 := keystore.StandardScryptN, keystore.StandardScryptP
+	kStore2 := keystore.NewKeyStore(keydir2, n2, p2)
+
+	_, err = kStore2.ImportECDSA(privKey, "")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	acc2 := kStore2.Accounts()[0]
+	err = kStore2.Unlock(acc2, "")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend.AccountManager().AddBackend(kStore2)
+
+	err = stack.Start()
+	return stack, ethBackend, err
+}

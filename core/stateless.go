@@ -43,27 +43,17 @@ import (
 //
 // TODO(karalabe): Would be nice to resolve both issues above somehow and move it.
 func ExecuteStateless(config *params.ChainConfig, vmconfig vm.Config, block *types.Block, witness *stateless.Witness, author *common.Address, consensus consensus.Engine, diskdb ethdb.Database) (common.Hash, common.Hash, *state.StateDB, *ProcessResult, error) {
-	var preStateRoot common.Hash
-	if config.Bor != nil && config.Bor.IsDelayedSRC(block.Number()) {
-		// Under delayed SRC, block.Root() carries the pre-state root for this block
-		// (the actual post-execution state root of the parent, placed there by the
-		// block producer). Use it directly; do NOT treat it as a faulty value.
-		preStateRoot = block.Root()
-	} else {
-		// Sanity check: the caller should have zeroed Root and ReceiptHash so that
-		// we can compute them from scratch via the witness.
-		if block.Root() != (common.Hash{}) {
-			log.Error("stateless runner received state root it's expected to calculate (faulty consensus client)", "block", block.Number())
-		}
-		if block.ReceiptHash() != (common.Hash{}) {
-			log.Error("stateless runner received receipt root it's expected to calculate (faulty consensus client)", "block", block.Number())
-		}
-		preStateRoot = witness.Root()
+	// Sanity check if the supplied block accidentally contains a set root or
+	// receipt hash. If so, be very loud, but still continue.
+	if block.Root() != (common.Hash{}) {
+		log.Error("stateless runner received state root it's expected to calculate (faulty consensus client)", "block", block.Number())
 	}
-
+	if block.ReceiptHash() != (common.Hash{}) {
+		log.Error("stateless runner received receipt root it's expected to calculate (faulty consensus client)", "block", block.Number())
+	}
 	// Create and populate the state database to serve as the stateless backend
 	memdb := witness.MakeHashDB(diskdb)
-	db, err := state.New(preStateRoot, state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
+	db, err := state.New(witness.Root(), state.NewDatabase(triedb.NewDatabase(memdb, triedb.HashDefaults), nil))
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, nil, err
 	}

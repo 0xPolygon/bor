@@ -151,7 +151,7 @@ type StateDB struct {
 	witnessStats *stateless.WitnessStats
 
 	// nonExistentReads tracks addresses that were looked up but don't exist
-	// in the state trie. Under delayed SRC, these are included in the
+	// in the state trie. Under pipelined SRC, these are included in the
 	// FlatDiff so the SRC goroutine can walk their trie paths and capture
 	// proof-of-absence nodes for the witness. Without this, stateless
 	// execution fails when it tries to prove these accounts don't exist.
@@ -1057,7 +1057,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		}
 		// Short circuit if the account is not found
 		if acct == nil {
-			// Track the address so the delayed SRC goroutine can walk
+			// Track the address so the pipelined SRC goroutine can walk
 			// the trie path and capture proof-of-absence nodes for the
 			// witness. Without this, stateless execution can't verify
 			// non-existent accounts.
@@ -1972,7 +1972,7 @@ type FlatDiff struct {
 	Code      map[common.Hash][]byte                         // newly deployed code
 
 	// ReadSet and ReadStorage list accounts and storage slots that were read
-	// (but not mutated) during block execution. The delayed SRC goroutine loads
+	// (but not mutated) during block execution. The pipelined SRC goroutine loads
 	// these from the root_{N-1} trie so their MPT proof nodes are captured in
 	// the witness for stateless execution.
 	ReadSet     []common.Address
@@ -2079,7 +2079,7 @@ func (s *StateDB) CommitSnapshot(deleteEmptyObjects bool) *FlatDiff {
 	}
 
 	// Capture read-only accounts: accessed during execution but not mutated.
-	// The delayed SRC goroutine uses these to load their root_{N-1} trie nodes
+	// The pipelined SRC goroutine uses these to load their root_{N-1} trie nodes
 	// into the witness so stateless nodes can execute against root_{N-1}.
 	for addr, obj := range s.stateObjects {
 		if _, isMutation := s.mutations[addr]; isMutation {
@@ -2229,9 +2229,9 @@ func (s *StateDB) ApplyFlatDiffForCommit(diff *FlatDiff) {
 // the post-state of the block that produced flatDiff, without waiting for
 // that block's state root to be computed.
 //
-// This is used during DelayedSRC block processing: while goroutine G_N is
-// computing root_N from (root_{N-1}, FlatDiff_N), the next block N+1 can
-// already be executed using NewWithFlatBase(root_{N-1}, db, FlatDiff_N).
+// This is used during pipelined SRC: while a background goroutine computes
+// root_N from (root_{N-1}, FlatDiff_N), the next block N+1 can already be
+// executed using NewWithFlatBase(root_{N-1}, db, FlatDiff_N).
 func NewWithFlatBase(parentCommittedRoot common.Hash, db Database, flatDiff *FlatDiff) (*StateDB, error) {
 	sdb, err := New(parentCommittedRoot, db)
 	if err != nil {
@@ -2246,6 +2246,19 @@ func NewWithFlatBase(parentCommittedRoot common.Hash, db Database, flatDiff *Fla
 // SetFlatDiffRef sets the read-only FlatDiff reference for lazy lookups.
 func (s *StateDB) SetFlatDiffRef(diff *FlatDiff) {
 	s.flatDiffRef = diff
+}
+
+// WasStorageSlotRead returns true if the given address+slot was accessed
+// (read) during this block's execution. Used by pipelined SRC to detect
+// whether any transaction read the EIP-2935 history storage slot that
+// contains stale data during speculative execution.
+func (s *StateDB) WasStorageSlotRead(addr common.Address, slot common.Hash) bool {
+	obj, exists := s.stateObjects[addr]
+	if !exists {
+		return false
+	}
+	_, accessed := obj.originStorage[slot]
+	return accessed
 }
 
 // Prepare handles the preparatory steps for executing a state transition with.
@@ -2398,4 +2411,21 @@ func (s *StateDB) AccessEvents() *AccessEvents {
 // Inner receives the underlying state db
 func (s *StateDB) Inner() *StateDB {
 	return s
+}
+
+// PropagateReadsTo touches all addresses and storage slots accessed in s on
+// the destination StateDB. This ensures the destination tracks them in its
+// stateObjects (and later in its FlatDiff ReadSet) so the pipelined SRC
+// goroutine captures their trie proof nodes in the witness.
+//
+// Use this when a temporary copy of the state is used for EVM calls (e.g.,
+// CommitStates → LastStateId) and the accessed addresses must be visible
+// in the original state for witness generation.
+func (s *StateDB) PropagateReadsTo(dst *StateDB) {
+	for addr, obj := range s.stateObjects {
+		dst.GetBalance(addr)
+		for slot := range obj.originStorage {
+			dst.GetState(addr, slot)
+		}
+	}
 }

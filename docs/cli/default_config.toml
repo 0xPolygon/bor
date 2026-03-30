@@ -105,6 +105,8 @@ devfakeauthor = false
   base-fee-change-denominator = 0
   prefetch = false
   prefetch-gaslimit-percent = 100
+  pipelined-src = true
+  pipelined-src-logs = true
 
 [jsonrpc]
   ipcdisable = false

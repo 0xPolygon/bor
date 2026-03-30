@@ -19,6 +19,7 @@ package core
 import (
 	"math/big"
 	"sync"
+	"sync/atomic"
 
 	"github.com/holiman/uint256"
 
@@ -152,6 +153,64 @@ func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash
 		}
 
 		return common.Hash{}
+	}
+}
+
+// SpeculativeGetHashFn returns a GetHashFunc for use during pipelined SRC
+// speculative execution of block N+1, where block N's hash is not yet known
+// (SRC(N) is still computing root_N).
+//
+// It uses three-tier resolution:
+//   - Tier 1 (n == pendingBlockN): lazy-resolves by calling srcDone(), which
+//     blocks until SRC(N) completes and returns hash(block_N). Cached after
+//     first call.
+//   - Tier 2 (n == pendingBlockN-1): returns blockN1Header.Hash() directly.
+//     Block N-1 is fully committed and in the chain DB.
+//   - Tier 3 (n < pendingBlockN-1): delegates to GetHashFn anchored at
+//     block N-1. Its cache seeds from blockN1Header.ParentHash = hash(block_{N-2}),
+//     so index 0 gives BLOCKHASH(N-2), which is correct.
+//
+// srcDone is called at most once and must return hash(block_N) after SRC(N)
+// completes. It may block.
+func SpeculativeGetHashFn(blockN1Header *types.Header, chain ChainContext,
+	pendingBlockN uint64, srcDone func() common.Hash, blockhashNAccessed *atomic.Bool) func(uint64) common.Hash {
+
+	blockN1Hash := blockN1Header.Hash()
+
+	// olderFn handles blocks N-2 and below via the standard chain walk.
+	olderFn := GetHashFn(blockN1Header, chain)
+
+	var resolvedBlockNHash common.Hash
+	var resolved bool
+	var resolveMu sync.Mutex
+
+	return func(n uint64) common.Hash {
+		if n >= pendingBlockN+1 {
+			return common.Hash{} // future block
+		}
+		if n == pendingBlockN {
+			// Tier 1: lazy-resolve block N's hash.
+			// Flag that BLOCKHASH(N) was accessed — the resolved hash is
+			// pre-seal (no signature in Extra) and will differ from the
+			// final on-chain hash. The caller must abort speculative
+			// execution and fall back to the sequential path.
+			if blockhashNAccessed != nil {
+				blockhashNAccessed.Store(true)
+			}
+			resolveMu.Lock()
+			defer resolveMu.Unlock()
+			if !resolved {
+				resolvedBlockNHash = srcDone()
+				resolved = true
+			}
+			return resolvedBlockNHash
+		}
+		if n == pendingBlockN-1 {
+			// Tier 2: block N-1 is fully committed.
+			return blockN1Hash
+		}
+		// Tier 3: blocks N-2 and older via standard chain walk.
+		return olderFn(n)
 	}
 }
 

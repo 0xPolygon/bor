@@ -164,8 +164,6 @@ var (
 	WitnessPruneCursorKey = []byte("witnessPruneCursorKey")
 	WitnessPruneHeadKey   = []byte("witnessPruneHeadKey")
 
-	PostStateRootPrefix = []byte("post-state-root-") // PostStateRootPrefix + hash -> post-execution state root
-
 	// BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
 	BloomBitsIndexPrefix = []byte("iB")
 
@@ -295,11 +293,6 @@ func witnessKey(hash common.Hash) []byte {
 // witnessSizeKey = WitnessSizePrefix + hash
 func witnessSizeKey(hash common.Hash) []byte {
 	return append(WitnessSizePrefix, hash.Bytes()...)
-}
-
-// postStateRootKey = PostStateRootPrefix + hash
-func postStateRootKey(hash common.Hash) []byte {
-	return append(PostStateRootPrefix, hash.Bytes()...)
 }
 
 func witnessPruneCursorKey() []byte {

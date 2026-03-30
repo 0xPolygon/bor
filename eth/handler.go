@@ -172,9 +172,6 @@ type handler struct {
 	minedBlockSub *event.TypeMuxSubscription
 	blockRange    *blockRangeState
 
-	witnessReadyCh  chan core.WitnessReadyEvent
-	witnessReadySub event.Subscription
-
 	requiredBlocks map[uint64]common.Hash
 
 	enableBlockTracking  bool
@@ -622,12 +619,6 @@ func (h *handler) Start(maxPeers int) {
 	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
 	go h.minedBroadcastLoop()
 
-	// broadcast delayed-SRC witnesses once the SRC goroutine completes
-	h.wg.Add(1)
-	h.witnessReadyCh = make(chan core.WitnessReadyEvent, 10)
-	h.witnessReadySub = h.chain.SubscribeWitnessReadyEvent(h.witnessReadyCh)
-	go h.witnessBroadcastLoop()
-
 	h.wg.Add(1)
 	go h.chainSync.loop()
 
@@ -649,7 +640,6 @@ func (h *handler) Stop() {
 		h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
 	}
 	h.minedBlockSub.Unsubscribe()
-	h.witnessReadySub.Unsubscribe() // quits witnessBroadcastLoop
 	h.blockRange.stop()
 
 	// Quit chainSync and txsync64.
@@ -843,26 +833,6 @@ func (h *handler) minedBroadcastLoop() {
 			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
 			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
 			broadcastLoopTimer.Update(time.Since(loopStart))
-		}
-	}
-}
-
-// witnessBroadcastLoop announces delayed-SRC witnesses to peers once the
-// background SRC goroutine has finished computing them. Analogous to block
-// propagation: we send a hash announcement and let peers fetch on demand.
-func (h *handler) witnessBroadcastLoop() {
-	defer h.wg.Done()
-
-	for {
-		select {
-		case ev := <-h.witnessReadyCh:
-			hash := ev.Block.Hash()
-			number := ev.Block.NumberU64()
-			for _, peer := range h.peers.peersWithoutWitness(hash) {
-				peer.Peer.AsyncSendNewWitnessHash(hash, number)
-			}
-		case <-h.witnessReadySub.Err():
-			return
 		}
 	}
 }

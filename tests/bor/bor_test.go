@@ -36,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -2934,375 +2933,163 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 	return spanner
 }
 
-// TestDelayedStateRoot verifies the Delayed SRC protocol across the hard fork
-// boundary. Before the fork, block[N].Header.Root is the actual post-execution
-// state root of block N. After the fork, block[N].Header.Root stores the
-// post-execution state root of block N-1 (the parent), computed concurrently
-// by a background goroutine.
-func TestDelayedStateRoot(t *testing.T) {
+// TestPipelinedSRC_BasicBlockProduction verifies that a single miner with
+// pipelined SRC enabled can produce multiple consecutive blocks correctly.
+// This exercises the full pipeline: commitPipelined → FlatDiff extraction →
+// background SRC goroutine → speculative N+1 execution → block assembly → seal.
+func TestPipelinedSRC_BasicBlockProduction(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
 
-	const delayedSRCBlock = 5
-
-	updateGenesis := func(gen *core.Genesis) {
-		gen.Config.Bor.DelayedSRCBlock = big.NewInt(delayedSRCBlock)
-		// Large sprint to avoid hitting sprint boundaries that invoke StateSyncEvents.
-		gen.Config.Bor.Sprint = map[string]uint64{"0": 64}
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
 	}
 
-	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
-	chain := init.ethereum.BlockChain()
-	engine := init.ethereum.Engine()
-	_bor := engine.(*bor.Bor)
-	defer _bor.Close()
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
+	genesis.Config.Bor.Period = map[string]uint64{"0": 2}
+	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
+	genesis.Config.Bor.RioBlock = big.NewInt(0) // Enable Rio so snapshot uses spanByBlockNumber (no ecrecover needed)
 
-	span0 := createMockSpan(addr, chain.Config().ChainID.String())
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	h := createMockHeimdall(ctrl, &span0, &span0)
-	_bor.SetHeimdallClient(h)
-
-	validators := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators
-	spanner := getMockedSpanner(t, validators)
-	_bor.SetSpanner(spanner)
-
-	// Build and insert 7 blocks: blocks 1-4 are pre-fork, blocks 5-7 are post-fork.
-	// insertNewBlock calls t.Fatalf on error, so a ValidateState failure here means
-	// the goroutine computed the wrong root or the protocol invariant was violated.
-	const numBlocks = 7
-	blocks := make([]*types.Block, numBlocks+1)
-	blocks[0] = init.genesis.ToBlock()
-
-	for i := 1; i <= numBlocks; i++ {
-		blocks[i] = buildNextBlock(t, _bor, chain, blocks[i-1], nil, init.genesis.Config.Bor, nil, validators, false, nil, nil)
-		insertNewBlock(t, chain, blocks[i])
-	}
-
-	// Pre-fork invariant: GetPostStateRoot(block_N) == block_N.Header.Root,
-	// because header.Root IS the block's own post-execution state root before the fork.
-	for i := 1; i < delayedSRCBlock; i++ {
-		got := chain.GetPostStateRoot(blocks[i].Hash())
-		require.NotEqual(t, common.Hash{}, got, "pre-fork block %d: delayed root should not be zero", i)
-		require.Equal(t, blocks[i].Header().Root, got,
-			"pre-fork block %d: GetPostStateRoot should match header.Root", i)
-	}
-
-	// Post-fork invariant: block[N].Header.Root == GetPostStateRoot(block[N-1]).
-	// For N == delayedSRCBlock this also covers the activation boundary where block[N-1]
-	// is still pre-fork (its delayed root equals its own header.Root).
-	for i := delayedSRCBlock; i <= numBlocks; i++ {
-		parentDelayedRoot := chain.GetPostStateRoot(blocks[i-1].Hash())
-		require.NotEqual(t, common.Hash{}, parentDelayedRoot,
-			"block %d parent: delayed root should not be zero", i)
-		require.Equal(t, parentDelayedRoot, blocks[i].Header().Root,
-			"post-fork block %d: header.Root should equal GetPostStateRoot(parent)", i)
-	}
-
-	// The last inserted block's delayed state root is computed by a background goroutine
-	// and stored in pendingSRC (no child block has been inserted to carry it in its
-	// header.Root). GetPostStateRoot waits for that goroutine and returns
-	// its result directly.
-	lastRoot := chain.GetPostStateRoot(blocks[numBlocks].Hash())
-	require.NotEqual(t, common.Hash{}, lastRoot,
-		"last post-fork block: delayed root from in-flight goroutine should not be zero")
-}
-
-// TestDelayedStateRootImport extends TestDelayedStateRoot to verify that the
-// stateless witness for each post-fork block is correctly built and persisted
-// by the background SRC goroutine. After block[N+1] is inserted, G_N has
-// finished (ValidateState(N+1) is the sync point inside processBlock), so the
-// witness for block N must already be in the database.
-func TestDelayedStateRootImport(t *testing.T) {
-	t.Parallel()
-	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
-
-	const delayedSRCBlock = 5
-
-	updateGenesis := func(gen *core.Genesis) {
-		gen.Config.Bor.DelayedSRCBlock = big.NewInt(delayedSRCBlock)
-		gen.Config.Bor.Sprint = map[string]uint64{"0": 64}
-	}
-
-	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), updateGenesis)
-	chain := init.ethereum.BlockChain()
-	engine := init.ethereum.Engine()
-	_bor := engine.(*bor.Bor)
-	defer _bor.Close()
-
-	span0 := createMockSpan(addr, chain.Config().ChainID.String())
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	h := createMockHeimdall(ctrl, &span0, &span0)
-	_bor.SetHeimdallClient(h)
-
-	validators := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators
-	spanner := getMockedSpanner(t, validators)
-	_bor.SetSpanner(spanner)
-
-	// Build and insert 9 blocks: blocks 1-4 are pre-fork, blocks 5-9 are post-fork.
-	const numBlocks = 9
-	blocks := make([]*types.Block, numBlocks+1)
-	blocks[0] = init.genesis.ToBlock()
-
-	for i := 1; i <= numBlocks; i++ {
-		blocks[i] = buildNextBlock(t, _bor, chain, blocks[i-1], nil, init.genesis.Config.Bor, nil, validators, false, nil, nil)
-		insertNewBlock(t, chain, blocks[i])
-
-		// After inserting block[i], the sync point inside processBlock has already
-		// waited for G_{i-1} to finish. Therefore the witness for block[i-1] must
-		// be in the database — but only for post-fork blocks (i-1 >= delayedSRCBlock).
-		if i > delayedSRCBlock {
-			prevHash := blocks[i-1].Hash()
-			witnessBytes := chain.GetWitness(prevHash)
-			require.NotNil(t, witnessBytes,
-				"witness for block %d should be in DB after inserting block %d", i-1, i)
-
-			w, err := stateless.GetWitnessFromRlp(witnessBytes)
-			require.NoError(t, err, "witness for block %d: RLP decode failed", i-1)
-
-			// Under delayed SRC the goroutine embeds parentRoot (= root_{i-2}) as
-			// w.Header().Root. block[i-1].Header().Root is also root_{i-2} by the
-			// protocol invariant (post-fork header stores parent's actual state root).
-			require.Equal(t, blocks[i-1].Header().Root, w.Header().Root,
-				"block %d witness: Header.Root should equal block's header.Root (pre-state root)", i-1)
-		}
-	}
-
-	// Wait for G_{numBlocks} (the last goroutine) to finish.
-	lastRoot := chain.GetPostStateRoot(blocks[numBlocks].Hash())
-	require.NotEqual(t, common.Hash{}, lastRoot,
-		"last post-fork block: delayed root from in-flight goroutine should not be zero")
-
-	// With G_{numBlocks} done, the witness for the last block is now in the database.
-	lastWitnessBytes := chain.GetWitness(blocks[numBlocks].Hash())
-	require.NotNil(t, lastWitnessBytes,
-		"witness for last block should be in DB after goroutine completes")
-
-	lastWitness, err := stateless.GetWitnessFromRlp(lastWitnessBytes)
-	require.NoError(t, err, "witness for last block: RLP decode failed")
-	require.Equal(t, blocks[numBlocks].Header().Root, lastWitness.Header().Root,
-		"last block witness: Header.Root should equal block's header.Root")
-}
-
-// TestDelayedStateRootMiner verifies the Delayed SRC protocol on the block
-// production (miner) path. writeBlockAndSetHead defers CommitWithUpdate to a
-// background goroutine and stores the resulting FlatDiff so the miner can open
-// the next block's state immediately via NewWithFlatBase without waiting for
-// the goroutine to commit the trie.
-func TestDelayedStateRootMiner(t *testing.T) {
-	t.Parallel()
-	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
-
-	const delayedSRCBlock = 3
-	const targetBlock = 7
-
-	// Build a genesis with DelayedSRCBlock=3 and a large sprint to avoid
-	// hitting sprint boundaries that trigger Heimdall StateSyncEvents calls.
-	genesis := InitGenesis(t, nil, "./testdata/genesis.json", 64)
-	genesis.Config.Bor.DelayedSRCBlock = big.NewInt(delayedSRCBlock)
-
-	stack, ethBackend, err := InitMiner(genesis, key, true)
+	// Start a single miner with pipelined SRC enabled
+	stack, ethBackend, err := InitMinerWithPipelinedSRC(genesis, keys[0], true)
 	require.NoError(t, err)
 	defer stack.Close()
 
-	chain := ethBackend.BlockChain()
-
-	// Subscribe to both feeds before mining starts so we don't miss any events.
-	headCh := make(chan core.ChainHeadEvent, 20)
-	headSub := chain.SubscribeChainHeadEvent(headCh)
-	defer headSub.Unsubscribe()
-
-	witnessCh := make(chan core.WitnessReadyEvent, 20)
-	witnessSub := chain.SubscribeWitnessReadyEvent(witnessCh)
-	defer witnessSub.Unsubscribe()
-
-	require.NoError(t, ethBackend.StartMining())
-
-	// Collect ChainHeadEvents until we reach targetBlock; also drain
-	// WitnessReadyEvents that arrive concurrently.
-	witnessByBlock := make(map[uint64]*stateless.Witness)
-
-	timeout := time.After(120 * time.Second)
-collectLoop:
-	for {
-		select {
-		case ev := <-headCh:
-			if ev.Header.Number.Uint64() >= targetBlock {
-				break collectLoop
-			}
-		case ev := <-witnessCh:
-			witnessByBlock[ev.Block.NumberU64()] = ev.Witness
-		case <-timeout:
-			t.Fatal("timeout waiting for miner to produce blocks")
-		}
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
 	}
 
-	// Drain any events already queued in the channels (non-blocking).
-drainLoop:
+	// Start mining
+	err = ethBackend.StartMining()
+	require.NoError(t, err)
+
+	// Wait for the miner to produce at least 10 blocks
+	targetBlock := uint64(10)
+	deadline := time.After(60 * time.Second)
 	for {
 		select {
-		case <-headCh:
-		case ev := <-witnessCh:
-			witnessByBlock[ev.Block.NumberU64()] = ev.Witness
+		case <-deadline:
+			currentNum := ethBackend.BlockChain().CurrentBlock().Number.Uint64()
+			t.Fatalf("Timed out waiting for block %d, current block: %d", targetBlock, currentNum)
 		default:
-			break drainLoop
+			time.Sleep(500 * time.Millisecond)
+			if ethBackend.BlockChain().CurrentBlock().Number.Uint64() >= targetBlock {
+				goto done
+			}
 		}
 	}
+done:
 
-	// Wait briefly for witnesses that G_N fires slightly after the corresponding
-	// ChainHeadEvent (the goroutine for block N finishes before ChainHeadEvent for
-	// block N+1, so witnesses for blocks < targetBlock should already be queued).
-	witnessTimer := time.NewTimer(5 * time.Second)
-	defer witnessTimer.Stop()
-waitWitness:
-	for {
-		select {
-		case ev := <-witnessCh:
-			witnessByBlock[ev.Block.NumberU64()] = ev.Witness
-		case <-witnessTimer.C:
-			break waitWitness
+	chain := ethBackend.BlockChain()
+	currentNum := chain.CurrentBlock().Number.Uint64()
+	t.Logf("Miner produced %d blocks with pipelined SRC", currentNum)
+
+	// Verify chain integrity: each block's parent hash matches the previous block's hash
+	for i := uint64(1); i <= currentNum; i++ {
+		block := chain.GetBlockByNumber(i)
+		require.NotNil(t, block, "block %d not found", i)
+
+		if i > 0 {
+			parent := chain.GetBlockByNumber(i - 1)
+			require.NotNil(t, parent, "parent block %d not found", i-1)
+			require.Equal(t, parent.Hash(), block.ParentHash(),
+				"block %d ParentHash mismatch: expected %x, got %x", i, parent.Hash(), block.ParentHash())
 		}
-	}
 
-	// Pre-fork invariant: GetPostStateRoot(block_N) == block_N.Header.Root.
-	for i := uint64(1); i < delayedSRCBlock; i++ {
-		h := chain.GetHeaderByNumber(i)
-		require.NotNil(t, h, "pre-fork block %d not found", i)
-		got := chain.GetPostStateRoot(h.Hash())
-		require.NotEqual(t, common.Hash{}, got, "pre-fork block %d: delayed root should not be zero", i)
-		require.Equal(t, h.Root, got, "pre-fork block %d: delayed root should equal header.Root", i)
-	}
-
-	// Post-fork header root invariant: block[N].Root == GetPostStateRoot(block[N-1]).
-	for i := uint64(delayedSRCBlock); i <= targetBlock; i++ {
-		h := chain.GetHeaderByNumber(i)
-		require.NotNil(t, h, "post-fork block %d not found", i)
-		ph := chain.GetHeaderByNumber(i - 1)
-		require.NotNil(t, ph, "parent block %d not found", i-1)
-
-		parentDelayedRoot := chain.GetPostStateRoot(ph.Hash())
-		require.NotEqual(t, common.Hash{}, parentDelayedRoot,
-			"block %d parent: delayed root should not be zero", i)
-		require.Equal(t, parentDelayedRoot, h.Root,
-			"post-fork block %d: header.Root should equal GetPostStateRoot(parent)", i)
-	}
-
-	// GetLastFlatDiff must be non-nil: writeBlockAndSetHead stores the FlatDiff
-	// from each post-fork sealed block so the miner can build the next block
-	// immediately without waiting for the SRC goroutine.
-	flatDiff := chain.GetLastFlatDiff()
-	require.NotNil(t, flatDiff, "GetLastFlatDiff() should be non-nil after post-fork mining")
-
-	// WitnessReadyEvent must have been received for each post-fork block up to
-	// targetBlock-1. For block targetBlock the goroutine may still be running
-	// (it finishes before the next ChainHeadEvent, which we did not wait for).
-	for i := uint64(delayedSRCBlock); i < targetBlock; i++ {
-		w, ok := witnessByBlock[i]
-		require.True(t, ok, "WitnessReadyEvent not received for post-fork block %d", i)
-		require.NotNil(t, w, "witness for block %d should not be nil", i)
-
-		h := chain.GetHeaderByNumber(i)
-		require.NotNil(t, h, "block %d header not found", i)
-		// The goroutine embeds parentRoot as w.Header().Root, and
-		// block[N].Header().Root is also parentRoot under delayed SRC.
-		require.Equal(t, h.Root, w.Header().Root,
-			"block %d witness: Header.Root should equal block's header.Root", i)
+		// Verify state root is valid (can open state at this root)
+		_, err := chain.StateAt(block.Root())
+		require.NoError(t, err, "cannot open state at block %d root %x", i, block.Root())
 	}
 }
 
-// TestDelayedStateRootCrashRecovery simulates a crash where the SRC goroutine's
-// persisted post-state root is lost. On reopening the blockchain, the startup
-// recovery re-executes the head block, restoring the FlatDiff and spawning the
-// SRC goroutine so PostExecutionStateAt returns correct state.
-func TestDelayedStateRootCrashRecovery(t *testing.T) {
+// TestPipelinedSRC_WithTransactions verifies that the pipelined SRC miner
+// correctly includes transactions in blocks.
+func TestPipelinedSRC_WithTransactions(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
 
-	const delayedSRCBlock = 3
-
-	init := buildEthereumInstance(t, rawdb.NewMemoryDatabase(), func(gen *core.Genesis) {
-		gen.Config.Bor.DelayedSRCBlock = big.NewInt(delayedSRCBlock)
-		gen.Config.Bor.Sprint = map[string]uint64{"0": 64}
-	})
-
-	chain := init.ethereum.BlockChain()
-	engine := init.ethereum.Engine()
-	_bor := engine.(*bor.Bor)
-	defer _bor.Close()
-
-	span0 := createMockSpan(addr, chain.Config().ChainID.String())
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	h := createMockHeimdall(ctrl, &span0, &span0)
-	_bor.SetHeimdallClient(h)
-
-	validators := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet).Validators
-	spanner := getMockedSpanner(t, validators)
-	_bor.SetSpanner(spanner)
-
-	// Build and insert blocks past the fork boundary.
-	const numBlocks = 7
-	blocks := make([]*types.Block, numBlocks+1)
-	blocks[0] = init.genesis.ToBlock()
-	for i := 1; i <= numBlocks; i++ {
-		blocks[i] = buildNextBlock(t, _bor, chain, blocks[i-1], nil, init.genesis.Config.Bor, nil, validators, false, nil, nil)
-		insertNewBlock(t, chain, blocks[i])
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
 	}
 
-	// Wait for the last SRC goroutine to finish and record its root.
-	headHash := chain.CurrentBlock().Hash()
-	expectedRoot := chain.GetPostStateRoot(headHash)
-	require.NotEqual(t, common.Hash{}, expectedRoot, "post-state root should be computed")
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
+	genesis.Config.Bor.Period = map[string]uint64{"0": 2}
+	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
+	genesis.Config.Bor.RioBlock = big.NewInt(0) // Enable Rio for pipelined SRC
 
-	// Record the post-execution state for comparison after recovery.
-	preState, err := chain.PostExecutionStateAt(chain.CurrentBlock())
+	stack, ethBackend, err := InitMinerWithPipelinedSRC(genesis, keys[0], true)
 	require.NoError(t, err)
-	checkAddr := common.HexToAddress("0x0000000000000000000000000000000000001000")
-	expectedBalance := preState.GetBalance(checkAddr)
+	defer stack.Close()
 
-	// Grab a reference to the underlying DB before stopping.
-	db := init.ethereum.ChainDb()
+	for stack.Server().NodeInfo().Ports.Listener == 0 {
+		time.Sleep(250 * time.Millisecond)
+	}
 
-	// Stop the chain cleanly (journals trie state).
-	chain.Stop()
-
-	// Simulate crash: delete the persisted post-state root for the head block
-	// so that GetPostStateRoot returns empty on the next startup.
-	key := append(rawdb.PostStateRootPrefix, headHash.Bytes()...)
-	require.NoError(t, db.Delete(key))
-
-	// Also delete the child block's reference (there is no child block for the
-	// head, but verify ReadPostStateRoot returns empty now).
-	got := rawdb.ReadPostStateRoot(db, headHash)
-	require.Equal(t, common.Hash{}, got, "post-state root should be deleted from DB")
-
-	// Reopen the blockchain on the same DB. The startup recovery should detect
-	// the missing post-state root and re-execute the head block.
-	chain2, err := core.NewBlockChain(db, init.genesis, engine, core.DefaultConfig())
+	err = ethBackend.StartMining()
 	require.NoError(t, err)
-	defer chain2.Stop()
 
-	// Verify the head block is unchanged.
-	require.Equal(t, headHash, chain2.CurrentBlock().Hash(), "head block should be the same after reopen")
+	// Wait for a few blocks first
+	for ethBackend.BlockChain().CurrentBlock().Number.Uint64() < 2 {
+		time.Sleep(500 * time.Millisecond)
+	}
 
-	// Verify PostExecutionStateAt returns correct state (via the recovered FlatDiff).
-	postState, err := chain2.PostExecutionStateAt(chain2.CurrentBlock())
-	require.NoError(t, err, "PostExecutionStateAt should succeed after recovery")
-	require.Equal(t, expectedBalance, postState.GetBalance(checkAddr),
-		"recovered state should match pre-crash state")
+	// Submit transactions
+	txpool := ethBackend.TxPool()
+	senderKey := pkey1
+	recipientAddr := crypto.PubkeyToAddress(pkey2.PublicKey)
+	signer := types.LatestSignerForChainID(genesis.Config.ChainID)
 
-	// Verify GetPostStateRoot works (the SRC goroutine spawned by recovery
-	// should compute the root; wait for it).
-	recoveredRoot := chain2.GetPostStateRoot(headHash)
-	require.Equal(t, expectedRoot, recoveredRoot,
-		"recovered post-state root should match original")
+	nonce := txpool.Nonce(crypto.PubkeyToAddress(senderKey.PublicKey))
+	txCount := 10
 
-	// Verify the root was persisted by the recovery goroutine.
-	persistedRoot := rawdb.ReadPostStateRoot(db, headHash)
-	require.Equal(t, expectedRoot, persistedRoot,
-		"post-state root should be re-persisted after recovery")
+	for i := 0; i < txCount; i++ {
+		tx := types.NewTransaction(
+			nonce+uint64(i),
+			recipientAddr,
+			big.NewInt(1000),
+			21000,
+			big.NewInt(30000000000),
+			nil,
+		)
+		signedTx, err := types.SignTx(tx, signer, senderKey)
+		require.NoError(t, err)
+		errs := txpool.Add([]*types.Transaction{signedTx}, true)
+		require.Nil(t, errs[0], "failed to add tx %d", i)
+	}
+
+	// Wait for transactions to be included in blocks
+	deadline := time.After(60 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("Timed out waiting for transactions to be included")
+		default:
+			time.Sleep(500 * time.Millisecond)
+			// Check if all transactions have been mined
+			currentNonce := txpool.Nonce(crypto.PubkeyToAddress(senderKey.PublicKey))
+			if currentNonce >= nonce+uint64(txCount) {
+				goto txsDone
+			}
+		}
+	}
+txsDone:
+
+	chain := ethBackend.BlockChain()
+	currentNum := chain.CurrentBlock().Number.Uint64()
+	t.Logf("All %d transactions included by block %d", txCount, currentNum)
+
+	// Verify we can find the transactions in the blocks
+	totalTxs := 0
+	for i := uint64(1); i <= currentNum; i++ {
+		block := chain.GetBlockByNumber(i)
+		if block != nil {
+			totalTxs += len(block.Transactions())
+		}
+	}
+	require.GreaterOrEqual(t, totalTxs, txCount,
+		"expected at least %d transactions across all blocks, got %d", txCount, totalTxs)
 }

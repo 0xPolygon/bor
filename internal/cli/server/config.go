@@ -449,6 +449,12 @@ type SealerConfig struct {
 
 	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
+
+	// EnablePipelinedSRC enables pipelined state root computation: overlap SRC(N) with block N+1 tx execution
+	EnablePipelinedSRC bool `hcl:"pipelined-src,optional" toml:"pipelined-src,optional"`
+
+	// PipelinedSRCLogs enables verbose logging for pipelined SRC
+	PipelinedSRCLogs bool `hcl:"pipelined-src-logs,optional" toml:"pipelined-src-logs,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -906,6 +912,8 @@ func DefaultConfig() *Config {
 			PrefetchGasLimitPercent:  100,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
+			EnablePipelinedSRC:       true,
+			PipelinedSRCLogs:         true,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1277,6 +1285,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+		n.Miner.EnablePipelinedSRC = c.Sealer.EnablePipelinedSRC
+		n.Miner.PipelinedSRCLogs = c.Sealer.PipelinedSRCLogs
 
 		// Validate prefetch gas limit percentage
 		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {

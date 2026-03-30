@@ -173,9 +173,8 @@ type BlockChain interface {
 	StateAt(root common.Hash) (*state.StateDB, error)
 
 	// PostExecutionStateAt returns a StateDB representing the post-execution
-	// state of the given block header. Under delayed SRC, uses a non-blocking
-	// FlatDiff overlay when available; otherwise falls back to resolving the
-	// actual state root (which may block).
+	// state of the given block header. Under pipelined SRC, uses a non-blocking
+	// FlatDiff overlay when available; otherwise falls back to StateAt.
 	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
 }
 
@@ -1802,6 +1801,42 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 
 	// Add transactions synchronously as we're already holding the lock
 	pool.addTxs(reinject, false)
+}
+
+// ResetSpeculativeState updates the pool's internal state to reflect a new
+// block that hasn't been written to the chain yet. This is used by pipelined
+// SRC: after block N's transactions are executed but before block N is sealed,
+// the miner calls this to update the txpool so that speculative execution of
+// block N+1 gets correct pending transactions (with block N's nonces/balances).
+//
+// Unlike the full reset() path, this does NOT walk the chain for included/
+// discarded transactions (the block isn't in the chain DB). It only:
+//  1. Updates currentState and pendingNonces from the provided statedb
+//  2. Sets currentHead to the new header
+//  3. Demotes transactions with stale nonces
+//  4. Promotes newly executable transactions
+func (pool *LegacyPool) ResetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	pool.currentHead.Store(newHead)
+	pool.currentState = statedb
+	pool.pendingNonces = newNoncer(statedb)
+
+	// Demote transactions that are no longer valid with the new nonces
+	pool.demoteUnexecutables()
+
+	// Promote transactions that are now executable
+	promoted := pool.promoteExecutables(nil)
+
+	// Fire events for promoted transactions
+	if len(promoted) > 0 {
+		var txs []*types.Transaction
+		for _, tx := range promoted {
+			txs = append(txs, tx)
+		}
+		pool.txFeed.Send(core.NewTxsEvent{Txs: txs})
+	}
 }
 
 // promoteExecutables moves transactions that have become processable from the

@@ -354,6 +354,10 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.interruptcommit```: Interrupt block commit when block creation time is passed (default: true)
 
+- ```miner.pipelined-src```: Enable pipelined state root computation: overlap SRC(N) with block N+1 tx execution (default: true)
+
+- ```miner.pipelined-src-logs```: Enable verbose logging for pipelined SRC (spawned SRC, SRC completed, block sealed, etc.) (default: true)
+
 - ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: false)
 
 - ```miner.prefetch.gaslimit.percent```: Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%) (default: 100)

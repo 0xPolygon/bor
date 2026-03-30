@@ -263,6 +263,8 @@ type task struct {
 	createdAt            time.Time
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
+	pipelined            bool          // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
+	witnessBytes         []byte        // RLP-encoded witness from SRC goroutine (for pipelined blocks)
 }
 
 // txFits reports whether the transaction fits into the block size limit.
@@ -411,6 +413,9 @@ type worker struct {
 	noempty atomic.Bool
 
 	makeWitness bool
+
+	// Pipelined SRC: speculative work channel for block N+1 execution
+	speculativeWorkCh chan *speculativeWorkReq
 }
 
 //nolint:staticcheck
@@ -441,6 +446,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		blockTime:           config.BlockTime,
 		slowTxTracker:       newSlowTxTopTracker(),
 		makeWitness:         makeWitness,
+		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
 	// Subscribe for transaction insertion events (whether from network or resurrects)
@@ -839,6 +845,9 @@ func (w *worker) mainLoop() {
 				w.commitWork(req.interrupt, req.noempty, req.timestamp)
 			}
 
+		case req := <-w.speculativeWorkCh:
+			w.commitSpeculativeWork(req)
+
 		case req := <-w.getWorkCh:
 			req.result <- w.generateWork(req.params, false)
 
@@ -1101,9 +1110,15 @@ func (w *worker) resultLoop() {
 			}
 
 			// Commit block and state to database.
+			// For pipelined blocks, state was already committed by the SRC goroutine —
+			// use WriteBlockAndSetHeadPipelined to skip the redundant CommitWithUpdate.
 			writeStart := time.Now()
-			_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
 			writeElapsed := time.Since(writeStart)
+			if task.pipelined {
+				_, err = w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, true, task.witnessBytes)
+			} else {
+				_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+			}
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
 			if err != nil {
@@ -1167,26 +1182,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 			return nil, fmt.Errorf("parent block not found")
 		}
 		var err error
-		if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsDelayedSRC(header.Number) {
-			// Under delayed SRC, the actual pre-state for executing block N is
-			// root_{N-1} = GetPostStateRoot(parent.ParentHash).
-			// G_{N-1} has already finished (it was the sync point during parent's
-			// validation), so this lookup is immediate — no blocking.
-			// G_N (computing root_N from FlatDiff_N) is still running concurrently.
-			// We open state at root_{N-1} + FlatDiff_N overlay, which gives a
-			// complete view of block N's post-execution state without waiting for G_N.
-			baseRoot := w.chain.GetPostStateRoot(parent.ParentHash)
-			if baseRoot == (common.Hash{}) {
-				return nil, fmt.Errorf("delayed state root unavailable for grandparent %s", parent.ParentHash)
-			}
-			flatDiff := w.chain.GetLastFlatDiff()
-			if flatDiff == nil {
-				return nil, fmt.Errorf("no flat diff available for delayed SRC block building")
-			}
-			state, err = w.chain.StateAtWithFlatDiff(baseRoot, flatDiff)
-		} else {
-			state, err = w.chain.StateAt(parent.Root)
-		}
+		state, err = w.chain.StateAt(parent.Root)
 		if err != nil {
 			return nil, err
 		}
@@ -1947,8 +1943,15 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	// Clear the pending work block number when commitWork completes (success or failure).
+	// If the pipelined path was taken, pendingWorkBlock was set to N+1 by
+	// buildAndCommitBlock — don't overwrite it back to 0 in that case.
+	currentBlockNum := w.chain.CurrentBlock().Number.Uint64()
 	defer func() {
-		w.pendingWorkBlock.Store(0)
+		// Only clear if the pipeline didn't advance pendingWorkBlock beyond
+		// what commitWork originally set it to.
+		if w.pendingWorkBlock.Load() <= currentBlockNum+1 {
+			w.pendingWorkBlock.Store(0)
+		}
 	}()
 
 	// Set the coinbase if the worker is running or it's required
@@ -1974,20 +1977,10 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		timestamp:          uint64(timestamp),
 		coinbase:           coinbase,
 		parentHash:         parent.Hash(),
+		statedb:            state,
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
-	}
-	// Default to state (correct for pre-fork and activation boundary).
-	// Under delayed SRC, parent.Root = root_{N-1} and misses block N's mutations;
-	// overlay flatDiff_N to get the correct pre-state when it is available.
-	genParams.statedb = state
-	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsDelayedSRC(new(big.Int).Add(parent.Number, big.NewInt(1))) {
-		if flatDiff := w.chain.GetLastFlatDiff(); flatDiff != nil {
-			if s, ferr := w.chain.StateAtWithFlatDiff(parent.Root, flatDiff); ferr == nil {
-				genParams.statedb = s
-			}
-		}
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -2083,7 +2076,16 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		return
 	}
 	// Submit the generated block for consensus sealing.
-	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
+	// If pipelining is eligible, use commitPipelined to overlap SRC with N+1 execution.
+	if w.isPipelineEligible(work.header.Number.Uint64()) {
+		// Set pendingWorkBlock to N+1 so that when ChainHeadEvent fires for
+		// block N, newWorkLoop's de-duplication check sees that N+1 is already
+		// being worked on and skips the redundant commitWork.
+		w.pendingWorkBlock.Store(work.header.Number.Uint64() + 1)
+		_ = w.commitPipelined(work, start)
+	} else {
+		_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
+	}
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.

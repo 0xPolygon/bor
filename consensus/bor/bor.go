@@ -58,7 +58,18 @@ const (
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
 	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
-	minBlockBuildTime  = 1 * time.Second // Minimum remaining time before extending the block deadline to avoid empty blocks
+	// minBlockBuildTime is the minimum remaining time before Prepare() extends
+	// the block deadline to avoid producing empty blocks. If time.Until(target)
+	// is less than this value, the target timestamp is pushed forward by one
+	// blockTime period.
+	//
+	// This interacts with pipelined SRC: when a speculative block is aborted,
+	// the pipeline triggers a fresh commitWork. On chains where blockTime ==
+	// minBlockBuildTime (e.g., 1-second devnets), the remaining time after the
+	// abort (~990ms) is always less than minBlockBuildTime, so the timestamp is
+	// always pushed — adding an extra 1s gap. On mainnet (2s blocks), the
+	// remaining time (~1.99s) exceeds minBlockBuildTime, so no push occurs.
+	minBlockBuildTime = 1 * time.Second
 )
 
 // Bor protocol constants.
@@ -1361,25 +1372,9 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 		return nil, nil, 0, err
 	}
 
+	// No block rewards in PoA, so the state remains as it is
 	start := time.Now()
-
-	// No block rewards in PoA, so the state remains as it is.
-	// Under delayed SRC, header.Root stores the parent block's actual state root;
-	// the goroutine in BlockChain.spawnSRCGoroutine handles this block's root.
-	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
-		dsrcReader, ok := chain.(core.DelayedSRCReader)
-		if !ok {
-			return nil, nil, 0, fmt.Errorf("chain does not implement DelayedSRCReader")
-		}
-		parentRoot := dsrcReader.GetPostStateRoot(header.ParentHash)
-		if parentRoot == (common.Hash{}) {
-			return nil, nil, 0, fmt.Errorf("delayed state root unavailable for parent %s", header.ParentHash)
-		}
-		header.Root = parentRoot
-	} else {
-		header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
-	}
-
+	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	commitTime := time.Since(start)
 
 	// Uncles are dropped
@@ -1402,6 +1397,81 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 
 	// return the final block for sealing
 	return block, receipts, commitTime, nil
+}
+
+// FinalizeForPipeline runs the same post-transaction state modifications as
+// FinalizeAndAssemble (state sync, span commits, contract code changes) but
+// does NOT compute IntermediateRoot or assemble the block. It returns the
+// stateSyncData so the caller can pass it to AssembleBlock later after the
+// background SRC goroutine has computed the state root.
+//
+// This is the pipelined SRC equivalent of the first half of FinalizeAndAssemble.
+func (c *Bor) FinalizeForPipeline(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.StateSyncData, error) {
+	headerNumber := header.Number.Uint64()
+	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
+		return nil, consensus.ErrUnexpectedWithdrawals
+	}
+	if header.RequestsHash != nil {
+		return nil, consensus.ErrUnexpectedRequests
+	}
+
+	var (
+		stateSyncData []*types.StateSyncData
+		err           error
+	)
+
+	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		cx := statefull.ChainContext{Chain: chain, Bor: c}
+
+		if !c.config.IsRio(header.Number) {
+			if err = c.checkAndCommitSpan(statedb, header, cx); err != nil {
+				log.Error("Error while committing span", "error", err)
+				return nil, err
+			}
+		}
+
+		if c.HeimdallClient != nil {
+			stateSyncData, err = c.CommitStates(statedb, header, cx)
+			if err != nil {
+				log.Error("Error while committing states", "error", err)
+				return nil, err
+			}
+		}
+	}
+
+	if err = c.changeContractCodeIfNeeded(headerNumber, statedb); err != nil {
+		log.Error("Error changing contract code", "error", err)
+		return nil, err
+	}
+
+	return stateSyncData, nil
+}
+
+// AssembleBlock constructs the final block from a pre-computed state root,
+// without calling IntermediateRoot. This is used by pipelined SRC where the
+// state root is computed by a background goroutine.
+//
+// stateSyncData is the state sync data collected during Finalize(). If non-nil
+// and the Madhugiri fork is active, a StateSyncTx is appended to the body.
+func (c *Bor) AssembleBlock(chain consensus.ChainHeaderReader, header *types.Header, statedb *state.StateDB, body *types.Body, receipts []*types.Receipt, stateRoot common.Hash, stateSyncData []*types.StateSyncData) (*types.Block, []*types.Receipt, error) {
+	headerNumber := header.Number.Uint64()
+
+	header.Root = stateRoot
+	header.UncleHash = types.CalcUncleHash(nil)
+
+	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(big.NewInt(int64(headerNumber))) {
+		stateSyncTx := types.NewTx(&types.StateSyncTx{
+			StateSyncData: stateSyncData,
+		})
+		body.Transactions = append(body.Transactions, stateSyncTx)
+		receipts = insertStateSyncTransactionAndCalculateReceipt(stateSyncTx, header, body, statedb, receipts)
+	} else {
+		bc := chain.(core.BorStateSyncer)
+		bc.SetStateSync(stateSyncData)
+	}
+
+	block := types.NewBlock(header, body, receipts, trie.NewStackTrie(nil))
+	return block, receipts, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -1597,38 +1667,15 @@ func (c *Bor) checkAndCommitSpan(
 	headerNumber := header.Number.Uint64()
 
 	tempState := state.Inner().Copy()
-	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
-		// Under delayed SRC, skip ResetPrefetcher + StartPrefetcher.
-		// The full-node state is at root_{N-2} with a FlatDiff overlay
-		// approximating root_{N-1}. ResetPrefetcher clears that overlay,
-		// causing GetCurrentSpan to read stale root_{N-2} values — different
-		// from what the stateless node sees at root_{N-1}. The mismatch leads
-		// to different storage-slot access patterns, so the SRC goroutine
-		// captures the wrong trie nodes.
-		//
-		// StartPrefetcher is also unnecessary: the witness is built by the
-		// SRC goroutine, and tempState's reads are captured via
-		// CommitSnapshot + TouchAllAddresses below.
-	} else {
-		tempState.ResetPrefetcher()
-		tempState.StartPrefetcher("bor", state.Witness(), nil)
-	}
+	tempState.ResetPrefetcher()
+	tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 	span, err := c.spanner.GetCurrentSpan(ctx, header.ParentHash, tempState)
 	if err != nil {
 		return err
 	}
 
-	if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
-		// Under delayed SRC, use CommitSnapshot instead of IntermediateRoot
-		// to capture all accesses without computing a trie root. Touch
-		// every address on the main state so they appear in the block's
-		// FlatDiff and the SRC goroutine includes their trie paths in
-		// the witness.
-		tempState.CommitSnapshot(false).TouchAllAddresses(state.Inner())
-	} else {
-		tempState.IntermediateRoot(false)
-	}
+	tempState.IntermediateRoot(false)
 
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
@@ -1765,30 +1812,21 @@ func (c *Bor) CommitStates(
 	if c.config.IsIndore(header.Number) {
 		// Fetch the LastStateId from contract via current state instance
 		tempState := state.Inner().Copy()
-		if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
-			// See comment in checkAndCommitSpan: under delayed SRC,
-			// skip ResetPrefetcher + StartPrefetcher to preserve the
-			// FlatDiff overlay and avoid stale root_{N-2} reads.
-		} else {
-			tempState.ResetPrefetcher()
-			tempState.StartPrefetcher("bor", state.Witness(), nil)
-		}
+		tempState.ResetPrefetcher()
+		tempState.StartPrefetcher("bor", state.Witness(), nil)
 
 		lastStateIDBig, err = c.GenesisContractsClient.LastStateId(tempState, number-1, header.ParentHash)
 		if err != nil {
 			return nil, err
 		}
 
-		if c.chainConfig.Bor != nil && c.chainConfig.Bor.IsDelayedSRC(header.Number) {
-			// Under delayed SRC, use CommitSnapshot instead of
-			// IntermediateRoot to capture all accesses without computing
-			// a trie root. Touch every address on the main state so they
-			// appear in the block's FlatDiff and the SRC goroutine
-			// includes their trie paths in the witness.
-			tempState.CommitSnapshot(false).TouchAllAddresses(state.Inner())
-		} else {
-			tempState.IntermediateRoot(false)
-		}
+		tempState.IntermediateRoot(false)
+
+		// Propagate addresses accessed during LastStateId back to the original
+		// state so they appear in the FlatDiff ReadSet. Without this, the
+		// pipelined SRC goroutine's witness won't capture their trie proof
+		// nodes, causing stateless execution to fail with missing trie nodes.
+		tempState.PropagateReadsTo(state.Inner())
 
 		stateSyncDelay := c.config.CalculateStateSyncDelay(number)
 		to = time.Unix(int64(header.Time-stateSyncDelay), 0)
