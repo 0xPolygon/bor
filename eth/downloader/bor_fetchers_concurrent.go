@@ -402,13 +402,14 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				peer.log.Debug("Downloader: peer exceeded fail threshold, zeroing capacity", "queueKind", queue.kind(), "fails", fails)
 				queue.updateCapacity(peer, 0, 0)
 			} else {
+				d.dropPeer(peer.id)
+
 				// If this peer was the master peer, abort sync immediately
 				d.cancelLock.RLock()
 				master := peer.id == d.cancelPeer
 				d.cancelLock.RUnlock()
 
 				peer.log.Debug("Downloader: dropping peer on timeout", "queueKind", queue.kind(), "fails", fails, "master", master)
-				d.dropPeer(peer.id)
 
 				if master {
 					d.cancel()
