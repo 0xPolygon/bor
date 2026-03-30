@@ -64,6 +64,9 @@ type Server struct {
 	tracer     *sdktrace.TracerProvider
 	config     *Config
 
+	// tracerAPI to trace block executions
+	tracerAPI *tracers.API
+
 	// Bor health service.
 	healthService *health.Health
 }
@@ -244,6 +247,7 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 
 	// debug tracing is enabled by default
 	stack.RegisterAPIs(tracers.APIs(srv.backend.APIBackend))
+	srv.tracerAPI = tracers.NewAPI(srv.backend.APIBackend)
 
 	// graphql is started from another place
 	if config.JsonRPC.Graphql.Enabled {

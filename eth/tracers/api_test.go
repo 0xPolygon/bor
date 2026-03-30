@@ -706,12 +706,6 @@ func TestTraceBlock(t *testing.T) {
 	}
 }
 
-// txTraceResult is the result of a single transaction trace.
-type txTraceResultTest struct {
-	Result interface{} `json:"result,omitempty"` // Trace results produced by the tracer
-	Error  string      `json:"error,omitempty"`  // Trace failure produced by the tracer
-}
-
 // nolint:typecheck
 func TestTracingWithOverrides(t *testing.T) {
 	t.Parallel()

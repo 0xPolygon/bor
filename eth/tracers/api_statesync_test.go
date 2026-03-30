@@ -214,20 +214,6 @@ func (b *borTestBackend) injectStateSyncTx(blockNum uint64, stateSyncTx *types.T
 	return nil
 }
 
-// createStateSyncTx creates a state sync transaction for testing.
-func createStateSyncTx(id uint64) *types.Transaction {
-	return types.NewTx(&types.StateSyncTx{
-		StateSyncData: []*types.StateSyncData{
-			{
-				ID:       id,
-				Contract: common.HexToAddress("0x0000000000000000000000000000000000001001"),
-				Data:     []byte{0x01, 0x02, 0x03},
-				TxHash:   common.HexToHash("0x0000dead"),
-			},
-		},
-	})
-}
-
 // newStateSyncTestSetup creates a common test setup for state-sync tracing tests.
 // It returns the backend, api, stateSyncTx, and the block number where the state-sync tx was injected.
 func newStateSyncTestSetup(t *testing.T, n int) (*borTestBackend, *API, uint64) {
@@ -412,8 +398,7 @@ func TestTraceChain_WithStateSyncTx(t *testing.T) {
 	require.NoError(t, err, "failed to get block: %d, err: %v", 3, err)
 
 	// Trace full chain (from, to] (i.e. [0, 3])
-	results := make(chan *blockTraceResult, 3)
-	results = api.traceChain(from, to, nil, nil)
+	results := api.traceChain(from, to, nil, nil)
 	require.NoError(t, err, "TraceBlockByNumber failed: %v", err)
 	require.NotNil(t, results, "TraceBlockByNumber returned nil traces")
 

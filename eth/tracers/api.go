@@ -28,7 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -543,21 +542,6 @@ func (api *API) StandardTraceBlockToFile(ctx context.Context, hash common.Hash, 
 	}
 
 	return api.standardTraceBlockToFile(ctx, block, config)
-}
-
-func prepareCallMessage(msg core.Message) statefull.Callmsg {
-	return statefull.Callmsg{
-		CallMsg: ethereum.CallMsg{
-			From:       msg.From,
-			To:         msg.To,
-			Gas:        msg.GasLimit,
-			GasPrice:   msg.GasPrice,
-			GasFeeCap:  msg.GasFeeCap,
-			GasTipCap:  msg.GasTipCap,
-			Value:      msg.Value,
-			Data:       msg.Data,
-			AccessList: msg.AccessList,
-		}}
 }
 
 // IntermediateRoots executes a block (bad- or canon- or side-), and returns a list
