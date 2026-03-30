@@ -95,6 +95,23 @@ func newStates(accounts map[common.Hash][]byte, storages map[common.Hash]map[com
 	return s
 }
 
+// copy creates a deep copy of the state set (safe to mutate concurrently).
+func (s *stateSet) copy() *stateSet {
+	accounts := make(map[common.Hash][]byte, len(s.accountData))
+	for hash, data := range s.accountData {
+		accounts[hash] = data // []byte values are treated as immutable
+	}
+	storages := make(map[common.Hash]map[common.Hash][]byte, len(s.storageData))
+	for accountHash, slots := range s.storageData {
+		slotsCopy := make(map[common.Hash][]byte, len(slots))
+		for storageHash, data := range slots {
+			slotsCopy[storageHash] = data
+		}
+		storages[accountHash] = slotsCopy
+	}
+	return newStates(accounts, storages, s.rawStorageKey)
+}
+
 // account returns the account data associated with the specified address hash.
 func (s *stateSet) account(hash common.Hash) ([]byte, bool) {
 	// If the account is known locally, return it
