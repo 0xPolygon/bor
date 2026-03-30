@@ -38,7 +38,7 @@ type buffer struct {
 	layers     uint64    // The number of diff layers aggregated inside
 	limit      uint64    // The maximum total memory allowance in bytes
 	nodeLimit  uint64    // Trie node memory threshold that triggers a flush
-	stateLimit uint64    // State memory threshold (hard cap)
+	stateLimit uint64    // State memory reservation/budget within limit; not an independent hard cap
 	nodes      *nodeSet  // Aggregated trie node set
 	states     *stateSet // Aggregated state set
 
