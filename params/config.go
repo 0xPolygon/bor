@@ -941,21 +941,21 @@ type BorConfig struct {
 	TargetBaseFee          *uint64 `json:"-"` // Desired base fee in wei; target gas % adjusts around this value. Set via --miner.targetBaseFee
 	BaseFeeBuffer          *uint64 `json:"-"` // Buffer in wei; no adjustment when parentBaseFee is within ±buffer of TargetBaseFee. Set via --miner.baseFeeBuffer
 
-	JaipurBlock                 *big.Int          `json:"jaipurBlock"`                           // Jaipur switch block (nil = no fork, 0 = already on jaipur)
-	DelhiBlock                  *big.Int          `json:"delhiBlock"`                            // Delhi switch block (nil = no fork, 0 = already on delhi)
-	IndoreBlock                 *big.Int          `json:"indoreBlock"`                           // Indore switch block (nil = no fork, 0 = already on indore)
-	StateSyncConfirmationDelay  map[string]uint64 `json:"stateSyncConfirmationDelay"`            // StateSync Confirmation Delay, in seconds, to calculate `to`
-	AhmedabadBlock              *big.Int          `json:"ahmedabadBlock"`                        // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
-	BhilaiBlock                 *big.Int          `json:"bhilaiBlock"`                           // Bhilai switch block (nil = no fork, 0 = already on bhilai)
-	RioBlock                    *big.Int          `json:"rioBlock"`                              // Rio switch block (nil = no fork, 0 = already on rio)
-	MadhugiriBlock              *big.Int          `json:"madhugiriBlock"`                        // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
-	MadhugiriProBlock           *big.Int          `json:"madhugiriProBlock"`                     // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
-	DandeliBlock                *big.Int          `json:"dandeliBlock"`                          // Dandeli switch block (nil = no fork, 0 = already on dandeli)
-	LisovoBlock                 *big.Int          `json:"lisovoBlock"`                           // Lisovo switch block (nil = no fork, 0 = already on lisovo)
-	LisovoProBlock              *big.Int          `json:"lisovoProBlock"`                        // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
-	GiuglianoBlock              *big.Int          `json:"giuglianoBlock"`                        // Giugliano switch block (nil = no fork, 0 = already on giugliano)
+	JaipurBlock                *big.Int          `json:"jaipurBlock"`                // Jaipur switch block (nil = no fork, 0 = already on jaipur)
+	DelhiBlock                 *big.Int          `json:"delhiBlock"`                 // Delhi switch block (nil = no fork, 0 = already on delhi)
+	IndoreBlock                *big.Int          `json:"indoreBlock"`                // Indore switch block (nil = no fork, 0 = already on indore)
+	StateSyncConfirmationDelay map[string]uint64 `json:"stateSyncConfirmationDelay"` // StateSync Confirmation Delay, in seconds, to calculate `to`
+	AhmedabadBlock             *big.Int          `json:"ahmedabadBlock"`             // Ahmedabad switch block (nil = no fork, 0 = already on ahmedabad)
+	BhilaiBlock                *big.Int          `json:"bhilaiBlock"`                // Bhilai switch block (nil = no fork, 0 = already on bhilai)
+	RioBlock                   *big.Int          `json:"rioBlock"`                   // Rio switch block (nil = no fork, 0 = already on rio)
+	MadhugiriBlock             *big.Int          `json:"madhugiriBlock"`             // Madhugiri switch block (nil = no fork, 0 = already on madhugiri)
+	MadhugiriProBlock          *big.Int          `json:"madhugiriProBlock"`          // MadhugiriPro switch block (nil = no fork, 0 = already on madhugiriPro)
+	DandeliBlock               *big.Int          `json:"dandeliBlock"`               // Dandeli switch block (nil = no fork, 0 = already on dandeli)
+	LisovoBlock                *big.Int          `json:"lisovoBlock"`                // Lisovo switch block (nil = no fork, 0 = already on lisovo)
+	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
+	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	// TODO marcello define block numbers
-	DeterministicStateSyncBlock *big.Int          `json:"deterministicStateSyncBlock,omitempty"` // DeterministicStateSync switch block (nil = no fork, 0 = already active)
+	DeterministicStateSyncBlock *big.Int `json:"deterministicStateSyncBlock,omitempty"` // DeterministicStateSync switch block (nil = no fork, 0 = already active)
 }
 
 // String implements the stringer interface, returning the consensus engine details.

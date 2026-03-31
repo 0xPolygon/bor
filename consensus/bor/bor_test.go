@@ -4981,6 +4981,7 @@ func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
 		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
 	}
 }
+
 // giuglianoBorConfig returns a BorConfig with Giugliano enabled at genesis.
 func giuglianoBorConfig() *params.BorConfig {
 	return &params.BorConfig{
@@ -5275,16 +5276,16 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 // It returns configurable results and tracks call counts for assertions.
 type trackingHeimdallClient struct {
 	// Call counters
-	stateSyncEventsCalled       int
-	getBlockHeightByTimeCalled  int
+	stateSyncEventsCalled         int
+	getBlockHeightByTimeCalled    int
 	stateSyncEventsAtHeightCalled int
 
 	// Configurable return values
-	blockHeight    int64
-	blockHeightErr error
-	events         []*clerk.EventRecordWithTime
-	eventsErr      error
-	eventsAtHeight []*clerk.EventRecordWithTime
+	blockHeight       int64
+	blockHeightErr    error
+	events            []*clerk.EventRecordWithTime
+	eventsErr         error
+	eventsAtHeight    []*clerk.EventRecordWithTime
 	eventsAtHeightErr error
 }
 
@@ -5326,12 +5327,12 @@ func (t *trackingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (i
 // deterministicBorConfig returns a BorConfig with DeterministicStateSyncBlock set.
 func deterministicBorConfig(forkBlock int64) *params.BorConfig {
 	return &params.BorConfig{
-		Sprint:                        map[string]uint64{"0": 16},
-		Period:                        map[string]uint64{"0": 2},
-		IndoreBlock:                   big.NewInt(0),
-		StateSyncConfirmationDelay:    map[string]uint64{"0": 0},
-		RioBlock:                      big.NewInt(1000000),
-		DeterministicStateSyncBlock:   big.NewInt(forkBlock),
+		Sprint:                      map[string]uint64{"0": 16},
+		Period:                      map[string]uint64{"0": 2},
+		IndoreBlock:                 big.NewInt(0),
+		StateSyncConfirmationDelay:  map[string]uint64{"0": 0},
+		RioBlock:                    big.NewInt(1000000),
+		DeterministicStateSyncBlock: big.NewInt(forkBlock),
 	}
 }
 

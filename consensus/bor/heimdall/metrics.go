@@ -29,8 +29,8 @@ const (
 	MilestoneLastNoAckRequest requestType = "milestone-last-no-ack"
 	MilestoneIDRequest        requestType = "milestone-id"
 	StatusRequest             requestType = "status"
-	BlockHeightByTimeRequest    requestType = "block-height-by-time"
-	StateSyncAtHeightRequest    requestType = "state-sync-at-height"
+	BlockHeightByTimeRequest  requestType = "block-height-by-time"
+	StateSyncAtHeightRequest  requestType = "state-sync-at-height"
 )
 
 func WithRequestType(ctx context.Context, reqType requestType) context.Context {
