@@ -319,6 +319,8 @@ loop:
 		}
 	}
 
+	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
+
 	close(p.closed)
 	p.rw.close(reason)
 	p.wg.Wait()

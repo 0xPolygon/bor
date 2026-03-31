@@ -473,7 +473,19 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 			}
 			dl.frozen = nil
 		}
-		combined = newBuffer(dl.db.config.WriteBufferSize, nil, nil, 0)
+		// Carry states over to the new buffer only when the flush was
+		// triggered by node pressure (combined.full()), not by force or
+		// history-driven flushes which expect a full clear. States are
+		// carried when they are still within their allocation, meaning
+		// trie nodes were the cause of the flush.
+		// Use a shallow copy so the live buffer can evolve independently
+		// while the background flush persists the original snapshot.
+		if !force && !flush && combined.shouldCarryStates() {
+			carried := combined.states.copy()
+			combined = newBuffer(dl.db.config.WriteBufferSize, dl.db.config.StateReservation, nil, carried, 0)
+		} else {
+			combined = newBuffer(dl.db.config.WriteBufferSize, dl.db.config.StateReservation, nil, nil, 0)
+		}
 	}
 	// Link the generator if snapshot is not yet completed
 	ndl := newDiskLayer(bottom.root, bottom.stateID(), dl.db, dl.nodes, dl.states, combined, dl.frozen)
@@ -534,6 +546,10 @@ func (dl *diskLayer) revert(h *stateHistory) (*diskLayer, error) {
 		log.Debug("Reverted data in write buffer", "oldroot", h.meta.root, "newroot", h.meta.parent, "elapsed", common.PrettyDuration(time.Since(start)))
 		return ndl, nil
 	}
+	// The buffer has no uncommitted transitions. Clear any carried-over
+	// state data so it won't serve stale reads after the persistent
+	// state is reverted below.
+	dl.buffer.reset()
 	// Block until the frozen buffer is fully flushed
 	if dl.frozen != nil {
 		if err := dl.frozen.waitFlush(); err != nil {

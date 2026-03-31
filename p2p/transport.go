@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/bitutil"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/rlpx"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -65,6 +66,9 @@ func (t *rlpxTransport) ReadMsg() (Msg, error) {
 	t.conn.SetReadDeadline(time.Now().Add(frameReadTimeout))
 
 	code, data, wireSize, err := t.conn.Read()
+	if err != nil {
+		log.Debug("P2P read error", "err", err)
+	}
 	if err == nil {
 		// Protocol messages are dispatched to subprotocol handlers asynchronously,
 		// but package rlpx may reuse the returned 'data' buffer on the next call
@@ -98,6 +102,7 @@ func (t *rlpxTransport) WriteMsg(msg Msg) error {
 
 	size, err := t.conn.Write(msg.Code, t.wbuf.Bytes())
 	if err != nil {
+		log.Debug("P2P write error", "msgcode", msg.Code, "msgsize", msg.Size, "err", err)
 		return err
 	}
 

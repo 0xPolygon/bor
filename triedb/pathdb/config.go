@@ -32,17 +32,30 @@ const (
 	defaultStateCleanSize = 16 * 1024 * 1024
 
 	// maxBufferSize is the maximum memory allowance of node buffer.
-	// Too large buffer will cause the system to pause for a long
-	// time when write happens. Also, the largest batch that pebble can
-	// support is 4GB, node will panic if batch size exceeds this limit.
-	maxBufferSize = 256 * 1024 * 1024
+	// When async flushing is enabled (the default, controlled by
+	// NoAsyncFlush in Config), the buffer is frozen and flushed in a
+	// background goroutine while a new buffer accepts writes, so block
+	// processing is not blocked by the flush. When async flushing is
+	// disabled (NoAsyncFlush = true), larger buffers will cause the
+	// system to pause for a longer time when the flush happens.
+	// The largest batch that pebble can support is 4GB; the serialized
+	// batch is typically smaller than the in-memory buffer size.
+	maxBufferSize = 2048 * 1024 * 1024
 
 	// defaultBufferSize is the default memory allowance of node buffer
 	// that aggregates the writes from above until it's flushed into the
 	// disk. It's meant to be used once the initial sync is finished.
-	// Do not increase the buffer size arbitrarily, otherwise the system
-	// pause time will increase when the database writes happen.
+	// Do not increase the buffer size arbitrarily without async flushing
+	// enabled, otherwise the system pause time will increase when the
+	// database writes happen.
 	defaultBufferSize = 64 * 1024 * 1024
+
+	// defaultStateReservation is the percentage of the write buffer reserved
+	// for state data (accounts plus storage slots). The remaining portion is for
+	// trie nodes. When trie nodes exceed their allocation, the buffer is flushed,
+	// but states are carried over to the new buffer, allowing state
+	// data to accumulate across flush cycles for a higher dirty hit rate.
+	defaultStateReservation = 80
 
 	// defaultPreloadRateLimit is the default rate limit for address cache preloading
 	// in bytes per second. 1 MB/s balances sync impact with preload performance.
@@ -61,6 +74,7 @@ var Defaults = &Config{
 	TrieCleanSize:       defaultTrieCleanSize,
 	StateCleanSize:      defaultStateCleanSize,
 	WriteBufferSize:     defaultBufferSize,
+	StateReservation:    defaultStateReservation,
 	PreloadRateLimit:    defaultPreloadRateLimit,
 }
 
@@ -78,6 +92,7 @@ type Config struct {
 	TrieCleanSize       int    // Maximum memory allowance (in bytes) for caching clean trie data
 	StateCleanSize      int    // Maximum memory allowance (in bytes) for caching clean state data
 	WriteBufferSize     int    // Maximum memory allowance (in bytes) for write buffer
+	StateReservation    int    // Percentage of write buffer reserved for states (1-100, default 80)
 	ReadOnly            bool   // Flag whether the database is opened in read only mode
 	JournalDirectory    string // Absolute path of journal directory (null means the journal data is persisted in key-value store)
 
@@ -105,6 +120,10 @@ func (c *Config) sanitize() *Config {
 		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.WriteBufferSize), "updated", common.StorageSize(maxBufferSize))
 		conf.WriteBufferSize = maxBufferSize
 	}
+	if conf.StateReservation <= 0 || conf.StateReservation > 100 {
+		log.Warn("Sanitizing invalid state reservation", "provided", conf.StateReservation, "updated", defaultStateReservation)
+		conf.StateReservation = defaultStateReservation
+	}
 	return &conf
 }
 
@@ -117,6 +136,7 @@ func (c *Config) fields() []interface{} {
 	list = append(list, "triecache", common.StorageSize(c.TrieCleanSize))
 	list = append(list, "statecache", common.StorageSize(c.StateCleanSize))
 	list = append(list, "buffer", common.StorageSize(c.WriteBufferSize))
+	list = append(list, "statereservation", fmt.Sprintf("%d%%", c.StateReservation))
 
 	if c.StateHistory == 0 {
 		list = append(list, "state-history", "entire chain")

@@ -35,8 +35,10 @@ import (
 
 const (
 	// maxTxAnnounces is the maximum number of unique transactions a peer
-	// can announce in a short time.
-	maxTxAnnounces = 4096
+	// can announce in a short time. This must be at least as large as
+	// maxQueuedTxAnns (the sender-side announce queue in eth/protocols/eth/peer.go)
+	// to avoid silently dropping announcement batches under high throughput.
+	maxTxAnnounces = 16384
 
 	// maxTxRetrievals is the maximum number of transactions that can be fetched
 	// in one request. The rationale for picking 256 is to have a reasonabe lower

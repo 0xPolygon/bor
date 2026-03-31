@@ -70,6 +70,12 @@ type stateSet struct {
 
 	rawStorageKey bool // indicates whether the storage set uses the raw slot key or the hash
 
+	// storageShared indicates that inherited storage submaps should be treated
+	// as copy-on-write. ownedStorage tracks which accounts have already detached
+	// from the shared snapshot and may be mutated in place.
+	storageShared bool
+	ownedStorage  map[common.Hash]struct{}
+
 	// Lock for guarding the two lists above. These lists might be accessed
 	// concurrently and lock protection is essential to avoid concurrent
 	// slice or map read/write.
@@ -93,6 +99,68 @@ func newStates(accounts map[common.Hash][]byte, storages map[common.Hash]map[com
 	}
 	s.size = s.check()
 	return s
+}
+
+// copy clones the top-level maps and keeps storage submaps shared until the
+// first write in the returned stateSet, minimizing carry-over memory overhead
+// while keeping the source snapshot untouched for async flushing.
+func (s *stateSet) copy() *stateSet {
+	accounts := make(map[common.Hash][]byte, len(s.accountData))
+	for hash, data := range s.accountData {
+		accounts[hash] = data // []byte values are treated as immutable
+	}
+	storages := make(map[common.Hash]map[common.Hash][]byte, len(s.storageData))
+	for accountHash, slots := range s.storageData {
+		storages[accountHash] = slots
+	}
+	return &stateSet{
+		accountData:       accounts,
+		storageData:       storages,
+		size:              s.size,
+		rawStorageKey:     s.rawStorageKey,
+		storageShared:     len(storages) > 0,
+		storageListSorted: make(map[common.Hash][]common.Hash),
+	}
+}
+
+// storageIsShared reports whether the account's storage submap is still shared
+// with the source snapshot and must be detached before mutation.
+func (s *stateSet) storageIsShared(accountHash common.Hash) bool {
+	if !s.storageShared {
+		return false
+	}
+	if _, owned := s.ownedStorage[accountHash]; owned {
+		return false
+	}
+	return true
+}
+
+// markStorageOwned records that the account's storage submap has been detached
+// from the shared snapshot and may now be mutated in place.
+func (s *stateSet) markStorageOwned(accountHash common.Hash) {
+	if !s.storageShared {
+		return
+	}
+	if s.ownedStorage == nil {
+		s.ownedStorage = make(map[common.Hash]struct{})
+	}
+	s.ownedStorage[accountHash] = struct{}{}
+}
+
+// writableStorage returns a storage submap that is safe to mutate, cloning it
+// on first write if it is still shared with the source snapshot.
+func (s *stateSet) writableStorage(accountHash common.Hash) map[common.Hash][]byte {
+	slots := s.storageData[accountHash]
+	if !s.storageIsShared(accountHash) {
+		return slots
+	}
+	cloned := make(map[common.Hash][]byte, len(slots))
+	for storageHash, data := range slots {
+		cloned[storageHash] = data
+	}
+	s.storageData[accountHash] = cloned
+	s.markStorageOwned(accountHash)
+	return cloned
 }
 
 // account returns the account data associated with the specified address hash.
@@ -260,7 +328,7 @@ func (s *stateSet) merge(other *stateSet) {
 			continue
 		}
 		// Storage exists in both local and external set, merge the slots
-		slots := s.storageData[accountHash]
+		slots := s.writableStorage(accountHash)
 		for storageHash, data := range storage {
 			if origin, ok := slots[storageHash]; ok {
 				delta += len(data) - len(origin)
@@ -300,10 +368,11 @@ func (s *stateSet) revertTo(accountOrigin map[common.Hash][]byte, storageOrigin 
 	}
 	// Overwrite the storage data with original value blindly
 	for addrHash, storage := range storageOrigin {
-		slots := s.storageData[addrHash]
-		if len(slots) == 0 {
+		slots, ok := s.storageData[addrHash]
+		if !ok || len(slots) == 0 {
 			panic(fmt.Sprintf("non-existent storage set for reverting, %x", addrHash))
 		}
+		slots = s.writableStorage(addrHash)
 		for storageHash, blob := range storage {
 			data, ok := slots[storageHash]
 			if !ok {
@@ -413,6 +482,8 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 		}
 	}
 	s.storageData = storageSet
+	s.storageShared = false
+	s.ownedStorage = nil
 	s.storageListSorted = make(map[common.Hash][]common.Hash)
 
 	s.size = s.check()
@@ -430,6 +501,8 @@ func (s *stateSet) reset() {
 	s.accountData = make(map[common.Hash][]byte)
 	s.storageData = make(map[common.Hash]map[common.Hash][]byte)
 	s.size = 0
+	s.storageShared = false
+	s.ownedStorage = nil
 	s.accountListSorted = nil
 	s.storageListSorted = make(map[common.Hash][]common.Hash)
 }

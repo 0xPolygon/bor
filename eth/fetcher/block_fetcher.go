@@ -708,7 +708,7 @@ func (f *BlockFetcher) loop() {
 								f.FilterHeaders(p, headers, time.Now(), announcedAt)
 
 							case <-timeout.C:
-								log.Debug("Header fetch timed out", "peer", p, "hash", h)
+								log.Debug("BlockFetcher: header fetch timed out, dropping peer", "peer", p, "hash", h, "timeout", 2*fetchTimeout)
 								f.dropPeer(p)
 							case <-f.quit:
 								return // Fetcher stopped
@@ -783,7 +783,7 @@ func (f *BlockFetcher) loop() {
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
 					case <-timeout.C:
-						log.Debug("Body fetch timed out", "peer", p, "hashes", hs)
+						log.Debug("BlockFetcher: body fetch timed out, dropping peer", "peer", p, "hashes", hs, "timeout", 2*fetchTimeout)
 						f.dropPeer(p)
 					case <-f.quit:
 						return // Fetcher stopped
