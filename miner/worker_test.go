@@ -2967,3 +2967,40 @@ func TestDelayFlagOffByOne(t *testing.T) {
 	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }
+
+// TestDisablePendingBlock validates if setting `DisablePendingBlock` to true
+// correctly prevents the creation of a pending block or not.
+func TestDisablePendingBlock(t *testing.T) {
+	t.Run("pending block is nil when flag is enabled", func(t *testing.T) {
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = true
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+		time.Sleep(500 * time.Millisecond)
+
+		block, receipts, stateDB := w.pending()
+		require.Nil(t, block, "pending block should be nil when DisablePendingBlock is true")
+		require.Nil(t, receipts, "pending receipts should be nil when DisablePendingBlock is true")
+		require.Nil(t, stateDB, "pending state should be nil when DisablePendingBlock is true")
+	})
+
+	t.Run("pending block is created when flag is disabled", func(t *testing.T) {
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = false
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+		time.Sleep(500 * time.Millisecond)
+
+		block, _, stateDB := w.pending()
+		require.NotNil(t, block, "pending block should not be nil when DisablePendingBlock is false")
+		require.NotNil(t, stateDB, "pending state should not be nil when DisablePendingBlock is false")
+	})
+}

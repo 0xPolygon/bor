@@ -336,6 +336,8 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.blocktime```: The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time. (default: 0s)
 
+- ```miner.disable-pending-block```: Disable the pending block creation loop. When set, RPC queries for 'pending' block will return nil (default: false)
+
 - ```miner.enableDynamicGasLimit```: Enable dynamic gas limit adjustment based on base fee (default: false)
 
 - ```miner.enableDynamicTargetGas```: Enable dynamic EIP-1559 target gas percentage adjustment based on base fee (post-Lisovo, mutually exclusive with enableDynamicGasLimit) (default: false)

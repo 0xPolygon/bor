@@ -449,6 +449,10 @@ type SealerConfig struct {
 
 	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
+
+	// DisablePendingBlock disables the pending block creation loop which currently works in all node types
+	// to create a block for serving rpc queries for 'pending' block.
+	DisablePendingBlock bool `hcl:"disable-pending-block,optional" toml:"disable-pending-block,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -866,7 +870,6 @@ func DefaultConfig() *Config {
 		StateScheme: "path",
 		Snapshot:    true,
 		BorLogs:     false,
-
 		TxPool: &TxPoolConfig{
 			Locals:               []string{},
 			NoLocals:             false,
@@ -906,6 +909,7 @@ func DefaultConfig() *Config {
 			PrefetchGasLimitPercent:  100,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
+			DisablePendingBlock:      false,
 		},
 		Gpo: &GpoConfig{
 			Blocks:           20,
@@ -1277,6 +1281,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+		n.Miner.DisablePendingBlock = c.Sealer.DisablePendingBlock
 
 		// Validate prefetch gas limit percentage
 		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {
