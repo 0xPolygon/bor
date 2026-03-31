@@ -216,6 +216,11 @@ func Commands() map[string]MarkDownCommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"rebuild-state": func() (MarkDownCommand, error) {
+			return &RebuildStateCommand{
+				Meta: meta,
+			}, nil
+		},
 	}
 }
 

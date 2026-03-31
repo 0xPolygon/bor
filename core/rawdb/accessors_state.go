@@ -147,6 +147,13 @@ func ReadTrieJournal(db ethdb.KeyValueReader) []byte {
 	return data
 }
 
+// DeleteTrieJournal removes the serialized in-memory trie nodes of layers.
+func DeleteTrieJournal(db ethdb.KeyValueWriter) {
+	if err := db.Delete(trieJournalKey); err != nil {
+		log.Crit("Failed to delete trie journal", "err", err)
+	}
+}
+
 // WriteTrieJournal stores the serialized in-memory trie nodes of layers to save at
 // shutdown.
 func WriteTrieJournal(db ethdb.KeyValueWriter, journal []byte) {

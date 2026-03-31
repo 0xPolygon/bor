@@ -137,7 +137,7 @@ var (
 	// Path-based storage scheme of merkle patricia trie.
 	TrieNodeAccountPrefix = []byte("A") // TrieNodeAccountPrefix + hexPath -> trie node
 	TrieNodeStoragePrefix = []byte("O") // TrieNodeStoragePrefix + accountHash + hexPath -> trie node
-	stateIDPrefix         = []byte("L") // stateIDPrefix + state root -> state id
+	StateIDPrefix         = []byte("L") // StateIDPrefix + state root -> state id
 
 	// State history indexing within path-based storage scheme
 	StateHistoryIndexPrefix           = []byte("m")   // The global prefix of state history index data
@@ -338,7 +338,7 @@ func genesisStateSpecKey(hash common.Hash) []byte {
 
 // stateIDKey = stateIDPrefix + root (32 bytes)
 func stateIDKey(root common.Hash) []byte {
-	return append(stateIDPrefix, root.Bytes()...)
+	return append(StateIDPrefix, root.Bytes()...)
 }
 
 // accountTrieNodeKey = TrieNodeAccountPrefix + nodePath.

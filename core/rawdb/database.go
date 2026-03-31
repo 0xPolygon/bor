@@ -721,7 +721,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 				hashNumPairings.add(size)
 			case IsLegacyTrieNode(key, it.Value()):
 				legacyTries.add(size)
-			case bytes.HasPrefix(key, stateIDPrefix) && len(key) == len(stateIDPrefix)+common.HashLength:
+			case bytes.HasPrefix(key, StateIDPrefix) && len(key) == len(StateIDPrefix)+common.HashLength:
 				stateLookups.add(size)
 			case IsAccountTrieNode(key):
 				accountTries.add(size)
@@ -770,7 +770,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 				switch {
 				case IsAccountTrieNode(remain):
 					verkleTries.add(size)
-				case bytes.HasPrefix(remain, stateIDPrefix) && len(remain) == len(stateIDPrefix)+common.HashLength:
+				case bytes.HasPrefix(remain, StateIDPrefix) && len(remain) == len(StateIDPrefix)+common.HashLength:
 					verkleStateLookups.add(size)
 				case bytes.Equal(remain, persistentStateIDKey):
 					metadata.add(size)
