@@ -245,6 +245,7 @@ func BorRLP(header *types.Header, c *params.BorConfig) []byte {
 type Bor struct {
 	chainConfig *params.ChainConfig // Chain config
 	config      *params.BorConfig   // Consensus engine configuration parameters for bor consensus
+	vmConfig    vm.Config           // VM config (optional) for system transactions
 	db          ethdb.Database      // Database to store and retrieve snapshot checkpoints
 
 	recents               *ttlcache.Cache[common.Hash, *Snapshot]     // Snapshots for recent block to speed up reorgs
@@ -327,6 +328,7 @@ func New(
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
+		vmConfig:               vm.Config{},
 		db:                     db,
 		ethAPI:                 ethAPI,
 		recents:                recents,
@@ -364,6 +366,10 @@ func New(
 	go c.runMilestoneFetcher()
 
 	return c
+}
+
+func (c *Bor) SetVMConfig(vmCfg vm.Config) {
+	c.vmConfig = vmCfg
 }
 
 // Author implements consensus.Engine, returning the Ethereum address recovered
@@ -1694,7 +1700,7 @@ func (c *Bor) FetchAndCommitSpan(
 		)
 	}
 
-	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain)
+	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.vmConfig)
 }
 
 // CommitStates commit states
@@ -1815,7 +1821,7 @@ func (c *Bor) CommitStates(
 		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
 		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
 		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
-		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain)
+		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, c.vmConfig)
 		if err != nil {
 			return nil, err
 		}

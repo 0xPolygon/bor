@@ -53,7 +53,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
-		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
+		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
 		Value:   &c.cliConfig.VMTrace,
 		Default: c.cliConfig.VMTrace,
 	})

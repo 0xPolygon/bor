@@ -2,11 +2,13 @@ package tracers
 
 import (
 	"context"
+	"encoding/json"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -14,6 +16,25 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/stretchr/testify/require"
+)
+
+var (
+	key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	address = crypto.PubkeyToAddress(key.PublicKey)
+
+	// State receiver address from BorConfig — must match what the tracer reads
+	stateReceiverAddr = common.HexToAddress("0x0000000000000000000000000000000000001001")
+
+	// Target contract that the state receiver forwards calls to.
+	// Bytecode: PUSH1(0) PUSH1(0) LOG0 STOP — emits an empty LOG0 on any call.
+	targetAddr = common.HexToAddress("0x0000000000000000000000000000000000002000")
+	targetCode = []byte{0x60, 0x00, 0x60, 0x00, 0xa0, 0x00}
+
+	// Production StateReceiver bytecode — leave empty for now, will be populated.
+	// This contract has full RLP decoding, sequential stateId validation,
+	// and forwards calls via: call(txGas, receiver, 0, add(data, 0x20), mload(data), 0, 0)
+	stateReceiverCode = common.FromHex("0x608060405234801561001057600080fd5b50600436106100415760003560e01c806319494a17146100465780633434735f146100e15780635407ca671461012b575b600080fd5b6100c76004803603604081101561005c57600080fd5b81019080803590602001909291908035906020019064010000000081111561008357600080fd5b82018360208201111561009557600080fd5b803590602001918460018302840111640100000000831117156100b757600080fd5b9091929391929390505050610149565b604051808215151515815260200191505060405180910390f35b6100e961047a565b604051808273ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16815260200191505060405180910390f35b610133610492565b6040518082815260200191505060405180910390f35b600073fffffffffffffffffffffffffffffffffffffffe73ffffffffffffffffffffffffffffffffffffffff163373ffffffffffffffffffffffffffffffffffffffff1614610200576040517f08c379a00000000000000000000000000000000000000000000000000000000081526004018080602001828103825260128152602001807f4e6f742053797374656d2041646465737321000000000000000000000000000081525060200191505060405180910390fd5b606061025761025285858080601f016020809104026020016040519081016040528093929190818152602001838380828437600081840152601f19601f82011690508083019250505050505050610498565b6104c6565b905060006102788260008151811061026b57fe5b60200260200101516105a3565b905080600160005401146102f4576040517f08c379a000000000000000000000000000000000000000000000000000000000815260040180806020018281038252601b8152602001807f537461746549647320617265206e6f742073657175656e7469616c000000000081525060200191505060405180910390fd5b600080815480929190600101919050555060006103248360018151811061031757fe5b6020026020010151610614565b905060606103458460028151811061033857fe5b6020026020010151610637565b9050610350826106c3565b1561046f576000624c4b409050606084836040516024018083815260200180602001828103825283818151815260200191508051906020019080838360005b838110156103aa57808201518184015260208101905061038f565b50505050905090810190601f1680156103d75780820380516001836020036101000a031916815260200191505b5093505050506040516020818303038152906040527f26c53bea000000000000000000000000000000000000000000000000000000007bffffffffffffffffffffffffffffffffffffffffffffffffffffffff19166020820180517bffffffffffffffffffffffffffffffffffffffffffffffffffffffff8381831617835250505050905060008082516020840160008887f1965050505b505050509392505050565b73fffffffffffffffffffffffffffffffffffffffe81565b60005481565b6104a0610943565b600060208301905060405180604001604052808451815260200182815250915050919050565b60606104d1826106dc565b6104da57600080fd5b60006104e58361072a565b905060608160405190808252806020026020018201604052801561052357816020015b61051061095d565b8152602001906001900390816105085790505b5090506000610535856020015161079b565b8560200151019050600080600090505b848110156105965761055683610824565b915060405180604001604052808381526020018481525084828151811061057957fe5b602002602001018190525081830192508080600101915050610545565b5082945050505050919050565b60008082600001511180156105bd57506021826000015111155b6105c657600080fd5b60006105d5836020015161079b565b9050600081846000015103905060008083866020015101905080519150602083101561060857826020036101000a820491505b81945050505050919050565b6000601582600001511461062757600080fd5b610630826105a3565b9050919050565b6060600082600001511161064a57600080fd5b6000610659836020015161079b565b905060008184600001510390506060816040519080825280601f01601f19166020018201604052801561069b5781602001600182028038833980820191505090505b50905060008160200190506106b78487602001510182856108dc565b81945050505050919050565b600080823b905060008163ffffffff1611915050919050565b600080826000015114156106f35760009050610725565b60008083602001519050805160001a915060c060ff168260ff16101561071e57600092505050610725565b6001925050505b919050565b600080826000015114156107415760009050610796565b60008090506000610755846020015161079b565b84602001510190506000846000015185602001510190505b8082101561078f5761077e82610824565b82019150828060010193505061076d565b8293505050505b919050565b600080825160001a9050608060ff168110156107bb57600091505061081f565b60b860ff168110806107e0575060c060ff1681101580156107df575060f860ff1681105b5b156107ef57600191505061081f565b60c060ff1681101561080f5760018060b80360ff1682030191505061081f565b60018060f80360ff168203019150505b919050565b6000806000835160001a9050608060ff1681101561084557600191506108d2565b60b860ff16811015610862576001608060ff1682030191506108d1565b60c060ff168110156108925760b78103600185019450806020036101000a855104600182018101935050506108d0565b60f860ff168110156108af57600160c060ff1682030191506108cf565b60f78103600185019450806020036101000a855104600182018101935050505b5b5b5b8192505050919050565b60008114156108ea5761093e565b5b602060ff16811061091a5782518252602060ff1683019250602060ff1682019150602060ff16810390506108eb565b6000600182602060ff16036101000a03905080198451168184511681811785525050505b505050565b604051806040016040528060008152602001600081525090565b60405180604001604052806000815260200160008152509056fea265627a7a7231582083fbdacb76f32b4112d0f7db9a596937925824798a0026ba0232322390b5263764736f6c634300050b0032") // TODO: replace with production bytecode
 )
 
 // borTestBackend extends testBackend with Bor-specific configuration for testing
@@ -67,7 +88,7 @@ func (b *borTestBackend) BlockByHash(ctx context.Context, hash common.Hash) (*ty
 }
 
 // newBorChainConfig creates a chain config suitable for Bor state sync testing.
-func newBorChainConfig(madhugiriBlock *big.Int) *params.ChainConfig {
+func newBorChainConfig() *params.ChainConfig {
 	return &params.ChainConfig{
 		ChainID:             big.NewInt(137),
 		HomesteadBlock:      big.NewInt(0),
@@ -90,61 +111,8 @@ func newBorChainConfig(madhugiriBlock *big.Int) *params.ChainConfig {
 			AhmedabadBlock:    big.NewInt(0),
 			BhilaiBlock:       big.NewInt(0),
 			RioBlock:          big.NewInt(0),
-			MadhugiriBlock:    madhugiriBlock,
-			MadhugiriProBlock: madhugiriBlock,
-			DandeliBlock:      big.NewInt(0),
-			Period: map[string]uint64{
-				"0": 2,
-			},
-			ProducerDelay: map[string]uint64{
-				"0": 2,
-			},
-			Sprint: map[string]uint64{
-				"0": 16,
-			},
-			BackupMultiplier: map[string]uint64{
-				"0": 2,
-			},
-			ValidatorContract:     "0x0000000000000000000000000000000000001000",
-			StateReceiverContract: "0x0000000000000000000000000000000000001001",
-			BurntContract: map[string]string{
-				"0": "0x000000000000000000000000000000000000dead",
-			},
-			Coinbase: map[string]string{
-				"0": "0x0000000000000000000000000000000000000000",
-			},
-		},
-	}
-}
-
-// newBorChainConfigForInsertion creates a chain config with Bor settings but without Madhugiri
-// for block insertion. This allows transaction execution (which needs BorConfig for burnt contract)
-// while avoiding state-sync validation during insertion.
-func newBorChainConfigForInsertion() *params.ChainConfig {
-	return &params.ChainConfig{
-		ChainID:             big.NewInt(137),
-		HomesteadBlock:      big.NewInt(0),
-		DAOForkBlock:        big.NewInt(0),
-		DAOForkSupport:      true,
-		EIP150Block:         big.NewInt(0),
-		EIP155Block:         big.NewInt(0),
-		EIP158Block:         big.NewInt(0),
-		ByzantiumBlock:      big.NewInt(0),
-		ConstantinopleBlock: big.NewInt(0),
-		PetersburgBlock:     big.NewInt(0),
-		IstanbulBlock:       big.NewInt(0),
-		MuirGlacierBlock:    big.NewInt(0),
-		BerlinBlock:         big.NewInt(0),
-		LondonBlock:         big.NewInt(0),
-		Bor: &params.BorConfig{
-			JaipurBlock:       big.NewInt(0),
-			DelhiBlock:        big.NewInt(0),
-			IndoreBlock:       big.NewInt(0),
-			AhmedabadBlock:    big.NewInt(0),
-			BhilaiBlock:       big.NewInt(0),
-			RioBlock:          big.NewInt(0),
-			MadhugiriBlock:    nil, // No Madhugiri - disables state-sync validation
-			MadhugiriProBlock: nil,
+			MadhugiriBlock:    big.NewInt(0),
+			MadhugiriProBlock: big.NewInt(0),
 			DandeliBlock:      big.NewInt(0),
 			Period: map[string]uint64{
 				"0": 2,
@@ -174,15 +142,14 @@ func newBorChainConfigForInsertion() *params.ChainConfig {
 // 1. Inserts blocks without Bor validation (to avoid state-sync processing issues)
 // 2. Exposes a Bor chain config to the tracer API (to test Madhugiri logic)
 // 3. Allows manual injection of state-sync txs into block bodies after insertion
-func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, madhugiriBlock *big.Int, generator func(i int, b *core.BlockGen)) *borTestBackend {
-	// Use config without Bor for block insertion
-	insertionConfig := newBorChainConfigForInsertion()
-	gspec.Config = insertionConfig
+func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, generator func(i int, b *core.BlockGen)) *borTestBackend {
+	borCfg := newBorChainConfig()
+	gspec.Config = borCfg
 
 	backend := &borTestBackend{
 		testBackend: testBackend{
 			// Use Bor config for API queries (this is what the tracer API sees)
-			chainConfig: newBorChainConfig(madhugiriBlock),
+			chainConfig: borCfg,
 			engine:      ethash.NewFaker(),
 			chaindb:     rawdb.NewMemoryDatabase(),
 		},
@@ -247,41 +214,20 @@ func (b *borTestBackend) injectStateSyncTx(blockNum uint64, stateSyncTx *types.T
 	return nil
 }
 
-// createStateSyncTx creates a state sync transaction for testing.
-func createStateSyncTx(id uint64) *types.Transaction {
-	return types.NewTx(&types.StateSyncTx{
-		StateSyncData: []*types.StateSyncData{
-			{
-				ID:       id,
-				Contract: common.HexToAddress("0x0000000000000000000000000000000000001001"),
-				Data:     []byte{0x01, 0x02, 0x03},
-				TxHash:   common.HexToHash("0x0000dead"),
-			},
+// newStateSyncTestSetup creates a common test setup for state-sync tracing tests.
+// It returns the backend, api, stateSyncTx, and the block number where the state-sync tx was injected.
+func newStateSyncTestSetup(t *testing.T, n int) (*borTestBackend, *API, uint64) {
+	t.Helper()
+
+	gspec := &core.Genesis{
+		Alloc: types.GenesisAlloc{
+			address:           {Balance: big.NewInt(params.Ether)},
+			stateReceiverAddr: {Code: stateReceiverCode, Balance: big.NewInt(0)},
+			targetAddr:        {Code: targetCode, Balance: big.NewInt(0)},
 		},
-	})
-}
+	}
 
-// TestTraceBlockStateSyncPostMadhugiri verifies that post-Madhugiri blocks
-// include state sync transactions in trace results regardless of BorTraceEnabled.
-// This is the core fix for the tx count mismatch bug (PIP-74).
-func TestTraceBlockStateSyncPostMadhugiri(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	// Madhugiri at block 5 - test block 10 which is post-fork
-	madhugiriBlock := big.NewInt(5)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
+	backend := newBorTestBackend(t, n, gspec, func(i int, b *core.BlockGen) {
 		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
 			Nonce:    uint64(i),
 			To:       &address,
@@ -291,660 +237,240 @@ func TestTraceBlockStateSyncPostMadhugiri(t *testing.T) {
 		}), b.Signer(), key)
 		b.AddTx(tx)
 	})
-	defer backend.chain.Stop()
 
-	// Inject state-sync tx into post-Madhugiri blocks (block 6+)
-	for i := uint64(6); i <= 10; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	// Test post-Madhugiri block (block 10) with BorTraceEnabled=false (default)
-	t.Run("PostMadhugiri_BorTraceDisabled", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(10))
-		if block == nil {
-			t.Fatal("block 10 not found")
-		}
-
-		expectedTxCount := len(block.Transactions())
-		if expectedTxCount != 2 {
-			t.Fatalf("expected 2 txs in block (1 regular + 1 state sync), got %d", expectedTxCount)
-		}
-
-		// Verify last tx is state sync
-		lastTx := block.Transactions()[expectedTxCount-1]
-		if lastTx.Type() != types.StateSyncTxType {
-			t.Fatalf("expected last tx to be StateSyncTxType, got %d", lastTx.Type())
-		}
-
-		// Trace with default config (BorTraceEnabled=false)
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(10), nil)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		// Post-Madhugiri: trace count MUST match block tx count
-		if len(results) != expectedTxCount {
-			t.Errorf("tx count mismatch: block has %d txs, trace returned %d results (expected match post-Madhugiri)",
-				expectedTxCount, len(results))
-		}
-	})
-
-	// Test post-Madhugiri block with BorTraceEnabled=true
-	t.Run("PostMadhugiri_BorTraceEnabled", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(10))
-		expectedTxCount := len(block.Transactions())
-
-		borTraceEnabled := true
-		config := &TraceConfig{BorTraceEnabled: &borTraceEnabled}
-
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(10), config)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		if len(results) != expectedTxCount {
-			t.Errorf("tx count mismatch with BorTraceEnabled=true: block has %d txs, trace returned %d results",
-				expectedTxCount, len(results))
-		}
-	})
-}
-
-// TestTraceBlockStateSyncPreMadhugiri verifies legacy behavior is preserved
-// for pre-Madhugiri blocks where state sync was not canonical.
-func TestTraceBlockStateSyncPreMadhugiri(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	// Madhugiri at block 100 - all test blocks are pre-fork
-	madhugiriBlock := big.NewInt(100)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	api := NewAPI(backend)
-
-	// Pre-Madhugiri block without state sync tx in body
-	t.Run("PreMadhugiri_NoStateSyncInBody", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(5))
-		if block == nil {
-			t.Fatal("block 5 not found")
-		}
-
-		blockTxCount := len(block.Transactions())
-		if blockTxCount != 1 {
-			t.Fatalf("expected 1 tx in pre-Madhugiri block, got %d", blockTxCount)
-		}
-
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(5), nil)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		// Pre-Madhugiri without state sync: trace count should match block body
-		if len(results) != blockTxCount {
-			t.Errorf("expected %d trace results, got %d", blockTxCount, len(results))
-		}
-	})
-}
-
-// TestTraceBlockMadhugiriForkBoundary tests edge cases at the exact fork boundary.
-func TestTraceBlockMadhugiriForkBoundary(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	// Madhugiri at block 5
-	madhugiriBlock := big.NewInt(5)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx starting at Madhugiri block (block 5+)
-	for i := uint64(5); i <= 10; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	// Test block just before Madhugiri (block 4)
-	t.Run("BlockBeforeFork", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(4))
-		if block == nil {
-			t.Fatal("block 4 not found")
-		}
-
-		blockTxCount := len(block.Transactions())
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(4), nil)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		// Block 4 is pre-Madhugiri, no state sync in body
-		if len(results) != blockTxCount {
-			t.Errorf("block 4 (pre-fork): expected %d results, got %d", blockTxCount, len(results))
-		}
-	})
-
-	// Test exact Madhugiri fork block (block 5)
-	t.Run("ExactForkBlock", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(5))
-		if block == nil {
-			t.Fatal("block 5 not found")
-		}
-
-		blockTxCount := len(block.Transactions())
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(5), nil)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		// Block 5 is Madhugiri block - state sync should be included
-		if len(results) != blockTxCount {
-			t.Errorf("block 5 (fork block): expected %d results, got %d", blockTxCount, len(results))
-		}
-	})
-
-	// Test block just after Madhugiri (block 6)
-	t.Run("BlockAfterFork", func(t *testing.T) {
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(6))
-		if block == nil {
-			t.Fatal("block 6 not found")
-		}
-
-		blockTxCount := len(block.Transactions())
-		results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(6), nil)
-		if err != nil {
-			t.Fatalf("TraceBlockByNumber failed: %v", err)
-		}
-
-		// Block 6 is post-Madhugiri - state sync should be included
-		if len(results) != blockTxCount {
-			t.Errorf("block 6 (post-fork): expected %d results, got %d", blockTxCount, len(results))
-		}
-	})
-}
-
-// TestTraceBlockByHashStateSyncPostMadhugiri tests TraceBlockByHash endpoint.
-func TestTraceBlockByHashStateSyncPostMadhugiri(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	madhugiriBlock := big.NewInt(5)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx into post-Madhugiri blocks
-	for i := uint64(6); i <= 10; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(10))
-	if block == nil {
-		t.Fatal("block 10 not found")
-	}
-
-	expectedTxCount := len(block.Transactions())
-
-	results, err := api.TraceBlockByHash(context.Background(), block.Hash(), nil)
-	if err != nil {
-		t.Fatalf("TraceBlockByHash failed: %v", err)
-	}
-
-	if len(results) != expectedTxCount {
-		t.Errorf("TraceBlockByHash: tx count mismatch: block has %d txs, trace returned %d results",
-			expectedTxCount, len(results))
-	}
-}
-
-// TestTraceChainStateSyncPostMadhugiri tests traceChain across fork boundary.
-func TestTraceChainStateSyncPostMadhugiri(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	madhugiriBlock := big.NewInt(5)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx into post-Madhugiri blocks
-	for i := uint64(5); i <= 10; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	// Use internal traceChain method (like existing tests do)
-	from, _ := api.blockByNumber(context.Background(), rpc.BlockNumber(4))
-	to, _ := api.blockByNumber(context.Background(), rpc.BlockNumber(7))
-	resCh := api.traceChain(from, to, nil, nil)
-
-	// Verify trace count for each block
-	nextBlock := uint64(5) // traceChain starts from start+1
-	for result := range resCh {
-		blockNum := uint64(result.Block)
-		if blockNum != nextBlock {
-			t.Errorf("unexpected block number: got %d, want %d", blockNum, nextBlock)
-		}
-
-		// Get expected tx count from actual block
-		block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(blockNum))
-		if block == nil {
-			t.Errorf("block %d not found", blockNum)
-			nextBlock++
-			continue
-		}
-
-		expectedTxCount := len(block.Transactions())
-		if len(result.Traces) != expectedTxCount {
-			t.Errorf("block %d: trace count mismatch: expected %d, got %d",
-				blockNum, expectedTxCount, len(result.Traces))
-		}
-
-		nextBlock++
-	}
-
-	// Verify we processed all expected blocks
-	if nextBlock != 8 { // Should have processed blocks 5, 6, 7
-		t.Errorf("did not process all blocks: stopped at %d", nextBlock)
-	}
-}
-
-// TestIntermediateRootsStateSyncPostMadhugiri tests IntermediateRoots endpoint.
-func TestIntermediateRootsStateSyncPostMadhugiri(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	madhugiriBlock := big.NewInt(5)
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx into post-Madhugiri blocks
-	for i := uint64(6); i <= 10; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(10))
-	if block == nil {
-		t.Fatal("block 10 not found")
-	}
-
-	expectedTxCount := len(block.Transactions())
-
-	roots, err := api.IntermediateRoots(context.Background(), block.Hash(), nil)
-	if err != nil {
-		t.Fatalf("IntermediateRoots failed: %v", err)
-	}
-
-	// Each tx should produce an intermediate root
-	if len(roots) != expectedTxCount {
-		t.Errorf("IntermediateRoots: expected %d roots (one per tx), got %d",
-			expectedTxCount, len(roots))
-	}
-}
-
-// TestStateSyncTxTypeDetection verifies correct detection of state sync tx type.
-func TestStateSyncTxTypeDetection(t *testing.T) {
-	t.Parallel()
-
-	stateSyncTx := createStateSyncTx(1)
-
-	if stateSyncTx.Type() != types.StateSyncTxType {
-		t.Errorf("expected tx type %d (StateSyncTxType), got %d",
-			types.StateSyncTxType, stateSyncTx.Type())
-	}
-
-	// Verify properties of state sync tx
-	if stateSyncTx.Gas() != 0 {
-		t.Errorf("state sync tx should have 0 gas, got %d", stateSyncTx.Gas())
-	}
-	if stateSyncTx.GasPrice().Cmp(big.NewInt(0)) != 0 {
-		t.Errorf("state sync tx should have 0 gas price")
-	}
-	if stateSyncTx.Value().Cmp(big.NewInt(0)) != 0 {
-		t.Errorf("state sync tx should have 0 value")
-	}
-}
-
-// TestNoMadhugiriFork tests behavior when Madhugiri fork is not configured.
-func TestNoMadhugiriFork(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	// nil = no Madhugiri fork
-	genBlocks := 10
-
-	backend := newBorTestBackend(t, genBlocks, gspec, nil, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	api := NewAPI(backend)
-
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(5))
-	if block == nil {
-		t.Fatal("block 5 not found")
-	}
-
-	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(5), nil)
-	if err != nil {
-		t.Fatalf("TraceBlockByNumber failed: %v", err)
-	}
-
-	// Without Madhugiri fork, trace count should match block body
-	expectedCount := len(block.Transactions())
-	if len(results) != expectedCount {
-		t.Errorf("without Madhugiri fork: expected %d results, got %d", expectedCount, len(results))
-	}
-}
-
-// TestMadhugiriAtGenesis tests edge case where Madhugiri is active from genesis.
-func TestMadhugiriAtGenesis(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	// Madhugiri at block 0 = active from genesis
-	madhugiriBlock := big.NewInt(0)
-	genBlocks := 5
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		// Use dynamic fee tx with proper fee caps
-		baseFee := b.BaseFee()
-		tx, _ := types.SignTx(types.NewTx(&types.DynamicFeeTx{
-			Nonce:     uint64(i),
-			To:        &address,
-			Value:     big.NewInt(1000),
-			Gas:       params.TxGas,
-			GasFeeCap: new(big.Int).Mul(baseFee, big.NewInt(2)),
-			GasTipCap: big.NewInt(1),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx into all blocks (Madhugiri active from genesis)
-	for i := uint64(1); i <= 5; i++ {
-		stateSyncTx := createStateSyncTx(i)
-		if err := backend.injectStateSyncTx(i, stateSyncTx); err != nil {
-			t.Fatalf("failed to inject state-sync tx: %v", err)
-		}
-	}
-
-	api := NewAPI(backend)
-
-	// Test block 1 (all blocks are post-Madhugiri)
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(1))
-	if block == nil {
-		t.Fatal("block 1 not found")
-	}
-
-	expectedTxCount := len(block.Transactions())
-	if expectedTxCount != 2 {
-		t.Fatalf("expected 2 txs, got %d", expectedTxCount)
-	}
-
-	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(1), nil)
-	if err != nil {
-		t.Fatalf("TraceBlockByNumber failed: %v", err)
-	}
-
-	if len(results) != expectedTxCount {
-		t.Errorf("Madhugiri from genesis: expected %d results, got %d", expectedTxCount, len(results))
-	}
-}
-
-// TestMultipleStateSyncEvents tests blocks with multiple state sync events bundled.
-func TestMultipleStateSyncEvents(t *testing.T) {
-	t.Parallel()
-
-	var (
-		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		address = crypto.PubkeyToAddress(key.PublicKey)
-		gspec   = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				address: {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	madhugiriBlock := big.NewInt(0)
-	genBlocks := 5
-
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
-			Nonce:    uint64(i),
-			To:       &address,
-			Value:    big.NewInt(1000),
-			Gas:      params.TxGas,
-			GasPrice: new(big.Int).Mul(b.BaseFee(), big.NewInt(2)),
-		}), b.Signer(), key)
-		b.AddTx(tx)
-	})
-	defer backend.chain.Stop()
-
-	// Inject state-sync tx with multiple events into block 3
 	stateSyncTx := types.NewTx(&types.StateSyncTx{
 		StateSyncData: []*types.StateSyncData{
-			{ID: 31, Contract: common.HexToAddress("0x1001"), Data: []byte{0x01}},
-			{ID: 32, Contract: common.HexToAddress("0x1001"), Data: []byte{0x02}},
-			{ID: 33, Contract: common.HexToAddress("0x1001"), Data: []byte{0x03}},
+			{
+				ID:       1,
+				Contract: targetAddr,
+				Data:     []byte("event-one"),
+				TxHash:   common.HexToHash("0xaaa1"),
+			},
+			{
+				ID:       2,
+				Contract: targetAddr,
+				Data:     []byte("event-two"),
+				TxHash:   common.HexToHash("0xaaa2"),
+			},
 		},
 	})
-	if err := backend.injectStateSyncTx(3, stateSyncTx); err != nil {
-		t.Fatalf("failed to inject state-sync tx: %v", err)
-	}
+
+	stateSyncBlock := uint64(2)
+	err := backend.injectStateSyncTx(stateSyncBlock, stateSyncTx)
+	require.NoError(t, err, "failed to inject state-sync tx")
 
 	api := NewAPI(backend)
+	return backend, api, stateSyncBlock
+}
 
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(3))
-	if block == nil {
-		t.Fatal("block 3 not found")
+// TestTraceBlockByNumber_WithStateSyncTx tests end-to-end state-sync tracing using the actual
+// StateReceiver contract bytecode and mirrors what happens in actual networks. During the test
+// we do the following things:
+//
+//  1. Deploy StateReceiver at 0x1001 with mainnet bytecode (which has `stateReceive` method).
+//  2. A simple "target" contract is deployed at a separate address — it just emits LOG0 on any call.
+//  3. A StateSyncTx carries bridge events whose Contract field points to the target is injected.
+//  4. During tracing, the bridge events are executed inside EVM which calls the StateReceiver
+//     contract, which further calls the target contract and generates expected trace.
+//  5. We later verify if the trace is correctly generated or not.
+func TestTraceBlockByNumber_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3)
+	defer backend.chain.Stop()
+
+	// Ensure block body contains transactions
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block, "block %d not found", stateSyncBlock)
+	transactions := block.Transactions()
+	require.Equal(t, 2, len(transactions), "expected %d transactions in block body, got %d", 2, len(transactions))
+
+	// Trace block by number
+	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock), nil)
+	require.NoError(t, err, "TraceBlockByNumber failed: %v", err)
+	require.NotNil(t, results, "TraceBlockByNumber returned nil traces")
+
+	// Validate if the trace is correct or not
+	require.Equal(t, len(transactions), len(results), "expected %d trace results, got: %d", len(transactions), len(results))
+	for i, result := range results {
+		require.Equal(t, "", result.Error, "expected nil error in trace result %d, got: %s", i, result.Error)
+		require.Equal(t, transactions[i].Hash(), result.TxHash, "trace result %d tx hash mismatch: got %s, want %s", i, result.TxHash.Hex(), transactions[i].Hash().Hex())
 	}
 
-	// Should have 2 txs: 1 regular + 1 state sync (with 3 events bundled)
-	expectedTxCount := len(block.Transactions())
-	if expectedTxCount != 2 {
-		t.Fatalf("expected 2 txs, got %d", expectedTxCount)
+	// Validate the state-sync trace specifically
+	raw, ok := results[1].Result.(json.RawMessage)
+	require.True(t, ok, "expected json.RawMessage for state-sync trace result, got %T", results[1].Result)
+
+	var execResult struct {
+		Gas         uint64            `json:"gas"`
+		Failed      bool              `json:"failed"`
+		StructLogs  []json.RawMessage `json:"structLogs"`
+		ReturnValue string            `json:"returnValue"`
+	}
+	err = json.Unmarshal(raw, &execResult)
+	require.NoError(t, err, "failed to unmarshal state-sync trace: %v", err)
+	require.Greater(t, len(execResult.StructLogs), 0, "state-sync trace has no struct logs — EVM code was not executed")
+
+	// The target contract emits LOG0 for each onStateReceive call.
+	// With 2 bridge events, we expect 2 LOG0 from the target contract.
+	var log0Count int
+	for _, entry := range execResult.StructLogs {
+		var op struct {
+			Op string `json:"op"`
+		}
+		if err := json.Unmarshal(entry, &op); err == nil && op.Op == "LOG0" {
+			log0Count++
+		}
+	}
+	require.Equal(t, 2, log0Count, "expected 2 LOG0 opcodes (one per bridge event forwarded to target), got %d", log0Count)
+	t.Logf("state-sync trace: %d struct logs, %d LOG0 opcodes, gas used: %d", len(execResult.StructLogs), log0Count, execResult.Gas)
+}
+
+// TestTraceBlockByHash_WithStateSyncTx tests end-to-end state-sync tracing using the actual
+// StateReceiver contract bytecode and mirrors what happens in actual networks. Follows same
+// steps as trace by block.
+func TestTraceBlockByHash_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3)
+	defer backend.chain.Stop()
+
+	// Ensure block body contains transactions
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block, "block %d not found", stateSyncBlock)
+	transactions := block.Transactions()
+	require.Equal(t, 2, len(transactions), "expected %d transactions in block body, got %d", 2, len(transactions))
+
+	// Trace block by hash
+	results, err := api.TraceBlockByHash(context.Background(), block.Hash(), nil)
+	require.NoError(t, err, "TraceBlockByHash failed: %v", err)
+	require.NotNil(t, results, "TraceBlockByHash returned nil traces")
+
+	// Validate if the trace is correct or not
+	require.Equal(t, len(transactions), len(results), "expected %d trace results, got: %d", len(transactions), len(results))
+	for i, result := range results {
+		require.Equal(t, "", result.Error, "expected nil error in trace result %d, got: %s", i, result.Error)
+		require.Equal(t, transactions[i].Hash(), result.TxHash, "trace result %d tx hash mismatch: got %s, want %s", i, result.TxHash.Hex(), transactions[i].Hash().Hex())
 	}
 
-	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(3), nil)
-	if err != nil {
-		t.Fatalf("TraceBlockByNumber failed: %v", err)
-	}
+	// Validate the state-sync trace specifically
+	raw, ok := results[1].Result.(json.RawMessage)
+	require.True(t, ok, "expected json.RawMessage for state-sync trace result, got %T", results[1].Result)
 
-	// Multiple events in one state sync tx = still 1 tx in trace results
-	if len(results) != expectedTxCount {
-		t.Errorf("multiple state sync events: expected %d results, got %d", expectedTxCount, len(results))
+	var execResult struct {
+		Gas         uint64            `json:"gas"`
+		Failed      bool              `json:"failed"`
+		StructLogs  []json.RawMessage `json:"structLogs"`
+		ReturnValue string            `json:"returnValue"`
+	}
+	err = json.Unmarshal(raw, &execResult)
+	require.NoError(t, err, "failed to unmarshal state-sync trace: %v", err)
+	require.Greater(t, len(execResult.StructLogs), 0, "state-sync trace has no struct logs — EVM code was not executed")
+
+	// The target contract emits LOG0 for each onStateReceive call.
+	// With 2 bridge events, we expect 2 LOG0 from the target contract.
+	var log0Count int
+	for _, entry := range execResult.StructLogs {
+		var op struct {
+			Op string `json:"op"`
+		}
+		if err := json.Unmarshal(entry, &op); err == nil && op.Op == "LOG0" {
+			log0Count++
+		}
+	}
+	require.Equal(t, 2, log0Count, "expected 2 LOG0 opcodes (one per bridge event forwarded to target), got %d", log0Count)
+	t.Logf("state-sync trace: %d struct logs, %d LOG0 opcodes, gas used: %d", len(execResult.StructLogs), log0Count, execResult.Gas)
+}
+
+// TestTraceChain_WithStateSyncTx tests end-to-end state-sync tracing using the actual
+// StateReceiver contract bytecode and mirrors what happens in actual networks. It generates
+// traces of range of blocks.
+func TestTraceChain_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3)
+	defer backend.chain.Stop()
+
+	// Get the from and to blocks
+	from, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(0))
+	require.NoError(t, err, "failed to get block: %d, err: %v", 0, err)
+	to, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(3))
+	require.NoError(t, err, "failed to get block: %d, err: %v", 3, err)
+
+	// Trace full chain (from, to] (i.e. [0, 3])
+	results := api.traceChain(from, to, nil, nil)
+	require.NoError(t, err, "TraceBlockByNumber failed: %v", err)
+	require.NotNil(t, results, "TraceBlockByNumber returned nil traces")
+
+	// Validate if the trace is correct or not
+	for res := range results {
+		traces := res.Traces
+		block, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(uint64(res.Block)))
+		require.NoError(t, err, "failed to get block: %d, err: %v", res.Block, err)
+		transactions := block.Transactions()
+		require.Equal(t, len(transactions), len(traces), "expected %d trace results, got: %d", len(transactions), len(traces))
+		for i, result := range traces {
+			require.Equal(t, "", result.Error, "expected nil error in trace result %d of block: %d, got: %s", i, block.NumberU64(), result.Error)
+			require.Equal(t, transactions[i].Hash(), result.TxHash, "trace result %d tx hash mismatch of block: %d: got %s, want %s", i, block.NumberU64(), result.TxHash.Hex(), transactions[i].Hash().Hex())
+		}
+		if res.Block == hexutil.Uint64(stateSyncBlock) {
+			// Validate the state-sync trace specifically
+			raw, ok := traces[1].Result.(json.RawMessage)
+			require.True(t, ok, "expected json.RawMessage for state-sync trace result, got %T", traces[1].Result)
+
+			var execResult struct {
+				Gas         uint64            `json:"gas"`
+				Failed      bool              `json:"failed"`
+				StructLogs  []json.RawMessage `json:"structLogs"`
+				ReturnValue string            `json:"returnValue"`
+			}
+			err = json.Unmarshal(raw, &execResult)
+			require.NoError(t, err, "failed to unmarshal state-sync trace: %v", err)
+			require.Greater(t, len(execResult.StructLogs), 0, "state-sync trace has no struct logs — EVM code was not executed")
+
+			// The target contract emits LOG0 for each onStateReceive call.
+			// With 2 bridge events, we expect 2 LOG0 from the target contract.
+			var log0Count int
+			for _, entry := range execResult.StructLogs {
+				var op struct {
+					Op string `json:"op"`
+				}
+				if err := json.Unmarshal(entry, &op); err == nil && op.Op == "LOG0" {
+					log0Count++
+				}
+			}
+			require.Equal(t, 2, log0Count, "expected 2 LOG0 opcodes (one per bridge event forwarded to target), got %d", log0Count)
+		}
 	}
 }
 
-// TestEmptyBlockWithStateSyncOnly tests blocks containing only state sync tx.
-func TestEmptyBlockWithStateSyncOnly(t *testing.T) {
+// TestIntermediateRoots_WithStateSyncTx tests end-to-end state-sync tracing using the actual
+// StateReceiver contract bytecode and mirrors what happens in actual networks. Follows same
+// steps as trace by block.
+func TestIntermediateRoots_WithStateSyncTx(t *testing.T) {
 	t.Parallel()
 
-	var (
-		key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-		gspec  = &core.Genesis{
-			Alloc: types.GenesisAlloc{
-				crypto.PubkeyToAddress(key.PublicKey): {Balance: big.NewInt(params.Ether)},
-			},
-		}
-	)
-
-	madhugiriBlock := big.NewInt(0)
-	genBlocks := 5
-
-	// Generate empty blocks (no regular txs)
-	backend := newBorTestBackend(t, genBlocks, gspec, madhugiriBlock, func(i int, b *core.BlockGen) {
-		// No transactions added
-	})
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3)
 	defer backend.chain.Stop()
 
-	// Inject state-sync tx into block 3 (which is otherwise empty)
-	stateSyncTx := createStateSyncTx(3)
-	if err := backend.injectStateSyncTx(3, stateSyncTx); err != nil {
-		t.Fatalf("failed to inject state-sync tx: %v", err)
+	// Ensure block body contains transactions
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block, "block %d not found", stateSyncBlock)
+	transactions := block.Transactions()
+	require.Equal(t, 2, len(transactions), "expected %d transactions in block body, got %d", 2, len(transactions))
+
+	// Trace block by hash
+	results, err := api.IntermediateRoots(context.Background(), block.Hash(), nil)
+	require.NoError(t, err, "IntermediateRoots failed: %v", err)
+	require.NotNil(t, results, "IntermediateRoots returned nil traces")
+
+	// Validate that correct state roots are returned
+	expectedStateRoots := []common.Hash{
+		common.HexToHash("0x23eda0b1dbe747a8daedaf94b811a393de400047812394476dac190a5e9a8fd4"),
+		common.HexToHash("0x1b5bcf33b31f2d38b498594a348bc176b9e05b46cba3ed3701ba739c012bc757"),
 	}
-
-	api := NewAPI(backend)
-
-	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(3))
-	if block == nil {
-		t.Fatal("block 3 not found")
-	}
-
-	expectedTxCount := len(block.Transactions())
-	if expectedTxCount != 1 {
-		t.Fatalf("expected 1 tx (state-sync only), got %d", expectedTxCount)
-	}
-
-	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(3), nil)
-	if err != nil {
-		t.Fatalf("TraceBlockByNumber failed: %v", err)
-	}
-
-	if len(results) != expectedTxCount {
-		t.Errorf("block with only state sync: expected %d results, got %d", expectedTxCount, len(results))
+	require.Equal(t, 2, len(results), "expected 2 intermediate roots, got: %d", len(results))
+	for i, result := range results {
+		require.Equal(t, expectedStateRoots[i], result, "state root mismatch, index: %d, expected: %v, got: %v", i, expectedStateRoots[i].Hex(), result.Hex())
 	}
 }

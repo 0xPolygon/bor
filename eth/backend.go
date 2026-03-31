@@ -311,6 +311,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
 		}
 		options.VmConfig.Tracer = t
+		if borEngine, ok := eth.engine.(*bor.Bor); ok {
+			borEngine.SetVMConfig(options.VmConfig)
+		}
 	}
 
 	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)

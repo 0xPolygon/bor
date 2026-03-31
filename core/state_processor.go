@@ -105,7 +105,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 
 	// Iterate over and process the individual transactions
-	for i, tx := range block.Transactions() {
+	txs := block.Transactions()
+	for i, tx := range txs {
 		// Check if execution should be cancelled or not
 		select {
 		case <-interruptCtx.Done():
@@ -151,10 +152,17 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
+	// Trace state-sync transaction (if present and if tracer is enabled)
+	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
+		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
+		}
+	}
+
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
 	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), receipts)
+	receipts = p.chain.Engine().Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
 
 	// apply state sync logs
 	if p.chainConfig().Bor != nil && p.chainConfig().Bor.IsMadhugiri(block.Number()) {
@@ -167,6 +175,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
+		}
+		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
+			hooks.OnTxEnd(receipts[len(receipts)-1], nil)
 		}
 	}
 

@@ -265,6 +265,9 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	if txIndex == 0 && len(block.Transactions()) == 0 {
 		return nil, context, statedb, release, nil
 	}
+	if txIndex >= len(block.Transactions()) {
+		return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	}
 	// Recompute transactions up to the target index.
 	signer := types.MakeSigner(eth.blockchain.Config(), block.Number(), block.Time())
 	for idx, tx := range block.Transactions() {

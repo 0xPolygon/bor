@@ -21,6 +21,10 @@ ethstats = ""                   # Reporting URL of a ethstats service (nodename:
 witnessprotocol = false         # Enables the wit/0 protocol
 devfakeauthor = false           # Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
+# VM tracing
+vmtrace = "supply"                           # Name of a tracer to record internal VM operations during blockchain synchronization (costly)
+"vmtrace.jsonconfig" = '{"path": "output"}'  # Tracer configuration (JSON)
+
 ["eth.requiredblocks"]  # Comma separated block number-to-hash mappings to require for peering (<number>=<hash>) (default = empty map)
   "31000000" = "0x2087b9e2b353209c2c21e370c82daa12278efd0fe5f0febe6c29035352cf050e"
   "32000000" = "0x875500011e5eecc0c554f95d07b31cf59df4ca2505f4dbbfffa7d4e4da917c68"
@@ -31,11 +35,11 @@ enable-private-tx = true # Enable private transaction relay
 bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
 
 [log]
-  vmodule = ""                    # Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
-  json = false                    # Format logs with JSON
-  backtrace = ""                  # Request a stack trace at a specific logging statement (e.g. "block.go:271")
-  debug = true                    # Prepends log messages with call-site location (file and line number)
-  enable-block-tracking = false   # Enables additional logging of information collected while tracking block lifecycle
+  vmodule = ""                               # Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)
+  json = false                               # Format logs with JSON
+  backtrace = ""                             # Request a stack trace at a specific logging statement (e.g. "block.go:271")
+  debug = true                               # Prepends log messages with call-site location (file and line number)
+  enable-block-tracking = false              # Enables additional logging of information collected while tracking block lifecycle
 
 [p2p]
   maxpeers = 50                  # Maximum number of network peers (network disabled if set to 0)
