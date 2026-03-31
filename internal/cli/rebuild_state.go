@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -125,7 +126,13 @@ func (c *RebuildStateCommand) Run(args []string) int {
 
 	log.Info("State pruned and head reset to genesis")
 
-	// Step 3: Replay blocks (fresh backend since chain was reset).
+	// Step 3: Re-commit genesis state so block 1 replay can find its parent.
+	if err := c.recommitGenesis(); err != nil {
+		c.UI.Error(fmt.Sprintf("Failed to re-commit genesis state: %v", err))
+		return 1
+	}
+
+	// Step 4: Replay blocks (fresh backend since chain was reset).
 	rebuilt, err := c.replayBlocks(tip.blockNumber)
 	if err != nil {
 		c.UI.Error(fmt.Sprintf("Failed to replay blocks: %v", err))
@@ -392,6 +399,73 @@ func (c *RebuildStateCommand) prunePathState(chaindb ethdb.Database, stack *node
 	if err := chaindb.Compact(nil, nil); err != nil {
 		log.Warn("Database compaction failed", "err", err)
 	}
+
+	return nil
+}
+
+// recommitGenesis re-commits the genesis state after pruning.
+//
+// State pruning deletes all trie nodes including genesis state. The backend
+// close in pruneAndReset also persists stale in-memory trie layers to the
+// journal file. This method deletes that stale journal, then opens a fresh
+// backend (so the path database initializes with an empty-root disk layer)
+// and re-commits the genesis state trie from the stored genesis allocation.
+func (c *RebuildStateCommand) recommitGenesis() error {
+	// Delete the stale trie journal that closeBackend wrote after pruning.
+	// We resolve the path via the node config (DataDir/<name>/triedb/).
+	config, err := server.ReadConfigFile(c.configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+
+	if c.dataDir != "" {
+		config.DataDir = c.dataDir
+	}
+
+	nodeCfg, err := config.BuildNode()
+	if err != nil {
+		return fmt.Errorf("failed to build node config: %w", err)
+	}
+
+	triedbDir := nodeCfg.ResolvePath("triedb")
+
+	for _, name := range []string{"merkle.journal", "merkle.journal.tmp"} {
+		p := filepath.Join(triedbDir, name)
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove stale journal %s: %w", p, err)
+		} else if err == nil {
+			log.Info("Removed stale trie journal", "path", p)
+		}
+	}
+
+	backend, stack, err := c.initBackend()
+	if err != nil {
+		return err
+	}
+	defer closeBackend(backend, stack)
+
+	chaindb := backend.ChainDb()
+	genesisHash := rawdb.ReadCanonicalHash(chaindb, 0)
+
+	if genesisHash == (common.Hash{}) {
+		return fmt.Errorf("genesis block not found")
+	}
+
+	genesisHeader := rawdb.ReadHeader(chaindb, genesisHash, 0)
+	if genesisHeader == nil {
+		return fmt.Errorf("genesis header not found")
+	}
+
+	root, err := core.RecommitGenesisState(chaindb, backend.BlockChain().TrieDB())
+	if err != nil {
+		return fmt.Errorf("failed to re-commit genesis state: %w", err)
+	}
+
+	if root != genesisHeader.Root {
+		return fmt.Errorf("genesis state root mismatch: got %s, expected %s", root, genesisHeader.Root)
+	}
+
+	log.Info("Re-committed genesis state", "root", root)
 
 	return nil
 }

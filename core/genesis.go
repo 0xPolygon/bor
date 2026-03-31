@@ -215,6 +215,23 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database) (common.Hash, e
 	return root, nil
 }
 
+// RecommitGenesisState re-creates the genesis state trie from the stored
+// genesis allocation. This is useful after state pruning when the genesis
+// block still exists but its state has been deleted.
+func RecommitGenesisState(db ethdb.Database, tdb *triedb.Database) (common.Hash, error) {
+	ghash := rawdb.ReadCanonicalHash(db, 0)
+	if ghash == (common.Hash{}) {
+		return common.Hash{}, errors.New("genesis block not found")
+	}
+
+	alloc, err := getGenesisState(db, ghash)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("failed to load genesis alloc: %w", err)
+	}
+
+	return flushAlloc(&alloc, tdb)
+}
+
 func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc types.GenesisAlloc, err error) {
 	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
 	if len(blob) != 0 {
