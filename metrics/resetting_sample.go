@@ -11,15 +11,24 @@ func ResettingSample(sample Sample) Sample {
 }
 
 // resettingSample is a simple wrapper around a sample that resets it upon the
-// snapshot retrieval.
+// snapshot retrieval. It maintains cumulative count and sum separately so that
+// Prometheus _count counters remain monotonically increasing across scrapes.
 type resettingSample struct {
 	Sample
+	count int64
+	sum   int64
 }
 
 // Snapshot returns a read-only copy of the sample with the original reset.
+// Count and Sum are cumulative for Prometheus counter semantics.
+// Values (used for percentiles) are from the current interval only.
 func (rs *resettingSample) Snapshot() *sampleSnapshot {
 	s := rs.Sample.Snapshot()
+	rs.count += s.Count()
+	rs.sum += s.Sum()
 	rs.Sample.Clear()
 
-	return s
+	return newSampleSnapshotPrecalculated(
+		rs.count, s.Values(), s.Min(), s.Max(), rs.sum,
+	)
 }
