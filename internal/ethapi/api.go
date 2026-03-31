@@ -87,6 +87,69 @@ func (api *EthereumAPI) GasPrice(ctx context.Context) (*hexutil.Big, error) {
 	return (*hexutil.Big)(tipcap), err
 }
 
+// Coinbase returns the current client coinbase address.
+func (api *EthereumAPI) Coinbase() (common.Address, error) {
+	return api.b.Etherbase()
+}
+
+// Hashrate returns the POW hashrate.
+func (api *EthereumAPI) Hashrate() (hexutil.Uint64, error) {
+	hashrate, err := api.b.Hashrate()
+	if err != nil {
+		return 0, err
+	}
+	return hexutil.Uint64(hashrate), nil
+}
+
+// Mining returns an indication if this node is currently mining.
+func (api *EthereumAPI) Mining() (bool, error) {
+	return api.b.Mining()
+}
+
+// ProtocolVersion returns the current Ethereum protocol version.
+func (api *EthereumAPI) ProtocolVersion() hexutil.Uint {
+	return hexutil.Uint(api.b.ProtocolVersion())
+}
+
+// GetWork returns a work package for external miners.
+//
+// The work package consists of 3 strings:
+//
+//	result[0] - 32 bytes hex encoded current block header pow-hash
+//	result[1] - 32 bytes hex encoded seed hash used for DAG
+//	result[2] - 32 bytes hex encoded boundary condition ("target"), 2^256/difficulty
+//	result[3] - hex encoded block number
+//
+// Returns JSON-RPC error -32000 if mining is not supported
+func (api *EthereumAPI) GetWork() ([4]string, error) {
+	work, err := api.b.GetWork()
+	if err != nil {
+		return work, &rpc.CustomError{Code: -32000, ValidationError: err.Error()}
+	}
+	return work, nil
+}
+
+// SubmitWork can be used by external miners to submit their POW solution.
+// It returns an indication if the work was accepted.
+// Returns JSON-RPC error -32000 if mining not supported
+func (api *EthereumAPI) SubmitWork(nonce types.BlockNonce, hash, digest common.Hash) (bool, error) {
+	ok, err := api.b.SubmitWork(nonce, hash, digest)
+	if err != nil {
+		return ok, &rpc.CustomError{Code: -32000, ValidationError: err.Error()}
+	}
+	return ok, nil
+}
+
+// SubmitHashrate can be used for remote miners to submit their hash rate.
+// Returns JSON-RPC error -32000 if mining not supported
+func (api *EthereumAPI) SubmitHashrate(rate hexutil.Uint64, id common.Hash) (bool, error) {
+	ok, err := api.b.SubmitHashrate(rate, id)
+	if err != nil {
+		return ok, &rpc.CustomError{Code: -32000, ValidationError: err.Error()}
+	}
+	return ok, nil
+}
+
 // MaxPriorityFeePerGas returns a suggestion for a gas tip cap for dynamic fee transactions.
 func (api *EthereumAPI) MaxPriorityFeePerGas(ctx context.Context) (*hexutil.Big, error) {
 	tipcap, err := api.b.SuggestGasTipCap(ctx)
@@ -527,7 +590,10 @@ func (api *BlockChainAPI) GetHeaderByHash(ctx context.Context, hash common.Hash)
 //   - When number is -4 the chain safe block is returned.
 //   - When fullTx is true all transactions in the block are returned, otherwise
 //     only the transaction hash is returned.
-func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool) (map[string]interface{}, error) {
+//   - When borExtra is true, the response includes a "decodedExtra" object with
+//     parsed EIP-1559 gas parameters and transaction dependency metadata from the
+//     block header's Extra field. This parameter is optional.
+func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool, borExtra *bool) (map[string]interface{}, error) {
 	block, err := api.b.BlockByNumber(ctx, number)
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
@@ -541,6 +607,7 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
 		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
+			appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 			return response, nil
 		}
 
@@ -548,6 +615,8 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 		if response != nil {
 			response = api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx)
 		}
+
+		appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 
 		return response, nil
 	}
@@ -557,7 +626,8 @@ func (api *BlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.Block
 
 // GetBlockByHash returns the requested block. When fullTx is true all transactions in the block are returned in full
 // detail, otherwise only the transaction hash is returned.
-func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool) (map[string]interface{}, error) {
+// When borExtra is true, the response includes parsed block extra data. This parameter is optional.
+func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, fullTx bool, borExtra *bool) (map[string]interface{}, error) {
 	block, err := api.b.BlockByHash(ctx, hash)
 	if block != nil && err == nil {
 		response := RPCMarshalBlock(block, true, fullTx, api.b.ChainConfig(), api.b.ChainDb())
@@ -565,13 +635,16 @@ func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, 
 		// State-sync tx and receipt is stored with normal block receipts post Madhugiri HF so skip
 		// fetching them separately.
 		if api.b.ChainConfig().Bor != nil && api.b.ChainConfig().Bor.IsMadhugiri(block.Number()) {
+			appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 			return response, nil
 		}
 
 		// append marshalled bor transaction
 		if response != nil {
-			return api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx), err
+			response = api.appendRPCMarshalBorTransaction(ctx, block, response, fullTx)
 		}
+
+		appendBorExtraData(response, block, borExtra, api.b.ChainConfig())
 
 		return response, nil
 	}
@@ -891,7 +964,7 @@ func applyMessageWithEVM(ctx context.Context, evm *vm.EVM, msg *core.Message, ti
 	}()
 
 	// Execute the message.
-	result, err := core.ApplyMessage(evm, msg, gp, nil)
+	result, err := core.ApplyMessage(evm, msg, gp)
 
 	// If the timer caused an abort, return an appropriate error message
 	if evm.Cancelled() {
@@ -996,6 +1069,8 @@ func (api *BlockChainAPI) CallWithState(ctx context.Context, args TransactionArg
 // Note, this function doesn't make any changes in the state/blockchain and is
 // useful to execute and retrieve values.
 func (api *BlockChainAPI) SimulateV1(ctx context.Context, opts simOpts, blockNrOrHash *rpc.BlockNumberOrHash) ([]*simBlockResult, error) {
+	return nil, errors.New("eth_simulateV1 is not supported on Bor")
+	//nolint:govet // Unreachable code kept intentionally so it can be re-enabled easily.
 	if len(opts.BlockStateCalls) == 0 {
 		return nil, &invalidParamsError{message: "empty input"}
 	} else if len(opts.BlockStateCalls) > maxSimulateBlocks {
@@ -1686,7 +1761,7 @@ func AccessList(ctx context.Context, b Backend, blockNrOrHash rpc.BlockNumberOrH
 		if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
 			evm.Context.BlobBaseFee = new(big.Int)
 		}
-		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit), nil)
+		res, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		if err != nil {
 			return nil, 0, nil, fmt.Errorf("failed to apply transaction: %v err: %v", args.ToTransaction(types.LegacyTxType).Hash(), err)
 		}
@@ -2569,8 +2644,8 @@ func (api *DebugAPI) GetRawReceipts(ctx context.Context, blockNrOrHash rpc.Block
 }
 
 // GetRawTransaction returns the bytes of the transaction for the given hash.
-func (api *DebugAPI) GetRawTransaction(ctx context.Context, hash common.Hash) (hexutil.Bytes, error) {
-	// Retrieve a finalized transaction, or a pooled otherwise
+func (api *DebugAPI) GetRawTransaction(_ context.Context, hash common.Hash) (hexutil.Bytes, error) {
+	// Retrieve a finalized transaction or a pooled otherwise
 	found, tx, _, _, _ := api.b.GetCanonicalTransaction(hash)
 	if !found {
 		if tx = api.b.GetPoolTransaction(hash); tx != nil {
@@ -2656,6 +2731,97 @@ func (api *DebugAPI) GetTraceStack() string {
 // along with few additional identifiers.
 func (api *DebugAPI) PeerStats() interface{} {
 	return api.b.PeerStats()
+}
+
+// DebugAccountResult is the result struct for debug_accountAt
+type DebugAccountResult struct {
+	Balance  hexutil.Big    `json:"balance"`
+	Nonce    hexutil.Uint64 `json:"nonce"`
+	Code     hexutil.Bytes  `json:"code"`
+	CodeHash common.Hash    `json:"codeHash"`
+}
+
+// AccountAt returns the state of an account at a specific point during block execution,
+// specifically after executing the transaction at the given index.
+func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txIndex uint64, address common.Address) (*DebugAccountResult, error) {
+	block, err := api.b.BlockByHash(ctx, blockHash)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+
+	// Check if the retrieved block is canonical
+	canonicalBlock, err := api.b.BlockByNumber(ctx, rpc.BlockNumber(block.NumberU64()))
+	if err != nil {
+		return nil, err
+	}
+	if canonicalBlock == nil || canonicalBlock.Hash() != blockHash {
+		return nil, errors.New("block hash is not canonical")
+	}
+
+	// Get the parent block's state
+	parent, err := api.b.BlockByHash(ctx, block.ParentHash())
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		return nil, fmt.Errorf("parent %#x not found", block.ParentHash())
+	}
+
+	// Get state at parent block
+	stateDb, _, err := api.b.StateAndHeaderByNumber(ctx, rpc.BlockNumber(parent.NumberU64()))
+	if err != nil {
+		return nil, err
+	}
+	if stateDb == nil {
+		return nil, fmt.Errorf("state not available for block %d", parent.NumberU64())
+	}
+
+	// Create EVM
+	signer := types.MakeSigner(api.b.ChainConfig(), block.Number(), block.Time())
+	evm := api.b.GetEVM(ctx, stateDb, block.Header(), &vm.Config{}, nil)
+
+	// transactions up to txIndex (included)
+	lastTxIdx := txIndex
+	if txIndex >= uint64(len(block.Transactions())) {
+		// If txIndex is out of range, replay all available transactions
+		if len(block.Transactions()) > 0 {
+			lastTxIdx = uint64(len(block.Transactions()) - 1)
+		} else {
+			lastTxIdx = 0
+		}
+	}
+
+	for idx := uint64(0); idx <= lastTxIdx && idx < uint64(len(block.Transactions())); idx++ {
+		tx := block.Transactions()[idx]
+		// Skip state-sync transactions
+		if tx.Type() == types.StateSyncTxType {
+			continue
+		}
+		msg, err := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if err != nil {
+			return nil, fmt.Errorf("transaction %#x failed to convert to message: %v", tx.Hash(), err)
+		}
+
+		stateDb.SetTxContext(tx.Hash(), int(idx))
+		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
+			return nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
+		}
+
+		// Finalize state after each transaction
+		stateDb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
+	}
+
+	// Query account state
+	result := &DebugAccountResult{}
+	result.Balance.ToInt().Set(stateDb.GetBalance(address).ToBig())
+	result.Nonce = hexutil.Uint64(stateDb.GetNonce(address))
+	result.Code = stateDb.GetCode(address)
+	result.CodeHash = common.BytesToHash(stateDb.GetCodeHash(address).Bytes())
+
+	return result, nil
 }
 
 // NetAPI offers network related RPC methods

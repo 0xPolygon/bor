@@ -3,6 +3,7 @@ package wit
 import (
 	"crypto/rand"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -508,4 +509,39 @@ func TestReplyWitnessMetadata(t *testing.T) {
 
 		app.Close()
 	})
+}
+
+// TestKnownCacheConcurrency verifies that KnownCache is safe for concurrent access
+// without external locking. Run with -race to detect data races.
+func TestKnownCacheConcurrency(t *testing.T) {
+	cache := newKnownCache(100)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+
+		go func(n int) {
+			defer wg.Done()
+
+			h := common.Hash{byte(n)}
+			cache.Add(h)
+			cache.Contains(h)
+			cache.Cardinality()
+		}(i)
+	}
+
+	wg.Wait()
+	assert.LessOrEqual(t, cache.Cardinality(), 100)
+}
+
+// TestKnownCacheEviction verifies that the cache evicts entries when at capacity.
+func TestKnownCacheEviction(t *testing.T) {
+	cache := newKnownCache(5)
+
+	for i := 0; i < 10; i++ {
+		cache.Add(common.Hash{byte(i)})
+	}
+
+	assert.LessOrEqual(t, cache.Cardinality(), 5, "Cache should not exceed max capacity")
 }

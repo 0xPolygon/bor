@@ -430,6 +430,16 @@ func (srv *Server) DiscoveryV5() *discover.UDPv5 {
 	return srv.discv5
 }
 
+// StopDialing stops the dial scheduler without stopping the server.
+func (srv *Server) StopDialing() {
+	srv.lock.Lock()
+	defer srv.lock.Unlock()
+
+	if srv.running && srv.dialsched != nil {
+		srv.dialsched.stop()
+	}
+}
+
 // Stop terminates the server and all active peer connections.
 // It blocks until all active connections have been closed.
 func (srv *Server) Stop() {

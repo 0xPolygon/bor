@@ -1289,8 +1289,10 @@ func TestDecodeNode(t *testing.T) {
 	)
 
 	for i := 0; i < 5000000; i++ {
+		prngMu.Lock()
 		prng.Read(hash)
 		prng.Read(elems)
+		prngMu.Unlock()
 		decodeNode(hash, elems)
 	}
 }

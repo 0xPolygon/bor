@@ -131,6 +131,18 @@ type EVM struct {
 
 	readOnly   bool   // Whether to throw on stateful modifications
 	returnData []byte // Last CALL's return data for subsequent reuse
+
+	// interrupt is the block-building timeout flag. When set, the interpreter
+	// checks it on every opcode across all call depths (Call, DelegateCall,
+	// StaticCall, CallCode, Create). Use SetInterrupt to configure.
+	interrupt *atomic.Bool
+}
+
+// SetInterrupt sets the block-building interrupt flag that is checked on every
+// opcode across all call depths. This allows the block builder to abort
+// transaction execution when the block building deadline is reached.
+func (evm *EVM) SetInterrupt(interrupt *atomic.Bool) {
+	evm.interrupt = interrupt
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -242,7 +254,7 @@ func isSystemCall(caller common.Address) bool {
 // parameters. It also handles any necessary value transfer required and takse
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
-func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int, interrupt *atomic.Bool) (ret []byte, leftOverGas uint64, err error) {
+func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
 	// Capture the tracer start/end events in debug mode
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, CALL, caller, addr, input, gas, value.ToBig())
@@ -301,7 +313,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			contract := NewContract(caller, addr, value, gas, evm.jumpDests)
 			contract.IsSystemCall = isSystemCall(caller)
 			contract.SetCallCode(evm.resolveCodeHash(addr), code)
-			ret, err = evm.Run(contract, input, false, interrupt)
+			ret, err = evm.Run(contract, input, false)
 			gas = contract.Gas
 		}
 	}
@@ -363,7 +375,7 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 		// The contract is a scoped environment for this execution context only.
 		contract := NewContract(caller, caller, value, gas, evm.jumpDests)
 		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
-		ret, err = evm.Run(contract, input, false, nil)
+		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
 
@@ -410,7 +422,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		// Note: The value refers to the original value from the parent call.
 		contract := NewContract(originCaller, caller, value, gas, evm.jumpDests)
 		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
-		ret, err = evm.Run(contract, input, false, nil)
+		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
 
@@ -468,7 +480,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		// When an error was returned by the EVM or when setting the creation code
 		// above we revert to the snapshot and consume any gas remaining. Additionally
 		// when we're in Homestead this also counts for code storage gas errors.
-		ret, err = evm.Run(contract, input, true, nil)
+		ret, err = evm.Run(contract, input, true)
 		gas = contract.Gas
 	}
 
@@ -593,7 +605,7 @@ func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *ui
 // initNewContract runs a new contract's creation code, performs checks on the
 // resulting code that is to be deployed, and consumes necessary gas.
 func (evm *EVM) initNewContract(contract *Contract, address common.Address) ([]byte, error) {
-	ret, err := evm.Run(contract, nil, false, nil)
+	ret, err := evm.Run(contract, nil, false)
 	if err != nil {
 		return ret, err
 	}

@@ -92,10 +92,23 @@ type ReaderStats struct {
 	StorageMiss int64
 }
 
+// PrefetchStats exposes additional attribution stats for evaluating prefetch effectiveness.
+type PrefetchStats struct {
+	// Hits in PROCESS that came from PREFETCH-origin entries.
+	AccountHitFromPrefetch int64
+	StorageHitFromPrefetch int64
+	// Unique keys PREFETCH inserted into the shared local cache.
+	AccountInsert int64
+	StorageInsert int64
+	// Unique prefetched account keys that PROCESS actually used.
+	AccountHitFromPrefetchUnique int64
+}
+
 // ReaderWithStats wraps the additional method to retrieve the reader statistics from.
 type ReaderWithStats interface {
 	Reader
 	GetStats() ReaderStats
+	GetPrefetchStats() PrefetchStats
 }
 
 // cachingCodeReader implements ContractCodeReader, accessing contract code either in
@@ -418,13 +431,40 @@ func newReader(codeReader ContractCodeReader, stateReader StateReader) *reader {
 	}
 }
 
+// readerRole identifies the "writer" responsible for warming the shared local cache.
+// It is used purely for attribution in metrics (prefetch vs process).
+type readerRole uint8
+
+const (
+	roleUnknown  readerRole = 0
+	rolePrefetch readerRole = 1
+	roleProcess  readerRole = 2
+)
+
+// accountCacheEntry is the cached account plus attribution metadata.
+type accountCacheEntry struct {
+	acct *types.StateAccount
+	// origin is who first inserted this entry into the local cache (prefetch/process).
+	origin readerRole
+	// usedByProcess is flipped exactly once when the PROCESS reader consumes an entry
+	// that was prefetched. Used to compute unique-usage/precision.
+	usedByProcess uint32
+}
+
+// storageCacheEntry is the cached storage slot plus attribution metadata.
+// Note: stored inline (no per-slot heap alloc).
+type storageCacheEntry struct {
+	value  common.Hash
+	origin readerRole
+}
+
 // readerWithCache is a wrapper around Reader that maintains additional state caches
 // to support concurrent state access.
 type readerWithCache struct {
 	Reader // safe for concurrent read
 
 	// Previously resolved state entries.
-	accounts    map[common.Address]*types.StateAccount
+	accounts    map[common.Address]*accountCacheEntry
 	accountLock sync.RWMutex
 
 	// List of storage buckets, each of which is thread-safe.
@@ -433,7 +473,7 @@ type readerWithCache struct {
 	// the overhead caused by locking.
 	storageBuckets [16]struct {
 		lock     sync.RWMutex
-		storages map[common.Address]map[common.Hash]common.Hash
+		storages map[common.Address]map[common.Hash]storageCacheEntry
 	}
 }
 
@@ -441,10 +481,10 @@ type readerWithCache struct {
 func newReaderWithCache(reader Reader) *readerWithCache {
 	r := &readerWithCache{
 		Reader:   reader,
-		accounts: make(map[common.Address]*types.StateAccount),
+		accounts: make(map[common.Address]*accountCacheEntry),
 	}
 	for i := range r.storageBuckets {
-		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]common.Hash)
+		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
 	}
 	return r
 }
@@ -454,23 +494,35 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 // might be nil if it's not existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
-func (r *readerWithCache) account(addr common.Address) (*types.StateAccount, bool, error) {
+//
+// It also returns the cache entry (for provenance/unique-usage accounting)
+// and whether this call inserted a new entry (first-writer-wins).
+func (r *readerWithCache) account(addr common.Address, caller readerRole) (*types.StateAccount, bool, *accountCacheEntry, bool, error) {
 	// Try to resolve the requested account in the local cache
 	r.accountLock.RLock()
-	acct, ok := r.accounts[addr]
+	ent, ok := r.accounts[addr]
 	r.accountLock.RUnlock()
 	if ok {
-		return acct, true, nil
+		return ent.acct, true, ent, false, nil
 	}
 	// Try to resolve the requested account from the underlying reader
 	acct, err := r.Reader.Account(addr)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, false, err
 	}
 	r.accountLock.Lock()
-	r.accounts[addr] = acct
+	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
+	if existing, ok := r.accounts[addr]; ok {
+		r.accountLock.Unlock()
+		// This was a MISS originally (we didn't find it under RLock),
+		// but another goroutine inserted it while we fetched from the backing reader.
+		// Report incache=false so miss counters reflect backing-read cost.
+		return existing.acct, false, existing, false, nil
+	}
+	newEnt := &accountCacheEntry{acct: acct, origin: caller}
+	r.accounts[addr] = newEnt
 	r.accountLock.Unlock()
-	return acct, false, nil
+	return acct, false, newEnt, true, nil
 }
 
 // Account implements StateReader, retrieving the account specified by the address.
@@ -478,16 +530,18 @@ func (r *readerWithCache) account(addr common.Address) (*types.StateAccount, boo
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, error) {
-	account, _, err := r.account(addr)
+	account, _, _, _, err := r.account(addr, roleUnknown)
 	return account, err
 }
 
 // storage retrieves the storage slot specified by the address and slot key, along
 // with a flag indicating whether it's found in the cache or not. The returned
 // storage slot might be empty if it's not existent.
-func (r *readerWithCache) storage(addr common.Address, slot common.Hash) (common.Hash, bool, error) {
+//
+// It also returns the cache entry (for provenance/unique-usage accounting)
+// and whether this call inserted a new entry (first-writer-wins).
+func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller readerRole) (common.Hash, bool, *storageCacheEntry, bool, error) {
 	var (
-		value  common.Hash
 		ok     bool
 		bucket = &r.storageBuckets[addr[0]&0x0f]
 	)
@@ -495,27 +549,41 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash) (common
 	bucket.lock.RLock()
 	slots, ok := bucket.storages[addr]
 	if ok {
-		value, ok = slots[slot]
+		ent, ok := slots[slot]
+		if ok {
+			// Map values are returned by value (copy). Returning a pointer to the local copy is
+			// OK for reading attribution fields (origin), but not for mutating fields.
+			bucket.lock.RUnlock()
+			return ent.value, true, &ent, false, nil
+		}
 	}
 	bucket.lock.RUnlock()
-	if ok {
-		return value, true, nil
-	}
+
 	// Try to resolve the requested storage slot from the underlying reader
 	value, err := r.Reader.Storage(addr, slot)
 	if err != nil {
-		return common.Hash{}, false, err
+		return common.Hash{}, false, nil, false, err
 	}
+
 	bucket.lock.Lock()
 	slots, ok = bucket.storages[addr]
 	if !ok {
-		slots = make(map[common.Hash]common.Hash)
+		slots = make(map[common.Hash]storageCacheEntry)
 		bucket.storages[addr] = slots
 	}
-	slots[slot] = value
+	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
+	if existing, ok := slots[slot]; ok {
+		bucket.lock.Unlock()
+		// This was a MISS originally (we didn't find it under RLock),
+		// but another goroutine inserted it while we fetched from the backing reader.
+		// Report incache=false so miss counters reflect backing-read cost.
+		return existing.value, false, &existing, false, nil
+	}
+	newEnt := storageCacheEntry{value: value, origin: caller}
+	slots[slot] = newEnt
 	bucket.lock.Unlock()
 
-	return value, false, nil
+	return value, false, &newEnt, true, nil
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the
@@ -524,22 +592,36 @@ func (r *readerWithCache) storage(addr common.Address, slot common.Hash) (common
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	value, _, err := r.storage(addr, slot)
+	value, _, _, _, err := r.storage(addr, slot, roleUnknown)
 	return value, err
 }
 
 type readerWithCacheStats struct {
 	*readerWithCache
+	role readerRole
+
 	accountHit  atomic.Int64
 	accountMiss atomic.Int64
 	storageHit  atomic.Int64
 	storageMiss atomic.Int64
+
+	// attribute PROCESS hits that were served by PREFETCH-origin entries.
+	accountHitFromPrefetch atomic.Int64
+	storageHitFromPrefetch atomic.Int64
+
+	// count unique inserts by PREFETCH (how much it warmed).
+	accountInsert atomic.Int64
+	storageInsert atomic.Int64
+
+	// count unique prefetched keys that PROCESS actually used (precision) for accounts only.
+	accountHitFromPrefetchUnique atomic.Int64
 }
 
 // newReaderWithCacheStats constructs the reader with additional statistics tracked.
-func newReaderWithCacheStats(reader *readerWithCache) *readerWithCacheStats {
+func newReaderWithCacheStats(reader *readerWithCache, role readerRole) *readerWithCacheStats {
 	return &readerWithCacheStats{
 		readerWithCache: reader,
+		role:            role,
 	}
 }
 
@@ -548,14 +630,26 @@ func newReaderWithCacheStats(reader *readerWithCache) *readerWithCacheStats {
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount, error) {
-	account, incache, err := r.readerWithCache.account(addr)
+	account, incache, ent, inserted, err := r.readerWithCache.account(addr, r.role)
 	if err != nil {
 		return nil, err
 	}
 	if incache {
 		r.accountHit.Add(1)
+		// Attribute hits in PROCESS that came from PREFETCH-origin entries.
+		if r.role == roleProcess && ent != nil && ent.origin == rolePrefetch {
+			r.accountHitFromPrefetch.Add(1)
+			// Flip usedByProcess only once per entry.
+			if atomic.CompareAndSwapUint32(&ent.usedByProcess, 0, 1) {
+				r.accountHitFromPrefetchUnique.Add(1)
+			}
+		}
 	} else {
 		r.accountMiss.Add(1)
+		// Count unique inserts done by PREFETCH (first-writer-wins).
+		if r.role == rolePrefetch && inserted {
+			r.accountInsert.Add(1)
+		}
 	}
 	return account, nil
 }
@@ -566,14 +660,24 @@ func (r *readerWithCacheStats) Account(addr common.Address) (*types.StateAccount
 //
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCacheStats) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	value, incache, err := r.readerWithCache.storage(addr, slot)
+	value, incache, entCopy, inserted, err := r.readerWithCache.storage(addr, slot, r.role)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	if incache {
 		r.storageHit.Add(1)
+		// Attribute hits in PROCESS that came from PREFETCH-origin entries.
+		// NOTE: No write-lock marking (Option C). We only track hit attribution.
+		if r.role == roleProcess && entCopy != nil && entCopy.origin == rolePrefetch {
+			r.storageHitFromPrefetch.Add(1)
+		}
 	} else {
 		r.storageMiss.Add(1)
+		// Count unique inserts done by PREFETCH (first-writer-wins).
+		// This comes "for free" on the miss/insert path (no extra locking).
+		if r.role == rolePrefetch && inserted {
+			r.storageInsert.Add(1)
+		}
 	}
 	return value, nil
 }
@@ -585,5 +689,16 @@ func (r *readerWithCacheStats) GetStats() ReaderStats {
 		AccountMiss: r.accountMiss.Load(),
 		StorageHit:  r.storageHit.Load(),
 		StorageMiss: r.storageMiss.Load(),
+	}
+}
+
+// GetPrefetchStats returns attribution statistics for evaluating prefetch effectiveness.
+func (r *readerWithCacheStats) GetPrefetchStats() PrefetchStats {
+	return PrefetchStats{
+		AccountHitFromPrefetch:       r.accountHitFromPrefetch.Load(),
+		StorageHitFromPrefetch:       r.storageHitFromPrefetch.Load(),
+		AccountInsert:                r.accountInsert.Load(),
+		StorageInsert:                r.storageInsert.Load(),
+		AccountHitFromPrefetchUnique: r.accountHitFromPrefetchUnique.Load(),
 	}
 }

@@ -51,6 +51,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -6134,7 +6135,7 @@ func TestWitnessCache(t *testing.T) {
 	// Test 8: Test HasWitness with cache hit
 	testHash3 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
 	testWitness4 := []byte("test witness data 4")
-	chain.WriteWitness(chain.db, testHash3, testWitness4)
+	chain.WriteWitness(testHash3, testWitness4)
 
 	// HasWitness should return true (from cache)
 	require.True(t, chain.HasWitness(testHash3), "HasWitness should return true for cached witness")
@@ -6157,7 +6158,7 @@ func TestWitnessCache(t *testing.T) {
 	testWitness6 := []byte("test witness data 6")
 
 	// Use WriteWitness wrapper
-	chain.WriteWitness(chain.db, testHash6, testWitness6)
+	chain.WriteWitness(testHash6, testWitness6)
 
 	// Verify it's in both DB and cache
 	require.True(t, chain.HasWitness(testHash6), "HasWitness should return true after WriteWitness")
@@ -6201,7 +6202,7 @@ func TestWitnessCachePurgeOnReorg(t *testing.T) {
 	// Manually add witnesses to cache and DB for these blocks
 	for i, block := range blocks {
 		witnessData := []byte(fmt.Sprintf("witness data for block %d", i))
-		chain.WriteWitness(db, block.Hash(), witnessData)
+		chain.WriteWitness(block.Hash(), witnessData)
 	}
 
 	// Verify witnesses are in cache
@@ -6275,7 +6276,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// Test that prefetch and process readers are independent
 	t.Run("independent readers", func(t *testing.T) {
 		block := blocks[0]
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
 		if err != nil {
 			t.Fatalf("StateAtWithReaders failed: %v", err)
 		}
@@ -6311,7 +6312,7 @@ func TestStateAtWithReaders(t *testing.T) {
 	// implementation. It's kept for API compatibility and future-proofing.
 	t.Run("error from invalid root", func(t *testing.T) {
 		invalidRoot := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
-		statedb, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
 
 		if err == nil {
 			t.Fatal("expected error when using invalid root hash")
@@ -6325,4 +6326,104 @@ func TestStateAtWithReaders(t *testing.T) {
 
 		t.Logf("Got expected error for invalid root: %v", err)
 	})
+
+	// P1 Test: Verify prefetch and process readers maintain independence
+	// when one modifies state
+	t.Run("prefetch process independence", func(t *testing.T) {
+		block := blocks[1]
+		statedb, throwaway, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		if err != nil {
+			t.Fatalf("StateAtWithReaders failed: %v", err)
+		}
+
+		// Get initial balance
+		originalBalance := statedb.GetBalance(address)
+
+		// Use throwaway state (prefetch) to modify account
+		// This simulates what prefetchFromPool does
+		throwaway.SetBalance(address, uint256.NewInt(999999), 0)
+
+		// Verify main statedb (process) is unaffected
+		processBalance := statedb.GetBalance(address)
+		if processBalance.Cmp(originalBalance) != 0 {
+			t.Errorf("Process statedb should be unaffected by throwaway modifications, got %v, want %v",
+				processBalance, originalBalance)
+		}
+
+		// Verify both readers can track stats independently
+		processStats := processReader.GetStats()
+		prefetchStats := prefetchReader.GetStats()
+
+		// Both should have some activity
+		if processStats.AccountHit+processStats.AccountMiss == 0 {
+			t.Error("Process reader should have tracked account reads")
+		}
+
+		t.Logf("Independence test - Process stats: %d hits/%d misses, Prefetch stats: %d hits/%d misses",
+			processStats.AccountHit, processStats.AccountMiss,
+			prefetchStats.AccountHit, prefetchStats.AccountMiss)
+
+		// The key validation: throwaway state modifications don't affect main state
+		// This ensures prefetch speculation doesn't corrupt the actual block building state
+	})
+}
+
+// TestWriteBlockMetrics verifies that the block write path metrics
+// (batch write, state commit, witness collection) are updated after
+// inserting blocks into the chain, and that the slow-operation warning
+// log code paths execute without errors.
+func TestWriteBlockMetrics(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(1000000000000000)
+		gspec   = &Genesis{
+			Config:  params.TestChainConfig,
+			Alloc:   types.GenesisAlloc{address: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 5, func(i int, block *BlockGen) {
+		block.SetCoinbase(common.Address{0x01})
+		tx, err := types.SignTx(types.NewTransaction(block.TxNonce(address), common.Address{0x02}, big.NewInt(1000), params.TxGas, block.header.BaseFee, nil), signer, key)
+		if err != nil {
+			panic(err)
+		}
+		block.AddTx(tx)
+	})
+
+	chain, _ := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	defer chain.Stop()
+
+	// Capture metric counts before insertion
+	batchCountBefore := blockBatchWriteTimer.Snapshot().Count()
+	commitCountBefore := stateCommitTimer.Snapshot().Count()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	// Verify timers were updated
+	batchSnap := blockBatchWriteTimer.Snapshot()
+	commitSnap := stateCommitTimer.Snapshot()
+
+	if batchSnap.Count() <= batchCountBefore {
+		t.Error("blockBatchWriteTimer should have been updated after block insertion")
+	}
+	if commitSnap.Count() <= commitCountBefore {
+		t.Error("stateCommitTimer should have been updated after block insertion")
+	}
+
+	// Verify durations are non-negative (the duration variables that feed
+	// both the metrics and the >100ms warning log checks are valid)
+	if batchSnap.Mean() < 0 {
+		t.Error("blockBatchWriteTimer mean duration should be non-negative")
+	}
+	if commitSnap.Mean() < 0 {
+		t.Error("stateCommitTimer mean duration should be non-negative")
+	}
 }

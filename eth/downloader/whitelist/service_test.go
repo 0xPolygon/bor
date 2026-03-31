@@ -4,6 +4,7 @@ package whitelist
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"reflect"
 	"sort"
@@ -1532,4 +1533,62 @@ func TestForkCorrectness(t *testing.T) {
 		require.Equal(t, 0, len(s.forkValidationCache), "expected no entries in cache")
 		require.Equal(t, chain3[1].Number.Uint64(), s.lastValidForkBlock, "expected last known valid block to be unchanged")
 	})
+}
+
+// TestNewServiceDiscardsInvalidLockedMilestone verifies that NewService detects and clears
+// a LockedMilestoneNumber that is beyond the safe range when loading from DB.
+func TestNewServiceDiscardsInvalidLockedMilestone(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+
+	// Write a locked milestone with an unreachable block number to the DB,
+	// simulating a previously corrupted state.
+	lockedIDs := map[string]struct{}{"bad-id": {}}
+	err := rawdb.WriteLockField(db, true, math.MaxUint64, common.Hash{0xAB}, lockedIDs)
+	require.NoError(t, err)
+
+	// NewService should detect the out-of-range value and clear it.
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	require.True(t, ok)
+
+	m.finality.RLock()
+	defer m.finality.RUnlock()
+
+	require.False(t, m.Locked, "expected Locked to be false after discarding invalid milestone")
+	require.Equal(t, uint64(0), m.LockedMilestoneNumber, "expected LockedMilestoneNumber to be reset to 0")
+	require.Equal(t, common.Hash{}, m.LockedMilestoneHash, "expected LockedMilestoneHash to be reset")
+	require.Empty(t, m.LockedMilestoneIDs, "expected LockedMilestoneIDs to be cleared")
+
+	// Verify the corrected state was persisted to DB.
+	locked, lockedNum, lockedHash, ids, err := rawdb.ReadLockField(db)
+	require.NoError(t, err)
+	require.False(t, locked)
+	require.Equal(t, uint64(0), lockedNum)
+	require.Equal(t, common.Hash{}, lockedHash)
+	require.Empty(t, ids)
+}
+
+// TestNewServicePreservesValidLockedMilestone verifies that NewService does not
+// interfere with a legitimate locked milestone stored in DB.
+func TestNewServicePreservesValidLockedMilestone(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+
+	expectedHash := common.Hash{0x42}
+	lockedIDs := map[string]struct{}{"valid-id": {}}
+	err := rawdb.WriteLockField(db, true, 1000, expectedHash, lockedIDs)
+	require.NoError(t, err)
+
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	require.True(t, ok)
+
+	m.finality.RLock()
+	defer m.finality.RUnlock()
+
+	require.True(t, m.Locked, "expected Locked to remain true for valid milestone")
+	require.Equal(t, uint64(1000), m.LockedMilestoneNumber)
+	require.Equal(t, expectedHash, m.LockedMilestoneHash)
+	require.Len(t, m.LockedMilestoneIDs, 1)
 }

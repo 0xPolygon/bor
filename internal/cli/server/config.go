@@ -4,7 +4,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 
-	// "math"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -57,11 +57,14 @@ type Config struct {
 	// Verbosity is the level of the logs to put out
 	Verbosity int `hcl:"verbosity,optional" toml:"verbosity,optional"`
 
-	// LogLevel is the level of the logs to put out
-	LogLevel string `hcl:"log-level,optional" toml:"log-level,optional"`
-
 	// Record information useful for VM and contract debugging
 	EnablePreimageRecording bool `hcl:"vmdebug,optional" toml:"vmdebug,optional"`
+
+	// VMTrace enables live VM tracing at startup
+	VMTrace string `hcl:"vmtrace,optional" toml:"vmtrace,optional"`
+
+	// VMTraceJsonConfig is the JSON config for the VM tracer
+	VMTraceJsonConfig string `hcl:"vmtrace.jsonconfig,optional" toml:"vmtrace.jsonconfig,optional"`
 
 	// Enable state size tracking
 	StateSizeTracking bool `hcl:"state.size-tracking,optional" toml:"state.size-tracking,optional"`
@@ -78,8 +81,11 @@ type Config struct {
 	// KeyStoreDir is the directory to store keystores
 	KeyStoreDir string `hcl:"keystore,optional" toml:"keystore,optional"`
 
-	// Maximum number of messages in a batch (default=100, use 0 for no limits)
-	RPCBatchLimit uint64 `hcl:"rpc.batchlimit,optional" toml:"rpc.batchlimit,optional"`
+	// Maximum number of requests in a batch (default=1000, use 0 for no limits)
+	BatchRequestLimit int `hcl:"rpc.batch-request-limit,optional" toml:"rpc.batch-request-limit,optional"`
+
+	// Maximum number of response bytes across all requests in a batch (default=25MB, use 0 for no limits)
+	BatchResponseMaxSize int `hcl:"rpc.batch-response-max-size,optional" toml:"rpc.batch-response-max-size,optional"`
 
 	// Maximum size (in bytes) a result of an rpc request could have (default=100000, use 0 for no limits)
 	RPCReturnDataLimit uint64 `hcl:"rpc.returndatalimit,optional" toml:"rpc.returndatalimit,optional"`
@@ -233,9 +239,6 @@ type PprofConfig struct {
 
 	// Turn on block profiling with the given rate
 	BlockProfileRate int `hcl:"blockprofilerate,optional" toml:"blockprofilerate,optional"`
-
-	// // Write CPU profile to the given file
-	// CPUProfile string `hcl:"cpuprofile,optional" toml:"cpuprofile,optional"`
 }
 
 type P2PConfig struct {
@@ -311,7 +314,7 @@ type P2PDiscovery struct {
 }
 
 type HeimdallConfig struct {
-	// URL is the url of the heimdall server
+	// URL is the url of the heimdall server (comma-separated for failover: "url1,url2,url3")
 	URL string `hcl:"url,optional" toml:"url,optional"`
 
 	Timeout time.Duration `hcl:"timeout,optional" toml:"timeout,optional"`
@@ -319,10 +322,10 @@ type HeimdallConfig struct {
 	// Without is used to disable remote heimdall during testing
 	Without bool `hcl:"bor.without,optional" toml:"bor.without,optional"`
 
-	// GRPCAddress is the address of the heimdall grpc server
+	// GRPCAddress is the address of the heimdall grpc server (comma-separated for failover: "addr1,addr2")
 	GRPCAddress string `hcl:"grpc-address,optional" toml:"grpc-address,optional"`
 
-	// WSAddress is the address of the heimdall ws subscription server
+	// WSAddress is the address of the heimdall ws subscription server (comma-separated for failover: "addr1,addr2")
 	WSAddress string `hcl:"ws-address,optional" toml:"ws-address,optional"`
 
 	// RunHeimdall is used to run heimdall as a child process
@@ -412,6 +415,12 @@ type SealerConfig struct {
 	TargetBaseFee         uint64 `hcl:"targetBaseFee,optional" toml:"targetBaseFee,optional"`
 	BaseFeeBuffer         uint64 `hcl:"baseFeeBuffer,optional" toml:"baseFeeBuffer,optional"`
 
+	// Dynamic target gas percentage configuration (post-Lisovo, mutually exclusive with EnableDynamicGasLimit)
+	// Shares TargetBaseFee and BaseFeeBuffer with dynamic gas limit configuration.
+	EnableDynamicTargetGas bool   `hcl:"enableDynamicTargetGas,optional" toml:"enableDynamicTargetGas,optional"`
+	TargetGasMinPercentage uint64 `hcl:"targetGasMinPercentage,optional" toml:"targetGasMinPercentage,optional"`
+	TargetGasMaxPercentage uint64 `hcl:"targetGasMaxPercentage,optional" toml:"targetGasMaxPercentage,optional"`
+
 	// GasPrice is the minimum gas price for mining a transaction
 	GasPrice    *big.Int `hcl:"-,optional" toml:"-"`
 	GasPriceRaw string   `hcl:"gasprice,optional" toml:"gasprice,optional"`
@@ -432,8 +441,11 @@ type SealerConfig struct {
 	// BaseFeeChangeDenominator is the base fee change rate (must be >0, default 64) for post-Lisovo blocks
 	BaseFeeChangeDenominator uint64 `hcl:"base-fee-change-denominator,optional" toml:"base-fee-change-denominator,optional"`
 
-	// DisableSnapshot skips pending-block snapshot updates (saves CPU when RPC is disabled)
-	DisableSnapshot bool `hcl:"disable-snapshot,optional" toml:"disable-snapshot,optional"`
+	// EnablePrefetch enables transaction prefetching from pool during block building
+	EnablePrefetch bool `hcl:"prefetch,optional" toml:"prefetch,optional"`
+
+	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 }
 
 type JsonRPCConfig struct {
@@ -455,6 +467,9 @@ type JsonRPCConfig struct {
 
 	// LogQueryLimit is the max number of addresses or topics allowed in filter criteria for eth_getLogs.
 	LogQueryLimit int `hcl:"logquerylimit,optional" toml:"logquerylimit,optional"`
+
+	// RangeLimit is the maximum block range allowed for eth_getLogs and bor_getLogs (0 = no limit).
+	RangeLimit uint64 `hcl:"rangelimit,optional" toml:"rangelimit,optional"`
 
 	// Http has the json-rpc http related settings
 	Http *APIConfig `hcl:"http,block" toml:"http,block"`
@@ -671,18 +686,6 @@ type CacheConfig struct {
 	// TxLookupLimit sets the maximum number of blocks from head whose tx indices are reserved.
 	TxLookupLimit uint64 `hcl:"txlookuplimit,optional" toml:"txlookuplimit,optional"`
 
-	// NoTxIndex disables transaction indexing entirely when set to true.
-	// This avoids the overhead of iterating and decoding block bodies for tx index updates.
-	NoTxIndex bool `hcl:"notxindex,optional" toml:"notxindex,optional"`
-
-	// SkipReceiptWrite skips writing receipts to the DB during block insertion.
-	// Saves ~5% CPU by avoiding receipt RLP encoding and writes.
-	SkipReceiptWrite bool `hcl:"skipreceiptwrite,optional" toml:"skipreceiptwrite,optional"`
-
-	// SkipBodyWrite skips writing block bodies to the DB during block insertion.
-	// Saves ~6% CPU by avoiding block body RLP encoding and writes.
-	SkipBodyWrite bool `hcl:"skipbodywrite,optional" toml:"skipbodywrite,optional"`
-
 	// Number of block states to keep in memory (default = 128)
 	TriesInMemory uint64 `hcl:"triesinmemory,optional" toml:"triesinmemory,optional"`
 
@@ -704,6 +707,11 @@ type CacheConfig struct {
 	// Example: "0x1234...=1024,0x5678...=512" (1024MB and 512MB)
 	AddressCacheSizesRaw string            `hcl:"addresscachesizes,optional" toml:"addresscachesizes,optional"`
 	AddressCacheSizes    map[string]string `hcl:"-,optional" toml:"-"`
+
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// Accepts values like "500KB", "1MB", "0" (for unlimited). Default: 1MB/s
+	PreloadRateLimit string `hcl:"preloadratelimit,optional" toml:"preloadratelimit,optional"`
 
 	// GC settings
 	// GoMemLimit sets the soft memory limit for the runtime
@@ -778,6 +786,9 @@ type WitnessConfig struct {
 	// WitnessAPI enables witness API endpoints
 	WitnessAPI bool `hcl:"witnessapi,optional" toml:"witnessapi,optional"`
 
+	// FileStore enables storing witness blobs on the filesystem instead of Pebble
+	FileStore bool `hcl:"filestore,optional" toml:"filestore,optional"`
+
 	// Minimum necessary distance between local header and peer to fast forward
 	FastForwardThreshold uint64 `hcl:"fastforwardthreshold,optional" toml:"fastforwardthreshold,optional"`
 }
@@ -799,7 +810,6 @@ func DefaultConfig() *Config {
 		Identity:                    Hostname(),
 		RequiredBlocks:              map[string]string{},
 		Verbosity:                   3,
-		LogLevel:                    "",
 		EnablePreimageRecording:     false,
 		StateSizeTracking:           ethconfig.Defaults.EnableStateSizeTracking,
 		DataDir:                     DefaultDataDir(),
@@ -815,8 +825,9 @@ func DefaultConfig() *Config {
 			Debug:               false,
 			EnableBlockTracking: false,
 		},
-		RPCBatchLimit:      100,
-		RPCReturnDataLimit: 100000,
+		BatchRequestLimit:    node.DefaultConfig.BatchRequestLimit,
+		BatchResponseMaxSize: node.DefaultConfig.BatchResponseMaxSize,
+		RPCReturnDataLimit:   100000,
 		P2P: &P2PConfig{
 			MaxPeers:             50,
 			MaxPendPeers:         50,
@@ -879,11 +890,16 @@ func DefaultConfig() *Config {
 			GasLimitMax:              miner.DefaultConfig.GasLimitMax,
 			TargetBaseFee:            miner.DefaultConfig.TargetBaseFee,
 			BaseFeeBuffer:            miner.DefaultConfig.BaseFeeBuffer,
+			EnableDynamicTargetGas:   false,
+			TargetGasMinPercentage:   50,                                         // 50% floor
+			TargetGasMaxPercentage:   80,                                         // 80% ceiling
 			GasPrice:                 big.NewInt(params.BorDefaultMinerGasPrice), // bor's default
 			ExtraData:                "",
 			Recommit:                 125 * time.Second,
 			CommitInterruptFlag:      true,
 			BlockTime:                0,
+			EnablePrefetch:           false, // Disabled by default, requires explicit opt-in
+			PrefetchGasLimitPercent:  100,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 		},
@@ -892,15 +908,15 @@ func DefaultConfig() *Config {
 			Percentile:       60,
 			MaxHeaderHistory: 1024,
 			MaxBlockHistory:  1024,
-			MaxPrice:         gasprice.DefaultMaxPrice,
-			IgnorePrice:      gasprice.DefaultIgnorePrice, // bor's default
+			MaxPrice:         new(big.Int).Set(gasprice.DefaultMaxPrice),
+			IgnorePrice:      new(big.Int).Set(gasprice.DefaultIgnorePrice), // bor's default
 		},
 		JsonRPC: &JsonRPCConfig{
 			IPCDisable:           false,
 			IPCPath:              "",
 			GasCap:               ethconfig.Defaults.RPCGasCap,
 			TxFeeCap:             ethconfig.Defaults.RPCTxFeeCap,
-			LogQueryLimit:        ethconfig.Defaults.RPCLogQueryLimit,
+			LogQueryLimit:        ethconfig.Defaults.LogQueryLimit,
 			RPCEVMTimeout:        ethconfig.Defaults.RPCEVMTimeout,
 			AllowUnprotectedTxs:  false,
 			EnablePersonal:       false,
@@ -1014,7 +1030,6 @@ func DefaultConfig() *Config {
 			Addr:             "127.0.0.1",
 			MemProfileRate:   512 * 1024,
 			BlockProfileRate: 0,
-			// CPUProfile:       "",
 		},
 		ParallelEVM: &ParallelEVMConfig{
 			Enable:               true,
@@ -1028,6 +1043,7 @@ func DefaultConfig() *Config {
 			EnableParallelStatelessImport:  false,
 			ParallelStatelessImportWorkers: 0,
 			WitnessAPI:                     false,
+			FileStore:                      false,
 			FastForwardThreshold:           6400,
 		},
 		History: &HistoryConfig{
@@ -1211,9 +1227,14 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 
 	n.EnablePreimageRecording = c.EnablePreimageRecording
 	n.EnableStateSizeTracking = c.StateSizeTracking
+	n.VMTrace = c.VMTrace
+	n.VMTraceJsonConfig = c.VMTraceJsonConfig
 
 	// txpool options
 	{
+		for _, addrStr := range c.TxPool.Locals {
+			n.TxPool.Locals = append(n.TxPool.Locals, common.HexToAddress(addrStr))
+		}
 		n.TxPool.NoLocals = c.TxPool.NoLocals
 		n.TxPool.Journal = c.TxPool.Journal
 		n.TxPool.Rejournal = c.TxPool.Rejournal
@@ -1249,14 +1270,25 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.ExtraData = []byte(c.Sealer.ExtraData)
 		n.Miner.CommitInterruptFlag = c.Sealer.CommitInterruptFlag
 		n.Miner.BlockTime = c.Sealer.BlockTime
+		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
+		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+
+		// Validate prefetch gas limit percentage
+		if c.Sealer.EnablePrefetch && c.Sealer.PrefetchGasLimitPercent > 150 {
+			return nil, fmt.Errorf("miner.prefetch-gaslimit-percent (%d) must not exceed 150%%", c.Sealer.PrefetchGasLimitPercent)
+		}
 
 		// Dynamic gas limit configuration
-		n.Miner.DisableSnapshot = c.Sealer.DisableSnapshot
 		n.Miner.EnableDynamicGasLimit = c.Sealer.EnableDynamicGasLimit
 		n.Miner.GasLimitMin = c.Sealer.GasLimitMin
 		n.Miner.GasLimitMax = c.Sealer.GasLimitMax
 		n.Miner.TargetBaseFee = c.Sealer.TargetBaseFee
 		n.Miner.BaseFeeBuffer = c.Sealer.BaseFeeBuffer
+
+		// Enforce mutual exclusivity between dynamic gas limit and dynamic target gas
+		if c.Sealer.EnableDynamicGasLimit && c.Sealer.EnableDynamicTargetGas {
+			return nil, fmt.Errorf("miner.enableDynamicGasLimit and miner.enableDynamicTargetGas are mutually exclusive; only one may be enabled at a time")
+		}
 
 		// Validate dynamic gas limit configuration
 		if c.Sealer.EnableDynamicGasLimit {
@@ -1268,6 +1300,41 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			}
 			if c.Sealer.TargetBaseFee == 0 {
 				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic gas limit is enabled")
+			}
+		}
+
+		// Validate dynamic target gas percentage configuration
+		if c.Sealer.EnableDynamicTargetGas {
+			if c.Sealer.TargetGasMinPercentage == 0 || c.Sealer.TargetGasMinPercentage > 100 {
+				return nil, fmt.Errorf("miner.targetGasMinPercentage (%d) must be between 1-100", c.Sealer.TargetGasMinPercentage)
+			}
+			if c.Sealer.TargetGasMaxPercentage == 0 || c.Sealer.TargetGasMaxPercentage > 100 {
+				return nil, fmt.Errorf("miner.targetGasMaxPercentage (%d) must be between 1-100", c.Sealer.TargetGasMaxPercentage)
+			}
+			if c.Sealer.TargetGasMinPercentage >= c.Sealer.TargetGasMaxPercentage {
+				return nil, fmt.Errorf("miner.targetGasMinPercentage (%d) must be less than miner.targetGasMaxPercentage (%d)", c.Sealer.TargetGasMinPercentage, c.Sealer.TargetGasMaxPercentage)
+			}
+			if c.Sealer.TargetBaseFee == 0 {
+				return nil, fmt.Errorf("miner.targetBaseFee must be greater than 0 when dynamic target gas is enabled")
+			}
+			if c.Sealer.BaseFeeBuffer >= c.Sealer.TargetBaseFee {
+				log.Warn("miner.baseFeeBuffer >= miner.targetBaseFee; lower bound will be 0 (TargetGasMinPercentage branch permanently disabled, only upward fee pressure can trigger)")
+			}
+			// The static fallback percentage (explicit or implicit default) must fall within [min, max].
+			// When baseFee is within the buffer, GetTargetGasPercentage() is used as the neutral value;
+			// it must respect the configured dynamic range.
+			if c.Sealer.TargetGasPercentage > 0 {
+				if c.Sealer.TargetGasPercentage <= c.Sealer.TargetGasMinPercentage || c.Sealer.TargetGasPercentage >= c.Sealer.TargetGasMaxPercentage {
+					return nil, fmt.Errorf("miner.target-gas-percentage (%d) must be between miner.targetGasMinPercentage (%d) and miner.targetGasMaxPercentage (%d)",
+						c.Sealer.TargetGasPercentage, c.Sealer.TargetGasMinPercentage, c.Sealer.TargetGasMaxPercentage)
+				}
+			} else {
+				// Implicit default: TargetGasPercentagePostDandeli (65) must also be within range
+				defaultPct := uint64(params.TargetGasPercentagePostDandeli)
+				if defaultPct <= c.Sealer.TargetGasMinPercentage || defaultPct >= c.Sealer.TargetGasMaxPercentage {
+					return nil, fmt.Errorf("default target gas percentage (%d) falls outside [miner.targetGasMinPercentage=%d, miner.targetGasMaxPercentage=%d]; set --miner.target-gas-percentage to a value within the range",
+						defaultPct, c.Sealer.TargetGasMinPercentage, c.Sealer.TargetGasMaxPercentage)
+				}
 			}
 		}
 
@@ -1291,6 +1358,15 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		if c.Sealer.BaseFeeChangeDenominator > 0 {
 			n.Genesis.Config.Bor.BaseFeeChangeDenominator = &c.Sealer.BaseFeeChangeDenominator
+		}
+
+		// Wire dynamic target gas percentage configuration to BorConfig
+		if c.Sealer.EnableDynamicTargetGas {
+			n.Genesis.Config.Bor.EnableDynamicTargetGas = &c.Sealer.EnableDynamicTargetGas
+			n.Genesis.Config.Bor.TargetGasMinPercentage = &c.Sealer.TargetGasMinPercentage
+			n.Genesis.Config.Bor.TargetGasMaxPercentage = &c.Sealer.TargetGasMaxPercentage
+			n.Genesis.Config.Bor.TargetBaseFee = &c.Sealer.TargetBaseFee
+			n.Genesis.Config.Bor.BaseFeeBuffer = &c.Sealer.BaseFeeBuffer
 		}
 	}
 
@@ -1434,11 +1510,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		// Apply configurable garbage collection settings with validation
 		if c.Cache.GoMemLimit != "" {
-			if limit, err := parseGoMemLimit(c.Cache.GoMemLimit); err != nil {
+			if bytes, err := parseGoMemLimit(c.Cache.GoMemLimit); err != nil {
 				log.Warn("Invalid GOMEMLIMIT value, skipping", "value", c.Cache.GoMemLimit, "error", err)
 			} else {
-				godebug.SetMemoryLimit(limit)
-				log.Info("Set GOMEMLIMIT", "value", c.Cache.GoMemLimit, "bytes", limit)
+				prev := godebug.SetMemoryLimit(bytes)
+				log.Info("Set GOMEMLIMIT via runtime", "value", c.Cache.GoMemLimit, "bytes", bytes, "previous", prev)
 			}
 		}
 
@@ -1449,11 +1525,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		}
 		if sanitizedGoGC != 100 { // Only set if different from default
 			godebug.SetGCPercent(sanitizedGoGC)
-			if sanitizedGoGC == -1 {
-				log.Info("Disabled GC (GOGC=-1)")
-			} else {
-				log.Info("Set GOGC", "percent", sanitizedGoGC)
-			}
+			log.Info("Set GOGC", "percent", sanitizedGoGC)
 		}
 
 		if c.Cache.GoDebug != "" {
@@ -1473,9 +1545,6 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Preimages = c.Cache.Preimages
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
-		n.NoTxIndex = c.Cache.NoTxIndex
-		n.SkipReceiptWrite = c.Cache.SkipReceiptWrite
-		n.SkipBodyWrite = c.Cache.SkipBodyWrite
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
@@ -1488,6 +1557,20 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 			} else {
 				n.AddressCacheSizes = addressCacheSizes
 			}
+		}
+
+		// Parse preload rate limit (default: 1MB/s per address)
+		if c.Cache.PreloadRateLimit != "" {
+			rateLimitBytes, err := parseByteSize(c.Cache.PreloadRateLimit)
+			if err != nil {
+				log.Warn("Failed to parse preload rate limit, using default 1MB/s per address", "error", err)
+				n.PreloadRateLimit = 1024 * 1024
+			} else {
+				n.PreloadRateLimit = rateLimitBytes
+			}
+		} else {
+			// Default to 1MB/s per address if not specified
+			n.PreloadRateLimit = 1024 * 1024
 		}
 	}
 
@@ -1520,15 +1603,15 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.TxSyncDefaultTimeout = c.JsonRPC.TxSyncDefaultTimeout
 	n.TxSyncMaxTimeout = c.JsonRPC.TxSyncMaxTimeout
 
-	n.RPCLogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.LogQueryLimit = c.JsonRPC.LogQueryLimit
+	n.RPCBlockRangeLimit = c.JsonRPC.RangeLimit
 
-	// Choose the sync mode. Only "full" or "stateless" sync is supported
+	// Choose the sync mode
 	switch c.SyncMode {
 	case "full":
 		n.SyncMode = downloader.FullSync
 	case "snap":
-		log.Info("Snap sync is momentarily disabled in bor, switching to full sync")
-		n.SyncMode = downloader.FullSync
+		n.SyncMode = downloader.SnapSync
 	case "stateless":
 		n.SyncMode = downloader.StatelessSync
 		log.Info("Using Stateless Sync mode - syncing from latest checkpoint without history")
@@ -1589,8 +1672,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.EnableParallelStatelessImport = c.Witness.EnableParallelStatelessImport
 	n.EnableParallelStatelessImportWorkers = c.Witness.ParallelStatelessImportWorkers
 	n.WitnessAPIEnabled = c.Witness.WitnessAPI
+	n.WitnessFileStore = c.Witness.FileStore
 	n.FastForwardThreshold = c.Witness.FastForwardThreshold
-
 	n.RPCReturnDataLimit = c.RPCReturnDataLimit
 
 	if c.Ancient != "" {
@@ -1658,6 +1741,46 @@ func parseAddressCacheSizes(input string) (map[common.Address]int, error) {
 	}
 
 	return result, nil
+}
+
+// parseByteSize parses a byte size string like "5MB", "10MB", "1GB", or "0" (for unlimited)
+// Returns the size in bytes. Supported suffixes: B, KB, MB, GB (case insensitive)
+func parseByteSize(input string) (int64, error) {
+	input = strings.TrimSpace(input)
+	if input == "" || input == "0" {
+		return 0, nil
+	}
+
+	input = strings.ToUpper(input)
+
+	var multiplier int64 = 1
+	var numStr string
+
+	switch {
+	case strings.HasSuffix(input, "GB"):
+		multiplier = 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(input, "GB")
+	case strings.HasSuffix(input, "MB"):
+		multiplier = 1024 * 1024
+		numStr = strings.TrimSuffix(input, "MB")
+	case strings.HasSuffix(input, "KB"):
+		multiplier = 1024
+		numStr = strings.TrimSuffix(input, "KB")
+	case strings.HasSuffix(input, "B"):
+		multiplier = 1
+		numStr = strings.TrimSuffix(input, "B")
+	default:
+		// Assume bytes if no suffix
+		numStr = input
+	}
+
+	numStr = strings.TrimSpace(numStr)
+	num, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte size: %s", input)
+	}
+
+	return num * multiplier, nil
 }
 
 var (
@@ -1775,6 +1898,7 @@ func (c *Config) buildNode() (*node.Config, error) {
 
 	cfg := &node.Config{
 		Name:                  clientIdentifier,
+		UserIdent:             c.Identity,
 		DataDir:               c.DataDir,
 		DBEngine:              c.DBEngine,
 		KeyStoreDir:           c.KeyStoreDir,
@@ -1813,7 +1937,8 @@ func (c *Config) buildNode() (*node.Config, error) {
 		AuthPort:                               int(c.JsonRPC.Auth.Port),
 		AuthAddr:                               c.JsonRPC.Auth.Addr,
 		AuthVirtualHosts:                       c.JsonRPC.Auth.VHosts,
-		RPCBatchLimit:                          c.RPCBatchLimit,
+		BatchRequestLimit:                      c.BatchRequestLimit,
+		BatchResponseMaxSize:                   c.BatchResponseMaxSize,
 		WSJsonRPCExecutionPoolSize:             c.JsonRPC.Ws.ExecutionPoolSize,
 		WSJsonRPCExecutionPoolRequestTimeout:   c.JsonRPC.Ws.ExecutionPoolRequestTimeout,
 		HTTPJsonRPCExecutionPoolSize:           c.JsonRPC.Http.ExecutionPoolSize,
@@ -2011,70 +2136,58 @@ func MakePasswordListFromFile(path string) ([]string, error) {
 	return lines, nil
 }
 
-// parseGoMemLimit parses a GOMEMLIMIT string value into bytes.
-// Accepts formats like "48GB", "48GiB", "1024MB", "51539607552", or "off" (-1).
+// parseGoMemLimit parses a GOMEMLIMIT string (e.g. "100GB", "1024MB", "off")
+// into bytes. Returns math.MaxInt64 for "off" (no limit).
 func parseGoMemLimit(value string) (int64, error) {
 	if value == "off" {
-		return -1, nil // math.MaxInt64 effectively disables the limit
+		return math.MaxInt64, nil
 	}
 
-	// Try parsing as pure number (bytes)
-	if n, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return n, nil
-	}
-
-	// Parse number + unit suffix
-	// Strip optional "iB" or "B" suffix, then match unit prefix
-	s := strings.TrimSpace(value)
-
-	// Find where the numeric part ends
+	// Split numeric prefix from unit suffix
 	i := 0
-	for i < len(s) && (s[i] >= '0' && s[i] <= '9' || s[i] == '.') {
+	for i < len(value) && (value[i] >= '0' && value[i] <= '9' || value[i] == '.') {
 		i++
 	}
+
 	if i == 0 {
-		return 0, fmt.Errorf("invalid GOMEMLIMIT format: %q", value)
+		return 0, fmt.Errorf("invalid GOMEMLIMIT: no numeric value in %q", value)
 	}
 
-	numStr := s[:i]
-	unit := s[i:]
+	numStr := value[:i]
+	unit := value[i:]
 
 	num, err := strconv.ParseFloat(numStr, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid GOMEMLIMIT number: %q", numStr)
+		return 0, fmt.Errorf("invalid GOMEMLIMIT number %q: %v", numStr, err)
 	}
 
 	var multiplier float64
-	switch strings.ToUpper(strings.TrimSuffix(strings.TrimSuffix(unit, "B"), "i")) {
+
+	switch unit {
 	case "", "B":
 		multiplier = 1
-	case "K":
+	case "KB", "KiB":
 		multiplier = 1024
-	case "M":
+	case "MB", "MiB":
 		multiplier = 1024 * 1024
-	case "G":
+	case "GB", "GiB":
 		multiplier = 1024 * 1024 * 1024
-	case "T":
+	case "TB", "TiB":
 		multiplier = 1024 * 1024 * 1024 * 1024
 	default:
-		return 0, fmt.Errorf("invalid GOMEMLIMIT unit: %q", unit)
+		return 0, fmt.Errorf("invalid GOMEMLIMIT unit %q (expected B, KB, MB, GB, TB)", unit)
 	}
 
 	return int64(num * multiplier), nil
 }
 
-// sanitizeGoGC clamps GOGC values to reasonable bounds.
-// -1 disables GC entirely (useful for short benchmarks with GOMEMLIMIT set).
+// sanitizeGoGC clamps GOGC values to reasonable bounds
 func sanitizeGoGC(value int) int {
 	const (
 		minGoGC = 10
 		maxGoGC = 2000
 	)
 
-	// Allow -1 to disable GC (runtime/debug.SetGCPercent(-1))
-	if value == -1 {
-		return -1
-	}
 	if value < minGoGC {
 		return minGoGC
 	}

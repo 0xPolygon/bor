@@ -3,6 +3,7 @@ package whitelist
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -76,6 +77,19 @@ func NewService(db ethdb.Database, disableBlindForkValidation bool, maxBlindFork
 	if err != nil || !locked {
 		locked = false
 		lockedMilestoneIDs = make(map[string]struct{})
+	}
+
+	// Discard the locked state if the stored milestone number is out of the safe range (corrupted data).
+	if locked && lockedMilestoneNumber > math.MaxInt64 {
+		log.Warn("Discarding invalid locked milestone loaded from DB", "lockedMilestoneNumber", lockedMilestoneNumber)
+		locked = false
+		lockedMilestoneNumber = 0
+		lockedMilestoneHash = common.Hash{}
+		lockedMilestoneIDs = make(map[string]struct{})
+
+		if err := rawdb.WriteLockField(db, locked, lockedMilestoneNumber, lockedMilestoneHash, lockedMilestoneIDs); err != nil {
+			log.Error("Error clearing invalid lock data from db", "err", err)
+		}
 	}
 
 	order, list, err := rawdb.ReadFutureMilestoneList(db)

@@ -63,8 +63,10 @@ type Config struct {
 	CommitInterruptFlag bool          // Interrupt commit when time is up ( default = true)
 	BlockTime           time.Duration // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
 
-	NewPayloadTimeout   time.Duration  // The maximum time allowance for creating a new payload
-	PendingFeeRecipient common.Address `toml:"-"` // Address for pending block rewards.
+	NewPayloadTimeout       time.Duration  // The maximum time allowance for creating a new payload
+	PendingFeeRecipient     common.Address `toml:"-"` // Address for pending block rewards.
+	EnablePrefetch          bool           // Enable transaction prefetching from pool during block building
+	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 }
 
 // DefaultConfig contains default settings for miner.
@@ -84,7 +86,9 @@ var DefaultConfig = Config{
 	// consensus-layer usually will wait a half slot of time(6s)
 	// for payload generation. It should be enough for Geth to
 	// run 3 rounds.
-	Recommit: 2 * time.Second,
+	Recommit:                2 * time.Second,
+	EnablePrefetch:          true,
+	PrefetchGasLimitPercent: 100, // 100% of header gas limit
 }
 
 // Miner is the main object which takes care of submitting new work to consensus
@@ -273,8 +277,8 @@ func (miner *Miner) SetEtherbase(addr common.Address) {
 func (miner *Miner) SetPrioAddresses(prio []common.Address) {
 	miner.confMu.Lock()
 	miner.prio = prio
-	miner.worker.prio = miner.prio
 	miner.confMu.Unlock()
+	miner.worker.setPrio(prio)
 }
 
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.

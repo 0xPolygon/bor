@@ -49,10 +49,11 @@ type freezerdb struct {
 	ethdb.KeyValueStore
 	*chainFreezer
 
-	witPruner   *pruner
-	blockPruner *pruner
-	readOnly    bool
-	ancientRoot string
+	witnessStore WitnessStore
+	witPruner    *pruner
+	blockPruner  *pruner
+	readOnly     bool
+	ancientRoot  string
 }
 
 // AncientDatadir returns the path of root ancient directory.
@@ -62,16 +63,15 @@ func (frdb *freezerdb) AncientDatadir() (string, error) {
 
 // Close implements io.Closer, closing both the fast key-value store as well as
 // the slow ancient tables.
+// WitnessStore returns the witness store associated with this database.
+func (frdb *freezerdb) WitnessStore() WitnessStore {
+	return frdb.witnessStore
+}
+
 func (frdb *freezerdb) Close() error {
 	var errs []error
-	if err := frdb.chainFreezer.Close(); err != nil {
-		errs = append(errs, err)
-	}
 
-	if err := frdb.KeyValueStore.Close(); err != nil {
-		errs = append(errs, err)
-	}
-
+	// Stop pruners first, while the DB is still open.
 	if frdb.witPruner != nil {
 		if err := frdb.witPruner.Close(); err != nil {
 			errs = append(errs, err)
@@ -82,6 +82,20 @@ func (frdb *freezerdb) Close() error {
 		if err := frdb.blockPruner.Close(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	if frdb.witnessStore != nil {
+		if err := frdb.witnessStore.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if err := frdb.chainFreezer.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := frdb.KeyValueStore.Close(); err != nil {
+		errs = append(errs, err)
 	}
 
 	if len(errs) != 0 {
@@ -321,6 +335,13 @@ type OpenOptions struct {
 	WitnessPruneEnabled bool
 	BlockPruneEnabled   bool
 	Stateless           bool
+
+	// WitnessFileStore enables storing witness blobs on the filesystem
+	// instead of in the key-value database.
+	WitnessFileStore bool
+	// WitnessStoreDir is the directory for filesystem-backed witness storage.
+	WitnessStoreDir string
+
 	// Ephemeral means that filesystem sync operations should be avoided:
 	// data integrity in the face of a crash is not important. This option
 	// should typically be used in tests.
@@ -485,8 +506,22 @@ func Open(db ethdb.KeyValueStore, opts OpenOptions) (ethdb.Database, error) {
 		chainFreezer:  frdb,
 	}
 
+	// Initialize witness store: filesystem or database backend.
+	if opts.WitnessFileStore && opts.WitnessStoreDir != "" {
+		ethDb.witnessStore = NewFSWitnessStore(opts.WitnessStoreDir, ethDb)
+		log.Info("Witness store using filesystem backend", "dir", opts.WitnessStoreDir)
+	} else {
+		ethDb.witnessStore = NewDBWitnessStore(ethDb)
+		// Warn if filesystem witness data exists but flag is off.
+		if opts.WitnessStoreDir != "" {
+			if _, err := os.Stat(opts.WitnessStoreDir); err == nil {
+				log.Warn("Witness directory exists but --witness.filestore is disabled; filesystem witnesses will be orphaned", "dir", opts.WitnessStoreDir)
+			}
+		}
+	}
+
 	if opts.WitnessPruneEnabled || opts.Stateless {
-		ethDb.witPruner = NewPruner(ethDb, NewWitnessStrategy())
+		ethDb.witPruner = NewPruner(ethDb, NewWitnessStrategy(ethDb.witnessStore))
 		ethDb.witPruner.Start()
 	}
 
@@ -995,4 +1030,22 @@ func SafeDeleteRange(db ethdb.KeyValueStore, start, end []byte, hashScheme bool,
 		}
 	}
 	return batch.Write()
+}
+
+// witnessStoreDB is an optional interface that databases may implement
+// to expose their WitnessStore.
+type witnessStoreDB interface {
+	WitnessStore() WitnessStore
+}
+
+// GetWitnessStore extracts the WitnessStore from the database if it is
+// a freezerdb with an initialized witness store. Otherwise it returns
+// a fallback DB-backed witness store.
+func GetWitnessStore(db ethdb.Database) WitnessStore {
+	if wsdb, ok := db.(witnessStoreDB); ok {
+		if ws := wsdb.WitnessStore(); ws != nil {
+			return ws
+		}
+	}
+	return NewDBWitnessStore(db)
 }

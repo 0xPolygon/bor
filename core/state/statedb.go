@@ -170,6 +170,7 @@ type StateDB struct {
 	SnapshotStorageReads time.Duration
 	SnapshotCommits      time.Duration
 	TrieDBCommits        time.Duration
+	WitnessCollection    time.Duration // time spent collecting trie nodes into witness during IntermediateRoot (sequential portion only)
 
 	// Bor metrics
 	BorConsensusTime time.Duration
@@ -1138,6 +1139,14 @@ func (s *StateDB) Copy() *StateDB {
 		logSize:              s.logSize,
 		preimages:            maps.Clone(s.preimages),
 
+		// Timing fields — must be carried over so metrics in resultLoop see
+		// the values accumulated during fillTransactions, not zero.
+		AccountReads:         s.AccountReads,
+		StorageReads:         s.StorageReads,
+		SnapshotAccountReads: s.SnapshotAccountReads,
+		SnapshotStorageReads: s.SnapshotStorageReads,
+		BorConsensusTime:     s.BorConsensusTime,
+
 		// Do we need to copy the access list and transient storage?
 		// In practice: No. At the start of a transaction, these two lists are empty.
 		// In practice, we only ever copy state _between_ transactions/blocks, never
@@ -1330,6 +1339,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Skip witness collection in Verkle mode, they will be gathered
 	// together at the end.
 	if s.witness != nil && !s.db.TrieDB().IsVerkle() {
+		witStart := time.Now()
 		// Pull in anything that has been accessed before destruction
 		for _, obj := range s.stateObjectsDestruct {
 			// Skip any objects that haven't touched their storage
@@ -1374,6 +1384,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				}
 			}
 		}
+		s.WitnessCollection += time.Since(witStart)
 	}
 	workers.Wait()
 	s.StorageUpdates += time.Since(start)
@@ -1437,11 +1448,13 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 
 	// If witness building is enabled, gather the account trie witness
 	if s.witness != nil {
+		witStart := time.Now()
 		witness := s.trie.Witness()
 		s.witness.AddState(witness)
 		if s.witnessStats != nil {
 			s.witnessStats.Add(witness, common.Hash{})
 		}
+		s.WitnessCollection += time.Since(witStart)
 	}
 	return hash
 }

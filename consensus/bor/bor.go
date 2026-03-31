@@ -58,6 +58,7 @@ const (
 	inmemorySnapshots  = 128             // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096            // Number of recent block signatures to keep in memory
 	veblopBlockTimeout = time.Second * 8 // Timeout for new span check. DO NOT CHANGE THIS VALUE.
+	minBlockBuildTime  = 1 * time.Second // Minimum remaining time before extending the block deadline to avoid empty blocks
 )
 
 // Bor protocol constants.
@@ -96,6 +97,10 @@ var (
 	// invalid list of validators (i.e. non divisible by 40 bytes).
 	errInvalidSpanValidators = errors.New("invalid validator list on sprint end block")
 
+	// errMissingGiuglianoFields is returned if a post-Giugliano block is missing
+	// the gas target or base fee change denominator in its extra data.
+	errMissingGiuglianoFields = errors.New("missing gas target or base fee change denominator in extra data")
+
 	// errInvalidMixDigest is returned if a block's mix digest is non-zero.
 	errInvalidMixDigest = errors.New("non-zero mix digest")
 
@@ -123,6 +128,10 @@ var (
 	// is not contiguous in terms of parent-child relationships.
 	errNonContiguousHeaderRange = errors.New("non-contiguous headers in checkpoint range")
 )
+
+// maxAllowedFutureBlockTimeSeconds is the maximum number of seconds that a block
+// timestamp may exceed the local clock.
+const maxAllowedFutureBlockTimeSeconds = uint64(30)
 
 // SignerFn is a signer callback function to request a header to be signed by a
 // backing account.
@@ -410,13 +419,37 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	number := header.Number.Uint64()
 	now := uint64(time.Now().Unix())
 
-	// Allow early blocks if Bhilai HF is enabled
-	if c.config.IsBhilai(header.Number) {
+	if c.config.IsGiugliano(header.Number) {
+		// Rio introduced flexible blocktime (can be set larger than consensus without approval).
+		// Using strict CalcProducerDelay for early block announcement (introduced back in Giugliano)
+		// would reject valid blocks, so we just ensure announcement time comes after parent time to
+		// allow for flexible blocktime.
+		var parent *types.Header
+
+		if len(parents) > 0 {
+			parent = parents[len(parents)-1]
+		} else {
+			parent = chain.GetHeader(header.ParentHash, number-1)
+		}
+		if parent == nil || now < parent.Time {
+			log.Error("Block announced too early post giugliano", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+		}
+		// Upper-bound check: a block whose timestamp is more than maxAllowedFutureBlockTimeSeconds
+		// ahead of the local clock is rejected.
+		if header.Time > now+maxAllowedFutureBlockTimeSeconds {
+			log.Error("Block timestamp too far in future post giugliano", "number", number, "headerTime", header.Time, "now", now)
+			return consensus.ErrFutureBlock
+		}
+	} else if c.config.IsBhilai(header.Number) {
+		// TODO: Once Amoy and Mainnet supports Giugliano HF, we are safe to remove this check (since it only works for block future blocks)
 		// Don't waste time checking blocks from the future but allow a buffer of block time for
 		// early block announcements. Note that this is a loose check and would allow early blocks
 		// from non-primary producer. Such blocks will be rejected later when we know the succession
 		// number of the signer in the current sprint.
-		if header.Time-c.config.CalculatePeriod(number) > now {
+		// Uses CalcProducerDelay instead of block period to account for producer delay on sprint start blocks.
+		// We assume succession 0 (primary producer) to not be much restrictive for early block announcements.
+		if header.Time-CalcProducerDelay(number, 0, c.config) > now {
 			log.Error("Block announced too early post bhilai", "number", number, "headerTime", header.Time, "now", now)
 			return consensus.ErrFutureBlock
 		}
@@ -445,6 +478,18 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 	if isSprintEnd && signersBytes%validatorHeaderBytesLength != 0 {
 		log.Warn("Invalid validator set", "number", number, "signersBytes", signersBytes)
 		return errInvalidSpanValidators
+	}
+
+	// Post-Giugliano: verify that gas target and base fee change denominator are present.
+	// We only check presence, not correctness, because post-Lisovo these parameters are
+	// configurable per-node via CLI flags. Validating values would cause nodes with
+	// different configurations to reject each other's blocks. The actual base fee
+	// calculation in CalcBaseFee uses its own computation and does not read these fields.
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget, bfcd := header.GetBaseFeeParams(c.chainConfig)
+		if gasTarget == nil || bfcd == nil {
+			return errMissingGiuglianoFields
+		}
 	}
 
 	// Ensure that the mix digest is zero as we don't have fork protection currently
@@ -484,7 +529,18 @@ func (c *Bor) verifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 		return err
 	}
 
-	c.recentVerifiedHeaders.Set(header.Hash(), header, ttlcache.DefaultTTL)
+	// Calculate TTL for the header cache entry
+	// If the header time is in the future (early announced block), add extra time to TTL
+	cacheTTL := veblopBlockTimeout
+	nowTime := time.Now()
+	headerTime := time.Unix(int64(header.Time), 0)
+	if headerTime.After(nowTime) && c.config.IsGiugliano(header.Number) {
+		// Add the time from now until header time as extra to the base timeout
+		extraTime := headerTime.Sub(nowTime)
+		cacheTTL = veblopBlockTimeout + extraTime
+	}
+
+	c.recentVerifiedHeaders.Set(header.Hash(), header, cacheTTL)
 	return nil
 }
 
@@ -939,9 +995,21 @@ func IsBlockEarly(parent *types.Header, header *types.Header, number uint64, suc
 	return parent != nil && header.Time < parent.Time+CalcProducerDelay(number, succession, cfg)
 }
 
+// setGiuglianoExtraFields populates the GasTarget and BaseFeeChangeDenominator
+// fields in BlockExtraData for post-Giugliano blocks. CalcGasTarget and
+// BaseFeeChangeDenominator both operate on the parent header's values.
+func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header, blockExtraData *types.BlockExtraData) {
+	if c.config.IsGiugliano(header.Number) {
+		gasTarget := eip1559.CalcGasTarget(c.chainConfig, parent)
+		bfcd := params.BaseFeeChangeDenominator(c.config, parent.Number)
+		blockExtraData.GasTarget = &gasTarget
+		blockExtraData.BaseFeeChangeDenominator = &bfcd
+	}
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
@@ -965,6 +1033,12 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 
 	header.Extra = header.Extra[:types.ExtraVanityLength]
 
+	// Fetch parent early — needed for Giugliano extra fields and timestamp calculation
+	parent := chain.GetHeader(header.ParentHash, number-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+
 	// get validator set if number
 	if IsSprintStart(number+1, c.config.CalculateSprint(number)) && !c.config.IsRio(header.Number) {
 		newValidators, err := c.spanner.GetCurrentValidatorsByHash(context.Background(), header.ParentHash, number+1)
@@ -987,9 +1061,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 				TxDependency:   nil,
 			}
 
+			c.setGiuglianoExtraFields(header, parent, blockExtraData)
+
 			blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 			if err != nil {
-				log.Error("error while encoding block extra data: %v", err)
+				log.Error("error while encoding block extra data", "err", err)
 				return fmt.Errorf("error while encoding block extra data: %v", err)
 			}
 
@@ -1005,9 +1081,11 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 			TxDependency:   nil,
 		}
 
+		c.setGiuglianoExtraFields(header, parent, blockExtraData)
+
 		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 		if err != nil {
-			log.Error("error while encoding block extra data: %v", err)
+			log.Error("error while encoding block extra data", "err", err)
 			return fmt.Errorf("error while encoding block extra data: %v", err)
 		}
 
@@ -1021,11 +1099,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	header.MixDigest = common.Hash{}
 
 	// Ensure the timestamp has the correct delay
-	parent := chain.GetHeader(header.ParentHash, number-1)
-	if parent == nil {
-		return consensus.ErrUnknownAncestor
-	}
-
 	var succession int
 	// if signer is not empty
 	if currentSigner.signer != (common.Address{}) {
@@ -1038,6 +1111,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 	if c.blockTime > 0 && uint64(c.blockTime.Seconds()) < c.config.CalculatePeriod(number) {
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
+
+	var delay time.Duration
 
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
@@ -1056,19 +1131,40 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
+		delay = time.Until(parentActualBlockTime)
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
-	if now.After(header.GetActualTime()) {
-		additionalBlockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
-		if c.blockTime > 0 {
-			additionalBlockTime = c.blockTime
-		}
-		header.Time = uint64(now.Add(additionalBlockTime).Unix())
+	blockTime := time.Duration(c.config.CalculatePeriod(number)) * time.Second
+	if c.blockTime > 0 && c.config.IsRio(header.Number) {
+		blockTime = c.blockTime
+	}
+	// Ensure minimum build time so the block has enough time to include transactions.
+	// The interrupt timer reserves 500ms for state root computation, so without
+	// sufficient remaining time the block would end up empty.
+	if time.Until(header.GetActualTime()) < minBlockBuildTime {
+		header.Time = uint64(now.Add(blockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
-			header.ActualTime = now.Add(additionalBlockTime)
+			header.ActualTime = now.Add(blockTime)
+		}
+	}
+
+	// Wait before start the block production if needed (previously this wait was on Seal)
+	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
+		var successionNumber int
+		// if signer is not empty (RPC nodes have empty signer)
+		if currentSigner.signer != (common.Address{}) {
+			var err error
+			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
+			if err != nil {
+				return err
+			}
+			if successionNumber == 0 {
+				<-time.After(delay)
+			}
 		}
 	}
 
@@ -1238,6 +1334,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 	)
 
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
+		borStart := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 
 		// check and commit span
@@ -1256,6 +1353,7 @@ func (c *Bor) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *typ
 				return nil, nil, 0, err
 			}
 		}
+		state.BorConsensusTime = time.Since(borStart)
 	}
 
 	if err = c.changeContractCodeIfNeeded(headerNumber, state); err != nil {
@@ -1336,14 +1434,8 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsBhilai(header.Number) {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time for non-primary validators
-		// Disable early block announcement
-		// if successionNumber == 0 {
-		// 	// For primary producers, set the delay to `header.Time - block time` instead of `header.Time`
-		// 	// for early block announcement instead of waiting for full block time.
-		// 	delay = time.Until(time.Unix(int64(header.Time-c.config.CalculatePeriod(number)), 0))
-		// }
+	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
+		delay = 0 // delay was moved to Prepare for giugliano and later
 	} else {
 		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
 	}

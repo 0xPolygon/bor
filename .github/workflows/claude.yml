@@ -31,8 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
@@ -40,19 +40,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@2316a9a8dbe4e7ac26008088f966f8c290e9a2e1
+        uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
-
+          # path_to_claude_code_executable: ${{ env.CLAUDE_PATH }}          
           # This is an optional setting that allows Claude to read CI results on PRs
+          claude_args: |
+            --model claude-opus-4-6
           additional_permissions: |
             actions: read
-
-          claude_args: '--model claude-opus-4-5-20251101'
-
           # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
           # prompt: 'Update the pull request description to include a summary of changes.'
 

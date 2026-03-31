@@ -292,6 +292,261 @@ func TestSealerBothGasParametersConfig(t *testing.T) {
 	})
 }
 
+// TestParseByteSize tests the parseByteSize helper function for parsing
+// human-readable byte size strings (e.g., "500KB", "5MB", "1GB").
+func TestParseByteSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int64
+		wantErr  bool
+	}{
+		// Valid inputs with different suffixes
+		{"bytes", "1024B", 1024, false},
+		{"kilobytes", "500KB", 500 * 1024, false},
+		{"megabytes", "5MB", 5 * 1024 * 1024, false},
+		{"gigabytes", "1GB", 1 * 1024 * 1024 * 1024, false},
+
+		// Case insensitivity
+		{"lowercase kb", "500kb", 500 * 1024, false},
+		{"lowercase mb", "5mb", 5 * 1024 * 1024, false},
+		{"mixed case", "5Mb", 5 * 1024 * 1024, false},
+
+		// No suffix (assumes bytes)
+		{"no suffix", "1024", 1024, false},
+
+		// Zero and empty
+		{"zero string", "0", 0, false},
+		{"empty string", "", 0, false},
+
+		// Whitespace handling
+		{"leading space", "  500KB", 500 * 1024, false},
+		{"trailing space", "500KB  ", 500 * 1024, false},
+		{"space before suffix", "500 KB", 500 * 1024, false},
+
+		// Invalid inputs
+		{"invalid suffix", "500XB", 0, true},
+		{"non-numeric", "abcMB", 0, true},
+		{"float", "5.5MB", 0, true},
+
+		// Note: negative values are technically parsed by ParseInt,
+		// but produce negative results which are invalid for byte sizes.
+		// The calling code should validate the result is non-negative.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseByteSize(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err, "expected error for input: %s", tt.input)
+			} else {
+				assert.NoError(t, err, "unexpected error for input: %s", tt.input)
+				assert.Equal(t, tt.expected, result, "unexpected result for input: %s", tt.input)
+			}
+		})
+	}
+}
+
+// TestPreloadRateLimitConfig tests the preload rate limit configuration parsing.
+func TestPreloadRateLimitConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int64
+	}{
+		{"empty string defaults to 1MB/s", "", 1024 * 1024},
+		{"explicit 1MB", "1MB", 1024 * 1024},
+		{"unlimited (0)", "0", 0},
+		{"invalid falls back to 1MB/s", "invalid", 1024 * 1024},
+		{"500KB", "500KB", 500 * 1024},
+		{"2MB", "2MB", 2 * 1024 * 1024},
+		{"lowercase 100kb", "100kb", 100 * 1024},
+		{"lowercase 10mb", "10mb", 10 * 1024 * 1024},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DefaultConfig()
+			config.Cache.PreloadRateLimit = tt.input
+
+			assert.NoError(t, config.loadChain())
+
+			ethConfig, err := config.buildEth(nil, nil)
+			assert.NoError(t, err)
+
+			assert.Equal(t, tt.expected, ethConfig.PreloadRateLimit, "input: %s", tt.input)
+		})
+	}
+}
+
+// TestSealerDynamicTargetGasConfig tests the EnableDynamicTargetGas feature validation
+// and BorConfig wiring introduced in buildEth.
+func TestSealerDynamicTargetGasConfig(t *testing.T) {
+	// validDynamicTargetGasConfig returns a baseline config with all required fields
+	// set to valid values for EnableDynamicTargetGas.
+	validDynamicTargetGasConfig := func() *Config {
+		config := DefaultConfig()
+		config.Sealer.EnableDynamicTargetGas = true
+		config.Sealer.TargetGasMinPercentage = 50    // 50% floor
+		config.Sealer.TargetGasMaxPercentage = 80    // 80% ceiling
+		config.Sealer.TargetBaseFee = 25_000_000_000 // 25 gwei
+		config.Sealer.BaseFeeBuffer = 10_000_000_000 // 10 gwei buffer
+		return config
+	}
+
+	buildConfig := func(t *testing.T, config *Config) (*ethconfig.Config, error) {
+		t.Helper()
+		assert.NoError(t, config.loadChain())
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+		return config.buildEth(nil, nil)
+	}
+
+	t.Run("MutualExclusivity_ReturnsError", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Sealer.EnableDynamicGasLimit = true
+		config.Sealer.EnableDynamicTargetGas = true
+
+		assert.NoError(t, config.loadChain())
+		_, err := config.buildNode()
+		assert.NoError(t, err)
+		_, err = config.buildEth(nil, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("TargetGasMinPercentage_Zero_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMinPercentage = 0
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (0) must be between 1-100")
+	})
+
+	t.Run("TargetGasMinPercentage_OutOfRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMinPercentage = 101
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (101) must be between 1-100")
+	})
+
+	t.Run("TargetGasMaxPercentage_Zero_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMaxPercentage = 0
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMaxPercentage (0) must be between 1-100")
+	})
+
+	t.Run("TargetGasMaxPercentage_OutOfRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMaxPercentage = 101
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMaxPercentage (101) must be between 1-100")
+	})
+
+	t.Run("TargetGasMinPercentage_EqualTo_TargetGasMaxPercentage_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMinPercentage = 65
+		config.Sealer.TargetGasMaxPercentage = 65
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (65) must be less than miner.targetGasMaxPercentage (65)")
+	})
+
+	t.Run("TargetGasMinPercentage_GreaterThan_TargetGasMaxPercentage_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetGasMinPercentage = 80
+		config.Sealer.TargetGasMaxPercentage = 50
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetGasMinPercentage (80) must be less than miner.targetGasMaxPercentage (50)")
+	})
+
+	t.Run("TargetGasPercentage_OutsideDynamicRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig() // min=50, max=80
+		config.Sealer.TargetGasPercentage = 90  // outside [50, 80]
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.target-gas-percentage (90) must be between")
+	})
+
+	t.Run("TargetGasPercentage_WithinDynamicRange_NoError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig() // min=50, max=80
+		config.Sealer.TargetGasPercentage = 65  // within [50, 80]
+
+		_, err := buildConfig(t, config)
+		assert.NoError(t, err)
+	})
+
+	t.Run("ImplicitDefault65_OutsideDynamicRange_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		// default 65% falls below min=70
+		config.Sealer.TargetGasMinPercentage = 70
+		config.Sealer.TargetGasMaxPercentage = 90
+		// TargetGasPercentage left at 0 (not set) → implicit default 65 < 70
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "default target gas percentage (65) falls outside")
+	})
+
+	t.Run("TargetBaseFee_Zero_ReturnsError", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		config.Sealer.TargetBaseFee = 0
+		config.Sealer.BaseFeeBuffer = 0
+
+		_, err := buildConfig(t, config)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "miner.targetBaseFee must be greater than 0 when dynamic target gas is enabled")
+	})
+
+	t.Run("BaseFeeBuffer_GTE_TargetBaseFee_WarnsOnly", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+		// Buffer equal to TargetBaseFee → lower bound clamps to 0, only a warning emitted
+		config.Sealer.BaseFeeBuffer = config.Sealer.TargetBaseFee
+
+		_, err := buildConfig(t, config)
+		assert.NoError(t, err)
+	})
+
+	t.Run("ValidConfig_WiresBorConfig", func(t *testing.T) {
+		config := validDynamicTargetGasConfig()
+
+		ethConfig, err := buildConfig(t, config)
+		assert.NoError(t, err)
+
+		bor := ethConfig.Genesis.Config.Bor
+		assert.NotNil(t, bor.EnableDynamicTargetGas)
+		assert.True(t, *bor.EnableDynamicTargetGas)
+		assert.NotNil(t, bor.TargetGasMinPercentage)
+		assert.Equal(t, uint64(50), *bor.TargetGasMinPercentage)
+		assert.NotNil(t, bor.TargetGasMaxPercentage)
+		assert.Equal(t, uint64(80), *bor.TargetGasMaxPercentage)
+		assert.NotNil(t, bor.TargetBaseFee)
+		assert.Equal(t, uint64(25_000_000_000), *bor.TargetBaseFee)
+		assert.NotNil(t, bor.BaseFeeBuffer)
+		assert.Equal(t, uint64(10_000_000_000), *bor.BaseFeeBuffer)
+	})
+
+	t.Run("BothDisabled_NoError", func(t *testing.T) {
+		config := DefaultConfig()
+		// Both EnableDynamicGasLimit and EnableDynamicTargetGas default to false
+
+		_, err := buildConfig(t, config)
+		assert.NoError(t, err)
+	})
+}
+
 // TestDeveloperModeGasParameters tests the developer mode specific code path
 // for setting TargetGasPercentage and BaseFeeChangeDenominator (lines 1293-1304 in config.go).
 // The default config uses mainnet which has Bor config, so these tests actually execute lines 1293-1304.

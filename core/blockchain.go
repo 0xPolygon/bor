@@ -91,6 +91,13 @@ var (
 	storageCacheHitPrefetchMeter  = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/hit", nil)
 	storageCacheMissPrefetchMeter = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/miss", nil)
 
+	// Additional prefetch attribution metrics
+	accountHitFromPrefetchMeter       = metrics.NewRegisteredMeter("chain/account/reads/cache/process/hit_from_prefetch", nil)
+	storageHitFromPrefetchMeter       = metrics.NewRegisteredMeter("chain/storage/reads/cache/process/hit_from_prefetch", nil)
+	accountInsertPrefetchMeter        = metrics.NewRegisteredMeter("chain/account/reads/cache/prefetch/insert", nil)
+	storageInsertPrefetchMeter        = metrics.NewRegisteredMeter("chain/storage/reads/cache/prefetch/insert", nil)
+	accountHitFromPrefetchUniqueMeter = metrics.NewRegisteredMeter("chain/account/reads/cache/process/prefetch_used_unique", nil)
+
 	accountReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/account/single/reads", nil) //nolint:revive,unused
 	storageReadSingleTimer   = metrics.NewRegisteredResettingTimer("chain/storage/single/reads", nil) //nolint:revive,unused
 	snapshotCommitTimer      = metrics.NewRegisteredResettingTimer("chain/snapshot/commits", nil)
@@ -126,6 +133,17 @@ var (
 	blockPrefetchInterruptMeter  = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
 	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
 	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
+
+	// Witness and write-path metrics for block production observability.
+	// These track the time spent in each phase of writeBlockWithState, which runs
+	// on the critical path between block sealing and broadcasting. Delays here
+	// (e.g. from large witness encoding, DB compaction stalls, or pathdb diff layer
+	// flushes) can cause blocks to be broadcast late, triggering span rotations.
+	witnessEncodeTimer     = metrics.NewRegisteredTimer("chain/witness/encode", nil)     // time to RLP-encode the witness (EncodeRLP)
+	witnessDbWriteTimer    = metrics.NewRegisteredTimer("chain/witness/dbwrite", nil)    // time to write encoded witness into the DB batch (WriteWitness)
+	witnessCollectionTimer = metrics.NewRegisteredTimer("chain/witness/collection", nil) // time spent collecting trie nodes into the witness during IntermediateRoot
+	blockBatchWriteTimer   = metrics.NewRegisteredTimer("chain/batch/write", nil)        // time to flush the block batch to disk (blockBatch.Write) — spikes indicate DB compaction stalls
+	stateCommitTimer       = metrics.NewRegisteredTimer("chain/state/commit", nil)       // time for statedb.CommitWithUpdate — in pathdb mode, spikes indicate diff layer flushes
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
@@ -197,6 +215,11 @@ type BlockChainConfig struct {
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
+
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// 0 = unlimited (legacy behavior), default = 1MB/s
+	PreloadRateLimit int64
 
 	// State snapshot related options
 	SnapshotLimit   int  // Memory allowance (MB) to use for caching snapshot entries in memory
@@ -307,6 +330,7 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 			WriteBufferSize:   cfg.TrieDirtyLimit * 1024 * 1024,
 			NoAsyncFlush:      cfg.TrieNoAsyncFlush,
 			AddressCacheSizes: cfg.AddressCacheSizes,
+			PreloadRateLimit:  cfg.PreloadRateLimit,
 		}
 	}
 	return config
@@ -372,6 +396,7 @@ type BlockChain struct {
 	receiptsCache *lru.Cache[common.Hash, []*types.Receipt] // Receipts cache with all fields derived
 	blockCache    *lru.Cache[common.Hash, *types.Block]
 	witnessCache  *lru.Cache[common.Hash, []byte] // Witness cache for RLP-encoded witnesses
+	witnessStore  rawdb.WitnessStore
 
 	txLookupLock  sync.RWMutex
 	txLookupCache *lru.Cache[common.Hash, txLookup]
@@ -453,6 +478,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		blockCache:          lru.NewCache[common.Hash, *types.Block](blockCacheLimit),
 		txLookupCache:       lru.NewCache[common.Hash, txLookup](txLookupCacheLimit),
 		witnessCache:        lru.NewCache[common.Hash, []byte](bodyCacheLimit),
+		witnessStore:        rawdb.GetWitnessStore(db),
 		engine:              engine,
 		borReceiptsCache:    lru.NewCache[common.Hash, *types.Receipt](receiptsCacheLimit),
 		borReceiptsRLPCache: lru.NewCache[common.Hash, rlp.RawValue](receiptsCacheLimit),
@@ -469,7 +495,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 
 	bc.statedb = state.NewDatabase(bc.triedb, nil)
 	bc.validator = NewBlockValidator(chainConfig, bc)
-	bc.prefetcher = newStatePrefetcher(chainConfig, bc.hc)
+	bc.prefetcher = NewStatePrefetcher(chainConfig, bc.hc)
 	bc.processor = NewStateProcessor(bc.hc)
 
 	genesisHeader := bc.GetHeaderByNumber(0)
@@ -736,13 +762,23 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		accountCacheMissMeter.Mark(stats.AccountMiss)
 		storageCacheHitMeter.Mark(stats.StorageHit)
 		storageCacheMissMeter.Mark(stats.StorageMiss)
+
+		// Report additional prefetch attribution metrics
+		prefetchStats := prefetch.GetPrefetchStats()
+		accountInsertPrefetchMeter.Mark(prefetchStats.AccountInsert)
+		storageInsertPrefetchMeter.Mark(prefetchStats.StorageInsert)
+
+		processStats := process.GetPrefetchStats()
+		accountHitFromPrefetchMeter.Mark(processStats.AccountHitFromPrefetch)
+		storageHitFromPrefetchMeter.Mark(processStats.StorageHitFromPrefetch)
+		accountHitFromPrefetchUniqueMeter.Mark(processStats.AccountHitFromPrefetchUnique)
 	}()
 
 	go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
 		// Disable tracing for prefetcher executions.
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, followupInterrupt)
+		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
 
 		blockPrefetchExecuteTimer.Update(time.Since(start))
 		if followupInterrupt.Load() {
@@ -2254,24 +2290,52 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	rawdb.WritePreimages(blockBatch, statedb.Preimages())
 
 	if statedb.Witness() != nil {
+		encStart := time.Now()
+
 		var witBuf bytes.Buffer
 		if err := statedb.Witness().EncodeRLP(&witBuf); err != nil {
 			log.Error("error in witness encoding", "caughterr", err)
 		}
 
-		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
+		encodeDuration := time.Since(encStart)
+		witnessEncodeTimer.Update(encodeDuration)
 
 		witnessBytes := witBuf.Bytes()
-		bc.WriteWitness(blockBatch, block.Hash(), witnessBytes)
+
+		writeStart := time.Now()
+		log.Debug("Writing witness", "block", block.NumberU64(), "hash", block.Hash(), "header", statedb.Witness().Header())
+		bc.WriteWitness(block.Hash(), witnessBytes)
+		dbWriteDuration := time.Since(writeStart)
+		witnessDbWriteTimer.Update(dbWriteDuration)
+
+		if encodeDuration > 100*time.Millisecond {
+			log.Warn("Slow witness encoding", "block", block.NumberU64(), "elapsed", common.PrettyDuration(encodeDuration), "size", common.StorageSize(len(witnessBytes)))
+		}
+		if dbWriteDuration > 100*time.Millisecond {
+			log.Warn("Slow witness DB write", "block", block.NumberU64(), "elapsed", common.PrettyDuration(dbWriteDuration), "size", common.StorageSize(len(witnessBytes)))
+		}
 	} else {
 		log.Debug("No witness to write", "block", block.NumberU64())
 	}
 
+	batchStart := time.Now()
 	if err := blockBatch.Write(); err != nil {
 		log.Crit("Failed to write block into disk", "err", err)
 	}
+	batchFlushDuration := time.Since(batchStart)
+	blockBatchWriteTimer.Update(batchFlushDuration)
+	if batchFlushDuration > 100*time.Millisecond {
+		log.Warn("Slow block batch flush", "block", block.NumberU64(), "elapsed", common.PrettyDuration(batchFlushDuration))
+	}
+
 	// Commit all cached state changes into underlying memory database.
+	commitStart := time.Now()
 	root, stateUpdate, err := statedb.CommitWithUpdate(block.NumberU64(), bc.chainConfig.IsEIP158(block.Number()), bc.chainConfig.IsCancun(block.Number()))
+	commitDuration := time.Since(commitStart)
+	stateCommitTimer.Update(commitDuration)
+	if commitDuration > 100*time.Millisecond {
+		log.Warn("Slow state commit", "block", block.NumberU64(), "elapsed", common.PrettyDuration(commitDuration))
+	}
 	if err != nil {
 		return []*types.Log{}, err
 	}
@@ -3237,6 +3301,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
 		snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
 		triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
+		witnessCollectionTimer.Update(statedb.WitnessCollection)
 
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
 		blockInsertTimer.UpdateSince(start)
@@ -3441,6 +3506,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 	storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
 	snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
 	triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
+	witnessCollectionTimer.Update(statedb.WitnessCollection)
 
 	blockWriteTimer.Update(time.Since(wstart) - max(statedb.AccountCommits, statedb.StorageCommits) /* concurrent */ - statedb.SnapshotCommits - statedb.TrieDBCommits)
 	elapsed := time.Since(startTime) + 1 // prevent zero division

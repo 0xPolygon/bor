@@ -240,7 +240,7 @@ func TestGetRootHashCacheInvalidatedOnReorg(t *testing.T) {
 	headA := chain.CurrentHeader().Hash()
 
 	// Reorg to chain B and compute again: cache entry for (1,4) must not be reused,
-	// because it's bound to headA and the tip has changed.
+	// because it's bound to the end block hash and the canonical block at that height has changed.
 	chain.reorgToChainB()
 
 	fmt.Println("=== Cache test: root on chain B after reorg ===")

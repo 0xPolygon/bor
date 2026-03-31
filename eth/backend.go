@@ -196,6 +196,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		WitnessPruneEnabled: witnessPruneEnabled,
 		BlockPruneEnabled:   blockPruneEnabled,
 		Stateless:           config.SyncMode == downloader.StatelessSync,
+		WitnessFileStore:    config.WitnessFileStore,
 	}
 	chainDb, err := stack.OpenDatabaseWithOptions("chaindata", dbOptions)
 	if err != nil {
@@ -283,6 +284,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			ChainHistoryMode:  config.HistoryMode,
 			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
 			AddressCacheSizes: config.AddressCacheSizes,
+			PreloadRateLimit:  config.PreloadRateLimit,
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
 				EnableWitnessStats:      config.EnableWitnessStats,
@@ -500,7 +502,11 @@ func (s *Ethereum) APIs() []rpc.API {
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
 
 	// BOR change starts
-	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{})
+	filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{
+		LogCacheSize:  s.config.FilterLogCacheSize,
+		LogQueryLimit: s.config.LogQueryLimit,
+		RangeLimit:    s.config.RPCBlockRangeLimit,
+	})
 	// set genesis to public filter api
 	publicFilterAPI := filters.NewFilterAPI(filterSystem, s.config.BorLogs)
 	// avoiding constructor changed by introducing new method to set genesis
@@ -1028,6 +1034,9 @@ func (s *Ethereum) Stop() error {
 	s.engine.Close()
 	s.dropper.Stop()
 	s.handler.Stop()
+
+	// Stop the dial scheduler to suppress "Looking for peers" during shutdown.
+	s.p2pServer.StopDialing()
 
 	// Then stop everything else.
 	// Close all bg processes

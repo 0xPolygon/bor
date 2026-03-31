@@ -19,7 +19,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -54,7 +53,6 @@ type Server struct {
 	codecs map[ServerCodec]struct{}
 	run    atomic.Bool
 
-	BatchLimit    uint64
 	executionPool *SafePool
 
 	batchItemLimit     int
@@ -85,10 +83,6 @@ func NewServer(service string, executionPoolSize uint64, executionPoolRequesttim
 	server.RegisterName(MetadataApi, rpcService)
 
 	return server
-}
-
-func (s *Server) SetRPCBatchLimit(batchLimit uint64) {
-	s.BatchLimit = batchLimit
 }
 
 func (s *Server) SetExecutionPoolSize(n int) {
@@ -208,15 +202,8 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	}
 
 	if batch {
-		if s.BatchLimit > 0 && len(reqs) > int(s.BatchLimit) {
-			if err1 := codec.writeJSON(ctx, errorMessage(fmt.Errorf("batch limit %d exceeded: %d requests given", s.BatchLimit, len(reqs))), true); err1 != nil {
-				log.Warn("WARNING - requests given exceeds the batch limit", "err", err1)
-				log.Debug("batch limit %d exceeded: %d requests given", s.BatchLimit, len(reqs))
-			}
-		} else {
-			//nolint:contextcheck
-			h.handleBatch(reqs)
-		}
+		//nolint:contextcheck
+		h.handleBatch(reqs)
 	} else {
 		//nolint:contextcheck
 		h.handleMsg(reqs[0])

@@ -28,6 +28,8 @@ import (
 // concurrent fetcher and the downloader.
 type bodyQueue Downloader
 
+func (q *bodyQueue) kind() queueKind { return bodyQueueKind }
+
 // waker returns a notification channel that gets pinged in case more body
 // fetches have been queued up, so the fetcher might assign it to idle peers.
 func (q *bodyQueue) waker() chan bool {

@@ -36,11 +36,9 @@ func (c *DumpconfigCommand) Synopsis() string {
 	return "Export configuration file"
 }
 
-// TODO: add flags for file location and format (toml, json, hcl) of the configuration file.
-
 // Run implements the cli.Command interface
 func (c *DumpconfigCommand) Run(args []string) int {
-	// Initialize an empty command instance to get flags
+	// Initialize an empty command instance to get the flags.
 	command := server.Command{}
 	flags := command.Flags(nil)
 
@@ -51,7 +49,12 @@ func (c *DumpconfigCommand) Run(args []string) int {
 
 	userConfig := command.GetConfig()
 
-	// convert the big.Int and time.Duration fields to their corresponding Raw fields
+	// Keep generated default config environment-neutral.
+	userConfig.Chain = ""
+	userConfig.Identity = ""
+	userConfig.DataDir = "/var/lib/bor"
+
+	// Convert the big.Int and time.Duration fields to their corresponding Raw fields
 	userConfig.JsonRPC.RPCEVMTimeoutRaw = userConfig.JsonRPC.RPCEVMTimeout.String()
 	userConfig.JsonRPC.HttpTimeout.ReadTimeoutRaw = userConfig.JsonRPC.HttpTimeout.ReadTimeout.String()
 	userConfig.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw = userConfig.JsonRPC.HttpTimeout.ReadHeaderTimeout.String()
@@ -59,8 +62,12 @@ func (c *DumpconfigCommand) Run(args []string) int {
 	userConfig.JsonRPC.HttpTimeout.IdleTimeoutRaw = userConfig.JsonRPC.HttpTimeout.IdleTimeout.String()
 	userConfig.JsonRPC.Http.ExecutionPoolRequestTimeoutRaw = userConfig.JsonRPC.Http.ExecutionPoolRequestTimeout.String()
 	userConfig.JsonRPC.Ws.ExecutionPoolRequestTimeoutRaw = userConfig.JsonRPC.Ws.ExecutionPoolRequestTimeout.String()
+	userConfig.JsonRPC.TxSyncDefaultTimeoutRaw = userConfig.JsonRPC.TxSyncDefaultTimeout.String()
+	userConfig.JsonRPC.TxSyncMaxTimeoutRaw = userConfig.JsonRPC.TxSyncMaxTimeout.String()
 	userConfig.TxPool.RejournalRaw = userConfig.TxPool.Rejournal.String()
 	userConfig.TxPool.LifeTimeRaw = userConfig.TxPool.LifeTime.String()
+	userConfig.TxPool.RebroadcastIntervalRaw = userConfig.TxPool.RebroadcastInterval.String()
+	userConfig.TxPool.RebroadcastMaxAgeRaw = userConfig.TxPool.RebroadcastMaxAge.String()
 	userConfig.Sealer.GasPriceRaw = userConfig.Sealer.GasPrice.String()
 	userConfig.Sealer.RecommitRaw = userConfig.Sealer.Recommit.String()
 	userConfig.Sealer.BlockTimeRaw = userConfig.Sealer.BlockTime.String()

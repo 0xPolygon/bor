@@ -16,3 +16,7 @@ comment:
   behavior: default
   require_changes: false
 
+ignore:
+  - "consensus/bor/genesis_contract_mock.go"
+  - "consensus/bor/span_mock.go"
+
