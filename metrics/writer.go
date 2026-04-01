@@ -11,9 +11,7 @@ import (
 // Write sorts writes each metric in the given registry periodically to the
 // given io.Writer.
 func Write(r Registry, d time.Duration, w io.Writer) {
-	ticker := time.NewTicker(d)
-	defer ticker.Stop()
-	for range ticker.C {
+	for range time.Tick(d) {
 		WriteOnce(r, w)
 	}
 }
