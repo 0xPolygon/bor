@@ -31,9 +31,11 @@ type mockHeimdallClient struct {
 	fetchCheckpointCntFn func(ctx context.Context) (int64, error)
 	fetchMilestoneFn     func(ctx context.Context) (*milestone.Milestone, error)
 	fetchMilestoneCntFn  func(ctx context.Context) (int64, error)
-	fetchStatusFn        func(ctx context.Context) (*ctypes.SyncInfo, error)
-	closeFn              func()
-	hits                 atomic.Int32
+	fetchStatusFn              func(ctx context.Context) (*ctypes.SyncInfo, error)
+	stateSyncEventsAtHeightFn  func(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
+	getBlockHeightByTimeFn     func(ctx context.Context, cutoffTime int64) (int64, error)
+	closeFn                    func()
+	hits                       atomic.Int32
 }
 
 func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
@@ -122,13 +124,23 @@ func (m *mockHeimdallClient) Close() {
 	}
 }
 
-func (m *mockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
+func (m *mockHeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
 	m.hits.Add(1)
-	return 0, nil
+
+	if m.getBlockHeightByTimeFn != nil {
+		return m.getBlockHeightByTimeFn(ctx, cutoffTime)
+	}
+
+	return 100, nil
 }
 
-func (m *mockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+func (m *mockHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
 	m.hits.Add(1)
+
+	if m.stateSyncEventsAtHeightFn != nil {
+		return m.stateSyncEventsAtHeightFn(ctx, fromID, toTime, heimdallHeight)
+	}
+
 	return []*clerk.EventRecordWithTime{}, nil
 }
 
@@ -1264,4 +1276,269 @@ func TestRegistry_InformedCascade_RespectsCooldown(t *testing.T) {
 
 	// Should prefer tertiary (cooled) over primary (uncooled)
 	assert.Equal(t, 2, fc.registry.Active(), "should prefer cooled tertiary over uncooled primary")
+}
+
+// --- StateSyncEventsAtHeight failover tests ---
+
+func TestMultiFailover_StateSyncEventsAtHeight_SwitchOnPrimaryDown(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, fromID uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return []*clerk.EventRecordWithTime{{EventRecord: clerk.EventRecord{ID: fromID}}}, nil
+		},
+	}
+
+	fc := newInstantMulti(primary, secondary)
+	defer fc.Close()
+
+	events, err := fc.StateSyncEventsAtHeight(context.Background(), 42, 100, 200)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, uint64(42), events[0].ID)
+
+	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been called")
+}
+
+func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnSuccess(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, fromID uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return []*clerk.EventRecordWithTime{{EventRecord: clerk.EventRecord{ID: fromID}}}, nil
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 5 * time.Second
+	fc.probeTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	fc.ensureHealthRegistry()
+	time.Sleep(50 * time.Millisecond)
+
+	secondaryBefore := secondary.hits.Load()
+
+	events, err := fc.StateSyncEventsAtHeight(context.Background(), 7, 50, 100)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, uint64(7), events[0].ID)
+	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "secondary should not be contacted when primary succeeds")
+}
+
+func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnServiceUnavailable(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, ErrServiceUnavailable
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	_, err = fc.StateSyncEventsAtHeight(context.Background(), 1, 50, 100)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrServiceUnavailable))
+	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+}
+
+func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnShutdownDetected(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, ErrShutdownDetected
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	_, err = fc.StateSyncEventsAtHeight(context.Background(), 1, 50, 100)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrShutdownDetected))
+	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+}
+
+func TestMultiFailover_StateSyncEventsAtHeight_ThreeClients_CascadeToTertiary(t *testing.T) {
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, connErr
+		},
+	}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return nil, connErr
+		},
+	}
+	tertiary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, fromID uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			return []*clerk.EventRecordWithTime{{EventRecord: clerk.EventRecord{ID: fromID}}}, nil
+		},
+	}
+
+	fc := newInstantMulti(primary, secondary, tertiary)
+	defer fc.Close()
+
+	events, err := fc.StateSyncEventsAtHeight(context.Background(), 10, 50, 100)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, uint64(10), events[0].ID)
+
+	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been tried")
+	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "tertiary should have been called")
+}
+
+// --- GetBlockHeightByTime failover tests ---
+
+func TestMultiFailover_GetBlockHeightByTime_SwitchOnPrimaryDown(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 0, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, cutoffTime int64) (int64, error) {
+			return 500, nil
+		},
+	}
+
+	fc := newInstantMulti(primary, secondary)
+	defer fc.Close()
+
+	height, err := fc.GetBlockHeightByTime(context.Background(), 1234567890)
+	require.NoError(t, err)
+	assert.Equal(t, int64(500), height)
+
+	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been called")
+}
+
+func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnSuccess(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 999, nil
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 5 * time.Second
+	fc.probeTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	fc.ensureHealthRegistry()
+	time.Sleep(50 * time.Millisecond)
+
+	secondaryBefore := secondary.hits.Load()
+
+	height, err := fc.GetBlockHeightByTime(context.Background(), 1234567890)
+	require.NoError(t, err)
+	assert.Equal(t, int64(999), height)
+	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "secondary should not be contacted when primary succeeds")
+}
+
+func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnServiceUnavailable(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 0, ErrServiceUnavailable
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	_, err = fc.GetBlockHeightByTime(context.Background(), 1234567890)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrServiceUnavailable))
+	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+}
+
+func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnShutdownDetected(t *testing.T) {
+	primary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 0, ErrShutdownDetected
+		},
+	}
+	secondary := &mockHeimdallClient{}
+
+	fc, err := NewMultiHeimdallClient(primary, secondary)
+	require.NoError(t, err)
+
+	fc.attemptTimeout = 100 * time.Millisecond
+	fc.registry.HealthCheckInterval = 1 * time.Hour
+	fc.registry.ConsecutiveThreshold = 1
+	fc.registry.PromotionCooldown = 0
+	defer fc.Close()
+
+	_, err = fc.GetBlockHeightByTime(context.Background(), 1234567890)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrShutdownDetected))
+	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+}
+
+func TestMultiFailover_GetBlockHeightByTime_ThreeClients_CascadeToTertiary(t *testing.T) {
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+
+	primary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 0, connErr
+		},
+	}
+	secondary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 0, connErr
+		},
+	}
+	tertiary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			return 750, nil
+		},
+	}
+
+	fc := newInstantMulti(primary, secondary, tertiary)
+	defer fc.Close()
+
+	height, err := fc.GetBlockHeightByTime(context.Background(), 1234567890)
+	require.NoError(t, err)
+	assert.Equal(t, int64(750), height)
+
+	assert.GreaterOrEqual(t, primary.hits.Load(), int32(1), "primary should have been tried")
+	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been tried")
+	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "tertiary should have been called")
 }
