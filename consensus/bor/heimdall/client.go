@@ -307,9 +307,6 @@ type RecordListVisibleAtHeightResponse = clerkTypes.RecordListVisibleAtHeightRes
 // StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height,
 // using the new query endpoint that queries the latest state with immutable visibility_height indexes.
 func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer cancel()
-
 	ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
 
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)

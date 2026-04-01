@@ -1766,6 +1766,9 @@ func (c *Bor) CommitStates(
 			// Post-fork: fail hard to preserve determinism across validators
 			return nil, fmt.Errorf("deterministic state sync: failed to resolve Heimdall height: %w", err)
 		}
+		if heimdallHeight <= 0 {
+			return nil, fmt.Errorf("deterministic state sync: invalid Heimdall height %d for cutoff %d", heimdallHeight, to.Unix())
+		}
 
 		log.Info("Using deterministic state sync", "cutoff", to.Unix(), "heimdallHeight", heimdallHeight)
 
