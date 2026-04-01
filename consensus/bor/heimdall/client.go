@@ -310,6 +310,8 @@ func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uin
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
 
+	ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
+
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
 
 	for {
@@ -320,10 +322,7 @@ func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uin
 
 		log.Debug("Fetching state sync events at height", "queryParams", u.RawQuery)
 
-		ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
-
-		request := &Request{client: h.client, url: u, start: time.Now()}
-		response, err := Fetch[RecordListVisibleAtHeightResponse](ctx, request)
+		response, err := FetchWithRetry[RecordListVisibleAtHeightResponse](ctx, h.client, u, h.closeCh)
 		if err != nil {
 			return nil, err
 		}
