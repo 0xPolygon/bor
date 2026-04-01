@@ -287,34 +287,48 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		w.eth.TxPool().ResetSpeculativeState(blockNHeader, specTxPoolState)
 	}
 
-	// --- Fill transactions for N+1 ---
-	// Reset the block building interrupt flag — it may have been set by block N's
-	// timeout timer. If we don't clear it, fillTransactions → Pending() sees the
-	// flag and returns an empty map, resulting in txs=0.
-	w.interruptBlockBuilding.Store(false)
+	// --- Fill transactions for N+1 (in goroutine) ---
+	// fillTransactions runs concurrently with SRC(N) so that sealing block N
+	// is not delayed by filling block N+1's transactions.
+	initialFillDone := make(chan struct{})
+	var eip2935Abort bool
 
-	var specInterrupt atomic.Int32
-	w.fillTransactions(&specInterrupt, specEnv) //nolint:errcheck
+	go func() {
+		defer close(initialFillDone)
 
-	// --- Check abort conditions ---
-	eip2935Abort := false
-	if w.chainConfig.IsPrague(specHeader.Number) {
-		dangerousSlot := common.BigToHash(new(big.Int).SetUint64(blockNNumber % params.HistoryServeWindow))
-		if specState.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
-			log.Warn("Pipelined SRC: discarding speculative N+1 — EIP-2935 slot accessed",
-				"block", nextBlockNumber, "slot", dangerousSlot)
-			eip2935Abort = true
-			pipelineEIP2935AbortsCounter.Inc(1)
+		specStopFn := createInterruptTimer(
+			specHeader.Number.Uint64(),
+			specHeader.GetActualTime(),
+			&w.interruptBlockBuilding,
+			&w.interruptFlagSetAt,
+			true, // pipelinedSRC — no 500ms buffer
+		)
+
+		var specInterrupt atomic.Int32
+		w.fillTransactions(&specInterrupt, specEnv) //nolint:errcheck
+		specStopFn()
+
+		// Check abort conditions (needs fill to be done).
+		if w.chainConfig.IsPrague(specHeader.Number) {
+			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(blockNNumber % params.HistoryServeWindow))
+			if specState.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
+				log.Warn("Pipelined SRC: discarding speculative N+1 — EIP-2935 slot accessed",
+					"block", nextBlockNumber, "slot", dangerousSlot)
+				eip2935Abort = true
+				pipelineEIP2935AbortsCounter.Inc(1)
+			}
 		}
-	}
+	}()
 
 	// --- Wait for SRC(N) to complete ---
+	// No longer blocked by fillTransactions — block N is sealed as soon as SRC finishes.
 	srcStart := time.Now()
 	root, witnessN, err := w.chain.WaitForSRC()
 	pipelineSRCTimer.Update(time.Since(srcStart))
 	if err != nil {
 		log.Error("Pipelined SRC: SRC(N) failed", "block", blockNNumber, "err", err)
 		pipelineSpeculativeAbortsCounter.Inc(1)
+		<-initialFillDone // wait for goroutine before returning
 		return
 	}
 
@@ -370,6 +384,10 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	}
 	realBlockNHash := chainHead.Hash()
 	rootN := root // state root of the last written block
+
+	// Wait for the initial fillTransactions goroutine to finish before entering
+	// the loop — the loop's first iteration checks abort conditions from the fill.
+	<-initialFillDone
 
 	// --- CONTINUOUS PIPELINE LOOP ---
 	// State at this point:
@@ -556,7 +574,9 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		specEnvNext.evm.SetInterrupt(&w.interruptBlockBuilding)
 		specEnvNext.tcount = 0
 
-		// --- Reset txpool and fill transactions for next block ---
+		// --- Reset txpool and fill transactions for next block (in goroutine) ---
+		// fillTransactions runs concurrently with SRC so that sealing block N
+		// is not delayed by filling block N+1's transactions.
 		specTxPoolStateNext, err := w.chain.StateAtWithFlatDiff(rootN, flatDiff)
 		if err != nil {
 			log.Error("Pipelined SRC: failed to create txpool state for next block", "err", err)
@@ -564,25 +584,43 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			w.eth.TxPool().ResetSpeculativeState(finalSpecHeader, specTxPoolStateNext)
 		}
 
-		w.interruptBlockBuilding.Store(false)
-		var specInterruptNext atomic.Int32
-		fillStart := time.Now()
-		w.fillTransactions(&specInterruptNext, specEnvNext) //nolint:errcheck
-		execElapsed := time.Since(fillStart)
+		fillDone := make(chan struct{})
+		var nextEIP2935Abort bool
+		var fillElapsed time.Duration
 
-		// --- Check EIP-2935 abort for next block ---
-		nextEIP2935Abort := false
-		if w.chainConfig.IsPrague(specHeaderNext.Number) {
-			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(nextBlockNumber % params.HistoryServeWindow))
-			if specStateNext.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
-				log.Warn("Pipelined SRC: EIP-2935 slot accessed in next block",
-					"block", nextNextBlockNumber, "slot", dangerousSlot)
-				nextEIP2935Abort = true
-				pipelineEIP2935AbortsCounter.Inc(1)
+		go func() {
+			defer close(fillDone)
+
+			specStopFnNext := createInterruptTimer(
+				specHeaderNext.Number.Uint64(),
+				specHeaderNext.GetActualTime(),
+				&w.interruptBlockBuilding,
+				&w.interruptFlagSetAt,
+				true, // pipelinedSRC — no 500ms buffer
+			)
+
+			var specInterruptNext atomic.Int32
+			fillStart := time.Now()
+			w.fillTransactions(&specInterruptNext, specEnvNext) //nolint:errcheck
+			specStopFnNext()
+			fillElapsed = time.Since(fillStart)
+
+			// Check EIP-2935 abort for next block (needs fill to be done
+			// so WasStorageSlotRead can inspect accessed slots).
+			if w.chainConfig.IsPrague(specHeaderNext.Number) {
+				dangerousSlot := common.BigToHash(new(big.Int).SetUint64(nextBlockNumber % params.HistoryServeWindow))
+				if specStateNext.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
+					log.Warn("Pipelined SRC: EIP-2935 slot accessed in next block",
+						"block", nextNextBlockNumber, "slot", dangerousSlot)
+					nextEIP2935Abort = true
+					pipelineEIP2935AbortsCounter.Inc(1)
+				}
 			}
-		}
+		}()
 
 		// --- Wait for SRC of current speculative block ---
+		// No longer blocked by fillTransactions — SRC result is collected as
+		// soon as the goroutine completes, allowing immediate sealing.
 		srcWaitStart := time.Now()
 		rootSpec, witnessSpec, err := w.chain.WaitForSRC()
 		srcWaitElapsed := time.Since(srcWaitStart)
@@ -591,12 +629,12 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		if err != nil {
 			log.Error("Pipelined SRC: SRC failed", "block", nextBlockNumber, "err", err)
 			pipelineSpeculativeAbortsCounter.Inc(1)
+			<-fillDone // wait for goroutine before breaking
 			break
 		}
 		if w.config.PipelinedSRCLogs {
 			log.Info("Pipelined SRC: SRC completed",
-				"block", nextBlockNumber, "srcTotal", srcTotalElapsed,
-				"srcWait", srcWaitElapsed, "execOverlap", execElapsed)
+				"block", nextBlockNumber, "srcWait", srcWaitElapsed)
 		}
 
 		// --- Assemble current speculative block ---
@@ -605,6 +643,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		}, specEnv.receipts, rootSpec, specStateSyncData)
 		if err != nil {
 			log.Error("Pipelined SRC: AssembleBlock failed", "block", nextBlockNumber, "err", err)
+			<-fillDone // wait for goroutine before breaking
 			break
 		}
 
@@ -621,7 +660,8 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			select {
 			case <-time.After(delay):
 			case <-w.exitCh:
-				return // defer clears pendingWorkBlock
+				<-fillDone // wait for goroutine before returning
+				return     // defer clears pendingWorkBlock
 			}
 		}
 
@@ -631,13 +671,20 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		sealedBlock, err := w.inlineSealAndWrite(blockSpec, receiptsSpec, specState, witnessSpec)
 		if err != nil {
 			log.Error("Pipelined SRC: inline seal+write failed", "block", nextBlockNumber, "err", err)
+			<-fillDone // wait for goroutine before breaking
 			break
 		}
+
+		// Wait for fillTransactions goroutine to finish before next iteration.
+		// The abort conditions (EIP-2935, BLOCKHASH) are checked at the top of
+		// the next loop iteration, which requires fill to be complete.
+		<-fillDone
 		pipelineSpeculativeBlocksCounter.Inc(1)
 
 		if w.config.PipelinedSRCLogs {
 			log.Info("Pipelined SRC: block sealed (inline)", "number", sealedBlock.Number(),
-				"txs", len(sealedBlock.Transactions()), "root", rootSpec)
+				"txs", len(sealedBlock.Transactions()), "root", rootSpec,
+				"fillBlock", nextNextBlockNumber, "fillElapsed", fillElapsed)
 		}
 
 		// --- Shift variables for next iteration ---

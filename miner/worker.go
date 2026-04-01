@@ -890,6 +890,7 @@ func (w *worker) mainLoop() {
 						w.current.header.GetActualTime(),
 						&w.interruptBlockBuilding,
 						&w.interruptFlagSetAt,
+						w.config.EnablePipelinedSRC,
 					)
 				}
 
@@ -2026,6 +2027,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 			work.header.GetActualTime(),
 			&w.interruptBlockBuilding,
 			&w.interruptFlagSetAt,
+			w.config.EnablePipelinedSRC,
 		)
 	}
 
@@ -2226,11 +2228,12 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 
 // createInterruptTimer creates and starts a timer based on the header's timestamp for block building
 // and toggles the flag when the timer expires.
-func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64) func() {
+func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64, pipelinedSRC bool) func() {
 	delay := time.Until(actualTimestamp)
 
-	// Reduce the timeout by 500ms to give some buffer for state root computation
-	if delay > 1*time.Second {
+	// Reserve 500ms for state root computation — unless pipelined SRC is enabled,
+	// in which case SRC runs in the background and fillTransactions gets the full block time.
+	if !pipelinedSRC && delay > 1*time.Second {
 		delay -= 500 * time.Millisecond
 	}
 
