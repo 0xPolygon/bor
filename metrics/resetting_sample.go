@@ -1,5 +1,7 @@
 package metrics
 
+import "sync/atomic"
+
 // ResettingSample converts an ordinary sample into one that resets whenever its
 // snapshot is retrieved. This will break for multi-monitor systems, but when only
 // a single metric is being pushed out, this ensure that low-frequency events don't
@@ -11,24 +13,22 @@ func ResettingSample(sample Sample) Sample {
 }
 
 // resettingSample is a simple wrapper around a sample that resets it upon the
-// snapshot retrieval. It maintains cumulative count and sum separately so that
+// snapshot retrieval. It maintains cumulative count separately so that
 // Prometheus _count counters remain monotonically increasing across scrapes.
 type resettingSample struct {
 	Sample
-	count int64
-	sum   int64
+	count atomic.Int64
 }
 
 // Snapshot returns a read-only copy of the sample with the original reset.
-// Count and Sum are cumulative for Prometheus counter semantics.
-// Values (used for percentiles) are from the current interval only.
+// Count is cumulative for Prometheus counter semantics.
+// Values, Sum, Min, Max are from the current interval only.
 func (rs *resettingSample) Snapshot() *sampleSnapshot {
 	s := rs.Sample.Snapshot()
-	rs.count += s.Count()
-	rs.sum += s.Sum()
+	count := rs.count.Add(s.Count())
 	rs.Sample.Clear()
 
 	return newSampleSnapshotPrecalculated(
-		rs.count, s.Values(), s.Min(), s.Max(), rs.sum,
+		count, s.Values(), s.Min(), s.Max(), s.Sum(),
 	)
 }
