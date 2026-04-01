@@ -5367,7 +5367,7 @@ func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
 	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled, "pre-fork should not call GetBlockHeightByTime")
 	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled, "pre-fork should not call StateSyncEventsAtHeight")
 
-	// Post-fork: block 112 should use GetBlockHeightByTime + StateSyncEventsAtHeight (deterministi state sync)
+	// Post-fork: block 112 should use GetBlockHeightByTime + StateSyncEventsAtHeight (deterministic state sync)
 	tracker2 := &trackingHeimdallClient{
 		blockHeight:    500,
 		eventsAtHeight: []*clerk.EventRecordWithTime{},

@@ -101,7 +101,6 @@ const (
 	fetchBlockHeightByTimeFormat = "cutoff_time=%d"
 
 	fetchStateSyncsAtHeightPath   = "clerk/state-syncs-at-height"
-	fetchStateSyncsAtHeightFormat = "from_id=%d&heimdall_height=%d&to_time=%s&pagination.limit=%d"
 )
 
 // StateSyncEvents fetches the state sync events from heimdall
@@ -316,7 +315,7 @@ func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uin
 			return nil, err
 		}
 
-		log.Info("Fetching state sync events at height", "queryParams", u.RawQuery)
+		log.Debug("Fetching state sync events at height", "queryParams", u.RawQuery)
 
 		ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
 
@@ -327,20 +326,18 @@ func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uin
 		}
 
 		for _, e := range response.EventRecords {
-			if e.Id >= fromID && e.RecordTime.Before(time.Unix(toTime, 0)) {
-				record := &clerk.EventRecordWithTime{
-					EventRecord: clerk.EventRecord{
-						ID:       e.Id,
-						ChainID:  e.BorChainId,
-						Contract: common.HexToAddress(e.Contract),
-						Data:     e.Data,
-						LogIndex: e.LogIndex,
-						TxHash:   common.HexToHash(e.TxHash),
-					},
-					Time: e.RecordTime,
-				}
-				eventRecords = append(eventRecords, record)
+			record := &clerk.EventRecordWithTime{
+				EventRecord: clerk.EventRecord{
+					ID:       e.Id,
+					ChainID:  e.BorChainId,
+					Contract: common.HexToAddress(e.Contract),
+					Data:     e.Data,
+					LogIndex: e.LogIndex,
+					TxHash:   common.HexToHash(e.TxHash),
+				},
+				Time: e.RecordTime,
 			}
+			eventRecords = append(eventRecords, record)
 		}
 
 		if len(response.EventRecords) < stateFetchLimit {
@@ -536,9 +533,12 @@ func blockHeightByTimeURL(urlString string, cutoffTime int64) (*url.URL, error) 
 
 func visibleAtHeightURL(urlString string, fromID uint64, heimdallHeight int64, toTime int64) (*url.URL, error) {
 	t := time.Unix(toTime, 0).UTC()
-	formattedTime := t.Format(time.RFC3339Nano)
-	queryParams := fmt.Sprintf(fetchStateSyncsAtHeightFormat, fromID, heimdallHeight, formattedTime, stateFetchLimit)
-	return makeURL(urlString, fetchStateSyncsAtHeightPath, queryParams)
+	params := url.Values{}
+	params.Set("from_id", fmt.Sprintf("%d", fromID))
+	params.Set("heimdall_height", fmt.Sprintf("%d", heimdallHeight))
+	params.Set("to_time", t.Format(time.RFC3339Nano))
+	params.Set("pagination.limit", fmt.Sprintf("%d", stateFetchLimit))
+	return makeURL(urlString, fetchStateSyncsAtHeightPath, params.Encode())
 }
 
 func makeURL(urlString, rawPath, rawQuery string) (*url.URL, error) {
