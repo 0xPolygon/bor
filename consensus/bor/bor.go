@@ -1761,7 +1761,8 @@ func (c *Bor) CommitStates(
 	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
 	if c.config.IsDeterministicStateSync(header.Number) {
-		heimdallHeight, err := c.HeimdallClient.GetBlockHeightByTime(c.ctx, to.Unix())
+		var heimdallHeight int64
+		heimdallHeight, err = c.HeimdallClient.GetBlockHeightByTime(c.ctx, to.Unix())
 		if err != nil {
 			// Post-fork: fail hard to preserve determinism across validators
 			return nil, fmt.Errorf("deterministic state sync: failed to resolve Heimdall height: %w", err)

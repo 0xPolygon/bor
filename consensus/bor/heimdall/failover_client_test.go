@@ -24,18 +24,18 @@ import (
 
 // mockHeimdallClient is a configurable mock implementing the Endpoint interface.
 type mockHeimdallClient struct {
-	getSpanFn            func(ctx context.Context, spanID uint64) (*types.Span, error)
-	getLatestSpanFn      func(ctx context.Context) (*types.Span, error)
-	stateSyncEventsFn    func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
-	fetchCheckpointFn    func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
-	fetchCheckpointCntFn func(ctx context.Context) (int64, error)
-	fetchMilestoneFn     func(ctx context.Context) (*milestone.Milestone, error)
-	fetchMilestoneCntFn  func(ctx context.Context) (int64, error)
-	fetchStatusFn              func(ctx context.Context) (*ctypes.SyncInfo, error)
-	stateSyncEventsAtHeightFn  func(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
-	getBlockHeightByTimeFn     func(ctx context.Context, cutoffTime int64) (int64, error)
-	closeFn                    func()
-	hits                       atomic.Int32
+	getSpanFn                 func(ctx context.Context, spanID uint64) (*types.Span, error)
+	getLatestSpanFn           func(ctx context.Context) (*types.Span, error)
+	stateSyncEventsFn         func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
+	fetchCheckpointFn         func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
+	fetchCheckpointCntFn      func(ctx context.Context) (int64, error)
+	fetchMilestoneFn          func(ctx context.Context) (*milestone.Milestone, error)
+	fetchMilestoneCntFn       func(ctx context.Context) (int64, error)
+	fetchStatusFn             func(ctx context.Context) (*ctypes.SyncInfo, error)
+	stateSyncEventsAtHeightFn func(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
+	getBlockHeightByTimeFn    func(ctx context.Context, cutoffTime int64) (int64, error)
+	closeFn                   func()
+	hits                      atomic.Int32
 }
 
 func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
