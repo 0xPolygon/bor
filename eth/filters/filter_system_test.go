@@ -479,6 +479,38 @@ func newHistoricalBorLogsHarness(t *testing.T, enableBorLogs bool) *historicalBo
 	}
 }
 
+func newHistoricalBorDecisionAPI(t *testing.T, enableBorLogs bool, cfg *params.ChainConfig) (*testBackend, *FilterAPI) {
+	t.Helper()
+
+	db := rawdb.NewMemoryDatabase()
+	backend, sys := newTestFilterSystem(db, Config{})
+	backend.chainConfig = cfg
+
+	api := NewFilterAPI(sys, enableBorLogs)
+	if cfg != nil {
+		api.SetChainConfig(cfg)
+	}
+
+	t.Cleanup(func() { _ = db.Close() })
+
+	return backend, api
+}
+
+func writeHistoricalBorDecisionChain(t *testing.T, backend *testBackend, cfg *params.ChainConfig, blocks int) []*types.Block {
+	t.Helper()
+
+	gspec := &core.Genesis{
+		Config:  cfg,
+		Alloc:   types.GenesisAlloc{},
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+
+	_, chain, receipts := core.GenerateChainWithGenesis(gspec, ethash.NewFaker(), blocks, func(i int, gen *core.BlockGen) {})
+	writeHistoricalBorChain(t, backend.db, gspec, chain, receipts)
+
+	return chain
+}
+
 // TestBlockSubscription tests if a block subscription returns block hashes for posted chain events.
 // It creates multiple subscriptions:
 // - one at the start and should receive all posted chain events and a second (blockHashes)
@@ -860,6 +892,164 @@ func TestHistoricalQueriesKeepPostMadhugiriResultsCanonical(t *testing.T) {
 			requireHistoricalBorRangeLogs(t, logs, harness, fetcher.name+" cross-fork range")
 		})
 	}
+}
+
+func TestHistoricalQueryHelperGuards(t *testing.T) {
+	t.Parallel()
+
+	t.Run("BlockFilterDisabledWithoutBorSupport", func(t *testing.T) {
+		_, api := newHistoricalBorDecisionAPI(t, false, nil)
+
+		filter := api.borLogsFilterForBlock(t.Context(), nil, common.HexToHash("0x1"), nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor block filter when bor logs are disabled and no fork config is available")
+		}
+	})
+
+	t.Run("BlockFilterSkipsMissingHistoricalHeader", func(t *testing.T) {
+		cfg := cloneBorHistoricalTestConfig(4)
+		_, api := newHistoricalBorDecisionAPI(t, false, cfg)
+
+		filter := api.borLogsFilterForBlock(t.Context(), cfg.Bor, common.HexToHash("0xdeadbeef"), nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor block filter when the historical block header cannot be resolved")
+		}
+	})
+
+	t.Run("RangeFilterDisabledWithoutBorSupport", func(t *testing.T) {
+		_, api := newHistoricalBorDecisionAPI(t, false, nil)
+
+		filter := api.borLogsFilterForRange(t.Context(), nil, 1, 2, nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when bor logs are disabled and no fork config is available")
+		}
+	})
+
+	t.Run("RangeFilterDisabledWithoutMadhugiriFork", func(t *testing.T) {
+		cfgCopy := *params.TestChainConfig
+		borCopy := *params.BorTestChainConfig.Bor
+		sprintCopy := make(map[string]uint64, len(borCopy.Sprint))
+		for k, v := range borCopy.Sprint {
+			sprintCopy[k] = v
+		}
+		borCopy.Sprint = sprintCopy
+		borCopy.MadhugiriBlock = nil
+		cfgCopy.Bor = &borCopy
+
+		_, api := newHistoricalBorDecisionAPI(t, false, &cfgCopy)
+		filter := api.borLogsFilterForRange(t.Context(), cfgCopy.Bor, 1, 2, nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when bor logs are disabled and no Madhugiri fork boundary exists")
+		}
+	})
+
+	t.Run("RangeFilterSkipsUnresolvedBegin", func(t *testing.T) {
+		cfg := cloneBorHistoricalTestConfig(4)
+		_, api := newHistoricalBorDecisionAPI(t, false, cfg)
+
+		filter := api.borLogsFilterForRange(t.Context(), cfg.Bor, rpc.SafeBlockNumber.Int64(), 1, nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when the beginning block tag cannot be resolved")
+		}
+	})
+
+	t.Run("RangeFilterSkipsUnresolvedEnd", func(t *testing.T) {
+		cfg := cloneBorHistoricalTestConfig(4)
+		_, api := newHistoricalBorDecisionAPI(t, false, cfg)
+
+		filter := api.borLogsFilterForRange(t.Context(), cfg.Bor, 1, rpc.SafeBlockNumber.Int64(), nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when the ending block tag cannot be resolved")
+		}
+	})
+
+	t.Run("RangeFilterSkipsInvertedResolvedRange", func(t *testing.T) {
+		cfg := cloneBorHistoricalTestConfig(4)
+		_, api := newHistoricalBorDecisionAPI(t, false, cfg)
+
+		filter := api.borLogsFilterForRange(t.Context(), cfg.Bor, 3, 2, nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when the resolved range is inverted")
+		}
+	})
+
+	t.Run("RangeFilterSkipsPostForkOnlyRanges", func(t *testing.T) {
+		cfg := cloneBorHistoricalTestConfig(4)
+		_, api := newHistoricalBorDecisionAPI(t, false, cfg)
+
+		filter := api.borLogsFilterForRange(t.Context(), cfg.Bor, 4, 5, nil, nil)
+		if filter != nil {
+			t.Fatal("expected nil bor range filter when the range starts at Madhugiri or later")
+		}
+	})
+}
+
+func TestResolveHistoricalLogBlockNumber(t *testing.T) {
+	t.Parallel()
+
+	cfg := cloneBorHistoricalTestConfig(8)
+	backend, api := newHistoricalBorDecisionAPI(t, false, cfg)
+	chain := writeHistoricalBorDecisionChain(t, backend, cfg, 5)
+	backend.historyCutoff = chain[1].NumberU64()
+	rawdb.WriteFinalizedBlockHash(backend.db, chain[2].Hash())
+
+	testCases := []struct {
+		name   string
+		number int64
+		want   uint64
+		ok     bool
+	}{
+		{
+			name:   "Latest",
+			number: rpc.LatestBlockNumber.Int64(),
+			want:   chain[len(chain)-1].NumberU64(),
+			ok:     true,
+		},
+		{
+			name:   "Finalized",
+			number: rpc.FinalizedBlockNumber.Int64(),
+			want:   chain[2].NumberU64(),
+			ok:     true,
+		},
+		{
+			name:   "SafeMissing",
+			number: rpc.SafeBlockNumber.Int64(),
+			want:   0,
+			ok:     false,
+		},
+		{
+			name:   "EarliestUsesHistoryCutoff",
+			number: rpc.EarliestBlockNumber.Int64(),
+			want:   backend.historyCutoff,
+			ok:     true,
+		},
+		{
+			name:   "NegativeRejected",
+			number: -42,
+			want:   0,
+			ok:     false,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := api.resolveHistoricalLogBlockNumber(t.Context(), tc.number)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("resolveHistoricalLogBlockNumber(%d) = (%d, %t), want (%d, %t)", tc.number, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+
+	t.Run("MissingFinalizedHeaderReturnsFalse", func(t *testing.T) {
+		emptyBackend, emptyAPI := newHistoricalBorDecisionAPI(t, false, cfg)
+		rawdb.WriteFinalizedBlockHash(emptyBackend.db, common.HexToHash("0xbeef"))
+
+		got, ok := emptyAPI.resolveHistoricalLogBlockNumber(t.Context(), rpc.FinalizedBlockNumber.Int64())
+		if ok || got != 0 {
+			t.Fatalf("resolveHistoricalLogBlockNumber(finalized) = (%d, %t), want (0, false) when the finalized header is missing", got, ok)
+		}
+	})
 }
 
 // TestExceedLogQueryLimit tests getLogs with too many addresses or topics
