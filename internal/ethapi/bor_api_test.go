@@ -1411,6 +1411,26 @@ func (b *testBackendWithPreMadhuguriBorReceipt) ChainConfig() *params.ChainConfi
 	return &cfg
 }
 
+type testBackendWithPostMadhugiriBorReceipt struct {
+	*testBackend
+	borReceipt *types.Receipt
+}
+
+func (b *testBackendWithPostMadhugiriBorReceipt) GetBorBlockReceipt(_ context.Context, _ common.Hash) (*types.Receipt, error) {
+	return b.borReceipt, nil
+}
+
+func (b *testBackendWithPostMadhugiriBorReceipt) ChainConfig() *params.ChainConfig {
+	cfg := *params.AllEthashProtocolChanges
+	borCfg := params.BorConfig{}
+	if cfg.Bor != nil {
+		borCfg = *cfg.Bor
+	}
+	borCfg.MadhugiriBlock = big.NewInt(0)
+	cfg.Bor = &borCfg
+	return &cfg
+}
+
 func TestBorGetLogsByHashWithLogs(t *testing.T) {
 	t.Parallel()
 
@@ -1681,14 +1701,13 @@ func TestBorGetLogsByHashPreMadhugiri(t *testing.T) {
 	})
 }
 
-func TestBorGetLogsPreMadhugiriStateSyncLogs(t *testing.T) {
+func TestGetBlockAndReceiptsStateSyncReceipt(t *testing.T) {
 	t.Parallel()
 
 	var (
-		accs     = newAccounts(1)
-		logAddr  = common.HexToAddress("0x0000000000000000000000000000000000001010")
-		logTopic = common.HexToHash("0x1234")
-		genesis  = &core.Genesis{
+		accs    = newAccounts(1)
+		logAddr = common.HexToAddress("0x0000000000000000000000000000000000001010")
+		genesis = &core.Genesis{
 			Config: params.AllEthashProtocolChanges,
 			Alloc: types.GenesisAlloc{
 				accs[0].addr: {Balance: big.NewInt(params.Ether)},
@@ -1717,77 +1736,50 @@ func TestBorGetLogsPreMadhugiriStateSyncLogs(t *testing.T) {
 		t.Fatal("Could not get block 1")
 	}
 
+	normalReceipts, err := backend.GetReceipts(context.Background(), block.Hash())
+	require.NoError(t, err)
+
 	borReceipt := &types.Receipt{
 		Type:   types.StateSyncTxType,
 		Status: types.ReceiptStatusSuccessful,
 		Logs: []*types.Log{
 			{
 				Address: logAddr,
-				Topics:  []common.Hash{logTopic},
+				Topics:  []common.Hash{common.HexToHash("0x1234")},
 				Data:    []byte{1, 2, 3, 4},
 			},
 		},
 	}
 
-	api := NewBorAPI(&testBackendWithPreMadhuguriBorReceipt{
-		testBackend: backend,
-		borReceipt:  borReceipt,
+	t.Run("pre_madhugiri_appends_state_sync_receipt", func(t *testing.T) {
+		api := NewBorAPI(&testBackendWithPreMadhuguriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		})
+
+		gotBlock, receipts, err := api.getBlockAndReceipts(context.Background(), block.NumberU64())
+		require.NoError(t, err)
+		require.NotNil(t, gotBlock)
+		require.Equal(t, block.Hash(), gotBlock.Hash())
+		require.Len(t, receipts, len(normalReceipts)+1)
+
+		last := receipts[len(receipts)-1]
+		require.EqualValues(t, types.StateSyncTxType, last.Type)
+		require.Len(t, last.Logs, 1)
+		require.Equal(t, logAddr, last.Logs[0].Address)
 	})
 
-	t.Run("get_logs_includes_state_sync_receipt", func(t *testing.T) {
-		blockHash := block.Hash()
-		crit := FilterCriteria{
-			BlockHash: &blockHash,
-			Addresses: []common.Address{logAddr},
-			Topics:    [][]common.Hash{{logTopic}},
-		}
+	t.Run("post_madhugiri_does_not_append_state_sync_receipt", func(t *testing.T) {
+		api := NewBorAPI(&testBackendWithPostMadhugiriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		})
 
-		logs, err := api.GetLogs(context.Background(), crit)
-		if err != nil {
-			t.Fatalf("GetLogs() error = %v", err)
-		}
-		if len(logs) == 0 {
-			t.Fatal("GetLogs() returned 0 logs, want at least 1")
-		}
-
-		found := false
-		for _, log := range logs {
-			if log.Address == logAddr && len(log.Topics) > 0 && log.Topics[0] == logTopic {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("GetLogs() did not include the expected pre-Madhugiri state-sync log")
-		}
-	})
-
-	t.Run("get_latest_logs_includes_state_sync_receipt", func(t *testing.T) {
-		blockCount := uint64(1)
-		crit := FilterCriteria{
-			Addresses: []common.Address{logAddr},
-			Topics:    [][]common.Hash{{logTopic}},
-		}
-		opts := LogFilterOptions{BlockCount: &blockCount}
-
-		logs, err := api.GetLatestLogs(context.Background(), crit, opts)
-		if err != nil {
-			t.Fatalf("GetLatestLogs() error = %v", err)
-		}
-		if len(logs) == 0 {
-			t.Fatal("GetLatestLogs() returned 0 logs, want at least 1")
-		}
-
-		found := false
-		for _, log := range logs {
-			if log.Address == logAddr && len(log.Topics) > 0 && log.Topics[0] == logTopic {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("GetLatestLogs() did not include the expected pre-Madhugiri state-sync log")
-		}
+		gotBlock, receipts, err := api.getBlockAndReceipts(context.Background(), block.NumberU64())
+		require.NoError(t, err)
+		require.NotNil(t, gotBlock)
+		require.Equal(t, block.Hash(), gotBlock.Hash())
+		require.Len(t, receipts, len(normalReceipts))
 	})
 }
 
