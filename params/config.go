@@ -955,7 +955,7 @@ type BorConfig struct {
 	LisovoProBlock             *big.Int          `json:"lisovoProBlock"`             // LisovoPro switch block (nil = no fork, 0 = already on lisovoPro)
 	GiuglianoBlock             *big.Int          `json:"giuglianoBlock"`             // Giugliano switch block (nil = no fork, 0 = already on giugliano)
 	// TODO marcello define block numbers
-	DeterministicStateSyncBlock *big.Int `json:"deterministicStateSyncBlock,omitempty"` // DeterministicStateSync switch block (nil = no fork, 0 = already active)
+	DeterministicStateSyncBlock *big.Int `json:"deterministicStateSyncBlock"` // DeterministicStateSync switch block (nil = no fork, 0 = already active)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
