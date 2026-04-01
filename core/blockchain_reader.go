@@ -182,6 +182,13 @@ func (bc *BlockChain) HasWitness(hash common.Hash) bool {
 	return bc.witnessStore.HasWitness(hash)
 }
 
+// CacheWitness adds a witness to the in-memory cache without writing to the
+// persistent store. Used by pipelined SRC to make witnesses available to the
+// WIT protocol immediately after broadcast, before the async DB write completes.
+func (bc *BlockChain) CacheWitness(hash common.Hash, witness []byte) {
+	bc.witnessCache.Add(hash, witness)
+}
+
 // WriteWitness writes the witness to the witness store and updates the cache.
 func (bc *BlockChain) WriteWitness(hash common.Hash, witness []byte) {
 	bc.witnessStore.WriteWitness(hash, witness)

@@ -396,6 +396,8 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	//   - rootN is block N's committed state root
 	//   - eip2935Abort and blockhashNAccessed track N+1's abort conditions
 	curBlockhashAccessed := &blockhashNAccessed
+	var prevDBWriteDone chan struct{}  // tracks the previous iteration's async DB write
+	var lastSealedHeader *types.Header // header of the last inline-sealed block (for grandparent lookup)
 
 	for {
 		// --- Check abort conditions for current speculative block ---
@@ -436,6 +438,15 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 				}
 			}()
 			break
+		}
+
+		// --- Wait for previous async DB write before finalize ---
+		// FinalizeForPipeline may call into state sync / span commit code that
+		// reads block headers and state from the chain DB. If the previous
+		// inline-sealed block hasn't been persisted yet, those lookups fail.
+		if prevDBWriteDone != nil {
+			<-prevDBWriteDone
+			prevDBWriteDone = nil
 		}
 
 		// --- Finalize current speculative block ---
@@ -526,7 +537,14 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		specStateNext.StartPrefetcher("miner-speculative", nil, nil)
 
 		// --- Build SpeculativeGetHashFn for next block ---
-		grandparentHeader := w.chain.GetHeaderByNumber(blockNNumber)
+		// Use lastSealedHeader if available (the async DB write may not have
+		// persisted it yet), otherwise fall back to the chain DB.
+		var grandparentHeader *types.Header
+		if lastSealedHeader != nil && lastSealedHeader.Number.Uint64() == blockNNumber {
+			grandparentHeader = lastSealedHeader
+		} else {
+			grandparentHeader = w.chain.GetHeaderByNumber(blockNNumber)
+		}
 		if grandparentHeader == nil {
 			log.Error("Pipelined SRC: grandparent header not found for next block", "number", blockNNumber)
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
@@ -661,16 +679,19 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			case <-time.After(delay):
 			case <-w.exitCh:
 				<-fillDone // wait for goroutine before returning
-				return     // defer clears pendingWorkBlock
+				if prevDBWriteDone != nil {
+					<-prevDBWriteDone
+				}
+				return // defer clears pendingWorkBlock
 			}
 		}
 
-		// --- Inline seal + write (bypass taskLoop/resultLoop) ---
-		// Uses emitHeadEvent=false to avoid deadlock: mainLoop is blocked here,
-		// and chainHeadFeed.Send would block if newWorkLoop's channel fills up.
-		sealedBlock, err := w.inlineSealAndWrite(blockSpec, receiptsSpec, specState, witnessSpec)
+		// --- Inline seal + broadcast (bypass taskLoop/resultLoop) ---
+		// prevDBWriteDone was already awaited before FinalizeForPipeline above.
+		// The DB write runs asynchronously — the pipeline proceeds without waiting.
+		sealedBlock, dbWriteDone, err := w.inlineSealAndBroadcast(blockSpec, receiptsSpec, specState, witnessSpec)
 		if err != nil {
-			log.Error("Pipelined SRC: inline seal+write failed", "block", nextBlockNumber, "err", err)
+			log.Error("Pipelined SRC: inline seal failed", "block", nextBlockNumber, "err", err)
 			<-fillDone // wait for goroutine before breaking
 			break
 		}
@@ -679,6 +700,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		// The abort conditions (EIP-2935, BLOCKHASH) are checked at the top of
 		// the next loop iteration, which requires fill to be complete.
 		<-fillDone
+		prevDBWriteDone = dbWriteDone
 		pipelineSpeculativeBlocksCounter.Inc(1)
 
 		if w.config.PipelinedSRCLogs {
@@ -688,6 +710,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		}
 
 		// --- Shift variables for next iteration ---
+		lastSealedHeader = sealedBlock.Header()
 		blockNNumber = nextBlockNumber
 		nextBlockNumber = nextNextBlockNumber
 		rootN = rootSpec
@@ -698,6 +721,11 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		coinbase = coinbaseNext
 		eip2935Abort = nextEIP2935Abort
 		curBlockhashAccessed = nextBlockhashAccessed
+	}
+
+	// Wait for the last async DB write to complete before exiting.
+	if prevDBWriteDone != nil {
+		<-prevDBWriteDone
 	}
 }
 
@@ -790,37 +818,41 @@ func (w *worker) sealBlockViaTaskCh(
 	}
 }
 
-// inlineSealAndWrite seals a pipelined block using a private channel (bypassing
-// taskLoop/resultLoop) and writes it directly to the chain. This avoids the
-// race condition where rapid submissions to the unbuffered taskCh cause delays
-// and duplicate blocks.
+// inlineSealAndBroadcast seals a pipelined block using a private channel
+// (bypassing taskLoop/resultLoop), broadcasts it to peers immediately, and
+// writes to the chain DB asynchronously. This avoids blocking the pipeline
+// on the DB write — the next iteration can start as soon as the block is sealed.
+//
+// Returns the sealed block and a channel that closes when the async DB write
+// completes. The caller must wait on writeDone before the node can serve the
+// block data from DB, but the pipeline can proceed immediately.
 //
 // Uses emitHeadEvent=false to avoid a deadlock: mainLoop is blocked in
 // commitSpeculativeWork, so chainHeadFeed.Send would eventually block when
 // newWorkLoop's channel fills up.
-func (w *worker) inlineSealAndWrite(block *types.Block, receipts []*types.Receipt, statedb *state.StateDB, witnessBytes []byte) (*types.Block, error) {
+func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Receipt, statedb *state.StateDB, witnessBytes []byte) (*types.Block, chan struct{}, error) {
 	// Seal the block via a private channel — reuses Seal() without contention
 	// on the shared w.resultCh. For primary producers on Bhilai+, delay=0.
 	sealCh := make(chan *consensus.NewSealedBlockEvent, 1)
 	stopCh := make(chan struct{})
 
 	if err := w.engine.Seal(w.chain, block, nil, sealCh, stopCh); err != nil {
-		return nil, fmt.Errorf("seal failed: %w", err)
+		return nil, nil, fmt.Errorf("seal failed: %w", err)
 	}
 
 	var sealedBlock *types.Block
 	select {
 	case ev := <-sealCh:
 		if ev == nil || ev.Block == nil {
-			return nil, errors.New("nil sealed block from Seal")
+			return nil, nil, errors.New("nil sealed block from Seal")
 		}
 		sealedBlock = ev.Block
 	case <-time.After(5 * time.Second):
 		close(stopCh)
-		return nil, errors.New("inline seal timed out")
+		return nil, nil, errors.New("inline seal timed out")
 	case <-w.exitCh:
 		close(stopCh)
-		return nil, errors.New("worker stopped during inline seal")
+		return nil, nil, errors.New("worker stopped during inline seal")
 	}
 
 	hash := sealedBlock.Hash()
@@ -849,17 +881,19 @@ func (w *worker) inlineSealAndWrite(block *types.Block, receipts []*types.Receip
 		logs = append(logs, receipt.Logs...)
 	}
 
-	// Write to chain WITHOUT emitting ChainHeadEvent (emitHeadEvent=false).
-	_, err := w.chain.WriteBlockAndSetHeadPipelined(sealedBlock, sealedReceipts, logs, statedb, false, witnessBytes)
-	if err != nil {
-		return nil, fmt.Errorf("write to chain failed: %w", err)
-	}
-
 	log.Info("Successfully sealed new block", "number", sealedBlock.Number(),
 		"sealhash", w.engine.SealHash(sealedBlock.Header()), "hash", hash,
 		"elapsed", "inline")
 
-	// Broadcast the block to peers
+	// Cache the witness so the WIT protocol can serve it to stateless peers
+	// immediately, without waiting for the async DB write.
+	if len(witnessBytes) > 0 {
+		w.chain.CacheWitness(hash, witnessBytes)
+	}
+
+	// Broadcast to peers BEFORE writing to DB — the block is fully valid and
+	// sealed, so peers can start processing it immediately. The DB write is
+	// not needed for broadcast.
 	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: time.Now()})
 
 	sealedBlocksCounter.Inc(1)
@@ -868,5 +902,17 @@ func (w *worker) inlineSealAndWrite(block *types.Block, receipts []*types.Receip
 	}
 	w.clearPending(sealedBlock.NumberU64())
 
-	return sealedBlock, nil
+	// Write to chain DB asynchronously — the pipeline can proceed with the
+	// next iteration using sealedBlock.Hash() directly, without waiting for
+	// the DB write to complete.
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_, err := w.chain.WriteBlockAndSetHeadPipelined(sealedBlock, sealedReceipts, logs, statedb, false, witnessBytes)
+		if err != nil {
+			log.Error("Pipelined SRC: async DB write failed", "block", sealedBlock.Number(), "err", err)
+		}
+	}()
+
+	return sealedBlock, writeDone, nil
 }
