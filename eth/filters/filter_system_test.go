@@ -51,15 +51,9 @@ type testBackend struct {
 	pendingBlock    *types.Block
 	pendingReceipts types.Receipts
 
-	stateSyncFeed  event.Feed
-	chainConfig    *params.ChainConfig
-	historyCutoff  uint64
-	headersByHash  map[common.Hash]*types.Header
-	headersByNum   map[uint64]*types.Header
-	receiptsByHash map[common.Hash]types.Receipts
-	borReceipts    map[common.Hash]*types.Receipt
-	headHash       common.Hash
-	finalizedHash  common.Hash
+	stateSyncFeed event.Feed
+	chainConfig   *params.ChainConfig
+	historyCutoff uint64
 }
 
 func (b *testBackend) SubscribeStateSyncEvent(ch chan<- core.StateSyncEvent) event.Subscription {
@@ -88,12 +82,6 @@ func (b *testBackend) ChainDb() ethdb.Database {
 }
 
 func (b *testBackend) GetCanonicalHash(number uint64) common.Hash {
-	if b.headersByNum != nil {
-		if header := b.headersByNum[number]; header != nil {
-			return header.Hash()
-		}
-	}
-
 	return rawdb.ReadCanonicalHash(b.db, number)
 }
 
@@ -112,25 +100,6 @@ func (b *testBackend) GetRawReceipts(hash common.Hash, number uint64) types.Rece
 }
 
 func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error) {
-	if b.headersByNum != nil {
-		switch blockNr {
-		case rpc.LatestBlockNumber:
-			return b.headersByHash[b.headHash], nil
-		case rpc.FinalizedBlockNumber:
-			if b.finalizedHash == (common.Hash{}) {
-				return nil, nil
-			}
-			return b.headersByHash[b.finalizedHash], nil
-		case rpc.SafeBlockNumber:
-			return nil, errors.New("safe block not found")
-		default:
-			if blockNr < 0 {
-				return nil, nil
-			}
-			return b.headersByNum[uint64(blockNr)], nil
-		}
-	}
-
 	var (
 		hash common.Hash
 		num  uint64
@@ -164,10 +133,6 @@ func (b *testBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumbe
 }
 
 func (b *testBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
-	if b.headersByHash != nil {
-		return b.headersByHash[hash], nil
-	}
-
 	number, ok := rawdb.ReadHeaderNumber(b.db, hash)
 	if !ok {
 		//nolint:nilnil
@@ -185,10 +150,6 @@ func (b *testBackend) GetBody(ctx context.Context, hash common.Hash, number rpc.
 }
 
 func (b *testBackend) GetReceipts(_ context.Context, hash common.Hash) (types.Receipts, error) {
-	if b.receiptsByHash != nil {
-		return b.receiptsByHash[hash], nil
-	}
-
 	if number, ok := rawdb.ReadHeaderNumber(b.db, hash); ok {
 		if header := rawdb.ReadHeader(b.db, hash, number); header != nil {
 			return rawdb.ReadReceipts(b.db, hash, number, header.Time, params.TestChainConfig), nil
@@ -199,15 +160,6 @@ func (b *testBackend) GetReceipts(_ context.Context, hash common.Hash) (types.Re
 }
 
 func (b *testBackend) GetLogs(_ context.Context, hash common.Hash, number uint64) ([][]*types.Log, error) {
-	if b.receiptsByHash != nil {
-		receipts := b.receiptsByHash[hash]
-		logs := make([][]*types.Log, len(receipts))
-		for i, receipt := range receipts {
-			logs[i] = receipt.Logs
-		}
-		return logs, nil
-	}
-
 	logs := rawdb.ReadLogs(b.db, hash, number)
 	return logs, nil
 }
@@ -242,20 +194,6 @@ func (b *testBackend) NewMatcherBackend() filtermaps.MatcherBackend {
 }
 
 func (b *testBackend) GetBorBlockReceipt(_ context.Context, blockHash common.Hash) (*types.Receipt, error) {
-	if b.borReceipts != nil {
-		number, ok := rawdb.ReadHeaderNumber(b.db, blockHash)
-		if !ok {
-			return &types.Receipt{}, nil
-		}
-		if cfg := b.ChainConfig(); cfg != nil && cfg.Bor != nil && cfg.Bor.Sprint != nil && !cfg.Bor.IsSprintStart(number) {
-			return &types.Receipt{}, nil
-		}
-		if receipt := b.borReceipts[blockHash]; receipt != nil {
-			return receipt, nil
-		}
-		return &types.Receipt{}, nil
-	}
-
 	number, ok := rawdb.ReadHeaderNumber(b.db, blockHash)
 	if !ok {
 		return &types.Receipt{}, nil
@@ -428,7 +366,7 @@ func requireHistoricalBorRangeLogs(t *testing.T, logs []*types.Log, harness *his
 }
 
 func cloneBorHistoricalTestConfig(madhugiriBlock uint64) *params.ChainConfig {
-	cfgCopy := *params.BorTestChainConfig
+	cfgCopy := *params.TestChainConfig
 	borCopy := *params.BorTestChainConfig.Bor
 	sprintCopy := make(map[string]uint64, len(borCopy.Sprint))
 	for k, v := range borCopy.Sprint {
@@ -474,14 +412,10 @@ func writeHistoricalBorChain(t *testing.T, db ethdb.Database, gspec *core.Genesi
 		hash := block.Hash()
 		number := block.NumberU64()
 
-		rawdb.WriteHeader(db, block.Header())
-		rawdb.WriteBody(db, hash, number, block.Body())
+		rawdb.WriteBlock(db, block)
 		rawdb.WriteCanonicalHash(db, hash, number)
+		rawdb.WriteHeadBlockHash(db, hash)
 		rawdb.WriteReceipts(db, hash, number, receipts[idx])
-	}
-
-	if len(chain) > 0 {
-		rawdb.WriteHeadBlockHash(db, chain[len(chain)-1].Hash())
 	}
 }
 
@@ -523,31 +457,11 @@ func newHistoricalBorLogsHarness(t *testing.T, enableBorLogs bool) *historicalBo
 
 	writeHistoricalBorChain(t, db, gspec, chain, receipts)
 
-	backend.headersByHash = make(map[common.Hash]*types.Header, len(chain))
-	backend.headersByNum = make(map[uint64]*types.Header, len(chain))
-	backend.receiptsByHash = make(map[common.Hash]types.Receipts, len(chain))
-	backend.borReceipts = make(map[common.Hash]*types.Receipt, 2)
-	for i, block := range chain {
-		backend.headersByHash[block.Hash()] = block.Header()
-		backend.headersByNum[block.NumberU64()] = block.Header()
-		backend.receiptsByHash[block.Hash()] = receipts[i]
-	}
-	backend.headHash = chain[len(chain)-1].Hash()
-	backend.finalizedHash = chain[3].Hash()
-
 	preBorLogs := makeBorLogs(preBorAddr, preBorTopic)
 	writeBorReceiptForTest(t, db, cfg, chain[1], receipts[1], preBorLogs)
-	backend.borReceipts[chain[1].Hash()] = &types.Receipt{
-		Status: types.ReceiptStatusSuccessful,
-		Logs:   preBorLogs,
-	}
 
 	postBorLogs := makeBorLogs(postBorAddr, postBorTopic)
 	writeBorReceiptForTest(t, db, cfg, chain[3], receipts[3], postBorLogs)
-	backend.borReceipts[chain[3].Hash()] = &types.Receipt{
-		Status: types.ReceiptStatusSuccessful,
-		Logs:   postBorLogs,
-	}
 
 	backend.startFilterMaps(16, false, filtermaps.RangeTestParams)
 	t.Cleanup(backend.stopFilterMaps)
