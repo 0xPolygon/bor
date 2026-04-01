@@ -1243,6 +1243,9 @@ func (c *ChainConfig) Description() string {
 		if c.Bor.GiuglianoBlock != nil {
 			banner += fmt.Sprintf(" - Giugliano:                   #%-8v\n", c.Bor.GiuglianoBlock)
 		}
+		if c.Bor.DeterministicStateSyncBlock != nil {
+			banner += fmt.Sprintf(" - Deterministic State Sync:    #%-8v\n", c.Bor.DeterministicStateSyncBlock)
+		}
 		return banner
 	}
 
