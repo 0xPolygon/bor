@@ -100,7 +100,7 @@ const (
 	fetchBlockHeightByTimePath   = "clerk/block-height-by-time"
 	fetchBlockHeightByTimeFormat = "cutoff_time=%d"
 
-	fetchStateSyncsAtHeightPath   = "clerk/state-syncs-at-height"
+	fetchStateSyncsAtHeightPath = "clerk/state-syncs-at-height"
 )
 
 // StateSyncEvents fetches the state sync events from heimdall

@@ -2,6 +2,7 @@ package heimdallgrpc
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/types/query"
@@ -143,6 +144,10 @@ func (h *HeimdallGRPCClient) StateSyncEventsAtHeight(ctx context.Context, fromID
 
 		fromID += uint64(stateFetchLimit)
 	}
+
+	sort.SliceStable(eventRecords, func(i, j int) bool {
+		return eventRecords[i].ID < eventRecords[j].ID
+	})
 
 	return eventRecords, nil
 }

@@ -2,6 +2,7 @@ package heimdallapp
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/clerk/keeper"
@@ -65,6 +66,10 @@ func (h *HeimdallAppClient) StateSyncEventsAtHeight(_ context.Context, fromID ui
 
 		fromID += uint64(stateFetchLimit)
 	}
+
+	sort.SliceStable(totalRecords, func(i, j int) bool {
+		return totalRecords[i].ID < totalRecords[j].ID
+	})
 
 	return totalRecords, nil
 }

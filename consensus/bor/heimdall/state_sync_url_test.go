@@ -23,28 +23,15 @@ func TestStateSyncsAtHeightURL_Format(t *testing.T) {
 	require.True(t, strings.HasSuffix(u.Path, "clerk/state-syncs-at-height"),
 		"expected path to end with clerk/state-syncs-at-height, got %s", u.Path)
 
-	// to_time must be RFC3339Nano, NOT raw unix seconds
+	// Validate individual query parameters using parsed values (not raw string)
+	q := u.Query()
+
 	expectedTime := time.Unix(toTime, 0).UTC().Format(time.RFC3339Nano)
-	require.Contains(t, u.RawQuery, fmt.Sprintf("to_time=%s", expectedTime),
-		"to_time should be RFC3339Nano formatted")
-	require.NotContains(t, u.RawQuery, fmt.Sprintf("to_time=%d", toTime),
-		"to_time should NOT be raw unix seconds")
-
-	// from_id parameter
-	require.Contains(t, u.RawQuery, fmt.Sprintf("from_id=%d", fromID))
-
-	// heimdall_height parameter
-	require.Contains(t, u.RawQuery, fmt.Sprintf("heimdall_height=%d", heimdallHeight))
-
-	// pagination.limit parameter
-	require.Contains(t, u.RawQuery, fmt.Sprintf("pagination.limit=%d", stateFetchLimit))
-
-	// Full URL sanity check
-	expected := fmt.Sprintf(
-		"http://bor0/clerk/state-syncs-at-height?from_id=%d&heimdall_height=%d&to_time=%s&pagination.limit=%d",
-		fromID, heimdallHeight, expectedTime, stateFetchLimit,
-	)
-	require.Equal(t, expected, u.String())
+	require.Equal(t, expectedTime, q.Get("to_time"), "to_time should be RFC3339Nano formatted")
+	require.NotEqual(t, fmt.Sprintf("%d", toTime), q.Get("to_time"), "to_time should NOT be raw unix seconds")
+	require.Equal(t, fmt.Sprintf("%d", fromID), q.Get("from_id"))
+	require.Equal(t, fmt.Sprintf("%d", heimdallHeight), q.Get("heimdall_height"))
+	require.Equal(t, fmt.Sprintf("%d", stateFetchLimit), q.Get("pagination.limit"))
 }
 
 func TestBlockHeightByTimeURL_Format(t *testing.T) {
