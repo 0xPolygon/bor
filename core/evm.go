@@ -172,8 +172,7 @@ func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash
 //
 // srcDone is called at most once and must return hash(block_N) after SRC(N)
 // completes. It may block.
-func SpeculativeGetHashFn(blockN1Header *types.Header, chain ChainContext,
-	pendingBlockN uint64, srcDone func() common.Hash, blockhashNAccessed *atomic.Bool) func(uint64) common.Hash {
+func SpeculativeGetHashFn(blockN1Header *types.Header, chain ChainContext, pendingBlockN uint64, srcDone func() common.Hash, blockhashNAccessed *atomic.Bool) func(uint64) common.Hash {
 
 	blockN1Hash := blockN1Header.Hash()
 

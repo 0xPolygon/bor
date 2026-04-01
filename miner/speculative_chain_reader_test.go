@@ -28,8 +28,8 @@ func (m *mockChainHeaderReader) addHeader(h *types.Header) {
 	m.byNum[h.Number.Uint64()] = h
 }
 
-func (m *mockChainHeaderReader) Config() *params.ChainConfig   { return params.TestChainConfig }
-func (m *mockChainHeaderReader) CurrentHeader() *types.Header   { return nil }
+func (m *mockChainHeaderReader) Config() *params.ChainConfig        { return params.TestChainConfig }
+func (m *mockChainHeaderReader) CurrentHeader() *types.Header       { return nil }
 func (m *mockChainHeaderReader) GetTd(common.Hash, uint64) *big.Int { return big.NewInt(1) }
 
 func (m *mockChainHeaderReader) GetHeader(hash common.Hash, number uint64) *types.Header {
