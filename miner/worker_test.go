@@ -2968,9 +2968,11 @@ func TestDelayFlagOffByOne(t *testing.T) {
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }
 
-// TestDisablePendingBlock validates if setting `DisablePendingBlock` to true
-// correctly prevents the creation of a pending block or not.
+// TestDisablePendingBlock validates if setting `DisablePendingBlock` affects the
+// creation of pending block or not.
 func TestDisablePendingBlock(t *testing.T) {
+	t.Parallel()
+
 	t.Run("pending block is nil when flag is enabled", func(t *testing.T) {
 		config := DefaultTestConfig()
 		config.DisablePendingBlock = true
@@ -2999,8 +3001,9 @@ func TestDisablePendingBlock(t *testing.T) {
 		w.startCh <- struct{}{}
 		time.Sleep(500 * time.Millisecond)
 
-		block, _, stateDB := w.pending()
+		block, receipts, stateDB := w.pending()
 		require.NotNil(t, block, "pending block should not be nil when DisablePendingBlock is false")
+		require.NotNil(t, receipts, "pending receipts should not be nil when DisablePendingBlock is false")
 		require.NotNil(t, stateDB, "pending state should not be nil when DisablePendingBlock is false")
 	})
 }
