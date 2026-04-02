@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/holiman/uint256"
 
@@ -175,10 +174,15 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 	vmenv.SetTxContext(core.NewEVMTxContext(message))
 
 	stateReceiverABI := abi.StateReceiver()
-	var totalGasUsed uint64
-
 	const method = "commitState"
-	now := time.Now().Unix()
+	var (
+		totalGasUsed uint64
+		// The actual state-sync transaction uses event time but because we don't have
+		// it here, we use the block time. The calldata will be different than what
+		// was constructed while executing the transaction but it'll be deterministic
+		// in every run.
+		now = vmenv.Context.Time
+	)
 
 	for _, event := range events {
 		// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord)
