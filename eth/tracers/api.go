@@ -1238,6 +1238,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 				TxHash:            tx.Hash(),
 				BlockNumber:       txctx.BlockNumber,
 				BlockHash:         txctx.BlockHash,
+				TransactionIndex:  uint(txctx.TxIndex),
 			}
 			tracer.Hooks.OnTxEnd(receipt, nil)
 		}
