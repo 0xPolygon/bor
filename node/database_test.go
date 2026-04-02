@@ -39,7 +39,6 @@ func TestOpenDatabase_WitnessFileStore_ResolvesDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDatabaseWithOptions failed: %v", err)
 	}
-	defer db.Close()
 
 	// The witness store should be an FS backend. Verify by writing
 	// through it and checking the file lands on disk.
@@ -47,6 +46,9 @@ func TestOpenDatabase_WitnessFileStore_ResolvesDir(t *testing.T) {
 
 	hash := [32]byte{0xab, 0xcd}
 	ws.WriteWitness(hash, []byte("test-witness"))
+
+	// Close the DB to drain async FS writes before checking disk.
+	db.Close()
 
 	// The witness directory should be at <datadir>/chaindata/witnesses.
 	witnessDir := filepath.Join(n.ResolvePath("chaindata"), "witnesses")

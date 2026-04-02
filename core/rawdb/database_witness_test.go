@@ -65,6 +65,7 @@ func TestOpen_FSWitnessStore(t *testing.T) {
 	// Write through the witness store and verify the file lands on disk.
 	hash := testHash(42)
 	ws.WriteWitness(hash, []byte("fs-witness"))
+	flushFSWrites(ws)
 
 	filePath := witnessFilePath(witnessDir, hash)
 	if _, err := os.Stat(filePath); err != nil {

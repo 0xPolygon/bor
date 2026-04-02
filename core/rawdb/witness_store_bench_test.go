@@ -81,17 +81,42 @@ func BenchmarkWriteWitness_DB(b *testing.B) {
 	}
 }
 
-func BenchmarkWriteWitness_FS(b *testing.B) {
+// BenchmarkWriteWitness_FS_Async measures the caller-observed latency of
+// the async FS write path (channel send only).
+func BenchmarkWriteWitness_FS_Async(b *testing.B) {
 	for _, size := range []int{100 * 1024, 1024 * 1024, 5 * 1024 * 1024} {
 		payload := makePayload(size)
 		b.Run(sizeLabel(size), func(b *testing.B) {
 			witnessDir := b.TempDir()
 			db := newPebbleDB(b)
 			ws := NewFSWitnessStore(witnessDir, db)
+			b.Cleanup(func() { ws.Close() })
 			b.ResetTimer()
 			b.SetBytes(int64(size))
 			for i := 0; i < b.N; i++ {
 				ws.WriteWitness(benchHash(i), payload)
+			}
+			b.StopTimer()
+			flushFSWrites(ws)
+		})
+	}
+}
+
+// BenchmarkWriteWitness_FS_Sync measures the end-to-end latency of
+// the FS write path by flushing after each write.
+func BenchmarkWriteWitness_FS_Sync(b *testing.B) {
+	for _, size := range []int{100 * 1024, 1024 * 1024, 5 * 1024 * 1024} {
+		payload := makePayload(size)
+		b.Run(sizeLabel(size), func(b *testing.B) {
+			witnessDir := b.TempDir()
+			db := newPebbleDB(b)
+			ws := NewFSWitnessStore(witnessDir, db)
+			b.Cleanup(func() { ws.Close() })
+			b.ResetTimer()
+			b.SetBytes(int64(size))
+			for i := 0; i < b.N; i++ {
+				ws.WriteWitness(benchHash(i), payload)
+				flushFSWrites(ws)
 			}
 		})
 	}
@@ -124,8 +149,10 @@ func BenchmarkReadWitness_FS(b *testing.B) {
 			witnessDir := b.TempDir()
 			db := newPebbleDB(b)
 			ws := NewFSWitnessStore(witnessDir, db)
+			b.Cleanup(func() { ws.Close() })
 			hash := benchHash(0)
 			ws.WriteWitness(hash, payload)
+			flushFSWrites(ws)
 			b.ResetTimer()
 			b.SetBytes(int64(size))
 			for i := 0; i < b.N; i++ {
@@ -157,10 +184,12 @@ func BenchmarkDeleteWitness_FS(b *testing.B) {
 		witnessDir := b.TempDir()
 		db := newPebbleDB(b)
 		ws := NewFSWitnessStore(witnessDir, db)
+		b.Cleanup(func() { ws.Close() })
 		payload := makePayload(1024)
 		for i := 0; i < b.N; i++ {
 			ws.WriteWitness(benchHash(i), payload)
 		}
+		flushFSWrites(ws)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			ws.DeleteWitness(benchHash(i))

@@ -21,6 +21,16 @@ func testHash(i int) common.Hash {
 	return h
 }
 
+// flushFSWrites blocks until all pending async writes in an FS witness store
+// have been processed. No-op for DB witness stores.
+func flushFSWrites(ws WitnessStore) {
+	if fs, ok := ws.(*fsWitnessStore); ok {
+		done := make(chan struct{})
+		fs.writeCh <- writeRequest{done: done}
+		<-done
+	}
+}
+
 // crudTest exercises the full Create / Read / Has / Delete lifecycle on a WitnessStore.
 func crudTest(t *testing.T, ws WitnessStore) {
 	t.Helper()
@@ -38,6 +48,7 @@ func crudTest(t *testing.T, ws WitnessStore) {
 
 	// Write and verify.
 	ws.WriteWitness(hash, data)
+	flushFSWrites(ws)
 	if !ws.HasWitness(hash) {
 		t.Fatal("HasWitness should return true after write")
 	}
@@ -66,6 +77,7 @@ func TestFSWitnessStore_CRUD(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 	crudTest(t, ws)
 }
 
@@ -73,11 +85,13 @@ func TestFSWitnessStore_AtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	hash := testHash(42)
 	data := []byte("some-witness-data")
 
 	ws.WriteWitness(hash, data)
+	flushFSWrites(ws)
 
 	// Verify the final file exists and no .tmp file remains.
 	finalPath := witnessFilePath(dir, hash)
@@ -95,9 +109,11 @@ func TestFSWitnessStore_ShardLayout(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	hash := testHash(0xABCD)
 	ws.WriteWitness(hash, []byte("payload"))
+	flushFSWrites(ws)
 
 	// Verify 2-level shard directory structure.
 	hex := common.Bytes2Hex(hash[:])
@@ -119,9 +135,11 @@ func TestFSWitnessStore_EmptyDirCleanup(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	hash := testHash(99)
 	ws.WriteWitness(hash, []byte("data"))
+	flushFSWrites(ws)
 
 	// Delete the witness; shard dirs should be cleaned up if empty.
 	ws.DeleteWitness(hash)
@@ -136,6 +154,7 @@ func TestFSWitnessStore_ReadNonExistent(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	// Reading a non-existent witness should return nil, not panic.
 	got := ws.ReadWitness(testHash(999))
@@ -148,10 +167,12 @@ func TestFSWitnessStore_SizeMetadataInPebble(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	hash := testHash(7)
 	data := make([]byte, 1234)
 	ws.WriteWitness(hash, data)
+	flushFSWrites(ws)
 
 	// Size metadata should be in the database.
 	sizePtr := ReadWitnessSize(db, hash)
@@ -175,6 +196,7 @@ func TestFSWitnessStore_FallbackToPebble(t *testing.T) {
 
 	// Create FS store; it should fall back to Pebble on read.
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	if !ws.HasWitness(hash) {
 		t.Fatal("HasWitness should return true for Pebble-stored witness")
@@ -195,6 +217,7 @@ func TestFSWitnessStore_ConcurrentReadWrite(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	const n = 50
 	var wg sync.WaitGroup
@@ -220,6 +243,7 @@ func TestFSWitnessStore_ConcurrentReadWrite(t *testing.T) {
 	}
 
 	wg.Wait()
+	flushFSWrites(ws)
 
 	// Verify all writes succeeded.
 	for i := 0; i < n; i++ {
@@ -242,7 +266,8 @@ func TestFSWitnessStore_TempFileCleanup(t *testing.T) {
 	os.WriteFile(tmpPath, []byte("orphan"), 0644)
 
 	// NewFSWitnessStore should clean it up.
-	_ = NewFSWitnessStore(dir, db)
+	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Fatalf("expected orphaned .tmp file to be cleaned up, got err=%v", err)
@@ -264,6 +289,25 @@ func TestFSWitnessStore_Close(t *testing.T) {
 	}
 }
 
+// TestFSWitnessStore_CloseDrainsPending verifies that Close waits for
+// all pending async writes to complete before returning.
+func TestFSWitnessStore_CloseDrainsPending(t *testing.T) {
+	dir := t.TempDir()
+	db := NewMemoryDatabase()
+	ws := NewFSWitnessStore(dir, db)
+
+	hash := testHash(1)
+	ws.WriteWitness(hash, []byte("pending-data"))
+
+	// Close should drain; after it returns the file must be on disk.
+	ws.Close()
+
+	filePath := witnessFilePath(dir, hash)
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("expected witness file on disk after Close drain: %v", err)
+	}
+}
+
 // TestFSWitnessStore_DeletePermissionError exercises the os.Remove error path
 // in DeleteWitness where the error is NOT os.IsNotExist (e.g., permission denied).
 // The store should log the error but not panic.
@@ -275,9 +319,11 @@ func TestFSWitnessStore_DeletePermissionError(t *testing.T) {
 	dir := t.TempDir()
 	db := NewMemoryDatabase()
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	hash := testHash(77)
 	ws.WriteWitness(hash, []byte("data"))
+	flushFSWrites(ws)
 
 	// Make the shard directory read-only so os.Remove gets EACCES, not ENOENT.
 	shardDir := witnessDir(dir, hash)
@@ -326,7 +372,8 @@ func TestFSWitnessStore_CleanupSkipsUnreadableEntries(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(unreadableDir, 0755) })
 
 	// NewFSWitnessStore calls cleanupTempFiles; should not panic.
-	_ = NewFSWitnessStore(dir, db)
+	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	// The accessible .tmp file should still be cleaned up.
 	if _, err := os.Stat(tmpPath1); !os.IsNotExist(err) {
@@ -357,7 +404,8 @@ func TestFSWitnessStore_CleanupNonRemovableTmpFile(t *testing.T) {
 
 	// NewFSWitnessStore calls cleanupTempFiles; should log a warning
 	// but not panic.
-	_ = NewFSWitnessStore(dir, db)
+	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	// Restore permissions and verify the .tmp file is still there
 	// (removal failed as expected).
@@ -376,10 +424,12 @@ func TestFSWitnessStore_CleanupNonExistentDir(t *testing.T) {
 
 	// Should not panic or error; the directory simply doesn't exist yet.
 	ws := NewFSWitnessStore(dir, db)
+	defer ws.Close()
 
 	// The store should still be functional once a write creates the directory.
 	hash := testHash(1)
 	ws.WriteWitness(hash, []byte("data"))
+	flushFSWrites(ws)
 	if !ws.HasWitness(hash) {
 		t.Fatal("HasWitness should return true after write to initially non-existent dir")
 	}
@@ -423,6 +473,9 @@ func TestFSWitnessStore_CritOnMkdirAllFailure(t *testing.T) {
 		defer os.Remove(f.Name())
 		ws := NewFSWitnessStore(f.Name(), db)
 		ws.WriteWitness(testHash(1), []byte("data"))
+		// Close drains the channel, ensuring the writeLoop processes the
+		// request and hits log.Crit before the subprocess exits.
+		ws.Close()
 		return
 	}
 	if !runCrashTest(t, "TestFSWitnessStore_CritOnMkdirAllFailure") {
@@ -447,6 +500,7 @@ func TestFSWitnessStore_CritOnWriteFileFailure(t *testing.T) {
 		os.MkdirAll(shard, 0755)
 		os.Chmod(shard, 0555)
 		ws.WriteWitness(hash, []byte("data"))
+		ws.Close()
 		return
 	}
 	if !runCrashTest(t, "TestFSWitnessStore_CritOnWriteFileFailure") {
@@ -479,6 +533,7 @@ func TestFSWitnessStore_CritOnRenameFailure(t *testing.T) {
 		os.WriteFile(filepath.Join(finalPath, "blocker"), []byte("x"), 0644)
 		ws := NewFSWitnessStore(dir, db)
 		ws.WriteWitness(hash, []byte("data"))
+		ws.Close()
 		return
 	}
 	if !runCrashTest(t, "TestFSWitnessStore_CritOnRenameFailure") {
@@ -497,6 +552,7 @@ func TestFSWitnessStore_CritOnDBPutFailure(t *testing.T) {
 		ws := NewFSWitnessStore(dir, db)
 		db.Close()
 		ws.WriteWitness(testHash(1), []byte("data"))
+		ws.Close()
 		return
 	}
 	if !runCrashTest(t, "TestFSWitnessStore_CritOnDBPutFailure") {
