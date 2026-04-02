@@ -450,8 +450,9 @@ type SealerConfig struct {
 	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 
-	// DisablePendingBlock disables the pending block creation loop which currently works in all node types
-	// to create a block for serving rpc queries for 'pending' block.
+	// DisablePendingBlock disables the pending block creation loop which primarily builds a 'pending'
+	// block to serve rpc queries. If enabled, all 'pending' block queries will return nil. This won't
+	// apply for block producer nodes.
 	DisablePendingBlock bool `hcl:"disable-pending-block,optional" toml:"disable-pending-block,optional"`
 }
 

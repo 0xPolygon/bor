@@ -68,7 +68,7 @@ type Config struct {
 	EnablePrefetch          bool           // Enable transaction prefetching from pool during block building
 	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 
-	DisablePendingBlock bool // Disable the pending block creation loop
+	DisablePendingBlock bool // Disable the pending block creation loop on non block producer nodes
 }
 
 // DefaultConfig contains default settings for miner.

@@ -510,7 +510,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.disable-pending-block",
-		Usage:   "Disable the pending block creation loop. When set, RPC queries for 'pending' block will return nil",
+		Usage:   "Disable the pending block creation loop. When set, RPC queries for 'pending' block will return nil on non block producer nodes",
 		Value:   &c.cliConfig.Sealer.DisablePendingBlock,
 		Default: c.cliConfig.Sealer.DisablePendingBlock,
 		Group:   "Sealer",
