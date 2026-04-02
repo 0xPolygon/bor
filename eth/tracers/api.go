@@ -1223,9 +1223,12 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 				l.TxIndex = uint(txctx.TxIndex)
 			}
 			receipt := &types.Receipt{
-				Type:              types.StateSyncTxType,
-				Status:            types.ReceiptStatusSuccessful,
-				CumulativeGasUsed: txctx.CumulativeGasUsed + res.UsedGas,
+				Type:   types.StateSyncTxType,
+				Status: types.ReceiptStatusSuccessful,
+				// During actual execution, we don't add the state-sync gas in cumulative gas used. To
+				// keep the same semantics, we skip adding it here as well. For state-sync gas, users
+				// can refer to the `GasUsed` field in the receipt.
+				CumulativeGasUsed: txctx.CumulativeGasUsed,
 				Logs:              stateSyncLogs,
 				GasUsed:           res.UsedGas,
 				TxHash:            tx.Hash(),
