@@ -236,7 +236,7 @@ func (s *Server) DebugBlock(req *proto.DebugBlockRequest, stream proto.Bor_Debug
 		},
 	}
 
-	res, err := s.tracerAPI.TraceBlockByNumber(context.Background(), rpc.BlockNumber(req.Number), config)
+	res, err := s.tracerAPI.TraceBlockByNumber(stream.Context(), rpc.BlockNumber(req.Number), config)
 	if err != nil {
 		return err
 	}
