@@ -858,7 +858,6 @@ func TestHistoricalQueriesAutoMergePreMadhugiriBorLogs(t *testing.T) {
 	t.Parallel()
 
 	for _, fetcher := range getHistoricalBorLogsFetchers() {
-		fetcher := fetcher
 		t.Run(fetcher.name, func(t *testing.T) {
 			harness := newHistoricalBorLogsHarness(t, false)
 			preBlockHash := harness.preBlock.Hash()
@@ -877,7 +876,6 @@ func TestHistoricalQueriesKeepPostMadhugiriResultsCanonical(t *testing.T) {
 	t.Parallel()
 
 	for _, fetcher := range getHistoricalBorLogsFetchers() {
-		fetcher := fetcher
 		t.Run(fetcher.name, func(t *testing.T) {
 			harness := newHistoricalBorLogsHarness(t, false)
 			postBlockHash := harness.postBlock.Hash()
@@ -1032,7 +1030,6 @@ func TestResolveHistoricalLogBlockNumber(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := api.resolveHistoricalLogBlockNumber(t.Context(), tc.number)
 			if ok != tc.ok || got != tc.want {
