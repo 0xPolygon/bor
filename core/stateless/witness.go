@@ -113,10 +113,12 @@ func NewWitness(context *types.Header, chain HeaderReader) (*Witness, error) {
 		headers = append(headers, parent)
 	}
 	// Create the witness with a copy of the context header to prevent
-	// callers from mutating Root/ReceiptHash after witness creation.
+	// callers from mutating the header after witness creation.
+	// Note: Root and ReceiptHash are NOT zeroed here — they are zeroed at the
+	// point of stateless execution (ProcessBlockWithWitnesses) where they are
+	// recomputed. Zeroing here would break the witness manager's hash matching
+	// (handleBroadcast uses witness.Header().Hash() to look up pending blocks).
 	ctx := types.CopyHeader(context)
-	ctx.Root = common.Hash{}
-	ctx.ReceiptHash = common.Hash{}
 
 	return &Witness{
 		context: ctx,
