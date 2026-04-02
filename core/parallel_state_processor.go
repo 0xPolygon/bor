@@ -447,9 +447,9 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
-		}
-		if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
-			hooks.OnTxEnd(receipts[len(receipts)-1], nil)
+			if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
+				hooks.OnTxEnd(receipts[len(receipts)-1], nil)
+			}
 		}
 	}
 

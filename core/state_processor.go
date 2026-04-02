@@ -175,9 +175,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
-		}
-		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
-			hooks.OnTxEnd(receipts[len(receipts)-1], nil)
+			if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
+				hooks.OnTxEnd(receipts[len(receipts)-1], nil)
+			}
 		}
 	}
 
