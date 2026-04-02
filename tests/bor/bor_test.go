@@ -3082,6 +3082,13 @@ txsDone:
 	currentNum := chain.CurrentBlock().Number.Uint64()
 	t.Logf("All %d transactions included by block %d", txCount, currentNum)
 
+	// Wait for async DB writes to complete — pipelined SRC writes blocks
+	// asynchronously, so GetBlockByNumber may not find them immediately.
+	// Also, the speculative fill may have advanced the nonce before the block
+	// containing the txs is sealed, so re-read currentNum after waiting.
+	time.Sleep(2 * time.Second)
+	currentNum = chain.CurrentBlock().Number.Uint64()
+
 	// Verify we can find the transactions in the blocks
 	totalTxs := 0
 	for i := uint64(1); i <= currentNum; i++ {

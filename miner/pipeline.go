@@ -121,7 +121,7 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 	}
 	parentRoot := parent.Root
 
-	w.chain.SetLastFlatDiff(flatDiff, env.header.Hash())
+	w.chain.SetLastFlatDiff(flatDiff, env.header.Number.Uint64())
 	// Note: this counts block N as "entering the pipeline." If Prepare() fails
 	// and fallbackToSequential produces the block inline, the counter is slightly
 	// inflated — the block was produced sequentially, not speculatively.
@@ -216,6 +216,9 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	specState, err := w.chain.StateAtWithFlatDiff(req.parentRoot, req.flatDiff)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to open speculative state", "err", err)
+		// SRC goroutine is already running — wait for it to finish before
+		// fallbackToSequential does IntermediateRoot on the same parent root.
+		w.chain.WaitForSRC() //nolint:errcheck
 		w.fallbackToSequential(req)
 		return
 	}
@@ -225,6 +228,9 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	blockN1Header := w.chain.GetHeader(blockNHeader.ParentHash, blockNNumber-1)
 	if blockN1Header == nil {
 		log.Error("Pipelined SRC: grandparent header not found")
+		// SRC goroutine is already running — wait for it to finish before
+		// fallbackToSequential does IntermediateRoot on the same parent root.
+		w.chain.WaitForSRC() //nolint:errcheck
 		w.fallbackToSequential(req)
 		return
 	}
@@ -291,6 +297,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	// fillTransactions runs concurrently with SRC(N) so that sealing block N
 	// is not delayed by filling block N+1's transactions.
 	initialFillDone := make(chan struct{})
+	defer func() { <-initialFillDone }() // ensure goroutine is drained on all return paths
 	var eip2935Abort bool
 
 	go func() {
@@ -328,12 +335,15 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	if err != nil {
 		log.Error("Pipelined SRC: SRC(N) failed", "block", blockNNumber, "err", err)
 		pipelineSpeculativeAbortsCounter.Inc(1)
-		<-initialFillDone // wait for goroutine before returning
 		return
 	}
 
 	// --- Assemble and seal block N ---
-	borEngine, _ := w.engine.(*bor.Bor)
+	borEngine, ok := w.engine.(*bor.Bor)
+	if !ok {
+		log.Error("Pipelined SRC: engine is not Bor")
+		return
+	}
 
 	finalHeaderN := types.CopyHeader(blockNHeader)
 	finalHeaderN.Root = root
@@ -377,7 +387,11 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	// Get the REAL block N hash from the chain — this is the signed hash
 	// written by resultLoop after Seal() modified header.Extra.
 	chainHead := w.chain.CurrentBlock()
-	if chainHead == nil || chainHead.Number.Uint64() != blockNNum {
+	if chainHead == nil {
+		log.Error("Pipelined SRC: chain head is nil after waiting", "expected", blockNNum)
+		return
+	}
+	if chainHead.Number.Uint64() != blockNNum {
 		log.Error("Pipelined SRC: chain head mismatch after waiting", "expected", blockNNum,
 			"got", chainHead.Number.Uint64())
 		return
@@ -387,6 +401,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 
 	// Wait for the initial fillTransactions goroutine to finish before entering
 	// the loop — the loop's first iteration checks abort conditions from the fill.
+	// (The defer also drains this, but we need the results here, not just cleanup.)
 	<-initialFillDone
 
 	// --- CONTINUOUS PIPELINE LOOP ---
@@ -518,7 +533,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		srcSpawnTime := time.Now()
 		tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
 		w.chain.SpawnSRCGoroutine(tmpBlockCur, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Hash())
+		w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64())
 		if w.config.PipelinedSRCLogs {
 			log.Info("Pipelined SRC: spawned SRC, starting speculative exec",
 				"srcBlock", nextBlockNumber, "specExecBlock", nextNextBlockNumber)
@@ -780,7 +795,7 @@ func (w *worker) sealBlockViaTaskCh(
 	if spawnSRC {
 		tmpBlock := types.NewBlockWithHeader(finalHeader)
 		w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalHeader.Hash())
+		w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64())
 	}
 	pipelineSpeculativeBlocksCounter.Inc(1)
 

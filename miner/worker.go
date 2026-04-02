@@ -1114,12 +1114,12 @@ func (w *worker) resultLoop() {
 			// For pipelined blocks, state was already committed by the SRC goroutine —
 			// use WriteBlockAndSetHeadPipelined to skip the redundant CommitWithUpdate.
 			writeStart := time.Now()
-			writeElapsed := time.Since(writeStart)
 			if task.pipelined {
 				_, err = w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, true, task.witnessBytes)
 			} else {
 				_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
 			}
+			writeElapsed := time.Since(writeStart)
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
 
 			if err != nil {

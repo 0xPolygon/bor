@@ -35,8 +35,11 @@ type HeaderReader interface {
 	GetHeader(hash common.Hash, number uint64) *types.Header
 }
 
-// ValidateWitnessPreState validates that the witness pre-state root matches the parent block's state root.
-func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader) error {
+// ValidateWitnessPreState validates that the witness pre-state root matches
+// the parent block's state root. The expectedBlock header is the block being
+// imported — the witness context must match it (ParentHash and Number) to
+// prevent a malicious peer from substituting a witness for a different block.
+func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expectedBlock *types.Header) error {
 	if witness == nil {
 		return fmt.Errorf("witness is nil")
 	}
@@ -50,6 +53,19 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader) error 
 	contextHeader := witness.Header()
 	if contextHeader == nil {
 		return fmt.Errorf("witness context header is nil")
+	}
+
+	// Verify the witness is for the expected block — a malicious peer could
+	// craft a witness with a different ParentHash to bypass the pre-state check.
+	if expectedBlock != nil {
+		if contextHeader.ParentHash != expectedBlock.ParentHash {
+			return fmt.Errorf("witness ParentHash mismatch: witness=%x, expected=%x, blockNumber=%d",
+				contextHeader.ParentHash, expectedBlock.ParentHash, expectedBlock.Number.Uint64())
+		}
+		if contextHeader.Number.Uint64() != expectedBlock.Number.Uint64() {
+			return fmt.Errorf("witness block number mismatch: witness=%d, expected=%d",
+				contextHeader.Number.Uint64(), expectedBlock.Number.Uint64())
+		}
 	}
 
 	// Get the parent block header from the chain.
@@ -96,9 +112,14 @@ func NewWitness(context *types.Header, chain HeaderReader) (*Witness, error) {
 		}
 		headers = append(headers, parent)
 	}
-	// Create the witness with a reconstructed gutted out block
+	// Create the witness with a copy of the context header to prevent
+	// callers from mutating Root/ReceiptHash after witness creation.
+	ctx := types.CopyHeader(context)
+	ctx.Root = common.Hash{}
+	ctx.ReceiptHash = common.Hash{}
+
 	return &Witness{
-		context: context,
+		context: ctx,
 		Headers: headers,
 		Codes:   make(map[string]struct{}),
 		State:   make(map[string]struct{}),

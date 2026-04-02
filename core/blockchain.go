@@ -450,9 +450,9 @@ type BlockChain struct {
 	// The miner uses it together with the grandparent's committed root to open
 	// a StateDB via NewWithFlatBase, allowing block N+1 execution to start
 	// before the SRC goroutine finishes.
-	lastFlatDiff          *state.FlatDiff
-	lastFlatDiffBlockHash common.Hash
-	lastFlatDiffMu        sync.RWMutex
+	lastFlatDiff         *state.FlatDiff
+	lastFlatDiffBlockNum uint64
+	lastFlatDiffMu       sync.RWMutex
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -2761,7 +2761,7 @@ func (bc *BlockChain) insertChainStatelessParallel(chain types.Blocks, witnesses
 			if witnesses[i].HeaderReader() != nil {
 				headerReader = witnesses[i].HeaderReader()
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader, block.Header()); err != nil {
 				stopHeaders()
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
@@ -2925,7 +2925,7 @@ func (bc *BlockChain) insertChainStatelessSequential(chain types.Blocks, witness
 			if witnesses[i].HeaderReader() != nil {
 				headerReader = witnesses[i].HeaderReader()
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[i], headerReader, block.Header()); err != nil {
 				return int(processed.Load()), fmt.Errorf("post-import witness validation failed for block %d: %w", block.NumberU64(), err)
 			}
 		}
@@ -3228,7 +3228,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			if witnesses[it.processed()-1].HeaderReader() != nil {
 				headerReader = witnesses[it.processed()-1].HeaderReader()
 			}
-			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], headerReader); err != nil {
+			if err := stateless.ValidateWitnessPreState(witnesses[it.processed()-1], headerReader, block.Header()); err != nil {
 				log.Error("Witness validation failed during chain insertion", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 				bc.reportBlock(block, &ProcessResult{}, err)
 				followupInterrupt.Store(true)
@@ -4368,12 +4368,14 @@ func (bc *BlockChain) WriteBlockAndSetHeadPipelined(block *types.Block, receipts
 // behind the actual post-execution state).
 func (bc *BlockChain) PostExecutionStateAt(header *types.Header) (*state.StateDB, error) {
 	// Fast path: if we have the FlatDiff for this block, use it as an overlay.
+	// Matching by block number (not hash) because the hash may not be final
+	// at the time SetLastFlatDiff is called (Root and seal signature are added later).
 	bc.lastFlatDiffMu.RLock()
 	flatDiff := bc.lastFlatDiff
-	flatDiffHash := bc.lastFlatDiffBlockHash
+	flatDiffBlockNum := bc.lastFlatDiffBlockNum
 	bc.lastFlatDiffMu.RUnlock()
 
-	if flatDiff != nil && flatDiffHash == header.Hash() {
+	if flatDiff != nil && flatDiffBlockNum == header.Number.Uint64() {
 		return state.NewWithFlatBase(header.Root, bc.statedb, flatDiff)
 	}
 
@@ -4402,6 +4404,12 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 	go func() {
 		defer bc.wg.Done()
 		defer pending.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("Pipelined SRC: panic in SRC goroutine", "block", block.NumberU64(), "err", r)
+				pending.err = fmt.Errorf("SRC goroutine panicked: %v", r)
+			}
+		}()
 
 		tmpDB, err := state.New(parentRoot, bc.statedb)
 		if err != nil {
@@ -4510,18 +4518,14 @@ func (bc *BlockChain) GetLastFlatDiff() *state.FlatDiff {
 	return bc.lastFlatDiff
 }
 
-// GetLastFlatDiffBlockHash returns the block hash associated with the cached FlatDiff.
-func (bc *BlockChain) GetLastFlatDiffBlockHash() common.Hash {
-	bc.lastFlatDiffMu.RLock()
-	defer bc.lastFlatDiffMu.RUnlock()
-	return bc.lastFlatDiffBlockHash
-}
-
-// SetLastFlatDiff stores the FlatDiff and its source block hash.
-func (bc *BlockChain) SetLastFlatDiff(diff *state.FlatDiff, blockHash common.Hash) {
+// SetLastFlatDiff stores the FlatDiff and the block number it belongs to.
+// The block number is used by PostExecutionStateAt to match the FlatDiff
+// to the correct block (hash matching is unreliable because Root and seal
+// signature are not available when FlatDiff is captured).
+func (bc *BlockChain) SetLastFlatDiff(diff *state.FlatDiff, blockNum uint64) {
 	bc.lastFlatDiffMu.Lock()
 	bc.lastFlatDiff = diff
-	bc.lastFlatDiffBlockHash = blockHash
+	bc.lastFlatDiffBlockNum = blockNum
 	bc.lastFlatDiffMu.Unlock()
 }
 
@@ -4547,7 +4551,7 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 		} else {
 			headerReader = bc
 		}
-		if err := stateless.ValidateWitnessPreState(witness, headerReader); err != nil {
+		if err := stateless.ValidateWitnessPreState(witness, headerReader, block.Header()); err != nil {
 			log.Error("Witness validation failed during stateless processing", "blockNumber", block.Number(), "blockHash", block.Hash(), "err", err)
 			return nil, nil, fmt.Errorf("witness validation failed: %w", err)
 		}
