@@ -300,6 +300,8 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// memory allowance for cache.
 		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
+		// BytesPerSync was 512 KB as implicit default. Increasing it will provide fewer but larger syncs during compaction
+		BytesPerSync: 1 * 1024 * 1024,
 
 		// The size of memory table(as well as the write buffer).
 		// Note, there may have more than two memory tables in the system.
@@ -310,7 +312,8 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// Note, this must be the number of tables not the size of all memtables
 		// according to https://github.com/cockroachdb/pebble/blob/master/options.go#L738-L742
 		// and to https://github.com/cockroachdb/pebble/blob/master/db.go#L1892-L1903.
-		MemTableStopWritesThreshold: memTableLimit,
+		// Doubling the threshold will reduce write stalls during flush
+		MemTableStopWritesThreshold: memTableLimit * 2,
 
 		// The default compaction concurrency(1 thread),
 		// Here use all available CPUs for faster compaction.
@@ -363,6 +366,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 	// Disable seek compaction explicitly. Check https://github.com/ethereum/go-ethereum/pull/20130
 	// for more details.
 	opt.Experimental.ReadSamplingMultiplier = -1
+
+	// Adaptive compaction scales the workers based on the load instead of always using all CPUs
+	// L0CompactionConcurrency compaction worker per overlapping sublevel
+	opt.Experimental.L0CompactionConcurrency = 1
+	// CompactionDebtConcurrency worker per 256 MB of compaction debt
+	opt.Experimental.CompactionDebtConcurrency = 1 << 28
 
 	// Open the db and recover any potential corruptions
 	innerDB, err := pebble.Open(file, opt)

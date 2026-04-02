@@ -1,6 +1,18 @@
-#!/bin/bash
-#
-###############
-# Remove bor installs
-##############
-sudo rm -rf /usr/bin/bor
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge|disappear)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade)
+        ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -117,6 +117,8 @@ func (p *Peer) broadcastTransactions() {
 			// New batch of transactions to be broadcast, queue them (with cap)
 			queue = append(queue, hashes...)
 			if len(queue) > maxQueuedTxs {
+				dropped := len(queue) - maxQueuedTxs
+				p.Log().Debug("Broadcast: queue overflowed, dropping oldest", "dropped", dropped, "queueLen", len(queue), "queueLimit", maxQueuedTxs)
 				// Fancy copy and resize to ensure buffer doesn't grow indefinitely
 				queue = queue[:copy(queue, queue[len(queue)-maxQueuedTxs:])]
 			}
@@ -124,7 +126,8 @@ func (p *Peer) broadcastTransactions() {
 		case <-done:
 			done = nil
 
-		case <-fail:
+		case err := <-fail:
+			p.Log().Debug("Broadcast: failed to send transactions, discarding future txs", "err", err)
 			failed = true
 
 		case <-p.term:
@@ -198,6 +201,8 @@ func (p *Peer) announceTransactions() {
 			// New batch of transactions to be broadcast, queue them (with cap)
 			queue = append(queue, hashes...)
 			if len(queue) > queueLimit {
+				dropped := len(queue) - queueLimit
+				p.Log().Debug("Announce: queue overflowed, dropping oldest", "dropped", dropped, "queueLimit", queueLimit)
 				// Fancy copy and resize to ensure buffer doesn't grow indefinitely
 				queue = queue[:copy(queue, queue[len(queue)-queueLimit:])]
 			}
