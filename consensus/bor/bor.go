@@ -1744,7 +1744,18 @@ func (c *Bor) CommitStates(
 			return nil, err
 		}
 
-		to = time.Unix(int64(chain.Chain.GetHeaderByNumber(number-c.config.CalculateSprint(number)).Time), 0)
+		sprintLength := c.config.CalculateSprint(number)
+		if number < sprintLength {
+			return nil, fmt.Errorf("invalid sprint start block for block %d with sprint length %d", number, sprintLength)
+		}
+
+		sprintStartNumber := number - sprintLength
+		sprintStartHeader := chain.Chain.GetHeaderByNumber(sprintStartNumber)
+		if sprintStartHeader == nil {
+			return nil, fmt.Errorf("failed to fetch sprint start header %d for block %d", sprintStartNumber, number)
+		}
+
+		to = time.Unix(int64(sprintStartHeader.Time), 0)
 	}
 
 	lastStateID := lastStateIDBig.Uint64()
