@@ -20,6 +20,12 @@ type resettingSample struct {
 	count atomic.Int64
 }
 
+// Clear resets both the underlying sample and the cumulative count.
+func (rs *resettingSample) Clear() {
+	rs.Sample.Clear()
+	rs.count.Store(0)
+}
+
 // Snapshot returns a read-only copy of the sample with the original reset.
 // Count is cumulative for Prometheus counter semantics.
 // Values, Sum, Min, Max are from the current interval only.
