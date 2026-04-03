@@ -35,6 +35,6 @@ func (rs *resettingSample) Snapshot() *sampleSnapshot {
 	rs.Sample.Clear()
 
 	return newSampleSnapshotPrecalculated(
-		count, s.Values(), s.Min(), s.Max(), s.Sum(),
+		count, s.values, s.Min(), s.Max(), s.Sum(),
 	)
 }
