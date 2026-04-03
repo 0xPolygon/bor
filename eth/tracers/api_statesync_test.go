@@ -399,8 +399,7 @@ func TestTraceChain_WithStateSyncTx(t *testing.T) {
 
 	// Trace full chain (from, to] (i.e. [0, 3])
 	results := api.traceChain(from, to, nil, nil)
-	require.NoError(t, err, "TraceBlockByNumber failed: %v", err)
-	require.NotNil(t, results, "TraceBlockByNumber returned nil traces")
+	require.NotNil(t, results, "TraceChain returned nil traces")
 
 	// Validate if the trace is correct or not
 	for res := range results {

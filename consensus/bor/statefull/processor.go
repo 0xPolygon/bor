@@ -181,7 +181,7 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 		// it here, we use the block time. The calldata will be different than what
 		// was constructed while executing the transaction but it'll be deterministic
 		// in every run.
-		now = int64(vmenv.Context.Time)
+		now = vmenv.Context.Time
 	)
 
 	for _, event := range events {
@@ -202,7 +202,7 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 		}
 
 		// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
-		data, err := stateReceiverABI.Pack(method, big.NewInt(0).SetInt64(now), recordBytes)
+		data, err := stateReceiverABI.Pack(method, big.NewInt(0).SetUint64(now), recordBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
 		}
