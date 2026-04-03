@@ -1172,12 +1172,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	}))
 
 	// grpc
-	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "grpc.enabled",
-		Usage:   "Enable the gRPC server (disabled by default for security)",
-		Value:   &c.cliConfig.GRPC.Enabled,
-		Default: c.cliConfig.GRPC.Enabled,
-	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "grpc.addr",
 		Usage:   "Address and port to bind the GRPC server",

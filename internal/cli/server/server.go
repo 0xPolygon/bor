@@ -311,11 +311,9 @@ func NewServer(config *Config, opts ...serverOption) (*Server, error) {
 		return nil, err
 	}
 
-	// start the GRPC Server only if explicitly enabled
-	if config.GRPC.Enabled {
-		if err := WithGRPCAddress()(srv, config); err != nil {
-			return nil, err
-		}
+	// start the GRPC Server
+	if err := WithGRPCAddress()(srv, config); err != nil {
+		return nil, err
 	}
 
 	return srv, nil
@@ -523,13 +521,7 @@ func (s *Server) GetLatestBlockNumber() *big.Int {
 }
 
 func (s *Server) GetGrpcAddr() string {
-	_, port, err := net.SplitHostPort(s.config.GRPC.Addr)
-	if err != nil {
-		// fallback: return the raw address
-		return s.config.GRPC.Addr
-	}
-
-	return port
+	return s.config.GRPC.Addr
 }
 
 // setupHealthService initializes the health service for Bor.
