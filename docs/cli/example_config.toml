@@ -86,7 +86,7 @@ bp-rpc-endpoints = [ ] # Comma separated rpc endpoints of all block producers
   gasprice = "25000000000"      # Minimum gas price for mining a transaction. Regardless the value set, it will be enforced to 25000000000 for all networks
   recommit = "2m5s"             # The time interval for miner to re-create mining work
   commitinterrupt = true        # Interrupt the current mining work when time is exceeded and create partial blocks
-  disable-pending-block = false # Disable the pending block creation loop. When set, RPC queries for 'pending' block will return nil
+  disable-pending-block = false # Disable the pending block creation loop on non block producer nodes. When set, 'pending' block will be unavailable for RPC queries.
   # Dynamic gas limit configuration
   enableDynamicGasLimit = false   # Enable dynamic gas limit adjustment based on base fee
   gasLimitMin = 50000000          # Minimum gas limit when dynamic gas limit is enabled
