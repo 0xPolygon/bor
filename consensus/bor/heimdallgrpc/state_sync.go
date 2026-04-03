@@ -152,6 +152,71 @@ func (h *HeimdallGRPCClient) StateSyncEventsAtHeight(ctx context.Context, fromID
 	return eventRecords, nil
 }
 
+// StateSyncEventsByTime fetches state sync events using the combined endpoint that
+// resolves the Heimdall height from the cutoff time internally.
+func (h *HeimdallGRPCClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	log.Info("Fetching state sync events by time (gRPC)", "fromID", fromID, "toTime", toTime)
+
+	var err error
+
+	globalCtx, cancel := context.WithTimeout(ctx, stateSyncTotalTimeout)
+	defer cancel()
+
+	start := time.Now()
+	ctx = heimdall.WithRequestType(globalCtx, heimdall.StateSyncByTimeRequest)
+
+	defer func() {
+		heimdall.SendMetrics(ctx, start, err == nil)
+	}()
+
+	eventRecords := make([]*clerk.EventRecordWithTime, 0)
+
+	for {
+		req := &types.StateSyncsByTimeRequest{
+			FromId:     fromID,
+			ToTime:     time.Unix(toTime, 0),
+			Pagination: query.PageRequest{Limit: stateFetchLimit},
+		}
+
+		var res *types.StateSyncsByTimeResponse
+		pageCtx, pageCancel := context.WithTimeout(ctx, defaultTimeout)
+		res, err = h.clerkQueryClient.GetStateSyncsByTime(pageCtx, req)
+		pageCancel()
+		if err != nil {
+			return nil, err
+		}
+
+		events := res.GetEventRecords()
+
+		for _, event := range events {
+			eventRecord := &clerk.EventRecordWithTime{
+				EventRecord: clerk.EventRecord{
+					ID:       event.Id,
+					Contract: common.HexToAddress(event.Contract),
+					Data:     event.Data,
+					TxHash:   common.HexToHash(event.TxHash),
+					LogIndex: event.LogIndex,
+					ChainID:  event.BorChainId,
+				},
+				Time: event.RecordTime,
+			}
+			eventRecords = append(eventRecords, eventRecord)
+		}
+
+		if len(events) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
+	}
+
+	sort.SliceStable(eventRecords, func(i, j int) bool {
+		return eventRecords[i].ID < eventRecords[j].ID
+	})
+
+	return eventRecords, nil
+}
+
 // GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff
 // unix timestamp using the native gRPC GetBlockHeightByTime endpoint.
 func (h *HeimdallGRPCClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {

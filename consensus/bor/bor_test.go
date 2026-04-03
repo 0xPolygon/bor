@@ -125,6 +125,9 @@ func (f *failingHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64)
 func (f *failingHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, errors.New("state sync events at height failed")
 }
+func (f *failingHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, errors.New("state sync events by time failed")
+}
 
 // newStateDBForTest creates a fresh state database for testing.
 func newStateDBForTest(t *testing.T, root common.Hash) *state.StateDB {
@@ -2986,6 +2989,9 @@ func (m *mockHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64) (i
 func (m *mockHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
+func (m *mockHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return m.events, nil
+}
 func TestEncodeSigHeader_WithBaseFee(t *testing.T) {
 	t.Parallel()
 	h := &types.Header{
@@ -5276,17 +5282,20 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 // It returns configurable results and tracks call counts for assertions.
 type trackingHeimdallClient struct {
 	// Call counters
-	stateSyncEventsCalled         int
-	getBlockHeightByTimeCalled    int
+	stateSyncEventsCalled        int
+	getBlockHeightByTimeCalled   int
 	stateSyncEventsAtHeightCalled int
+	stateSyncEventsByTimeCalled  int
 
 	// Configurable return values
-	blockHeight       int64
-	blockHeightErr    error
-	events            []*clerk.EventRecordWithTime
-	eventsErr         error
-	eventsAtHeight    []*clerk.EventRecordWithTime
-	eventsAtHeightErr error
+	blockHeight          int64
+	blockHeightErr       error
+	events               []*clerk.EventRecordWithTime
+	eventsErr            error
+	eventsAtHeight       []*clerk.EventRecordWithTime
+	eventsAtHeightErr    error
+	eventsByTime         []*clerk.EventRecordWithTime
+	eventsByTimeErr      error
 }
 
 func (t *trackingHeimdallClient) Close() {}
@@ -5322,6 +5331,10 @@ func (t *trackingHeimdallClient) FetchStatus(context.Context) (*ctypes.SyncInfo,
 func (t *trackingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
 	t.getBlockHeightByTimeCalled++
 	return t.blockHeight, t.blockHeightErr
+}
+func (t *trackingHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
+	t.stateSyncEventsByTimeCalled++
+	return t.eventsByTime, t.eventsByTimeErr
 }
 
 // deterministicBorConfig returns a BorConfig with DeterministicStateSyncBlock set.
@@ -5366,11 +5379,11 @@ func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
 	require.Equal(t, 1, tracker.stateSyncEventsCalled, "pre-fork should call StateSyncEvents")
 	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled, "pre-fork should not call GetBlockHeightByTime")
 	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled, "pre-fork should not call StateSyncEventsAtHeight")
+	require.Equal(t, 0, tracker.stateSyncEventsByTimeCalled, "pre-fork should not call StateSyncEventsByTime")
 
-	// Post-fork: block 112 should use GetBlockHeightByTime + StateSyncEventsAtHeight (deterministic state sync)
+	// Post-fork: block 112 should use StateSyncEventsByTime (deterministic state sync)
 	tracker2 := &trackingHeimdallClient{
-		blockHeight:    500,
-		eventsAtHeight: []*clerk.EventRecordWithTime{},
+		eventsByTime: []*clerk.EventRecordWithTime{},
 	}
 	b.SetHeimdallClient(tracker2)
 
@@ -5380,11 +5393,12 @@ func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
 	_, err = b.CommitStates(stateDb2, h2, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Equal(t, 0, tracker2.stateSyncEventsCalled, "post-fork should not call StateSyncEvents")
-	require.Equal(t, 1, tracker2.getBlockHeightByTimeCalled, "post-fork should call GetBlockHeightByTime")
-	require.Equal(t, 1, tracker2.stateSyncEventsAtHeightCalled, "post-fork should call StateSyncEventsAtHeight")
+	require.Equal(t, 1, tracker2.stateSyncEventsByTimeCalled, "post-fork should call StateSyncEventsByTime")
+	require.Equal(t, 0, tracker2.getBlockHeightByTimeCalled, "post-fork should not call GetBlockHeightByTime")
+	require.Equal(t, 0, tracker2.stateSyncEventsAtHeightCalled, "post-fork should not call StateSyncEventsAtHeight")
 }
 
-func TestCommitStates_FailLoudPostFork(t *testing.T) {
+func TestCommitStates_ResilientPostFork(t *testing.T) {
 	t.Parallel()
 
 	addr1 := common.HexToAddress("0x1")
@@ -5400,31 +5414,35 @@ func TestCommitStates_FailLoudPostFork(t *testing.T) {
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	now := time.Now()
 
-	// GetBlockHeightByTime returns an error
+	// StateSyncEventsByTime returns an error
 	tracker := &trackingHeimdallClient{
-		blockHeightErr: errors.New("heimdall height lookup failed"),
+		eventsByTimeErr: errors.New("heimdall state sync by time failed"),
 	}
 	b.SetHeimdallClient(tracker)
 
 	stateDb := newStateDBForTest(t, genesis.Root)
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
 
-	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	result, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 
-	// Must return a non-nil error
-	require.Error(t, err, "post-fork should fail loudly when GetBlockHeightByTime errors")
-	require.Contains(t, err.Error(), "deterministic state sync")
+	// Post-fork errors are resilient: log + return empty, no error
+	require.NoError(t, err, "post-fork should not return error on StateSyncEventsByTime failure")
+	require.Empty(t, result, "post-fork should return empty on StateSyncEventsByTime failure")
 
+	// StateSyncEventsByTime should have been called
+	require.Equal(t, 1, tracker.stateSyncEventsByTimeCalled,
+		"StateSyncEventsByTime should have been called once")
 	// Must not fallback to StateSyncEvents
 	require.Equal(t, 0, tracker.stateSyncEventsCalled,
-		"post-fork should NOT fall back to StateSyncEvents on GetBlockHeightByTime error")
-	require.Equal(t, 1, tracker.getBlockHeightByTimeCalled,
-		"GetBlockHeightByTime should have been called once")
+		"post-fork should NOT fall back to StateSyncEvents on error")
+	// Old two-call pattern should not be used
+	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled,
+		"GetBlockHeightByTime should NOT be called")
 	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled,
-		"StateSyncEventsAtHeight should NOT be called when GetBlockHeightByTime fails")
+		"StateSyncEventsAtHeight should NOT be called")
 }
 
-func TestCommitStates_FailLoudPostFork_EventsAtHeightError(t *testing.T) {
+func TestCommitStates_ResilientPostFork_ReturnsEmptyOnError(t *testing.T) {
 	t.Parallel()
 
 	addr1 := common.HexToAddress("0x1")
@@ -5439,28 +5457,30 @@ func TestCommitStates_FailLoudPostFork_EventsAtHeightError(t *testing.T) {
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	now := time.Now()
 
-	// GetBlockHeightByTime succeeds, but StateSyncEventsAtHeight fails
+	// StateSyncEventsByTime fails with an HTTP error
 	tracker := &trackingHeimdallClient{
-		blockHeight:       500,
-		eventsAtHeightErr: errors.New("HTTP 503: service unavailable"),
+		eventsByTimeErr: errors.New("HTTP 503: service unavailable"),
 	}
 	b.SetHeimdallClient(tracker)
 
 	stateDb := newStateDBForTest(t, genesis.Root)
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: uint64(now.Unix())}
 
-	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
+	result, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 
-	// Must return a non-nil error (not silently return empty list)
-	require.Error(t, err, "post-fork should fail loudly when StateSyncEventsAtHeight errors")
-	require.Contains(t, err.Error(), "deterministic state sync")
+	// Post-fork is resilient: returns empty on error, does not propagate
+	require.NoError(t, err, "post-fork should not return error on StateSyncEventsByTime failure")
+	require.Empty(t, result, "post-fork should return empty on StateSyncEventsByTime failure")
 
-	// Both methods should have been called
-	require.Equal(t, 1, tracker.getBlockHeightByTimeCalled,
-		"GetBlockHeightByTime should have been called")
-	require.Equal(t, 1, tracker.stateSyncEventsAtHeightCalled,
-		"StateSyncEventsAtHeight should have been called")
+	// StateSyncEventsByTime should have been called
+	require.Equal(t, 1, tracker.stateSyncEventsByTimeCalled,
+		"StateSyncEventsByTime should have been called")
 	// Old path should not have been called as fallback
 	require.Equal(t, 0, tracker.stateSyncEventsCalled,
 		"post-fork should not fall back to StateSyncEvents")
+	// Old two-call pattern should not be used
+	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled,
+		"GetBlockHeightByTime should NOT be called")
+	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled,
+		"StateSyncEventsAtHeight should NOT be called")
 }

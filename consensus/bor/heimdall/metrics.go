@@ -31,6 +31,7 @@ const (
 	StatusRequest             requestType = "status"
 	BlockHeightByTimeRequest  requestType = "block-height-by-time"
 	StateSyncAtHeightRequest  requestType = "state-sync-at-height"
+	StateSyncByTimeRequest    requestType = "state-sync-by-time"
 )
 
 func WithRequestType(ctx context.Context, reqType requestType) context.Context {
@@ -127,6 +128,13 @@ var (
 				false: metrics.NewRegisteredMeter("client/requests/statesyncatheight/invalid", nil),
 			},
 			timer: metrics.NewRegisteredTimer("client/requests/statesyncatheight/duration", nil),
+		},
+		StateSyncByTimeRequest: {
+			request: map[bool]*metrics.Meter{
+				true:  metrics.NewRegisteredMeter("client/requests/statesyncbytime/valid", nil),
+				false: metrics.NewRegisteredMeter("client/requests/statesyncbytime/invalid", nil),
+			},
+			timer: metrics.NewRegisteredTimer("client/requests/statesyncbytime/duration", nil),
 		},
 	}
 )

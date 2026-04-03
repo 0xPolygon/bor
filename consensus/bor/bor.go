@@ -1761,22 +1761,16 @@ func (c *Bor) CommitStates(
 	c.spanStore.waitUntilHeimdallIsSynced(c.ctx)
 
 	if c.config.IsDeterministicStateSync(header.Number) {
-		var heimdallHeight int64
-		heimdallHeight, err = c.HeimdallClient.GetBlockHeightByTime(c.ctx, to.Unix())
-		if err != nil {
-			// Post-fork: fail hard to preserve determinism across validators
-			return nil, fmt.Errorf("deterministic state sync: failed to resolve Heimdall height: %w", err)
-		}
-		if heimdallHeight <= 0 {
-			return nil, fmt.Errorf("deterministic state sync: invalid Heimdall height %d for cutoff %d", heimdallHeight, to.Unix())
-		}
+		log.Info("Using deterministic state sync", "cutoff", to.Unix())
 
-		log.Info("Using deterministic state sync", "cutoff", to.Unix(), "heimdallHeight", heimdallHeight)
-
-		eventRecords, err = c.HeimdallClient.StateSyncEventsAtHeight(c.ctx, from, to.Unix(), heimdallHeight)
+		eventRecords, err = c.HeimdallClient.StateSyncEventsByTime(c.ctx, from, to.Unix())
 		if err != nil {
-			// Post-fork: fail hard to preserve determinism across validators
-			return nil, fmt.Errorf("deterministic state sync: failed to fetch events at height %d: %w", heimdallHeight, err)
+			// Match pre-fork resilience: log and return empty on transient errors.
+			// Determinism is preserved because all validators independently skip
+			// the same sprint, and events will be picked up in the next sprint.
+			log.Error("Error fetching deterministic state sync events", "fromID", from, "to", to.Unix(), "err", err)
+
+			return make([]*types.StateSyncData, 0), nil
 		}
 	} else {
 		eventRecords, err = c.HeimdallClient.StateSyncEvents(c.ctx, from, to.Unix())

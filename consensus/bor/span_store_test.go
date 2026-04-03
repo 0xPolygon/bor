@@ -91,6 +91,9 @@ func (h *MockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64
 func (h *MockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
+func (h *MockHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func TestSpanStore_SpanById(t *testing.T) {
 	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
@@ -409,6 +412,9 @@ func (h *MockOverlappingHeimdallClient) GetBlockHeightByTime(context.Context, in
 	return 0, nil
 }
 func (h *MockOverlappingHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+func (h *MockOverlappingHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
 
@@ -978,6 +984,9 @@ func (d *dynamicHeimdallClient) GetBlockHeightByTime(context.Context, int64) (in
 func (d *dynamicHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
+func (d *dynamicHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func makeTestSpan(id, start, end uint64, producerAddr string) *types.Span {
 	producer := stakeTypes.Validator{
@@ -1099,6 +1108,9 @@ func (m *MockSyncStatusClient) GetBlockHeightByTime(context.Context, int64) (int
 	return 0, nil
 }
 func (m *MockSyncStatusClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+func (m *MockSyncStatusClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
 
@@ -1489,6 +1501,9 @@ func (h *TimeoutHeimdallClient) GetBlockHeightByTime(context.Context, int64) (in
 	return 0, nil
 }
 func (h *TimeoutHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
+func (h *TimeoutHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
 

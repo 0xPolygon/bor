@@ -79,6 +79,41 @@ func (h *HeimdallAppClient) GetBlockHeightByTime(_ context.Context, cutoffTime i
 	return h.hApp.ClerkKeeper.GetBlockHeightByTime(h.NewContext(), cutoffTime)
 }
 
+// StateSyncEventsByTime fetches state sync events using the combined endpoint that
+// resolves the Heimdall height from the cutoff time internally.
+func (h *HeimdallAppClient) StateSyncEventsByTime(_ context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	totalRecords := make([]*clerk.EventRecordWithTime, 0)
+
+	queryServer := keeper.NewQueryServer(&h.hApp.ClerkKeeper)
+
+	for {
+		req := &types.StateSyncsByTimeRequest{
+			FromId:     fromID,
+			ToTime:     time.Unix(toTime, 0),
+			Pagination: query.PageRequest{Limit: stateFetchLimit},
+		}
+
+		res, err := queryServer.GetStateSyncsByTime(h.NewContext(), req)
+		if err != nil {
+			return nil, err
+		}
+
+		totalRecords = append(totalRecords, toEvents(res.EventRecords)...)
+
+		if len(res.EventRecords) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
+	}
+
+	sort.SliceStable(totalRecords, func(i, j int) bool {
+		return totalRecords[i].ID < totalRecords[j].ID
+	})
+
+	return totalRecords, nil
+}
+
 func toEvents(hdEvents []types.EventRecord) []*clerk.EventRecordWithTime {
 	events := make([]*clerk.EventRecordWithTime, len(hdEvents))
 

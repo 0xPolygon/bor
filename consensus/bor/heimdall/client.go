@@ -101,6 +101,8 @@ const (
 	fetchBlockHeightByTimeFormat = "cutoff_time=%d"
 
 	fetchStateSyncsAtHeightPath = "clerk/state-syncs-at-height"
+
+	fetchStateSyncsByTimePath = "clerk/state-syncs-by-time"
 )
 
 // StateSyncEvents fetches the state sync events from heimdall
@@ -353,6 +355,58 @@ func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uin
 	return eventRecords, nil
 }
 
+// StateSyncsByTimeResponse uses the proto-generated response type from heimdall-v2.
+type StateSyncsByTimeResponse = clerkTypes.StateSyncsByTimeResponse
+
+// StateSyncEventsByTime fetches state sync events using the combined endpoint that
+// resolves the Heimdall height from the cutoff time internally.
+func (h *HeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	ctx = WithRequestType(ctx, StateSyncByTimeRequest)
+
+	eventRecords := make([]*clerk.EventRecordWithTime, 0)
+
+	for {
+		u, err := stateSyncsByTimeURL(h.urlString, fromID, toTime)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Debug("Fetching state sync events by time", "queryParams", u.RawQuery)
+
+		response, err := FetchWithRetry[StateSyncsByTimeResponse](ctx, h.client, u, h.closeCh)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, e := range response.EventRecords {
+			record := &clerk.EventRecordWithTime{
+				EventRecord: clerk.EventRecord{
+					ID:       e.Id,
+					ChainID:  e.BorChainId,
+					Contract: common.HexToAddress(e.Contract),
+					Data:     e.Data,
+					LogIndex: e.LogIndex,
+					TxHash:   common.HexToHash(e.TxHash),
+				},
+				Time: e.RecordTime,
+			}
+			eventRecords = append(eventRecords, record)
+		}
+
+		if len(response.EventRecords) < stateFetchLimit {
+			break
+		}
+
+		fromID += uint64(stateFetchLimit)
+	}
+
+	sort.SliceStable(eventRecords, func(i, j int) bool {
+		return eventRecords[i].ID < eventRecords[j].ID
+	})
+
+	return eventRecords, nil
+}
+
 func FetchOnce[T any](ctx context.Context, client http.Client, url *url.URL, closeCh chan struct{}) (*T, error) {
 	request := &Request{client: client, url: url, start: time.Now()}
 	return Fetch[T](ctx, request)
@@ -538,6 +592,15 @@ func visibleAtHeightURL(urlString string, fromID uint64, heimdallHeight int64, t
 	params.Set("to_time", t.Format(time.RFC3339Nano))
 	params.Set("pagination.limit", fmt.Sprintf("%d", stateFetchLimit))
 	return makeURL(urlString, fetchStateSyncsAtHeightPath, params.Encode())
+}
+
+func stateSyncsByTimeURL(urlString string, fromID uint64, toTime int64) (*url.URL, error) {
+	t := time.Unix(toTime, 0).UTC()
+	params := url.Values{}
+	params.Set("from_id", fmt.Sprintf("%d", fromID))
+	params.Set("to_time", t.Format(time.RFC3339Nano))
+	params.Set("pagination.limit", fmt.Sprintf("%d", stateFetchLimit))
+	return makeURL(urlString, fetchStateSyncsByTimePath, params.Encode())
 }
 
 func makeURL(urlString, rawPath, rawQuery string) (*url.URL, error) {

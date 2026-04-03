@@ -30,6 +30,7 @@ const (
 type Endpoint interface {
 	StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
 	StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
+	StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error)
 	GetSpan(ctx context.Context, spanID uint64) (*types.Span, error)
 	GetLatestSpan(ctx context.Context) (*types.Span, error)
 	FetchCheckpoint(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
@@ -114,6 +115,12 @@ func (f *MultiHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64
 func (f *MultiHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
 		return c.StateSyncEventsAtHeight(ctx, fromID, toTime, heimdallHeight)
+	})
+}
+
+func (f *MultiHeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
+		return c.StateSyncEventsByTime(ctx, fromID, toTime)
 	})
 }
 

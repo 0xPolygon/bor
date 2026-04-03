@@ -187,6 +187,21 @@ func (mr *MockIHeimdallClientMockRecorder) StateSyncEventsAtHeight(ctx, fromID, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateSyncEventsAtHeight", reflect.TypeOf((*MockIHeimdallClient)(nil).StateSyncEventsAtHeight), ctx, fromID, toTime, heimdallHeight)
 }
 
+// StateSyncEventsByTime mocks base method.
+func (m *MockIHeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "StateSyncEventsByTime", ctx, fromID, toTime)
+	ret0, _ := ret[0].([]*clerk.EventRecordWithTime)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// StateSyncEventsByTime indicates an expected call of StateSyncEventsByTime.
+func (mr *MockIHeimdallClientMockRecorder) StateSyncEventsByTime(ctx, fromID, toTime interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StateSyncEventsByTime", reflect.TypeOf((*MockIHeimdallClient)(nil).StateSyncEventsByTime), ctx, fromID, toTime)
+}
+
 // StateSyncEvents mocks base method.
 func (m *MockIHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
 	m.ctrl.T.Helper()
