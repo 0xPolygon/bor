@@ -836,6 +836,7 @@ func (w *worker) mainLoop() {
 			// blocks (non-validator), skip commitWork entirely — its only purpose in
 			// that case is to maintain the pending block snapshot for RPC.
 			if w.config.DisablePendingBlock && !w.IsRunning() {
+				w.pendingWorkBlock.Store(0)
 				continue
 			}
 

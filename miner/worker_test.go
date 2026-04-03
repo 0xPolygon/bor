@@ -2974,6 +2974,8 @@ func TestDisablePendingBlock(t *testing.T) {
 	t.Parallel()
 
 	t.Run("pending block is nil when flag is enabled", func(t *testing.T) {
+		t.Parallel()
+
 		config := DefaultTestConfig()
 		config.DisablePendingBlock = true
 
@@ -2982,15 +2984,16 @@ func TestDisablePendingBlock(t *testing.T) {
 
 		// Trigger the pending block build (non-validator path: worker is not started/running).
 		w.startCh <- struct{}{}
-		time.Sleep(500 * time.Millisecond)
 
-		block, receipts, stateDB := w.pending()
-		require.Nil(t, block, "pending block should be nil when DisablePendingBlock is true")
-		require.Nil(t, receipts, "pending receipts should be nil when DisablePendingBlock is true")
-		require.Nil(t, stateDB, "pending state should be nil when DisablePendingBlock is true")
+		require.Never(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil || receipts != nil || stateDB != nil
+		}, 500*time.Millisecond, 100*time.Millisecond, "pending block, receipts and state should be nil when DisablePendingBlock is true")
 	})
 
 	t.Run("pending block is created when flag is disabled", func(t *testing.T) {
+		t.Parallel()
+
 		config := DefaultTestConfig()
 		config.DisablePendingBlock = false
 
@@ -2999,11 +3002,10 @@ func TestDisablePendingBlock(t *testing.T) {
 
 		// Trigger the pending block build (non-validator path: worker is not started/running).
 		w.startCh <- struct{}{}
-		time.Sleep(500 * time.Millisecond)
 
-		block, receipts, stateDB := w.pending()
-		require.NotNil(t, block, "pending block should not be nil when DisablePendingBlock is false")
-		require.NotNil(t, receipts, "pending receipts should not be nil when DisablePendingBlock is false")
-		require.NotNil(t, stateDB, "pending state should not be nil when DisablePendingBlock is false")
+		require.Eventually(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil && receipts != nil && stateDB != nil
+		}, 2*time.Second, 100*time.Millisecond, "pending block, receipts and state should not be nil when DisablePendingBlock is false")
 	})
 }
