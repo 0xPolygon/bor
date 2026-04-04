@@ -113,12 +113,23 @@ func (f *MultiHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64
 }
 
 func (f *MultiHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
+	// Set a 1-minute global timeout for the paginated fetch BEFORE callWithFailover
+	// applies its per-attempt 30s cap. This way each attempt gets min(1min, 30s) = 30s,
+	// and multiple failover attempts share the 1-minute budget.
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer cancel()
+
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
 		return c.StateSyncEventsAtHeight(ctx, fromID, toTime, heimdallHeight)
 	})
 }
 
 func (f *MultiHeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	// Set a 1-minute global timeout for the paginated fetch BEFORE callWithFailover
+	// applies its per-attempt 30s cap.
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer cancel()
+
 	return callWithFailover(f, ctx, func(ctx context.Context, c Endpoint) ([]*clerk.EventRecordWithTime, error) {
 		return c.StateSyncEventsByTime(ctx, fromID, toTime)
 	})

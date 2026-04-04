@@ -1692,3 +1692,51 @@ func TestMultiFailover_StateSyncEventsByTime_ThreeClients_CascadeToTertiary(t *t
 	assert.GreaterOrEqual(t, secondary.hits.Load(), int32(1), "secondary should have been tried")
 	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "tertiary should have been called")
 }
+
+func TestMultiFailover_StateSyncEventsByTime_CapsAttemptTimeoutWithGlobalPaginationDeadline(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsByTimeFn: func(ctx context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok, "paginated call should have a deadline")
+
+			remaining := time.Until(deadline)
+			assert.LessOrEqual(t, remaining, time.Minute+2*time.Second, "global pagination deadline should cap per-attempt timeout")
+			assert.Greater(t, remaining, 55*time.Second, "global pagination deadline should be close to 1 minute")
+
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
+
+	fc, err := NewMultiHeimdallClient(primary)
+	require.NoError(t, err)
+	defer fc.Close()
+
+	fc.attemptTimeout = 2 * time.Minute
+
+	_, err = fc.StateSyncEventsByTime(context.Background(), 1, 9999)
+	require.NoError(t, err)
+}
+
+func TestMultiFailover_StateSyncEventsAtHeight_CapsAttemptTimeoutWithGlobalPaginationDeadline(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(ctx context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok, "paginated call should have a deadline")
+
+			remaining := time.Until(deadline)
+			assert.LessOrEqual(t, remaining, time.Minute+2*time.Second, "global pagination deadline should cap per-attempt timeout")
+			assert.Greater(t, remaining, 55*time.Second, "global pagination deadline should be close to 1 minute")
+
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
+
+	fc, err := NewMultiHeimdallClient(primary)
+	require.NoError(t, err)
+	defer fc.Close()
+
+	fc.attemptTimeout = 2 * time.Minute
+
+	_, err = fc.StateSyncEventsAtHeight(context.Background(), 1, 9999, 123)
+	require.NoError(t, err)
+}
