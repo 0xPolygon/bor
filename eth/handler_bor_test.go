@@ -71,6 +71,9 @@ func (m *mockHeimdall) GetBlockHeightByTime(context.Context, int64) (int64, erro
 func (m *mockHeimdall) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
+func (m *mockHeimdall) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 func TestFetchWhitelistCheckpointAndMilestone(t *testing.T) {
 	t.Parallel()

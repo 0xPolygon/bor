@@ -144,6 +144,11 @@ func (m *mockHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID
 	return []*clerk.EventRecordWithTime{}, nil
 }
 
+func (m *mockHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	m.hits.Add(1)
+	return []*clerk.EventRecordWithTime{}, nil
+}
+
 // testConnErr is a reusable connection-refused error for tests.
 var testConnErr = &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
@@ -276,12 +281,18 @@ func TestFailover_NoSwitchOnContextCanceled(t *testing.T) {
 }
 
 func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
+	var secondaryCalled atomic.Bool
 	primary := &mockHeimdallClient{
 		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
 			return nil, ErrServiceUnavailable
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) {
+			secondaryCalled.Store(true)
+			return &types.Span{Id: 1}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -295,7 +306,7 @@ func TestFailover_NoSwitchOnServiceUnavailable(t *testing.T) {
 	_, err = fc.GetSpan(context.Background(), 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+	assert.False(t, secondaryCalled.Load(), "should not failover on 503")
 }
 
 func TestFailover_NoSwitchOnShutdownDetected(t *testing.T) {
@@ -1467,12 +1478,18 @@ func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnSuccess(t *testing.T) {
 }
 
 func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnServiceUnavailable(t *testing.T) {
+	var secondaryCalled atomic.Bool
 	primary := &mockHeimdallClient{
 		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
 			return 0, ErrServiceUnavailable
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			secondaryCalled.Store(true)
+			return 500, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -1486,16 +1503,22 @@ func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnServiceUnavailable(t *test
 	_, err = fc.GetBlockHeightByTime(context.Background(), 1234567890)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+	assert.False(t, secondaryCalled.Load(), "should not failover on 503")
 }
 
 func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnShutdownDetected(t *testing.T) {
+	var secondaryCalled atomic.Bool
 	primary := &mockHeimdallClient{
 		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
 			return 0, ErrShutdownDetected
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		getBlockHeightByTimeFn: func(_ context.Context, _ int64) (int64, error) {
+			secondaryCalled.Store(true)
+			return 500, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -1509,7 +1532,7 @@ func TestMultiFailover_GetBlockHeightByTime_NoSwitchOnShutdownDetected(t *testin
 	_, err = fc.GetBlockHeightByTime(context.Background(), 1234567890)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+	assert.False(t, secondaryCalled.Load(), "should not failover on shutdown")
 }
 
 func TestMultiFailover_GetBlockHeightByTime_ThreeClients_CascadeToTertiary(t *testing.T) {

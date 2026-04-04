@@ -55,6 +55,9 @@ func (m *mockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64
 func (m *mockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
+func (m *mockHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+	return nil, nil
+}
 
 // newTestBorChainConfig creates a minimal Bor chain config for testing
 func newTestBorChainConfig() *params.ChainConfig {
