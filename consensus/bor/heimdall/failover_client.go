@@ -189,9 +189,19 @@ func callWithFailover[T any](f *MultiHeimdallClient, ctx context.Context, fn fun
 
 	active := f.registry.Active()
 
-	subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
+	// Only apply attemptTimeout if the caller hasn't set a tighter deadline.
+	// Paginated methods (e.g. StateSyncEventsByTime) set their own global
+	// timeout before reaching here; capping them with a shorter attemptTimeout
+	// would silently truncate the pagination.
+	subCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		subCtx, cancel = context.WithTimeout(ctx, f.attemptTimeout)
+		defer cancel()
+	}
+
 	result, err := fn(subCtx, f.clients[active])
-	cancel()
+
 
 	if err == nil {
 		return result, nil
@@ -247,9 +257,15 @@ func cascadeClients[T any](f *MultiHeimdallClient, ctx context.Context, fn func(
 
 	for _, candidates := range passes {
 		for _, i := range candidates {
-			subCtx, cancel := context.WithTimeout(ctx, f.attemptTimeout)
+			subCtx := ctx
+			if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+				var cancel context.CancelFunc
+				subCtx, cancel = context.WithTimeout(ctx, f.attemptTimeout)
+				defer cancel()
+			}
+
 			result, err := fn(subCtx, f.clients[i])
-			cancel()
+
 
 			if err == nil {
 				f.registry.SetActive(i)

@@ -1765,9 +1765,14 @@ func (c *Bor) CommitStates(
 
 		eventRecords, err = c.HeimdallClient.StateSyncEventsByTime(c.ctx, from, to.Unix())
 		if err != nil {
-			// Match pre-fork resilience: log and return empty on transient errors.
-			// Determinism is preserved because all validators independently skip
-			// the same sprint, and events will be picked up in the next sprint.
+			// Liveness-over-safety tradeoff (matches pre-fork behavior):
+			// FetchWithRetry already retries aggressively and MultiHeimdallClient
+			// provides failover, so errors reaching here are persistent. Returning
+			// empty lets the proposer build a block with 0 state syncs. If other
+			// validators succeed, they will derive a different state root and reject
+			// this block — the proposer misses a slot but no silent divergence
+			// occurs. Skipped events are retried at the next sprint since `from`
+			// is derived from the on-chain LastStateId.
 			log.Error("Error fetching deterministic state sync events", "fromID", from, "to", to.Unix(), "err", err)
 
 			return make([]*types.StateSyncData, 0), nil

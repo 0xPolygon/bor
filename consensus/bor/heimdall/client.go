@@ -361,6 +361,11 @@ type StateSyncsByTimeResponse = clerkTypes.StateSyncsByTimeResponse
 // StateSyncEventsByTime fetches state sync events using the combined endpoint that
 // resolves the Heimdall height from the cutoff time internally.
 func (h *HeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
+	// Global timeout bounding the entire paginated fetch, matching the gRPC
+	// implementation's stateSyncTotalTimeout (1 minute).
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+	defer cancel()
+
 	ctx = WithRequestType(ctx, StateSyncByTimeRequest)
 
 	eventRecords := make([]*clerk.EventRecordWithTime, 0)
