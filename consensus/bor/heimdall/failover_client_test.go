@@ -1328,12 +1328,19 @@ func TestMultiFailover_StateSyncEventsAtHeight_SwitchOnPrimaryDown(t *testing.T)
 }
 
 func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnSuccess(t *testing.T) {
+	var secondaryCalled atomic.Bool
+
 	primary := &mockHeimdallClient{
 		stateSyncEventsAtHeightFn: func(_ context.Context, fromID uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 			return []*clerk.EventRecordWithTime{{EventRecord: clerk.EventRecord{ID: fromID}}}, nil
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			secondaryCalled.Store(true)
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -1348,22 +1355,27 @@ func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnSuccess(t *testing.T) {
 	fc.ensureHealthRegistry()
 	time.Sleep(50 * time.Millisecond)
 
-	secondaryBefore := secondary.hits.Load()
-
 	events, err := fc.StateSyncEventsAtHeight(context.Background(), 7, 50, 100)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, uint64(7), events[0].ID)
-	assert.Equal(t, secondaryBefore, secondary.hits.Load(), "secondary should not be contacted when primary succeeds")
+	assert.False(t, secondaryCalled.Load(), "secondary stateSyncEventsAtHeight should not be called when primary succeeds")
 }
 
 func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnServiceUnavailable(t *testing.T) {
+	var secondaryCalled atomic.Bool
+
 	primary := &mockHeimdallClient{
 		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 			return nil, ErrServiceUnavailable
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			secondaryCalled.Store(true)
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -1377,16 +1389,23 @@ func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnServiceUnavailable(t *t
 	_, err = fc.StateSyncEventsAtHeight(context.Background(), 1, 50, 100)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrServiceUnavailable))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on 503")
+	assert.False(t, secondaryCalled.Load(), "should not failover on 503")
 }
 
 func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnShutdownDetected(t *testing.T) {
+	var secondaryCalled atomic.Bool
+
 	primary := &mockHeimdallClient{
 		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 			return nil, ErrShutdownDetected
 		},
 	}
-	secondary := &mockHeimdallClient{}
+	secondary := &mockHeimdallClient{
+		stateSyncEventsAtHeightFn: func(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			secondaryCalled.Store(true)
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
 
 	fc, err := NewMultiHeimdallClient(primary, secondary)
 	require.NoError(t, err)
@@ -1400,7 +1419,7 @@ func TestMultiFailover_StateSyncEventsAtHeight_NoSwitchOnShutdownDetected(t *tes
 	_, err = fc.StateSyncEventsAtHeight(context.Background(), 1, 50, 100)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrShutdownDetected))
-	assert.Equal(t, int32(0), secondary.hits.Load(), "should not failover on shutdown")
+	assert.False(t, secondaryCalled.Load(), "should not failover on shutdown")
 }
 
 func TestMultiFailover_StateSyncEventsAtHeight_ThreeClients_CascadeToTertiary(t *testing.T) {
