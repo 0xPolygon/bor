@@ -5282,20 +5282,20 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 // It returns configurable results and tracks call counts for assertions.
 type trackingHeimdallClient struct {
 	// Call counters
-	stateSyncEventsCalled        int
-	getBlockHeightByTimeCalled   int
+	stateSyncEventsCalled         int
+	getBlockHeightByTimeCalled    int
 	stateSyncEventsAtHeightCalled int
-	stateSyncEventsByTimeCalled  int
+	stateSyncEventsByTimeCalled   int
 
 	// Configurable return values
-	blockHeight          int64
-	blockHeightErr       error
-	events               []*clerk.EventRecordWithTime
-	eventsErr            error
-	eventsAtHeight       []*clerk.EventRecordWithTime
-	eventsAtHeightErr    error
-	eventsByTime         []*clerk.EventRecordWithTime
-	eventsByTimeErr      error
+	blockHeight       int64
+	blockHeightErr    error
+	events            []*clerk.EventRecordWithTime
+	eventsErr         error
+	eventsAtHeight    []*clerk.EventRecordWithTime
+	eventsAtHeightErr error
+	eventsByTime      []*clerk.EventRecordWithTime
+	eventsByTimeErr   error
 }
 
 func (t *trackingHeimdallClient) Close() {}
