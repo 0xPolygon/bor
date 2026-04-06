@@ -1416,7 +1416,7 @@ func TestMultiFailover_StateSyncEventsByTime_ThreeClients_CascadeToTertiary(t *t
 	assert.GreaterOrEqual(t, tertiary.hits.Load(), int32(1), "tertiary should have been called")
 }
 
-func TestMultiFailover_StateSyncEventsByTime_CapsAttemptTimeoutWithGlobalPaginationDeadline(t *testing.T) {
+func TestMultiFailover_StateSyncEventsByTime_UsesGlobalPaginationDeadlineWhenAttemptTimeoutExceedsIt(t *testing.T) {
 	primary := &mockHeimdallClient{
 		stateSyncEventsByTimeFn: func(ctx context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 			deadline, ok := ctx.Deadline()
@@ -1435,6 +1435,28 @@ func TestMultiFailover_StateSyncEventsByTime_CapsAttemptTimeoutWithGlobalPaginat
 	defer fc.Close()
 
 	fc.attemptTimeout = 2 * time.Minute
+
+	_, err = fc.StateSyncEventsByTime(context.Background(), 1, 9999)
+	require.NoError(t, err)
+}
+
+func TestMultiFailover_StateSyncEventsByTime_UsesDefaultPerAttemptTimeoutWhenSmallerThanGlobalDeadline(t *testing.T) {
+	primary := &mockHeimdallClient{
+		stateSyncEventsByTimeFn: func(ctx context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok, "paginated call should have a deadline")
+
+			remaining := time.Until(deadline)
+			assert.LessOrEqual(t, remaining, defaultAttemptTimeout+2*time.Second, "default per-attempt timeout should bound the call")
+			assert.Greater(t, remaining, 25*time.Second, "default per-attempt timeout should be close to 30 seconds")
+
+			return []*clerk.EventRecordWithTime{}, nil
+		},
+	}
+
+	fc, err := NewMultiHeimdallClient(primary)
+	require.NoError(t, err)
+	defer fc.Close()
 
 	_, err = fc.StateSyncEventsByTime(context.Background(), 1, 9999)
 	require.NoError(t, err)
