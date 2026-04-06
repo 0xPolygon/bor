@@ -5282,30 +5282,20 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 // It returns configurable results and tracks call counts for assertions.
 type trackingHeimdallClient struct {
 	// Call counters
-	stateSyncEventsCalled         int
-	getBlockHeightByTimeCalled    int
-	stateSyncEventsAtHeightCalled int
-	stateSyncEventsByTimeCalled   int
+	stateSyncEventsCalled       int
+	stateSyncEventsByTimeCalled int
 
 	// Configurable return values
-	blockHeight       int64
-	blockHeightErr    error
-	events            []*clerk.EventRecordWithTime
-	eventsErr         error
-	eventsAtHeight    []*clerk.EventRecordWithTime
-	eventsAtHeightErr error
-	eventsByTime      []*clerk.EventRecordWithTime
-	eventsByTimeErr   error
+	events          []*clerk.EventRecordWithTime
+	eventsErr       error
+	eventsByTime    []*clerk.EventRecordWithTime
+	eventsByTimeErr error
 }
 
 func (t *trackingHeimdallClient) Close() {}
 func (t *trackingHeimdallClient) StateSyncEvents(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	t.stateSyncEventsCalled++
 	return t.events, t.eventsErr
-}
-func (t *trackingHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	t.stateSyncEventsAtHeightCalled++
-	return t.eventsAtHeight, t.eventsAtHeightErr
 }
 func (t *trackingHeimdallClient) GetSpan(context.Context, uint64) (*borTypes.Span, error) {
 	return nil, nil
@@ -5327,10 +5317,6 @@ func (t *trackingHeimdallClient) FetchMilestoneCount(context.Context) (int64, er
 }
 func (t *trackingHeimdallClient) FetchStatus(context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
-}
-func (t *trackingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	t.getBlockHeightByTimeCalled++
-	return t.blockHeight, t.blockHeightErr
 }
 func (t *trackingHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	t.stateSyncEventsByTimeCalled++
@@ -5377,8 +5363,6 @@ func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
 	_, err := b.CommitStates(stateDb, h, statefull.ChainContext{Chain: chain.HeaderChain(), Bor: b})
 	require.NoError(t, err)
 	require.Equal(t, 1, tracker.stateSyncEventsCalled, "pre-fork should call StateSyncEvents")
-	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled, "pre-fork should not call GetBlockHeightByTime")
-	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled, "pre-fork should not call StateSyncEventsAtHeight")
 	require.Equal(t, 0, tracker.stateSyncEventsByTimeCalled, "pre-fork should not call StateSyncEventsByTime")
 
 	// Post-fork: block 112 should use StateSyncEventsByTime (deterministic state sync)
@@ -5394,8 +5378,6 @@ func TestCommitStates_DeterministicForkSwitch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, tracker2.stateSyncEventsCalled, "post-fork should not call StateSyncEvents")
 	require.Equal(t, 1, tracker2.stateSyncEventsByTimeCalled, "post-fork should call StateSyncEventsByTime")
-	require.Equal(t, 0, tracker2.getBlockHeightByTimeCalled, "post-fork should not call GetBlockHeightByTime")
-	require.Equal(t, 0, tracker2.stateSyncEventsAtHeightCalled, "post-fork should not call StateSyncEventsAtHeight")
 }
 
 func TestCommitStates_ResilientPostFork(t *testing.T) {
@@ -5435,11 +5417,6 @@ func TestCommitStates_ResilientPostFork(t *testing.T) {
 	// Must not fallback to StateSyncEvents
 	require.Equal(t, 0, tracker.stateSyncEventsCalled,
 		"post-fork should NOT fall back to StateSyncEvents on error")
-	// Old two-call pattern should not be used
-	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled,
-		"GetBlockHeightByTime should NOT be called")
-	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled,
-		"StateSyncEventsAtHeight should NOT be called")
 }
 
 func TestCommitStates_ResilientPostFork_ReturnsEmptyOnError(t *testing.T) {
@@ -5478,9 +5455,4 @@ func TestCommitStates_ResilientPostFork_ReturnsEmptyOnError(t *testing.T) {
 	// Old path should not have been called as fallback
 	require.Equal(t, 0, tracker.stateSyncEventsCalled,
 		"post-fork should not fall back to StateSyncEvents")
-	// Old two-call pattern should not be used
-	require.Equal(t, 0, tracker.getBlockHeightByTimeCalled,
-		"GetBlockHeightByTime should NOT be called")
-	require.Equal(t, 0, tracker.stateSyncEventsAtHeightCalled,
-		"StateSyncEventsAtHeight should NOT be called")
 }

@@ -11,7 +11,6 @@ import (
 	"path"
 	"reflect"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
@@ -96,11 +95,6 @@ const (
 	fetchLatestSpan = "bor/spans/latest"
 
 	fetchStatus = "/status"
-
-	fetchBlockHeightByTimePath   = "clerk/block-height-by-time"
-	fetchBlockHeightByTimeFormat = "cutoff_time=%d"
-
-	fetchStateSyncsAtHeightPath = "clerk/state-syncs-at-height"
 
 	fetchStateSyncsByTimePath = "clerk/state-syncs-by-time"
 )
@@ -271,93 +265,6 @@ func (h *HeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, err
 	}
 
 	return response, nil
-}
-
-// BlockHeightByTimeResponse is the response from the Heimdall clerk/block-height-by-time endpoint.
-// Note: Cosmos SDK REST gateway serializes int64 fields as JSON strings.
-type BlockHeightByTimeResponse struct {
-	Height string `json:"height"`
-}
-
-// GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff unix timestamp.
-func (h *HeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
-	heightByTimeURL, err := blockHeightByTimeURL(h.urlString, cutoffTime)
-	if err != nil {
-		return 0, err
-	}
-
-	ctx = WithRequestType(ctx, BlockHeightByTimeRequest)
-
-	response, err := FetchWithRetry[BlockHeightByTimeResponse](ctx, h.client, heightByTimeURL, h.closeCh)
-	if err != nil {
-		return 0, err
-	}
-
-	height, err := strconv.ParseInt(response.Height, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse height %q: %w", response.Height, err)
-	}
-
-	return height, nil
-}
-
-// RecordListVisibleAtHeightResponse uses the proto-generated response type from heimdall-v2.
-// This handles Cosmos SDK's string-encoded integers correctly via gogoproto JSON unmarshaling.
-// Type alias added for readability.
-type RecordListVisibleAtHeightResponse = clerkTypes.RecordListVisibleAtHeightResponse
-
-// StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height,
-// using the new query endpoint that queries the latest state with immutable visibility_height indexes.
-func (h *HeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
-	// Global timeout bounding the entire paginated fetch, matching the gRPC
-	// implementation's stateSyncTotalTimeout (1 minute).
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
-	defer cancel()
-
-	ctx = WithRequestType(ctx, StateSyncAtHeightRequest)
-
-	eventRecords := make([]*clerk.EventRecordWithTime, 0)
-
-	for {
-		u, err := visibleAtHeightURL(h.urlString, fromID, heimdallHeight, toTime)
-		if err != nil {
-			return nil, err
-		}
-
-		log.Debug("Fetching state sync events at height", "queryParams", u.RawQuery)
-
-		response, err := FetchWithRetry[RecordListVisibleAtHeightResponse](ctx, h.client, u, h.closeCh)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, e := range response.EventRecords {
-			record := &clerk.EventRecordWithTime{
-				EventRecord: clerk.EventRecord{
-					ID:       e.Id,
-					ChainID:  e.BorChainId,
-					Contract: common.HexToAddress(e.Contract),
-					Data:     e.Data,
-					LogIndex: e.LogIndex,
-					TxHash:   common.HexToHash(e.TxHash),
-				},
-				Time: e.RecordTime,
-			}
-			eventRecords = append(eventRecords, record)
-		}
-
-		if len(response.EventRecords) < stateFetchLimit {
-			break
-		}
-
-		fromID += uint64(stateFetchLimit)
-	}
-
-	sort.SliceStable(eventRecords, func(i, j int) bool {
-		return eventRecords[i].ID < eventRecords[j].ID
-	})
-
-	return eventRecords, nil
 }
 
 // StateSyncsByTimeResponse uses the proto-generated response type from heimdall-v2.
@@ -587,21 +494,6 @@ func milestoneCountURL(urlString string) (*url.URL, error) {
 
 func statusURL(urlString string) (*url.URL, error) {
 	return makeURL(urlString, fetchStatus, "")
-}
-
-func blockHeightByTimeURL(urlString string, cutoffTime int64) (*url.URL, error) {
-	queryParams := fmt.Sprintf(fetchBlockHeightByTimeFormat, cutoffTime)
-	return makeURL(urlString, fetchBlockHeightByTimePath, queryParams)
-}
-
-func visibleAtHeightURL(urlString string, fromID uint64, heimdallHeight int64, toTime int64) (*url.URL, error) {
-	t := time.Unix(toTime, 0).UTC()
-	params := url.Values{}
-	params.Set("from_id", fmt.Sprintf("%d", fromID))
-	params.Set("heimdall_height", fmt.Sprintf("%d", heimdallHeight))
-	params.Set("to_time", t.Format(time.RFC3339Nano))
-	params.Set("pagination.limit", fmt.Sprintf("%d", stateFetchLimit))
-	return makeURL(urlString, fetchStateSyncsAtHeightPath, params.Encode())
 }
 
 func stateSyncsByTimeURL(urlString string, fromID uint64, toTime int64) (*url.URL, error) {

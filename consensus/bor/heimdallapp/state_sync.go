@@ -38,47 +38,6 @@ func (h *HeimdallAppClient) StateSyncEvents(ctx context.Context, fromID uint64, 
 	return totalRecords, nil
 }
 
-// StateSyncEventsAtHeight fetches state sync events visible at a specific Heimdall height.
-// Uses the clerk query server to apply the same visibility_height filtering as gRPC/HTTP paths.
-func (h *HeimdallAppClient) StateSyncEventsAtHeight(_ context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
-	totalRecords := make([]*clerk.EventRecordWithTime, 0)
-
-	queryServer := keeper.NewQueryServer(&h.hApp.ClerkKeeper)
-
-	for {
-		req := &types.RecordListVisibleAtHeightRequest{
-			FromId:         fromID,
-			HeimdallHeight: heimdallHeight,
-			ToTime:         time.Unix(toTime, 0),
-			Pagination:     query.PageRequest{Limit: stateFetchLimit},
-		}
-
-		res, err := queryServer.GetRecordListVisibleAtHeight(h.NewContext(), req)
-		if err != nil {
-			return nil, err
-		}
-
-		totalRecords = append(totalRecords, toEvents(res.EventRecords)...)
-
-		if len(res.EventRecords) < stateFetchLimit {
-			break
-		}
-
-		fromID += uint64(stateFetchLimit)
-	}
-
-	sort.SliceStable(totalRecords, func(i, j int) bool {
-		return totalRecords[i].ID < totalRecords[j].ID
-	})
-
-	return totalRecords, nil
-}
-
-// GetBlockHeightByTime returns the Heimdall block height at or before the given cutoff unix timestamp.
-func (h *HeimdallAppClient) GetBlockHeightByTime(_ context.Context, cutoffTime int64) (int64, error) {
-	return h.hApp.ClerkKeeper.GetBlockHeightByTime(h.NewContext(), cutoffTime)
-}
-
 // StateSyncEventsByTime fetches state sync events using the combined endpoint that
 // resolves the Heimdall height from the cutoff time internally.
 func (h *HeimdallAppClient) StateSyncEventsByTime(_ context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {
