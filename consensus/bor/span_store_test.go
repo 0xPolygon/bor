@@ -84,13 +84,6 @@ func (h *MockHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, er
 func (h *MockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
-
-func (h *MockHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	return 0, nil
-}
-func (h *MockHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
-}
 func (h *MockHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
@@ -406,13 +399,6 @@ func (h *MockOverlappingHeimdallClient) Close() {
 
 func (h *MockOverlappingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
-}
-
-func (h *MockOverlappingHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	return 0, nil
-}
-func (h *MockOverlappingHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
 }
 func (h *MockOverlappingHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
@@ -978,12 +964,6 @@ func (d *dynamicHeimdallClient) Close() {}
 func (d *dynamicHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
 }
-func (d *dynamicHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	return 0, nil
-}
-func (d *dynamicHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
-}
 func (d *dynamicHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
@@ -1104,12 +1084,6 @@ func (m *MockSyncStatusClient) FetchMilestoneID(ctx context.Context, milestoneID
 	panic("not implemented")
 }
 func (m *MockSyncStatusClient) Close() {}
-func (m *MockSyncStatusClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	return 0, nil
-}
-func (m *MockSyncStatusClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
-}
 func (m *MockSyncStatusClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }
@@ -1497,12 +1471,6 @@ func (h *TimeoutHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64,
 	panic("not implemented")
 }
 func (h *TimeoutHeimdallClient) Close() {}
-func (h *TimeoutHeimdallClient) GetBlockHeightByTime(context.Context, int64) (int64, error) {
-	return 0, nil
-}
-func (h *TimeoutHeimdallClient) StateSyncEventsAtHeight(context.Context, uint64, int64, int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
-}
 func (h *TimeoutHeimdallClient) StateSyncEventsByTime(context.Context, uint64, int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, nil
 }

@@ -24,19 +24,17 @@ import (
 
 // mockHeimdallClient is a configurable mock implementing the Endpoint interface.
 type mockHeimdallClient struct {
-	getSpanFn                 func(ctx context.Context, spanID uint64) (*types.Span, error)
-	getLatestSpanFn           func(ctx context.Context) (*types.Span, error)
-	stateSyncEventsFn         func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
-	fetchCheckpointFn         func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
-	fetchCheckpointCntFn      func(ctx context.Context) (int64, error)
-	fetchMilestoneFn          func(ctx context.Context) (*milestone.Milestone, error)
-	fetchMilestoneCntFn       func(ctx context.Context) (int64, error)
-	fetchStatusFn             func(ctx context.Context) (*ctypes.SyncInfo, error)
-	stateSyncEventsAtHeightFn func(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error)
-	stateSyncEventsByTimeFn   func(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error)
-	getBlockHeightByTimeFn    func(ctx context.Context, cutoffTime int64) (int64, error)
-	closeFn                   func()
-	hits                      atomic.Int32
+	getSpanFn               func(ctx context.Context, spanID uint64) (*types.Span, error)
+	getLatestSpanFn         func(ctx context.Context) (*types.Span, error)
+	stateSyncEventsFn       func(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error)
+	fetchCheckpointFn       func(ctx context.Context, number int64) (*checkpoint.Checkpoint, error)
+	fetchCheckpointCntFn    func(ctx context.Context) (int64, error)
+	fetchMilestoneFn        func(ctx context.Context) (*milestone.Milestone, error)
+	fetchMilestoneCntFn     func(ctx context.Context) (int64, error)
+	fetchStatusFn           func(ctx context.Context) (*ctypes.SyncInfo, error)
+	stateSyncEventsByTimeFn func(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error)
+	closeFn                 func()
+	hits                    atomic.Int32
 }
 
 func (m *mockHeimdallClient) StateSyncEvents(ctx context.Context, fromID uint64, to int64) ([]*clerk.EventRecordWithTime, error) {
@@ -123,26 +121,6 @@ func (m *mockHeimdallClient) Close() {
 	if m.closeFn != nil {
 		m.closeFn()
 	}
-}
-
-func (m *mockHeimdallClient) GetBlockHeightByTime(ctx context.Context, cutoffTime int64) (int64, error) {
-	m.hits.Add(1)
-
-	if m.getBlockHeightByTimeFn != nil {
-		return m.getBlockHeightByTimeFn(ctx, cutoffTime)
-	}
-
-	return 100, nil
-}
-
-func (m *mockHeimdallClient) StateSyncEventsAtHeight(ctx context.Context, fromID uint64, toTime int64, heimdallHeight int64) ([]*clerk.EventRecordWithTime, error) {
-	m.hits.Add(1)
-
-	if m.stateSyncEventsAtHeightFn != nil {
-		return m.stateSyncEventsAtHeightFn(ctx, fromID, toTime, heimdallHeight)
-	}
-
-	return []*clerk.EventRecordWithTime{}, nil
 }
 
 func (m *mockHeimdallClient) StateSyncEventsByTime(ctx context.Context, fromID uint64, toTime int64) ([]*clerk.EventRecordWithTime, error) {

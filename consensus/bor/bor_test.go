@@ -119,12 +119,6 @@ func (f *failingHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64,
 func (f *failingHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return nil, errors.New("fetch status failed")
 }
-func (f *failingHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64) (int64, error) {
-	return 0, errors.New("get block height by time failed")
-}
-func (f *failingHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, errors.New("state sync events at height failed")
-}
 func (f *failingHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 	return nil, errors.New("state sync events by time failed")
 }
@@ -2982,12 +2976,6 @@ func (m *mockHeimdallClient) FetchMilestoneCount(ctx context.Context) (int64, er
 }
 func (m *mockHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
 	return &ctypes.SyncInfo{CatchingUp: false}, nil
-}
-func (m *mockHeimdallClient) GetBlockHeightByTime(_ context.Context, _ int64) (int64, error) {
-	return 0, nil
-}
-func (m *mockHeimdallClient) StateSyncEventsAtHeight(_ context.Context, _ uint64, _ int64, _ int64) ([]*clerk.EventRecordWithTime, error) {
-	return nil, nil
 }
 func (m *mockHeimdallClient) StateSyncEventsByTime(_ context.Context, _ uint64, _ int64) ([]*clerk.EventRecordWithTime, error) {
 	return m.events, nil
