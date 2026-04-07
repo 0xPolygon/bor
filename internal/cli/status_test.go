@@ -25,13 +25,13 @@ func TestStatusCommand(t *testing.T) {
 
 	defer server.CloseMockServer(srv)
 
-	// get the grpc address
-	grpcAddr := srv.GetGrpcAddr()
+	// get the grpc port
+	port := srv.GetGrpcAddr()
 
 	command1 := &StatusCommand{
 		Meta2: &Meta2{
 			UI:   cli.NewMockUi(),
-			addr: grpcAddr,
+			addr: "127.0.0.1:" + port,
 		},
 		wait: true,
 	}

@@ -496,7 +496,7 @@ func (s *Server) GetLatestBlockNumber() *big.Int {
 }
 
 func (s *Server) GetGrpcAddr() string {
-	return s.config.GRPC.Addr
+	return s.config.GRPC.Addr[1:]
 }
 
 // setupHealthService initializes the health service for Bor.
