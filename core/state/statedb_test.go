@@ -806,6 +806,42 @@ func TestMVHashMapReadWriteDelete(t *testing.T) {
 	assert.Equal(t, uint256.NewInt(0), b)
 }
 
+func TestDumpMapsUseCorrectReadWriteSets(t *testing.T) {
+	t.Parallel()
+
+	db := NewDatabaseForTesting()
+	mvhm := blockstm.MakeMVHashMap()
+	s, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	addr := common.HexToAddress("0x01")
+	readKey := common.HexToHash("0x01")
+	writeKey := common.HexToHash("0x02")
+
+	s.GetOrNewStateObject(addr)
+	s.ClearReadMap()
+	s.ClearWriteMap()
+	s.txIndex = 3
+
+	assert.Equal(t, common.Hash{}, s.GetState(addr, readKey))
+	s.SetState(addr, writeKey, common.HexToHash("0xff"))
+
+	readDump := s.GetReadMapDump()
+	writeDump := s.GetWriteMapDump()
+
+	readPath := blockstm.NewStateKey(addr, readKey)
+	writePath := blockstm.NewStateKey(addr, writeKey)
+
+	assert.True(t, slices.ContainsFunc(readDump, func(d DumpStruct) bool {
+		return d.Op == "Read\n" && bytes.Equal(d.Path, readPath[:])
+	}))
+	assert.True(t, slices.ContainsFunc(writeDump, func(d DumpStruct) bool {
+		return d.Op == "Write\n" && bytes.Equal(d.Path, writePath[:])
+	}))
+	assert.False(t, slices.ContainsFunc(writeDump, func(d DumpStruct) bool {
+		return bytes.Equal(d.Path, readPath[:])
+	}))
+}
+
 func TestMVHashMapCreateContract(t *testing.T) {
 	t.Parallel()
 

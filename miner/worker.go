@@ -84,6 +84,9 @@ const (
 	// so there are no competing miners and no uncle block concept. Any non-canonical block
 	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
 	staleThreshold = 0
+
+	// interruptBuffer is the buffer time to give some buffer for state root computation
+	interruptBuffer = 100 * time.Millisecond
 )
 
 var (
@@ -2198,9 +2201,9 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64) func() {
 	delay := time.Until(actualTimestamp)
 
-	// Reduce the timeout by 500ms to give some buffer for state root computation
+	// Reduce the timeout to give some buffer for state root computation
 	if delay > 1*time.Second {
-		delay -= 500 * time.Millisecond
+		delay -= interruptBuffer
 	}
 
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
