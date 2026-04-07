@@ -1411,6 +1411,26 @@ func (b *testBackendWithPreMadhuguriBorReceipt) ChainConfig() *params.ChainConfi
 	return &cfg
 }
 
+type testBackendWithPostMadhugiriBorReceipt struct {
+	*testBackend
+	borReceipt *types.Receipt
+}
+
+func (b *testBackendWithPostMadhugiriBorReceipt) GetBorBlockReceipt(_ context.Context, _ common.Hash) (*types.Receipt, error) {
+	return b.borReceipt, nil
+}
+
+func (b *testBackendWithPostMadhugiriBorReceipt) ChainConfig() *params.ChainConfig {
+	cfg := *params.AllEthashProtocolChanges
+	borCfg := params.BorConfig{}
+	if cfg.Bor != nil {
+		borCfg = *cfg.Bor
+	}
+	borCfg.MadhugiriBlock = big.NewInt(0)
+	cfg.Bor = &borCfg
+	return &cfg
+}
+
 func TestBorGetLogsByHashWithLogs(t *testing.T) {
 	t.Parallel()
 
@@ -1678,6 +1698,88 @@ func TestBorGetLogsByHashPreMadhugiri(t *testing.T) {
 		if len(result) != expectedLen {
 			t.Errorf("GetLogsByHash() returned %d log arrays, want %d (2 regular, no state-sync)", len(result), expectedLen)
 		}
+	})
+}
+
+func TestGetBlockAndReceiptsStateSyncReceipt(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		logAddr = common.HexToAddress("0x0000000000000000000000000000000000001010")
+		genesis = &core.Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+
+	backend := newTestBackend(t, 1, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		if i == 0 {
+			tx, _ := types.SignTx(
+				types.NewTx(&types.LegacyTx{
+					Nonce:    b.TxNonce(accs[0].addr),
+					To:       &accs[0].addr,
+					Value:    big.NewInt(1000),
+					Gas:      params.TxGas,
+					GasPrice: big.NewInt(params.InitialBaseFee),
+				}),
+				types.LatestSigner(genesis.Config), accs[0].key,
+			)
+			b.AddTx(tx)
+		}
+	})
+
+	block := backend.chain.GetBlockByNumber(1)
+	if block == nil {
+		t.Fatal("Could not get block 1")
+	}
+
+	normalReceipts, err := backend.GetReceipts(context.Background(), block.Hash())
+	require.NoError(t, err)
+
+	borReceipt := &types.Receipt{
+		Type:   types.StateSyncTxType,
+		Status: types.ReceiptStatusSuccessful,
+		Logs: []*types.Log{
+			{
+				Address: logAddr,
+				Topics:  []common.Hash{common.HexToHash("0x1234")},
+				Data:    []byte{1, 2, 3, 4},
+			},
+		},
+	}
+
+	t.Run("pre_madhugiri_appends_state_sync_receipt", func(t *testing.T) {
+		api := NewBorAPI(&testBackendWithPreMadhuguriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		})
+
+		gotBlock, receipts, err := api.getBlockAndReceipts(context.Background(), block.NumberU64())
+		require.NoError(t, err)
+		require.NotNil(t, gotBlock)
+		require.Equal(t, block.Hash(), gotBlock.Hash())
+		require.Len(t, receipts, len(normalReceipts)+1)
+
+		last := receipts[len(receipts)-1]
+		require.EqualValues(t, types.StateSyncTxType, last.Type)
+		require.Len(t, last.Logs, 1)
+		require.Equal(t, logAddr, last.Logs[0].Address)
+	})
+
+	t.Run("post_madhugiri_does_not_append_state_sync_receipt", func(t *testing.T) {
+		api := NewBorAPI(&testBackendWithPostMadhugiriBorReceipt{
+			testBackend: backend,
+			borReceipt:  borReceipt,
+		})
+
+		gotBlock, receipts, err := api.getBlockAndReceipts(context.Background(), block.NumberU64())
+		require.NoError(t, err)
+		require.NotNil(t, gotBlock)
+		require.Equal(t, block.Hash(), gotBlock.Hash())
+		require.Len(t, receipts, len(normalReceipts))
 	})
 }
 
