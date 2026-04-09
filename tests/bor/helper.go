@@ -819,3 +819,72 @@ func InitMinerWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateKey,
 	err = stack.Start()
 	return stack, ethBackend, err
 }
+
+// InitImporterWithPipelinedSRC creates a non-mining node with pipelined import
+// SRC enabled. The node will import blocks from peers using the pipelined state
+// root computation path. A validator key is still needed for the keystore (used
+// for P2P identity / account manager) but the node does NOT start mining.
+func InitImporterWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
+	datadir, err := os.MkdirTemp("", "InitImporter-"+uuid.New().String())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	config := &node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    25,
+		},
+		UseLightweightKDF: true,
+	}
+	stack, err := node.New(config)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend, err := eth.New(stack, &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   256,
+		DatabaseHandles: 256,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase: crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:   genesis.GasLimit * 11 / 10,
+			GasPrice:  big.NewInt(1),
+			Recommit:  time.Second,
+		},
+		WithoutHeimdall:          withoutHeimdall,
+		EnablePipelinedImportSRC: true,
+		PipelinedImportSRCLogs:   true,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keydir := stack.KeyStoreDir()
+	n, p := keystore.StandardScryptN, keystore.StandardScryptP
+	kStore := keystore.NewKeyStore(keydir, n, p)
+
+	_, err = kStore.ImportECDSA(privKey, "")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	acc := kStore.Accounts()[0]
+	err = kStore.Unlock(acc, "")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ethBackend.AccountManager().AddBackend(kStore)
+
+	err = stack.Start()
+	return stack, ethBackend, err
+}

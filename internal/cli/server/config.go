@@ -175,6 +175,9 @@ type Config struct {
 
 	// Relay has transaction relay related settings
 	Relay *RelayConfig `hcl:"relay,block" toml:"relay,block"`
+
+	// Pipeline has pipelined SRC settings for block import
+	Pipeline *PipelineConfig `hcl:"pipeline,block" toml:"pipeline,block"`
 }
 
 type HistoryConfig struct {
@@ -813,6 +816,16 @@ type RelayConfig struct {
 	BlockProducerRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
 }
 
+// PipelineConfig has settings for pipelined state root computation during block import.
+type PipelineConfig struct {
+	// EnableImportSRC enables pipelined state root computation during block import:
+	// overlap SRC(N) with tx execution of block N+1
+	EnableImportSRC bool `hcl:"enable-import-src,optional" toml:"enable-import-src,optional"`
+
+	// ImportSRCLogs enables verbose logging for pipelined import SRC
+	ImportSRCLogs bool `hcl:"import-src-logs,optional" toml:"import-src-logs,optional"`
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Chain:                       "mainnet",
@@ -1074,6 +1087,10 @@ func DefaultConfig() *Config {
 			EnablePreconfs:            false,
 			EnablePrivateTx:           false,
 			BlockProducerRpcEndpoints: []string{},
+		},
+		Pipeline: &PipelineConfig{
+			EnableImportSRC: true,
+			ImportSRCLogs:   true,
 		},
 	}
 }
@@ -1558,6 +1575,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TrieDirtyCache = calcPerc(c.Cache.PercGc)
 		n.NoPrefetch = c.Cache.NoPrefetch
 		n.Preimages = c.Cache.Preimages
+		n.EnablePipelinedImportSRC = c.Pipeline.EnableImportSRC
+		n.PipelinedImportSRCLogs = c.Pipeline.ImportSRCLogs
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout

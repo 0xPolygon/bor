@@ -164,13 +164,15 @@ type handler struct {
 	// privateTxGetter to check if a transaction needs to be treated as private or not
 	privateTxGetter relay.PrivateTxGetter
 
-	eventMux      *event.TypeMux
-	txsCh         chan core.NewTxsEvent
-	txsSub        event.Subscription
-	stuckTxsCh    chan core.StuckTxsEvent
-	stuckTxsSub   event.Subscription
-	minedBlockSub *event.TypeMuxSubscription
-	blockRange    *blockRangeState
+	eventMux        *event.TypeMux
+	txsCh           chan core.NewTxsEvent
+	txsSub          event.Subscription
+	stuckTxsCh      chan core.StuckTxsEvent
+	stuckTxsSub     event.Subscription
+	minedBlockSub   *event.TypeMuxSubscription
+	witnessReadyCh  chan core.WitnessReadyEvent
+	witnessReadySub event.Subscription
+	blockRange      *blockRangeState
 
 	requiredBlocks map[uint64]common.Hash
 
@@ -619,6 +621,12 @@ func (h *handler) Start(maxPeers int) {
 	h.minedBlockSub = h.eventMux.Subscribe(core.NewMinedBlockEvent{})
 	go h.minedBroadcastLoop()
 
+	// announce witnesses from pipelined import SRC
+	h.witnessReadyCh = make(chan core.WitnessReadyEvent, 10)
+	h.witnessReadySub = h.chain.SubscribeWitnessReadyEvent(h.witnessReadyCh)
+	h.wg.Add(1)
+	go h.witnessReadyBroadcastLoop()
+
 	h.wg.Add(1)
 	go h.chainSync.loop()
 
@@ -640,6 +648,9 @@ func (h *handler) Stop() {
 		h.stuckTxsSub.Unsubscribe() // quits stuckTxBroadcastLoop
 	}
 	h.minedBlockSub.Unsubscribe()
+	if h.witnessReadySub != nil {
+		h.witnessReadySub.Unsubscribe()
+	}
 	h.blockRange.stop()
 
 	// Quit chainSync and txsync64.
@@ -833,6 +844,24 @@ func (h *handler) minedBroadcastLoop() {
 			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
 			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
 			broadcastLoopTimer.Update(time.Since(loopStart))
+		}
+	}
+}
+
+// witnessReadyBroadcastLoop announces witness availability from the pipelined
+// import SRC goroutine. Without this, the stateless node would have to poll
+// for witnesses with 10-second retry intervals.
+func (h *handler) witnessReadyBroadcastLoop() {
+	defer h.wg.Done()
+
+	for {
+		select {
+		case ev := <-h.witnessReadyCh:
+			for _, peer := range h.peers.peersWithoutWitness(ev.BlockHash) {
+				peer.Peer.AsyncSendNewWitnessHash(ev.BlockHash, ev.BlockNumber)
+			}
+		case <-h.witnessReadySub.Err():
+			return
 		}
 	}
 }

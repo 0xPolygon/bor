@@ -654,6 +654,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Cache.TxLookupLimit,
 		Group:   "Cache",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.enable-import-src",
+		Usage:   "Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution",
+		Value:   &c.cliConfig.Pipeline.EnableImportSRC,
+		Default: c.cliConfig.Pipeline.EnableImportSRC,
+		Group:   "Pipeline",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.import-src-logs",
+		Usage:   "Enable verbose logging for pipelined import SRC",
+		Value:   &c.cliConfig.Pipeline.ImportSRCLogs,
+		Default: c.cliConfig.Pipeline.ImportSRCLogs,
+		Group:   "Pipeline",
+	})
 	f.IntFlag(&flagset.IntFlag{
 		Name:    "fdlimit",
 		Usage:   "Raise the open file descriptor resource limit (default = system fd limit)",

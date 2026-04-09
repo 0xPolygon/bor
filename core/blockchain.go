@@ -145,6 +145,12 @@ var (
 	blockBatchWriteTimer   = metrics.NewRegisteredTimer("chain/batch/write", nil)        // time to flush the block batch to disk (blockBatch.Write) — spikes indicate DB compaction stalls
 	stateCommitTimer       = metrics.NewRegisteredTimer("chain/state/commit", nil)       // time for statedb.CommitWithUpdate — in pathdb mode, spikes indicate diff layer flushes
 
+	// Pipelined import SRC metrics
+	pipelineImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/pipelined/blocks", nil)
+	pipelineImportSRCTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/src", nil)
+	pipelineImportCollectTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/collect", nil)
+	pipelineImportFallbackCounter = metrics.NewRegisteredCounter("chain/imports/pipelined/fallback", nil)
+
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
 	errInvalidOldChain      = errors.New("invalid old chain")
@@ -257,6 +263,21 @@ type BlockChainConfig struct {
 
 	// MilestoneFetcher returns the latest milestone end block from Heimdall.
 	MilestoneFetcher func(ctx context.Context) (uint64, error)
+
+	// EnablePipelinedImportSRC enables pipelined state root computation during
+	// block import: overlap SRC(N) with tx execution of block N+1.
+	EnablePipelinedImportSRC bool
+
+	// PipelinedImportSRCLogs enables verbose logging for the import pipeline.
+	PipelinedImportSRCLogs bool
+}
+
+// PipelineImportOpts configures ProcessBlock for pipelined import mode.
+// When non-nil, ProcessBlock opens state at CommittedParentRoot (with optional
+// FlatDiff overlay) and uses ValidateStateCheap instead of full ValidateState.
+type PipelineImportOpts struct {
+	CommittedParentRoot common.Hash     // Last committed trie root (grandparent when FlatDiff is set)
+	FlatDiff            *state.FlatDiff // Previous block's state overlay (nil for first block in pipeline)
 }
 
 // DefaultConfig returns the default config.
@@ -355,6 +376,24 @@ type pendingSRCState struct {
 	err         error
 }
 
+// pendingImportSRCState stores the state of a block whose SRC goroutine has
+// been spawned. Block metadata is written to DB immediately; the state commit
+// runs in the background. An auto-collection goroutine waits for SRC to finish
+// and immediately writes the witness + handles trie GC, so collection doesn't
+// depend on the arrival of the next block.
+type pendingImportSRCState struct {
+	block         *types.Block
+	flatDiff      *state.FlatDiff
+	committedRoot common.Hash   // last committed trie root when SRC was spawned
+	procTime      time.Duration // for gcproc accumulation
+
+	// collectedCh is closed when auto-collection completes (verify root,
+	// write witness, trie GC). Callers block on <-collectedCh.
+	collectedCh   chan struct{}
+	collectedRoot common.Hash // verified root (set before closing collectedCh)
+	collectedErr  error       // non-nil if SRC failed or root mismatch
+}
+
 // BlockChain represents the canonical chain given a database with a genesis
 // block. The Blockchain manages chain imports, reverts, chain reorganisations.
 //
@@ -389,6 +428,7 @@ type BlockChain struct {
 	chainHeadFeed    event.Feed
 	logsFeed         event.Feed
 	blockProcFeed    event.Feed
+	witnessReadyFeed event.Feed
 	blockProcCounter int32
 	scope            event.SubscriptionScope
 	genesisBlock     *types.Block
@@ -446,13 +486,20 @@ type BlockChain struct {
 	pendingSRC   *pendingSRCState
 	pendingSRCMu sync.Mutex
 
+	// pendingImportSRC tracks a block whose SRC goroutine is in-flight during
+	// pipelined import. Persists across insertChain calls.
+	pendingImportSRC   *pendingImportSRCState
+	pendingImportSRCMu sync.Mutex
+
 	// lastFlatDiff holds the FlatDiff from the most recently committed block.
 	// The miner uses it together with the grandparent's committed root to open
 	// a StateDB via NewWithFlatBase, allowing block N+1 execution to start
 	// before the SRC goroutine finishes.
-	lastFlatDiff         *state.FlatDiff
-	lastFlatDiffBlockNum uint64
-	lastFlatDiffMu       sync.RWMutex
+	lastFlatDiff           *state.FlatDiff
+	lastFlatDiffBlockNum   uint64
+	lastFlatDiffParentRoot common.Hash // committed root that the FlatDiff is based on
+	lastFlatDiffBlockRoot  common.Hash // the block's own state root (from header)
+	lastFlatDiffMu         sync.RWMutex
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -732,7 +779,7 @@ func NewParallelBlockChain(db ethdb.Database, genesis *Genesis, engine consensus
 	return bc, nil
 }
 
-func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
+func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, witness *stateless.Witness, followupInterrupt *atomic.Bool, pipeOpts *PipelineImportOpts) (_ types.Receipts, _ []*types.Log, _ uint64, _ *state.StateDB, vtime time.Duration, blockEndErr error) {
 	// Process the block using processor and parallelProcessor at the same time, take the one which finishes first, cancel the other, and return the result
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -757,22 +804,36 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		}()
 	}
 
-	parentRoot := parent.Root
-	prefetch, process, err := bc.statedb.ReadersWithCacheStats(parentRoot)
+	// When pipelined import is active, the parent root may not be committed to the
+	// trie DB yet (SRC goroutine still running). Use the last committed root for
+	// readers and overlay the previous block's FlatDiff for correct reads.
+	readerRoot := parent.Root
+	if pipeOpts != nil {
+		readerRoot = pipeOpts.CommittedParentRoot
+	}
+
+	prefetch, process, err := bc.statedb.ReadersWithCacheStats(readerRoot)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	throwaway, err := state.NewWithReader(parentRoot, bc.statedb, prefetch)
+	throwaway, err := state.NewWithReader(readerRoot, bc.statedb, prefetch)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	statedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
+	statedb, err := state.NewWithReader(readerRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
 	}
-	parallelStatedb, err := state.NewWithReader(parentRoot, bc.statedb, process)
+	parallelStatedb, err := state.NewWithReader(readerRoot, bc.statedb, process)
 	if err != nil {
 		return nil, nil, 0, nil, 0, err
+	}
+
+	// Apply FlatDiff overlay so reads see the previous block's post-state.
+	if pipeOpts != nil && pipeOpts.FlatDiff != nil {
+		throwaway.SetFlatDiffRef(pipeOpts.FlatDiff)
+		statedb.SetFlatDiffRef(pipeOpts.FlatDiff)
+		parallelStatedb.SetFlatDiffRef(pipeOpts.FlatDiff)
 	}
 
 	// Upload the statistics of reader at the end
@@ -847,7 +908,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			blockExecutionParallelTimer.UpdateSince(pstart)
 			if err == nil {
 				vstart := time.Now()
-				err = bc.validator.ValidateState(block, parallelStatedb, res, false)
+				if pipeOpts != nil {
+					err = bc.validator.ValidateStateCheap(block, parallelStatedb, res)
+				} else {
+					err = bc.validator.ValidateState(block, parallelStatedb, res, false)
+				}
 				vtime = time.Since(vstart)
 			}
 			if res == nil {
@@ -867,7 +932,11 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			if err == nil {
 				vstart := time.Now()
-				err = bc.validator.ValidateState(block, statedb, res, false)
+				if pipeOpts != nil {
+					err = bc.validator.ValidateStateCheap(block, statedb, res)
+				} else {
+					err = bc.validator.ValidateState(block, statedb, res, false)
+				}
 				vtime = time.Since(vstart)
 			}
 			if res == nil {
@@ -1677,6 +1746,11 @@ func (bc *BlockChain) stopWithoutSaving() {
 	if bc.stateSizer != nil {
 		bc.stateSizer.Stop()
 	}
+	// Flush any pending import SRC before waiting for goroutines.
+	if err := bc.flushPendingImportSRC(); err != nil {
+		log.Error("Failed to flush pending import SRC during shutdown", "err", err)
+	}
+
 	// Now wait for all chain modifications to end and persistent goroutines to exit.
 	//
 	// Note: Close waits for the mutex to become available, i.e. any running chain
@@ -3190,10 +3264,49 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
-		statedb, err := state.New(parent.Root, bc.statedb)
-		if err != nil {
-			return nil, it.index, err
+
+		// --- Pipelined import: check for pending SRC from previous block ---
+		pipelineActive := bc.cfg.EnablePipelinedImportSRC && setHead && !bc.cfg.Stateless
+		var pipeOpts *PipelineImportOpts
+
+		if pipelineActive {
+			if bc.cfg.PipelinedImportSRCLogs {
+				log.Info("Pipelined import: started processing block",
+					"block", block.NumberU64(), "txs", len(block.Transactions()))
+			}
+
+			bc.pendingImportSRCMu.Lock()
+			pending := bc.pendingImportSRC
+			bc.pendingImportSRCMu.Unlock()
+
+			if pending != nil {
+				if block.ParentHash() == pending.block.Hash() {
+					// This block continues from the pending one — use FlatDiff overlay
+					pipeOpts = &PipelineImportOpts{
+						CommittedParentRoot: pending.committedRoot,
+						FlatDiff:            pending.flatDiff,
+					}
+				} else {
+					// Block doesn't follow pending (reorg/gap) — flush first
+					if err := bc.flushPendingImportSRC(); err != nil {
+						log.Error("Pipelined import: flush failed on mismatch", "err", err)
+					}
+				}
+			}
+
+			// No pending state — first block in pipeline. Still enter the
+			// pipeline so the SRC goroutine persists for the next insertChain
+			// call, enabling cross-call overlap with block N+1.
+			if pipeOpts == nil {
+				pipeOpts = &PipelineImportOpts{
+					CommittedParentRoot: parent.Root,
+				}
+			}
 		}
+
+		// Note: ProcessBlock opens its own statedbs internally. The statedb
+		// created here in the original code was only used for activeState tracking.
+		// With pipelined import, ProcessBlock handles all state opening.
 
 		// If we are past Byzantium, enable prefetching to pull in trie node paths
 		// while processing transactions. Before Byzantium the prefetcher is mostly
@@ -3208,12 +3321,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 					return nil, it.index, err
 				}
 			}
-			// Bor: We start the prefetcher in process block function called below
-			// and not here as we copy state for block-stm in that function. Also,
-			// we don't want to start duplicate prefetchers per block.
-			// statedb.StartPrefetcher("chain", witness)
 		}
-		activeState = statedb
 
 		var followupInterrupt atomic.Bool
 
@@ -3249,7 +3357,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
-		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt)
+		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, pipeOpts)
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -3257,8 +3365,157 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		if err != nil {
 			bc.reportBlock(block, &ProcessResult{Receipts: receipts}, err)
 			followupInterrupt.Store(true)
+			// Flush any pending import SRC before returning on error
+			if pipelineActive {
+				_ = bc.flushPendingImportSRC()
+			}
 			return nil, it.index, err
 		}
+
+		// --- Pipelined import: extract FlatDiff, collect previous SRC, write metadata, spawn SRC ---
+		if pipelineActive {
+			flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
+
+			// Collect previous pending SRC (verify root + trie GC)
+			bc.pendingImportSRCMu.Lock()
+			pending := bc.pendingImportSRC
+			bc.pendingImportSRCMu.Unlock()
+
+			var committedRoot common.Hash
+			if pending != nil {
+				if bc.cfg.PipelinedImportSRCLogs {
+					log.Info("Pipelined import: collecting previous SRC",
+						"block", block.NumberU64(), "pendingBlock", pending.block.NumberU64())
+				}
+				collectStart := time.Now()
+				var collectErr error
+				committedRoot, collectErr = bc.collectPendingImportSRC()
+				pipelineImportCollectTimer.UpdateSince(collectStart)
+				if collectErr != nil {
+					followupInterrupt.Store(true)
+					return nil, it.index - 1, collectErr
+				}
+			} else {
+				// First block in pipeline — parent root is already committed
+				committedRoot = parent.Root
+			}
+
+			// BOR state sync feed
+			bc.stateSyncMu.RLock()
+			for _, data := range bc.GetStateSync() {
+				bc.stateSyncFeed.Send(StateSyncEvent{Data: data})
+			}
+			bc.stateSyncMu.RUnlock()
+
+			proctime := time.Since(start)
+
+			// Store FlatDiff BEFORE writing metadata. writeBlockAndSetHeadPipelined
+			// emits ChainEvent which triggers subscribers that read state. FlatDiff
+			// must be available so PostExecutionStateAt works for those reads.
+			bc.SetLastFlatDiff(flatDiff, block.NumberU64(), committedRoot, block.Root())
+
+			// Write block metadata to DB immediately (so sync protocol sees it).
+			// State commit is deferred to the SRC goroutine. emitHeadEvent=false
+			// because the deferred ChainHeadEvent at end of insertChain handles it.
+			_, writeErr := bc.writeBlockAndSetHeadPipelined(
+				block, receipts, logs, statedb, false, nil)
+			if writeErr != nil {
+				followupInterrupt.Store(true)
+				return nil, it.index, writeErr
+			}
+
+			// Spawn SRC goroutine for current block
+			tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
+			bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff)
+
+			// Store as pending — persists across insertChain calls
+			newPending := &pendingImportSRCState{
+				block:         block,
+				flatDiff:      flatDiff,
+				committedRoot: committedRoot,
+				procTime:      proctime,
+				collectedCh:   make(chan struct{}),
+			}
+			bc.pendingImportSRCMu.Lock()
+			bc.pendingImportSRC = newPending
+			bc.pendingImportSRCMu.Unlock()
+
+			// Spawn auto-collection goroutine: waits for SRC to finish, then
+			// immediately verifies root, writes witness, and handles trie GC.
+			// This way collection doesn't depend on the next block's arrival.
+			srcStart := time.Now()
+			bc.wg.Add(1)
+			go func(p *pendingImportSRCState, srcStart time.Time) {
+				defer bc.wg.Done()
+				defer close(p.collectedCh)
+
+				root, witnessBytes, err := bc.WaitForSRC()
+				pipelineImportSRCTimer.UpdateSince(srcStart)
+				if err != nil {
+					log.Error("Pipelined import: SRC goroutine failed",
+						"block", p.block.NumberU64(), "err", err)
+					p.collectedErr = err
+					return
+				}
+
+				if root != p.block.Root() {
+					p.collectedErr = fmt.Errorf("pipelined import: root mismatch (expected: %x got: %x) block: %d",
+						p.block.Root(), root, p.block.NumberU64())
+					log.Error("Pipelined import: root mismatch, reverting chain head",
+						"block", p.block.NumberU64(), "expected", p.block.Root(), "got", root)
+					bc.reportBlock(p.block, nil, p.collectedErr)
+					if parentBlock := bc.GetBlock(p.block.ParentHash(), p.block.NumberU64()-1); parentBlock != nil {
+						bc.writeHeadBlock(parentBlock)
+					}
+					return
+				}
+
+				p.collectedRoot = root
+
+				if bc.cfg.PipelinedImportSRCLogs {
+					log.Info("Pipelined import: SRC verified",
+						"block", p.block.NumberU64(), "root", root)
+				}
+
+				// Write witness and announce availability to peers
+				if len(witnessBytes) > 0 {
+					bc.WriteWitness(p.block.Hash(), witnessBytes)
+					bc.witnessReadyFeed.Send(WitnessReadyEvent{
+						BlockHash:   p.block.Hash(),
+						BlockNumber: p.block.NumberU64(),
+					})
+				}
+
+				// Trie GC
+				bc.handleImportTrieGC(root, p.block.NumberU64(), p.procTime)
+
+				pipelineImportBlocksCounter.Inc(1)
+			}(newPending, srcStart)
+
+			if bc.cfg.PipelinedImportSRCLogs {
+				log.Info("Pipelined import: spawned SRC",
+					"block", block.NumberU64(), "committedRoot", committedRoot,
+					"txs", len(block.Transactions()))
+			}
+
+			followupInterrupt.Store(true)
+
+			// Update stats and report
+			stats.processed++
+			stats.usedGas += usedGas
+			lastCanon = block
+
+			var snapDiffItems, snapBufItems common.StorageSize
+			if bc.snaps != nil {
+				snapDiffItems, snapBufItems = bc.snaps.Size()
+			}
+			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+			stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
+
+			continue // Skip normal write path
+		}
+
+		// --- Normal (non-pipelined) write path ---
 
 		// BOR state sync feed related changes
 		bc.stateSyncMu.RLock()
@@ -4246,12 +4503,23 @@ func (bc *BlockChain) SubscribeChain2HeadEvent(ch chan<- Chain2HeadEvent) event.
 // The state commit is handled separately by the SRC goroutine that already
 // called CommitWithUpdate. This avoids the "layer stale" error that occurs
 // when two CommitWithUpdate calls diverge from the same parent root.
+// WriteBlockAndSetHeadPipelined is the public variant that acquires the chain mutex.
+// Used by the miner pipeline (resultLoop) where the mutex is not already held.
 func (bc *BlockChain) WriteBlockAndSetHeadPipelined(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, emitHeadEvent bool, witnessBytes []byte) (WriteStatus, error) {
 	if !bc.chainmu.TryLock() {
 		return NonStatTy, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
 
+	return bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, emitHeadEvent, witnessBytes)
+}
+
+// writeBlockAndSetHeadPipelined is the internal implementation. It writes block
+// data (header, body, receipts) to the database and sets it as the chain head,
+// WITHOUT committing trie state. The state commit is handled by the SRC goroutine.
+// This function does NOT acquire the chain mutex — the caller must ensure
+// proper synchronization (e.g., called from insertChainWithWitnesses).
+func (bc *BlockChain) writeBlockAndSetHeadPipelined(block *types.Block, receipts []*types.Receipt, logs []*types.Log, statedb *state.StateDB, emitHeadEvent bool, witnessBytes []byte) (WriteStatus, error) {
 	// Write block data without state commit
 	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 	if ptd == nil {
@@ -4373,10 +4641,14 @@ func (bc *BlockChain) PostExecutionStateAt(header *types.Header) (*state.StateDB
 	bc.lastFlatDiffMu.RLock()
 	flatDiff := bc.lastFlatDiff
 	flatDiffBlockNum := bc.lastFlatDiffBlockNum
+	flatDiffParentRoot := bc.lastFlatDiffParentRoot
 	bc.lastFlatDiffMu.RUnlock()
 
 	if flatDiff != nil && flatDiffBlockNum == header.Number.Uint64() {
-		return state.NewWithFlatBase(header.Root, bc.statedb, flatDiff)
+		// Open at the parent's committed root (which IS in the trie DB) and
+		// overlay the FlatDiff. We cannot use header.Root because it may not
+		// be committed yet (pipelined import SRC still running).
+		return state.NewWithFlatBase(flatDiffParentRoot, bc.statedb, flatDiff)
 	}
 
 	// Slow path: use the committed state root directly.
@@ -4411,7 +4683,11 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 			}
 		}()
 
-		tmpDB, err := state.New(parentRoot, bc.statedb)
+		// Use NewTrieOnly to force all reads through the MPT (no flat/snapshot
+		// readers). This ensures every account and storage read walks the trie,
+		// capturing proof-path nodes in the witness. With normal readers, the
+		// flat reader short-circuits the trie and proof paths are never captured.
+		tmpDB, err := state.NewTrieOnly(parentRoot, bc.statedb)
 		if err != nil {
 			log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 			pending.err = err
@@ -4482,6 +4758,10 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 				log.Error("Pipelined SRC: failed to encode witness", "block", block.NumberU64(), "err", err)
 			} else {
 				pending.witness = witBuf.Bytes()
+				// Cache the witness immediately so GetWitness can serve it
+				// before the auto-collection goroutine writes it to DB.
+				// For imported blocks the hash is already final (block is sealed).
+				bc.witnessCache.Add(block.Hash(), pending.witness)
 			}
 		}
 
@@ -4509,6 +4789,109 @@ func (bc *BlockChain) WaitForSRC() (common.Hash, []byte, error) {
 	return pending.root, pending.witness, nil
 }
 
+// flushPendingImportSRC collects the pending import SRC goroutine (if any),
+// verifies the root, writes the block to DB, handles trie GC, and clears
+// the pending state. Called on shutdown, reorg, and when an incoming block
+// doesn't continue from the pending block.
+// flushPendingImportSRC waits for the auto-collection goroutine to finish
+// and clears the pending state. Called on shutdown and when an incoming block
+// doesn't follow the pending one (reorg/gap).
+func (bc *BlockChain) flushPendingImportSRC() error {
+	bc.pendingImportSRCMu.Lock()
+	pending := bc.pendingImportSRC
+	bc.pendingImportSRC = nil
+	bc.pendingImportSRCMu.Unlock()
+
+	if pending == nil {
+		return nil
+	}
+
+	pipelineImportFallbackCounter.Inc(1)
+
+	// Wait for auto-collection to finish (it handles verify, witness, trie GC)
+	<-pending.collectedCh
+	return pending.collectedErr
+}
+
+// collectPendingImportSRC collects the pending import SRC goroutine, writes
+// the previous block, and returns the new committed root. Unlike flush, this
+// does NOT clear pendingImportSRC (the caller replaces it with the new block).
+// collectPendingImportSRC waits for the auto-collection goroutine to finish
+// and returns the committed root. The actual work (verify root, write witness,
+// trie GC) is done by the auto-collection goroutine spawned alongside the SRC.
+func (bc *BlockChain) collectPendingImportSRC() (common.Hash, error) {
+	bc.pendingImportSRCMu.Lock()
+	pending := bc.pendingImportSRC
+	bc.pendingImportSRCMu.Unlock()
+
+	if pending == nil {
+		return common.Hash{}, errors.New("no pending import SRC")
+	}
+
+	// Wait for auto-collection goroutine to finish
+	<-pending.collectedCh
+
+	if pending.collectedErr != nil {
+		return common.Hash{}, pending.collectedErr
+	}
+	return pending.collectedRoot, nil
+}
+
+// handleImportTrieGC performs trie garbage collection after a pipelined import
+// SRC has committed the state. Replicates writeBlockWithState's GC logic.
+func (bc *BlockChain) handleImportTrieGC(root common.Hash, blockNum uint64, procTime time.Duration) {
+	bc.gcproc += procTime
+
+	if bc.triedb.Scheme() == rawdb.PathScheme {
+		return
+	}
+	if bc.cfg.ArchiveMode {
+		_ = bc.triedb.Commit(root, false)
+		return
+	}
+
+	bc.triedb.Reference(root, common.Hash{})
+	bc.triegc.Push(root, -int64(blockNum))
+
+	triesInMemory := bc.cfg.GetTriesInMemory()
+	if blockNum <= triesInMemory {
+		return
+	}
+
+	_, nodes, imgs := bc.triedb.Size()
+	limit := common.StorageSize(bc.cfg.TrieDirtyLimit) * 1024 * 1024
+	if nodes > limit || imgs > 4*1024*1024 {
+		_ = bc.triedb.Cap(limit - ethdb.IdealBatchSize)
+	}
+
+	chosen := blockNum - triesInMemory
+	flushInterval := time.Duration(bc.flushInterval.Load())
+	if bc.gcproc > flushInterval {
+		header := bc.GetHeaderByNumber(chosen)
+		if header == nil {
+			log.Warn("Reorg in progress, trie commit postponed", "number", chosen)
+		} else {
+			if chosen < bc.lastWrite+triesInMemory && bc.gcproc >= 2*flushInterval {
+				log.Info("State in memory for too long, committing",
+					"time", bc.gcproc, "allowance", flushInterval,
+					"optimum", float64(chosen-bc.lastWrite)/float64(triesInMemory))
+			}
+			_ = bc.triedb.Commit(header.Root, true)
+			bc.lastWrite = chosen
+			bc.gcproc = 0
+		}
+	}
+
+	for !bc.triegc.Empty() {
+		r, number := bc.triegc.Pop()
+		if uint64(-number) > chosen {
+			bc.triegc.Push(r, number)
+			break
+		}
+		bc.triedb.Dereference(r)
+	}
+}
+
 // GetLastFlatDiff returns the FlatDiff captured from the most recently committed
 // block. The miner uses this to open a NewWithFlatBase StateDB without waiting
 // for the current SRC goroutine to finish.
@@ -4522,10 +4905,12 @@ func (bc *BlockChain) GetLastFlatDiff() *state.FlatDiff {
 // The block number is used by PostExecutionStateAt to match the FlatDiff
 // to the correct block (hash matching is unreliable because Root and seal
 // signature are not available when FlatDiff is captured).
-func (bc *BlockChain) SetLastFlatDiff(diff *state.FlatDiff, blockNum uint64) {
+func (bc *BlockChain) SetLastFlatDiff(diff *state.FlatDiff, blockNum uint64, parentRoot common.Hash, blockRoot common.Hash) {
 	bc.lastFlatDiffMu.Lock()
 	bc.lastFlatDiff = diff
 	bc.lastFlatDiffBlockNum = blockNum
+	bc.lastFlatDiffParentRoot = parentRoot
+	bc.lastFlatDiffBlockRoot = blockRoot
 	bc.lastFlatDiffMu.Unlock()
 }
 

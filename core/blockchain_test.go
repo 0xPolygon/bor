@@ -185,7 +185,7 @@ func testBlockChainImport(chain types.Blocks, blockchain *BlockChain) error {
 		if err != nil {
 			return err
 		}
-		receipts, logs, usedGas, statedb, _, err := blockchain.ProcessBlock(block, blockchain.GetBlockByHash(block.ParentHash()).Header(), nil, nil)
+		receipts, logs, usedGas, statedb, _, err := blockchain.ProcessBlock(block, blockchain.GetBlockByHash(block.ParentHash()).Header(), nil, nil, nil)
 		res := &ProcessResult{
 			Receipts: receipts,
 			Logs:     logs,
@@ -6425,5 +6425,461 @@ func TestWriteBlockMetrics(t *testing.T) {
 	}
 	if commitSnap.Mean() < 0 {
 		t.Error("stateCommitTimer mean duration should be non-negative")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pipelined Import SRC Tests
+// ---------------------------------------------------------------------------
+
+// pipelinedConfig returns a BlockChainConfig with pipelined import SRC enabled.
+func pipelinedConfig(scheme string) *BlockChainConfig {
+	cfg := DefaultConfig().WithStateScheme(scheme)
+	cfg.EnablePipelinedImportSRC = true
+	cfg.PipelinedImportSRCLogs = true
+	return cfg
+}
+
+// TestPipelinedImportSRC_MultipleBlocks generates 10 blocks with transactions and
+// inserts them into two chains — one with pipelined SRC enabled and one without.
+// The state roots of every canonical block must match between both chains.
+func TestPipelinedImportSRC_MultipleBlocks(t *testing.T) {
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.HashScheme)
+	testPipelinedImportSRC_MultipleBlocks(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_MultipleBlocks(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	// Generate 10 blocks with a simple transfer in each.
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 10, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Chain with pipeline enabled.
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	// Reference chain without pipeline.
+	refChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, DefaultConfig().WithStateScheme(scheme))
+	if err != nil {
+		t.Fatalf("failed to create reference chain: %v", err)
+	}
+	defer refChain.Stop()
+
+	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("pipeline chain: failed to insert blocks: %v", err)
+	}
+	if _, err := refChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("reference chain: failed to insert blocks: %v", err)
+	}
+
+	// Both chains must agree on head.
+	if pipeChain.CurrentBlock().Number.Uint64() != 10 {
+		t.Fatalf("pipeline chain head = %d, want 10", pipeChain.CurrentBlock().Number.Uint64())
+	}
+	if refChain.CurrentBlock().Number.Uint64() != 10 {
+		t.Fatalf("reference chain head = %d, want 10", refChain.CurrentBlock().Number.Uint64())
+	}
+
+	// All canonical blocks must have matching state roots.
+	for i := uint64(1); i <= 10; i++ {
+		pipeBlock := pipeChain.GetBlockByNumber(i)
+		refBlock := refChain.GetBlockByNumber(i)
+		if pipeBlock == nil || refBlock == nil {
+			t.Fatalf("block %d: missing on pipeline(%v) or reference(%v)", i, pipeBlock == nil, refBlock == nil)
+		}
+		if pipeBlock.Root() != refBlock.Root() {
+			t.Errorf("block %d: state root mismatch pipeline=%s reference=%s", i, pipeBlock.Root(), refBlock.Root())
+		}
+		if pipeBlock.Hash() != refBlock.Hash() {
+			t.Errorf("block %d: block hash mismatch pipeline=%s reference=%s", i, pipeBlock.Hash(), refBlock.Hash())
+		}
+	}
+}
+
+// TestPipelinedImportSRC_SingleBlock inserts a single block with pipeline enabled
+// and verifies correctness of the state.
+func TestPipelinedImportSRC_SingleBlock(t *testing.T) {
+	testPipelinedImportSRC_SingleBlock(t, rawdb.HashScheme)
+	testPipelinedImportSRC_SingleBlock(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_SingleBlock(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert block: %v", err)
+	}
+
+	if chain.CurrentBlock().Number.Uint64() != 1 {
+		t.Fatalf("head = %d, want 1", chain.CurrentBlock().Number.Uint64())
+	}
+
+	statedb, err := chain.StateAt(blocks[0].Root())
+	if err != nil {
+		t.Fatalf("StateAt failed: %v", err)
+	}
+
+	// Recipient should have received 1000 wei.
+	bal := statedb.GetBalance(recipient)
+	if bal.IsZero() {
+		t.Error("recipient balance should be non-zero after transfer")
+	}
+}
+
+// TestPipelinedImportSRC_CrossCallPersistence inserts blocks across two separate
+// InsertChain calls with pipelined SRC and verifies that state persists correctly
+// between calls (the pending SRC from the first batch is flushed before the
+// second batch begins).
+func TestPipelinedImportSRC_CrossCallPersistence(t *testing.T) {
+	testPipelinedImportSRC_CrossCallPersistence(t, rawdb.HashScheme)
+	testPipelinedImportSRC_CrossCallPersistence(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_CrossCallPersistence(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 6, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Pipeline chain: split insertion across two calls.
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if _, err := pipeChain.InsertChain(blocks[:3], false); err != nil {
+		t.Fatalf("pipeline: first batch insert failed: %v", err)
+	}
+	if _, err := pipeChain.InsertChain(blocks[3:], false); err != nil {
+		t.Fatalf("pipeline: second batch insert failed: %v", err)
+	}
+
+	// Reference chain: single call.
+	refChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, DefaultConfig().WithStateScheme(scheme))
+	if err != nil {
+		t.Fatalf("failed to create reference chain: %v", err)
+	}
+	defer refChain.Stop()
+
+	if _, err := refChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("reference: insert failed: %v", err)
+	}
+
+	if pipeChain.CurrentBlock().Number.Uint64() != 6 {
+		t.Fatalf("pipeline head = %d, want 6", pipeChain.CurrentBlock().Number.Uint64())
+	}
+
+	for i := uint64(1); i <= 6; i++ {
+		pipeBlock := pipeChain.GetBlockByNumber(i)
+		refBlock := refChain.GetBlockByNumber(i)
+		if pipeBlock == nil || refBlock == nil {
+			t.Fatalf("block %d missing", i)
+		}
+		if pipeBlock.Root() != refBlock.Root() {
+			t.Errorf("block %d: state root mismatch pipeline=%s reference=%s", i, pipeBlock.Root(), refBlock.Root())
+		}
+	}
+}
+
+// TestPipelinedImportSRC_Reorg inserts a main chain and then a longer fork to
+// trigger a reorg. Verifies that the fork becomes canonical and all state roots
+// are valid after the reorg.
+func TestPipelinedImportSRC_Reorg(t *testing.T) {
+	testPipelinedImportSRC_Reorg(t, rawdb.HashScheme)
+	testPipelinedImportSRC_Reorg(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_Reorg(t *testing.T, scheme string) {
+	var (
+		key1, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		key2, _ = crypto.HexToECDSA("8a1f9a8f95be41cd7ccb6168179afb4504aefe388d1e14474d32c45c72ce7b7a")
+		addr1   = crypto.PubkeyToAddress(key1.PublicKey)
+		addr2   = crypto.PubkeyToAddress(key2.PublicKey)
+		funds   = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec   = &Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				addr1: {Balance: funds},
+				addr2: {Balance: funds},
+			},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	// Main chain: 5 blocks, transfers from addr1.
+	_, mainBlocks, _ := GenerateChainWithGenesis(gspec, engine, 5, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr1), common.HexToAddress("0x1111"), big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key1,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Fork chain: 7 blocks branching from genesis, using addr2 so it creates
+	// different state. Longer chain so it becomes canonical.
+	_, forkBlocks, _ := GenerateChainWithGenesis(gspec, engine, 7, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr2), common.HexToAddress("0x2222"), big.NewInt(2000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key2,
+		)
+		gen.AddTx(tx)
+	})
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Insert main chain.
+	if _, err := chain.InsertChain(mainBlocks, false); err != nil {
+		t.Fatalf("main chain insert failed: %v", err)
+	}
+	if chain.CurrentBlock().Number.Uint64() != 5 {
+		t.Fatalf("after main: head = %d, want 5", chain.CurrentBlock().Number.Uint64())
+	}
+
+	// Insert fork chain — should trigger reorg since it's longer.
+	if _, err := chain.InsertChain(forkBlocks, false); err != nil {
+		t.Fatalf("fork chain insert failed: %v", err)
+	}
+	if chain.CurrentBlock().Number.Uint64() != 7 {
+		t.Fatalf("after fork: head = %d, want 7", chain.CurrentBlock().Number.Uint64())
+	}
+
+	// Verify the fork is now canonical by checking block hashes.
+	for i := uint64(1); i <= 7; i++ {
+		canonical := chain.GetBlockByNumber(i)
+		if canonical == nil {
+			t.Fatalf("missing canonical block %d after reorg", i)
+		}
+		if canonical.Hash() != forkBlocks[i-1].Hash() {
+			t.Errorf("block %d: canonical hash %s != fork hash %s", i, canonical.Hash(), forkBlocks[i-1].Hash())
+		}
+	}
+
+	// Verify state is accessible for the canonical head.
+	statedb, err := chain.StateAt(chain.CurrentBlock().Root)
+	if err != nil {
+		t.Fatalf("StateAt head failed: %v", err)
+	}
+	// addr2 sent 2000 wei per block for 7 blocks => should have less than initial funds.
+	bal := statedb.GetBalance(addr2)
+	if bal.IsZero() {
+		t.Error("addr2 balance should be non-zero")
+	}
+}
+
+// TestPipelinedImportSRC_StateAtDuringPipeline generates blocks that modify
+// account balances and verifies that StateAt returns correct balances for each
+// block's root after pipelined insertion.
+func TestPipelinedImportSRC_StateAtDuringPipeline(t *testing.T) {
+	testPipelinedImportSRC_StateAtDuringPipeline(t, rawdb.HashScheme)
+	testPipelinedImportSRC_StateAtDuringPipeline(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_StateAtDuringPipeline(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		txValue   = big.NewInt(10000) // 10000 wei per block
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	numBlocks := 5
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, txValue, params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	// Verify state at each block root shows monotonically increasing recipient balance.
+	var prevBal *uint256.Int
+	for i := 0; i < numBlocks; i++ {
+		statedb, err := chain.StateAt(blocks[i].Root())
+		if err != nil {
+			t.Fatalf("block %d: StateAt failed: %v", i+1, err)
+		}
+		bal := statedb.GetBalance(recipient)
+		if bal.IsZero() {
+			t.Errorf("block %d: recipient balance is zero, expected non-zero", i+1)
+		}
+		if prevBal != nil && bal.Cmp(prevBal) <= 0 {
+			t.Errorf("block %d: recipient balance %s should be greater than previous %s", i+1, bal, prevBal)
+		}
+		prevBal = bal.Clone()
+	}
+
+	// Final balance should equal txValue * numBlocks.
+	expectedBal := new(big.Int).Mul(txValue, big.NewInt(int64(numBlocks)))
+	finalState, _ := chain.StateAt(blocks[numBlocks-1].Root())
+	got := finalState.GetBalance(recipient).ToBig()
+	if got.Cmp(expectedBal) != 0 {
+		t.Errorf("final recipient balance: got %s, want %s", got, expectedBal)
+	}
+}
+
+// TestPipelinedImportSRC_ValidateStateCheap verifies that blocks inserted with
+// pipelined SRC pass all cheap validation checks (gas used, bloom filter,
+// receipt root). This is implicitly tested by successful insertion, but this
+// test explicitly verifies no errors by comparing against a reference chain.
+func TestPipelinedImportSRC_ValidateStateCheap(t *testing.T) {
+	testPipelinedImportSRC_ValidateStateCheap(t, rawdb.HashScheme)
+	testPipelinedImportSRC_ValidateStateCheap(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_ValidateStateCheap(t *testing.T, scheme string) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 8, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Insert with pipeline — any ValidateStateCheap failure would surface as
+	// an InsertChain error.
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(scheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	n, err := pipeChain.InsertChain(blocks, false)
+	if err != nil {
+		t.Fatalf("pipeline InsertChain failed at block %d: %v", n, err)
+	}
+
+	// Reference chain for comparison.
+	refChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, DefaultConfig().WithStateScheme(scheme))
+	if err != nil {
+		t.Fatalf("failed to create reference chain: %v", err)
+	}
+	defer refChain.Stop()
+
+	if _, err := refChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("reference InsertChain failed: %v", err)
+	}
+
+	// Verify: every block has matching gas, bloom, receipt root, and state root.
+	for i := uint64(1); i <= 8; i++ {
+		pBlock := pipeChain.GetBlockByNumber(i)
+		rBlock := refChain.GetBlockByNumber(i)
+		if pBlock == nil || rBlock == nil {
+			t.Fatalf("block %d missing", i)
+		}
+		if pBlock.GasUsed() != rBlock.GasUsed() {
+			t.Errorf("block %d: gas used mismatch %d vs %d", i, pBlock.GasUsed(), rBlock.GasUsed())
+		}
+		if pBlock.Bloom() != rBlock.Bloom() {
+			t.Errorf("block %d: bloom filter mismatch", i)
+		}
+		if pBlock.ReceiptHash() != rBlock.ReceiptHash() {
+			t.Errorf("block %d: receipt hash mismatch %s vs %s", i, pBlock.ReceiptHash(), rBlock.ReceiptHash())
+		}
+		if pBlock.Root() != rBlock.Root() {
+			t.Errorf("block %d: state root mismatch %s vs %s", i, pBlock.Root(), rBlock.Root())
+		}
 	}
 }

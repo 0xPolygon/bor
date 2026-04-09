@@ -120,14 +120,30 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 		seen[witnessPage.Hash] = struct{}{}
 	}
 
-	// witness sizes query
+	// witness sizes query — first check rawdb, then fall back to GetWitness
+	// which can wait for the pipelined import SRC goroutine to finish generating
+	// the witness. Without this fallback, the handler returns empty for witnesses
+	// that are cached (SRC done) but not yet written to the store (auto-collection
+	// pending).
 	witnessSize := make(map[common.Hash]uint64, len(seen))
+	prefetchedWitnesses := make(map[common.Hash][]byte, len(seen))
 	for witnessBlockHash := range seen {
 		size := rawdb.ReadWitnessSize(h.Chain().DB(), witnessBlockHash)
-		if size == nil {
-			witnessSize[witnessBlockHash] = 0
-		} else {
+		if size != nil {
 			witnessSize[witnessBlockHash] = *size
+		} else if h.Chain().GetHeaderByHash(witnessBlockHash) != nil {
+			// Witness not in store yet but block exists — try GetWitness which
+			// checks the cache and waits for pipelined SRC if needed. The
+			// header check prevents a DoS where a peer requests witnesses for
+			// non-existent blocks, causing 2-second waits per hash.
+			if w := h.Chain().GetWitness(witnessBlockHash); len(w) > 0 {
+				witnessSize[witnessBlockHash] = uint64(len(w))
+				prefetchedWitnesses[witnessBlockHash] = w
+			} else {
+				witnessSize[witnessBlockHash] = 0
+			}
+		} else {
+			witnessSize[witnessBlockHash] = 0
 		}
 	}
 
@@ -150,6 +166,11 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 			var witnessBytes []byte
 			if cachedRLPBytes, exists := witnessCache[witnessPage.Hash]; exists {
 				witnessBytes = cachedRLPBytes
+			} else if prefetched, exists := prefetchedWitnesses[witnessPage.Hash]; exists {
+				// Use the witness already fetched during the size check (avoids double wait)
+				witnessBytes = prefetched
+				witnessCache[witnessPage.Hash] = prefetched
+				totalCached += len(prefetched)
 			} else {
 				// Use GetWitness to benefit from the blockchain's witness cache
 				queriedBytes := h.Chain().GetWitness(witnessPage.Hash)

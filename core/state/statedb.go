@@ -197,6 +197,18 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 	return NewWithReader(root, db, reader)
 }
 
+// NewTrieOnly creates a new state that uses only the trie reader (no flat/snapshot
+// readers). This forces all account and storage reads to walk the MPT, which is
+// required for witness building — the witness captures trie nodes during the walk.
+// Used by the pipelined SRC goroutine to ensure the witness is complete.
+func NewTrieOnly(root common.Hash, db *CachingDB) (*StateDB, error) {
+	reader, err := db.TrieOnlyReader(root)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithReader(root, db, reader)
+}
+
 // NewWithReader creates a new state for the specified state root. Unlike New,
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
@@ -1036,6 +1048,10 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 				}
 				s.setStateObject(obj)
 				return obj
+			}
+			// Account not in FlatDiff — check if it was destructed in FlatDiff.
+			if _, ok := s.flatDiffRef.Destructs[addr]; ok {
+				return nil
 			}
 		}
 		s.AccountLoaded++

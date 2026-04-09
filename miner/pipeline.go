@@ -121,7 +121,7 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 	}
 	parentRoot := parent.Root
 
-	w.chain.SetLastFlatDiff(flatDiff, env.header.Number.Uint64())
+	w.chain.SetLastFlatDiff(flatDiff, env.header.Number.Uint64(), parentRoot, common.Hash{})
 	// Note: this counts block N as "entering the pipeline." If Prepare() fails
 	// and fallbackToSequential produces the block inline, the counter is slightly
 	// inflated — the block was produced sequentially, not speculatively.
@@ -533,7 +533,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		srcSpawnTime := time.Now()
 		tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
 		w.chain.SpawnSRCGoroutine(tmpBlockCur, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64())
+		w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), rootN, common.Hash{})
 		if w.config.PipelinedSRCLogs {
 			log.Info("Pipelined SRC: spawned SRC, starting speculative exec",
 				"srcBlock", nextBlockNumber, "specExecBlock", nextNextBlockNumber)
@@ -795,7 +795,7 @@ func (w *worker) sealBlockViaTaskCh(
 	if spawnSRC {
 		tmpBlock := types.NewBlockWithHeader(finalHeader)
 		w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64())
+		w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
 	}
 	pipelineSpeculativeBlocksCounter.Inc(1)
 

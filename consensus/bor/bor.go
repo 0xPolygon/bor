@@ -1677,6 +1677,13 @@ func (c *Bor) checkAndCommitSpan(
 
 	tempState.IntermediateRoot(false)
 
+	// Propagate addresses accessed during GetCurrentSpan back to the original
+	// state so they appear in the FlatDiff ReadSet. Without this, the pipelined
+	// SRC goroutine's witness won't capture their trie proof nodes (the copy's
+	// reads aren't tracked on the original), causing stateless execution to fail
+	// with missing trie nodes for the validator contract.
+	tempState.PropagateReadsTo(state.Inner())
+
 	if c.needToCommitSpan(span, headerNumber) {
 		return c.FetchAndCommitSpan(ctx, span.Id+1, state, header, chain)
 	}
