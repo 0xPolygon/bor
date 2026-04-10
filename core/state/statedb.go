@@ -1046,6 +1046,27 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 				if code, ok := s.flatDiffRef.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {
 					obj.code = code
 				}
+				// Resolve the committed storage root for prefetcher consistency.
+				//
+				// The FlatDiff account's Root is block N's post-state storage root,
+				// but the prefetcher's NodeReader is opened at committedParentRoot
+				// (the grandparent). These are inconsistent — the reader can only
+				// resolve trie nodes for the grandparent's storage root. Without
+				// this, the prefetcher hits "Unexpected trie node" hash mismatches
+				// on every storage trie root resolution for FlatDiff accounts.
+				//
+				// We read the account from the committed state (flat reader, in-
+				// memory snapshot) to get the grandparent's storage root. This is
+				// the root that the prefetcher's reader can actually resolve.
+				if acctCopy.Root != types.EmptyRootHash {
+					if committedAcct, err := s.reader.Account(addr); err == nil && committedAcct != nil {
+						obj.prefetchRoot = committedAcct.Root
+					}
+					// If the account doesn't exist in the committed state (new in
+					// block N), prefetchRoot stays zero and getPrefetchRoot() falls
+					// back to data.Root. The prefetcher will skip it since the trie
+					// didn't exist at committedParentRoot.
+				}
 				s.setStateObject(obj)
 				return obj
 			}

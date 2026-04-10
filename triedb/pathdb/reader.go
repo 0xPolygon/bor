@@ -66,7 +66,18 @@ type reader struct {
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
-		return nil, err
+		// If the diff layer chain walks into a stale disk layer (marked stale
+		// by concurrent cap()/persist() during pipelined SRC), fall back to
+		// the current base disk layer — same strategy as accountFallback and
+		// storageFallback.
+		if errors.Is(err, errSnapshotStale) {
+			blob, got, loc, err = r.nodeFallback(owner, path)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 	// Error out if the local one is inconsistent with the target.
 	if !r.noHashCheck && got != hash {
@@ -90,6 +101,26 @@ func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte,
 		return nil, fmt.Errorf("unexpected node: (%x %v), %x!=%x, %s, blob: %s", owner, path, hash, got, loc.string(), blobHex)
 	}
 	return blob, nil
+}
+
+// nodeFallback retrieves a trie node when the normal diff layer walk fails
+// due to concurrent layer flattening (cap). This mirrors the fallback strategy
+// used by accountFallback and storageFallback.
+//
+// During pipelined SRC, the background SRC goroutine's CommitWithUpdate can
+// trigger cap() which flattens bottom diff layers into a new disk layer,
+// marking the old disk layer as stale. Concurrently, the prefetcher's trie
+// walk may reach this stale disk layer and get errSnapshotStale.
+//
+// The fallback tries the entry-point layer first (which is still valid in
+// memory), then falls back to tree.bottom() — the current base disk layer,
+// which is guaranteed non-stale.
+func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
+	blob, got, loc, err := r.layer.node(owner, path, 0)
+	if errors.Is(err, errSnapshotStale) {
+		return r.db.tree.bottom().node(owner, path, 0)
+	}
+	return blob, got, loc, err
 }
 
 // AccountRLP directly retrieves the account associated with a particular hash.
