@@ -1104,7 +1104,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	if currentSigner.signer != (common.Address{}) {
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
-			return err
+			// If the signer is not in the active validator set, use succession 0
+			// so that the pending block header is still valid for RPC queries.
+			// Seal() will independently reject the block if unauthorized.
+			succession = 0
 		}
 	}
 
@@ -1154,15 +1157,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	// Wait before start the block production if needed (previously this wait was on Seal)
 	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		var successionNumber int
 		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
-			var err error
-			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
-			if err != nil {
-				return err
-			}
-			if successionNumber == 0 {
+			if succession == 0 {
 				<-time.After(delay)
 			}
 		}
