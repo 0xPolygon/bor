@@ -26,6 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holiman/uint256"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -40,8 +43,6 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/trie/utils"
-	"github.com/holiman/uint256"
-	"golang.org/x/sync/errgroup"
 )
 
 // TriesInMemory represents the number of layers that are kept in RAM.
@@ -146,7 +147,8 @@ type StateDB struct {
 	journal *journal
 
 	// State witness if cross validation is needed
-	witness *stateless.Witness
+	witness      *stateless.Witness
+	witnessStats *stateless.WitnessStats
 
 	// Measurements gathered during execution for debugging purposes
 
@@ -168,6 +170,7 @@ type StateDB struct {
 	SnapshotStorageReads time.Duration
 	SnapshotCommits      time.Duration
 	TrieDBCommits        time.Duration
+	WitnessCollection    time.Duration // time spent collecting trie nodes into witness during IntermediateRoot (sequential portion only)
 
 	// Bor metrics
 	BorConsensusTime time.Duration
@@ -418,7 +421,7 @@ func (s *StateDB) ApplyMVWriteSet(writes []blockstm.WriteDescriptor) {
 			case NoncePath:
 				s.SetNonce(addr, sr.GetNonce(addr), tracing.NonceChangeUnspecified)
 			case CodePath:
-				s.SetCode(addr, sr.GetCode(addr))
+				s.SetCode(addr, sr.GetCode(addr), tracing.CodeChangeUnspecified)
 			case SuicidePath:
 				stateObject := s.getStateObject(addr)
 				if stateObject != nil && sr.HasSelfDestructed(addr) {
@@ -462,7 +465,7 @@ func (s *StateDB) GetReadMapDump() []DumpStruct {
 
 // GetWriteMapDump gets writeMap Dump of format: "TxIdx, Inc, Path, Write"
 func (s *StateDB) GetWriteMapDump() []DumpStruct {
-	writeList := s.MVReadList()
+	writeList := s.MVWriteList()
 	res := make([]DumpStruct, 0, len(writeList))
 
 	for _, val := range writeList {
@@ -493,12 +496,13 @@ func (s *StateDB) SetWitness(witness *stateless.Witness) {
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
-func (s *StateDB) StartPrefetcher(namespace string, witness *stateless.Witness) {
+func (s *StateDB) StartPrefetcher(namespace string, witness *stateless.Witness, witnessStats *stateless.WitnessStats) {
 	// Terminate any previously running prefetcher
 	s.StopPrefetcher()
 
 	// Enable witness collection if requested
 	s.witness = witness
+	s.witnessStats = witnessStats
 
 	// With the switch to the Proof-of-Stake consensus algorithm, block production
 	// rewards are now handled at the consensus layer. Consequently, a block may
@@ -570,7 +574,7 @@ func (s *StateDB) GetLogs(hash common.Hash, blockNumber uint64, blockHash common
 }
 
 func (s *StateDB) Logs() []*types.Log {
-	var logs []*types.Log
+	logs := make([]*types.Log, 0, s.logSize)
 	for _, lgs := range s.logs {
 		logs = append(logs, lgs...)
 	}
@@ -742,6 +746,15 @@ func (s *StateDB) GetCommittedState(addr common.Address, hash common.Hash) commo
 	})
 }
 
+// GetStateAndCommittedState returns the current value and the original value.
+func (s *StateDB) GetStateAndCommittedState(addr common.Address, hash common.Hash) (common.Hash, common.Hash) {
+	stateObject := s.getStateObject(addr)
+	if stateObject != nil {
+		return stateObject.getState(hash)
+	}
+	return common.Hash{}, common.Hash{}
+}
+
 // Database retrieves the low level database supporting the lower level trie ops.
 func (s *StateDB) Database() Database {
 	return s.db
@@ -846,7 +859,7 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64, reason tracing.Non
 	}
 }
 
-func (s *StateDB) SetCode(addr common.Address, code []byte) (prev []byte) {
+func (s *StateDB) SetCode(addr common.Address, code []byte, reason tracing.CodeChangeReason) (prev []byte) {
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject != nil {
 		// TODO (@pratikspatil024) - verify this change
@@ -1126,6 +1139,14 @@ func (s *StateDB) Copy() *StateDB {
 		logSize:              s.logSize,
 		preimages:            maps.Clone(s.preimages),
 
+		// Timing fields — must be carried over so metrics in resultLoop see
+		// the values accumulated during fillTransactions, not zero.
+		AccountReads:         s.AccountReads,
+		StorageReads:         s.StorageReads,
+		SnapshotAccountReads: s.SnapshotAccountReads,
+		SnapshotStorageReads: s.SnapshotStorageReads,
+		BorConsensusTime:     s.BorConsensusTime,
+
 		// Do we need to copy the access list and transient storage?
 		// In practice: No. At the start of a transaction, these two lists are empty.
 		// In practice, we only ever copy state _between_ transactions/blocks, never
@@ -1318,6 +1339,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Skip witness collection in Verkle mode, they will be gathered
 	// together at the end.
 	if s.witness != nil && !s.db.TrieDB().IsVerkle() {
+		witStart := time.Now()
 		// Pull in anything that has been accessed before destruction
 		for _, obj := range s.stateObjectsDestruct {
 			// Skip any objects that haven't touched their storage
@@ -1325,9 +1347,17 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				continue
 			}
 			if trie := obj.getPrefetchedTrie(); trie != nil {
-				s.witness.AddState(trie.Witness())
+				witness := trie.Witness()
+				s.witness.AddState(witness)
+				if s.witnessStats != nil {
+					s.witnessStats.Add(witness, obj.addrHash)
+				}
 			} else if obj.trie != nil {
-				s.witness.AddState(obj.trie.Witness())
+				witness := obj.trie.Witness()
+				s.witness.AddState(witness)
+				if s.witnessStats != nil {
+					s.witnessStats.Add(witness, obj.addrHash)
+				}
 			}
 		}
 		// Pull in only-read and non-destructed trie witnesses
@@ -1341,11 +1371,20 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 				continue
 			}
 			if trie := obj.getPrefetchedTrie(); trie != nil {
-				s.witness.AddState(trie.Witness())
+				witness := trie.Witness()
+				s.witness.AddState(witness)
+				if s.witnessStats != nil {
+					s.witnessStats.Add(witness, obj.addrHash)
+				}
 			} else if obj.trie != nil {
-				s.witness.AddState(obj.trie.Witness())
+				witness := obj.trie.Witness()
+				s.witness.AddState(witness)
+				if s.witnessStats != nil {
+					s.witnessStats.Add(witness, obj.addrHash)
+				}
 			}
 		}
+		s.WitnessCollection += time.Since(witStart)
 	}
 	workers.Wait()
 	s.StorageUpdates += time.Since(start)
@@ -1409,7 +1448,13 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 
 	// If witness building is enabled, gather the account trie witness
 	if s.witness != nil {
-		s.witness.AddState(s.trie.Witness())
+		witStart := time.Now()
+		witness := s.trie.Witness()
+		s.witness.AddState(witness)
+		if s.witnessStats != nil {
+			s.witnessStats.Add(witness, common.Hash{})
+		}
+		s.WitnessCollection += time.Since(witStart)
 	}
 	return hash
 }
@@ -1444,7 +1489,7 @@ func (s *StateDB) fastDeleteStorage(snaps *snapshot.Tree, addrHash common.Hash, 
 		storageOrigins = make(map[common.Hash][]byte)  // the set for tracking the original value of slot
 	)
 	stack := trie.NewStackTrie(func(path []byte, hash common.Hash, blob []byte) {
-		nodes.AddNode(path, trienode.NewDeleted())
+		nodes.AddNode(path, trienode.NewDeletedWithPrev(blob))
 	})
 	for iter.Next() {
 		slot := common.CopyBytes(iter.Slot())
@@ -1495,7 +1540,7 @@ func (s *StateDB) slowDeleteStorage(addr common.Address, addrHash common.Hash, r
 		if it.Hash() == (common.Hash{}) {
 			continue
 		}
-		nodes.AddNode(it.Path(), trienode.NewDeleted())
+		nodes.AddNode(it.Path(), trienode.NewDeletedWithPrev(it.NodeBlob()))
 	}
 	if err := it.Error(); err != nil {
 		return nil, nil, nil, err
@@ -1600,7 +1645,7 @@ func (s *StateDB) GetTrie() Trie {
 
 // commit gathers the state mutations accumulated along with the associated
 // trie changes, resetting all internal flags with the new state as the base.
-func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateUpdate, error) {
+func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNumber uint64) (*stateUpdate, error) {
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
 		return nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
@@ -1627,7 +1672,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 		//
 		// Given that some accounts may be destroyed and then recreated within
 		// the same block, it's possible that a node set with the same owner
-		// may already exists. In such cases, these two sets are combined, with
+		// may already exist. In such cases, these two sets are combined, with
 		// the later one overwriting the previous one if any nodes are modified
 		// or deleted in both sets.
 		//
@@ -1752,13 +1797,13 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 	origin := s.originalRoot
 	s.originalRoot = root
 
-	return newStateUpdate(noStorageWiping, origin, root, deletes, updates, nodes), nil
+	return newStateUpdate(noStorageWiping, origin, root, blockNumber, deletes, updates, nodes), nil
 }
 
 // commitAndFlush is a wrapper of commit which also commits the state mutations
 // to the configured data stores.
 func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (*stateUpdate, error) {
-	ret, err := s.commit(deleteEmptyObjects, noStorageWiping)
+	ret, err := s.commit(deleteEmptyObjects, noStorageWiping, block)
 	if err != nil {
 		return nil, err
 	}
@@ -1821,6 +1866,16 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool, noStorageWiping 
 		return common.Hash{}, err
 	}
 	return ret.root, nil
+}
+
+// CommitWithUpdate writes the state mutations and returns both the root hash and the state update.
+// This is useful for tracking state changes at the blockchain level.
+func (s *StateDB) CommitWithUpdate(block uint64, deleteEmptyObjects bool, noStorageWiping bool) (common.Hash, *stateUpdate, error) {
+	ret, err := s.commitAndFlush(block, deleteEmptyObjects, noStorageWiping)
+	if err != nil {
+		return common.Hash{}, nil, err
+	}
+	return ret.root, ret, nil
 }
 
 // Prepare handles the preparatory steps for executing a state transition with.

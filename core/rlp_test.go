@@ -21,13 +21,14 @@ import (
 	"math/big"
 	"testing"
 
+	"golang.org/x/crypto/sha3"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/crypto/sha3"
 )
 
 func getBlock(transactions int, uncles int, dataSize int) *types.Block {
@@ -164,9 +165,7 @@ func BenchmarkHashing(b *testing.B) {
 	var hasher = sha3.NewLegacyKeccak256()
 
 	b.Run("iteratorhashing", func(b *testing.B) {
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			var hash common.Hash
 
 			it, err := rlp.NewListIterator(bodyRlp)
@@ -194,9 +193,7 @@ func BenchmarkHashing(b *testing.B) {
 	var exp common.Hash
 
 	b.Run("fullbodyhashing", func(b *testing.B) {
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			var body types.Body
 
 			rlp.DecodeBytes(bodyRlp, &body)
@@ -207,9 +204,7 @@ func BenchmarkHashing(b *testing.B) {
 		}
 	})
 	b.Run("fullblockhashing", func(b *testing.B) {
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			var block types.Block
 
 			rlp.DecodeBytes(blockRlp, &block)

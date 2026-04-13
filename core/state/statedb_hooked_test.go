@@ -21,10 +21,11 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/holiman/uint256"
 )
 
 // This method tests that the 'burn' from sending-to-selfdestructed accounts
@@ -114,7 +115,7 @@ func TestHooks(t *testing.T) {
 	sdb.AddBalance(common.Address{0xaa}, uint256.NewInt(100), tracing.BalanceChangeUnspecified)
 	sdb.SubBalance(common.Address{0xaa}, uint256.NewInt(50), tracing.BalanceChangeTransfer)
 	sdb.SetNonce(common.Address{0xaa}, 1337, tracing.NonceChangeGenesis)
-	sdb.SetCode(common.Address{0xaa}, []byte{0x13, 37})
+	sdb.SetCode(common.Address{0xaa}, []byte{0x13, 37}, tracing.CodeChangeUnspecified)
 	sdb.SetState(common.Address{0xaa}, common.HexToHash("0x01"), common.HexToHash("0x11"))
 	sdb.SetState(common.Address{0xaa}, common.HexToHash("0x01"), common.HexToHash("0x22"))
 	sdb.SetTransientState(common.Address{0xaa}, common.HexToHash("0x02"), common.HexToHash("0x01"))

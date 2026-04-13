@@ -18,7 +18,9 @@
 package ethconfig
 
 import (
+	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -45,6 +47,25 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
+// parseURLs splits a comma-separated URL string into a trimmed, non-empty slice.
+func parseURLs(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	parts := strings.Split(s, ",")
+
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+
+	return out
+}
+
 // FullNodeGPO contains default gasprice oracle settings for full node.
 var FullNodeGPO = gasprice.Config{
 	Blocks:           20,
@@ -57,28 +78,33 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Ethereum main net.
 var Defaults = Config{
-	SyncMode:             downloader.SnapSync,
-	HistoryMode:          history.KeepAll,
-	NetworkId:            0, // enable auto configuration of networkID == chainID
-	TxLookupLimit:        2350000,
-	TransactionHistory:   2350000, // Note: used in bor cli
-	LogHistory:           2350000, // Note: used in bor cli
-	StateHistory:         params.FullImmutabilityThreshold,
-	DatabaseCache:        512,
-	TrieCleanCache:       154,
-	TrieDirtyCache:       256,
-	TrieTimeout:          60 * time.Minute,
-	SnapshotCache:        102,
-	FilterLogCacheSize:   32,
-	Miner:                miner.DefaultConfig,
-	TxPool:               legacypool.DefaultConfig,
-	BlobPool:             blobpool.DefaultConfig,
-	RPCGasCap:            50000000,
-	RPCEVMTimeout:        5 * time.Second,
-	GPO:                  FullNodeGPO,
-	RPCTxFeeCap:          1, // 1 ether
-	FastForwardThreshold: 6400,
-	WitnessAPIEnabled:    false,
+	SyncMode:              downloader.SnapSync,
+	HistoryMode:           history.KeepAll,
+	NetworkId:             0, // enable auto configuration of networkID == chainID
+	TxLookupLimit:         2350000,
+	TransactionHistory:    2350000, // Note: used in bor cli
+	LogHistory:            2350000, // Note: used in bor cli
+	StateHistory:          params.FullImmutabilityThreshold,
+	DatabaseCache:         512,
+	TrieCleanCache:        154,
+	TrieDirtyCache:        256,
+	TrieTimeout:           60 * time.Minute,
+	SnapshotCache:         102,
+	FilterLogCacheSize:    32,
+	LogQueryLimit:         1000,
+	Miner:                 miner.DefaultConfig,
+	TxPool:                legacypool.DefaultConfig,
+	BlobPool:              blobpool.DefaultConfig,
+	RPCGasCap:             50000000,
+	RPCEVMTimeout:         5 * time.Second,
+	GPO:                   FullNodeGPO,
+	RPCTxFeeCap:           1, // 1 ether
+	FastForwardThreshold:  6400,
+	WitnessPruneThreshold: 64000,
+	WitnessPruneInterval:  120 * time.Second,
+	WitnessAPIEnabled:     false,
+	TxSyncDefaultTimeout:  20 * time.Second,
+	TxSyncMaxTimeout:      1 * time.Minute,
 }
 
 //go:generate go run github.com/fjl/gencodec -type Config -formats toml -out gen_config.go
@@ -148,9 +174,18 @@ type Config struct {
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int
 
+	// This is the maximum number of addresses or topics allowed in filter criteria
+	// for eth_getLogs.
+	LogQueryLimit int
+
 	// Address-specific cache sizes for biased caching (pathdb only)
 	// Maps account address to cache size in bytes
 	AddressCacheSizes map[common.Address]int
+
+	// PreloadRateLimit limits cache preload I/O in bytes per second per address.
+	// This prevents preloading from overwhelming the disk during sync.
+	// 0 = unlimited (legacy behavior), default = 1MB/s
+	PreloadRateLimit int64
 
 	// Mining options
 	Miner miner.Config
@@ -165,6 +200,18 @@ type Config struct {
 	// Enables tracking of SHA3 preimages in the VM
 	EnablePreimageRecording bool
 
+	// Enables collection of witness trie access statistics
+	EnableWitnessStats bool
+
+	// Generate execution witnesses and self-check against them (testing purpose)
+	StatelessSelfValidation bool
+
+	// Use switch-based fast path interpreter
+	EnableEVMSwitchDispatch bool
+
+	// Enables tracking of state size
+	EnableStateSizeTracking bool
+
 	// Enables VM tracing
 	VMTrace           string
 	VMTraceJsonConfig string
@@ -178,14 +225,14 @@ type Config struct {
 	// RPCEVMTimeout is the global timeout for eth-call.
 	RPCEVMTimeout time.Duration
 
-	// RPCTxFeeCap is the global transaction fee(price * gaslimit) cap for
+	// RPCTxFeeCap is the global transaction fee (price * gas limit) cap for
 	// send-transaction variants. The unit is ether.
 	RPCTxFeeCap float64
 
-	// OverridePrague (TODO: remove after the fork)
-	OverridePrague *big.Int `toml:",omitempty"`
+	// RPCBlockRangeLimit is the maximum block range allowed in eth_getLogs / bor_getLogs (0 = unlimited)
+	RPCBlockRangeLimit uint64
 
-	// URL to connect to Heimdall node
+	// URL to connect to Heimdall node (comma-separated for failover: "url1,url2,url3")
 	HeimdallURL string
 
 	// timeout in heimdall requests
@@ -194,10 +241,10 @@ type Config struct {
 	// No heimdall service
 	WithoutHeimdall bool
 
-	// Address to connect to Heimdall gRPC server
+	// Address to connect to Heimdall gRPC server (comma-separated for failover: "addr1,addr2")
 	HeimdallgRPCAddress string
 
-	// Address to connect to Heimdall WS subscription server
+	// Address to connect to Heimdall WS subscription server (comma-separated for failover: "addr1,addr2")
 	HeimdallWSAddress string
 
 	// Run heimdall service as a child process
@@ -208,6 +255,10 @@ type Config struct {
 
 	// Use child heimdall process to fetch data, Only works when RunHeimdall is true
 	UseHeimdallApp bool
+
+	// OverrideHeimdallClient allows injecting a mock HeimdallClient for testing.
+	// When set, this client is used instead of creating one from HeimdallURL/HeimdallgRPCAddress.
+	OverrideHeimdallClient bor.IHeimdallClient `toml:"-"`
 
 	// Bor logs flag
 	BorLogs bool
@@ -255,11 +306,28 @@ type Config struct {
 	// WitnessAPIEnabled enables witness API endpoints
 	WitnessAPIEnabled bool
 
+	// WitnessFileStore enables storing witness blobs on the filesystem
+	// instead of in the key-value database. Reduces DB write amplification.
+	WitnessFileStore bool
+
 	// DisableBlindForkValidation disables additional fork validation and accept blind forks without tracing back to last whitelisted entry
 	DisableBlindForkValidation bool
 
 	// MaxBlindForkValidationLimit denotes the maximum number of blocks to traverse back in the database when validating blind forks
 	MaxBlindForkValidationLimit uint64
+
+	// EIP-7966: eth_sendRawTransactionSync timeouts
+	TxSyncDefaultTimeout time.Duration `toml:",omitempty"`
+	TxSyncMaxTimeout     time.Duration `toml:",omitempty"`
+
+	// Preconf / Private transaction relay related settings
+	EnablePreconfs            bool
+	EnablePrivateTx           bool
+	BlockProducerRpcEndpoints []string
+
+	// Preconf / Private transaction related settings for block producers
+	AcceptPreconfTx bool
+	AcceptPrivateTx bool
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
@@ -285,22 +353,76 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 			}
 
 			var heimdallClient bor.IHeimdallClient
-			if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
+			// Use override client if provided (for testing)
+			if ethConfig.OverrideHeimdallClient != nil {
+				heimdallClient = ethConfig.OverrideHeimdallClient
+			} else if ethConfig.RunHeimdall && ethConfig.UseHeimdallApp {
 				// TODO: Running heimdall from bor is not tested yet.
 				// heimdallClient = heimdallapp.NewHeimdallAppClient()
 				panic("Running heimdall from bor is not implemented yet. Please use heimdall gRPC or HTTP client instead.")
-			} else if ethConfig.HeimdallgRPCAddress != "" {
-				heimdallClient = heimdallgrpc.NewHeimdallGRPCClient(ethConfig.HeimdallgRPCAddress, ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
 			} else {
-				heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				httpURLs := parseURLs(ethConfig.HeimdallURL)
+				grpcAddrs := parseURLs(ethConfig.HeimdallgRPCAddress)
+
+				// Build one client per endpoint.
+				// gRPC takes priority where configured; falls back to HTTP.
+				var heimdallClients []heimdall.Endpoint
+
+				n := max(len(httpURLs), len(grpcAddrs))
+				for i := 0; i < n; i++ {
+					if i < len(grpcAddrs) && grpcAddrs[i] != "" {
+						var httpURL string
+						if len(httpURLs) > 0 {
+							httpURL = httpURLs[min(i, len(httpURLs)-1)]
+						}
+
+						grpcClient, err := heimdallgrpc.NewHeimdallGRPCClient(grpcAddrs[i], httpURL, ethConfig.HeimdallTimeout)
+						if err != nil {
+							log.Error("Failed to initialize Heimdall gRPC client; falling back to HTTP",
+								"index", i, "grpc", grpcAddrs[i], "err", err)
+
+							if i < len(httpURLs) {
+								heimdallClients = append(heimdallClients, heimdall.NewHeimdallClient(httpURLs[i], ethConfig.HeimdallTimeout))
+							}
+
+							continue
+						}
+
+						heimdallClients = append(heimdallClients, grpcClient)
+					} else if i < len(httpURLs) {
+						heimdallClients = append(heimdallClients, heimdall.NewHeimdallClient(httpURLs[i], ethConfig.HeimdallTimeout))
+					}
+				}
+
+				if len(heimdallClients) == 0 {
+					heimdallClient = heimdall.NewHeimdallClient(ethConfig.HeimdallURL, ethConfig.HeimdallTimeout)
+				} else if len(heimdallClients) == 1 {
+					heimdallClient = heimdallClients[0]
+				} else {
+					multiClient, err := heimdall.NewMultiHeimdallClient(heimdallClients...)
+					if err != nil {
+						return nil, fmt.Errorf("failed to create heimdall failover client: %w", err)
+					}
+
+					heimdallClient = multiClient
+					log.Info("Heimdall failover enabled with multiple endpoints", "endpoints", len(heimdallClients))
+				}
 			}
+
+			// WS client
+			wsAddrs := parseURLs(ethConfig.HeimdallWSAddress)
 
 			var heimdallWSClient bor.IHeimdallWSClient
 			var err error
-			if ethConfig.HeimdallWSAddress != "" {
-				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(ethConfig.HeimdallWSAddress)
+
+			if len(wsAddrs) > 0 {
+				heimdallWSClient, err = heimdallws.NewHeimdallWSClient(wsAddrs...)
 				if err != nil {
 					return nil, err
+				}
+
+				if len(wsAddrs) > 1 {
+					log.Info("Heimdall WS failover enabled with multiple endpoints", "endpoints", len(wsAddrs))
 				}
 			}
 

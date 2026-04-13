@@ -2,7 +2,7 @@ identity = ""
 datadir = "./data"
 keystore = "./keystore"
 verbosity = 3
-"rpc.batchlimit" = 0
+"rpc.batch-request-limit" = 0
 snapshot = true
 "bor.logs" = false
 
@@ -17,6 +17,7 @@ snapshot = true
 [jsonrpc]
   evmtimeout = "5s"
   txfeecap = 6.0
+  logquerylimit = 1000
   [jsonrpc.http]
     api = ["eth", "bor"]
   [jsonrpc.ws]

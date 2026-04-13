@@ -21,8 +21,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // storageKey returns a key for uniquely identifying the storage slot.

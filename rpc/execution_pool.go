@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/JekaMas/workerpool"
+
 	"github.com/ethereum/go-ethereum/metrics"
 )
 

@@ -21,7 +21,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sync/atomic"
+
+	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
@@ -30,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 // ExecutionResult includes all output after executing given evm
@@ -226,16 +226,16 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 // the gas used (which includes gas refunds) and an error if it failed. An error always
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
-func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool, interrupt *atomic.Bool) (*ExecutionResult, error) {
+func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
 	evm.SetTxContext(NewEVMTxContext(msg))
-	return newStateTransition(evm, msg, gp).execute(interrupt)
+	return newStateTransition(evm, msg, gp).execute()
 }
 
-func ApplyMessageNoFeeBurnOrTip(evm *vm.EVM, msg Message, gp *GasPool, interrupt *atomic.Bool) (*ExecutionResult, error) {
+func ApplyMessageNoFeeBurnOrTip(evm *vm.EVM, msg Message, gp *GasPool) (*ExecutionResult, error) {
 	st := newStateTransition(evm, &msg, gp)
 	st.noFeeBurnAndTip = true
 
-	return st.execute(interrupt)
+	return st.execute()
 }
 
 // stateTransition represents a state transition.
@@ -408,6 +408,9 @@ func (st *stateTransition) preCheck() error {
 		if len(msg.BlobHashes) == 0 {
 			return ErrMissingBlobHashes
 		}
+		if isOsaka && len(msg.BlobHashes) > params.BlobTxMaxBlobs {
+			return ErrTooManyBlobs
+		}
 		for i, hash := range msg.BlobHashes {
 			if !kzg4844.IsValidVersionedHash(hash[:]) {
 				return fmt.Errorf("blob %d has invalid hash version", i)
@@ -451,7 +454,7 @@ func (st *stateTransition) preCheck() error {
 //
 // However if any consensus issue encountered, return the error directly with
 // nil evm execution result.
-func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, error) {
+func (st *stateTransition) execute() (*ExecutionResult, error) {
 	input1 := st.state.GetBalance(st.msg.From)
 
 	var input2 *uint256.Int
@@ -561,7 +564,7 @@ func (st *stateTransition) execute(interrupt *atomic.Bool) (*ExecutionResult, er
 		}
 
 		// Execute the transaction's call.
-		ret, st.gasRemaining, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining, value, interrupt)
+		ret, st.gasRemaining, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining, value)
 	}
 
 	// Record the gas used excluding gas refunds. This value represents the actual
@@ -704,12 +707,12 @@ func (st *stateTransition) applyAuthorization(auth *types.SetCodeAuthorization) 
 	st.state.SetNonce(authority, auth.Nonce+1, tracing.NonceChangeAuthorization)
 	if auth.Address == (common.Address{}) {
 		// Delegation to zero address means clear.
-		st.state.SetCode(authority, nil)
+		st.state.SetCode(authority, nil, tracing.CodeChangeAuthorizationClear)
 		return nil
 	}
 
 	// Otherwise install delegation to auth.Address.
-	st.state.SetCode(authority, types.AddressToDelegation(auth.Address))
+	st.state.SetCode(authority, types.AddressToDelegation(auth.Address), tracing.CodeChangeAuthorization)
 
 	return nil
 }

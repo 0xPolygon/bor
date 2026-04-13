@@ -477,3 +477,120 @@ func TestStateSizeTracking(t *testing.T) {
 		t.Fatalf("Unexpected size, want: %d, got: %d", revertSize, a.size)
 	}
 }
+
+func mapPointer[K comparable, V any](m map[K]V) uintptr {
+	return reflect.ValueOf(m).Pointer()
+}
+
+func TestStateSetCopyUsesCopyOnWriteForStorageMaps(t *testing.T) {
+	accountA := common.HexToHash("0x01")
+	accountB := common.HexToHash("0x02")
+	slot1 := common.HexToHash("0x11")
+	slot2 := common.HexToHash("0x22")
+	slot3 := common.HexToHash("0x33")
+	slot4 := common.HexToHash("0x44")
+
+	original := newStates(
+		map[common.Hash][]byte{
+			accountA: {1},
+			accountB: {2},
+		},
+		map[common.Hash]map[common.Hash][]byte{
+			accountA: {slot1: {10}},
+			accountB: {slot2: {20}},
+		},
+		false,
+	)
+	copied := original.copy()
+
+	if original.storageShared {
+		t.Fatal("copy should not mutate source storage sharing state")
+	}
+	if original.ownedStorage != nil {
+		t.Fatal("copy should not mutate source ownership tracking")
+	}
+	if mapPointer(copied.accountData) == mapPointer(original.accountData) {
+		t.Fatal("accountData top-level map should be cloned")
+	}
+	if mapPointer(copied.storageData) == mapPointer(original.storageData) {
+		t.Fatal("storageData top-level map should be cloned")
+	}
+	if mapPointer(copied.storageData[accountA]) != mapPointer(original.storageData[accountA]) {
+		t.Fatal("account A storage submap should be shared until first write")
+	}
+	if mapPointer(copied.storageData[accountB]) != mapPointer(original.storageData[accountB]) {
+		t.Fatal("account B storage submap should be shared until first write")
+	}
+
+	copied.merge(newStates(nil, map[common.Hash]map[common.Hash][]byte{
+		accountA: {slot3: {30}},
+	}, false))
+	firstDetach := mapPointer(copied.storageData[accountA])
+
+	if firstDetach == mapPointer(original.storageData[accountA]) {
+		t.Fatal("account A storage submap should detach on first write")
+	}
+	if mapPointer(copied.storageData[accountB]) != mapPointer(original.storageData[accountB]) {
+		t.Fatal("untouched storage submaps should remain shared")
+	}
+	if _, ok := original.storageData[accountA][slot3]; ok {
+		t.Fatal("mutating copied stateSet should not affect original storage submap")
+	}
+
+	copied.merge(newStates(nil, map[common.Hash]map[common.Hash][]byte{
+		accountA: {slot4: {40}},
+	}, false))
+	if mapPointer(copied.storageData[accountA]) != firstDetach {
+		t.Fatal("detached storage submap should be reused for subsequent writes")
+	}
+}
+
+func TestStateSetRevertToDetachesSharedStorageMaps(t *testing.T) {
+	account := common.HexToHash("0x01")
+	slot := common.HexToHash("0x11")
+
+	original := newStates(nil, map[common.Hash]map[common.Hash][]byte{
+		account: {slot: {10}},
+	}, false)
+	copied := original.copy()
+
+	if mapPointer(copied.storageData[account]) != mapPointer(original.storageData[account]) {
+		t.Fatal("storage submap should be shared until first write")
+	}
+	copied.revertTo(nil, map[common.Hash]map[common.Hash][]byte{
+		account: {slot: {99}},
+	})
+
+	if mapPointer(copied.storageData[account]) == mapPointer(original.storageData[account]) {
+		t.Fatal("revertTo should detach shared storage submap before mutating it")
+	}
+	if got := copied.storageData[account][slot]; len(got) != 1 || got[0] != 99 {
+		t.Fatalf("copied stateSet should contain reverted value, got %v", got)
+	}
+	if got := original.storageData[account][slot]; len(got) != 1 || got[0] != 10 {
+		t.Fatalf("original stateSet should remain unchanged, got %v", got)
+	}
+}
+
+func TestStateSetRevertToMissingStorageDoesNotCreateEntry(t *testing.T) {
+	account := common.HexToHash("0x01")
+	missing := common.HexToHash("0x02")
+	slot := common.HexToHash("0x11")
+
+	copied := newStates(nil, map[common.Hash]map[common.Hash][]byte{
+		account: {slot: {10}},
+	}, false).copy()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected revertTo to panic for a missing storage set")
+		}
+		if _, ok := copied.storageData[missing]; ok {
+			t.Fatal("revertTo panic should not create a new storage entry")
+		}
+	}()
+
+	copied.revertTo(nil, map[common.Hash]map[common.Hash][]byte{
+		missing: {slot: {20}},
+	})
+}

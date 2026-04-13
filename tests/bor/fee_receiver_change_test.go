@@ -107,10 +107,10 @@ func TestCoinbaseRedirection(t *testing.T) {
 	}
 	sendTransactions(faucets[0], 5, earlyNonce)
 
-	// Wait for block 14 (just before Rio)
+	// Wait for block 15 (last pre-Rio block)
 	for {
 		block := nodes[0].BlockChain().CurrentBlock()
-		if block.Number.Uint64() >= 14 {
+		if block.Number.Uint64() >= 15 {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -128,10 +128,14 @@ func TestCoinbaseRedirection(t *testing.T) {
 	validator1Initial := genesisState.GetBalance(validator1).ToBig()
 	validator2Initial := genesisState.GetBalance(validator2).ToBig()
 
-	// Get current balances at block 14
-	statedb, err := nodes[0].BlockChain().State()
+	// Get balances at block 15 (last pre-Rio block)
+	block15 := nodes[0].BlockChain().GetBlockByNumber(15)
+	if block15 == nil {
+		t.Fatal("Failed to get block 15")
+	}
+	statedb, err := nodes[0].BlockChain().StateAt(block15.Root())
 	if err != nil {
-		t.Fatalf("failed to get state: %v", err)
+		t.Fatalf("failed to get state at block 15: %v", err)
 	}
 	rioCoinbaseBalanceBefore := statedb.GetBalance(rioCoinbase)
 	validator1BalanceBefore := statedb.GetBalance(validator1)
@@ -155,7 +159,7 @@ func TestCoinbaseRedirection(t *testing.T) {
 	}
 	sendTransactions(faucets[1], 5, nonce1)
 
-	// Wait for blocks 16 and 17 to be mined
+	// Wait for block 17 (at least 2 post-Rio blocks)
 	for {
 		block := nodes[0].BlockChain().CurrentBlock()
 		if block.Number.Uint64() >= 17 {
@@ -166,7 +170,7 @@ func TestCoinbaseRedirection(t *testing.T) {
 
 	// Count transactions in blocks
 	preRioTxCount := 0
-	rioBlockTxCount := 0
+	postRioTxCount := 0
 
 	for i := uint64(1); i < 16; i++ {
 		block := nodes[0].BlockChain().GetBlockByNumber(i)
@@ -175,15 +179,22 @@ func TestCoinbaseRedirection(t *testing.T) {
 		}
 	}
 
-	block16 := nodes[0].BlockChain().GetBlockByNumber(16)
-	if block16 != nil {
-		rioBlockTxCount = len(block16.Transactions())
+	// Count transactions in post-Rio blocks (16 and 17)
+	for i := uint64(16); i <= 17; i++ {
+		block := nodes[0].BlockChain().GetBlockByNumber(i)
+		if block != nil {
+			postRioTxCount += len(block.Transactions())
+		}
 	}
 
-	// Get final balances
-	statedbAfter, err := nodes[0].BlockChain().State()
+	// Get balances at block 17
+	block17 := nodes[0].BlockChain().GetBlockByNumber(17)
+	if block17 == nil {
+		t.Fatal("Failed to get block 17")
+	}
+	statedbAfter, err := nodes[0].BlockChain().StateAt(block17.Root())
 	if err != nil {
-		t.Fatalf("failed to get state: %v", err)
+		t.Fatalf("failed to get state at block 17: %v", err)
 	}
 	rioCoinbaseBalanceAfter := statedbAfter.GetBalance(rioCoinbase)
 	validator1BalanceAfter := statedbAfter.GetBalance(validator1)
@@ -202,15 +213,15 @@ func TestCoinbaseRedirection(t *testing.T) {
 
 	// Verify fee distribution
 	if preRioTxCount > 0 && totalPreRioFees.Cmp(big.NewInt(0)) > 0 {
-		t.Logf("✓ Pre-Rio: %d transactions, validators received %v wei in fees", preRioTxCount, totalPreRioFees)
+		t.Logf("✓ Pre-Rio (blocks 1-15): %d transactions, validators received %v wei in fees", preRioTxCount, totalPreRioFees)
 	} else if preRioTxCount > 0 {
 		t.Fatalf("FAIL: %d pre-Rio transactions but validators received no fees", preRioTxCount)
 	}
 
-	if rioBlockTxCount > 0 && rioCoinbaseGained.Cmp(big.NewInt(0)) > 0 {
-		t.Logf("✓ Rio block: %d transactions, Rio coinbase received %v wei in fees", rioBlockTxCount, rioCoinbaseGained)
-	} else if rioBlockTxCount > 0 {
-		t.Fatalf("FAIL: %d Rio block transactions but Rio coinbase received no fees", rioBlockTxCount)
+	if postRioTxCount > 0 && rioCoinbaseGained.Cmp(big.NewInt(0)) > 0 {
+		t.Logf("✓ Post-Rio (blocks 16-17): %d transactions, Rio coinbase received %v wei in fees", postRioTxCount, rioCoinbaseGained)
+	} else if postRioTxCount > 0 {
+		t.Fatalf("FAIL: %d post-Rio transactions but Rio coinbase received no fees", postRioTxCount)
 	}
 
 	t.Log("✓ Coinbase redirection at Rio hardfork verified successfully")

@@ -68,6 +68,11 @@ var (
 	bodyFetchMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/bodies", nil)
 	witnessFetchMeter = metrics.NewRegisteredMeter("eth/fetcher/block/witnesses", nil)
 
+	// Amortized per-item download durations for announcement-driven fetches (batch duration / item count).
+	blockHeaderItemDownloadTimer  = metrics.NewRegisteredTimer("eth/fetcher/block/headers/item_download_duration", nil)   // per-header amortized fetch latency
+	blockBodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/fetcher/block/bodies/item_download_duration", nil)    // per-body amortized fetch latency
+	blockWitnessItemDownloadTimer = metrics.NewRegisteredTimer("eth/fetcher/block/witnesses/item_download_duration", nil) // per-witness amortized fetch latency
+
 	headerFilterInMeter  = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/in", nil)
 	headerFilterOutMeter = metrics.NewRegisteredMeter("eth/fetcher/block/filter/headers/out", nil)
 	bodyFilterInMeter    = metrics.NewRegisteredMeter("eth/fetcher/block/filter/bodies/in", nil)
@@ -100,6 +105,9 @@ type blockBroadcasterFn func(block *types.Block, witness *stateless.Witness, pro
 // chainHeightFn is a callback type to retrieve the current chain height.
 type chainHeightFn func() uint64
 
+// currentHeaderFn is a callback type to retrieve the current block header.
+type currentHeaderFn func() *types.Header
+
 // headersInsertFn is a callback type to insert a batch of headers into the local chain.
 type headersInsertFn func(headers []*types.Header) (int, error)
 
@@ -109,6 +117,7 @@ type chainInsertFn func(types.Blocks, []*stateless.Witness) (int, error)
 
 // peerDropFn is a callback type for dropping a peer detected as malicious.
 type peerDropFn func(id string)
+type peerJailFn func(id string) // Function to jail a peer by peer ID (string)
 
 // blockAnnounce is the hash notification of the availability of a new block in the
 // network.
@@ -232,9 +241,11 @@ type BlockFetcher struct {
 	verifyHeader   headerVerifierFn   // Checks if a block's headers have a valid proof of work
 	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
 	chainHeight    chainHeightFn      // Retrieves the current chain's height
+	currentHeader  currentHeaderFn    // Retrieves the current block header
 	insertHeaders  headersInsertFn    // Injects a batch of headers into the chain
 	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
 	dropPeer       peerDropFn         // Drops a peer for misbehaving
+	jailPeer       peerJailFn         // Jails a peer to prevent reconnection (optional, can be nil)
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
@@ -249,7 +260,7 @@ type BlockFetcher struct {
 }
 
 // NewBlockFetcher creates a block fetcher to retrieve blocks based on hash announcements.
-func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, enableBlockTracking bool, requireWitness bool) *BlockFetcher {
+func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, currentHeader currentHeaderFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, jailPeer peerJailFn, enableBlockTracking bool, requireWitness bool, gasCeil uint64) *BlockFetcher {
 	f := &BlockFetcher{
 		light:               light,
 		notify:              make(chan *blockAnnounce),
@@ -272,9 +283,11 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		verifyHeader:        verifyHeader,
 		broadcastBlock:      broadcastBlock,
 		chainHeight:         chainHeight,
+		currentHeader:       currentHeader,
 		insertHeaders:       insertHeaders,
 		insertChain:         insertChain,
 		dropPeer:            dropPeer,
+		jailPeer:            jailPeer,
 		enableBlockTracking: enableBlockTracking,
 		requireWitness:      requireWitness,
 	}
@@ -283,10 +296,13 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 	f.wm = newWitnessManager(
 		f.quit,
 		f.dropPeer,
+		f.jailPeer,
 		f.enqueueCh,
 		f.getBlock,
 		f.getHeader,
 		f.chainHeight,
+		f.currentHeader,
+		gasCeil,
 	)
 
 	return f
@@ -684,13 +700,15 @@ func (f *BlockFetcher) loop() {
 								} // Channel closed
 								res.Done <- nil
 								headersResponse, ok := res.Res.(*eth.BlockHeadersRequest)
-								if !ok {
+								if !ok || headersResponse == nil {
 									return
 								} // Invalid response type
-								f.FilterHeaders(p, *headersResponse, time.Now(), announcedAt)
+								headers := *headersResponse
+								metrics.RecordPerItemDuration(blockHeaderItemDownloadTimer, res.Time, len(headers))
+								f.FilterHeaders(p, headers, time.Now(), announcedAt)
 
 							case <-timeout.C:
-								log.Debug("Header fetch timed out", "peer", p, "hash", h)
+								log.Debug("BlockFetcher: header fetch timed out, dropping peer", "peer", p, "hash", h, "timeout", 2*fetchTimeout)
 								f.dropPeer(p)
 							case <-f.quit:
 								return // Fetcher stopped
@@ -756,15 +774,16 @@ func (f *BlockFetcher) loop() {
 						} // Channel closed
 						res.Done <- nil
 						bodyResponse, ok := res.Res.(*eth.BlockBodiesResponse)
-						if !ok {
+						if !ok || bodyResponse == nil {
 							return
 						} // Invalid response type
 						// Ignoring withdrawals here, since the block fetcher is not used post-merge.
 						txs, uncles, _ := bodyResponse.Unpack()
+						metrics.RecordPerItemDuration(blockBodyItemDownloadTimer, res.Time, len(txs))
 						f.FilterBodies(p, txs, uncles, time.Now(), announcedAt)
 
 					case <-timeout.C:
-						log.Debug("Body fetch timed out", "peer", p, "hashes", hs)
+						log.Debug("BlockFetcher: body fetch timed out, dropping peer", "peer", p, "hashes", hs, "timeout", 2*fetchTimeout)
 						f.dropPeer(p)
 					case <-f.quit:
 						return // Fetcher stopped
@@ -1296,4 +1315,9 @@ func (f *BlockFetcher) forgetBlock(hash common.Hash) {
 		// Let's keep it for cases where forgetBlock is called directly after checking getBlock/getHeader
 		f.wm.forget(hash)
 	}
+}
+
+// GetWitnessManager returns the witness manager for external access
+func (f *BlockFetcher) GetWitnessManager() *witnessManager {
+	return f.wm
 }

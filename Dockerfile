@@ -1,5 +1,5 @@
 # ─── BUILDER STAGE ───────────────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.1-alpine AS builder
 
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR
@@ -22,7 +22,7 @@ RUN --mount=type=ssh \
     make bor
 
 # ─── RUNTIME STAGE ────────────────────────────────────────────────────────────────
-FROM alpine:latest
+FROM alpine:3.23
 
 ARG BOR_DIR=/var/lib/bor/
 ENV BOR_DIR=$BOR_DIR

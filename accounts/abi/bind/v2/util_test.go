@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient/simulated"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -53,18 +53,18 @@ var waitDeployedTests = map[string]struct {
 func TestWaitDeployed(t *testing.T) {
 	// TODO - bor: refactor and enable (task: POS-3046)
 	t.Skip("bor: Skipping all tests for now. To be fixed later")
+
 	t.Parallel()
 	for name, test := range waitDeployedTests {
-		backend := backends.NewSimulatedBackend(
+		backend := simulated.NewBackend(
 			types.GenesisAlloc{
 				crypto.PubkeyToAddress(testKey.PublicKey): {Balance: big.NewInt(10000000000000000)},
 			},
-			10000000,
 		)
 		defer backend.Close()
 
 		// Create the transaction
-		head, _ := backend.HeaderByNumber(t.Context(), nil) // Should be child's, good enough
+		head, _ := backend.Client().HeaderByNumber(t.Context(), nil) // Should be child's, good enough
 		gasPrice := new(big.Int).Add(head.BaseFee, big.NewInt(params.GWei))
 
 		tx := types.NewContractCreation(0, big.NewInt(0), test.gas, gasPrice, common.FromHex(test.code))
@@ -77,14 +77,13 @@ func TestWaitDeployed(t *testing.T) {
 			mined   = make(chan struct{})
 			ctx     = t.Context()
 		)
-
 		go func() {
-			address, err = bind.WaitDeployed(ctx, backend.Client, tx.Hash())
+			address, err = bind.WaitDeployed(ctx, backend.Client(), tx.Hash())
 			close(mined)
 		}()
 
 		// Send and mine the transaction.
-		if err := backend.SendTransaction(ctx, tx); err != nil {
+		if err := backend.Client().SendTransaction(ctx, tx); err != nil {
 			t.Errorf("test %q: failed to send transaction: %v", name, err)
 		}
 		backend.Commit()
@@ -94,7 +93,6 @@ func TestWaitDeployed(t *testing.T) {
 			if err != test.wantErr {
 				t.Errorf("test %q: error mismatch: want %q, got %q", name, test.wantErr, err)
 			}
-
 			if address != test.wantAddress {
 				t.Errorf("test %q: unexpected contract address %s", name, address.Hex())
 			}
@@ -107,45 +105,66 @@ func TestWaitDeployed(t *testing.T) {
 func TestWaitDeployedCornerCases(t *testing.T) {
 	// TODO - bor: refactor and enable (task: POS-3046)
 	t.Skip("bor: Skipping all tests for now. To be fixed later")
-	backend := backends.NewSimulatedBackend(
-		types.GenesisAlloc{
-			crypto.PubkeyToAddress(testKey.PublicKey): {Balance: big.NewInt(10000000000000000)},
-		},
-		10000000,
+
+	var (
+		backend = simulated.NewBackend(
+			types.GenesisAlloc{
+				crypto.PubkeyToAddress(testKey.PublicKey): {Balance: big.NewInt(10000000000000000)},
+			},
+		)
+		head, _     = backend.Client().HeaderByNumber(t.Context(), nil) // Should be child's, good enough
+		gasPrice    = new(big.Int).Add(head.BaseFee, big.NewInt(1))
+		signer      = types.LatestSigner(params.AllDevChainProtocolChanges)
+		code        = common.FromHex("6060604052600a8060106000396000f360606040526008565b00")
+		ctx, cancel = context.WithCancel(t.Context())
 	)
 	defer backend.Close()
 
-	head, _ := backend.HeaderByNumber(t.Context(), nil) // Should be child's, good enough
-	gasPrice := new(big.Int).Add(head.BaseFee, big.NewInt(1))
-
-	// Create a transaction to an account.
-	code := "6060604052600a8060106000396000f360606040526008565b00"
-	tx := types.NewTransaction(0, common.HexToAddress("0x01"), big.NewInt(0), 3000000, gasPrice, common.FromHex(code))
-	tx, _ = types.SignTx(tx, types.LatestSigner(params.AllDevChainProtocolChanges), testKey)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	if err := backend.SendTransaction(ctx, tx); err != nil {
+	// 1. WaitDeploy on a transaction that does not deploy a contract, verify it
+	// returns an error.
+	tx := types.MustSignNewTx(testKey, signer, &types.LegacyTx{
+		Nonce:    0,
+		To:       &common.Address{0x01},
+		Gas:      300000,
+		GasPrice: gasPrice,
+		Data:     code,
+	})
+	if err := backend.Client().SendTransaction(ctx, tx); err != nil {
 		t.Errorf("failed to send transaction: %q", err)
 	}
 	backend.Commit()
-	if _, err := bind.WaitDeployed(ctx, backend.Client, tx.Hash()); err != bind.ErrNoAddressInReceipt {
+	if _, err := bind.WaitDeployed(ctx, backend.Client(), tx.Hash()); err != bind.ErrNoAddressInReceipt {
 		t.Errorf("error mismatch: want %q, got %q, ", bind.ErrNoAddressInReceipt, err)
 	}
 
-	// Create a transaction that is not mined.
-	tx = types.NewContractCreation(1, big.NewInt(0), 3000000, gasPrice, common.FromHex(code))
-	tx, _ = types.SignTx(tx, types.LatestSigner(params.AllDevChainProtocolChanges), testKey)
+	// 2. Create a contract, but cancel the WaitDeploy before it is mined.
+	tx = types.MustSignNewTx(testKey, signer, &types.LegacyTx{
+		Nonce:    1,
+		Gas:      300000,
+		GasPrice: gasPrice,
+		Data:     code,
+	})
 
+	// Wait in another thread so that we can quickly cancel it after submitting
+	// the transaction.
+	done := make(chan struct{})
 	go func() {
-		contextCanceled := errors.New("context canceled")
-		if _, err := bind.WaitDeployed(ctx, backend.Client, tx.Hash()); err.Error() != contextCanceled.Error() {
-			t.Errorf("error mismatch: want %q, got %q, ", contextCanceled, err)
+		defer close(done)
+		_, err := bind.WaitDeployed(ctx, backend.Client(), tx.Hash())
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("error mismatch: want %v, got %v", context.Canceled, err)
 		}
 	}()
 
-	if err := backend.SendTransaction(ctx, tx); err != nil {
+	if err := backend.Client().SendTransaction(ctx, tx); err != nil {
 		t.Errorf("failed to send transaction: %q", err)
 	}
 	cancel()
+
+	// Wait for goroutine to exit or for a timeout.
+	select {
+	case <-done:
+	case <-time.After(time.Second * 2):
+		t.Fatalf("failed to cancel wait deploy")
+	}
 }

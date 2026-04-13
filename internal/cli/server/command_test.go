@@ -1,10 +1,12 @@
 package server
 
 import (
+	"io"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/mitchellh/cli"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +21,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 		"--identity", "",
 		"--datadir", "./data",
 		"--verbosity", "3",
-		"--rpc.batchlimit", "0",
+		"--rpc.batch-request-limit", "0",
 		"--snapshot",
 		"--bor.logs=false",
 		"--eth.requiredblocks", "a=b",
@@ -27,6 +29,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 		"--miner.recommit", "20s",
 		"--rpc.evmtimeout", "5s",
 		"--rpc.txfeecap", "6.0",
+		"--rpc.logquerylimit", "1000",
 		"--http.api", "eth,bor",
 		"--ws.api", "",
 		"--gpo.maxprice", "5000000000000",
@@ -43,7 +46,7 @@ func TestFlagsWithoutConfig(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "./data")
 	require.Equal(t, c.config.KeyStoreDir, "")
 	require.Equal(t, c.config.Verbosity, 3)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(0))
+	require.Equal(t, c.config.BatchRequestLimit, 0)
 	require.Equal(t, c.config.Snapshot, true)
 	require.Equal(t, c.config.BorLogs, false)
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"a": "b"})
@@ -77,7 +80,7 @@ func TestFlagsWithConfig(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "./data")
 	require.Equal(t, c.config.KeyStoreDir, "./keystore")
 	require.Equal(t, c.config.Verbosity, 3)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(0))
+	require.Equal(t, c.config.BatchRequestLimit, 0)
 	require.Equal(t, c.config.Snapshot, true)
 	require.Equal(t, c.config.BorLogs, false)
 	require.Equal(t, c.config.RequiredBlocks,
@@ -109,7 +112,7 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 		"--datadir", "",
 		"--keystore", "",
 		"--verbosity", "0",
-		"--rpc.batchlimit", "5",
+		"--rpc.batch-request-limit", "5",
 		"--snapshot=false",
 		"--bor.logs=true",
 		"--eth.requiredblocks", "x=y",
@@ -117,6 +120,7 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 		"--miner.recommit", "30s",
 		"--rpc.evmtimeout", "0s",
 		"--rpc.txfeecap", "0",
+		"--rpc.logquerylimit", "1000",
 		"--http.api", "",
 		"--ws.api", "eth,bor,web3",
 		"--gpo.maxprice", "0",
@@ -133,7 +137,7 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.Equal(t, c.config.DataDir, "")
 	require.Equal(t, c.config.KeyStoreDir, "")
 	require.Equal(t, c.config.Verbosity, 0)
-	require.Equal(t, c.config.RPCBatchLimit, uint64(5))
+	require.Equal(t, c.config.BatchRequestLimit, 5)
 	require.Equal(t, c.config.Snapshot, false)
 	require.Equal(t, c.config.BorLogs, true)
 	require.Equal(t, c.config.RequiredBlocks, map[string]string{"x": "y"})
@@ -143,4 +147,22 @@ func TestFlagsWithConfigAndFlags(t *testing.T) {
 	require.Equal(t, c.config.JsonRPC.Http.API, []string(nil))
 	require.Equal(t, c.config.JsonRPC.Ws.API, []string{"eth", "bor", "web3"})
 	require.Equal(t, c.config.Gpo.MaxPrice, big.NewInt(0))
+}
+
+func TestRemovedSlowTxThresholdFlag(t *testing.T) {
+	t.Parallel()
+
+	c := Command{
+		UI: &cli.BasicUi{
+			Writer:      io.Discard,
+			ErrorWriter: io.Discard,
+		},
+	}
+
+	err := c.extractFlags([]string{
+		"--miner.slowtxthreshold", "750ms",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "miner.slowtxthreshold")
 }

@@ -173,7 +173,6 @@ func (p *Peer) Fullname() string {
 
 // Caps returns the capabilities (supported subprotocols) of the remote peer.
 func (p *Peer) Caps() []Cap {
-	// TODO: maybe return copy
 	return p.rw.caps
 }
 
@@ -319,6 +318,8 @@ loop:
 			}
 		}
 	}
+
+	p.log.Debug("Peer disconnected", "remoteRequested", remoteRequested, "reason", reason, "err", err)
 
 	close(p.closed)
 	p.rw.close(reason)

@@ -332,7 +332,7 @@ func runCmd(ctx *cli.Context) error {
 		}
 	} else {
 		if len(code) > 0 {
-			prestate.SetCode(receiver, code)
+			prestate.SetCode(receiver, code, tracing.CodeChangeUnspecified)
 		}
 
 		execFunc = func() ([]byte, uint64, error) {

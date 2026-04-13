@@ -24,12 +24,14 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 func TestMemoryGasCost(t *testing.T) {
@@ -88,7 +90,7 @@ func TestEIP2200(t *testing.T) {
 
 		statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 		statedb.CreateAccount(address)
-		statedb.SetCode(address, hexutil.MustDecode(tt.input))
+		statedb.SetCode(address, hexutil.MustDecode(tt.input), tracing.CodeChangeUnspecified)
 		statedb.SetState(address, common.Hash{}, common.BytesToHash([]byte{tt.original}))
 		statedb.Finalise(true) // Push the state into the "original" slot
 
@@ -98,7 +100,7 @@ func TestEIP2200(t *testing.T) {
 		}
 		evm := NewEVM(vmctx, statedb, params.AllEthashProtocolChanges, Config{ExtraEips: []int{2200}})
 
-		_, gas, err := evm.Call(common.Address{}, address, nil, tt.gaspool, new(uint256.Int), nil)
+		_, gas, err := evm.Call(common.Address{}, address, nil, tt.gaspool, new(uint256.Int))
 		if !errors.Is(err, tt.failure) {
 			t.Errorf("test %d: failure mismatch: have %v, want %v", i, err, tt.failure)
 		}
@@ -144,7 +146,7 @@ func TestCreateGas(t *testing.T) {
 			address := common.BytesToAddress([]byte("contract"))
 			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
 			statedb.CreateAccount(address)
-			statedb.SetCode(address, hexutil.MustDecode(tt.code))
+			statedb.SetCode(address, hexutil.MustDecode(tt.code), tracing.CodeChangeUnspecified)
 			statedb.Finalise(true)
 
 			vmctx := BlockContext{
@@ -160,7 +162,7 @@ func TestCreateGas(t *testing.T) {
 
 			evm := NewEVM(vmctx, statedb, params.AllEthashProtocolChanges, config)
 			var startGas = uint64(testGas)
-			ret, gas, err := evm.Call(common.Address{}, address, nil, startGas, new(uint256.Int), nil)
+			ret, gas, err := evm.Call(common.Address{}, address, nil, startGas, new(uint256.Int))
 			if err != nil {
 				return false
 			}

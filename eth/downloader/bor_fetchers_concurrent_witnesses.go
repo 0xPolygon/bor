@@ -32,6 +32,8 @@ import (
 // concurrent fetcher and the downloader.
 type witnessQueue Downloader
 
+func (q *witnessQueue) kind() queueKind { return witnessQueueKind }
+
 // waker returns a notification channel that gets pinged in case more witness
 // fetches have been queued up, so the fetcher might assign it to idle peers.
 // Note: This assumes a 'witnessWakeCh' exists or will be added to downloader.queue.

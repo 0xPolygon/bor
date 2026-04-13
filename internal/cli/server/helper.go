@@ -21,7 +21,7 @@ func CreateMockServer(config *Config) (*Server, error) {
 	}
 
 	// The test uses grpc port from config so setting it here.
-	config.GRPC.Addr = fmt.Sprintf(":%d", grpcPort)
+	config.GRPC.Addr = fmt.Sprintf("127.0.0.1:%d", grpcPort)
 
 	// datadir
 	datadir, err := os.MkdirTemp("", "bor-cli-test")

@@ -3,9 +3,10 @@ package rawdb
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/stretchr/testify/require"
 )
 
 // TestDeleteStateHistoryIndex_WithoutBorReceipts tests if the deletion of all

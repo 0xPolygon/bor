@@ -28,12 +28,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/internal/testlog"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ethereum/go-ethereum/internal/testlog"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 const testMethod = "rpc_modules"
@@ -258,7 +259,7 @@ func createAndStartServer(t *testing.T, conf *httpConfig, ws bool, wsConf *wsCon
 		timeouts = &rpc.DefaultHTTPTimeouts
 	}
 
-	srv := newHTTPServer(testlog.Logger(t, log.LvlDebug), *timeouts, 100)
+	srv := newHTTPServer(testlog.Logger(t, log.LvlDebug), *timeouts)
 	assert.NoError(t, srv.enableRPC(apis(), *conf))
 
 	if ws {

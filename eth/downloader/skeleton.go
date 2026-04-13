@@ -390,7 +390,7 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 			defer close(done)
 			filled := s.filler.suspend()
 			if filled == nil {
-				log.Error("Latest filled block is not available")
+				log.Warn("Latest filled block is not available")
 				return
 			}
 			// If something was filled, try to delete stale sync helpers. If
@@ -813,7 +813,7 @@ func (s *skeleton) executeTask(peer *peerConnection, req *headerRequest) {
 
 	case <-timeoutTimer.C:
 		// Header retrieval timed out, update the metrics
-		peer.log.Warn("Header request timed out, dropping peer", "elapsed", ttl)
+		peer.log.Warn("Skeleton: header request timed out, dropping peer", "elapsed", ttl)
 		headerTimeoutMeter.Mark(1)
 		s.peers.rates.Update(peer.id, eth.BlockHeadersMsg, 0, 0)
 		s.scheduleRevertRequest(req)
@@ -1207,6 +1207,9 @@ func (s *skeleton) cleanStales(filled *types.Header) error {
 	if number < s.progress.Subchains[0].Head {
 		// The skeleton chain is partially consumed, set the new tail as filled+1.
 		tail := rawdb.ReadSkeletonHeader(s.db, number+1)
+		if tail == nil {
+			return fmt.Errorf("filled header is missing: %d", number+1)
+		}
 		if tail.ParentHash != filled.Hash() {
 			return fmt.Errorf("filled header is discontinuous with subchain: %d %s, please file an issue", number, filled.Hash())
 		}

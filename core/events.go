@@ -17,6 +17,8 @@
 package core
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -24,17 +26,23 @@ import (
 // NewTxsEvent is posted when a batch of transactions enter the transaction pool.
 type NewTxsEvent struct{ Txs []*types.Transaction }
 
+// StuckTxsEvent is posted when stuck transactions need rebroadcast.
+type StuckTxsEvent struct{ Txs []*types.Transaction }
+
 // NewMinedBlockEvent is posted when a block has been imported.
 type NewMinedBlockEvent struct {
-	Block   *types.Block
-	Witness *stateless.Witness
+	Block    *types.Block
+	Witness  *stateless.Witness
+	SealedAt time.Time // time when WriteBlockAndSetHead completed, used to measure broadcast latency
 }
 
 // RemovedLogsEvent is posted when a reorg happens
 type RemovedLogsEvent struct{ Logs []*types.Log }
 
 type ChainEvent struct {
-	Header *types.Header
+	Header       *types.Header
+	Receipts     []*types.Receipt
+	Transactions []*types.Transaction
 }
 
 type ChainSideEvent struct {

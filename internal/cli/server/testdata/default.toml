@@ -1,14 +1,13 @@
 chain = "mainnet"
 identity = "Polygon-Devs"
 verbosity = 3
-log-level = ""
 vmdebug = false
 datadir = "/var/lib/bor"
 ancient = ""
 "db.engine" = "pebble"
 "db.scheme" = "path"
 keystore = ""
-"rpc.batchlimit" = 100
+"rpc.batch-request-limit" = 1000
 "rpc.returndatalimit" = 100000
 syncmode = "full"
 gcmode = "full"
@@ -52,6 +51,7 @@ devfakeauthor = false
   url = "http://localhost:1317"
   "bor.without" = false
   grpc-address = ""
+  ws-address = ""
   "bor.runheimdall" = false
   "bor.runheimdallargs" = ""
   "bor.useheimdallapp" = false
@@ -84,6 +84,7 @@ devfakeauthor = false
   gascap = 50000000
   evmtimeout = "5s"
   txfeecap = 1.0
+  logquerylimit = 1000
   allow-unprotected-txs = false
   enabledeprecatedpersonal = false
   [jsonrpc.http]
@@ -177,7 +178,7 @@ devfakeauthor = false
   disable-bor-wallet = true
 
 [grpc]
-  addr = ":3131"
+  addr = "127.0.0.1:3131"
 
 [developer]
   dev = false

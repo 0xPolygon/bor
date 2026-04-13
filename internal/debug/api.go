@@ -35,9 +35,10 @@ import (
 	"sync"
 	"time"
 
+	bexpr "github.com/hashicorp/go-bexpr"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
-	bexpr "github.com/hashicorp/go-bexpr"
 )
 
 // Handler is the global debugging handler.

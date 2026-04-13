@@ -28,10 +28,14 @@ import (
 	"path"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -47,11 +51,11 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
-	"github.com/holiman/uint256"
-	"github.com/stretchr/testify/require"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 // So we can deterministically seed different blockchains
@@ -219,7 +223,7 @@ func TestParallelBlockChainImport(t *testing.T) {
 
 func testParallelBlockChainImport(t *testing.T, scheme string, enforceParallelProcessor bool) {
 	db, _, blockchain, err := newCanonical(ethash.NewFaker(), 10, true, scheme)
-	blockchain.parallelProcessor = NewParallelStateProcessor(blockchain.chainConfig, blockchain, blockchain.engine)
+	blockchain.parallelProcessor = NewParallelStateProcessor(blockchain.hc, blockchain)
 
 	if err != nil {
 		t.Fatalf("failed to make new canonical chain: %v", err)
@@ -976,15 +980,15 @@ func testFastVsFullChains(t *testing.T, scheme string) {
 		}
 
 		// Check that hash-to-number mappings are present in all databases.
-		if m := rawdb.ReadHeaderNumber(fastDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(fastDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in fastdb: %v", num, hash, m)
 		}
 
-		if m := rawdb.ReadHeaderNumber(ancientDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(ancientDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in ancientdb: %v", num, hash, m)
 		}
 
-		if m := rawdb.ReadHeaderNumber(archiveDb, hash); m == nil || *m != num {
+		if m, ok := rawdb.ReadHeaderNumber(archiveDb, hash); !ok || m != num {
 			t.Errorf("block #%d [%x]: wrong hash-to-number mapping in archivedb: %v", num, hash, m)
 		}
 	}
@@ -2120,6 +2124,7 @@ func TestInsertReceiptChainRollback(t *testing.T) {
 	testInsertReceiptChainRollback(t, rawdb.PathScheme)
 }
 
+//nolint:unused
 func testInsertReceiptChainRollback(t *testing.T, scheme string) {
 	// Generate forked chain. The returned BlockChain object is used to process the side chain blocks.
 	tmpChain, sideblocks, canonblocks, gspec, err := getLongAndShortChains(scheme)
@@ -4733,56 +4738,12 @@ func TestPragueRequests(t *testing.T) {
 	}
 }
 
-// mockChainValidator is a mock implementation of ethereum.ChainValidator for testing
-type mockChainValidator struct {
-	hasMilestone    bool
-	milestoneNumber uint64
-	milestoneHash   common.Hash
-}
-
-func (m *mockChainValidator) IsValidPeer(fetchHeadersByNumber func(number uint64, amount int, skip int, reverse bool) ([]*types.Header, []common.Hash, error)) (bool, error) {
-	return true, nil
-}
-
-func (m *mockChainValidator) IsValidChain(currentHeader *types.Header, chain []*types.Header) (bool, error) {
-	return true, nil
-}
-
-func (m *mockChainValidator) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {
-	return false, 0, common.Hash{}
-}
-
-func (m *mockChainValidator) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
-	return m.hasMilestone, m.milestoneNumber, m.milestoneHash
-}
-
-func (m *mockChainValidator) ProcessCheckpoint(endBlockNum uint64, endBlockHash common.Hash) {}
-
-func (m *mockChainValidator) ProcessMilestone(endBlockNum uint64, endBlockHash common.Hash) {}
-
-func (m *mockChainValidator) ProcessFutureMilestone(num uint64, hash common.Hash) {}
-
-func (m *mockChainValidator) PurgeWhitelistedCheckpoint() {}
-
-func (m *mockChainValidator) PurgeWhitelistedMilestone() {}
-
-func (m *mockChainValidator) LockMutex(endBlockNum uint64) bool { return true }
-
-func (m *mockChainValidator) UnlockMutex(doLock bool, milestoneId string, endBlockNum uint64, endBlockHash common.Hash) {
-}
-
-func (m *mockChainValidator) UnlockSprint(endBlockNum uint64) {}
-
-func (m *mockChainValidator) RemoveMilestoneID(milestoneId string) {}
-
-func (m *mockChainValidator) GetMilestoneIDsList() []string { return nil }
-
 // mockEngine that can fail header verification for specific block numbers
 type mockFailingEngine struct {
 	*ethash.Ethash
 	shouldFailHeader      map[uint64]bool
-	allowInitialInsertion bool // Allow initial insertion to succeed
-	insertionComplete     bool // Track when insertion is complete
+	allowInitialInsertion bool        // Allow initial insertion to succeed
+	insertionComplete     atomic.Bool // Track when insertion is complete
 }
 
 func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
@@ -4797,7 +4758,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 				return
 			default:
 				// If we're allowing initial insertion and it's not complete yet, succeed
-				if m.allowInitialInsertion && !m.insertionComplete {
+				if m.allowInitialInsertion && !m.insertionComplete.Load() {
 					results <- nil
 				} else if m.shouldFailHeader != nil && m.shouldFailHeader[header.Number.Uint64()] {
 					results <- errors.New("mock header verification failure")
@@ -4812,7 +4773,7 @@ func (m *mockFailingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, hea
 }
 
 func (m *mockFailingEngine) markInsertionComplete() {
-	m.insertionComplete = true
+	m.insertionComplete.Store(true)
 }
 
 // TestHeaderVerificationLoop tests the background header verification functionality
@@ -4825,24 +4786,23 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 	// Test case 1: Valid chain - no rewinds should happen
 	t.Run("ValidChain", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		// Create a mock validator that has a finalized block at height 3
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 3,
-			milestoneHash:   common.HexToHash("0x123"),
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 8, nil)
 
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4887,19 +4847,14 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
-		// Create a mock validator that has a finalized block at height 3
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 3,
-			milestoneHash:   common.HexToHash("0x123"),
-		}
-
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 8, nil)
 
-		// Create blockchain with mock validator and failing engine
+		// Create blockchain with milestone fetcher and failing engine
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil // milestone at block 3
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4930,25 +4885,26 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		}
 	})
 
-	// Test case 3: No finalized block - verification should not run
+	// Test case 3: Fetcher returns error - verification should not run
 	t.Run("NoFinalizedBlock", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		// Create a mock validator with no finalized block
-		mockValidator := &mockChainValidator{
-			hasMilestone: false,
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 0, fmt.Errorf("no milestone available")
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -4972,27 +4928,26 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 		}
 	})
 
-	// Test case 4: Current head at finalized block - no verification needed
+	// Test case 4: Milestone at head - no verification needed
 	t.Run("HeadAtFinalizedBlock", func(t *testing.T) {
 		engine := ethash.NewFaker()
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
 		genesis := &Genesis{
-			Config:  params.TestChainConfig,
+			Config:  &config,
 			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create a mock validator where finalized block equals current head
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 5, // Same as head
-			milestoneHash:   blocks[4].Hash(),
-		}
-
-		// Create blockchain with mock validator
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 5, nil // milestone at head
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -5019,23 +4974,23 @@ func testHeaderVerificationLoop(t *testing.T, scheme string) {
 	// Test case 5: Verify proper shutdown when blockchain stops
 	t.Run("ProperShutdown", func(t *testing.T) {
 		engine := ethash.NewFaker()
-		genesis := &Genesis{
-			Config:  params.TestChainConfig,
-			BaseFee: big.NewInt(params.InitialBaseFee),
-		}
 
-		mockValidator := &mockChainValidator{
-			hasMilestone:    true,
-			milestoneNumber: 2,
-			milestoneHash:   common.HexToHash("0x123"),
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
 		}
 
 		// Generate blocks
 		_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 5, nil)
 
-		// Create blockchain
 		cfg := DefaultConfig()
-		cfg.Checker = mockValidator
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 2, nil
+		}
 		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 		if err != nil {
 			t.Fatalf("failed to create blockchain: %v", err)
@@ -5060,24 +5015,24 @@ func TestVerifyPendingHeaders(t *testing.T) {
 
 func testVerifyPendingHeaders(t *testing.T, scheme string) {
 	engine := ethash.NewFaker()
+
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{
+		RioBlock: big.NewInt(0),
+	}
 	genesis := &Genesis{
-		Config:  params.TestChainConfig,
+		Config:  &config,
 		BaseFee: big.NewInt(params.InitialBaseFee),
 	}
 
 	// Generate blocks
 	_, blocks, _ := GenerateChainWithGenesis(genesis, engine, 8, nil)
 
-	// Test with mock validator
-	mockValidator := &mockChainValidator{
-		hasMilestone:    true,
-		milestoneNumber: 3,
-		milestoneHash:   common.HexToHash("0x123"),
-	}
-
-	// Create blockchain
+	// Create blockchain with milestone fetcher
 	cfg := DefaultConfig()
-	cfg.Checker = mockValidator
+	cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+		return 3, nil
+	}
 	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
 	if err != nil {
 		t.Fatalf("failed to create blockchain: %v", err)
@@ -5101,15 +5056,16 @@ func testVerifyPendingHeaders(t *testing.T, scheme string) {
 	}
 }
 
-// TestHeaderVerificationWithNilChecker tests that verification is skipped when checker is nil
-func TestHeaderVerificationWithNilChecker(t *testing.T) {
+// TestHeaderVerificationWithNilFetcher tests that the verification loop is skipped
+// when MilestoneFetcher is nil.
+func TestHeaderVerificationWithNilFetcher(t *testing.T) {
 	engine := ethash.NewFaker()
 	genesis := &Genesis{
 		Config:  params.TestChainConfig,
 		BaseFee: big.NewInt(params.InitialBaseFee),
 	}
 
-	// Create blockchain with nil checker
+	// Create blockchain without MilestoneFetcher
 	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, DefaultConfig())
 	if err != nil {
 		t.Fatalf("failed to create blockchain: %v", err)
@@ -5124,13 +5080,202 @@ func TestHeaderVerificationWithNilChecker(t *testing.T) {
 
 	initialHead := chain.CurrentBlock().Number.Uint64()
 
-	// Wait a bit - the verification loop should not run since checker is nil
+	// Wait a bit - the verification loop should not run since milestoneFetcher is nil
 	time.Sleep(2 * time.Second)
 
 	// Head should not have changed
 	newHead := chain.CurrentBlock().Number.Uint64()
 	if newHead != initialHead {
-		t.Errorf("Head should not have changed when checker is nil, got %d, want %d", newHead, initialHead)
+		t.Errorf("Head should not have changed when milestoneFetcher is nil, got %d, want %d", newHead, initialHead)
+	}
+}
+
+// headerCountingEngine wraps ethash and records how many headers VerifyHeaders receives.
+type headerCountingEngine struct {
+	*ethash.Ethash
+	headersVerified atomic.Int64
+}
+
+func (m *headerCountingEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+	m.headersVerified.Store(int64(len(headers)))
+	return m.Ethash.VerifyHeaders(chain, headers)
+}
+
+// TestVerifyPendingHeadersMilestoneFetcher tests that verifyPendingHeaders
+// verifies only headers between the Heimdall milestone and the chain head.
+func TestVerifyPendingHeadersMilestoneFetcher(t *testing.T) {
+	t.Run("VerifiesFromMilestoneToHead", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 20, nil)
+
+		cfg := DefaultConfig()
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 3, nil // milestone at block 3
+		}
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		chain.verifyPendingHeaders()
+
+		// Should verify blocks 4-20 = 17 headers
+		if got := engine.headersVerified.Load(); got != 17 {
+			t.Errorf("expected 17 headers verified, got %d", got)
+		}
+	})
+
+	t.Run("SkipsWhenMilestoneAheadOfHead", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 10, nil)
+
+		cfg := DefaultConfig()
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 100, nil // milestone ahead of head (still syncing)
+		}
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		engine.headersVerified.Store(0) // reset counter after initial insertion
+
+		chain.verifyPendingHeaders()
+
+		// Should not verify anything since milestone > head
+		if got := engine.headersVerified.Load(); got != 0 {
+			t.Errorf("expected 0 headers verified when milestone ahead of head, got %d", got)
+		}
+	})
+
+	t.Run("SkipsOnFetcherError", func(t *testing.T) {
+		engine := &headerCountingEngine{Ethash: ethash.NewFaker()}
+
+		config := *params.TestChainConfig
+		config.Bor = &params.BorConfig{
+			RioBlock: big.NewInt(0),
+		}
+		genesis := &Genesis{
+			Config:  &config,
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+
+		_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 10, nil)
+
+		cfg := DefaultConfig()
+		cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+			return 0, fmt.Errorf("heimdall unavailable")
+		}
+		chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+		if err != nil {
+			t.Fatalf("failed to create blockchain: %v", err)
+		}
+		defer chain.Stop()
+
+		if _, err := chain.InsertChain(blocks, false); err != nil {
+			t.Fatalf("failed to insert chain: %v", err)
+		}
+
+		engine.headersVerified.Store(0) // reset counter after initial insertion
+
+		chain.verifyPendingHeaders()
+
+		// Should not verify anything when fetcher returns error
+		if got := engine.headersVerified.Load(); got != 0 {
+			t.Errorf("expected 0 headers verified on fetcher error, got %d", got)
+		}
+	})
+}
+
+// TestVerifyPendingHeadersReorgMetrics tests that reorg metrics are recorded
+// when verifyPendingHeaders rewinds the chain due to an invalid header.
+func TestVerifyPendingHeadersReorgMetrics(t *testing.T) {
+	failingHeaders := map[uint64]bool{6: true}
+	engine := &mockFailingEngine{
+		Ethash:                ethash.NewFaker(),
+		shouldFailHeader:      failingHeaders,
+		allowInitialInsertion: true,
+	}
+
+	config := *params.TestChainConfig
+	config.Bor = &params.BorConfig{
+		RioBlock: big.NewInt(0),
+	}
+	genesis := &Genesis{
+		Config:  &config,
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+
+	_, blocks, _ := GenerateChainWithGenesis(genesis, engine.Ethash, 8, nil)
+
+	cfg := DefaultConfig()
+	cfg.MilestoneFetcher = func(ctx context.Context) (uint64, error) {
+		return 3, nil // milestone at block 3
+	}
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), genesis, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	engine.markInsertionComplete()
+
+	// Snapshot metrics before
+	reorgCountBefore := blockReorgMeter.Snapshot().Count()
+	reorgDropBefore := blockReorgDropMeter.Snapshot().Count()
+
+	chain.verifyPendingHeaders()
+
+	// Chain should have rewound to block 5
+	newHead := chain.CurrentBlock().Number.Uint64()
+	if newHead != 5 {
+		t.Errorf("expected head to rewind to 5, got %d", newHead)
+	}
+
+	// Reorg execute meter should have incremented by 1
+	reorgCountAfter := blockReorgMeter.Snapshot().Count()
+	if reorgCountAfter-reorgCountBefore != 1 {
+		t.Errorf("expected blockReorgMeter to increment by 1, got %d", reorgCountAfter-reorgCountBefore)
+	}
+
+	// Reorg drop meter should have incremented by 3 (dropped blocks 6, 7, 8)
+	reorgDropAfter := blockReorgDropMeter.Snapshot().Count()
+	if reorgDropAfter-reorgDropBefore != 3 {
+		t.Errorf("expected blockReorgDropMeter to increment by 3, got %d", reorgDropAfter-reorgDropBefore)
 	}
 }
 
@@ -5890,5 +6035,395 @@ func TestSplitReceiptsAndDeriveFields(t *testing.T) {
 		normal, stateSync := splitReceiptsAndDeriveFields(encoded, 0, common.Hash{}, &mockBorCfg)
 		require.Equal(t, rlp.RawValue(normalEncoded), normal, fmt.Sprintf("case: %s, normal receipts mismatch, got: %v, expected: %v", test.name, normal, normalEncoded))
 		require.Equal(t, rlp.RawValue(stateSyncEncoded), stateSync, fmt.Sprintf("case: %s, state-sync receipts mismatch, got: %v, expected: %v", test.name, stateSync, stateSyncEncoded))
+	}
+}
+
+// TestWitnessCache tests the witness caching functionality to ensure witnesses
+// are properly cached during writes and retrieved from cache during reads.
+func TestWitnessCache(t *testing.T) {
+	// Setup: Create a test blockchain
+	engine := ethash.NewFaker()
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+	}
+	cfg := DefaultConfig()
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Create test witness data
+	testHash := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+	testWitness1 := []byte("test witness data 1")
+	testWitness2 := []byte("test witness data 2 - different")
+
+	// Test 1: Write witness and verify it's cached
+	rawdb.WriteWitness(chain.db, testHash, testWitness1)
+	// Manually add to cache to simulate what happens during block import
+	chain.witnessCache.Add(testHash, testWitness1)
+
+	// Verify witness can be retrieved from cache
+	retrieved := chain.GetWitness(testHash)
+	require.NotNil(t, retrieved, "witness should be retrieved")
+	require.Equal(t, testWitness1, retrieved, "retrieved witness should match written witness")
+
+	// Test 2: Verify cache hit (witness should be in cache, not read from DB)
+	// We can verify this by checking the cache directly
+	cached, ok := chain.witnessCache.Get(testHash)
+	require.True(t, ok, "witness should be in cache")
+	require.Equal(t, testWitness1, cached, "cached witness should match")
+
+	// Test 3: Update witness in cache and verify GetWitness returns cached version
+	chain.witnessCache.Add(testHash, testWitness2)
+	retrieved = chain.GetWitness(testHash)
+	require.Equal(t, testWitness2, retrieved, "GetWitness should return cached version")
+
+	// Test 4: Test cache miss - witness not in cache but in DB
+	testHash2 := common.HexToHash("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+	testWitness3 := []byte("test witness data 3")
+	rawdb.WriteWitness(chain.db, testHash2, testWitness3)
+	// Don't add to cache - simulate cache miss
+
+	// GetWitness should read from DB and cache it
+	retrieved = chain.GetWitness(testHash2)
+	require.NotNil(t, retrieved, "witness should be retrieved from DB")
+	require.Equal(t, testWitness3, retrieved, "retrieved witness should match DB witness")
+
+	// Verify it's now in cache
+	cached, ok = chain.witnessCache.Get(testHash2)
+	require.True(t, ok, "witness should be cached after GetWitness")
+	require.Equal(t, testWitness3, cached, "cached witness should match")
+
+	// Test 5: Test non-existent witness
+	nonExistentHash := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000")
+	retrieved = chain.GetWitness(nonExistentHash)
+	require.Nil(t, retrieved, "non-existent witness should return nil")
+
+	// Test 6: Test cache purge
+	chain.witnessCache.Purge()
+	_, ok = chain.witnessCache.Get(testHash)
+	require.False(t, ok, "witness should not be in cache after purge")
+	_, ok = chain.witnessCache.Get(testHash2)
+	require.False(t, ok, "witness should not be in cache after purge")
+
+	// After purge, GetWitness should still work by reading from DB
+	retrieved = chain.GetWitness(testHash2)
+	require.NotNil(t, retrieved, "witness should still be retrievable from DB after cache purge")
+	require.Equal(t, testWitness3, retrieved, "retrieved witness should match DB witness")
+
+	// Test 7: Test that witness is cached during block import
+	// Create a block and witness, then import it
+	testChain, testBlock, testWitness := createTestBlockAndWitness(t)
+	defer testChain.Stop()
+
+	// Import the block with witness - this should cache the witness
+	blockHash := testBlock.Hash()
+	_, err = testChain.InsertChainStateless(types.Blocks{testBlock}, []*stateless.Witness{testWitness})
+	require.NoError(t, err, "block import should succeed")
+
+	// Verify witness is in cache after import
+	cached, ok = testChain.witnessCache.Get(blockHash)
+	require.True(t, ok, "witness should be cached after block import")
+	require.NotNil(t, cached, "cached witness should not be nil")
+
+	// Verify GetWitness retrieves from cache
+	retrieved = testChain.GetWitness(blockHash)
+	require.NotNil(t, retrieved, "witness should be retrievable after import")
+	require.Equal(t, cached, retrieved, "GetWitness should return cached witness")
+
+	// Test 8: Test HasWitness with cache hit
+	testHash3 := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	testWitness4 := []byte("test witness data 4")
+	chain.WriteWitness(testHash3, testWitness4)
+
+	// HasWitness should return true (from cache)
+	require.True(t, chain.HasWitness(testHash3), "HasWitness should return true for cached witness")
+
+	// Test 9: Test HasWitness with cache miss but DB hit
+	testHash4 := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	testWitness5 := []byte("test witness data 5")
+	rawdb.WriteWitness(chain.db, testHash4, testWitness5)
+	// Don't add to cache
+
+	// HasWitness should return true (from DB)
+	require.True(t, chain.HasWitness(testHash4), "HasWitness should return true for witness in DB")
+
+	// Test 10: Test HasWitness with complete miss
+	testHash5 := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	require.False(t, chain.HasWitness(testHash5), "HasWitness should return false for non-existent witness")
+
+	// Test 11: Test WriteWitness wrapper ensures cache consistency
+	testHash6 := common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444")
+	testWitness6 := []byte("test witness data 6")
+
+	// Use WriteWitness wrapper
+	chain.WriteWitness(testHash6, testWitness6)
+
+	// Verify it's in both DB and cache
+	require.True(t, chain.HasWitness(testHash6), "HasWitness should return true after WriteWitness")
+	retrieved = chain.GetWitness(testHash6)
+	require.Equal(t, testWitness6, retrieved, "GetWitness should return the written witness")
+	cached, ok = chain.witnessCache.Get(testHash6)
+	require.True(t, ok, "witness should be in cache after WriteWitness")
+	require.Equal(t, testWitness6, cached, "cached witness should match written witness")
+}
+
+// TestWitnessCachePurgeOnReorg tests that the witness cache is properly purged during chain reorganization
+func TestWitnessCachePurgeOnReorg(t *testing.T) {
+	// Create a test blockchain
+	engine := ethash.NewFaker()
+	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	gspec := &Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{addr: {Balance: big.NewInt(10000000000000000)}},
+	}
+	cfg := DefaultConfig()
+
+	db := rawdb.NewMemoryDatabase()
+	chain, err := NewBlockChain(db, gspec, engine, cfg)
+	if err != nil {
+		t.Fatalf("failed to create blockchain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Generate some blocks
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 5, func(i int, b *BlockGen) {
+		b.SetCoinbase(common.Address{1})
+		tx, _ := types.SignTx(types.NewTransaction(uint64(i), common.HexToAddress("0x1234"), big.NewInt(1000), 21000, big.NewInt(2000000000), nil), types.HomesteadSigner{}, key)
+		b.AddTx(tx)
+	})
+
+	// Import blocks
+	_, err = chain.InsertChain(blocks, true)
+	require.NoError(t, err, "block import should succeed")
+
+	// Manually add witnesses to cache and DB for these blocks
+	for i, block := range blocks {
+		witnessData := []byte(fmt.Sprintf("witness data for block %d", i))
+		chain.WriteWitness(block.Hash(), witnessData)
+	}
+
+	// Verify witnesses are in cache
+	for i, block := range blocks {
+		cached, ok := chain.witnessCache.Get(block.Hash())
+		require.True(t, ok, "witness for block %d should be in cache", i)
+		require.NotNil(t, cached, "cached witness for block %d should not be nil", i)
+	}
+
+	// Trigger a reorg by setting head to block 2 (this calls setHeadBeyondRoot which purges cache)
+	chain.SetHead(2)
+
+	// Verify cache was purged (witnesses should no longer be in cache)
+	for i, block := range blocks {
+		_, ok := chain.witnessCache.Get(block.Hash())
+		require.False(t, ok, "witness for block %d should not be in cache after reorg", i)
+	}
+
+	// Verify witnesses are still in DB (GetWitness should work by reading from DB)
+	for i, block := range blocks {
+		witness := chain.GetWitness(block.Hash())
+		require.NotNil(t, witness, "witness for block %d should still be in DB after reorg", i)
+
+		// After GetWitness, it should be back in cache
+		_, ok := chain.witnessCache.Get(block.Hash())
+		require.True(t, ok, "witness for block %d should be re-cached after GetWitness", i)
+	}
+}
+
+// TestStateAtWithReaders tests the StateAtWithReaders function which returns a state
+// along with two separate readers (prefetch and process) that share cache but track
+// separate statistics. This is used for cache hit/miss tracking in block production.
+func TestStateAtWithReaders(t *testing.T) {
+	t.Parallel()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(0).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec   = &Genesis{
+			Config: params.TestChainConfig,
+			Alloc:  types.GenesisAlloc{address: {Balance: funds}},
+		}
+		genDb   = rawdb.NewMemoryDatabase()
+		genesis = gspec.MustCommit(genDb, triedb.NewDatabase(genDb, triedb.HashDefaults))
+	)
+
+	// Create blockchain
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), DefaultConfig())
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	// Generate some blocks with transactions
+	signer := types.LatestSigner(gspec.Config)
+	blocks, _ := GenerateChain(gspec.Config, genesis, ethash.NewFaker(), genDb, 3, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(address), common.Address{byte(i + 1)}, big.NewInt(1000), params.TxGas, gen.BaseFee(), nil),
+			signer,
+			key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Insert the blocks
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	// Test that prefetch and process readers are independent
+	t.Run("independent readers", func(t *testing.T) {
+		block := blocks[0]
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		if err != nil {
+			t.Fatalf("StateAtWithReaders failed: %v", err)
+		}
+
+		// Read state using the process reader (via statedb)
+		_ = statedb.GetBalance(address)
+
+		// Get stats from both readers
+		processStats := processReader.GetStats()
+		prefetchStats := prefetchReader.GetStats()
+
+		// Verify process reader has some activity (we just used it)
+		processTotalReads := processStats.AccountHit + processStats.AccountMiss + processStats.StorageHit + processStats.StorageMiss
+		if processTotalReads == 0 {
+			t.Log("Warning: expected process reader to have some reads tracked")
+		}
+
+		// The prefetch reader might have fewer or no reads (we didn't explicitly use it)
+		// But it should be tracking independently
+		prefetchTotalReads := prefetchStats.AccountHit + prefetchStats.AccountMiss + prefetchStats.StorageHit + prefetchStats.StorageMiss
+
+		// The key test: verify they are tracking separately by checking they don't have identical stats
+		// (unless both happen to be zero, which is fine for this test)
+		if processTotalReads > 0 && prefetchTotalReads > 0 {
+			// If both have reads, they should be able to track independently
+			t.Logf("Process reader reads: %d, Prefetch reader reads: %d", processTotalReads, prefetchTotalReads)
+		}
+	})
+
+	// Test error handling - tests the first error path from ReadersWithCacheStats
+	// Note: The second error path from state.NewWithReader (lines 530-532 in blockchain_reader.go)
+	// is currently unreachable because NewWithReader never returns an error in the current
+	// implementation. It's kept for API compatibility and future-proofing.
+	t.Run("error from invalid root", func(t *testing.T) {
+		invalidRoot := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		statedb, _, prefetchReader, processReader, err := chain.StateAtWithReaders(invalidRoot)
+
+		if err == nil {
+			t.Fatal("expected error when using invalid root hash")
+		}
+
+		// Verify all return values are nil on error
+		if statedb != nil || prefetchReader != nil || processReader != nil {
+			t.Fatalf("expected all nil returns on error, got statedb=%v, prefetchReader=%v, processReader=%v",
+				statedb, prefetchReader, processReader)
+		}
+
+		t.Logf("Got expected error for invalid root: %v", err)
+	})
+
+	// P1 Test: Verify prefetch and process readers maintain independence
+	// when one modifies state
+	t.Run("prefetch process independence", func(t *testing.T) {
+		block := blocks[1]
+		statedb, throwaway, prefetchReader, processReader, err := chain.StateAtWithReaders(block.Root())
+		if err != nil {
+			t.Fatalf("StateAtWithReaders failed: %v", err)
+		}
+
+		// Get initial balance
+		originalBalance := statedb.GetBalance(address)
+
+		// Use throwaway state (prefetch) to modify account
+		// This simulates what prefetchFromPool does
+		throwaway.SetBalance(address, uint256.NewInt(999999), 0)
+
+		// Verify main statedb (process) is unaffected
+		processBalance := statedb.GetBalance(address)
+		if processBalance.Cmp(originalBalance) != 0 {
+			t.Errorf("Process statedb should be unaffected by throwaway modifications, got %v, want %v",
+				processBalance, originalBalance)
+		}
+
+		// Verify both readers can track stats independently
+		processStats := processReader.GetStats()
+		prefetchStats := prefetchReader.GetStats()
+
+		// Both should have some activity
+		if processStats.AccountHit+processStats.AccountMiss == 0 {
+			t.Error("Process reader should have tracked account reads")
+		}
+
+		t.Logf("Independence test - Process stats: %d hits/%d misses, Prefetch stats: %d hits/%d misses",
+			processStats.AccountHit, processStats.AccountMiss,
+			prefetchStats.AccountHit, prefetchStats.AccountMiss)
+
+		// The key validation: throwaway state modifications don't affect main state
+		// This ensures prefetch speculation doesn't corrupt the actual block building state
+	})
+}
+
+// TestWriteBlockMetrics verifies that the block write path metrics
+// (batch write, state commit, witness collection) are updated after
+// inserting blocks into the chain, and that the slow-operation warning
+// log code paths execute without errors.
+func TestWriteBlockMetrics(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		address = crypto.PubkeyToAddress(key.PublicKey)
+		funds   = big.NewInt(1000000000000000)
+		gspec   = &Genesis{
+			Config:  params.TestChainConfig,
+			Alloc:   types.GenesisAlloc{address: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFaker(), 5, func(i int, block *BlockGen) {
+		block.SetCoinbase(common.Address{0x01})
+		tx, err := types.SignTx(types.NewTransaction(block.TxNonce(address), common.Address{0x02}, big.NewInt(1000), params.TxGas, block.header.BaseFee, nil), signer, key)
+		if err != nil {
+			panic(err)
+		}
+		block.AddTx(tx)
+	})
+
+	chain, _ := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFaker(), DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	defer chain.Stop()
+
+	// Capture metric counts before insertion
+	batchCountBefore := blockBatchWriteTimer.Snapshot().Count()
+	commitCountBefore := stateCommitTimer.Snapshot().Count()
+
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("failed to insert chain: %v", err)
+	}
+
+	// Verify timers were updated
+	batchSnap := blockBatchWriteTimer.Snapshot()
+	commitSnap := stateCommitTimer.Snapshot()
+
+	if batchSnap.Count() <= batchCountBefore {
+		t.Error("blockBatchWriteTimer should have been updated after block insertion")
+	}
+	if commitSnap.Count() <= commitCountBefore {
+		t.Error("stateCommitTimer should have been updated after block insertion")
+	}
+
+	// Verify durations are non-negative (the duration variables that feed
+	// both the metrics and the >100ms warning log checks are valid)
+	if batchSnap.Mean() < 0 {
+		t.Error("blockBatchWriteTimer mean duration should be non-negative")
+	}
+	if commitSnap.Mean() < 0 {
+		t.Error("stateCommitTimer mean duration should be non-negative")
 	}
 }

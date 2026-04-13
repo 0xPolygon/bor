@@ -39,19 +39,55 @@ var (
 	errInvalidTopic           = errors.New("invalid topic(s)")
 	errFilterNotFound         = errors.New("filter not found")
 	errInvalidBlockRange      = errors.New("invalid block range params")
+	errUnknownBlock           = errors.New("unknown block")
+	errBlockHashWithRange     = errors.New("can't specify fromBlock/toBlock with blockHash")
 	errPendingLogsUnsupported = errors.New("pending logs are not supported")
 	errExceedMaxTopics        = errors.New("exceed max topics")
-	errExceedMaxAddresses     = errors.New("exceed max addresses")
+	errExceedLogQueryLimit    = errors.New("exceed max addresses or topics per search position")
+	errExceedMaxTxHashes      = errors.New("exceed max number of transaction hashes allowed per transactionReceipts subscription")
+	errExceedBlockRangeLimit  = errors.New("block range exceeds configured limit")
 )
 
 const (
-	// The maximum number of addresses allowed in a filter criteria
-	maxAddresses = 1000
 	// The maximum number of topic criteria allowed, vm.LOG4 - vm.LOG0
 	maxTopics = 4
 	// The maximum number of allowed topics within a topic criteria
 	maxSubTopics = 1000
+	// The maximum number of transaction hash criteria allowed in a single subscription
+	maxTxHashes = 200
 )
+
+// resolveBlockNumForRangeCheck converts a raw block number (which may be a negative
+// sentinel for symbolic values like "latest", "earliest", etc.) to a concrete
+// non-negative height suitable for range arithmetic. It is used only for the
+// range-limit guard; the actual filter still receives the original sentinel value.
+//   - earliest (-5) → 0
+//   - all other sentinels (latest, safe, finalized, pending) → head
+//   - concrete non-negative values → unchanged
+func resolveBlockNumForRangeCheck(n int64, head uint64) uint64 {
+	if n >= 0 {
+		return uint64(n)
+	}
+	if n == rpc.EarliestBlockNumber.Int64() {
+		return 0
+	}
+	return head // latest, safe, finalized, pending all treated as head
+}
+
+// checkBlockRangeLimit returns errExceedBlockRangeLimit if the range [begin, end]
+// exceeds the configured limit after resolving any symbolic block numbers.
+// The check is a no-op when limit is 0.
+func checkBlockRangeLimit(begin, end int64, head, limit uint64) error {
+	if limit == 0 {
+		return nil
+	}
+	effectiveBegin := resolveBlockNumForRangeCheck(begin, head)
+	effectiveEnd := resolveBlockNumForRangeCheck(end, head)
+	if effectiveEnd >= effectiveBegin && effectiveEnd-effectiveBegin > limit {
+		return errExceedBlockRangeLimit
+	}
+	return nil
+}
 
 // filter is a helper struct that holds meta information over the filter type
 // and associated subscription in the event system.
@@ -69,24 +105,25 @@ type filter struct {
 // FilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Ethereum protocol such as blocks, transactions and logs.
 type FilterAPI struct {
-	sys       *FilterSystem
-	events    *EventSystem
-	filtersMu sync.Mutex
-	filters   map[rpc.ID]*filter
-	timeout   time.Duration
-	borLogs   bool
-
-	chainConfig *params.ChainConfig
+	sys           *FilterSystem
+	events        *EventSystem
+	filtersMu     sync.Mutex
+	filters       map[rpc.ID]*filter
+	timeout       time.Duration
+	logQueryLimit int
+	borLogs       bool
+	chainConfig   *params.ChainConfig
 }
 
 // NewFilterAPI returns a new FilterAPI instance.
 func NewFilterAPI(system *FilterSystem, borLogs bool) *FilterAPI {
 	api := &FilterAPI{
-		sys:     system,
-		events:  NewEventSystem(system),
-		filters: make(map[rpc.ID]*filter),
-		timeout: system.cfg.Timeout,
-		borLogs: borLogs,
+		sys:           system,
+		events:        NewEventSystem(system),
+		filters:       make(map[rpc.ID]*filter),
+		timeout:       system.cfg.Timeout,
+		logQueryLimit: system.cfg.LogQueryLimit,
+		borLogs:       borLogs,
 	}
 	go api.timeoutLoop(system.cfg.Timeout)
 
@@ -147,6 +184,7 @@ func (api *FilterAPI) NewPendingTransactionFilter(fullTx *bool) rpc.ID {
 	api.filtersMu.Unlock()
 
 	go func() {
+		defer pendingTxSub.Unsubscribe()
 		for {
 			select {
 			case pTx := <-pendingTxs:
@@ -223,6 +261,7 @@ func (api *FilterAPI) NewBlockFilter() rpc.ID {
 	api.filtersMu.Unlock()
 
 	go func() {
+		defer headerSub.Unsubscribe()
 		for {
 			select {
 			case h := <-headers:
@@ -305,6 +344,83 @@ func (api *FilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc.Subsc
 	return rpcSub, nil
 }
 
+// TransactionReceiptsQuery defines criteria for transaction receipts subscription.
+// Same as ethereum.TransactionReceiptsQuery but with UnmarshalJSON() method.
+type TransactionReceiptsQuery ethereum.TransactionReceiptsQuery
+
+// UnmarshalJSON sets *args fields with given data.
+func (args *TransactionReceiptsQuery) UnmarshalJSON(data []byte) error {
+	type input struct {
+		TransactionHashes []common.Hash `json:"transactionHashes"`
+	}
+
+	var raw input
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	args.TransactionHashes = raw.TransactionHashes
+	return nil
+}
+
+// TransactionReceipts creates a subscription that fires transaction receipts when transactions are included in blocks.
+func (api *FilterAPI) TransactionReceipts(ctx context.Context, filter *TransactionReceiptsQuery) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	// Validate transaction hashes limit
+	if filter != nil && len(filter.TransactionHashes) > maxTxHashes {
+		return nil, errExceedMaxTxHashes
+	}
+
+	var (
+		rpcSub          = notifier.CreateSubscription()
+		matchedReceipts = make(chan []*ReceiptWithTx)
+		txHashes        []common.Hash
+	)
+
+	if filter != nil {
+		txHashes = filter.TransactionHashes
+	}
+
+	receiptsSub := api.events.SubscribeTransactionReceipts(txHashes, matchedReceipts)
+
+	go func() {
+		defer receiptsSub.Unsubscribe()
+
+		signer := types.LatestSigner(api.sys.backend.ChainConfig())
+
+		for {
+			select {
+			case receiptsWithTxs := <-matchedReceipts:
+				if len(receiptsWithTxs) > 0 {
+					// Convert to the same format as eth_getTransactionReceipt
+					marshaledReceipts := make([]map[string]interface{}, len(receiptsWithTxs))
+					for i, receiptWithTx := range receiptsWithTxs {
+						marshaledReceipts[i] = ethapi.MarshalReceipt(
+							receiptWithTx.Receipt,
+							receiptWithTx.Receipt.BlockHash,
+							receiptWithTx.Receipt.BlockNumber.Uint64(),
+							signer,
+							receiptWithTx.Transaction,
+							int(receiptWithTx.Receipt.TransactionIndex),
+						)
+					}
+
+					// Send a batch of tx receipts in one notification
+					notifier.Notify(rpcSub.ID, marshaledReceipts)
+				}
+			case <-rpcSub.Err():
+				return
+			}
+		}
+	}()
+
+	return rpcSub, nil
+}
+
 // FilterCriteria represents a request to create a new filter.
 // Same as ethereum.FilterQuery but with UnmarshalJSON() method.
 type FilterCriteria ethereum.FilterQuery
@@ -333,6 +449,7 @@ func (api *FilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
 	api.filtersMu.Unlock()
 
 	go func() {
+		defer logsSub.Unsubscribe()
 		for {
 			select {
 			case l := <-logs:
@@ -362,14 +479,26 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 
 	borConfig := api.sys.backend.ChainConfig().Bor
 
-	if len(crit.Addresses) > maxAddresses {
-		return nil, errExceedMaxAddresses
+	if api.logQueryLimit != 0 {
+		if len(crit.Addresses) > api.logQueryLimit {
+			return nil, errExceedLogQueryLimit
+		}
+		for _, topics := range crit.Topics {
+			if len(topics) > api.logQueryLimit {
+				return nil, errExceedLogQueryLimit
+			}
+		}
 	}
+
 	var filter *Filter
 
 	var borLogsFilter *BorBlockLogsFilter
 
 	if crit.BlockHash != nil {
+		if crit.FromBlock != nil || crit.ToBlock != nil {
+			return nil, errBlockHashWithRange
+		}
+
 		// Block filter requested, construct a single-shot filter
 		filter = api.sys.NewBlockFilter(*crit.BlockHash, crit.Addresses, crit.Topics)
 		// Block bor filter
@@ -393,6 +522,10 @@ func (api *FilterAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*type
 		}
 		if begin >= 0 && begin < int64(api.events.backend.HistoryPruningCutoff()) {
 			return nil, &history.PrunedHistoryError{}
+		}
+		head := api.sys.backend.CurrentHeader().Number.Uint64()
+		if err := checkBlockRangeLimit(begin, end, head, api.sys.cfg.RangeLimit); err != nil {
+			return nil, err
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, crit.Addresses, crit.Topics)
@@ -474,6 +607,10 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 		end := rpc.LatestBlockNumber.Int64()
 		if f.crit.ToBlock != nil {
 			end = f.crit.ToBlock.Int64()
+		}
+		head := api.sys.backend.CurrentHeader().Number.Uint64()
+		if err := checkBlockRangeLimit(begin, end, head, api.sys.cfg.RangeLimit); err != nil {
+			return nil, err
 		}
 		// Construct the range filter
 		filter = api.sys.NewRangeFilter(begin, end, f.crit.Addresses, f.crit.Topics)
@@ -617,9 +754,6 @@ func (args *FilterCriteria) UnmarshalJSON(data []byte) error {
 		// raw.Address can contain a single address or an array of addresses
 		switch rawAddr := raw.Addresses.(type) {
 		case []interface{}:
-			if len(rawAddr) > maxAddresses {
-				return errExceedMaxAddresses
-			}
 			for i, addr := range rawAddr {
 				if strAddr, ok := addr.(string); ok {
 					addr, err := decodeAddress(strAddr)

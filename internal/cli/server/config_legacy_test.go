@@ -19,7 +19,7 @@ func TestConfigLegacy(t *testing.T) {
 		testConfig.DataDir = "./data"
 		testConfig.KeyStoreDir = "./keystore"
 		testConfig.Verbosity = 3
-		testConfig.RPCBatchLimit = 0
+		testConfig.BatchRequestLimit = 0
 		testConfig.Snapshot = true
 		testConfig.BorLogs = false
 		testConfig.RequiredBlocks = map[string]string{
@@ -30,6 +30,7 @@ func TestConfigLegacy(t *testing.T) {
 		testConfig.Sealer.Recommit = 20 * time.Second
 		testConfig.JsonRPC.RPCEVMTimeout = 5 * time.Second
 		testConfig.JsonRPC.TxFeeCap = 6.0
+		testConfig.JsonRPC.LogQueryLimit = 1000
 		testConfig.JsonRPC.Http.API = []string{"eth", "bor"}
 		testConfig.JsonRPC.Ws.API = []string{""}
 		testConfig.Gpo.MaxPrice = big.NewInt(5000000000000)

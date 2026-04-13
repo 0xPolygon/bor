@@ -17,10 +17,12 @@
 package clique
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -126,5 +128,79 @@ func TestSealHash(t *testing.T) {
 
 	if have != want {
 		t.Errorf("have %x, want %x", have, want)
+	}
+}
+
+func TestVerifyHeaderRejectsInvalidBlockNumber(t *testing.T) {
+	var (
+		db     = rawdb.NewMemoryDatabase()
+		key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr   = crypto.PubkeyToAddress(key.PublicKey)
+		engine = New(params.AllCliqueProtocolChanges.Clique, db)
+	)
+
+	genspec := &core.Genesis{
+		Config:    params.AllCliqueProtocolChanges,
+		ExtraData: make([]byte, extraVanity+common.AddressLength+extraSeal),
+		Alloc: map[common.Address]types.Account{
+			addr: {Balance: big.NewInt(10000000000000000)},
+		},
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+	copy(genspec.ExtraData[extraVanity:], addr[:])
+
+	chain, _ := core.NewBlockChain(rawdb.NewMemoryDatabase(), genspec, engine, nil)
+	defer chain.Stop()
+
+	parent := chain.CurrentBlock()
+
+	// Block number that skips ahead (non-contiguous)
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(10), // Should be 1
+		Time:       parent.Time + 1,
+		Difficulty: diffInTurn,
+		Extra:      make([]byte, extraVanity+extraSeal),
+		UncleHash:  types.EmptyUncleHash,
+		GasLimit:   parent.GasLimit,
+		BaseFee:    parent.BaseFee,
+	}
+
+	sig, _ := crypto.Sign(SealHash(header).Bytes(), key)
+	copy(header.Extra[len(header.Extra)-extraSeal:], sig)
+
+	err := engine.VerifyHeader(chain, header)
+	if err == nil {
+		t.Fatal("expected VerifyHeader to reject non-contiguous block number")
+	}
+	if !errors.Is(err, consensus.ErrInvalidNumber) {
+		t.Fatalf("expected ErrInvalidNumber, got %v", err)
+	}
+
+	// Test overflow case: parent + 1 + 2^64 (would pass with uint64 truncation)
+	overflow := new(big.Int).Lsh(big.NewInt(1), 64)
+	overflow.Add(overflow, parent.Number)
+	overflow.Add(overflow, big.NewInt(1))
+
+	header2 := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     overflow,
+		Time:       parent.Time + 1,
+		Difficulty: diffInTurn,
+		Extra:      make([]byte, extraVanity+extraSeal),
+		UncleHash:  types.EmptyUncleHash,
+		GasLimit:   parent.GasLimit,
+		BaseFee:    parent.BaseFee,
+	}
+
+	sig2, _ := crypto.Sign(SealHash(header2).Bytes(), key)
+	copy(header2.Extra[len(header2.Extra)-extraSeal:], sig2)
+
+	err = engine.VerifyHeader(chain, header2)
+	if err == nil {
+		t.Fatal("expected VerifyHeader to reject overflow block number")
+	}
+	if !errors.Is(err, consensus.ErrInvalidNumber) {
+		t.Fatalf("expected ErrInvalidNumber for overflow, got %v", err)
 	}
 }

@@ -19,8 +19,9 @@ package snap
 import (
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // hashRange is a utility to handle ranges of hashes, Split up the
@@ -77,10 +78,11 @@ func (r *hashRange) End() common.Hash {
 
 // incHash returns the next hash, in lexicographical order (a.k.a plus one)
 func incHash(h common.Hash) common.Hash {
-	var a uint256.Int
-
-	a.SetBytes32(h[:])
-	a.AddUint64(&a, 1)
-
-	return common.Hash(a.Bytes32())
+	for i := len(h) - 1; i >= 0; i-- {
+		h[i]++
+		if h[i] != 0 {
+			break
+		}
+	}
+	return h
 }

@@ -96,16 +96,14 @@ type httpServer struct {
 	port     int
 
 	handlerNames map[string]string
-
-	RPCBatchLimit uint64
 }
 
 const (
 	shutdownTimeout = 5 * time.Second
 )
 
-func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts, rpcBatchLimit uint64) *httpServer {
-	h := &httpServer{log: log, timeouts: timeouts, handlerNames: make(map[string]string), RPCBatchLimit: rpcBatchLimit}
+func newHTTPServer(log log.Logger, timeouts rpc.HTTPTimeouts) *httpServer {
+	h := &httpServer{log: log, timeouts: timeouts, handlerNames: make(map[string]string)}
 
 	h.httpHandler.Store((*rpcHandler)(nil))
 	h.wsHandler.Store((*rpcHandler)(nil))
@@ -187,7 +185,7 @@ func (h *httpServer) start() error {
 	}
 	// Log http endpoint.
 	h.log.Info("HTTP server started",
-		"endpoint", listener.Addr(), "auth", (h.httpConfig.jwtSecret != nil),
+		"endpoint", listener.Addr(), "auth", h.httpConfig.jwtSecret != nil,
 		"prefix", h.httpConfig.prefix,
 		"cors", strings.Join(h.httpConfig.CorsAllowedOrigins, ","),
 		"vhosts", strings.Join(h.httpConfig.Vhosts, ","),
@@ -331,8 +329,6 @@ func (h *httpServer) enableRPC(apis []rpc.API, config httpConfig) error {
 
 	// Create RPC server and handler.
 	srv := rpc.NewServer("", 0, 0)
-	srv.SetRPCBatchLimit(h.RPCBatchLimit)
-
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
@@ -372,8 +368,6 @@ func (h *httpServer) enableWS(apis []rpc.API, config wsConfig) error {
 	}
 	// Create RPC server and handler.
 	srv := rpc.NewServer("", 0, 0)
-	srv.SetRPCBatchLimit(h.RPCBatchLimit)
-
 	srv.SetBatchLimits(config.batchItemLimit, config.batchResponseSizeLimit)
 	if config.httpBodyLimit > 0 {
 		srv.SetHTTPBodyLimit(config.httpBodyLimit)
@@ -550,7 +544,7 @@ func (w *gzipResponseWriter) init() {
 
 	length := hdr.Get("content-length")
 	if len(length) > 0 {
-		if n, err := strconv.ParseUint(length, 10, 64); err != nil {
+		if n, err := strconv.ParseUint(length, 10, 64); err == nil {
 			w.hasLength = true
 			w.contentLength = n
 		}

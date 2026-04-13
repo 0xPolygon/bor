@@ -19,7 +19,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -54,12 +53,12 @@ type Server struct {
 	codecs map[ServerCodec]struct{}
 	run    atomic.Bool
 
-	BatchLimit    uint64
 	executionPool *SafePool
 
 	batchItemLimit     int
 	batchResponseLimit int
 	httpBodyLimit      int
+	wsReadLimit        int64
 }
 
 // NewServer creates a new server instance with no registered handlers.
@@ -74,6 +73,7 @@ func NewServer(service string, executionPoolSize uint64, executionPoolRequesttim
 		codecs:        make(map[ServerCodec]struct{}),
 		executionPool: NewExecutionPool(int(executionPoolSize), executionPoolRequesttimeout, service, reportEpStats),
 		httpBodyLimit: defaultBodyLimit,
+		wsReadLimit:   wsDefaultReadLimit,
 	}
 	server.run.Store(true)
 
@@ -83,10 +83,6 @@ func NewServer(service string, executionPoolSize uint64, executionPoolRequesttim
 	server.RegisterName(MetadataApi, rpcService)
 
 	return server
-}
-
-func (s *Server) SetRPCBatchLimit(batchLimit uint64) {
-	s.BatchLimit = batchLimit
 }
 
 func (s *Server) SetExecutionPoolSize(n int) {
@@ -121,6 +117,13 @@ func (s *Server) SetBatchLimits(itemLimit, maxResponseSize int) {
 // This method should be called before processing any requests via ServeHTTP.
 func (s *Server) SetHTTPBodyLimit(limit int) {
 	s.httpBodyLimit = limit
+}
+
+// SetWebsocketReadLimit sets the limit for max message size for Websocket requests.
+//
+// This method should be called before processing any requests via Websocket server.
+func (s *Server) SetWebsocketReadLimit(limit int64) {
+	s.wsReadLimit = limit
 }
 
 // RegisterName creates a service for the given receiver type under the given name. When no
@@ -199,15 +202,8 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	}
 
 	if batch {
-		if s.BatchLimit > 0 && len(reqs) > int(s.BatchLimit) {
-			if err1 := codec.writeJSON(ctx, errorMessage(fmt.Errorf("batch limit %d exceeded: %d requests given", s.BatchLimit, len(reqs))), true); err1 != nil {
-				log.Warn("WARNING - requests given exceeds the batch limit", "err", err1)
-				log.Debug("batch limit %d exceeded: %d requests given", s.BatchLimit, len(reqs))
-			}
-		} else {
-			//nolint:contextcheck
-			h.handleBatch(reqs)
-		}
+		//nolint:contextcheck
+		h.handleBatch(reqs)
 	} else {
 		//nolint:contextcheck
 		h.handleMsg(reqs[0])

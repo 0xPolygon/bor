@@ -10,9 +10,12 @@ import (
 	reflect "reflect"
 	time "time"
 
+	gomock "go.uber.org/mock/gomock"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	accounts "github.com/ethereum/go-ethereum/accounts"
 	common "github.com/ethereum/go-ethereum/common"
+	hexutil "github.com/ethereum/go-ethereum/common/hexutil"
 	consensus "github.com/ethereum/go-ethereum/consensus"
 	core "github.com/ethereum/go-ethereum/core"
 	filtermaps "github.com/ethereum/go-ethereum/core/filtermaps"
@@ -24,7 +27,6 @@ import (
 	event "github.com/ethereum/go-ethereum/event"
 	params "github.com/ethereum/go-ethereum/params"
 	rpc "github.com/ethereum/go-ethereum/rpc"
-	"go.uber.org/mock/gomock"
 )
 
 // MockBackend is a mock of Backend interface.
@@ -179,6 +181,20 @@ func (mr *MockBackendMockRecorder) CurrentHeader() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentHeader", reflect.TypeOf((*MockBackend)(nil).CurrentHeader))
 }
 
+// CurrentSafeBlock mocks base method.
+func (m *MockBackend) CurrentSafeBlock() *types.Header {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentSafeBlock")
+	ret0, _ := ret[0].(*types.Header)
+	return ret0
+}
+
+// CurrentSafeBlock indicates an expected call of CurrentSafeBlock.
+func (mr *MockBackendMockRecorder) CurrentSafeBlock() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentSafeBlock", reflect.TypeOf((*MockBackend)(nil).CurrentSafeBlock))
+}
+
 // CurrentView mocks base method.
 func (m *MockBackend) CurrentView() *filtermaps.ChainView {
 	m.ctrl.T.Helper()
@@ -205,6 +221,21 @@ func (m *MockBackend) Engine() consensus.Engine {
 func (mr *MockBackendMockRecorder) Engine() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Engine", reflect.TypeOf((*MockBackend)(nil).Engine))
+}
+
+// Etherbase mocks base method.
+func (m *MockBackend) Etherbase() (common.Address, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Etherbase")
+	ret0, _ := ret[0].(common.Address)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Etherbase indicates an expected call of Etherbase.
+func (mr *MockBackendMockRecorder) Etherbase() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Etherbase", reflect.TypeOf((*MockBackend)(nil).Etherbase))
 }
 
 // ExtRPCEnabled mocks base method.
@@ -322,6 +353,39 @@ func (mr *MockBackendMockRecorder) GetBorBlockTransactionWithBlockHash(arg0, arg
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBorBlockTransactionWithBlockHash", reflect.TypeOf((*MockBackend)(nil).GetBorBlockTransactionWithBlockHash), arg0, arg1, arg2)
 }
 
+// GetCanonicalReceipt mocks base method.
+func (m *MockBackend) GetCanonicalReceipt(arg0 *types.Transaction, arg1 common.Hash, arg2, arg3 uint64) (*types.Receipt, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCanonicalReceipt", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(*types.Receipt)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCanonicalReceipt indicates an expected call of GetCanonicalReceipt.
+func (mr *MockBackendMockRecorder) GetCanonicalReceipt(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalReceipt", reflect.TypeOf((*MockBackend)(nil).GetCanonicalReceipt), arg0, arg1, arg2, arg3)
+}
+
+// GetCanonicalTransaction mocks base method.
+func (m *MockBackend) GetCanonicalTransaction(arg0 common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCanonicalTransaction", arg0)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(*types.Transaction)
+	ret2, _ := ret[2].(common.Hash)
+	ret3, _ := ret[3].(uint64)
+	ret4, _ := ret[4].(uint64)
+	return ret0, ret1, ret2, ret3, ret4
+}
+
+// GetCanonicalTransaction indicates an expected call of GetCanonicalTransaction.
+func (mr *MockBackendMockRecorder) GetCanonicalTransaction(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalTransaction", reflect.TypeOf((*MockBackend)(nil).GetCanonicalTransaction), arg0)
+}
+
 // GetEVM mocks base method.
 func (m *MockBackend) GetEVM(arg0 context.Context, arg1 *state.StateDB, arg2 *types.Header, arg3 *vm.Config, arg4 *vm.BlockContext) *vm.EVM {
 	m.ctrl.T.Helper()
@@ -334,6 +398,21 @@ func (m *MockBackend) GetEVM(arg0 context.Context, arg1 *state.StateDB, arg2 *ty
 func (mr *MockBackendMockRecorder) GetEVM(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEVM", reflect.TypeOf((*MockBackend)(nil).GetEVM), arg0, arg1, arg2, arg3, arg4)
+}
+
+// GetFinalizedBlockNumber mocks base method.
+func (m *MockBackend) GetFinalizedBlockNumber(arg0 context.Context) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFinalizedBlockNumber", arg0)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetFinalizedBlockNumber indicates an expected call of GetFinalizedBlockNumber.
+func (mr *MockBackendMockRecorder) GetFinalizedBlockNumber(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFinalizedBlockNumber", reflect.TypeOf((*MockBackend)(nil).GetFinalizedBlockNumber), arg0)
 }
 
 // GetLogs mocks base method.
@@ -453,24 +532,6 @@ func (mr *MockBackendMockRecorder) GetTdByNumber(arg0, arg1 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTdByNumber", reflect.TypeOf((*MockBackend)(nil).GetTdByNumber), arg0, arg1)
 }
 
-// GetTransaction mocks base method.
-func (m *MockBackend) GetTransaction(arg0 common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTransaction", arg0)
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(*types.Transaction)
-	ret2, _ := ret[2].(common.Hash)
-	ret3, _ := ret[3].(uint64)
-	ret4, _ := ret[4].(uint64)
-	return ret0, ret1, ret2, ret3, ret4
-}
-
-// GetTransaction indicates an expected call of GetTransaction.
-func (mr *MockBackendMockRecorder) GetTransaction(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTransaction", reflect.TypeOf((*MockBackend)(nil).GetTransaction), arg0)
-}
-
 // GetVoteOnHash mocks base method.
 func (m *MockBackend) GetVoteOnHash(arg0 context.Context, arg1, arg2 uint64, arg3, arg4 string) (bool, error) {
 	m.ctrl.T.Helper()
@@ -531,6 +592,36 @@ func (m *MockBackend) GetWitnesses(arg0 context.Context, arg1, arg2 uint64) ([]*
 func (mr *MockBackendMockRecorder) GetWitnesses(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWitnesses", reflect.TypeOf((*MockBackend)(nil).GetWitnesses), arg0, arg1, arg2)
+}
+
+// GetWork mocks base method.
+func (m *MockBackend) GetWork() ([4]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWork")
+	ret0, _ := ret[0].([4]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetWork indicates an expected call of GetWork.
+func (mr *MockBackendMockRecorder) GetWork() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWork", reflect.TypeOf((*MockBackend)(nil).GetWork))
+}
+
+// Hashrate mocks base method.
+func (m *MockBackend) Hashrate() (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Hashrate")
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Hashrate indicates an expected call of Hashrate.
+func (mr *MockBackendMockRecorder) Hashrate() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Hashrate", reflect.TypeOf((*MockBackend)(nil).Hashrate))
 }
 
 // HeaderByHash mocks base method.
@@ -606,6 +697,21 @@ func (mr *MockBackendMockRecorder) IsParallelImportActive() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsParallelImportActive", reflect.TypeOf((*MockBackend)(nil).IsParallelImportActive))
 }
 
+// Mining mocks base method.
+func (m *MockBackend) Mining() (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Mining")
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Mining indicates an expected call of Mining.
+func (mr *MockBackendMockRecorder) Mining() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Mining", reflect.TypeOf((*MockBackend)(nil).Mining))
+}
+
 // NewMatcherBackend mocks base method.
 func (m *MockBackend) NewMatcherBackend() filtermaps.MatcherBackend {
 	m.ctrl.T.Helper()
@@ -648,6 +754,20 @@ func (m *MockBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
 func (mr *MockBackendMockRecorder) Pending() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pending", reflect.TypeOf((*MockBackend)(nil).Pending))
+}
+
+// ProtocolVersion mocks base method.
+func (m *MockBackend) ProtocolVersion() uint {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ProtocolVersion")
+	ret0, _ := ret[0].(uint)
+	return ret0
+}
+
+// ProtocolVersion indicates an expected call of ProtocolVersion.
+func (mr *MockBackendMockRecorder) ProtocolVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProtocolVersion", reflect.TypeOf((*MockBackend)(nil).ProtocolVersion))
 }
 
 // PurgeWhitelistedCheckpoint mocks base method.
@@ -728,6 +848,34 @@ func (m *MockBackend) RPCTxFeeCap() float64 {
 func (mr *MockBackendMockRecorder) RPCTxFeeCap() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxFeeCap", reflect.TypeOf((*MockBackend)(nil).RPCTxFeeCap))
+}
+
+// RPCTxSyncDefaultTimeout mocks base method.
+func (m *MockBackend) RPCTxSyncDefaultTimeout() time.Duration {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RPCTxSyncDefaultTimeout")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+// RPCTxSyncDefaultTimeout indicates an expected call of RPCTxSyncDefaultTimeout.
+func (mr *MockBackendMockRecorder) RPCTxSyncDefaultTimeout() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxSyncDefaultTimeout", reflect.TypeOf((*MockBackend)(nil).RPCTxSyncDefaultTimeout))
+}
+
+// RPCTxSyncMaxTimeout mocks base method.
+func (m *MockBackend) RPCTxSyncMaxTimeout() time.Duration {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RPCTxSyncMaxTimeout")
+	ret0, _ := ret[0].(time.Duration)
+	return ret0
+}
+
+// RPCTxSyncMaxTimeout indicates an expected call of RPCTxSyncMaxTimeout.
+func (mr *MockBackendMockRecorder) RPCTxSyncMaxTimeout() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxSyncMaxTimeout", reflect.TypeOf((*MockBackend)(nil).RPCTxSyncMaxTimeout))
 }
 
 // SendTx mocks base method.
@@ -815,6 +963,36 @@ func (m *MockBackend) StoreWitness(arg0 context.Context, arg1 common.Hash, arg2 
 func (mr *MockBackendMockRecorder) StoreWitness(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StoreWitness", reflect.TypeOf((*MockBackend)(nil).StoreWitness), arg0, arg1, arg2)
+}
+
+// SubmitHashrate mocks base method.
+func (m *MockBackend) SubmitHashrate(arg0 hexutil.Uint64, arg1 common.Hash) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitHashrate", arg0, arg1)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubmitHashrate indicates an expected call of SubmitHashrate.
+func (mr *MockBackendMockRecorder) SubmitHashrate(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitHashrate", reflect.TypeOf((*MockBackend)(nil).SubmitHashrate), arg0, arg1)
+}
+
+// SubmitWork mocks base method.
+func (m *MockBackend) SubmitWork(arg0 types.BlockNonce, arg1, arg2 common.Hash) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitWork", arg0, arg1, arg2)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubmitWork indicates an expected call of SubmitWork.
+func (mr *MockBackendMockRecorder) SubmitWork(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitWork", reflect.TypeOf((*MockBackend)(nil).SubmitWork), arg0, arg1, arg2)
 }
 
 // SubscribeChain2HeadEvent mocks base method.
@@ -1016,14 +1194,6 @@ func (mr *MockBackendMockRecorder) UnprotectedAllowed() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnprotectedAllowed", reflect.TypeOf((*MockBackend)(nil).UnprotectedAllowed))
 }
 
-func (m *MockBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetCanonicalReceipt", tx, blockHash, blockNumber, blockIndex)
-	ret0, _ := ret[0].(*types.Receipt)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
 // WitnessByHash mocks base method.
 func (m *MockBackend) WitnessByHash(arg0 context.Context, arg1 common.Hash) (*stateless.Witness, error) {
 	m.ctrl.T.Helper()
@@ -1031,27 +1201,6 @@ func (m *MockBackend) WitnessByHash(arg0 context.Context, arg1 common.Hash) (*st
 	ret0, _ := ret[0].(*stateless.Witness)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
-}
-
-func (mr *MockBackendMockRecorder) GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalReceipt", reflect.TypeOf((*MockBackend)(nil).GetCanonicalReceipt), tx, blockHash, blockNumber, blockIndex)
-}
-
-func (m *MockBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetCanonicalTransaction", txHash)
-	ret0, _ := ret[0].(bool)
-	ret1, _ := ret[1].(*types.Transaction)
-	ret2, _ := ret[2].(common.Hash)
-	ret3, _ := ret[3].(uint64)
-	ret4, _ := ret[4].(uint64)
-	return ret0, ret1, ret2, ret3, ret4
-}
-
-func (mr *MockBackendMockRecorder) GetCanonicalTransaction(txHash any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCanonicalTransaction", reflect.TypeOf((*MockBackend)(nil).GetCanonicalTransaction), txHash)
 }
 
 // WitnessByHash indicates an expected call of WitnessByHash.

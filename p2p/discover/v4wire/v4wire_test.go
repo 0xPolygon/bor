@@ -18,11 +18,13 @@ package v4wire
 
 import (
 	"encoding/hex"
+	"math/big"
 	"net"
 	"reflect"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
+
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -135,4 +137,128 @@ func hexPubkey(h string) (ret Pubkey) {
 	copy(ret[:], b)
 
 	return ret
+}
+
+// TestDecodePubkeyNonCanonical verifies that DecodePubkey rejects non-canonical
+// secp256k1 coordinates (X >= P or Y >= P)
+func TestDecodePubkeyNonCanonical(t *testing.T) {
+	curve := crypto.S256()
+	P := curve.Params().P
+
+	// Test case 1: X = P
+	t.Run("X_equals_P", func(t *testing.T) {
+		var pubkey Pubkey
+		// First half: X = P
+		P.FillBytes(pubkey[:32])
+		// Second half: Y = 1
+		pubkey[63] = 1
+
+		_, err := DecodePubkey(curve, pubkey)
+		if err == nil {
+			t.Fatal("expected error for X >= P, got nil")
+		}
+		if err != ErrBadPoint {
+			t.Fatalf("expected ErrBadPoint, got %v", err)
+		}
+	})
+
+	// Test case 2: X = P + 1
+	t.Run("X_greater_than_P", func(t *testing.T) {
+		var pubkey Pubkey
+		xPlus1 := new(big.Int).Add(P, big.NewInt(1))
+		xPlus1.FillBytes(pubkey[:32])
+		pubkey[63] = 1 // Y = 1
+
+		_, err := DecodePubkey(curve, pubkey)
+		if err == nil {
+			t.Fatal("expected error for X > P, got nil")
+		}
+		if err != ErrBadPoint {
+			t.Fatalf("expected ErrBadPoint, got %v", err)
+		}
+	})
+
+	// Test case 3: Y = P
+	t.Run("Y_equals_P", func(t *testing.T) {
+		var pubkey Pubkey
+		pubkey[31] = 1 // X = 1
+		P.FillBytes(pubkey[32:])
+
+		_, err := DecodePubkey(curve, pubkey)
+		if err == nil {
+			t.Fatal("expected error for Y >= P, got nil")
+		}
+		if err != ErrBadPoint {
+			t.Fatalf("expected ErrBadPoint, got %v", err)
+		}
+	})
+
+	// Test case 4: Valid coordinates
+	t.Run("valid_coordinates", func(t *testing.T) {
+		params := curve.Params()
+		var pubkey Pubkey
+		params.Gx.FillBytes(pubkey[:32])
+		params.Gy.FillBytes(pubkey[32:])
+
+		pub, err := DecodePubkey(curve, pubkey)
+		if err != nil {
+			t.Fatalf("valid coordinates rejected: %v", err)
+		}
+		if pub.X.Cmp(params.Gx) != 0 || pub.Y.Cmp(params.Gy) != 0 {
+			t.Fatal("decoded coordinates don't match")
+		}
+	})
+
+	// Test case 5: Valid random key round-trip
+	t.Run("valid_random_key", func(t *testing.T) {
+		key, err := crypto.GenerateKey()
+		if err != nil {
+			t.Fatalf("key generation failed: %v", err)
+		}
+
+		encoded := EncodePubkey(&key.PublicKey)
+		decoded, err := DecodePubkey(curve, encoded)
+		if err != nil {
+			t.Fatalf("decoding valid key failed: %v", err)
+		}
+
+		if decoded.X.Cmp(key.X) != 0 || decoded.Y.Cmp(key.Y) != 0 {
+			t.Fatal("round-trip mismatch")
+		}
+	})
+}
+
+// TestNeighborsNonCanonicalNode verifies that a Neighbors packet with a node
+// containing non-canonical coordinates is properly rejected
+func TestNeighborsNonCanonicalNode(t *testing.T) {
+	curve := crypto.S256()
+	P := curve.Params().P
+
+	// Create a Neighbors packet with X = P
+	var maliciousID Pubkey
+	P.FillBytes(maliciousID[:32])
+	maliciousID[63] = 1 // Y = 1
+
+	neighbors := &Neighbors{
+		Nodes: []Node{
+			{
+				ID:  maliciousID,
+				IP:  net.ParseIP("127.0.0.1").To4(),
+				UDP: 30303,
+				TCP: 30303,
+			},
+		},
+		Expiration: 0,
+	}
+
+	// Try to decode the node ID
+	_, err := DecodePubkey(curve, neighbors.Nodes[0].ID)
+	if err == nil {
+		t.Fatal("expected error for node with X >= P, got nil")
+	}
+	if err != ErrBadPoint {
+		t.Fatalf("expected ErrBadPoint, got %v", err)
+	}
+
+	t.Log("Malicious node ID correctly rejected")
 }

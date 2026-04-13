@@ -20,6 +20,7 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/gogoproto/proto"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
@@ -37,6 +38,20 @@ var (
 	ErrNotInMilestoneList    = errors.New("milestoneID doesn't exist in Heimdall")
 	ErrServiceUnavailable    = errors.New("service unavailable")
 )
+
+// HTTPStatusError is returned when Heimdall responds with a non-2xx, non-503 status code.
+// It wraps ErrNotSuccessfulResponse for backwards-compatibility with errors.Is checks.
+type HTTPStatusError struct {
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%s: response code %d", ErrNotSuccessfulResponse.Error(), e.StatusCode)
+}
+
+func (e *HTTPStatusError) Unwrap() error {
+	return ErrNotSuccessfulResponse
+}
 
 const (
 	heimdallAPIBodyLimit = 128 * 1024 * 1024 // 128 MB
@@ -454,7 +469,7 @@ func internalFetch(ctx context.Context, client http.Client, u *url.URL) ([]byte,
 
 	// check status code
 	if res.StatusCode != 200 && res.StatusCode != 204 {
-		return nil, fmt.Errorf("%w: response code %d", ErrNotSuccessfulResponse, res.StatusCode)
+		return nil, &HTTPStatusError{StatusCode: res.StatusCode}
 	}
 
 	// unmarshall data from buffer

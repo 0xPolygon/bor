@@ -21,11 +21,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
-	"github.com/holiman/uint256"
 )
 
 // LazyTransaction contains a small subset of the transaction properties that is
@@ -79,8 +80,10 @@ type PendingFilter struct {
 	BlobFee     *uint256.Int // Minimum 4844 blobfee needed to include a blob transaction
 	GasLimitCap uint64       // Maximum gas can be used for a single transaction execution (0 means no limit)
 
-	OnlyPlainTxs bool // Return only plain EVM transactions (peer-join announces, block space filling)
-	OnlyBlobTxs  bool // Return only blob transactions (block blob-space filling)
+	// When BlobTxs true, return only blob transactions (block blob-space filling)
+	// when false, return only non-blob txs (peer-join announces, block space filling)
+	BlobTxs     bool
+	BlobVersion byte // Blob tx version to include. 0 means pre-Osaka, 1 means Osaka and later
 }
 
 // TxMetadata denotes the metadata of a transaction.
@@ -157,6 +160,9 @@ type SubPool interface {
 	// can decide whether to receive notifications only for newly seen transactions
 	// or also for reorged out ones.
 	SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bool) event.Subscription
+
+	// SubscribeRebroadcastTransactions subscribes to stuck transaction rebroadcast events.
+	SubscribeRebroadcastTransactions(ch chan<- core.StuckTxsEvent) event.Subscription
 
 	// Nonce returns the next nonce of an account, with all transactions executable
 	// by the pool already applied on top.

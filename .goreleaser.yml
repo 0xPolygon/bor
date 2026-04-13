@@ -16,6 +16,8 @@ builds:
     env:
       - CC=o64-clang
       - CXX=o64-clang++
+    flags:
+      - -pgo=prod.pprof
     tags:
       - netgo
     ldflags:
@@ -31,6 +33,8 @@ builds:
     env:
       - CC=oa64-clang
       - CXX=oa64-clang++
+    flags:
+      - -pgo=prod.pprof
     tags:
       - netgo
     ldflags:
@@ -46,10 +50,12 @@ builds:
     env:
       - CC=gcc
       - CXX=g++
+    flags:
+      - -pgo=prod.pprof
     tags:
       - netgo
     ldflags:
-      # We need to build a static binary because we are building in a glibc based system and running in a musl container 
+      # We need to build a static binary because we are building in a glibc based system and running in a musl container
       -s -w -extldflags "-static"
 
   - id: linux-arm64
@@ -62,10 +68,12 @@ builds:
     env:
       - CC=aarch64-linux-gnu-gcc
       - CXX=aarch64-linux-gnu-g++
+    flags:
+      - -pgo=prod.pprof
     tags:
       - netgo
     ldflags:
-      # We need to build a static binary because we are building in a glibc based system and running in a musl container 
+      # We need to build a static binary because we are building in a glibc based system and running in a musl container
       -s -w -extldflags "-static"
 
 nfpms:
@@ -119,6 +127,8 @@ dockers:
       - linux-amd64
     build_flag_templates:
       - --platform=linux/amd64
+      - --provenance=false
+      - --sbom=false
     extra_files:
       - builder/files/genesis-mainnet-v1.json
       - builder/files/genesis-testnet-v4.json
@@ -133,6 +143,8 @@ dockers:
       - linux-arm64
     build_flag_templates:
       - --platform=linux/arm64/v8
+      - --provenance=false
+      - --sbom=false
     extra_files:
       - builder/files/genesis-mainnet-v1.json
       - builder/files/genesis-testnet-v4.json

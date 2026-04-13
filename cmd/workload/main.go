@@ -20,9 +20,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/urfave/cli/v2"
+
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/internal/flags"
-	"github.com/urfave/cli/v2"
 )
 
 var app = flags.NewApp("go-ethereum workload test tool")
@@ -49,6 +50,7 @@ func init() {
 		filterGenerateCommand,
 		traceGenerateCommand,
 		filterPerfCommand,
+		filterFuzzCommand,
 	}
 }
 

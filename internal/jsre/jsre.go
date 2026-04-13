@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -207,7 +208,7 @@ loop:
 			if !isFunc {
 				panic(re.vm.ToValue("js error: timer/timeout callback is not a function"))
 			}
-			call(goja.Null(), timer.call.Arguments...)
+			call(goja.Null(), timer.call.Arguments[2:]...)
 
 			_, inreg := registry[timer] // when clearInterval is called from within the callback don't reset it
 			if timer.interval && inreg {

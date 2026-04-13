@@ -30,14 +30,16 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/internal/ethapi/override"
+	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -49,16 +51,16 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/blocktest"
+	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/holiman/uint256"
-	"github.com/stretchr/testify/require"
 )
 
 func testTransactionMarshal(t *testing.T, tests []txData, config *params.ChainConfig) {
@@ -77,7 +79,7 @@ func testTransactionMarshal(t *testing.T, tests []txData, config *params.ChainCo
 		if data, err := json.Marshal(tx); err != nil {
 			t.Fatalf("test %d: marshalling failed; %v", i, err)
 		} else if err = tx2.UnmarshalJSON(data); err != nil {
-			t.Fatalf("test %d: sunmarshal failed: %v", i, err)
+			t.Fatalf("test %d: unmarshal failed: %v", i, err)
 		} else if want, have := tx.Hash(), tx2.Hash(); want != have {
 			t.Fatalf("test %d: stx changed, want %x have %x", i, want, have)
 		}
@@ -433,11 +435,43 @@ func newTestAccountManager(t *testing.T) (*accounts.Manager, accounts.Account) {
 }
 
 type testBackend struct {
-	db      ethdb.Database
-	chain   *core.BlockChain
-	pending *types.Block
-	accman  *accounts.Manager
-	acc     accounts.Account
+	db     ethdb.Database
+	chain  *core.BlockChain
+	accman *accounts.Manager
+	acc    accounts.Account
+
+	pending         *types.Block
+	pendingReceipts types.Receipts
+
+	chainFeed *event.Feed
+	autoMine  bool
+
+	sentTx     *types.Transaction
+	sentTxHash common.Hash
+
+	syncDefaultTimeout time.Duration
+	syncMaxTimeout     time.Duration
+
+	// Relay / preconf / private tx mock controls
+	preconfEnabled   bool
+	privateTxEnabled bool
+	acceptPreconfTxs bool
+	acceptPrivateTxs bool
+
+	// Callback overrides (nil = use default)
+	txStatusFn           func(common.Hash) txpool.TxStatus
+	submitTxForPreconfFn func(*types.Transaction) error
+	checkPreconfStatusFn func(common.Hash) (bool, error)
+	submitPrivateTxFn    func(*types.Transaction) error
+	recordPrivateTxFn    func(common.Hash)
+	purgePrivateTxFn     func(common.Hash)
+
+	// Error to inject from SendTx (nil = existing logic)
+	sendTxErr error
+}
+
+func fakeBlockHash(txh common.Hash) common.Hash {
+	return crypto.Keccak256Hash([]byte("testblock"), txh.Bytes())
 }
 
 func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.Engine, generator func(i int, b *core.BlockGen)) *testBackend {
@@ -445,24 +479,62 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, engine consensus.E
 	options.TxLookupLimit = 0 // index all txs
 
 	accman, acc := newTestAccountManager(t)
-	// gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
+	gspec.Alloc[acc.Address] = types.Account{Balance: big.NewInt(params.Ether)}
+
 	// Generate blocks for testing
-	db, blocks, _ := core.GenerateChainWithGenesis(gspec, engine, n, generator)
+	db, blocks, receipts := core.GenerateChainWithGenesis(gspec, engine, n+1, generator)
 
 	chain, err := core.NewBlockChain(db, gspec, engine, options)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	if n, err := chain.InsertChain(blocks, false); err != nil {
+	if n, err := chain.InsertChain(blocks[:n], false); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
-
-	backend := &testBackend{db: db, chain: chain, accman: accman, acc: acc}
+	backend := &testBackend{
+		db:              db,
+		chain:           chain,
+		accman:          accman,
+		acc:             acc,
+		pending:         blocks[n],
+		pendingReceipts: receipts[n],
+		chainFeed:       new(event.Feed),
+	}
 	return backend
 }
 
-func (b *testBackend) setPendingBlock(block *types.Block) {
-	b.pending = block
+func (b testBackend) PreconfEnabled() bool   { return b.preconfEnabled }
+func (b testBackend) PrivateTxEnabled() bool { return b.privateTxEnabled }
+func (b testBackend) AcceptPreconfTxs() bool { return b.acceptPreconfTxs }
+func (b testBackend) AcceptPrivateTxs() bool { return b.acceptPrivateTxs }
+
+func (b testBackend) SubmitTxForPreconf(tx *types.Transaction) error {
+	if b.submitTxForPreconfFn != nil {
+		return b.submitTxForPreconfFn(tx)
+	}
+	return nil
+}
+func (b testBackend) CheckPreconfStatus(hash common.Hash) (bool, error) {
+	if b.checkPreconfStatusFn != nil {
+		return b.checkPreconfStatusFn(hash)
+	}
+	return false, nil
+}
+func (b testBackend) SubmitPrivateTx(tx *types.Transaction) error {
+	if b.submitPrivateTxFn != nil {
+		return b.submitPrivateTxFn(tx)
+	}
+	return nil
+}
+func (b testBackend) RecordPrivateTx(hash common.Hash) {
+	if b.recordPrivateTxFn != nil {
+		b.recordPrivateTxFn(hash)
+	}
+}
+func (b testBackend) PurgePrivateTx(hash common.Hash) {
+	if b.purgePrivateTxFn != nil {
+		b.purgePrivateTxFn(hash)
+	}
 }
 
 func (b testBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
@@ -505,8 +577,17 @@ func (b testBackend) HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc
 	panic("unknown type rpc.BlockNumberOrHash")
 }
 
-func (b testBackend) CurrentHeader() *types.Header { return b.chain.CurrentHeader() }
-func (b testBackend) CurrentBlock() *types.Header  { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentHeader() *types.Header    { return b.chain.CurrentHeader() }
+func (b testBackend) CurrentBlock() *types.Header     { return b.chain.CurrentBlock() }
+func (b testBackend) CurrentSafeBlock() *types.Header { return b.chain.CurrentSafeBlock() }
+func (b testBackend) GetFinalizedBlockNumber(_ context.Context) (uint64, error) {
+	// For tests, return a fixed finalized block number
+	current := b.chain.CurrentBlock().Number.Uint64()
+	if current < 10 {
+		return 0, nil
+	}
+	return current - 10, nil
+}
 func (b testBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	if number == rpc.LatestBlockNumber {
 		head := b.chain.CurrentBlock()
@@ -556,7 +637,13 @@ func (b testBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOr
 	}
 	panic("only implemented for number")
 }
-func (b testBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) { panic("implement me") }
+func (b testBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
+	block := b.pending
+	if block == nil {
+		return nil, nil, nil
+	}
+	return block, b.pendingReceipts, nil
+}
 func (b testBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	header, err := b.HeaderByHash(ctx, hash)
 	if header == nil || err != nil {
@@ -586,27 +673,75 @@ func (b testBackend) GetEVM(ctx context.Context, state *state.StateDB, header *t
 	return vm.NewEVM(context, state, b.chain.Config(), *vmConfig)
 }
 func (b testBackend) SubscribeChainEvent(ch chan<- core.ChainEvent) event.Subscription {
-	panic("implement me")
+	return b.chainFeed.Subscribe(ch)
 }
 func (b testBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	panic("implement me")
 }
-func (b testBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	panic("implement me")
-}
-func (b testBackend) GetPoolTransactions() (types.Transactions, error) { panic("implement me") }
-func (b testBackend) GetPoolTransaction(txHash common.Hash) *types.Transaction {
+func (b *testBackend) SendTx(ctx context.Context, tx *types.Transaction) error {
+	if b.sendTxErr != nil {
+		return b.sendTxErr
+	}
+	b.sentTx = tx
+	b.sentTxHash = tx.Hash()
+
+	if b.autoMine {
+		// Synthesize a "mined" receipt at head+1
+		num := b.chain.CurrentHeader().Number.Uint64() + 1
+		receipt := &types.Receipt{
+			TxHash:            tx.Hash(),
+			Status:            types.ReceiptStatusSuccessful,
+			BlockHash:         fakeBlockHash(tx.Hash()),
+			BlockNumber:       new(big.Int).SetUint64(num),
+			TransactionIndex:  0,
+			CumulativeGasUsed: 21000,
+			GasUsed:           21000,
+		}
+		// Broadcast a ChainEvent that includes the receipts and txs
+		b.chainFeed.Send(core.ChainEvent{
+			Header: &types.Header{
+				Number: new(big.Int).SetUint64(num),
+			},
+			Receipts:     types.Receipts{receipt},
+			Transactions: types.Transactions{tx},
+		})
+	}
 	return nil
 }
-func (b testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+func (b *testBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	// Treat the auto-mined tx as canonically placed at head+1.
+	if b.autoMine && txHash == b.sentTxHash {
+		num := b.chain.CurrentHeader().Number.Uint64() + 1
+		return true, b.sentTx, fakeBlockHash(txHash), num, 0
+	}
 	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(b.db, txHash)
 	return tx != nil, tx, blockHash, blockNumber, index
 }
-func (b testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+func (b *testBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	if b.autoMine && tx != nil && tx.Hash() == b.sentTxHash &&
+		blockHash == fakeBlockHash(tx.Hash()) &&
+		blockIndex == 0 &&
+		blockNumber == b.chain.CurrentHeader().Number.Uint64()+1 {
+		return &types.Receipt{
+			Type:              tx.Type(),
+			Status:            types.ReceiptStatusSuccessful,
+			CumulativeGasUsed: 21000,
+			GasUsed:           21000,
+			EffectiveGasPrice: big.NewInt(1),
+			BlockHash:         blockHash,
+			BlockNumber:       new(big.Int).SetUint64(blockNumber),
+			TransactionIndex:  0,
+			TxHash:            tx.Hash(),
+		}, nil
+	}
 	return b.chain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 func (b testBackend) TxIndexDone() bool {
 	return true
+}
+func (b testBackend) GetPoolTransactions() (types.Transactions, error) { return nil, nil }
+func (b testBackend) GetPoolTransaction(txHash common.Hash) *types.Transaction {
+	return nil
 }
 func (b testBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
 	return 0, nil
@@ -617,6 +752,12 @@ func (b testBackend) TxPoolContent() (map[common.Address][]*types.Transaction, m
 }
 func (b testBackend) TxPoolContentFrom(addr common.Address) ([]*types.Transaction, []*types.Transaction) {
 	panic("implement me")
+}
+func (b testBackend) TxStatus(hash common.Hash) txpool.TxStatus {
+	if b.txStatusFn != nil {
+		return b.txStatusFn(hash)
+	}
+	return txpool.TxStatusUnknown
 }
 func (b testBackend) SubscribeNewTxsEvent(events chan<- core.NewTxsEvent) event.Subscription {
 	panic("implement me")
@@ -1091,7 +1232,7 @@ func TestCall(t *testing.T) {
 					Balance: big.NewInt(params.Ether),
 					Nonce:   1,
 					Storage: map[common.Hash]common.Hash{
-						common.Hash{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+						{}: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
 					},
 				},
 			},
@@ -1307,7 +1448,7 @@ func TestCall(t *testing.T) {
 			},
 			expectErr: core.ErrBlobTxCreate,
 		},
-		// BOR Doens't support blob tx
+		// BOR Doesn't support blob tx
 		// BLOBHASH opcode
 		// {
 		// 	blockNumber: rpc.LatestBlockNumber,
@@ -1421,7 +1562,22 @@ func TestCall(t *testing.T) {
 	}
 }
 
+func TestSimulateV1Disabled(t *testing.T) {
+	t.Parallel()
+
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	b := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
+	api := NewBlockChainAPI(b)
+	result, err := api.SimulateV1(context.Background(), simOpts{}, nil)
+	require.Nil(t, result)
+	require.EqualError(t, err, "eth_simulateV1 is not supported on Bor")
+}
+
 func TestSimulateV1(t *testing.T) {
+	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	t.Parallel()
 	// Initialize test accounts
 	var (
@@ -1496,10 +1652,11 @@ func TestSimulateV1(t *testing.T) {
 		validation       = true
 	)
 	type log struct {
-		Address     common.Address `json:"address"`
-		Topics      []common.Hash  `json:"topics"`
-		Data        hexutil.Bytes  `json:"data"`
-		BlockNumber hexutil.Uint64 `json:"blockNumber"`
+		Address        common.Address `json:"address"`
+		Topics         []common.Hash  `json:"topics"`
+		Data           hexutil.Bytes  `json:"data"`
+		BlockNumber    hexutil.Uint64 `json:"blockNumber"`
+		BlockTimestamp hexutil.Uint64 `json:"blockTimestamp"`
 		// Skip txHash
 		//TxHash common.Hash `json:"transactionHash" gencodec:"required"`
 		TxIndex hexutil.Uint `json:"transactionIndex"`
@@ -1579,10 +1736,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 								common.BytesToHash(randomAccounts[1].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    11,
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -1601,10 +1759,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[1].addr.Bytes()),
 								common.BytesToHash(randomAccounts[2].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 11,
-							TxIndex:     1,
-							Index:       1,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    11,
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        1,
+							Index:          1,
 						},
 					},
 					Status: "0x1",
@@ -1667,10 +1826,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 								common.BytesToHash(randomAccounts[1].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    11,
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -1689,10 +1849,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 								common.BytesToHash(randomAccounts[3].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 11,
-							TxIndex:     1,
-							Index:       1,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    11,
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        1,
+							Index:          1,
 						},
 					},
 					Status: "0x1",
@@ -1718,10 +1879,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[1].addr.Bytes()),
 								common.BytesToHash(randomAccounts[2].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 12,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    12,
+							BlockTimestamp: hexutil.Uint64(0x7c),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -1931,10 +2093,11 @@ func TestSimulateV1(t *testing.T) {
 				Calls: []callRes{{
 					ReturnValue: "0x",
 					Logs: []log{{
-						Address:     randomAccounts[2].addr,
-						Topics:      []common.Hash{common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")},
-						BlockNumber: hexutil.Uint64(11),
-						Data:        hexutil.Bytes{},
+						Address:        randomAccounts[2].addr,
+						Topics:         []common.Hash{common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")},
+						BlockNumber:    hexutil.Uint64(11),
+						BlockTimestamp: hexutil.Uint64(0x70),
+						Data:           hexutil.Bytes{},
 					}},
 					GasUsed: "0x5508",
 					Status:  "0x1",
@@ -2094,12 +2257,12 @@ func TestSimulateV1(t *testing.T) {
 			want: []blockRes{{
 				Number:        "0xb",
 				GasLimit:      "0x47e7c4",
-				GasUsed:       "0xd984",
+				GasUsed:       "0x77dc",
 				Miner:         coinbase,
 				BaseFeePerGas: "0x0",
 				Calls: []callRes{{
 					ReturnValue: "0x",
-					GasUsed:     "0xd984",
+					GasUsed:     "0x77dc",
 					Logs: []log{
 						{
 							Address: transferAddress,
@@ -2108,8 +2271,9 @@ func TestSimulateV1(t *testing.T) {
 								addressToHash(accounts[0].addr),
 								addressToHash(randomAccounts[0].addr),
 							},
-							Data:        hexutil.Bytes(common.BigToHash(big.NewInt(50)).Bytes()),
-							BlockNumber: hexutil.Uint64(11),
+							Data:           hexutil.Bytes(common.BigToHash(big.NewInt(50)).Bytes()),
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
 						},
 						{
 							Address: core.GetFeeAddress(),
@@ -2122,10 +2286,10 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(accounts[0].addr.Bytes()),
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       1,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96},
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							Index:          hexutil.Uint(1),
 						},
 						{
 							Address: transferAddress,
@@ -2134,9 +2298,10 @@ func TestSimulateV1(t *testing.T) {
 								addressToHash(randomAccounts[0].addr),
 								addressToHash(fixedAccount.addr),
 							},
-							Data:        hexutil.Bytes(common.BigToHash(big.NewInt(100)).Bytes()),
-							BlockNumber: hexutil.Uint64(11),
-							Index:       hexutil.Uint(2),
+							Data:           hexutil.Bytes(common.BigToHash(big.NewInt(100)).Bytes()),
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							Index:          hexutil.Uint(2),
 						},
 						{
 							Address: core.GetFeeAddress(),
@@ -2149,10 +2314,10 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 								common.BytesToHash(fixedAccount.addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       3,
+							Data: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0xb6, 0xb3, 0xa7, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0xb6, 0xb3, 0xa7, 0x64, 0x00, 0x64}, BlockNumber: hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          3,
 						},
 					},
 					Status: "0x1",
@@ -2278,10 +2443,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[2].addr.Bytes()),
 								common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd1, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x74, 0xb3, 0xe3, 0xa0, 0x9d, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x74, 0xb3, 0xe3, 0x9f, 0xcc, 0x6a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0xd1, 0x66},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd1, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x74, 0xb3, 0xe3, 0xa0, 0x9d, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x74, 0xb3, 0xe3, 0x9f, 0xcc, 0x6a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0xd1, 0x66},
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -2328,10 +2494,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(randomAccounts[0].addr.Bytes()),
 								common.BytesToHash(randomAccounts[1].addr.Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xae, 0xbc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xaa, 0xd4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xae, 0xbc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0xaa, 0xd4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8},
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -2606,10 +2773,11 @@ func TestSimulateV1(t *testing.T) {
 							common.BytesToHash(accounts[0].addr.Bytes()),
 							common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
 						},
-						Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
-						BlockNumber: 11,
-						TxIndex:     1,
-						Index:       0,
+						Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
+						BlockNumber:    hexutil.Uint64(11),
+						BlockTimestamp: hexutil.Uint64(0x70),
+						TxIndex:        1,
+						Index:          0,
 					},
 					},
 					Status: "0x1",
@@ -2637,10 +2805,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(accounts[0].addr.Bytes()),
 								common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xa4, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0x69, 0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xf6, 0x75},
-							BlockNumber: 12,
-							TxIndex:     1,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xa4, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0x69, 0x3a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31, 0x4f, 0xb3, 0x70, 0x62, 0x98, 0xf6, 0x75},
+							BlockNumber:    hexutil.Uint64(12),
+							BlockTimestamp: hexutil.Uint64(0x7c),
+							TxIndex:        1,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -2711,10 +2880,11 @@ func TestSimulateV1(t *testing.T) {
 								common.BytesToHash(accounts[0].addr.Bytes()),
 								common.BytesToHash(common.HexToAddress("0x000000000000000000000000000000000000ffff").Bytes()),
 							},
-							Data:        []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
-							BlockNumber: 11,
-							TxIndex:     0,
-							Index:       0,
+							Data:           []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x52, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x77, 0x0d, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0xe0, 0x53, 0xbf, 0x1f, 0x76, 0xbb, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x15, 0x8e, 0x46, 0x09, 0x13, 0xd0, 0x52, 0x27},
+							BlockNumber:    hexutil.Uint64(11),
+							BlockTimestamp: hexutil.Uint64(0x70),
+							TxIndex:        0,
+							Index:          0,
 						},
 					},
 					Status: "0x1",
@@ -2859,6 +3029,7 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 }
 
 func TestSimulateV1TxSender(t *testing.T) {
+	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	var (
 		sender    = common.Address{0xaa, 0xaa}
 		sender2   = common.Address{0xaa, 0xab}
@@ -2963,7 +3134,7 @@ func TestSignTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect := `{"type":"0x2","chainId":"0x1","nonce":"0x0","to":"0x703c4b2bd70c169f5717101caee543299fc946c7","gas":"0x5208","gasPrice":null,"maxPriorityFeePerGas":"0x0","maxFeePerGas":"0x684ee180","value":"0x1","input":"0x","accessList":[],"v":"0x0","r":"0x8fabeb142d585dd9247f459f7e6fe77e2520c88d50ba5d220da1533cea8b34e1","s":"0x582dd68b21aef36ba23f34e49607329c20d981d30404daf749077f5606785ce7","yParity":"0x0","hash":"0x93927839207cfbec395da84b8a2bc38b7b65d2cb2819e9fef1f091f5b1d4cc8f"}`
+	expect := `{"type":"0x2","chainId":"0x539","nonce":"0x0","to":"0x703c4b2bd70c169f5717101caee543299fc946c7","gas":"0x5208","gasPrice":null,"maxPriorityFeePerGas":"0x0","maxFeePerGas":"0x7558bdb0","value":"0x1","input":"0x","accessList":[],"v":"0x0","r":"0xb0bbf33a3acf058714ac1a21edf4f3fb5634ee948b04399556fd3c8f28fb580f","s":"0x3d47400704ef822792cb2181b745ca962772a4c9e5dcd31024029a6889552c9f","yParity":"0x0","hash":"0xd748a0bf422d48f98e82633391438302f68f8567571ed1d258d1d6b5a3a626d1"}`
 	if !bytes.Equal(tx, []byte(expect)) {
 		t.Errorf("result mismatch. Have:\n%s\nWant:\n%s\n", tx, expect)
 	}
@@ -3529,21 +3700,6 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 		}
 		genBlocks = 10
 		signer    = types.HomesteadSigner{}
-		tx        = types.NewTx(&types.LegacyTx{
-			Nonce:    11,
-			GasPrice: big.NewInt(11111),
-			Gas:      1111,
-			To:       &acc2Addr,
-			Value:    big.NewInt(111),
-			Data:     []byte{0x11, 0x11, 0x11},
-		})
-		withdrawal = &types.Withdrawal{
-			Index:     0,
-			Validator: 1,
-			Address:   common.Address{0x12, 0x34},
-			Amount:    10,
-		}
-		pending = types.NewBlock(&types.Header{Number: big.NewInt(11), Time: 42}, &types.Body{Transactions: types.Transactions{tx}, Withdrawals: types.Withdrawals{withdrawal}}, nil, blocktest.NewHasher())
 	)
 	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
 		// Transfer from account[0] to account[1]
@@ -3552,7 +3708,6 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{Nonce: uint64(i), To: &acc2Addr, Value: big.NewInt(1000), Gas: params.TxGas, GasPrice: b.BaseFee(), Data: nil}), signer, acc1Key)
 		b.AddTx(tx)
 	})
-	backend.setPendingBlock(pending)
 	api := NewBlockChainAPI(backend)
 	blockHashes := make([]common.Hash, genBlocks+1)
 	ctx := t.Context()
@@ -3563,7 +3718,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 		}
 		blockHashes[i] = header.Hash()
 	}
-	pendingHash := pending.Hash()
+	pendingHash := backend.pending.Hash()
 
 	var testSuite = []struct {
 		blockNumber rpc.BlockNumber
@@ -3739,7 +3894,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 				result = api.GetHeaderByHash(t.Context(), *tt.blockHash)
 				rpc = "eth_getHeaderByHash"
 			} else {
-				result, err = api.GetBlockByHash(t.Context(), *tt.blockHash, tt.fullTx)
+				result, err = api.GetBlockByHash(t.Context(), *tt.blockHash, tt.fullTx, nil)
 				rpc = "eth_getBlockByHash"
 			}
 		} else {
@@ -3747,7 +3902,7 @@ func TestRPCGetBlockOrHeader(t *testing.T) {
 				result, err = api.GetHeaderByNumber(t.Context(), tt.blockNumber)
 				rpc = "eth_getHeaderByNumber"
 			} else {
-				result, err = api.GetBlockByNumber(t.Context(), tt.blockNumber, tt.fullTx)
+				result, err = api.GetBlockByNumber(t.Context(), tt.blockNumber, tt.fullTx, nil)
 				rpc = "eth_getBlockByNumber"
 			}
 		}
@@ -3806,7 +3961,7 @@ func setupTransactionsToApiTest(t *testing.T) (*TransactionAPI, []common.Hash, [
 			},
 		}
 		signer   = types.LatestSignerForChainID(params.TestChainConfig.ChainID)
-		txHashes = make([]common.Hash, genBlocks+1)
+		txHashes = make([]common.Hash, 0, genBlocks+1)
 	)
 
 	// Set the terminal total difficulty in the config
@@ -3819,9 +3974,6 @@ func setupTransactionsToApiTest(t *testing.T) (*TransactionAPI, []common.Hash, [
 		)
 		b.SetPoS()
 		switch i {
-		case 0:
-			// transfer 1000wei
-			tx, err = types.SignTx(types.NewTx(&types.LegacyTx{Nonce: uint64(i), To: &acc2Addr, Value: big.NewInt(1000), Gas: params.TxGas, GasPrice: b.BaseFee(), Data: nil}), types.HomesteadSigner{}, acc1Key)
 		case 1:
 			// create contract
 			tx, err = types.SignTx(types.NewTx(&types.LegacyTx{Nonce: uint64(i), To: nil, Gas: 53100, GasPrice: b.BaseFee(), Data: common.FromHex("0x60806040")}), signer, acc1Key)
@@ -3844,13 +3996,30 @@ func setupTransactionsToApiTest(t *testing.T) (*TransactionAPI, []common.Hash, [
 				StorageKeys: []common.Hash{{0}},
 			}}
 			tx, err = types.SignTx(types.NewTx(&types.AccessListTx{Nonce: uint64(i), To: nil, Gas: 58100, GasPrice: b.BaseFee(), Data: common.FromHex("0x60806040"), AccessList: accessList}), signer, acc1Key)
+		case 5:
+			// blob tx
+			fee := big.NewInt(500)
+			fee.Add(fee, b.BaseFee())
+			tx, err = types.SignTx(types.NewTx(&types.BlobTx{
+				Nonce:      uint64(i),
+				GasTipCap:  uint256.NewInt(1),
+				GasFeeCap:  uint256.MustFromBig(fee),
+				Gas:        params.TxGas,
+				To:         acc2Addr,
+				BlobFeeCap: uint256.NewInt(1),
+				BlobHashes: []common.Hash{{1}},
+				Value:      new(uint256.Int),
+			}), signer, acc1Key)
+		default:
+			// transfer 1000wei
+			tx, err = types.SignTx(types.NewTx(&types.LegacyTx{Nonce: uint64(i), To: &acc2Addr, Value: big.NewInt(1000), Gas: params.TxGas, GasPrice: b.BaseFee(), Data: nil}), types.HomesteadSigner{}, acc1Key)
 		}
 		if err != nil {
 			t.Errorf("failed to sign tx: %v", err)
 		}
 		if tx != nil {
 			b.AddTx(tx)
-			txHashes[i] = tx.Hash()
+			txHashes = append(txHashes, tx.Hash())
 		}
 	})
 
@@ -4009,7 +4178,8 @@ func testRPCResponseWithFile(t *testing.T, testid int, result interface{}, rpc s
 	}
 	outputFile := filepath.Join("testdata", fmt.Sprintf("%s-%s.json", rpc, file))
 	if os.Getenv("WRITE_TEST_FILES") != "" {
-		os.WriteFile(outputFile, data, 0644)
+		err = os.WriteFile(outputFile, data, 0644)
+		require.NoError(t, err, "failed to write test output file: %s", outputFile)
 	}
 	want, err := os.ReadFile(outputFile)
 	if err != nil {
@@ -4162,7 +4332,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[0],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x5208",
@@ -4183,7 +4353,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0x644a31c354391520d00e95b9affbbb010fc79ac268144ab8e28207f4cf51097e",
 					"transactionIndex": "0x0",
-					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 					"logIndex": "0x0",
 					"removed": false
 				  }
@@ -4200,7 +4370,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[1],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": "0xae9bea628c4ce503dcfd7e305cab4e29e7476592",
 				"cumulativeGasUsed": "0x12156",
@@ -4220,7 +4390,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[2],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x17f7e",
@@ -4240,7 +4410,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xa228af0975b99799bd28331085a6966aba2fb5814a8d89aabc342462aa40429a",
 					"transactionIndex": "0x2",
-					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 					"logIndex": "0x1",
 					"removed": false
 				  }
@@ -4257,7 +4427,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[3],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x1d30b",
@@ -4278,7 +4448,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 					"blockTimestamp": "0xa",
 					"transactionHash": "0xc2cc458a65bc96f642d4a2063cce162b0da642613d801271bdbc4aa7e775f3ed",
 					"transactionIndex": "0x3",
-					"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+					"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 					"logIndex": "0x2",
 					"removed": false
 				  }
@@ -4295,7 +4465,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[4],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": "0xfdaa97661a584d977b4d3abb5370766ff5b86a18",
 				"cumulativeGasUsed": "0x2b325",
@@ -4315,7 +4485,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 		{
 			txHash: txHashes[5],
 			want: `{
-				"blockHash": "0x1728b788dfe51e507d25f14f01414b5a17f807953c13833811d2afae1982b53b",
+				"blockHash": "0xcdbefbd0a516759927751ca4c00084f967cef3817ce6e0fd819f0534b271cb4a",
 				"blockNumber": "0x1",
 				"contractAddress": null,
 				"cumulativeGasUsed": "0x2b325",
@@ -4326,7 +4496,7 @@ func setupBlocksToApiTest(t *testing.T) (*BlockChainAPI, rpc.BlockNumberOrHash, 
 				"logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 				"status": "0x1",
 				"to": "0x0000000000000000000000000000000000000000",
-				"transactionHash": "0xba46f68d5c3729ac3fb672fec579fc2cad543bc9edf5b2d47d7c6636ac2fbec9",
+				"transactionHash": "0xcd9b0d3d7c08df38f716a708b13e38cb286af42680feb37e6a34a1b4197231a3",
 				"transactionIndex": "0x5",
 				"type": "0x0"
 			  }`,
@@ -4376,7 +4546,7 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 				Balance: (*hexutil.Big)(big.NewInt(1000000000000000000)),
 				Nonce:   &nonce,
 				State: map[common.Hash]common.Hash{
-					common.Hash{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
+					{}: common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000002a"),
 				},
 			},
 		}
@@ -4400,8 +4570,8 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create access list: %v", err)
 	}
-	if err != nil || result == nil {
-		t.Fatalf("Failed to create access list: %v", err)
+	if result == nil {
+		t.Fatalf("Failed to create access list: result is nil")
 	}
 	require.NotNil(t, result.Accesslist)
 
@@ -4413,81 +4583,950 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 	require.Equal(t, expected, result.Accesslist)
 }
 
-func TestBorWitnessAPI_Integration(t *testing.T) {
+func TestSendRawTransactionForPreconf(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected when AcceptPreconfTxs is false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "preconf transactions are not accepted")
+	})
+
+	t.Run("invalid raw tx bytes", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.SendRawTransactionForPreconf(context.Background(), hexutil.Bytes{0xde, 0xad})
+		require.Nil(t, result)
+		require.Error(t, err)
+	})
+
+	t.Run("SubmitTransaction fails with non-ErrAlreadyKnown", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = errors.New("nonce too low")
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.Nil(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "nonce too low")
+	})
+
+	t.Run("success with TxStatusPending returns preconfirmed true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, true, result["preconfirmed"])
+	})
+
+	t.Run("success with TxStatusQueued returns preconfirmed false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusQueued }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, false, result["preconfirmed"])
+	})
+
+	t.Run("ErrAlreadyKnown with TxStatusPending returns preconfirmed true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"], "hash should be tx.Hash() not zero hash")
+		require.Equal(t, true, result["preconfirmed"])
+	})
+
+	t.Run("ErrAlreadyKnown with TxStatusUnknown returns preconfirmed false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPreconfTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusUnknown }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		result, err := api.SendRawTransactionForPreconf(context.Background(), raw)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, tx.Hash(), result["hash"])
+		require.Equal(t, false, result["preconfirmed"])
+	})
+}
+
+func TestSendRawTransactionPrivate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected when both AcceptPrivateTxs and PrivateTxEnabled are false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Equal(t, common.Hash{}, hash)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "private transactions are not accepted")
+	})
+
+	t.Run("invalid raw tx bytes", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		hash, err := api.SendRawTransactionPrivate(context.Background(), hexutil.Bytes{0xde, 0xad})
+		require.Equal(t, common.Hash{}, hash)
+		require.Error(t, err)
+	})
+
+	t.Run("accepted via AcceptPrivateTxs, RecordPrivateTx called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+
+		var recordCount atomic.Int32
+		var submitPrivateCount atomic.Int32
+		b.recordPrivateTxFn = func(hash common.Hash) { recordCount.Add(1) }
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { submitPrivateCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called once")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should NOT be called when PrivateTxEnabled is false")
+	})
+
+	t.Run("SendTx fails, PurgePrivateTx called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.sendTxErr = errors.New("pool full")
+
+		var recordCount atomic.Int32
+		var purgeCount atomic.Int32
+		b.recordPrivateTxFn = func(hash common.Hash) { recordCount.Add(1) }
+		b.purgePrivateTxFn = func(hash common.Hash) { purgeCount.Add(1) }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pool full")
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called before SendTx")
+		require.Equal(t, int32(1), purgeCount.Load(), "PurgePrivateTx should be called on SendTx failure")
+	})
+
+	t.Run("ErrAlreadyKnown does not purge", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+
+		var purgeCount atomic.Int32
+		b.purgePrivateTxFn = func(hash common.Hash) { purgeCount.Add(1) }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.ErrorIs(t, err, txpool.ErrAlreadyKnown)
+		require.Equal(t, int32(0), purgeCount.Load(), "PurgePrivateTx should NOT be called for ErrAlreadyKnown")
+	})
+
+	t.Run("PrivateTxEnabled, SubmitPrivateTx succeeds", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.privateTxEnabled = true
+
+		var submitCount atomic.Int32
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { submitCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), submitCount.Load(), "SubmitPrivateTx should be called once")
+	})
+
+	t.Run("PrivateTxEnabled, SubmitPrivateTx fails returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.acceptPrivateTxs = true
+		b.privateTxEnabled = true
+		b.submitPrivateTxFn = func(tx *types.Transaction) error { return errors.New("relay down") }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "private tx accepted locally, submission failed")
+		require.Contains(t, err.Error(), "relay down")
+		require.Equal(t, tx.Hash(), hash, "hash should be returned even on SubmitPrivateTx failure")
+	})
+
+	t.Run("accepted via PrivateTxEnabled only", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true // acceptPrivateTxs is false
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash, "should succeed via PrivateTxEnabled OR condition")
+	})
+}
+
+func TestCheckPreconfStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejected when PreconfEnabled is false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		api := NewTransactionAPI(b, new(AddrLocker))
+
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.False(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "preconf transactions are not accepted")
+	})
+
+	t.Run("delegates to backend and returns true", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) { return true, nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.NoError(t, err)
+		require.True(t, result)
+	})
+
+	t.Run("delegates to backend and returns false", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) { return false, nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.NoError(t, err)
+		require.False(t, result)
+	})
+
+	t.Run("delegates to backend and returns error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) {
+			return false, errors.New("relay unreachable")
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		result, err := api.CheckPreconfStatus(context.Background(), common.HexToHash("0x1"))
+		require.False(t, result)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "relay unreachable")
+	})
+
+	t.Run("passes correct hash to backend", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+
+		var capturedHash common.Hash
+		b.checkPreconfStatusFn = func(hash common.Hash) (bool, error) {
+			capturedHash = hash
+			return true, nil
+		}
+
+		targetHash := common.HexToHash("0xabcdef")
+		api := NewTransactionAPI(b, new(AddrLocker))
+		_, _ = api.CheckPreconfStatus(context.Background(), targetHash)
+		require.Equal(t, targetHash, capturedHash, "backend should receive the exact hash passed to API")
+	})
+}
+
+func TestTxPoolAPI_TxStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns TxStatusUnknown", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusUnknown }
+
+		api := NewTxPoolAPI(b)
+		require.Equal(t, txpool.TxStatusUnknown, api.TxStatus(common.HexToHash("0x1")))
+	})
+
+	t.Run("returns TxStatusPending", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus { return txpool.TxStatusPending }
+
+		api := NewTxPoolAPI(b)
+		require.Equal(t, txpool.TxStatusPending, api.TxStatus(common.HexToHash("0x1")))
+	})
+
+	t.Run("passes correct hash to backend", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+
+		var capturedHash common.Hash
+		b.txStatusFn = func(hash common.Hash) txpool.TxStatus {
+			capturedHash = hash
+			return txpool.TxStatusPending
+		}
+
+		targetHash := common.HexToHash("0xabcdef")
+		api := NewTxPoolAPI(b)
+		api.TxStatus(targetHash)
+		require.Equal(t, targetHash, capturedHash)
+	})
+}
+
+func TestSendRawTransaction_PreconfPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("preconf disabled, SubmitTxForPreconf not called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		// preconfEnabled defaults to false
+
+		var preconfCount atomic.Int32
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			preconfCount.Add(1)
+			return nil
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should NOT be called when preconf is disabled")
+	})
+
+	t.Run("preconf enabled, SubmitTxForPreconf called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+
+		var preconfCount atomic.Int32
+		var capturedTxHash common.Hash
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			preconfCount.Add(1)
+			capturedTxHash = tx.Hash()
+			return nil
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), preconfCount.Load(), "SubmitTxForPreconf should be called once")
+		require.Equal(t, tx.Hash(), capturedTxHash, "SubmitTxForPreconf should receive the correct tx")
+	})
+
+	t.Run("preconf enabled, SubmitTxForPreconf fails, error not propagated", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
+			return errors.New("relay down")
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err, "SendRawTransaction should NOT propagate SubmitTxForPreconf errors")
+		require.Equal(t, tx.Hash(), hash)
+	})
+}
+func (b *testBackend) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *testBackend) GetWork() ([4]string, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *testBackend) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	// testBackend uses ethash (PoW) but doesn't implement mining work API
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) Etherbase() (common.Address, error) {
+	return common.Address{}, nil
+}
+
+func (b *backendMock) Hashrate() (uint64, error) {
+	return 0, nil
+}
+
+func (b *backendMock) Mining() (bool, error) {
+	return false, nil
+}
+
+func (b *backendMock) ProtocolVersion() uint {
+	return 69 // ETH69
+}
+
+func (b *backendMock) GetWork() ([4]string, error) {
+	return [4]string{}, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitWork(_ types.BlockNonce, _, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func (b *backendMock) SubmitHashrate(_ hexutil.Uint64, _ common.Hash) (bool, error) {
+	return false, errors.New("mining work API not implemented by backend")
+}
+
+func makeSignedRaw(t *testing.T, api *TransactionAPI, from, to common.Address, value *big.Int) (hexutil.Bytes, *types.Transaction) {
+	t.Helper()
+
+	fillRes, err := api.FillTransaction(context.Background(), TransactionArgs{
+		From:  &from,
+		To:    &to,
+		Value: (*hexutil.Big)(value),
+	})
+	if err != nil {
+		t.Fatalf("FillTransaction failed: %v", err)
+	}
+	signRes, err := api.SignTransaction(context.Background(), argsFromTransaction(fillRes.Tx, from))
+	if err != nil {
+		t.Fatalf("SignTransaction failed: %v", err)
+	}
+	return signRes.Raw, signRes.Tx
+}
+
+// makeSelfSignedRaw is a convenience for a 0-ETH self-transfer.
+func makeSelfSignedRaw(t *testing.T, api *TransactionAPI, addr common.Address) (hexutil.Bytes, *types.Transaction) {
+	return makeSignedRaw(t, api, addr, addr, big.NewInt(0))
+}
+
+func TestSendRawTransactionSync_Success(t *testing.T) {
 	t.Parallel()
 	genesis := &core.Genesis{
 		Config: params.TestChainConfig,
-		Alloc: types.GenesisAlloc{
-			common.HexToAddress("0x0000000000000000000000000000000000000000"): {Balance: big.NewInt(1000000000000000000)},
-		},
+		Alloc:  types.GenesisAlloc{},
 	}
-	backend := newTestBackend(t, 5, genesis, ethash.NewFaker(), nil)
+	b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+	b.autoMine = true // immediately “mines” the tx in-memory
 
-	testBlock, err := backend.BlockByNumber(t.Context(), rpc.BlockNumber(1))
-	require.NoError(t, err)
-	require.NotNil(t, testBlock)
-	testBlockHash := testBlock.Hash()
+	api := NewTransactionAPI(b, new(AddrLocker))
 
-	mockWitness, err := stateless.NewWitness(testBlock.Header(), backend.chain)
-	require.NoError(t, err)
-	require.NotNil(t, mockWitness)
+	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
 
-	var witBuf bytes.Buffer
-	err = mockWitness.EncodeRLP(&witBuf)
-	require.NoError(t, err)
-	rawdb.WriteWitness(backend.ChainDb(), testBlockHash, witBuf.Bytes())
+	receipt, err := api.SendRawTransactionSync(context.Background(), raw, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receipt == nil {
+		t.Fatalf("expected non-nil receipt")
+	}
+	if _, ok := receipt["blockNumber"]; !ok {
+		t.Fatalf("expected blockNumber in receipt, got %#v", receipt)
+	}
+}
 
-	t.Run("Database_WitnessStorage", func(t *testing.T) {
-		witnessData := rawdb.ReadWitness(backend.ChainDb(), testBlockHash)
-		require.NotEmpty(t, witnessData, "Witness data should be stored in database")
+func TestSendRawTransactionSync_Timeout(t *testing.T) {
+	t.Parallel()
 
-		witness, err := stateless.GetWitnessFromRlp(witnessData)
-		require.NoError(t, err)
-		require.NotNil(t, witness.Header())
-		require.Equal(t, testBlockHash, witness.Header().Hash())
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc:  types.GenesisAlloc{},
+	}
+	b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+	b.autoMine = false // don't mine, should time out
+
+	api := NewTransactionAPI(b, new(AddrLocker))
+
+	raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+	timeout := hexutil.Uint64(200) // 200ms
+	receipt, err := api.SendRawTransactionSync(context.Background(), raw, &timeout)
+
+	if receipt != nil {
+		t.Fatalf("expected nil receipt, got %#v", receipt)
+	}
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	// assert error shape & data (hash)
+	var de interface {
+		ErrorCode() int
+		ErrorData() interface{}
+	}
+	if !errors.As(err, &de) {
+		t.Fatalf("expected data error with code/data, got %T %v", err, err)
+	}
+	if de.ErrorCode() != errCodeTxSyncTimeout {
+		t.Fatalf("expected code %d, got %d", errCodeTxSyncTimeout, de.ErrorCode())
+	}
+	tx := new(types.Transaction)
+	if e := tx.UnmarshalBinary(raw); e != nil {
+		t.Fatal(e)
+	}
+	if got, want := de.ErrorData(), tx.Hash().Hex(); got != want {
+		t.Fatalf("expected ErrorData=%s, got %v", want, got)
+	}
+}
+
+func TestCoinbase(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks        = 5
+		expectedCoinbase = common.HexToAddress("0x1234567890123456789012345678901234567890")
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Etherbase to return our expected address
+	customBackend := &testBackendWithCoinbase{
+		testBackend: backend,
+		coinbase:    expectedCoinbase,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	coinbase, err := api.Coinbase()
+	if err != nil {
+		t.Fatalf("Coinbase() failed: %v", err)
+	}
+
+	if coinbase != expectedCoinbase {
+		t.Errorf("Coinbase() = %v, want %v", coinbase, expectedCoinbase)
+	}
+}
+
+func TestHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks               = 5
+		expectedHashrate uint64 = 12345678
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+
+	// Mock the Hashrate to return our expected value
+	customBackend := &testBackendWithHashrate{
+		testBackend: backend,
+		hashrate:    expectedHashrate,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	hashrate, err := api.Hashrate()
+	if err != nil {
+		t.Fatalf("Hashrate() error = %v", err)
+	}
+
+	if uint64(hashrate) != expectedHashrate {
+		t.Errorf("Hashrate() = %v, want %v", hashrate, expectedHashrate)
+	}
+}
+
+func TestMining(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	// test "node not mining"
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithMining{
+		testBackend: backend,
+		mining:      false,
+	}
+	api := NewEthereumAPI(customBackend)
+
+	mining, err := api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != false {
+		t.Errorf("Mining() = %v, want false", mining)
+	}
+
+	// test "node mining"
+	customBackend.mining = true
+	mining, err = api.Mining()
+	if err != nil {
+		t.Fatalf("Mining() error = %v", err)
+	}
+	if mining != true {
+		t.Errorf("Mining() = %v, want true", mining)
+	}
+}
+
+func TestProtocolVersion(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+		// Expected protocol version (ETH69)
+		expectedVersion uint = 69
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	customBackend := &testBackendWithProtocolVersion{
+		testBackend:     backend,
+		protocolVersion: expectedVersion,
+	}
+
+	api := NewEthereumAPI(customBackend)
+	version := api.ProtocolVersion()
+
+	if uint(version) != expectedVersion {
+		t.Errorf("ProtocolVersion() = %v, want %v", version, expectedVersion)
+	}
+}
+
+func TestGetWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// ethash.NewFaker() is a PoW engine, but Bor's mining backend doesn't implement GetWork
+	work, err := api.GetWork()
+	if err == nil {
+		t.Errorf("GetWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("GetWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if work != [4]string{} {
+		t.Errorf("GetWork() work = %v, want empty array", work)
+	}
+}
+
+func TestSubmitWork(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitWork with PoW consensus (bor doesn't implement mining work)
+	nonce := types.BlockNonce{}
+	hash := common.Hash{}
+	digest := common.Hash{}
+
+	result, err := api.SubmitWork(nonce, hash, digest)
+	if err == nil {
+		t.Errorf("SubmitWork() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitWork() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitWork() = %v, want false", result)
+	}
+}
+
+func TestSubmitHashrate(t *testing.T) {
+	t.Parallel()
+
+	var (
+		accs    = newAccounts(1)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accs[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		genBlocks = 5
+	)
+
+	backend := newTestBackend(t, genBlocks, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {})
+	api := NewEthereumAPI(backend)
+
+	// Test SubmitHashrate with PoW consensus (bor doesn't implement mining work)
+	rate := hexutil.Uint64(123456)
+	id := common.Hash{}
+
+	result, err := api.SubmitHashrate(rate, id)
+	if err == nil {
+		t.Errorf("SubmitHashrate() expected error, got nil")
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		if rpcErr.ErrorCode() != -32000 {
+			t.Errorf("SubmitHashrate() error code = %d, want -32000 (server error)", rpcErr.ErrorCode())
+		}
+	}
+	if result != false {
+		t.Errorf("SubmitHashrate() = %v, want false", result)
+	}
+}
+
+func TestAccountAt(t *testing.T) {
+	t.Parallel()
+
+	// Setup backend with some blocks
+	var (
+		key, _  = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr    = crypto.PubkeyToAddress(key.PublicKey)
+		genesis = &core.Genesis{
+			Config: params.TestChainConfig,
+			Alloc: types.GenesisAlloc{
+				addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+		signer = types.LatestSigner(genesis.Config)
+	)
+
+	backend := newTestBackend(t, 3, genesis, ethash.NewFaker(), func(i int, b *core.BlockGen) {
+		// Create a transaction that changes the account state
+		toAddr := common.Address{0x01}
+		tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+			Nonce:    b.TxNonce(addr),
+			To:       &toAddr,
+			Value:    big.NewInt(1000),
+			Gas:      21000,
+			GasPrice: b.BaseFee(),
+			Data:     nil,
+		}), signer, key)
+		b.AddTx(tx)
+	})
+	api := NewDebugAPI(backend)
+
+	// Get the block 1 hash
+	block, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(1))
+	if err != nil {
+		t.Fatalf("Failed to get block: %v", err)
+	}
+	blockHash := block.Hash()
+
+	t.Run("valid block and transaction", func(t *testing.T) {
+		// Query account state after the first transaction
+		result, err := api.AccountAt(context.Background(), blockHash, 0, addr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result")
+		}
+
+		// Check that nonce increased
+		if result.Nonce != 1 {
+			t.Errorf("Expected nonce 1, got %d", result.Nonce)
+		}
+
+		// Check that the balance decreased
+		expectedBalance := new(big.Int).Sub(big.NewInt(params.Ether), big.NewInt(1000))
+		gasUsed := new(big.Int).Mul(big.NewInt(21000), block.BaseFee())
+		expectedBalance.Sub(expectedBalance, gasUsed)
+
+		if result.Balance.ToInt().Cmp(expectedBalance) != 0 {
+			t.Logf("Expected balance %s, got %s", expectedBalance.String(), result.Balance.ToInt().String())
+		}
+
+		// Check that the code is empty (not a contract)
+		if len(result.Code) != 0 {
+			t.Errorf("Expected empty code, got %d bytes", len(result.Code))
+		}
 	})
 
-	borApi := NewBorAPI(backend)
-
-	t.Run("BorAPI_GetWitnessByNumber_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(1))
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness")
-		require.NotNil(t, result["context"], "Witness should have a context header")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	t.Run("non-existent block", func(t *testing.T) {
+		nonExistentHash := common.HexToHash("0x1234567890123456789012345678901234567890123456789012345678901234")
+		result, err := api.AccountAt(context.Background(), nonExistentHash, 0, addr)
+		if err != nil {
+			t.Fatalf("Expected no error for non-existent block, got: %v", err)
+		}
+		if result != nil {
+			t.Error("Expected nil result for non-existent block")
+		}
 	})
 
-	t.Run("BorAPI_GetWitnessByHash_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByHash(t.Context(), testBlockHash)
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
+	t.Run("invalid transaction index", func(t *testing.T) {
+		// Query with an out-of-bounds index
+		resultOutOfBounds, err := api.AccountAt(context.Background(), blockHash, 999, addr)
+		if err != nil {
+			t.Fatalf("AccountAt with out-of-bounds index failed: %v", err)
+		}
+		if resultOutOfBounds == nil {
+			t.Fatal("Expected non-nil result even for out-of-range txIndex")
+		}
+
+		// Get the last transaction index (block has at least 1 tx)
+		lastTxIdx := uint64(len(block.Transactions()) - 1)
+		resultAtLast, err := api.AccountAt(context.Background(), blockHash, lastTxIdx, addr)
+		if err != nil {
+			t.Fatalf("AccountAt at last tx index failed: %v", err)
+		}
+
+		// Both queries should return the same state
+		if resultOutOfBounds.Balance.ToInt().Cmp(resultAtLast.Balance.ToInt()) != 0 {
+			t.Errorf("Out-of-bounds query balance mismatch: got %v, want %v",
+				resultOutOfBounds.Balance.ToInt(), resultAtLast.Balance.ToInt())
+		}
+		if resultOutOfBounds.Nonce != resultAtLast.Nonce {
+			t.Errorf("Out-of-bounds query nonce mismatch: got %v, want %v",
+				resultOutOfBounds.Nonce, resultAtLast.Nonce)
+		}
 	})
 
-	t.Run("BorAPI_GetWitnessByBlockNumberOrHash_WithStoredWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(1)))
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness by number")
+	t.Run("non-existent account", func(t *testing.T) {
+		// Query account that doesn't exist
+		nonExistentAddr := common.HexToAddress("0x0000000000000000000000000000000000000099")
+		result, err := api.AccountAt(context.Background(), blockHash, 0, nonExistentAddr)
+		if err != nil {
+			t.Fatalf("AccountAt failed: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected non-nil result even for non-existent account")
+		}
 
-		result, err = borApi.GetWitnessByBlockNumberOrHash(t.Context(), rpc.BlockNumberOrHashWithHash(testBlockHash, false))
-		require.NoError(t, err)
-		require.NotNil(t, result, "Should find the stored witness by hash")
-		contextHeader := result["context"].(map[string]interface{})
-		require.Equal(t, testBlockHash, contextHeader["hash"], "Witness should be for the correct block")
-	})
-
-	t.Run("BorAPI_GetWitnessByNumber_NoWitness", func(t *testing.T) {
-		result, err := borApi.GetWitnessByNumber(t.Context(), rpc.BlockNumber(2))
-		require.NoError(t, err)
-		require.Nil(t, result, "Should return nil for block without witness")
-	})
-
-	t.Run("BorAPI_GetWitnessByHash_NonExistentBlock", func(t *testing.T) {
-		fakeHash := common.HexToHash("0xdeadbeef")
-		result, err := borApi.GetWitnessByHash(t.Context(), fakeHash)
-		require.NoError(t, err)
-		require.Nil(t, result, "Should return nil for non-existent block")
+		// Non-existent account should have zero balance and nonce
+		if result.Balance.ToInt().Cmp(big.NewInt(0)) != 0 {
+			t.Errorf("Expected zero balance for non-existent account, got %s", result.Balance.ToInt().String())
+		}
+		if result.Nonce != 0 {
+			t.Errorf("Expected zero nonce for non-existent account, got %d", result.Nonce)
+		}
 	})
 }

@@ -54,6 +54,10 @@ var (
 	// ErrRequestsHashMismatch indicates a mismatch between locally computed
 	// requests hash and the block's requests hash during validation.
 	ErrRequestsHashMismatch = errors.New("invalid requests hash")
+
+	// ErrBlockOversized is returned if the size of the RLP-encoded block
+	// exceeds the cap established by EIP 7934
+	ErrBlockOversized = errors.New("block RLP-encoded size exceeds maximum")
 )
 
 // List of evm-call-message pre-checking errors. All state transition messages will
@@ -140,6 +144,9 @@ var (
 	// ErrMissingBlobHashes is returned if a blob transaction has no blob hashes.
 	ErrMissingBlobHashes = errors.New("blob transaction missing blob hashes")
 
+	// ErrTooManyBlobs is returned if a blob transaction exceeds the maximum number of blobs.
+	ErrTooManyBlobs = errors.New("blob transaction has too many blobs")
+
 	// ErrBlobTxCreate is returned if a blob transaction has no explicit to field.
 	ErrBlobTxCreate = errors.New("blob transaction of type create")
 
@@ -161,4 +168,14 @@ var (
 	ErrAuthorizationInvalidSignature   = errors.New("EIP-7702 authorization has invalid signature")
 	ErrAuthorizationDestinationHasCode = errors.New("EIP-7702 authorization destination is a contract")
 	ErrAuthorizationNonceMismatch      = errors.New("EIP-7702 authorization nonce does not match current account nonce")
+)
+
+// Bor related errors
+var (
+	// ErrStateSyncProcessing should be used when state-sync isn't applied correctly
+	// in bor consensus. It can be either due to
+	// - Error in fetching event from heimdall
+	// - Error in processing state-sync event in EVM
+	// - Invalid state-sync tx data in block body post Madhugiri HF
+	ErrStateSyncProcessing = errors.New("unable to process state-sync tx")
 )

@@ -36,8 +36,8 @@ func TestCommand_DebugBlock(t *testing.T) {
 
 	defer server.CloseMockServer(srv)
 
-	// get the grpc port
-	port := srv.GetGrpcAddr()
+	// get the grpc address
+	grpcAddr := srv.GetGrpcAddr()
 
 	// wait for 4 seconds to mine a 2 blocks
 	time.Sleep(2 * time.Duration(config.Developer.Period) * time.Second)
@@ -54,7 +54,7 @@ func TestCommand_DebugBlock(t *testing.T) {
 	// trace 1st block
 	start := time.Now()
 	dst1 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
-	res := traceBlock(port, 1, output)
+	res := traceBlock(grpcAddr, 1, output)
 	require.Equal(t, 0, res)
 	t.Logf("Completed trace of block %d in %d ms at %s", 1, time.Since(start).Milliseconds(), dst1)
 
@@ -65,7 +65,7 @@ func TestCommand_DebugBlock(t *testing.T) {
 	start = time.Now()
 	latestBlock := srv.GetLatestBlockNumber().Int64()
 	dst2 := path.Join(output, prefix+time.Now().UTC().Format("2006-01-02-150405Z"), "block.json")
-	res = traceBlock(port, latestBlock, output)
+	res = traceBlock(grpcAddr, latestBlock, output)
 	require.Equal(t, 0, res)
 	t.Logf("Completed trace of block %d in %d ms at %s", latestBlock, time.Since(start).Milliseconds(), dst2)
 
@@ -80,12 +80,12 @@ func TestCommand_DebugBlock(t *testing.T) {
 }
 
 // traceBlock calls the cli command to trace a block
-func traceBlock(port string, number int64, output string) int {
+func traceBlock(addr string, number int64, output string) int {
 	ui := cli.NewMockUi()
 	command := &DebugBlockCommand{
 		Meta2: &Meta2{
 			UI:   ui,
-			addr: "127.0.0.1:" + port,
+			addr: addr,
 		},
 	}
 

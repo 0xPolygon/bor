@@ -11,13 +11,14 @@ import (
 	"github.com/0xPolygon/heimdall-v2/x/bor/types"
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/checkpoint"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/stretchr/testify/require"
 
 	stakeTypes "github.com/0xPolygon/heimdall-v2/x/stake/types"
 	"go.uber.org/mock/gomock"
@@ -1371,12 +1372,12 @@ func TestSpanStore_ConcurrentAccess(t *testing.T) {
 // TimeoutHeimdallClient simulates a heimdall client that times out or hangs on requests
 type TimeoutHeimdallClient struct {
 	timeout        time.Duration
-	shouldTimeout  bool
-	shouldHangSpan bool
+	shouldTimeout  atomic.Bool
+	shouldHangSpan atomic.Bool
 }
 
 func (h *TimeoutHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*types.Span, error) {
-	if h.shouldTimeout {
+	if h.shouldTimeout.Load() {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -1417,7 +1418,7 @@ func (h *TimeoutHeimdallClient) GetSpan(ctx context.Context, spanID uint64) (*ty
 }
 
 func (h *TimeoutHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span, error) {
-	if h.shouldHangSpan {
+	if h.shouldHangSpan.Load() {
 		// Simulate a hanging request that would block indefinitely
 		select {
 		case <-ctx.Done():
@@ -1430,7 +1431,7 @@ func (h *TimeoutHeimdallClient) GetLatestSpan(ctx context.Context) (*types.Span,
 }
 
 func (h *TimeoutHeimdallClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {
-	if h.shouldTimeout {
+	if h.shouldTimeout.Load() {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -1463,9 +1464,9 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	t.Run("heimdallStatus set to nil on FetchStatus error", func(t *testing.T) {
 		// Create a client that will fail on FetchStatus
 		mockClient := &TimeoutHeimdallClient{
-			shouldTimeout: true,
-			timeout:       10 * time.Millisecond, // Quick failure
+			timeout: 10 * time.Millisecond, // Quick failure
 		}
+		mockClient.shouldTimeout.Store(true)
 
 		spanStore := NewSpanStore(mockClient, nil, "1337")
 		defer spanStore.Close()
@@ -1490,9 +1491,9 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 	t.Run("background goroutine sets heimdallStatus to nil on persistent errors", func(t *testing.T) {
 		// Create a client that starts working then fails
 		mockClient := &TimeoutHeimdallClient{
-			shouldTimeout: false,
-			timeout:       10 * time.Millisecond,
+			timeout: 10 * time.Millisecond,
 		}
+		mockClient.shouldTimeout.Store(false)
 
 		spanStore := NewSpanStore(mockClient, nil, "1337")
 		defer spanStore.Close()
@@ -1505,7 +1506,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.NotNil(t, status, "Status should be set initially")
 
 		// Now make FetchStatus fail
-		mockClient.shouldTimeout = true
+		mockClient.shouldTimeout.Store(true)
 
 		// Wait for the background goroutine to encounter the error
 		time.Sleep(500 * time.Millisecond)
@@ -1515,7 +1516,7 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.Nil(t, status, "heimdallStatus should be nil after FetchStatus starts failing")
 
 		// Now make it work again
-		mockClient.shouldTimeout = false
+		mockClient.shouldTimeout.Store(false)
 
 		// Wait for recovery
 		time.Sleep(500 * time.Millisecond)
@@ -1525,4 +1526,55 @@ func TestSpanStore_HeimdallDownTimeout(t *testing.T) {
 		require.NotNil(t, status, "Status should be restored after recovery")
 		require.False(t, status.CatchingUp, "Status should show not catching up after recovery")
 	})
+}
+
+func TestSpanStore_PurgeCache(t *testing.T) {
+	t.Parallel()
+	spanStore := NewSpanStore(&MockHeimdallClient{}, nil, "1337")
+	defer spanStore.Close()
+	ctx := t.Context()
+
+	// Populate the cache with some spans
+	for i := uint64(0); i < 5; i++ {
+		span, err := spanStore.spanById(ctx, i)
+		require.NoError(t, err, "err in spanById for id=%d", i)
+		require.NotNil(t, span)
+	}
+
+	// Verify cache is populated
+	keys := spanStore.store.Keys()
+	require.Len(t, keys, 5, "cache should have 5 spans")
+
+	// Set up lastUsedSpan and latestKnownSpanId
+	span, err := spanStore.spanById(ctx, 2)
+	require.NoError(t, err)
+	spanStore.lastUsedSpan.Store(span)
+	spanStore.latestKnownSpanId.Store(4)
+	spanStore.latestSpanCache.Store(span)
+
+	// Verify values are set
+	require.NotNil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be set")
+	require.Equal(t, uint64(4), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 4")
+	require.NotNil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be set")
+
+	// Purge the cache
+	spanStore.PurgeCache()
+
+	// Verify cache is cleared
+	keys = spanStore.store.Keys()
+	require.Len(t, keys, 0, "cache should be empty after purge")
+
+	// Verify atomic values are reset
+	require.Nil(t, spanStore.lastUsedSpan.Load(), "lastUsedSpan should be nil after purge")
+	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(), "latestKnownSpanId should be 0 after purge")
+	require.Nil(t, spanStore.latestSpanCache.Load(), "latestSpanCache should be nil after purge")
+
+	// Verify we can still fetch spans after purge (cache miss should re-fetch)
+	span, err = spanStore.spanById(ctx, 0)
+	require.NoError(t, err, "should be able to fetch span after purge")
+	require.Equal(t, uint64(0), span.Id, "span id should be 0")
+
+	// Verify cache is being populated again
+	keys = spanStore.store.Keys()
+	require.Len(t, keys, 1, "cache should have 1 span after re-fetch")
 }

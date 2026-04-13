@@ -50,7 +50,7 @@ func (p *Peer) Handshake(networkID uint64, chain *core.BlockChain, rangeMsg Bloc
 func (p *Peer) handshake68(networkID uint64, chain *core.BlockChain) error {
 	var (
 		genesis    = chain.Genesis()
-		latest     = chain.CurrentBlock()
+		latest     = chain.CurrentHeader()
 		forkID     = forkid.NewID(chain.Config(), genesis, latest.Number.Uint64(), latest.Time)
 		forkFilter = forkid.NewFilter(chain)
 		td         = chain.GetTd(latest.Hash(), latest.Number.Uint64())
@@ -104,7 +104,7 @@ func (p *Peer) readStatus68(networkID uint64, status *StatusPacket68, genesis co
 func (p *Peer) handshake69(networkID uint64, chain *core.BlockChain, rangeMsg BlockRangeUpdatePacket) error {
 	var (
 		genesis    = chain.Genesis()
-		latest     = chain.CurrentBlock()
+		latest     = chain.CurrentHeader()
 		forkID     = forkid.NewID(chain.Config(), genesis, latest.Number.Uint64(), latest.Time)
 		forkFilter = forkid.NewFilter(chain)
 		td         = chain.GetTd(latest.Hash(), latest.Number.Uint64())
@@ -201,6 +201,7 @@ func waitForHandshake(errc <-chan error, p *Peer) error {
 				return err
 			}
 		case <-timeout.C:
+			p.Log().Debug("ETH handshake timed out", "timeout", handshakeTimeout)
 			markError(p, p2p.DiscReadTimeout)
 			return p2p.DiscReadTimeout
 		}

@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -115,7 +116,7 @@ func NewIDWithChain(chain Blockchain) ID {
 
 // NewFilter creates a filter that returns if a fork ID should be rejected or not
 // based on the local chain's status.
-func NewFilter(chain Blockchain) Filter {
+func NewFilter(chain *core.BlockChain) Filter {
 	return newFilter(
 		chain.Config(),
 		chain.Genesis(),
@@ -254,10 +255,8 @@ func checksumToBytes(hash uint32) [4]byte {
 // them, one for the block number based forks and the second for the timestamps.
 func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64) {
 	// Gather all the fork block numbers via reflection
-	kind := reflect.TypeOf(params.ChainConfig{})
+	kind := reflect.TypeFor[params.ChainConfig]()
 	conf := reflect.ValueOf(config).Elem()
-	x := uint64(0)
-
 	var (
 		forksByBlock []uint64
 		forksByTime  []uint64
@@ -273,13 +272,12 @@ func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64
 		}
 
 		// Extract the fork rule block number or timestamp and aggregate it
-		if field.Type == reflect.TypeOf(&x) {
+		if field.Type == reflect.TypeFor[*uint64]() {
 			if rule := conf.Field(i).Interface().(*uint64); rule != nil {
 				forksByTime = append(forksByTime, *rule)
 			}
 		}
-
-		if field.Type == reflect.TypeOf(new(big.Int)) {
+		if field.Type == reflect.TypeFor[*big.Int]() {
 			if rule := conf.Field(i).Interface().(*big.Int); rule != nil {
 				forksByBlock = append(forksByBlock, rule.Uint64())
 			}
@@ -312,4 +310,54 @@ func gatherForks(config *params.ChainConfig, genesis uint64) ([]uint64, []uint64
 	}
 
 	return forksByBlock, forksByTime
+}
+
+// GatherForks gathers all the known forks and creates a sorted list out of them.
+// Returns heightForks (block number forks) and timeForks (timestamp forks, which are not supported in bor).
+// Returns nil for empty fork lists.
+// This extends the internal gatherForks with Bor-specific fork handling.
+func GatherForks(config *params.ChainConfig, genesisTime uint64) (heightForks []uint64, timeForks []uint64) {
+	// Use the existing internal fork gathering logic
+	heightForks, timeForks = gatherForks(config, genesisTime)
+
+	// Add Bor-specific fork blocks (explicit list to avoid reflection fragility)
+	if config.Bor != nil {
+		for _, fork := range []*big.Int{
+			config.Bor.JaipurBlock,
+			config.Bor.DelhiBlock,
+			config.Bor.IndoreBlock,
+			config.Bor.AhmedabadBlock,
+			config.Bor.BhilaiBlock,
+			config.Bor.RioBlock,
+			config.Bor.MadhugiriBlock,
+			config.Bor.MadhugiriProBlock,
+			config.Bor.DandeliBlock,
+			config.Bor.LisovoBlock,
+			config.Bor.LisovoProBlock,
+			config.Bor.GiuglianoBlock,
+		} {
+			if fork != nil {
+				heightForks = append(heightForks, fork.Uint64())
+			}
+		}
+
+		// Re-sort and deduplicate after adding Bor forks
+		slices.Sort(heightForks)
+		heightForks = slices.Compact(heightForks)
+
+		// Re-apply filtering for block 0
+		if len(heightForks) > 0 && heightForks[0] == 0 {
+			heightForks = heightForks[1:]
+		}
+	}
+
+	// Ensure empty slices are nil
+	if len(heightForks) == 0 {
+		heightForks = nil
+	}
+	if len(timeForks) == 0 {
+		timeForks = nil
+	}
+
+	return heightForks, timeForks
 }
