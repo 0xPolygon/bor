@@ -1221,7 +1221,6 @@ func (w *worker) updateSnapshot(env *environment) {
 	w.snapshotMu.Lock()
 	defer w.snapshotMu.Unlock()
 
-
 	w.snapshotBlock = types.NewBlock(
 		env.header,
 		&types.Body{
