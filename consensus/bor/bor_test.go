@@ -3732,9 +3732,9 @@ func matchingStateSyncTx() *types.Transaction {
 	})
 }
 
-// TestFinalize_StateSyncMismatch_EmptyBody tests the original edge case: Heimdall reports
-// state-sync events and Finalize applies them to the state, but the block body is empty
-// (no StateSyncTx). Post-Madhugiri, this must be rejected.
+// TestFinalize_StateSyncMismatch_EmptyBody tests that a block which applies state-sync
+// transactions to state but doesn't have the transaction in block body (post Madhugiri)
+// is rejected with `ErrStateSyncMismatch` error.
 func TestFinalize_StateSyncMismatch_EmptyBody(t *testing.T) {
 	t.Parallel()
 
@@ -3746,6 +3746,29 @@ func TestFinalize_StateSyncMismatch_EmptyBody(t *testing.T) {
 
 	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
 	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "block body missing state-sync transaction")
+	require.Nil(t, result)
+}
+
+// TestFinalize_StateSyncMismatch_EmptyBody tests that a block which applies state-sync
+// transactions to state but last transaction in block body is not StateSyncTxType is
+// rejected with `ErrStateSyncMismatch` error.
+func TestFinalize_StateSyncMismatch_LastTxNotStateSyncType(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	// A legacy transaction — its Type() is not StateSyncTxType
+	addr := common.HexToAddress("0x1")
+	legacyTx := types.NewTx(&types.LegacyTx{Nonce: 0, To: &addr})
+
+	body := &types.Body{Transactions: []*types.Transaction{legacyTx}}
+	receipts := make([]*types.Receipt, 0)
+
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "block body missing state-sync transaction")
 	require.Nil(t, result)
 }
 
@@ -3772,26 +3795,7 @@ func TestFinalize_StateSyncMismatch_WrongHash(t *testing.T) {
 
 	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
 	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
-	require.Nil(t, result)
-}
-
-// TestFinalize_StateSyncMismatch_LastTxNotStateSyncType tests that a block body whose last
-// transaction is not of StateSyncTxType is rejected when Heimdall reports state-sync events.
-func TestFinalize_StateSyncMismatch_LastTxNotStateSyncType(t *testing.T) {
-	t.Parallel()
-
-	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
-	statedb := newStateDBForTest(t, genesis.Root)
-
-	// A legacy transaction — its Type() is not StateSyncTxType
-	addr := common.HexToAddress("0x1")
-	legacyTx := types.NewTx(&types.LegacyTx{Nonce: 0, To: &addr})
-
-	body := &types.Body{Transactions: []*types.Transaction{legacyTx}}
-	receipts := make([]*types.Receipt, 0)
-
-	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
-	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "hash mismatch")
 	require.Nil(t, result)
 }
 
@@ -3831,6 +3835,7 @@ func TestFinalize_StateSyncProcessingError(t *testing.T) {
 
 	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
 	require.ErrorIs(t, err, core.ErrStateSyncProcessing)
+	require.ErrorContains(t, err, "error while committing states")
 	require.Nil(t, result)
 }
 
