@@ -29,6 +29,8 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+var errTruncateBelowOffset = errors.New("truncation below offset")
+
 // memoryTable is used to store a list of sequential items in memory.
 type memoryTable struct {
 	items  uint64   // Number of stored items in the table, including the deleted ones
@@ -248,7 +250,11 @@ func (f *MemoryFreezer) ItemAmountInAncient() (uint64, error) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
 
-	return f.items - f.offset.Load(), nil
+	offset := f.offset.Load()
+	if f.items < offset {
+		return 0, nil
+	}
+	return f.items - offset, nil
 }
 
 // Ancient retrieves an ancient binary blob from the in-memory freezer.
@@ -260,7 +266,11 @@ func (f *MemoryFreezer) Ancient(kind string, number uint64) ([]byte, error) {
 	if t == nil {
 		return nil, errUnknownTable
 	}
-	data, err := t.retrieve(number-f.offset.Load(), 1, 0)
+	offset := f.offset.Load()
+	if number < offset {
+		return nil, errOutOfBounds
+	}
+	data, err := t.retrieve(number-offset, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +291,11 @@ func (f *MemoryFreezer) AncientRange(kind string, start, count, maxBytes uint64)
 	if t == nil {
 		return nil, errUnknownTable
 	}
-	return t.retrieve(start, count, maxBytes)
+	offset := f.offset.Load()
+	if start < offset {
+		return nil, errOutOfBounds
+	}
+	return t.retrieve(start-offset, count, maxBytes)
 }
 
 // Ancients returns the ancient item numbers in the freezer.
@@ -330,18 +344,20 @@ func (f *MemoryFreezer) ModifyAncients(fn func(ethdb.AncientWriteOp) error) (wri
 		return 0, errReadOnly
 	}
 	// Roll back all tables to the starting position in case of error.
+	old := f.items
+	offset := f.offset.Load()
 	defer func(old uint64) {
 		if err == nil {
 			return
 		}
 		// The write operation has failed. Go back to the previous item position.
 		for name, table := range f.tables {
-			err := table.truncateHead(old)
+			err := table.truncateHead(old - offset)
 			if err != nil {
 				log.Error("Freezer table roll-back failed", "table", name, "index", old, "err", err)
 			}
 		}
-	}(f.items)
+	}(old)
 
 	// Modify the ancients in batch.
 	f.writeBatch.reset(f)
@@ -369,8 +385,12 @@ func (f *MemoryFreezer) TruncateHead(items uint64) (uint64, error) {
 	if old <= items {
 		return old, nil
 	}
+	offset := f.offset.Load()
+	if items < offset {
+		return 0, errTruncateBelowOffset
+	}
 	for _, table := range f.tables {
-		if err := table.truncateHead(items - f.offset.Load()); err != nil {
+		if err := table.truncateHead(items - offset); err != nil {
 			return 0, err
 		}
 	}
@@ -392,9 +412,13 @@ func (f *MemoryFreezer) TruncateTail(tail uint64) (uint64, error) {
 	if old >= tail {
 		return old, nil
 	}
+	offset := f.offset.Load()
+	if tail < offset {
+		return 0, errTruncateBelowOffset
+	}
 	for _, table := range f.tables {
 		if table.config.prunable {
-			if err := table.truncateTail(tail - f.offset.Load()); err != nil {
+			if err := table.truncateTail(tail - offset); err != nil {
 				return 0, err
 			}
 		}
@@ -430,7 +454,7 @@ func (f *MemoryFreezer) Reset() error {
 		tables[name] = newMemoryTable(name, table.config)
 	}
 	f.tables = tables
-	f.items, f.tail = 0, 0
+	f.items, f.tail = f.offset.Load(), 0
 	return nil
 }
 
