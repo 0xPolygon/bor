@@ -1217,8 +1217,9 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	}
 
 	// Set state-sync in any case
-	hc := chain.(*core.HeaderChain)
-	hc.SetStateSync(stateSyncData)
+	if hc, ok := chain.(*core.HeaderChain); ok {
+		hc.SetStateSync(stateSyncData)
+	}
 
 	if len(stateSyncData) == 0 {
 		return receipts, nil
