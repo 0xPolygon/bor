@@ -3227,13 +3227,17 @@ func TestWitnessHandleFilterResultSkipsAlreadyPending(t *testing.T) {
 
 	// Pending state must be the original one, not replaced.
 	m.mu.Lock()
-	if m.pending[hash] == nil || m.pending[hash].op.origin != "old-peer" {
-		t.Errorf("pending entry was replaced; origin=%q", m.pending[hash].op.origin)
+	defer m.mu.Unlock()
+	state := m.pending[hash]
+	if state == nil {
+		t.Fatal("pending entry was removed; expected original to remain")
 	}
-	if m.pending[hash].retries != origRetries {
+	if state.op.origin != "old-peer" {
+		t.Errorf("pending entry was replaced; origin=%q", state.op.origin)
+	}
+	if state.retries != origRetries {
 		t.Error("pending retries counter was modified")
 	}
-	m.mu.Unlock()
 }
 
 // TestCheckCompletingSkipsAlreadyPending verifies the same already-pending
@@ -3267,10 +3271,14 @@ func TestWitnessCheckCompletingSkipsAlreadyPending(t *testing.T) {
 		t.Error("fetchWitness should not be invoked when already pending")
 	}
 	m.mu.Lock()
-	if m.pending[hash].op.origin != "original" {
+	defer m.mu.Unlock()
+	state := m.pending[hash]
+	if state == nil {
+		t.Fatal("pending entry was removed; expected original to remain")
+	}
+	if state.op.origin != "original" {
 		t.Error("pending entry was replaced")
 	}
-	m.mu.Unlock()
 }
 
 // TestHandleWitnessFetchSuccessUpdatesBlockTimestamps covers the guard at

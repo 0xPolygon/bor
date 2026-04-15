@@ -277,8 +277,11 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 		return
 	}
 
-	// Check distance (using parent's function)
-	if dist := int64(number) - int64(m.parentChainHeight()); dist <= -maxUncleDist {
+	// Check distance (using parent's function). Match block_fetcher.go's
+	// `<` comparison so a block at exactly dist == -maxUncleDist is treated
+	// the same by both: accepted. An inconsistent boundary would let
+	// block_fetcher import such a block while witness_manager drops it.
+	if dist := int64(number) - int64(m.parentChainHeight()); dist < -maxUncleDist {
 		m.mu.Unlock()
 		log.Debug("[wm] Discarded injected block, too far away", "peer", msg.origin, "number", number, "hash", hash, "distance", dist)
 		return // Doesn't count towards DOS limits as it's injected, just drop.
