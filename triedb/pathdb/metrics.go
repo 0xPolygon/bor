@@ -51,6 +51,20 @@ var (
 	dirtyStateWriteMeter   = metrics.NewRegisteredMeter("pathdb/dirty/state/write", nil)
 	dirtyStateHitDepthHist = metrics.NewRegisteredHistogram("pathdb/dirty/state/depth", nil, metrics.NewExpDecaySample(1028, 0.015))
 
+	// Per-layer storage-read latency histograms (nanoseconds). These measure
+	// only the time spent at the specific layer that served the read, not the
+	// full top-to-bottom descent. Pair with the existing hit/miss meters to
+	// derive weighted-average latency.
+	//
+	// diffStorageDurHist:   in-memory diff layer (recent block states not yet flushed)
+	// bufferStorageDurHist: disk layer write/frozen buffer (dirty; pending flush to Pebble)
+	// cleanStorageDurHist:  disk layer clean state cache (fastcache)
+	// diskStorageDurHist:   Pebble read (actual disk I/O, excluding OS page cache hits)
+	diffStorageDurHist   = metrics.NewRegisteredHistogram("pathdb/duration/storage/diff", nil, metrics.NewExpDecaySample(1028, 0.015))
+	bufferStorageDurHist = metrics.NewRegisteredHistogram("pathdb/duration/storage/buffer", nil, metrics.NewExpDecaySample(1028, 0.015))
+	cleanStorageDurHist  = metrics.NewRegisteredHistogram("pathdb/duration/storage/clean", nil, metrics.NewExpDecaySample(1028, 0.015))
+	diskStorageDurHist   = metrics.NewRegisteredHistogram("pathdb/duration/storage/disk", nil, metrics.NewExpDecaySample(1028, 0.015))
+
 	nodeCleanFalseMeter = metrics.NewRegisteredMeter("pathdb/clean/false", nil)
 	nodeDirtyFalseMeter = metrics.NewRegisteredMeter("pathdb/dirty/false", nil)
 	nodeDiskFalseMeter  = metrics.NewRegisteredMeter("pathdb/disk/false", nil)

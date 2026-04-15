@@ -260,9 +260,11 @@ func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 	// Try to retrieve the trie node from the not-yet-written node buffer first
 	// (both the live one and the frozen one). Note the buffer is lock free since
 	// it's impossible to mutate the buffer before tagging the layer as stale.
+	bufferStart := time.Now()
 	for _, buffer := range []*buffer{dl.buffer, dl.frozen} {
 		if buffer != nil {
 			if blob, found := buffer.storage(accountHash, storageHash); found {
+				bufferStorageDurHist.Update(time.Since(bufferStart).Nanoseconds())
 				dirtyStateHitMeter.Mark(1)
 				dirtyStateReadMeter.Mark(int64(len(blob)))
 				dirtyStateHitDepthHist.Update(int64(depth))
@@ -287,7 +289,9 @@ func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 	}
 	// Try to retrieve the storage slot from the memory cache
 	if dl.states != nil {
+		cleanStart := time.Now()
 		if blob, found := dl.states.HasGet(nil, key); found {
+			cleanStorageDurHist.Update(time.Since(cleanStart).Nanoseconds())
 			cleanStateHitMeter.Mark(1)
 			cleanStateReadMeter.Mark(int64(len(blob)))
 
@@ -301,7 +305,9 @@ func (dl *diskLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 		cleanStateMissMeter.Mark(1)
 	}
 	// Try to retrieve the account from the disk
+	diskStart := time.Now()
 	blob := rawdb.ReadStorageSnapshot(dl.db.diskdb, accountHash, storageHash)
+	diskStorageDurHist.Update(time.Since(diskStart).Nanoseconds())
 
 	// Store the resolved data in the clean cache. The background buffer flusher
 	// may also write to the clean cache concurrently, but two writers cannot

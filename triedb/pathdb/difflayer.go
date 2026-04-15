@@ -19,6 +19,7 @@ package pathdb
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -133,7 +134,9 @@ func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
+	start := time.Now()
 	if blob, found := dl.states.storage(accountHash, storageHash); found {
+		diffStorageDurHist.Update(time.Since(start).Nanoseconds())
 		dirtyStateHitMeter.Mark(1)
 		dirtyStateHitDepthHist.Update(int64(depth))
 		dirtyStateReadMeter.Mark(int64(len(blob)))
