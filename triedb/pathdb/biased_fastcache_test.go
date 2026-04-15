@@ -362,7 +362,7 @@ func TestAddressBiasedCache_PreloadWithData(t *testing.T) {
 	}
 
 	// Wait for async preloading to complete
-	time.Sleep(100 * time.Millisecond)
+	cache.wg.Wait()
 
 	// Verify root node was loaded
 	rootKey := accountHash.Bytes()
@@ -378,13 +378,12 @@ func TestAddressBiasedCache_PreloadWithData(t *testing.T) {
 // TestDecodeChildPaths_BranchNode verifies that decodeChildPaths correctly
 // identifies non-nil children in a branch node and returns only their paths.
 func TestDecodeChildPaths_BranchNode(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	hash := bytes.Repeat([]byte{0xab}, 32)
 
 	nodeData := encodeBranchNode(t, []byte{0, 5, 15}, hash)
 	currentPath := []byte{0x01}
 
-	children := cache.decodeChildPaths(nodeData, currentPath)
+	children := decodeChildPaths(nodeData, currentPath)
 	if len(children) != 3 {
 		t.Fatalf("expected 3 children, got %d", len(children))
 	}
@@ -406,21 +405,19 @@ func TestDecodeChildPaths_BranchNode(t *testing.T) {
 
 // TestDecodeChildPaths_EmptyBranch verifies that an all-nil branch node returns no children.
 func TestDecodeChildPaths_EmptyBranch(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	nodeData := encodeBranchNode(t, nil, nil)
-	if got := cache.decodeChildPaths(nodeData, nil); len(got) != 0 {
+	if got := decodeChildPaths(nodeData, nil); len(got) != 0 {
 		t.Errorf("expected no children for empty branch, got %v", got)
 	}
 }
 
 // TestDecodeChildPaths_ExtensionNodeEven verifies extension node decoding with an even-length key.
 func TestDecodeChildPaths_ExtensionNodeEven(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	// Extension: key nibbles [1, 2] → compact [0x00, 0x12]
 	nibbles := []byte{1, 2}
 	nodeData := encodeShortNode(t, nibblesToCompact(nibbles, false), bytes.Repeat([]byte{0xcc}, 32))
 
-	children := cache.decodeChildPaths(nodeData, []byte{0x05})
+	children := decodeChildPaths(nodeData, []byte{0x05})
 	if len(children) != 1 {
 		t.Fatalf("expected 1 child for extension node, got %d", len(children))
 	}
@@ -432,12 +429,11 @@ func TestDecodeChildPaths_ExtensionNodeEven(t *testing.T) {
 
 // TestDecodeChildPaths_ExtensionNodeOdd verifies extension node decoding with an odd-length key.
 func TestDecodeChildPaths_ExtensionNodeOdd(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	// Extension: key nibbles [1, 2, 3] → compact [0x11, 0x23]
 	nibbles := []byte{1, 2, 3}
 	nodeData := encodeShortNode(t, nibblesToCompact(nibbles, false), bytes.Repeat([]byte{0xcc}, 32))
 
-	children := cache.decodeChildPaths(nodeData, []byte{0x05})
+	children := decodeChildPaths(nodeData, []byte{0x05})
 	if len(children) != 1 {
 		t.Fatalf("expected 1 child for extension node, got %d", len(children))
 	}
@@ -449,27 +445,25 @@ func TestDecodeChildPaths_ExtensionNodeOdd(t *testing.T) {
 
 // TestDecodeChildPaths_LeafNode verifies that leaf nodes return no children.
 func TestDecodeChildPaths_LeafNode(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	// Leaf node: key nibbles [1, 2] with terminator flag → compact [0x20, 0x12]
 	nodeData := encodeShortNode(t, nibblesToCompact([]byte{1, 2}, true), []byte("value"))
-	if got := cache.decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
+	if got := decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
 		t.Errorf("expected no children for leaf node, got %v", got)
 	}
 
 	// Also test odd-length leaf
 	nodeData = encodeShortNode(t, nibblesToCompact([]byte{1, 2, 3}, true), []byte("value"))
-	if got := cache.decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
+	if got := decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
 		t.Errorf("expected no children for odd leaf node, got %v", got)
 	}
 }
 
 // TestDecodeChildPaths_InvalidData verifies that non-RLP input returns nil.
 func TestDecodeChildPaths_InvalidData(t *testing.T) {
-	cache := &AddressBiasedCache{}
-	if got := cache.decodeChildPaths([]byte("not valid rlp data"), nil); got != nil {
+	if got := decodeChildPaths([]byte("not valid rlp data"), nil); got != nil {
 		t.Errorf("expected nil for invalid data, got %v", got)
 	}
-	if got := cache.decodeChildPaths(nil, nil); got != nil {
+	if got := decodeChildPaths(nil, nil); got != nil {
 		t.Errorf("expected nil for nil data, got %v", got)
 	}
 }
@@ -477,12 +471,11 @@ func TestDecodeChildPaths_InvalidData(t *testing.T) {
 // TestDecodeChildPaths_EmptyExtensionRejected verifies malformed empty
 // extension nodes do not produce a non-growing child path equal to currentPath.
 func TestDecodeChildPaths_EmptyExtensionRejected(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	currentPath := []byte{0x05, 0x06}
 
 	// Compact key 0x00 decodes to an empty extension key, which should be ignored.
 	nodeData := encodeShortNode(t, []byte{0x00}, bytes.Repeat([]byte{0xdd}, 32))
-	if got := cache.decodeChildPaths(nodeData, currentPath); len(got) != 0 {
+	if got := decodeChildPaths(nodeData, currentPath); len(got) != 0 {
 		t.Fatalf("expected malformed empty extension to be ignored, got %v", got)
 	}
 }
@@ -490,10 +483,9 @@ func TestDecodeChildPaths_EmptyExtensionRejected(t *testing.T) {
 // TestDecodeChildPaths_ExtensionWithoutChildRejected verifies malformed
 // extension nodes with an empty child reference are ignored.
 func TestDecodeChildPaths_ExtensionWithoutChildRejected(t *testing.T) {
-	cache := &AddressBiasedCache{}
 	nodeData := encodeShortNode(t, nibblesToCompact([]byte{0x0a}, false), nil)
 
-	if got := cache.decodeChildPaths(nodeData, []byte{0x05}); len(got) != 0 {
+	if got := decodeChildPaths(nodeData, []byte{0x05}); len(got) != 0 {
 		t.Fatalf("expected malformed extension without child to be ignored, got %v", got)
 	}
 }
@@ -571,7 +563,7 @@ func TestPreloadBFS_CycleFree(t *testing.T) {
 	}
 	defer cache.Close()
 	// Wait for async preload to complete (no rate limit, so completes in microseconds)
-	time.Sleep(100 * time.Millisecond)
+	cache.wg.Wait()
 
 	// All 5 nodes must be in the cache. If the BFS had looped or revisited
 	// nodes, it would either hang or overwrite newer data (caught by the

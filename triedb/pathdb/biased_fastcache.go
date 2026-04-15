@@ -250,7 +250,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 		// Decode actual children from the node and enqueue them.
 		// Only real trie children are returned, keeping queue size proportional
 		// to trie width rather than growing exponentially with depth.
-		childPaths := c.decodeChildPaths(nodeData, item.path)
+		childPaths := decodeChildPaths(nodeData, item.path)
 		for _, childPath := range childPaths {
 			queue = append(queue, queueItem{
 				path:  childPath,
@@ -282,7 +282,7 @@ func (c *AddressBiasedCache) preloadAddressAsync(db ethdb.Database, addr common.
 // proportional to trie width rather than growing as 16^depth. Malformed
 // non-growing short nodes are ignored, and valid MPT child paths are strictly
 // longer than the parent path, so a visited set is not required.
-func (c *AddressBiasedCache) decodeChildPaths(nodeData []byte, currentPath []byte) [][]byte {
+func decodeChildPaths(nodeData []byte, currentPath []byte) [][]byte {
 	var rawNode []rlp.RawValue
 	if err := rlp.DecodeBytes(nodeData, &rawNode); err != nil {
 		return nil
@@ -292,9 +292,9 @@ func (c *AddressBiasedCache) decodeChildPaths(nodeData []byte, currentPath []byt
 	case 17: // Branch node — up to 16 children at slots 0–15
 		var children [][]byte
 		for i := byte(0); i < 16; i++ {
-			// A nil child is encoded as RLP empty string: a single 0x80 byte.
-			// Any other encoding (32-byte hash, inline list) means a child exists.
-			if len(rawNode[i]) == 1 && rawNode[i][0] == 0x80 {
+			// A nil child is encoded as RLP empty string: 0x80 (1 byte) or
+			// absent entirely (0 bytes). Any other encoding means a child exists.
+			if len(rawNode[i]) <= 1 {
 				continue
 			}
 			childPath := make([]byte, len(currentPath)+1)
@@ -322,7 +322,7 @@ func (c *AddressBiasedCache) decodeChildPaths(nodeData []byte, currentPath []byt
 		}
 		// A valid extension must reference a real child. Ignore malformed
 		// encodings with an empty child reference.
-		if len(rawNode[1]) == 1 && rawNode[1][0] == 0x80 {
+		if len(rawNode[1]) <= 1 {
 			return nil
 		}
 		childPath := make([]byte, len(currentPath)+len(nibbles))
@@ -341,7 +341,12 @@ func compactKeyToNibbles(compact []byte) []byte {
 		return nil
 	}
 	firstByte := compact[0]
-	var nibbles []byte
+	// Pre-allocate: each remaining byte contributes 2 nibbles; odd-length flag adds 1.
+	n := len(compact[1:]) * 2
+	if firstByte&0x10 != 0 {
+		n++
+	}
+	nibbles := make([]byte, 0, n)
 	// Bit 4 of the first byte is the odd-length flag: if set, the low nibble of
 	// the first byte is the first nibble of the key.
 	if firstByte&0x10 != 0 {
