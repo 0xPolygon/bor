@@ -225,8 +225,8 @@ func (m *witnessManager) armTimerChan(lastTick time.Time) (<-chan time.Time, tim
 	pendingCount := len(m.pending)
 	m.mu.Unlock()
 
-	if pendingCount != 0 {
-		// Drain the timer so a stale fire doesn't wake us up.
+	if pendingCount == 0 {
+		// Nothing to fetch — drain the timer so a stale fire doesn't wake us up.
 		m.stopAndDrainTimer()
 		return nil, lastTick
 	}

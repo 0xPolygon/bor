@@ -3381,3 +3381,59 @@ func TestWitnessGetConsensusPageCountMajority(t *testing.T) {
 		t.Errorf("consensus = %d, want 10 (clear majority)", consensus)
 	}
 }
+
+// TestWitnessLoopDrivesFetchesForPending guards against armTimerChan's
+// condition being inverted: when pending requests exist, the loop must
+// arm the timer so tick() eventually fires and invokes fetchWitness. The
+// existing TestLoop injects a message but never verifies the retry path
+// actually executes via the timer — it was insufficient to catch a bug
+// where armTimerChan returned a nil timer channel whenever pending > 0
+// (reported by code review on PR #2188).
+//
+// This test exercises the full loop→tick→fetchWitness pipeline through
+// real channels and asserts the fetch callback fires within a bounded
+// time.
+func TestWitnessLoopDrivesFetchesForPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, nil, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, 0,
+	)
+
+	fetchCalled := make(chan struct{}, 1)
+	fetchWitness := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		select {
+		case fetchCalled <- struct{}{}:
+		default:
+		}
+		return nil, errors.New("no peer with witness for hash")
+	}
+
+	go manager.loop()
+	defer manager.stop()
+
+	block := createTestBlock(101)
+	manager.injectNeedWitnessCh <- &injectBlockNeedWitnessMsg{
+		origin:       "test-peer",
+		block:        block,
+		fetchWitness: fetchWitness,
+	}
+
+	// fetchWitness must be invoked within a reasonable window. If
+	// armTimerChan's condition is inverted (returns nil channel when
+	// pending > 0), tick() never fires through the timer and this
+	// times out.
+	select {
+	case <-fetchCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fetchWitness was never invoked — loop is not driving tick for pending requests")
+	}
+}
