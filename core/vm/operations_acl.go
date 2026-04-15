@@ -44,6 +44,9 @@ func makeGasSStoreFunc(clearingRefund uint64) gasFunc {
 			cost = params.ColdSloadCostEIP2929
 			// If the caller cannot afford the cost, this change will be rolled back
 			evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
+			sstoreColdMeter.Mark(1)
+		} else {
+			sstoreWarmMeter.Mark(1)
 		}
 
 		value := common.Hash(y.Bytes32())
@@ -107,9 +110,11 @@ func gasSLoadEIP2929(evm *EVM, contract *Contract, stack *Stack, mem *Memory, me
 		// If the caller cannot afford the cost, this change will be rolled back
 		// If he does afford it, we can skip checking the same thing later on, during execution
 		evm.StateDB.AddSlotToAccessList(contract.Address(), slot)
+		sloadColdMeter.Mark(1)
 		return params.ColdSloadCostEIP2929, nil
 	}
 
+	sloadWarmMeter.Mark(1)
 	return params.WarmStorageReadCostEIP2929, nil
 }
 

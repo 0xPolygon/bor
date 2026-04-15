@@ -18,6 +18,7 @@ package vm
 
 import (
 	"math"
+	"time"
 
 	"github.com/holiman/uint256"
 
@@ -557,10 +558,12 @@ func opMstore8(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 }
 
 func opSload(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
+	start := time.Now()
 	loc := scope.Stack.peek()
 	hash := common.Hash(loc.Bytes32())
 	val := evm.StateDB.GetState(scope.Contract.Address(), hash)
 	loc.SetBytes(val.Bytes())
+	sloadDurationHist.Update(time.Since(start).Nanoseconds())
 
 	return nil, nil
 }
@@ -570,9 +573,11 @@ func opSstore(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		return nil, ErrWriteProtection
 	}
 
+	start := time.Now()
 	loc := scope.Stack.pop()
 	val := scope.Stack.pop()
 	evm.StateDB.SetState(scope.Contract.Address(), loc.Bytes32(), val.Bytes32())
+	sstoreDurationHist.Update(time.Since(start).Nanoseconds())
 	return nil, nil
 }
 
