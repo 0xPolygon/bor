@@ -998,28 +998,34 @@ func TestAddressBiasedCache_RateLimitInterruption(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
 
-	// Create many nodes to ensure preload takes time
-	nodeCount := 1000
-	nodeData := make([]byte, 100)
-	for i := 0; i < nodeCount; i++ {
-		path := []byte{byte(i % 256), byte(i / 256)}
-		rawdb.WriteStorageTrieNode(db, accountHash, path, nodeData)
+	// Build a valid trie large enough to keep the preload busy at 1KB/s.
+	// Branch root → 16 branch children → 256 leaf grandchildren (5KB each).
+	// Total: 256 × 5KB = 1.28MB — at 1KB/s this takes >1000s without cancellation.
+	slots := allBranchSlots()
+	hash := bytes.Repeat([]byte{0x33}, 32)
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, hash))
+	leafValue := bytes.Repeat([]byte{0xcc}, 5*1024)
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i}, encodeBranchNode(t, slots, hash))
+		for _, j := range slots {
+			rawdb.WriteStorageTrieNode(db, accountHash, []byte{i, j},
+				encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), leafValue))
+		}
 	}
-	rawdb.WriteStorageTrieNode(db, accountHash, nil, nodeData)
 
 	addressCacheSizes := map[common.Address]int{
 		addr: 1024 * 1024,
 	}
 
 	// Very slow rate limit to ensure preload is still running when we cancel
-	rateLimit := int64(1024) // 1 KB/s - would take ~100 seconds normally
+	rateLimit := int64(1024) // 1 KB/s - would take ~1000 seconds normally
 
 	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, rateLimit)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
-	// Let preload start
+	// Let preload start and exhaust the burst
 	time.Sleep(50 * time.Millisecond)
 
 	// Cancel by closing
@@ -1041,28 +1047,23 @@ func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
 
-	// Create root node and several child nodes with large data to consume burst quickly
-	// Burst is 64KB, so we need nodes that total > 64KB to ensure WaitN blocks
-	largeNodeData := make([]byte, 32*1024) // 32KB per node
-	for i := 0; i < len(largeNodeData); i++ {
-		largeNodeData[i] = byte(i % 256)
-	}
-
-	// Write root node
-	rawdb.WriteStorageTrieNode(db, accountHash, nil, largeNodeData)
-
-	// Write 4 child nodes (4 * 32KB = 128KB > 64KB burst)
-	for i := byte(0); i < 4; i++ {
-		path := []byte{i}
-		rawdb.WriteStorageTrieNode(db, accountHash, path, largeNodeData)
+	// Build a valid trie: branch root with 8 children, each a large leaf.
+	// 8 children × 10KB = 80KB > 64KB burst, so WaitN blocks partway through children.
+	slots := []byte{0, 1, 2, 3, 4, 5, 6, 7}
+	hash := bytes.Repeat([]byte{0xab}, 32)
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, hash))
+	largeValue := bytes.Repeat([]byte{0xbb}, 10*1024) // 10KB per leaf
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i},
+			encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), largeValue))
 	}
 
 	addressCacheSizes := map[common.Address]int{
 		addr: 1024 * 1024, // 1MB cache
 	}
 
-	// Very slow rate limit: 1KB/s with 64KB burst
-	// After burst is consumed, preload will block in WaitN for ~32 seconds per node
+	// Very slow rate limit: 1KB/s with 64KB burst.
+	// After ~6 children (~60KB) the burst is exhausted and WaitN blocks for ~10s per node.
 	rateLimit := int64(1024) // 1 KB/s
 
 	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, rateLimit)
@@ -1070,9 +1071,7 @@ func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
-	// Wait long enough for burst to be consumed and WaitN to block
-	// Root (32KB) + first two children (64KB) = 96KB > 64KB burst
-	// So after ~100ms the preload should be blocked in WaitN
+	// Wait for burst to be consumed and WaitN to block
 	time.Sleep(200 * time.Millisecond)
 
 	// Now Close() should interrupt the WaitN call
