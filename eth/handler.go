@@ -729,8 +729,9 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 
 		return
 	}
-	// Otherwise if the block is indeed in out own chain, announce it
-	if h.chain.HasBlock(hash, block.NumberU64()) {
+	// Otherwise, announce the block if it is already written locally or if the
+	// witness is cached and the block is in-flight on the local write path.
+	if h.chain.HasBlock(hash, block.NumberU64()) || h.chain.HasWitness(hash) {
 		for _, peer := range peers {
 			peer.AsyncSendNewBlockHash(block)
 		}
@@ -841,9 +842,48 @@ func (h *handler) minedBroadcastLoop() {
 				log.Info("[block tracker] Broadcasting mined block", "number", ev.Block.NumberU64(), "hash", ev.Block.Hash(), "blockTime", ev.Block.Time(), "now", now.Unix(), "delay", delay, "delayInMs", delayInMs, "sealToBroadcast", common.PrettyDuration(sealToBcast))
 			}
 			loopStart := time.Now()
-			h.BroadcastBlock(ev.Block, ev.Witness, true)  // First propagate block to peers
-			h.BroadcastBlock(ev.Block, ev.Witness, false) // Only then announce to the rest
+			h.BroadcastBlock(ev.Block, ev.Witness, true) // First propagate block to peers
+			go h.announceMinedBlock(ev.Block, ev.Witness)
 			broadcastLoopTimer.Update(time.Since(loopStart))
+		}
+	}
+}
+
+// announceMinedBlock announces a locally mined block after it becomes visible
+// through the local chain reader.
+//
+// The pipelined inline path broadcasts before its async DB write completes, so
+// announcing immediately can race with HasBlock() and silently skip the hash
+// announcement to non-propagation peers. Wait briefly for the write to land,
+// then announce. If the block still isn't visible but the witness is cached,
+// fall back to the witness-gated path so stateless peers can still progress.
+func (h *handler) announceMinedBlock(block *types.Block, witness *stateless.Witness) {
+	const (
+		pollInterval = 10 * time.Millisecond
+		maxWait      = 500 * time.Millisecond
+	)
+
+	hash := block.Hash()
+	number := block.NumberU64()
+	deadline := time.NewTimer(maxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		if h.chain.HasBlock(hash, number) {
+			h.BroadcastBlock(block, witness, false)
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			if h.chain.HasWitness(hash) {
+				h.BroadcastBlock(block, witness, false)
+			} else {
+				log.Debug("Skipping mined block announce before local write became visible", "hash", hash, "number", number)
+			}
+			return
 		}
 	}
 }

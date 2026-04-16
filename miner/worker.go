@@ -202,6 +202,10 @@ type environment struct {
 	gasPool  *core.GasPool  // available gas used to pack transactions
 	coinbase common.Address
 	evm      *vm.EVM
+	// buildInterrupt owns the timeout signal for this specific block-building
+	// attempt. It must not be shared across overlapping sequential/speculative
+	// builds, otherwise one timer can abort another build.
+	buildInterrupt *buildInterruptState
 
 	header   *types.Header
 	txs      []*types.Transaction
@@ -210,11 +214,29 @@ type environment struct {
 	blobs    int
 
 	mvReadMapList []map[blockstm.Key]blockstm.ReadDescriptor
+	depsBuilder   *blockstm.DepsBuilder
+	depsFailed    bool
 	witness       *stateless.Witness
 
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
+}
+
+type buildInterruptState struct {
+	timedOut  atomic.Bool
+	flagSetAt atomic.Int64
+}
+
+func newBuildInterruptState() *buildInterruptState {
+	return &buildInterruptState{}
+}
+
+func (s *buildInterruptState) timeoutFlag() *atomic.Bool {
+	if s == nil {
+		return nil
+	}
+	return &s.timedOut
 }
 
 // copy creates a deep copy of environment.
@@ -224,6 +246,7 @@ func (env *environment) copy() *environment {
 		state:          env.state.Copy(),
 		tcount:         env.tcount,
 		coinbase:       env.coinbase,
+		buildInterrupt: newBuildInterruptState(),
 		header:         types.CopyHeader(env.header),
 		receipts:       copyReceipts(env.receipts),
 		mvReadMapList:  env.mvReadMapList,
@@ -366,6 +389,10 @@ type worker struct {
 	// Used to prevent duplicate work.
 	pendingWorkBlock atomic.Uint64
 
+	// When set, the next sequential build is recovering a discarded
+	// speculative block and should preserve its original target slot.
+	nextCommitAbortRecovery atomic.Bool
+
 	snapshotMu       sync.RWMutex // The lock used to protect the snapshots below
 	snapshotBlock    *types.Block
 	snapshotReceipts types.Receipts
@@ -396,10 +423,11 @@ type worker struct {
 	fullTaskHook func()                             // Method to call before pushing the full sealing task.
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 
-	// Interrupt commit to stop block building on time
-	interruptCommitFlag    bool        // Denotes whether interrupt commit is enabled or not
-	interruptBlockBuilding atomic.Bool // A toggle to denote whether to stop block building or not
-	interruptFlagSetAt     atomic.Int64
+	// Interrupt commit to stop block building on time.
+	// interruptBlockBuilding is kept only as a manual/test override. Real timeout
+	// state now lives on each environment/build attempt.
+	interruptCommitFlag    bool
+	interruptBlockBuilding atomic.Bool
 	mockTxDelay            uint // A mock delay for transaction execution, only used in tests
 
 	blockTime     time.Duration     // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
@@ -812,6 +840,39 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	}
 }
 
+// schedulePipelineRetry re-enters block building through the normal newWorkCh
+// path after the pipeline exits or aborts. A short delay lets the latest head
+// become visible first, so the retry builds on the correct parent instead of
+// recursively calling commitWork from inside the speculative-work handler.
+func (w *worker) schedulePipelineRetry() {
+	go func() {
+		timer := time.NewTimer(25 * time.Millisecond)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+		case <-w.exitCh:
+			return
+		}
+
+		current := w.chain.CurrentBlock()
+		if current == nil {
+			return
+		}
+
+		target := current.Number.Uint64() + 1
+		if w.pendingWorkBlock.Load() >= target {
+			return
+		}
+		w.pendingWorkBlock.Store(target)
+
+		select {
+		case w.newWorkCh <- &newWorkReq{timestamp: time.Now().Unix()}:
+		case <-w.exitCh:
+		}
+	}()
+}
+
 // mainLoop is responsible for generating and submitting sealing work based on
 // the received event. It can support two modes: automatically generate task and
 // submit it or return task according to given parameters for various proposes.
@@ -835,18 +896,34 @@ func (w *worker) mainLoop() {
 	for {
 		select {
 		case req := <-w.newWorkCh:
+			abortRecovery := w.nextCommitAbortRecovery.Swap(false)
 			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
 				if w.eth.PeerCount() > 0 || devFakeAuthor {
 					//nolint:contextcheck
-					w.commitWork(req.interrupt, req.noempty, req.timestamp)
+					w.commitWork(req.interrupt, req.noempty, req.timestamp, abortRecovery)
 				}
 			} else {
 				//nolint:contextcheck
-				w.commitWork(req.interrupt, req.noempty, req.timestamp)
+				w.commitWork(req.interrupt, req.noempty, req.timestamp, abortRecovery)
 			}
 
 		case req := <-w.speculativeWorkCh:
-			w.commitSpeculativeWork(req)
+			if shouldRetry, abortRecovery := w.commitSpeculativeWork(req); shouldRetry {
+				if abortRecovery {
+					w.nextCommitAbortRecovery.Store(true)
+				}
+				// The pipeline exited normally (last block via sealBlockViaTaskCh)
+				// or was aborted (EIP-2935/BLOCKHASH). Re-enter through the normal
+				// newWorkCh path using the latest visible head. This avoids
+				// recursively calling commitWork from inside the speculative-work
+				// handler, which can build on a stale parent or wedge recovery.
+				//
+				// NOT called when commitSpeculativeWork fell back to sequential —
+				// fallbackToSequential already sealed block N via taskCh, and
+				// retrying here would create a tight loop that keeps restarting
+				// Seal() with fresh timestamps, preventing blocks from being sealed.
+				w.schedulePipelineRetry()
+			}
 
 		case req := <-w.getWorkCh:
 			req.result <- w.generateWork(req.params, false)
@@ -888,14 +965,13 @@ func (w *worker) mainLoop() {
 					stopFn = createInterruptTimer(
 						w.current.header.Number.Uint64(),
 						w.current.header.GetActualTime(),
-						&w.interruptBlockBuilding,
-						&w.interruptFlagSetAt,
+						w.current.buildInterrupt,
 						w.config.EnablePipelinedSRC,
 					)
 				}
 
-				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, &w.interruptBlockBuilding) // Mixed bag of everrything, yolo
-				blobTxs := newTransactionsByPriceAndNonce(w.current.signer, nil, w.current.header.BaseFee, &w.interruptBlockBuilding)  // Empty bag, don't bother optimising
+				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, w.current.buildInterrupt.timeoutFlag()) // Mixed bag of everrything, yolo
+				blobTxs := newTransactionsByPriceAndNonce(w.current.signer, nil, w.current.header.BaseFee, w.current.buildInterrupt.timeoutFlag())  // Empty bag, don't bother optimising
 
 				tcount := w.current.tcount
 
@@ -912,7 +988,7 @@ func (w *worker) mainLoop() {
 				// submit sealing work here since all empty submission will be rejected
 				// by clique. Of course the advance sealing(empty submission) is disabled.
 				if w.chainConfig.Clique != nil && w.chainConfig.Clique.Period == 0 {
-					w.commitWork(nil, true, time.Now().Unix())
+					w.commitWork(nil, true, time.Now().Unix(), false)
 				}
 			}
 
@@ -1209,13 +1285,14 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		state:          state,
 		size:           uint64(header.Size()),
 		coinbase:       coinbase,
+		buildInterrupt: newBuildInterruptState(),
 		header:         header,
 		witness:        state.Witness(),
 		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
 		prefetchReader: genParams.prefetchReader,
 		processReader:  genParams.processReader,
 	}
-	env.evm.SetInterrupt(&w.interruptBlockBuilding)
+	env.evm.SetInterrupt(env.buildInterrupt.timeoutFlag())
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1274,41 +1351,13 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 
 	var coalescedLogs []*types.Log
 
-	var deps map[int]map[int]bool
-
-	var depsBuilder *blockstm.DepsBuilder
-	var chDeps chan blockstm.TxReadWriteSet
-
-	var depsWg sync.WaitGroup
-	var once sync.Once
-
 	EnableMVHashMap := w.chainConfig.IsCancun(env.header.Number)
 
-	// create and add empty mvHashMap in statedb
-	if EnableMVHashMap && w.IsRunning() {
-		depsBuilder = blockstm.NewDepsBuilder()
-		chDeps = make(chan blockstm.TxReadWriteSet)
-
-		// Make sure we safely close the channel in case of interrupt
-		defer once.Do(func() {
-			close(chDeps)
-		})
-
-		depsWg.Add(1)
-
-		go func(chDeps chan blockstm.TxReadWriteSet) {
-			for t := range chDeps {
-				if err := depsBuilder.AddTransaction(t.Index, t.ReadList, t.WriteList); err != nil {
-					// Non-sequential index indicates a systematic bug, not a transient error.
-					// Drain the channel so the sender never blocks, then stop processing.
-					log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", t.Index, "err", err)
-					for range chDeps {
-					}
-					break
-				}
-			}
-			depsWg.Done()
-		}(chDeps)
+	// Speculative blocks can be filled in more than one pass. Keep a single DAG
+	// builder on the environment so dependency indices continue from the first
+	// pass instead of restarting from zero on a refill.
+	if EnableMVHashMap && w.IsRunning() && env.depsBuilder == nil && !env.depsFailed {
+		env.depsBuilder = blockstm.NewDepsBuilder()
 	}
 
 	var lastTxHash common.Hash
@@ -1336,16 +1385,20 @@ mainloop:
 		}
 
 		// Check for the flag to interrupt block building on timeout.
-		if w.interruptBlockBuilding.Load() {
+		// The worker-global interrupt is only a manual/test override; the real
+		// timeout state is owned by this build attempt.
+		if w.interruptBlockBuilding.Load() || (env.buildInterrupt != nil && env.buildInterrupt.timedOut.Load()) {
 			txCommitInterruptCounter.Inc(1)
 			logCtx := []interface{}{
 				"number", env.header.Number.Uint64(),
 				"headerTime", common.PrettyTime(time.Unix(int64(env.header.Time), 0)),
 			}
-			if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
-				flagSetTime := time.Unix(0, flagSetAt)
-				logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
-				logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
+			if env.buildInterrupt != nil {
+				if flagSetAt := env.buildInterrupt.flagSetAt.Load(); flagSetAt > 0 {
+					flagSetTime := time.Unix(0, flagSetAt)
+					logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
+					logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
+				}
 			}
 			if hasTxInterruptDelay {
 				logCtx = append(logCtx, "flagToTxInterruptDelay", common.PrettyDuration(flagToTxInterruptDelay))
@@ -1511,25 +1564,14 @@ mainloop:
 					return errors.New("transaction count exceeds dependency list length")
 				}
 
-				temp := blockstm.TxReadWriteSet{
-					Index:     env.tcount - 1,
-					ReadList:  env.state.MVReadList(),
-					WriteList: env.state.MVFullWriteList(),
-				}
-
-				// Send with timeout to prevent deadlock
-				select {
-				case chDeps <- temp:
-					// Successfully sent
-				case <-time.After(1 * time.Second):
-					// Timeout after 1 second - channel is blocked
-					log.Error("Transaction dependency channel blocked, aborting block building",
-						"txIndex", env.tcount-1,
-						"blockNumber", env.header.Number.Uint64())
-					once.Do(func() {
-						close(chDeps)
-					})
-					return errors.New("dependency channel timeout")
+				if !env.depsFailed {
+					if env.depsBuilder == nil {
+						env.depsBuilder = blockstm.NewDepsBuilder()
+					}
+					if err := env.depsBuilder.AddTransaction(env.tcount-1, env.state.MVReadList(), env.state.MVFullWriteList()); err != nil {
+						log.Error("Failed to build tx dependency metadata, dropping DAG hint", "tx", env.tcount-1, "err", err)
+						env.depsFailed = true
+					}
 				}
 			}
 
@@ -1538,9 +1580,11 @@ mainloop:
 		case errors.Is(err, vm.ErrInterrupt):
 			// Timeout interrupt surfaced from EVM execution for this tx.
 			if !hasTxInterruptDelay {
-				if flagSetAt := w.interruptFlagSetAt.Load(); flagSetAt > 0 {
-					flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
-					hasTxInterruptDelay = true
+				if env.buildInterrupt != nil {
+					if flagSetAt := env.buildInterrupt.flagSetAt.Load(); flagSetAt > 0 {
+						flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
+						hasTxInterruptDelay = true
+					}
 				}
 			}
 			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
@@ -1559,73 +1603,10 @@ mainloop:
 		}
 	}
 
-	// nolint:nestif
 	if EnableMVHashMap && w.IsRunning() {
-		once.Do(func() {
-			close(chDeps)
-		})
-		depsWg.Wait()
-
-		deps = depsBuilder.GetDeps()
-		if deps == nil {
-			log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
-		}
-
-		var blockExtraData types.BlockExtraData
-
-		tempVanity := env.header.Extra[:types.ExtraVanityLength]
-		tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
-
-		// Always decode header extra data before overwriting TxDependency.
-		if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
-			log.Error("error while decoding block extra data", "err", err)
+		if err := w.updateTxDependencyMetadata(env); err != nil {
 			return err
 		}
-
-		// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
-		if deps != nil && len(env.mvReadMapList) > 0 {
-			tempDeps := make([][]uint64, len(env.mvReadMapList))
-
-			for j := range deps[0] {
-				tempDeps[0] = append(tempDeps[0], uint64(j))
-			}
-
-			delayFlag := true
-
-			for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-				reads := env.mvReadMapList[i]
-
-				// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
-				_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-				_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
-				if ok1 || ok2 {
-					delayFlag = false
-					break
-				}
-
-				for j := range deps[i] {
-					tempDeps[i] = append(tempDeps[i], uint64(j))
-				}
-			}
-
-			if delayFlag {
-				blockExtraData.TxDependency = tempDeps
-			} else {
-				blockExtraData.TxDependency = nil
-			}
-		} else {
-			blockExtraData.TxDependency = nil
-		}
-
-		blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
-		if err != nil {
-			log.Error("error while encoding block extra data: %v", err)
-			return err
-		}
-
-		env.header.Extra = []byte{}
-		env.header.Extra = append(tempVanity, blockExtraDataBytes...)
-		env.header.Extra = append(env.header.Extra, tempSeal...)
 	}
 
 	if !w.IsRunning() && len(coalescedLogs) > 0 {
@@ -1647,12 +1628,82 @@ mainloop:
 	return nil
 }
 
+func (w *worker) updateTxDependencyMetadata(env *environment) error {
+	var deps map[int]map[int]bool
+
+	if env.depsBuilder != nil && !env.depsFailed {
+		deps = env.depsBuilder.GetDeps()
+	}
+	if deps == nil && len(env.mvReadMapList) > 0 {
+		log.Warn("Failed to build tx dependency DAG, skipping metadata", "number", env.header.Number)
+	}
+
+	var blockExtraData types.BlockExtraData
+
+	tempVanity := env.header.Extra[:types.ExtraVanityLength]
+	tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
+
+	// Always decode header extra data before overwriting TxDependency.
+	if err := rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData); err != nil {
+		log.Error("error while decoding block extra data", "err", err)
+		return err
+	}
+
+	// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
+	if deps != nil && len(env.mvReadMapList) > 0 {
+		tempDeps := make([][]uint64, len(env.mvReadMapList))
+
+		for j := range deps[0] {
+			tempDeps[0] = append(tempDeps[0], uint64(j))
+		}
+
+		delayFlag := true
+
+		for i := 1; i <= len(env.mvReadMapList)-1; i++ {
+			reads := env.mvReadMapList[i]
+
+			// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
+			_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
+			_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
+			if ok1 || ok2 {
+				delayFlag = false
+				break
+			}
+
+			for j := range deps[i] {
+				tempDeps[i] = append(tempDeps[i], uint64(j))
+			}
+		}
+
+		if delayFlag {
+			blockExtraData.TxDependency = tempDeps
+		} else {
+			blockExtraData.TxDependency = nil
+		}
+	} else {
+		blockExtraData.TxDependency = nil
+	}
+
+	blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
+	if err != nil {
+		log.Error("error while encoding block extra data: %v", err)
+		return err
+	}
+
+	env.header.Extra = []byte{}
+	env.header.Extra = append(tempVanity, blockExtraDataBytes...)
+	env.header.Extra = append(env.header.Extra, tempSeal...)
+
+	return nil
+}
+
 // generateParams wraps various of settings for generating sealing task.
 type generateParams struct {
 	timestamp          uint64                // The timestamp for sealing task
 	forceTime          bool                  // Flag whether the given timestamp is immutable or not
 	parentHash         common.Hash           // Parent block hash, empty means the latest chain head
 	coinbase           common.Address        // The fee recipient address for including transaction
+	abortRecovery      bool                  // Flag that this build is rebuilding a discarded speculative block
 	random             common.Hash           // The randomness generated by beacon chain, empty before the merge
 	withdrawals        types.Withdrawals     // List of withdrawals to include in block.
 	beaconRoot         *common.Hash          // The beacon root (cancun field).
@@ -1665,7 +1716,7 @@ type generateParams struct {
 }
 
 // makeHeader creates a new block header for sealing.
-func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
+func (w *worker) makeHeader(genParams *generateParams) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
 
@@ -1712,6 +1763,7 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 		Time:       timestamp,
 		Coinbase:   coinbase,
 	}
+	header.AbortRecovery = genParams.abortRecovery
 	// Set the extra field.
 	if len(w.extra) != 0 {
 		header.Extra = w.extra
@@ -1734,7 +1786,7 @@ func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*typ
 	header.ParentBeaconRoot = nil
 
 	// Run the consensus preparation with the default or customized consensus engine.
-	if err := w.engine.Prepare(w.chain, header, waitOnPrepare); err != nil {
+	if err := w.engine.Prepare(w.chain, header); err != nil {
 		switch err.(type) {
 		case *bor.UnauthorizedSignerError:
 			log.Debug("Failed to prepare header for sealing", "err", err)
@@ -1755,7 +1807,9 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	header, coinbase, err := w.makeHeader(genParams, true)
+	// Build the header without sleeping so tx selection gets the full slot.
+	// Bor's Seal path (or the pipeline's explicit wait) handles the final delay.
+	header, coinbase, err := w.makeHeader(genParams)
 	if err != nil {
 		return nil, err
 	}
@@ -1815,14 +1869,19 @@ func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.Pe
 //
 //nolint:gocognit
 func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) error {
+	if w.interruptBlockBuilding.Load() {
+		return nil
+	}
+
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
+	timeoutInterrupt := env.buildInterrupt.timeoutFlag()
 
 	filter.BlobTxs = false
-	pendingPlainTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+	pendingPlainTxs := w.eth.TxPool().Pending(filter, timeoutInterrupt)
 
 	filter.BlobTxs = true
 	if w.chainConfig.IsOsaka(env.header.Number) {
@@ -1830,7 +1889,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	} else {
 		filter.BlobVersion = types.BlobSidecarVersion0
 	}
-	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+	pendingBlobTxs := w.eth.TxPool().Pending(filter, timeoutInterrupt)
 
 	// Split the pending transactions into locals and remotes.
 	prioPlainTxs, normalPlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
@@ -1849,16 +1908,16 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 
 	// Fill the block with all available pending transactions.
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, timeoutInterrupt)
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
 			return err
 		}
 	}
 	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
 		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, timeoutInterrupt)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
 
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
@@ -1937,7 +1996,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
-func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64) {
+func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64, abortRecovery bool) {
 	// Abort committing if node is still syncing
 	if w.syncing.Load() {
 		return
@@ -1977,6 +2036,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	genParams := generateParams{
 		timestamp:          uint64(timestamp),
 		coinbase:           coinbase,
+		abortRecovery:      abortRecovery,
 		parentHash:         parent.Hash(),
 		statedb:            state,
 		prefetchReader:     prefetchReader,
@@ -2011,7 +2071,8 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		return
 	}
 
-	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
+	// Starts accounting time after prepareWork. Slot timing is handled in Seal
+	// for sequential paths and explicitly in the pipeline path.
 	start := time.Now()
 	interruptPrefetch.Store(true)
 
@@ -2025,8 +2086,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		stopFn = createInterruptTimer(
 			work.header.Number.Uint64(),
 			work.header.GetActualTime(),
-			&w.interruptBlockBuilding,
-			&w.interruptFlagSetAt,
+			work.buildInterrupt,
 			w.config.EnablePipelinedSRC,
 		)
 	}
@@ -2109,7 +2169,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 
 	// Acquire read lock to safely access w.extra in makeHeader
 	w.mu.RLock()
-	header, _, err := w.makeHeader(genParams, false)
+	header, _, err := w.makeHeader(genParams)
 	w.mu.RUnlock()
 
 	if err != nil {
@@ -2226,9 +2286,14 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 	}
 }
 
-// createInterruptTimer creates and starts a timer based on the header's timestamp for block building
-// and toggles the flag when the timer expires.
-func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64, pipelinedSRC bool) func() {
+// createInterruptTimer creates and starts a timer based on the header's timestamp for
+// one specific block-building attempt. The timeout state must be build-local so
+// overlapping sequential/speculative work cannot interrupt each other.
+func createInterruptTimer(number uint64, actualTimestamp time.Time, buildInterrupt *buildInterruptState, pipelinedSRC bool) func() {
+	if buildInterrupt == nil {
+		return func() {}
+	}
+
 	delay := time.Until(actualTimestamp)
 
 	// Reserve 500ms for state root computation — unless pipelined SRC is enabled,
@@ -2240,8 +2305,8 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
 
 	// Reset the flag when timer starts for building a new block.
-	interruptBlockBuilding.Store(false)
-	interruptFlagSetAt.Store(0)
+	buildInterrupt.timedOut.Store(false)
+	buildInterrupt.flagSetAt.Store(0)
 
 	go func() {
 		// Wait for timeout
@@ -2250,11 +2315,8 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 		// Toggle the flag to indicate commit transactions loop and EVM interpreter loop
 		// to stop block building.
 		if interruptCtx.Err() != context.Canceled {
-			interruptFlagSetAt.Store(time.Now().UnixNano())
-		}
-		interruptBlockBuilding.Store(true)
-
-		if interruptCtx.Err() != context.Canceled {
+			buildInterrupt.flagSetAt.Store(time.Now().UnixNano())
+			buildInterrupt.timedOut.Store(true)
 			cancel()
 		}
 	}()

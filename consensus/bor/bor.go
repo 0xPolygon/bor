@@ -63,12 +63,10 @@ const (
 	// is less than this value, the target timestamp is pushed forward by one
 	// blockTime period.
 	//
-	// This interacts with pipelined SRC: when a speculative block is aborted,
-	// the pipeline triggers a fresh commitWork. On chains where blockTime ==
-	// minBlockBuildTime (e.g., 1-second devnets), the remaining time after the
-	// abort (~990ms) is always less than minBlockBuildTime, so the timestamp is
-	// always pushed — adding an extra 1s gap. On mainnet (2s blocks), the
-	// remaining time (~1.99s) exceeds minBlockBuildTime, so no push occurs.
+	// Abort-recovery rebuilds from pipelined SRC are exempt from this push. By the
+	// time speculative execution is discarded, most of the slot may already be
+	// gone; moving the header to the next slot would create avoidable 3-second
+	// blocks on 2-second devnets.
 	minBlockBuildTime = 1 * time.Second
 )
 
@@ -1020,7 +1018,7 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
+func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
@@ -1123,8 +1121,6 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
 
-	var delay time.Duration
-
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
 
@@ -1142,10 +1138,8 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
-		delay = time.Until(parentActualBlockTime)
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
-		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
@@ -1156,26 +1150,14 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	// Ensure minimum build time so the block has enough time to include transactions.
 	// The interrupt timer reserves 500ms for state root computation, so without
 	// sufficient remaining time the block would end up empty.
-	if time.Until(header.GetActualTime()) < minBlockBuildTime {
+	//
+	// Abort-recovery rebuilds are different: speculative execution has already
+	// spent most of the slot, so pushing them again would create an avoidable
+	// extra block-time gap. Those late rebuilds should keep their original slot.
+	if !header.AbortRecovery && time.Until(header.GetActualTime()) < minBlockBuildTime {
 		header.Time = uint64(now.Add(blockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(blockTime)
-		}
-	}
-
-	// Wait before start the block production if needed (previously this wait was on Seal)
-	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		var successionNumber int
-		// if signer is not empty (RPC nodes have empty signer)
-		if currentSigner.signer != (common.Address{}) {
-			var err error
-			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
-			if err != nil {
-				return err
-			}
-			if successionNumber == 0 {
-				<-time.After(delay)
-			}
 		}
 	}
 
@@ -1519,12 +1501,11 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 
 	var delay time.Duration
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
-	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
-		delay = 0 // delay was moved to Prepare for giugliano and later
-	} else {
-		delay = time.Until(header.GetActualTime()) // Wait until we reach header time
-	}
+	// Sweet, the protocol permits us to sign the block, wait for our time.
+	// Sequential mining paths build the block body before the slot and rely on
+	// Seal to hold propagation until the target time. The pipeline paths may
+	// already have waited explicitly, in which case this is effectively zero.
+	delay = time.Until(header.GetActualTime())
 
 	// wiggle was already accounted for in header.Time, this is just for logging
 	wiggle := time.Duration(successionNumber) * time.Duration(c.config.CalculateBackupMultiplier(number)) * time.Second
@@ -1540,7 +1521,13 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	}
 
 	// Wait until sealing is terminated or delay timeout.
-	log.Info("Waiting for slot to sign and propagate", "number", number, "hash", header.Hash(), "delay-in-sec", uint(delay), "delay", common.PrettyDuration(delay))
+	log.Info(
+		"Waiting for slot to sign and propagate",
+		"number", number,
+		"hash", header.Hash(),
+		"delay-ms", float64(delay)/float64(time.Millisecond),
+		"delay", common.PrettyDuration(delay),
+	)
 
 	go func() {
 		select {
@@ -1553,7 +1540,7 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 					"Sealing out-of-turn",
 					"number", number,
 					"hash", header.Hash,
-					"wiggle-in-sec", uint(wiggle),
+					"wiggle-ms", float64(wiggle)/float64(time.Millisecond),
 					"wiggle", common.PrettyDuration(wiggle),
 					"in-turn-signer", snap.ValidatorSet.GetProposer().Address.Hex(),
 				)

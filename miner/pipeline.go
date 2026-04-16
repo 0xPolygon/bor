@@ -31,6 +31,13 @@ var (
 	pipelineFlatDiffExtractTimer     = metrics.NewRegisteredTimer("worker/pipelineFlatDiffExtractTime", nil)
 )
 
+const speculativeEmptyRefillLead = 300 * time.Millisecond
+
+// Refill speculative blocks that are still less than 75% full after the first
+// txpool snapshot. This catches the common case where the early snapshot grabs
+// a small trickle of txs, but the load ramps up before the slot boundary.
+const speculativeLowFillRemainingGasDivisor = 4
+
 // speculativeWorkReq is sent to mainLoop's speculative work channel
 // when block N's execution is done and we want to speculatively start N+1.
 type speculativeWorkReq struct {
@@ -65,15 +72,14 @@ func (w *worker) isPipelineEligible(currentBlockNumber uint64) bool {
 	if !w.IsRunning() || w.syncing.Load() {
 		return false
 	}
-	// Pre-Rio: sprint boundary blocks need real parent hash for validator lookup.
-	// The check is on number+1 because Prepare() for block N encodes validators
-	// when IsSprintStart(N+1) is true.
+	// Pre-Rio: the speculative chain reader provides block N's unsigned header.
+	// When snapshot() walks back and calls ecrecover() on this header, it fails
+	// because the Extra seal bytes are all zeros (Seal() hasn't run yet).
+	// This causes speculative Prepare to always fail with "recovery failed",
+	// making the pipeline useless pre-Rio. Skip it entirely.
 	nextBlockNumber := currentBlockNumber + 1
 	if !w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(nextBlockNumber)) {
-		sprint := w.chainConfig.Bor.CalculateSprint(nextBlockNumber)
-		if bor.IsSprintStart(nextBlockNumber+1, sprint) {
-			return false
-		}
+		return false
 	}
 	return true
 }
@@ -146,11 +152,79 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 	return nil
 }
 
+// shouldLateRefillSpeculativeBlock reports whether a speculative block should
+// take one more txpool snapshot shortly before the slot boundary.
+func shouldLateRefillSpeculativeBlock(env *environment) bool {
+	if len(env.txs) == 0 {
+		return true
+	}
+	if env.gasPool == nil {
+		return true
+	}
+
+	// Skip the top-up when the block is already mostly full. Otherwise, give it
+	// one late snapshot to catch txs that arrived after the initial early fill.
+	return env.gasPool.Gas() > env.header.GasLimit/speculativeLowFillRemainingGasDivisor
+}
+
+// fillSpeculativeTransactions snapshots the txpool once immediately, and if
+// the speculative block is still underfilled, gives it one more pass shortly
+// before the slot boundary. This avoids sealing low/empty speculative blocks
+// simply because the initial early snapshot raced ahead of incoming load.
+func (w *worker) fillSpeculativeTransactions(env *environment, interrupt *atomic.Int32) time.Duration {
+	fillStart := time.Now()
+	err := w.fillTransactions(interrupt, env)
+	totalFill := time.Since(fillStart)
+
+	if err != nil || !shouldLateRefillSpeculativeBlock(env) {
+		return totalFill
+	}
+
+	remaining := time.Until(env.header.GetActualTime())
+	if remaining <= speculativeEmptyRefillLead {
+		return totalFill
+	}
+
+	timer := time.NewTimer(remaining - speculativeEmptyRefillLead)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-w.exitCh:
+		return totalFill
+	}
+
+	refillStart := time.Now()
+	_ = w.fillTransactions(interrupt, env)
+	totalFill += time.Since(refillStart)
+
+	return totalFill
+}
+
 // commitSpeculativeWork handles a speculativeWorkReq: executes block N+1
 // speculatively using the FlatDiff overlay, then waits for SRC(N) to complete,
 // assembles block N, and sends it for sealing. Then it finalizes N+1 and
 // seals it as well.
-func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
+//
+// Returns true when mainLoop should requeue normal work after this function
+// returns. This is needed for:
+//   - Abort (EIP-2935/BLOCKHASH): the speculative block was discarded, so the
+//     block slot must be rebuilt sequentially.
+//   - Normal pipeline exit: the last block was sent to sealBlockViaTaskCh, and
+//     there is a race where ChainHeadEvent may arrive at newWorkLoop before
+//     pendingWorkBlock is cleared, causing the event to be skipped.
+//
+// Returns false when the pipeline fell back to sequential (fallbackToSequential
+// already sealed block N via taskCh → resultLoop → ChainHeadEvent). Retrying
+// work in this case creates a tight loop that keeps restarting Seal() with
+// fresh timestamps, preventing any block from ever being sealed.
+func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry bool, abortRecovery bool) {
+	// Default: retry commitWork after this function returns. This handles the
+	// race where ChainHeadEvent from the last pipeline block arrives before
+	// pendingWorkBlock is cleared. Fallback paths set shouldRetry = false
+	// because they already sealed block N via taskCh (resultLoop handles it).
+	shouldRetry = true
+
 	// Ensure pendingWorkBlock is cleared when this function exits, so the
 	// next ChainHeadEvent-triggered commitWork can proceed.
 	defer w.pendingWorkBlock.Store(0)
@@ -191,15 +265,18 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		specHeader.BaseFee = eip1559.CalcBaseFee(w.chainConfig, blockNHeader)
 	}
 
-	// Call Prepare() via the speculative chain reader with waitOnPrepare=false.
+	// Call Prepare() via the speculative chain reader.
 	// This sets Difficulty, Extra (validator bytes at sprint boundary), and timestamp
-	// but does NOT sleep. The timing wait is deferred until after the abort check
+	// without sleeping. The timing wait is deferred until after the abort check
 	// to avoid wasting a full block period if the speculative block is discarded.
 	// NOTE: Prepare() will zero out specHeader.Coinbase. The real coinbase
 	// is preserved in the local `coinbase` variable above.
-	if err := w.engine.Prepare(specReader, specHeader, false); err != nil {
+	if err := w.engine.Prepare(specReader, specHeader); err != nil {
 		log.Warn("Pipelined SRC: speculative Prepare failed, falling back", "err", err)
 		w.fallbackToSequential(req)
+		// fallbackToSequential already sealed block N via taskCh. Don't retry —
+		// resultLoop will emit ChainHeadEvent which triggers the next commitWork.
+		shouldRetry = false
 		return
 	}
 
@@ -220,6 +297,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		// fallbackToSequential does IntermediateRoot on the same parent root.
 		w.chain.WaitForSRC() //nolint:errcheck
 		w.fallbackToSequential(req)
+		shouldRetry = false
 		return
 	}
 	specState.StartPrefetcher("miner-speculative", nil, nil)
@@ -232,6 +310,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		// fallbackToSequential does IntermediateRoot on the same parent root.
 		w.chain.WaitForSRC() //nolint:errcheck
 		w.fallbackToSequential(req)
+		shouldRetry = false
 		return
 	}
 
@@ -271,14 +350,15 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	evmContext.GetHash = specGetHash
 
 	specEnv := &environment{
-		signer:   types.MakeSigner(w.chainConfig, specHeader.Number, specHeader.Time),
-		state:    specState,
-		size:     uint64(specHeader.Size()),
-		coinbase: coinbase,
-		header:   specHeader,
-		evm:      vm.NewEVM(evmContext, specState, w.chainConfig, vm.Config{}),
+		signer:         types.MakeSigner(w.chainConfig, specHeader.Number, specHeader.Time),
+		state:          specState,
+		size:           uint64(specHeader.Size()),
+		coinbase:       coinbase,
+		buildInterrupt: newBuildInterruptState(),
+		header:         specHeader,
+		evm:            vm.NewEVM(evmContext, specState, w.chainConfig, vm.Config{}),
 	}
-	specEnv.evm.SetInterrupt(&w.interruptBlockBuilding)
+	specEnv.evm.SetInterrupt(specEnv.buildInterrupt.timeoutFlag())
 	specEnv.tcount = 0
 
 	// NOTE: ProcessParentBlockHash is NOT called during speculative execution.
@@ -306,21 +386,19 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		specStopFn := createInterruptTimer(
 			specHeader.Number.Uint64(),
 			specHeader.GetActualTime(),
-			&w.interruptBlockBuilding,
-			&w.interruptFlagSetAt,
+			specEnv.buildInterrupt,
 			true, // pipelinedSRC — no 500ms buffer
 		)
 
 		var specInterrupt atomic.Int32
-		w.fillTransactions(&specInterrupt, specEnv) //nolint:errcheck
+		w.fillSpeculativeTransactions(specEnv, &specInterrupt)
 		specStopFn()
 
-		// Check abort conditions (needs fill to be done).
+		// Check abort conditions (needs fill to be done). The final discard
+		// log is emitted in the main loop so each aborted block is logged once.
 		if w.chainConfig.IsPrague(specHeader.Number) {
 			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(blockNNumber % params.HistoryServeWindow))
 			if specState.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
-				log.Warn("Pipelined SRC: discarding speculative N+1 — EIP-2935 slot accessed",
-					"block", nextBlockNumber, "slot", dangerousSlot)
 				eip2935Abort = true
 				pipelineEIP2935AbortsCounter.Inc(1)
 			}
@@ -364,6 +442,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			log.Info("Pipelined SRC: block N sent for sealing", "number", blockN.Number(), "txs", len(blockN.Transactions()), "root", root)
 		}
 	case <-w.exitCh:
+		shouldRetry = false
 		return
 	}
 
@@ -380,6 +459,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			log.Error("Pipelined SRC: timed out waiting for block N to be written", "number", blockNNum)
 			return
 		case <-w.exitCh:
+			shouldRetry = false
 			return
 		}
 	}
@@ -416,42 +496,25 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 
 	for {
 		// --- Check abort conditions for current speculative block ---
-		aborted := false
+		shouldAbort := false
 		if eip2935Abort {
 			log.Warn("Pipelined SRC: discarding speculative block — EIP-2935 slot accessed",
 				"block", nextBlockNumber)
 			pipelineSpeculativeAbortsCounter.Inc(1)
-			aborted = true
+			shouldAbort = true
 		}
-		if !aborted && curBlockhashAccessed.Load() {
+		if !shouldAbort && curBlockhashAccessed.Load() {
 			log.Warn("Pipelined SRC: discarding speculative block — BLOCKHASH(N) was accessed",
 				"block", nextBlockNumber, "pendingBlockN", blockNNumber)
 			pipelineSpeculativeAbortsCounter.Inc(1)
-			aborted = true
+			shouldAbort = true
 		}
-		if aborted {
-			// Trigger commitWork immediately after we return, rather than
-			// waiting for the veblopTimer (~1 block period). Without this,
-			// the delayed commitWork → Prepare() sees the target time as
-			// already passed and the minBlockBuildTime check pushes the
-			// timestamp forward by an extra block period.
-			//
-			// The goroutine sends to newWorkCh after a small delay to let
-			// commitSpeculativeWork return and mainLoop re-enter its select.
-			//
-			// Known limitation: on chains where blockTime == minBlockBuildTime
-			// (e.g., 1-second devnets), Prepare() always pushes the timestamp
-			// because the remaining time (~990ms) is less than minBlockBuildTime
-			// (1s). This adds an extra 1s gap after every abort. On mainnet
-			// (2s blocks), the remaining ~1.99s exceeds minBlockBuildTime, so
-			// blocks stay on schedule.
-			go func() {
-				time.Sleep(10 * time.Millisecond)
-				select {
-				case w.newWorkCh <- &newWorkReq{timestamp: time.Now().Unix()}:
-				case <-w.exitCh:
-				}
-			}()
+		if shouldAbort {
+			// Break out of the loop — mainLoop always calls commitWork after
+			// this function returns, which rebuilds the block sequentially.
+			// Mark the next commit as abort recovery so Bor.Prepare keeps the
+			// original slot instead of pushing late rebuilds into the next one.
+			abortRecovery = true
 			break
 		}
 
@@ -518,10 +581,10 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			specHeaderNext.BaseFee = eip1559.CalcBaseFee(w.chainConfig, finalSpecHeader)
 		}
 
-		// Prepare() with waitOnPrepare=false — sets header fields without sleeping.
+		// Prepare() sets header fields without sleeping.
 		// The timing wait is deferred to just before sealing, after the abort check.
 		// This avoids wasting a full block period if the speculative block is aborted.
-		if err := w.engine.Prepare(specReaderNext, specHeaderNext, false); err != nil {
+		if err := w.engine.Prepare(specReaderNext, specHeaderNext); err != nil {
 			log.Warn("Pipelined SRC: Prepare failed for next block, sealing current",
 				"block", nextNextBlockNumber, "err", err)
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
@@ -597,14 +660,15 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 		evmContextNext.GetHash = specGetHashNext
 
 		specEnvNext := &environment{
-			signer:   types.MakeSigner(w.chainConfig, specHeaderNext.Number, specHeaderNext.Time),
-			state:    specStateNext,
-			size:     uint64(specHeaderNext.Size()),
-			coinbase: coinbaseNext,
-			header:   specHeaderNext,
-			evm:      vm.NewEVM(evmContextNext, specStateNext, w.chainConfig, vm.Config{}),
+			signer:         types.MakeSigner(w.chainConfig, specHeaderNext.Number, specHeaderNext.Time),
+			state:          specStateNext,
+			size:           uint64(specHeaderNext.Size()),
+			coinbase:       coinbaseNext,
+			buildInterrupt: newBuildInterruptState(),
+			header:         specHeaderNext,
+			evm:            vm.NewEVM(evmContextNext, specStateNext, w.chainConfig, vm.Config{}),
 		}
-		specEnvNext.evm.SetInterrupt(&w.interruptBlockBuilding)
+		specEnvNext.evm.SetInterrupt(specEnvNext.buildInterrupt.timeoutFlag())
 		specEnvNext.tcount = 0
 
 		// --- Reset txpool and fill transactions for next block (in goroutine) ---
@@ -627,24 +691,21 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 			specStopFnNext := createInterruptTimer(
 				specHeaderNext.Number.Uint64(),
 				specHeaderNext.GetActualTime(),
-				&w.interruptBlockBuilding,
-				&w.interruptFlagSetAt,
+				specEnvNext.buildInterrupt,
 				true, // pipelinedSRC — no 500ms buffer
 			)
 
 			var specInterruptNext atomic.Int32
-			fillStart := time.Now()
-			w.fillTransactions(&specInterruptNext, specEnvNext) //nolint:errcheck
+			fillElapsed = w.fillSpeculativeTransactions(specEnvNext, &specInterruptNext)
 			specStopFnNext()
-			fillElapsed = time.Since(fillStart)
 
 			// Check EIP-2935 abort for next block (needs fill to be done
-			// so WasStorageSlotRead can inspect accessed slots).
+			// so WasStorageSlotRead can inspect accessed slots). The final
+			// discard log is emitted in the main loop so each aborted block is
+			// logged once.
 			if w.chainConfig.IsPrague(specHeaderNext.Number) {
 				dangerousSlot := common.BigToHash(new(big.Int).SetUint64(nextBlockNumber % params.HistoryServeWindow))
 				if specStateNext.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
-					log.Warn("Pipelined SRC: EIP-2935 slot accessed in next block",
-						"block", nextNextBlockNumber, "slot", dangerousSlot)
 					nextEIP2935Abort = true
 					pipelineEIP2935AbortsCounter.Inc(1)
 				}
@@ -697,6 +758,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 				if prevDBWriteDone != nil {
 					<-prevDBWriteDone
 				}
+				shouldRetry = false
 				return // defer clears pendingWorkBlock
 			}
 		}
@@ -742,6 +804,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) {
 	if prevDBWriteDone != nil {
 		<-prevDBWriteDone
 	}
+	return shouldRetry, abortRecovery
 }
 
 // fallbackToSequential computes the state root inline and assembles block N

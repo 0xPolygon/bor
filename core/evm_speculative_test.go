@@ -3,6 +3,7 @@ package core
 import (
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,27 @@ func TestSpeculativeGetHashFn_Tier1_LazyResolve(t *testing.T) {
 	}
 }
 
+func TestSpeculativeGetHashFn_Tier1_SetsAbortFlag(t *testing.T) {
+	chain, headers := buildChain(10)
+
+	blockN1Header := headers[8]
+	pendingBlockN := uint64(9)
+	expectedBlockNHash := common.HexToHash("0xdeadbeef")
+	var accessed atomic.Bool
+
+	fn := SpeculativeGetHashFn(blockN1Header, chain, pendingBlockN, func() common.Hash {
+		return expectedBlockNHash
+	}, &accessed)
+
+	result := fn(9)
+	if result != expectedBlockNHash {
+		t.Errorf("Tier 1: expected %x, got %x", expectedBlockNHash, result)
+	}
+	if !accessed.Load() {
+		t.Fatal("Tier 1: BLOCKHASH(N) access did not set abort flag")
+	}
+}
+
 func TestSpeculativeGetHashFn_Tier2_ImmediateParent(t *testing.T) {
 	chain, headers := buildChain(10)
 
@@ -122,6 +144,29 @@ func TestSpeculativeGetHashFn_Tier2_ImmediateParent(t *testing.T) {
 	result := fn(8)
 	if result != expectedN1Hash {
 		t.Errorf("Tier 2: expected %x, got %x", expectedN1Hash, result)
+	}
+}
+
+func TestSpeculativeGetHashFn_OlderTiersDoNotSetAbortFlag(t *testing.T) {
+	chain, headers := buildChain(10)
+
+	blockN1Header := headers[8]
+	pendingBlockN := uint64(9)
+	var accessed atomic.Bool
+
+	fn := SpeculativeGetHashFn(blockN1Header, chain, pendingBlockN, func() common.Hash {
+		t.Fatal("srcDone should not be called for Tier 2/3")
+		return common.Hash{}
+	}, &accessed)
+
+	_ = fn(8)
+	if accessed.Load() {
+		t.Fatal("Tier 2: BLOCKHASH(N-1) incorrectly set abort flag")
+	}
+
+	_ = fn(7)
+	if accessed.Load() {
+		t.Fatal("Tier 3: BLOCKHASH(N-2) incorrectly set abort flag")
 	}
 }
 

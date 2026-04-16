@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/triedb"
 
@@ -1071,6 +1072,37 @@ func TestCommitInterruptPending(t *testing.T) {
 	// Wait for the goroutine to complete or timeout
 	<-testDone
 	w.stop()
+}
+
+func TestCreateInterruptTimer_IsolatedPerBuild(t *testing.T) {
+	t.Parallel()
+
+	first := newBuildInterruptState()
+	second := newBuildInterruptState()
+
+	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first, true)
+	defer stopFirst()
+	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second, true)
+	defer stopSecond()
+
+	require.Eventually(t, func() bool {
+		return first.timedOut.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.NotZero(t, first.flagSetAt.Load())
+	require.False(t, second.timedOut.Load(), "one build's timeout must not trip another build")
+	require.Zero(t, second.flagSetAt.Load())
+}
+
+func TestCreateInterruptTimer_CancelDoesNotTripInterrupt(t *testing.T) {
+	t.Parallel()
+
+	state := newBuildInterruptState()
+	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state, true)
+	stop()
+
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, state.timedOut.Load(), "canceling a build timer must not look like a timeout")
+	require.Zero(t, state.flagSetAt.Load())
 }
 
 // TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
@@ -2966,4 +2998,52 @@ func TestDelayFlagOffByOne(t *testing.T) {
 
 	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
+}
+
+func TestTxDependencyMetadataPersistsAcrossSpeculativeRefillPasses(t *testing.T) {
+	t.Parallel()
+
+	chainConfig := params.BorUnittestChainConfig
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+	w.running.Store(true)
+
+	extraDataBytes, err := rlp.EncodeToBytes(types.BlockExtraData{})
+	require.NoError(t, err)
+
+	headerExtra := append(make([]byte, types.ExtraVanityLength), extraDataBytes...)
+	headerExtra = append(headerExtra, make([]byte, types.ExtraSealLength)...)
+
+	env := &environment{
+		header: &types.Header{
+			Number: big.NewInt(1),
+			Extra:  headerExtra,
+		},
+		coinbase:    testBankAddress,
+		depsBuilder: blockstm.NewDepsBuilder(),
+	}
+
+	key := blockstm.NewSubpathKey(testUserAddress, state.BalancePath)
+
+	env.mvReadMapList = append(env.mvReadMapList, map[blockstm.Key]blockstm.ReadDescriptor{})
+	require.NoError(t, env.depsBuilder.AddTransaction(0, nil, []blockstm.WriteDescriptor{{Path: key}}))
+	require.NoError(t, w.updateTxDependencyMetadata(env))
+
+	var blockExtraData types.BlockExtraData
+	require.NoError(t, rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData))
+	require.Len(t, blockExtraData.TxDependency, 1)
+	require.Empty(t, blockExtraData.TxDependency[0])
+
+	env.mvReadMapList = append(env.mvReadMapList, map[blockstm.Key]blockstm.ReadDescriptor{
+		key: {Path: key},
+	})
+	require.NoError(t, env.depsBuilder.AddTransaction(1, []blockstm.ReadDescriptor{{Path: key}}, nil))
+	require.NoError(t, w.updateTxDependencyMetadata(env))
+
+	require.NoError(t, rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData))
+	require.Equal(t, [][]uint64{{}, {0}}, blockExtraData.TxDependency)
 }
