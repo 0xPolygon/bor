@@ -106,6 +106,10 @@ var (
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
 	// Uses a larger reservoir to preserve tail visibility on high-throughput blocks.
 	txApplyDurationTimer = newRegisteredCustomTimer("worker/txApplyDuration", 8192)
+	// Split variants of txApplyDuration by prefetch status. The aggregate timer
+	// above stays to preserve existing Grafana dashboards.
+	txApplyDurationPrefetchedTimer    = newRegisteredCustomTimer("worker/txApplyDuration/prefetched", 8192)
+	txApplyDurationNotPrefetchedTimer = newRegisteredCustomTimer("worker/txApplyDuration/notPrefetched", 8192)
 	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
 	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
 	// intermediateRootTimer measures time taken to calculate intermediate root
@@ -141,6 +145,16 @@ var (
 	// Values range 0-100. High percentiles indicate prefetch degradation.
 	prefetchMissRateHistogram = metrics.NewRegisteredHistogram(
 		"worker/prefetch/miss_rate_percent",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
+
+	// prefetchBuilderAddedHistogram tracks the percentage of block transactions that were
+	// prefetched exclusively during the builder phase (i.e. would have been a miss if the
+	// idle phase had been the only prefetch source). Directly measures the payoff of the
+	// builder-phase prefetch over the aggregate miss rate above.
+	prefetchBuilderAddedHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/builder_added_percent",
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
@@ -218,6 +232,11 @@ type environment struct {
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
+
+	// prefetchedTxHashes is the live set written by the prefetch stream's
+	// onSuccess callback. Read at tx-commit time to annotate slow-tx logs and
+	// split the apply-duration histogram by prefetch status. May be nil.
+	prefetchedTxHashes *sync.Map
 }
 
 // copy creates a deep copy of environment.
@@ -229,9 +248,10 @@ func (env *environment) copy() *environment {
 		coinbase:       env.coinbase,
 		header:         types.CopyHeader(env.header),
 		receipts:       copyReceipts(env.receipts),
-		mvReadMapList:  env.mvReadMapList,
-		prefetchReader: env.prefetchReader,
-		processReader:  env.processReader,
+		mvReadMapList:      env.mvReadMapList,
+		prefetchReader:     env.prefetchReader,
+		processReader:      env.processReader,
+		prefetchedTxHashes: env.prefetchedTxHashes,
 	}
 
 	if env.gasPool != nil {
@@ -1199,8 +1219,9 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		header:         header,
 		witness:        state.Witness(),
 		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
-		prefetchReader: genParams.prefetchReader,
-		processReader:  genParams.processReader,
+		prefetchReader:     genParams.prefetchReader,
+		processReader:      genParams.processReader,
+		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
 
@@ -1485,11 +1506,29 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+			prefetched := false
+			if env.prefetchedTxHashes != nil {
+				_, prefetched = env.prefetchedTxHashes.Load(tx.Hash())
+			}
 			if metrics.Enabled() {
 				txApplyDurationTimer.Update(txDuration)
+				if prefetched {
+					txApplyDurationPrefetchedTimer.Update(txDuration)
+				} else {
+					txApplyDurationNotPrefetchedTimer.Update(txDuration)
+				}
 			}
 			if w.IsRunning() {
-				w.slowTxTracker.Add(txTimingEntry{hash: tx.Hash(), duration: txDuration})
+				var gasUsed uint64
+				if n := len(env.receipts); n > 0 {
+					gasUsed = env.receipts[n-1].GasUsed
+				}
+				w.slowTxTracker.Add(txTimingEntry{
+					hash:       tx.Hash(),
+					duration:   txDuration,
+					gasUsed:    gasUsed,
+					prefetched: prefetched,
+				})
 			}
 
 			if EnableMVHashMap && w.IsRunning() {
@@ -1662,7 +1701,8 @@ type generateParams struct {
 	statedb            *state.StateDB          // The statedb to use for block generation
 	prefetchReader     state.ReaderWithStats   // The prefetch reader to use for statistics
 	processReader      state.ReaderWithStats   // The process reader to use for statistics
-	prefetchedTxHashes *sync.Map               // Map of successfully prefetched transaction hashes
+	prefetchedTxHashes        *sync.Map        // Map of successfully prefetched transaction hashes
+	builderPrefetchedTxHashes *sync.Map        // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
 	productionStart    time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
 	builderStarted     *atomic.Bool            // Set when block building begins; immediately interrupts the idle Prefetch() call and triggers builder-mode prefetching
 	builderPlanCh      chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
@@ -2110,6 +2150,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		// planning work on `builderStarted != nil`, so leaving it nil means zero overhead
 		// when prefetch is disabled.
 		genParams.builderStarted = new(atomic.Bool)
+		genParams.builderPrefetchedTxHashes = &sync.Map{}
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -2261,6 +2302,14 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	onSuccess := func(hash common.Hash, _ uint64) {
 		if genParams.prefetchedTxHashes != nil {
 			genParams.prefetchedTxHashes.Store(hash, struct{}{})
+		}
+		// Track builder-phase contribution separately. The handoff (evmAbort +
+		// drainTxChan + EVM interrupt) guarantees no idle-phase tx's onSuccess
+		// fires after builderStarted flips, so this branch only records genuine
+		// builder-phase prefetches.
+		if genParams.builderPrefetchedTxHashes != nil &&
+			genParams.builderStarted != nil && genParams.builderStarted.Load() {
+			genParams.builderPrefetchedTxHashes.Store(hash, struct{}{})
 		}
 	}
 
@@ -2607,17 +2656,29 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			// Report prefetch coverage percentage
 			if len(env.txs) > 0 && genParams != nil && genParams.prefetchedTxHashes != nil {
 				prefetchedCount := 0
+				builderAddedCount := 0
 
-				// Count how many block transactions were prefetched
 				for _, tx := range env.txs {
 					if _, ok := genParams.prefetchedTxHashes.Load(tx.Hash()); ok {
 						prefetchedCount++
 					}
+					if genParams.builderPrefetchedTxHashes != nil {
+						if _, ok := genParams.builderPrefetchedTxHashes.Load(tx.Hash()); ok {
+							builderAddedCount++
+						}
+					}
 				}
 
-				// Calculate miss rate (0-100): higher = worse
+				// Miss rate (0-100, higher = worse).
 				missRate := int64((len(env.txs) - prefetchedCount) * 100 / len(env.txs))
 				prefetchMissRateHistogram.Update(missRate)
+
+				// Builder-added share (0-100): block txs the builder phase prefetched on
+				// its own. Only emitted when the builder phase actually ran.
+				if genParams.builderPrefetchedTxHashes != nil {
+					builderAdded := int64(builderAddedCount * 100 / len(env.txs))
+					prefetchBuilderAddedHistogram.Update(builderAdded)
+				}
 			}
 		}
 	}()
