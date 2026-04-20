@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -124,6 +125,16 @@ func (p *StatePrefetcher) PrefetchStream(
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer pool.Done()
+			// Isolate worker panics: prefetching is best-effort and operates on a
+			// throwaway state copy, so a panic here must never take down the node.
+			// The parent runPrefetcher goroutine has its own recover but Go's
+			// recover only catches panics in its own goroutine, not children.
+			defer func() {
+				if r := recover(); r != nil {
+					blockPrefetchWorkerPanicMeter.Mark(1)
+					log.Error("prefetch worker panicked", "err", r)
+				}
+			}()
 			ctx.runWorker()
 		}()
 	}

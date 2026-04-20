@@ -2008,6 +2008,12 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		genParams.planWg.Add(1)
 		go func() {
 			defer genParams.planWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error("sendPlan goroutine panicked", "err", r, "stack", string(debug.Stack()))
+					prefetchPanicMeter.Mark(1)
+				}
+			}()
 			for _, tx := range buildTxPlan(clone, gasLimit, prefetchedHashes) {
 				select {
 				case ch <- tx:
@@ -2316,6 +2322,13 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	// before runPrefetcher reaches the handoff, and an idle-phase tx whose
 	// EVM work finishes between those two moments would otherwise be
 	// miscounted as builder.
+	//
+	// Residual edge case: a worker that finished ApplyMessage but is still
+	// inside IntermediateRoot(true) (not interruptible by evmAbort) when the
+	// handoff completes could still reach onSuccess after inBuilderPhase=true,
+	// inflating builder attribution by at most one tx. Handoff is sub-
+	// millisecond in practice while IntermediateRoot spans microseconds to
+	// low milliseconds, so the window is tiny but not zero.
 	inBuilderPhase := new(atomic.Bool)
 
 	onSuccess := func(hash common.Hash, _ uint64) {
