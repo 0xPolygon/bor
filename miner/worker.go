@@ -1904,7 +1904,12 @@ func buildTxPlan(h *transactionsByPriceAndNonce, gasLimit uint64, prefetchedHash
 // txs are skipped entirely (not counted against the budget) because the freed gas
 // represents extra block capacity beyond the existing plan — plan txs' gas is already
 // committed to the main gas pool and should not be double-counted here.
-func scanOverflow(h *transactionsByPriceAndNonce, budget uint64, prefetchedHashes *sync.Map) ([]*types.Transaction, uint64) {
+func scanOverflow(
+	h *transactionsByPriceAndNonce,
+	budget uint64,
+	prefetchedHashes *sync.Map,
+	sentThisPhase map[common.Hash]struct{},
+) ([]*types.Transaction, uint64) {
 	var bonus []*types.Transaction
 	remaining := budget
 	for {
@@ -1919,6 +1924,14 @@ func scanOverflow(h *transactionsByPriceAndNonce, budget uint64, prefetchedHashe
 				h.Shift()
 				continue
 			}
+		}
+		// Skip txs still in-flight from an earlier plan-batch forward. They
+		// aren't in prefetchedHashes yet (onSuccess hasn't fired), but a worker
+		// is already executing them — emitting again just burns a second worker
+		// on the same tx.
+		if _, inflight := sentThisPhase[ltx.Hash]; inflight {
+			h.Shift()
+			continue
 		}
 		if ltx.Gas > remaining {
 			h.Pop() // Too large for freed capacity; abandon this account
@@ -1993,7 +2006,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	// Already-prefetched txs are excluded from the send but still counted in the gas
 	// budget so the estimate stays accurate. Bonus txs that fit due to freed gas are
 	// covered by the prefetcher's own overflow heap driven by builderGasFreedCh.
-	sendPlan := func(plainTxs *transactionsByPriceAndNonce) {
+	sendPlan := func(plainTxs *transactionsByPriceAndNonce, gasLimit uint64) {
 		if builderPlanCh == nil || plainTxs == nil {
 			return
 		}
@@ -2003,7 +2016,6 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		if genParams != nil {
 			prefetchedHashes = genParams.prefetchedTxHashes
 		}
-		gasLimit := env.header.GasLimit
 		ch := builderPlanCh
 		genParams.planWg.Add(1)
 		go func() {
@@ -2023,11 +2035,21 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		}()
 	}
 
+	// remainingGas returns the block gas still available for the next
+	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
+	// fall back to the full header limit.
+	remainingGas := func() uint64 {
+		if env.gasPool == nil {
+			return env.header.GasLimit
+		}
+		return env.gasPool.Gas()
+	}
+
 	// Fill the block with all available pending transactions.
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		sendPlan(plainTxs)
+		sendPlan(plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}
@@ -2037,7 +2059,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
-		sendPlan(plainTxs)
+		sendPlan(plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}
@@ -2347,6 +2369,21 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 
+	// Defer the shutdown so a panic in either provider still releases the
+	// workers. Without this, range-over-channel blocks forever (hardKill is
+	// checked only after dequeue) and N+1 goroutines leak per panicking block.
+	// sync.Once protects against the normal-exit close() racing with this
+	// deferred close — the normal path does it explicitly below for deterministic
+	// ordering with <-streamDone.
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			evmAbort.Store(true)
+			close(txsCh)
+		})
+	}
+	defer shutdown()
+
 	// Phase 1: idle tx provider — streams pool txs until builder flips or hardKill fires.
 	w.runIdleTxProvider(txsCh, header, genParams, hardKill)
 
@@ -2368,9 +2405,10 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		w.runBuilderTxProvider(txsCh, header, genParams, hardKill)
 	}
 
-	// Shutdown: abort any still-running work and close the channel to release workers.
-	evmAbort.Store(true)
-	close(txsCh)
+	// Normal shutdown: close first, then wait for the stream to drain. The
+	// defer above is a panic safety net; on the happy path we want the wait
+	// ordered with the close rather than after the wrapping goroutine's recover.
+	shutdown()
 	<-streamDone
 }
 
@@ -2537,6 +2575,14 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 	var extendedBudget uint64
 	var gasFreedCh <-chan uint64 = genParams.builderGasFreedCh
 
+	// sentThisPhase tracks hashes already forwarded on txsCh within the builder
+	// phase. genParams.prefetchedTxHashes is only written after onSuccess fires,
+	// which trails the EVM execution window; a plan tx still in-flight could
+	// otherwise be re-emitted by scanOverflow from a fresh pool snapshot, wasting
+	// a second worker on the same tx. Local map is safe because this provider
+	// runs single-threaded.
+	sentThisPhase := make(map[common.Hash]struct{})
+
 	for {
 		batch, newGasFreedCh, delta, builderDone := collectPlanBatch(
 			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes,
@@ -2546,11 +2592,11 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 
 		if extendedBudget > 0 {
 			var bonus []*types.Transaction
-			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes)
+			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, sentThisPhase)
 			batch = append(batch, bonus...)
 		}
 
-		forwardTxs(txsCh, batch)
+		forwardTxs(txsCh, batch, sentThisPhase)
 
 		if builderDone || interrupt.Load() {
 			return
@@ -2559,11 +2605,15 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 }
 
 // forwardTxs does a non-blocking send of each tx to ch. Drops silently if the
-// buffer is full — prefetch is best-effort.
-func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction) {
+// buffer is full — prefetch is best-effort. Tracks each forwarded hash in
+// sentThisPhase so follow-up overflow scans don't re-emit in-flight txs.
+func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, sentThisPhase map[common.Hash]struct{}) {
 	for _, tx := range txs {
 		select {
 		case ch <- tx:
+			if sentThisPhase != nil {
+				sentThisPhase[tx.Hash()] = struct{}{}
+			}
 		default:
 		}
 	}

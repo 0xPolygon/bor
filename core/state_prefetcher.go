@@ -223,6 +223,10 @@ func (p *StatePrefetcher) prefetchOneTx(
 	fails *atomic.Int64,
 ) (uint64, bool) {
 	if interrupt != nil && interrupt.Load() {
+		// Match every other failure path in this function — the docstring
+		// promises fails is incremented on every (0,false) return so the
+		// {valid,invalid} meters add up to the txIndex without double-counting.
+		fails.Add(1)
 		return 0, false
 	}
 
