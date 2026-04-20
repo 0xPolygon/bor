@@ -1876,19 +1876,23 @@ func buildTxPlan(h *transactionsByPriceAndNonce, gasLimit uint64, prefetchedHash
 			h.Pop() // Too large for remaining space; abandon account (mirrors commitTransactions)
 			continue
 		}
-		remaining -= ltx.Gas
 		// Already warmed during idle prefetch — count against gas budget but skip the send.
+		// Deliberate: the tx is still bound for the block, so its gas is consumed here.
 		if prefetchedHashes != nil {
 			if _, done := prefetchedHashes.Load(ltx.Hash); done {
+				remaining -= ltx.Gas
 				h.Shift()
 				continue
 			}
 		}
 		tx := ltx.Resolve()
 		if tx == nil {
+			// Resolve failed (tx evicted from the pool between listing and here);
+			// don't consume budget for a tx that won't make the block.
 			h.Pop()
 			continue
 		}
+		remaining -= ltx.Gas
 		plan = append(plan, tx)
 		h.Shift()
 	}
@@ -1910,9 +1914,11 @@ func scanOverflow(h *transactionsByPriceAndNonce, budget uint64, prefetchedHashe
 		}
 		// Skip already-prefetched (planned) txs without consuming freed budget:
 		// their gas is already accounted for in the main block gas pool.
-		if _, done := prefetchedHashes.Load(ltx.Hash); done {
-			h.Shift()
-			continue
+		if prefetchedHashes != nil {
+			if _, done := prefetchedHashes.Load(ltx.Hash); done {
+				h.Shift()
+				continue
+			}
 		}
 		if ltx.Gas > remaining {
 			h.Pop() // Too large for freed capacity; abandon this account
@@ -2583,7 +2589,11 @@ func collectPlanBatch(
 				builderDone = true
 				return
 			}
-			if _, done := prefetchedHashes.Load(tx.Hash()); !done {
+			skip := false
+			if prefetchedHashes != nil {
+				_, skip = prefetchedHashes.Load(tx.Hash())
+			}
+			if !skip {
 				batch = append(batch, tx)
 			}
 		case freed, ok := <-newGasFreedCh:
