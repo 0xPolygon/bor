@@ -2417,9 +2417,11 @@ func idleGasLimitPercent(cfg *Config) uint64 {
 }
 
 // streamIdleBatch walks the price-nonce heap and non-blockingly forwards
-// un-prefetched transactions to txsCh until the per-loop gas cap is exhausted
-// or the heap is drained. Dropped sends (buffer full) are not retried; prefetch
-// is best-effort.
+// un-prefetched transactions to txsCh until the per-loop gas cap is exhausted,
+// the heap is drained, or the channel fills. Returning on a full channel
+// avoids spinning through the rest of the heap doing Peek/Shift work that
+// would drop every tx: the outer loop will re-snapshot the pool on its next
+// iteration (~100ms later), by which time workers have drained the channel.
 func (w *worker) streamIdleBatch(
 	txsCh chan<- *types.Transaction,
 	txs *transactionsByPriceAndNonce,
@@ -2444,6 +2446,9 @@ func (w *worker) streamIdleBatch(
 			gaspool.SubGas(ltx.Gas)
 			totalGasPool.SubGas(ltx.Gas)
 		default:
+			// Channel full — stop this batch. The tx we failed to send will
+			// reappear in the next iteration's pool snapshot.
+			return
 		}
 		txs.Shift()
 	}
