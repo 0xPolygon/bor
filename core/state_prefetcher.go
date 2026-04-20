@@ -73,20 +73,20 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 // in parallel. It spins up a fixed worker pool once and keeps it alive for the
 // whole call; workers exit when txsCh is closed or when hardKill is set.
 //
-//   header                   — block header used for EVM context.
-//   statedb                  — parent state snapshot; each worker makes a per-tx Copy.
-//   cfg                      — VM config (no tracer recommended).
-//   intermediateRootPrefetch — if true, compute IntermediateRoot after each tx.
-//   hardKill                 — set by the caller to exit the stream permanently;
-//                              workers return at loop entry.
-//   evmAbort                 — soft, repeatable interrupt. When set, aborts in-flight
-//                              EVM work and causes workers to skip (not consume)
-//                              subsequent txs until the caller resets it. Lets the
-//                              caller implement phase transitions without tearing
-//                              down the worker pool. May be nil.
-//   txsCh                    — transaction source; stream exits when this closes.
-//   onSuccess                — called from worker goroutines on each successful tx.
-//                              Must be safe for concurrent invocation. May be nil.
+//	header                   — block header used for EVM context.
+//	statedb                  — parent state snapshot; each worker makes a per-tx Copy.
+//	cfg                      — VM config (no tracer recommended).
+//	intermediateRootPrefetch — if true, compute IntermediateRoot after each tx.
+//	hardKill                 — set by the caller to exit the stream permanently;
+//	                           workers return at loop entry.
+//	evmAbort                 — soft, repeatable interrupt. When set, aborts in-flight
+//	                           EVM work and causes workers to skip (not consume)
+//	                           subsequent txs until the caller resets it. Lets the
+//	                           caller implement phase transitions without tearing
+//	                           down the worker pool. May be nil.
+//	txsCh                    — transaction source; stream exits when this closes.
+//	onSuccess                — called from worker goroutines on each successful tx.
+//	                           Must be safe for concurrent invocation. May be nil.
 func (p *StatePrefetcher) PrefetchStream(
 	header *types.Header,
 	statedb *state.StateDB,
