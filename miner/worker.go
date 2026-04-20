@@ -2296,7 +2296,11 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	}
 
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
-	txsCh := make(chan *types.Transaction, 512)
+	// 4096 ≈ one full block's worth of 21k-gas txs at the 100M-gas block limit.
+	// Sized to absorb the idle provider's per-loop burst (bounded by gas budget)
+	// without ever blocking a sender; workers drain far faster than the idle
+	// heap can fill in practice. Channel memory is ~33 KB — negligible.
+	txsCh := make(chan *types.Transaction, 4096)
 	evmAbort := new(atomic.Bool)
 
 	onSuccess := func(hash common.Hash, _ uint64) {
