@@ -6883,3 +6883,163 @@ func testPipelinedImportSRC_ValidateStateCheap(t *testing.T, scheme string) {
 		}
 	}
 }
+
+// TestPipelinedImportMetrics verifies that the pipelined-import metrics and
+// their parity timers actually increment when blocks flow through the
+// pipelined path, and that the mode gauge reflects the enabled config.
+func TestPipelinedImportMetrics(t *testing.T) {
+	metrics.Enable()
+
+	const numBlocks = 5
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Snapshot counters before — metrics registrations are process-global, so
+	// other tests in the same binary may have already moved them.
+	blocksBefore := pipelineImportBlocksCounter.Snapshot().Count()
+	hitBefore := pipelineImportHitCounter.Snapshot().Count()
+	mismatchBefore := pipelineImportRootMismatchCounter.Snapshot().Count()
+	insertBefore := blockInsertTimer.Snapshot().Count()
+	stateCommitBefore := stateCommitTimer.Snapshot().Count()
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if got := pipelineImportEnabledGauge.Snapshot().Value(); got != 1 {
+		t.Errorf("pipelineImportEnabledGauge = %d, want 1 when EnablePipelinedImportSRC=true", got)
+	}
+
+	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("pipeline InsertChain failed: %v", err)
+	}
+
+	// Drain the trailing pending SRC so per-block counters reflect every block.
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC failed: %v", err)
+	}
+
+	blocksDelta := pipelineImportBlocksCounter.Snapshot().Count() - blocksBefore
+	hitDelta := pipelineImportHitCounter.Snapshot().Count() - hitBefore
+	mismatchDelta := pipelineImportRootMismatchCounter.Snapshot().Count() - mismatchBefore
+	insertDelta := blockInsertTimer.Snapshot().Count() - insertBefore
+	stateCommitDelta := stateCommitTimer.Snapshot().Count() - stateCommitBefore
+
+	if blocksDelta != numBlocks {
+		t.Errorf("pipelineImportBlocksCounter delta = %d, want %d", blocksDelta, numBlocks)
+	}
+	// First block has no pending predecessor; subsequent blocks should all hit.
+	if hitDelta != numBlocks-1 {
+		t.Errorf("pipelineImportHitCounter delta = %d, want %d", hitDelta, numBlocks-1)
+	}
+	if mismatchDelta != 0 {
+		t.Errorf("pipelineImportRootMismatchCounter delta = %d, want 0 (safety alarm)", mismatchDelta)
+	}
+	if insertDelta != numBlocks {
+		t.Errorf("blockInsertTimer (parity) delta = %d, want %d", insertDelta, numBlocks)
+	}
+	if stateCommitDelta != numBlocks {
+		t.Errorf("stateCommitTimer (parity, from SRC goroutine) delta = %d, want %d", stateCommitDelta, numBlocks)
+	}
+}
+
+// TestPipelineImportDisabledGauge verifies the mode gauge reads 0 when the
+// pipeline is not enabled in the chain config.
+func TestPipelineImportDisabledGauge(t *testing.T) {
+	metrics.Enable()
+
+	gspec := &Genesis{
+		Config:  params.AllEthashProtocolChanges,
+		BaseFee: big.NewInt(params.InitialBaseFee),
+	}
+	engine := ethash.NewFaker()
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	if got := pipelineImportEnabledGauge.Snapshot().Value(); got != 0 {
+		t.Errorf("pipelineImportEnabledGauge = %d, want 0 when EnablePipelinedImportSRC=false", got)
+	}
+}
+
+// TestPipelineFlatDiffHitMeters verifies that the FlatDiff overlay meters
+// increment when consecutive blocks under pipelined import touch accounts/slots
+// mutated by the previous block.
+func TestPipelineFlatDiffHitMeters(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	// Every block transfers from the same `addr` to `recipient` — both addresses
+	// are in the previous block's FlatDiff, so reads in the next block's
+	// execution should hit the overlay.
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 3, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// The FlatDiff meters live in the state package (unexported); look them up
+	// by name in the global registry rather than exposing accessors.
+	flatAcctMeter, ok := metrics.DefaultRegistry.Get("state/flatdiff/account_hits").(*metrics.Meter)
+	if !ok {
+		t.Fatal("state/flatdiff/account_hits meter not registered")
+	}
+	accountHitsBefore := flatAcctMeter.Snapshot().Count()
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("pipeline InsertChain failed: %v", err)
+	}
+	_ = pipeChain.flushPendingImportSRC()
+
+	if flatAcctMeter.Snapshot().Count()-accountHitsBefore == 0 {
+		t.Error("state/flatdiff/account_hits should have non-zero delta after consecutive-block transfers")
+	}
+	// Storage hits depend on the specific SSTORE pattern; pure balance-transfer
+	// blocks may not hit storage slots. We only assert account-side hits here.
+}

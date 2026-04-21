@@ -24,11 +24,24 @@ import (
 
 // Pipelined SRC metrics
 var (
-	pipelineSpeculativeBlocksCounter = metrics.NewRegisteredCounter("worker/pipelineSpeculativeBlocks", nil)
-	pipelineSpeculativeAbortsCounter = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts", nil)
-	pipelineEIP2935AbortsCounter     = metrics.NewRegisteredCounter("worker/pipelineEIP2935Aborts", nil)
-	pipelineSRCTimer                 = metrics.NewRegisteredTimer("worker/pipelineSRCTime", nil)
-	pipelineFlatDiffExtractTimer     = metrics.NewRegisteredTimer("worker/pipelineFlatDiffExtractTime", nil)
+	pipelineSpeculativeBlocksCounter    = metrics.NewRegisteredCounter("worker/pipelineSpeculativeBlocks", nil)
+	pipelineSpeculativeAbortsCounter    = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts", nil)
+	pipelineEIP2935AbortsCounter        = metrics.NewRegisteredCounter("worker/pipelineEIP2935Aborts", nil)
+	pipelineSRCTimer                    = metrics.NewRegisteredTimer("worker/pipelineSRCTime", nil)
+	pipelineFlatDiffExtractTimer        = metrics.NewRegisteredTimer("worker/pipelineFlatDiffExtractTime", nil)
+	pipelineSpeculativeCommittedCounter = metrics.NewRegisteredCounter("worker/pipelineSpeculativeCommitted", nil) // speculative block broadcast as the real next block — success signal
+	pipelineSRCWaitTimer                = metrics.NewRegisteredTimer("worker/pipelineSRCWait", nil)                // time blocked on WaitForSRC (ideally near-zero — means SRC finished before the caller arrived)
+	pipelineSealDurationTimer           = metrics.NewRegisteredTimer("worker/pipelineSealDuration", nil)           // engine.Seal latency in the inline path
+	// Per-cause abort counters — each increments alongside the aggregate pipelineSpeculativeAbortsCounter.
+	pipelineAbortBlockhashCounter = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts/blockhash", nil)  // BLOCKHASH(N) was read during speculative N+1
+	pipelineAbortSRCFailedCounter = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts/src_failed", nil) // WaitForSRC returned an error
+	pipelineAbortFallbackCounter  = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts/fallback", nil)   // fallbackToSequential entered
+	// Announce earliness histogram (ms). Positive = announced before header.Time (PIP-66 working). Negative = announced late.
+	pipelineAnnounceEarlinessMs = metrics.NewRegisteredHistogram("worker/pipelineAnnounceEarlinessMs", nil, metrics.NewExpDecaySample(1028, 0.015))
+	// Mode gauge — 1 when pipelined SRC block-building is enabled on this node, 0 otherwise.
+	// Pair with chain/imports/pipelined/enabled on dashboards to distinguish "metric is
+	// zero because pipelining is off" from "metric is zero because the code path bypassed it".
+	pipelineBuildEnabledGauge = metrics.NewRegisteredGauge("worker/pipeline/enabled", nil)
 )
 
 const speculativeEmptyRefillLead = 300 * time.Millisecond
@@ -379,6 +392,9 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 	initialFillDone := make(chan struct{})
 	defer func() { <-initialFillDone }() // ensure goroutine is drained on all return paths
 	var eip2935Abort bool
+	// Track wall-clock from fill begin → announce for each speculative block.
+	// Rotates together with specHeader/specState during the loop shift.
+	curSpecBuildStart := time.Now()
 
 	go func() {
 		defer close(initialFillDone)
@@ -409,10 +425,13 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 	// No longer blocked by fillTransactions — block N is sealed as soon as SRC finishes.
 	srcStart := time.Now()
 	root, witnessN, err := w.chain.WaitForSRC()
-	pipelineSRCTimer.Update(time.Since(srcStart))
+	srcWaitN := time.Since(srcStart)
+	pipelineSRCTimer.Update(srcWaitN)
+	pipelineSRCWaitTimer.Update(srcWaitN)
 	if err != nil {
 		log.Error("Pipelined SRC: SRC(N) failed", "block", blockNNumber, "err", err)
 		pipelineSpeculativeAbortsCounter.Inc(1)
+		pipelineAbortSRCFailedCounter.Inc(1)
 		return
 	}
 
@@ -507,6 +526,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 			log.Warn("Pipelined SRC: discarding speculative block — BLOCKHASH(N) was accessed",
 				"block", nextBlockNumber, "pendingBlockN", blockNNumber)
 			pipelineSpeculativeAbortsCounter.Inc(1)
+			pipelineAbortBlockhashCounter.Inc(1)
 			shouldAbort = true
 		}
 		if shouldAbort {
@@ -553,7 +573,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 			// Last block in the pipeline — seal synchronously via taskCh so that
 			// resultLoop emits ChainHeadEvent and normal block production resumes.
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, true)
+				specEnv.receipts, specStateSyncData, rootN, flatDiff, true, curSpecBuildStart)
 			break
 		}
 
@@ -588,7 +608,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 			log.Warn("Pipelined SRC: Prepare failed for next block, sealing current",
 				"block", nextNextBlockNumber, "err", err)
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, true)
+				specEnv.receipts, specStateSyncData, rootN, flatDiff, true, curSpecBuildStart)
 			break
 		}
 
@@ -609,7 +629,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 				"block", nextNextBlockNumber, "err", err)
 			// SRC is already running — wait for it and seal current block
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, false)
+				specEnv.receipts, specStateSyncData, rootN, flatDiff, false, curSpecBuildStart)
 			break
 		}
 		specStateNext.StartPrefetcher("miner-speculative", nil, nil)
@@ -626,7 +646,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		if grandparentHeader == nil {
 			log.Error("Pipelined SRC: grandparent header not found for next block", "number", blockNNumber)
 			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, false)
+				specEnv.receipts, specStateSyncData, rootN, flatDiff, false, curSpecBuildStart)
 			break
 		}
 
@@ -684,6 +704,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		fillDone := make(chan struct{})
 		var nextEIP2935Abort bool
 		var fillElapsed time.Duration
+		nextSpecBuildStart := time.Now()
 
 		go func() {
 			defer close(fillDone)
@@ -720,9 +741,11 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		srcWaitElapsed := time.Since(srcWaitStart)
 		srcTotalElapsed := time.Since(srcSpawnTime)
 		pipelineSRCTimer.Update(srcTotalElapsed)
+		pipelineSRCWaitTimer.Update(srcWaitElapsed)
 		if err != nil {
 			log.Error("Pipelined SRC: SRC failed", "block", nextBlockNumber, "err", err)
 			pipelineSpeculativeAbortsCounter.Inc(1)
+			pipelineAbortSRCFailedCounter.Inc(1)
 			<-fillDone // wait for goroutine before breaking
 			break
 		}
@@ -766,7 +789,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		// --- Inline seal + broadcast (bypass taskLoop/resultLoop) ---
 		// prevDBWriteDone was already awaited before FinalizeForPipeline above.
 		// The DB write runs asynchronously — the pipeline proceeds without waiting.
-		sealedBlock, dbWriteDone, err := w.inlineSealAndBroadcast(blockSpec, receiptsSpec, specState, witnessSpec)
+		sealedBlock, dbWriteDone, err := w.inlineSealAndBroadcast(blockSpec, receiptsSpec, specState, witnessSpec, curSpecBuildStart)
 		if err != nil {
 			log.Error("Pipelined SRC: inline seal failed", "block", nextBlockNumber, "err", err)
 			<-fillDone // wait for goroutine before breaking
@@ -798,6 +821,7 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		coinbase = coinbaseNext
 		eip2935Abort = nextEIP2935Abort
 		curBlockhashAccessed = nextBlockhashAccessed
+		curSpecBuildStart = nextSpecBuildStart
 	}
 
 	// Wait for the last async DB write to complete before exiting.
@@ -815,6 +839,7 @@ func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
 		log.Info("Pipelined SRC: falling back to sequential execution")
 	}
 	pipelineSpeculativeAbortsCounter.Inc(1)
+	pipelineAbortFallbackCounter.Inc(1)
 
 	borEngine, ok := w.engine.(*bor.Bor)
 	if !ok {
@@ -854,6 +879,7 @@ func (w *worker) sealBlockViaTaskCh(
 	rootN common.Hash,
 	flatDiff *state.FlatDiff,
 	spawnSRC bool, // false if SRC goroutine is already running
+	buildStart time.Time, // wall clock when this block's speculative fill began — for worker/build_to_announce
 ) {
 	if spawnSRC {
 		tmpBlock := types.NewBlockWithHeader(finalHeader)
@@ -887,7 +913,7 @@ func (w *worker) sealBlockViaTaskCh(
 	}
 
 	select {
-	case w.taskCh <- &task{receipts: blockReceipts, state: statedb, block: block, createdAt: time.Now(), pipelined: true, witnessBytes: witnessSpec}:
+	case w.taskCh <- &task{receipts: blockReceipts, state: statedb, block: block, createdAt: time.Now(), productionStart: buildStart, pipelined: true, witnessBytes: witnessSpec}:
 		if w.config.PipelinedSRCLogs {
 			log.Info("Pipelined SRC: block sealed", "number", block.Number(),
 				"txs", len(block.Transactions()), "root", rootSpec)
@@ -908,12 +934,13 @@ func (w *worker) sealBlockViaTaskCh(
 // Uses emitHeadEvent=false to avoid a deadlock: mainLoop is blocked in
 // commitSpeculativeWork, so chainHeadFeed.Send would eventually block when
 // newWorkLoop's channel fills up.
-func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Receipt, statedb *state.StateDB, witnessBytes []byte) (*types.Block, chan struct{}, error) {
+func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Receipt, statedb *state.StateDB, witnessBytes []byte, buildStart time.Time) (*types.Block, chan struct{}, error) {
 	// Seal the block via a private channel — reuses Seal() without contention
 	// on the shared w.resultCh. For primary producers on Bhilai+, delay=0.
 	sealCh := make(chan *consensus.NewSealedBlockEvent, 1)
 	stopCh := make(chan struct{})
 
+	sealStart := time.Now()
 	if err := w.engine.Seal(w.chain, block, nil, sealCh, stopCh); err != nil {
 		return nil, nil, fmt.Errorf("seal failed: %w", err)
 	}
@@ -932,6 +959,7 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 		close(stopCh)
 		return nil, nil, errors.New("worker stopped during inline seal")
 	}
+	pipelineSealDurationTimer.UpdateSince(sealStart)
 
 	hash := sealedBlock.Hash()
 
@@ -972,12 +1000,22 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 	// Broadcast to peers BEFORE writing to DB — the block is fully valid and
 	// sealed, so peers can start processing it immediately. The DB write is
 	// not needed for broadcast.
-	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: time.Now()})
+	announceAt := time.Now()
+	// Positive when announced before header.GetActualTime (PIP-66 early). Negative when late.
+	earlyMs := sealedBlock.Header().GetActualTime().Sub(announceAt).Milliseconds()
+	pipelineAnnounceEarlinessMs.Update(earlyMs)
+	pipelineSpeculativeCommittedCounter.Inc(1)
+	if !buildStart.IsZero() {
+		workerBuildToAnnounceTimer.UpdateSince(buildStart)
+	}
+	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: announceAt})
 
 	sealedBlocksCounter.Inc(1)
 	if sealedBlock.Transactions().Len() == 0 {
 		sealedEmptyBlocksCounter.Inc(1)
 	}
+	workerGasUsedPerBlockHistogram.Update(int64(sealedBlock.GasUsed()))
+	workerTxsPerBlockHistogram.Update(int64(sealedBlock.Transactions().Len()))
 	w.clearPending(sealedBlock.NumberU64())
 
 	// Write to chain DB asynchronously — the pipeline can proceed with the
@@ -986,7 +1024,9 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
+		writeStart := time.Now()
 		_, err := w.chain.WriteBlockAndSetHeadPipelined(sealedBlock, sealedReceipts, logs, statedb, false, witnessBytes)
+		writeBlockAndSetHeadTimer.UpdateSince(writeStart)
 		if err != nil {
 			log.Error("Pipelined SRC: async DB write failed", "block", sealedBlock.Number(), "err", err)
 		}

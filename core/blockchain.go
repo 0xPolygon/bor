@@ -69,7 +69,7 @@ var (
 	headSafeBlockGauge      = metrics.NewRegisteredGauge("chain/head/safe", nil)
 
 	chainInfoGauge   = metrics.NewRegisteredGaugeInfo("chain/info", nil)
-	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil) //nolint:unused
+	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil)
 
 	accountReadTimer   = metrics.NewRegisteredResettingTimer("chain/account/reads", nil)
 	accountHashTimer   = metrics.NewRegisteredResettingTimer("chain/account/hashes", nil)
@@ -109,10 +109,20 @@ var (
 
 	blockImportTimer = metrics.NewRegisteredMeter("chain/imports", nil)
 
-	blockInsertTimer                   = metrics.NewRegisteredTimer("chain/inserts", nil)
-	blockValidationTimer               = metrics.NewRegisteredTimer("chain/validation", nil)
-	blockCrossValidationTimer          = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
-	blockExecutionTimer                = metrics.NewRegisteredTimer("chain/execution", nil)
+	blockInsertTimer = metrics.NewRegisteredTimer("chain/inserts", nil)
+	// blockValidationTimer does NOT fire when pipelined SRC is enabled.
+	// Reason: pipelined import uses ValidateStateCheap (gas + bloom + receipt
+	// root only); the full root match happens later in the SRC goroutine.
+	// Closest pipeline signals: chain/imports/pipelined/collect (caller's wait
+	// on root verification) and chain/imports/pipelined/root_mismatch (must stay zero).
+	blockValidationTimer      = metrics.NewRegisteredTimer("chain/validation", nil)
+	blockCrossValidationTimer = metrics.NewRegisteredResettingTimer("chain/crossvalidation", nil) //nolint:revive,unused
+	blockExecutionTimer       = metrics.NewRegisteredTimer("chain/execution", nil)
+	// blockWriteTimer does NOT fire when pipelined SRC is enabled.
+	// Reason: pipelined import splits "write" across two code paths — metadata/batch
+	// write in writeBlockAndSetHeadPipelined and async state commit in the SRC
+	// goroutine — so there is no single "write phase" number. Approximate by summing
+	// chain/batch/write + chain/state/commit + chain/{account,storage}/commits.
 	blockWriteTimer                    = metrics.NewRegisteredTimer("chain/write", nil)
 	blockExecutionParallelCounter      = metrics.NewRegisteredCounter("chain/execution/parallel", nil)
 	blockExecutionSerialCounter        = metrics.NewRegisteredCounter("chain/execution/serial", nil)
@@ -146,10 +156,28 @@ var (
 	stateCommitTimer       = metrics.NewRegisteredTimer("chain/state/commit", nil)       // time for statedb.CommitWithUpdate — in pathdb mode, spikes indicate diff layer flushes
 
 	// Pipelined import SRC metrics
-	pipelineImportBlocksCounter   = metrics.NewRegisteredCounter("chain/imports/pipelined/blocks", nil)
-	pipelineImportSRCTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/src", nil)
-	pipelineImportCollectTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/collect", nil)
-	pipelineImportFallbackCounter = metrics.NewRegisteredCounter("chain/imports/pipelined/fallback", nil)
+	pipelineImportBlocksCounter       = metrics.NewRegisteredCounter("chain/imports/pipelined/blocks", nil)
+	pipelineImportSRCTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/src", nil)
+	pipelineImportCollectTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/collect", nil)
+	pipelineImportFallbackCounter     = metrics.NewRegisteredCounter("chain/imports/pipelined/fallback", nil)
+	pipelineImportHitCounter          = metrics.NewRegisteredCounter("chain/imports/pipelined/hit", nil)           // pending matched next block's parent — overlap achieved
+	pipelineImportMissCounter         = metrics.NewRegisteredCounter("chain/imports/pipelined/miss", nil)          // pending didn't match — flushed (reorg/gap)
+	pipelineImportRootMismatchCounter = metrics.NewRegisteredCounter("chain/imports/pipelined/root_mismatch", nil) // SRC goroutine returned wrong root — safety alarm, must stay zero
+	// Mode gauge — 1 when pipelined SRC import is enabled on this node, 0 otherwise.
+	// Dashboards can use this to distinguish "metric is zero because pipelining is off"
+	// from "metric is zero because the pipelined code path bypassed its emit site".
+	pipelineImportEnabledGauge = metrics.NewRegisteredGauge("chain/imports/pipelined/enabled", nil)
+
+	// Throughput histograms (mode-agnostic — emitted from both normal and pipelined import paths).
+	gasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	txsPerBlockHistogram     = metrics.NewRegisteredHistogram("chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	// Witness size histogram in bytes. Spikes here directly drive stateless-peer bandwidth cost.
+	witnessSizeBytesHistogram = metrics.NewRegisteredHistogram("chain/witness/size_bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	// End-to-end import timer: from block processing start until the witness is
+	// on disk and peer-visible (non-pipelined: end of writeBlockWithState;
+	// pipelined: after WitnessReadyEvent fires in the auto-collection goroutine).
+	// Apples-to-apples A/B metric between modes.
+	witnessReadyEndToEndTimer = metrics.NewRegisteredTimer("chain/imports/witness_ready_end_to_end", nil)
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
@@ -386,6 +414,7 @@ type pendingImportSRCState struct {
 	flatDiff      *state.FlatDiff
 	committedRoot common.Hash   // last committed trie root when SRC was spawned
 	procTime      time.Duration // for gcproc accumulation
+	blockStart    time.Time     // block processing start — used for chain/imports/witness_ready_end_to_end
 
 	// collectedCh is closed when auto-collection completes (verify root,
 	// write witness, trie GC). Callers block on <-collectedCh.
@@ -508,6 +537,11 @@ type BlockChain struct {
 func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine, cfg *BlockChainConfig) (*BlockChain, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
+	}
+	if cfg.EnablePipelinedImportSRC {
+		pipelineImportEnabledGauge.Update(1)
+	} else {
+		pipelineImportEnabledGauge.Update(0)
 	}
 
 	// Open trie database with provided config
@@ -2406,6 +2440,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		bc.WriteWitness(block.Hash(), witnessBytes)
 		dbWriteDuration := time.Since(writeStart)
 		witnessDbWriteTimer.Update(dbWriteDuration)
+		witnessSizeBytesHistogram.Update(int64(len(witnessBytes)))
 
 		if encodeDuration > 100*time.Millisecond {
 			log.Warn("Slow witness encoding", "block", block.NumberU64(), "elapsed", common.PrettyDuration(encodeDuration), "size", common.StorageSize(len(witnessBytes)))
@@ -3286,8 +3321,10 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 						CommittedParentRoot: pending.committedRoot,
 						FlatDiff:            pending.flatDiff,
 					}
+					pipelineImportHitCounter.Inc(1)
 				} else {
 					// Block doesn't follow pending (reorg/gap) — flush first
+					pipelineImportMissCounter.Inc(1)
 					if err := bc.flushPendingImportSRC(); err != nil {
 						log.Error("Pipelined import: flush failed on mismatch", "err", err)
 					}
@@ -3434,6 +3471,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				flatDiff:      flatDiff,
 				committedRoot: committedRoot,
 				procTime:      proctime,
+				blockStart:    start,
 				collectedCh:   make(chan struct{}),
 			}
 			bc.pendingImportSRCMu.Lock()
@@ -3459,6 +3497,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				}
 
 				if root != p.block.Root() {
+					pipelineImportRootMismatchCounter.Inc(1)
 					p.collectedErr = fmt.Errorf("pipelined import: root mismatch (expected: %x got: %x) block: %d",
 						p.block.Root(), root, p.block.NumberU64())
 					log.Error("Pipelined import: root mismatch, reverting chain head",
@@ -3480,10 +3519,15 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 				// Write witness and announce availability to peers
 				if len(witnessBytes) > 0 {
 					bc.WriteWitness(p.block.Hash(), witnessBytes)
+					witnessSizeBytesHistogram.Update(int64(len(witnessBytes)))
 					bc.witnessReadyFeed.Send(WitnessReadyEvent{
 						BlockHash:   p.block.Hash(),
 						BlockNumber: p.block.NumberU64(),
 					})
+				}
+				// End-to-end timer — block processing start → witness written + announced.
+				if !p.blockStart.IsZero() {
+					witnessReadyEndToEndTimer.UpdateSince(p.blockStart)
 				}
 
 				// Trie GC
@@ -3511,6 +3555,27 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 			trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
 			stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, setHead, false)
+
+			// Parity metrics so dashboards work the same in pipelined mode.
+			// Read-side, execution, and bor-consensus timers draw from the main
+			// statedb (populated during ProcessBlock). Hash/update/commit timers
+			// and stateCommitTimer fire from the SRC goroutine where tmpDB does
+			// the actual IntermediateRoot + CommitWithUpdate work.
+			ptimePipelined := time.Since(pstart) - vtime - statedb.BorConsensusTime
+			trieReadPipelined := statedb.SnapshotAccountReads + statedb.AccountReads + statedb.SnapshotStorageReads + statedb.StorageReads
+			accountReadTimer.Update(statedb.AccountReads)
+			storageReadTimer.Update(statedb.StorageReads)
+			snapshotAccountReadTimer.Update(statedb.SnapshotAccountReads)
+			snapshotStorageReadTimer.Update(statedb.SnapshotStorageReads)
+			blockExecutionTimer.Update(ptimePipelined - trieReadPipelined)
+			borConsensusTime.Update(statedb.BorConsensusTime)
+			elapsedPipelined := time.Since(start)
+			blockInsertTimer.Update(elapsedPipelined)
+			gasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
+			txsPerBlockHistogram.Update(int64(len(block.Transactions())))
+			if elapsedPipelined > 0 {
+				chainMgaspsMeter.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(elapsedPipelined)))
+			}
 
 			continue // Skip normal write path
 		}
@@ -3586,7 +3651,16 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		witnessCollectionTimer.Update(statedb.WitnessCollection)
 
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
-		blockInsertTimer.UpdateSince(start)
+		elapsedNormal := time.Since(start)
+		blockInsertTimer.Update(elapsedNormal)
+		gasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
+		txsPerBlockHistogram.Update(int64(len(block.Transactions())))
+		if elapsedNormal > 0 {
+			chainMgaspsMeter.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(elapsedNormal)))
+		}
+		// Witness has already been written inside writeBlockWithState by this point,
+		// so "witness ready" == "import complete" in the non-pipelined case.
+		witnessReadyEndToEndTimer.Update(elapsedNormal)
 
 		// Report the import stats before returning the various results
 		stats.processed++
@@ -4563,12 +4637,17 @@ func (bc *BlockChain) writeBlockAndSetHeadPipelined(block *types.Block, receipts
 	// the trie), so we use the SRC goroutine's witness which captures all
 	// MPT proof nodes during CommitWithUpdate.
 	if len(witnessBytes) > 0 {
+		witWriteStart := time.Now()
 		bc.WriteWitness(block.Hash(), witnessBytes)
+		witnessDbWriteTimer.UpdateSince(witWriteStart)
+		witnessSizeBytesHistogram.Update(int64(len(witnessBytes)))
 	}
 
+	batchStart := time.Now()
 	if err := blockBatch.Write(); err != nil {
 		log.Crit("Failed to write block into disk", "err", err)
 	}
+	blockBatchWriteTimer.UpdateSince(batchStart)
 	rawdb.WriteBytecodeSyncLastBlock(bc.db, block.NumberU64())
 
 	// Set head and emit events (same logic as writeBlockAndSetHead)
@@ -4734,12 +4813,27 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 			tmpDB.GetBalance(addr)
 		}
 
+		commitStart := time.Now()
 		root, stateUpdate, err := tmpDB.CommitWithUpdate(block.NumberU64(), deleteEmptyObjects, bc.chainConfig.IsCancun(block.Number()))
+		stateCommitTimer.UpdateSince(commitStart)
 		if err != nil {
 			log.Error("Pipelined SRC: CommitWithUpdate failed", "block", block.NumberU64(), "err", err)
 			pending.err = err
 			return
 		}
+
+		// Parity metrics: the hashing/update/commit statedb counters are populated
+		// on tmpDB during CommitWithUpdate. Emit them under the same names used by
+		// the non-pipelined import path so dashboards work in both modes.
+		accountHashTimer.Update(tmpDB.AccountHashes)
+		storageHashTimer.Update(tmpDB.StorageHashes)
+		accountUpdateTimer.Update(tmpDB.AccountUpdates)
+		storageUpdateTimer.Update(tmpDB.StorageUpdates)
+		accountCommitTimer.Update(tmpDB.AccountCommits)
+		storageCommitTimer.Update(tmpDB.StorageCommits)
+		snapshotCommitTimer.Update(tmpDB.SnapshotCommits)
+		triedbCommitTimer.Update(tmpDB.TrieDBCommits)
+		witnessCollectionTimer.Update(tmpDB.WitnessCollection)
 
 		if bc.stateSizer != nil {
 			bc.stateSizer.Notify(stateUpdate)
@@ -4754,9 +4848,11 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 		// writes it in resultLoop with the correct sealed hash.
 		if witness != nil {
 			var witBuf bytes.Buffer
+			encodeStart := time.Now()
 			if err := witness.EncodeRLP(&witBuf); err != nil {
 				log.Error("Pipelined SRC: failed to encode witness", "block", block.NumberU64(), "err", err)
 			} else {
+				witnessEncodeTimer.UpdateSince(encodeStart)
 				pending.witness = witBuf.Bytes()
 				// Cache the witness immediately so GetWitness can serve it
 				// before the auto-collection goroutine writes it to DB.

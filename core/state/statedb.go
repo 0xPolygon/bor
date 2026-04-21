@@ -1041,6 +1041,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		// Check the FlatDiff reference for accounts mutated in the parent block.
 		if s.flatDiffRef != nil {
 			if acct, ok := s.flatDiffRef.Accounts[addr]; ok {
+				flatDiffAccountHitsMeter.Mark(1)
 				acctCopy := acct
 				obj := newObject(s, addr, &acctCopy)
 				if code, ok := s.flatDiffRef.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {

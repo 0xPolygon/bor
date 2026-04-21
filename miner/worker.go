@@ -103,11 +103,24 @@ var (
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
 	// Uses a larger reservoir to preserve tail visibility on high-throughput blocks.
 	txApplyDurationTimer = newRegisteredCustomTimer("worker/txApplyDuration", 8192)
-	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation)
+	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation).
+	// NOT emitted when pipelined SRC is enabled: the pipelined path uses
+	// FinalizeForPipeline, which deliberately skips the inline IntermediateRoot
+	// (the root comes from the background SRC goroutine instead). Closest
+	// pipeline equivalents: worker/pipelineSRCTime (total SRC compute) and
+	// worker/pipelineSRCWait (portion of SRC that actually blocked the caller).
 	finalizeAndAssembleTimer = metrics.NewRegisteredTimer("worker/finalizeAndAssemble", nil)
-	// intermediateRootTimer measures time taken to calculate intermediate root
+	// intermediateRootTimer measures time taken to calculate intermediate root.
+	// NOT emitted when pipelined SRC is enabled: there is no inline root calculation
+	// under pipelining — the SRC goroutine computes it in parallel with the next
+	// block's execution. Closest pipeline equivalent: worker/pipelineSRCTime (cost)
+	// or worker/pipelineSRCWait (how much of the cost was hidden by the overlap).
 	intermediateRootTimer = metrics.NewRegisteredTimer("worker/intermediateRoot", nil)
-	// commitTimer measures total time for complete block building (tx execution + finalization + state root)
+	// commitTimer measures total time for complete block building (tx execution + finalization + state root).
+	// NOT emitted when pipelined SRC is enabled: the pipelined model has no
+	// single contiguous "build" interval — speculative fill of N+1 overlaps with
+	// SRC(N), so fabricating a total would be misleading. Closest pipeline signals:
+	// worker/pipelineSRCWait + worker/pipelineSealDuration + worker/pipelineAnnounceEarlinessMs.
 	commitTimer = metrics.NewRegisteredTimer("worker/commit", nil)
 	// writeBlockAndSetHeadTimer measures total time for WriteBlockAndSetHead in the seal result loop.
 	// This covers the entire gap between block sealing and event posting: witness encoding, batch write,
@@ -155,6 +168,15 @@ var (
 	workerBorConsensusTimer        = metrics.NewRegisteredTimer("worker/chain/bor/consensus", nil)
 	workerBlockExecutionTimer      = metrics.NewRegisteredTimer("worker/chain/execution", nil)
 	workerMgaspsTimer              = metrics.NewRegisteredResettingTimer("worker/chain/mgasps", nil)
+	// Throughput histograms — mode-agnostic. For the pipelined path, "per-block build elapsed"
+	// isn't a single contiguous interval, so mgasps is only emitted by the normal path.
+	// gas_used_per_block and txs_per_block are emitted in both modes.
+	workerGasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("worker/chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	workerTxsPerBlockHistogram     = metrics.NewRegisteredHistogram("worker/chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	// End-to-end producer timer: wall clock from build begin to NewMinedBlockEvent broadcast.
+	// Fires in both normal (resultLoop → mux.Post) and pipelined (inlineSealAndBroadcast → mux.Post) modes,
+	// giving a directly comparable apples-to-apples A/B signal.
+	workerBuildToAnnounceTimer = metrics.NewRegisteredTimer("worker/build_to_announce", nil)
 
 	// Trie commit metrics for block production (populated after WriteBlockAndSetHead → CommitWithUpdate).
 	workerAccountCommitTimer     = metrics.NewRegisteredResettingTimer("worker/chain/account/commits", nil)
@@ -284,6 +306,7 @@ type task struct {
 	state                *state.StateDB
 	block                *types.Block
 	createdAt            time.Time
+	productionStart      time.Time     // wall clock at build begin — used for worker/build_to_announce (fires from resultLoop at mux.Post)
 	productionElapsed    time.Duration // elapsed from after prepareWork to task submission (excludes sealing wait); used for workerMgaspsTimer and workerBlockExecutionTimer
 	intermediateRootTime time.Duration // time spent in IntermediateRoot inside FinalizeAndAssemble; subtracted when computing workerBlockExecutionTimer
 	pipelined            bool          // If true, state was already committed by SRC goroutine — skip CommitWithUpdate in writeBlockWithState
@@ -477,6 +500,11 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
+	if config.EnablePipelinedSRC {
+		pipelineBuildEnabledGauge.Update(1)
+	} else {
+		pipelineBuildEnabledGauge.Update(0)
+	}
 	// Subscribe for transaction insertion events (whether from network or resurrects)
 	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
 	// Subscribe events for blockchain
@@ -1224,13 +1252,27 @@ func (w *worker) resultLoop() {
 				if total := task.productionElapsed + writeElapsed; total > 0 {
 					workerMgaspsTimer.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(total)))
 				}
+				workerGasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
+				workerTxsPerBlockHistogram.Update(int64(block.Transactions().Len()))
 			}
 
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
 			// Broadcast the block and announce chain insertion event
-			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: time.Now()})
+			announceAt := time.Now()
+			if !task.productionStart.IsZero() {
+				workerBuildToAnnounceTimer.UpdateSince(task.productionStart)
+			}
+			if task.pipelined {
+				// Parity for sealBlockViaTaskCh path: inlineSealAndBroadcast emits these
+				// on the inline path; mirror them here so speculative blocks sealed via
+				// taskCh (last-of-pipeline, eligibility-fail, etc.) are also counted.
+				earlyMs := block.Header().GetActualTime().Sub(announceAt).Milliseconds()
+				pipelineAnnounceEarlinessMs.Update(earlyMs)
+				pipelineSpeculativeCommittedCounter.Inc(1)
+			}
+			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
 
 			sealedBlocksCounter.Inc(1)
 
@@ -2404,7 +2446,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		}
 
 		select {
-		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
+		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),

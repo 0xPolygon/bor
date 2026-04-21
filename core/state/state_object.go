@@ -233,6 +233,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	if s.db.flatDiffRef != nil {
 		if slots, ok := s.db.flatDiffRef.Storage[s.address]; ok {
 			if value, ok := slots[key]; ok {
+				flatDiffStorageHitsMeter.Mark(1)
 				s.originStorage[key] = value
 				return value
 			}
