@@ -1401,13 +1401,16 @@ func (b *testBackendWithPreMadhuguriBorReceipt) GetBorBlockReceipt(_ context.Con
 }
 
 func (b *testBackendWithPreMadhuguriBorReceipt) ChainConfig() *params.ChainConfig {
-	// Return config with Bor but MadhugiriBlock unset (nil) for pre-Madhuguri behavior
+	// Return config with Bor but MadhugiriBlock unset (nil) for pre-Madhuguri behavior.
+	// Deep-copy BorConfig so we never mutate the shared params.AllEthashProtocolChanges.Bor
+	// instance — concurrent tests read those fields and would race with us.
 	cfg := *params.AllEthashProtocolChanges
-	if cfg.Bor == nil {
-		cfg.Bor = &params.BorConfig{}
+	borCfg := params.BorConfig{}
+	if cfg.Bor != nil {
+		borCfg = *cfg.Bor
 	}
-	// Ensure MadhugiriBlock is nil so IsMadhugiri returns false
-	cfg.Bor.MadhugiriBlock = nil
+	borCfg.MadhugiriBlock = nil
+	cfg.Bor = &borCfg
 	return &cfg
 }
 
