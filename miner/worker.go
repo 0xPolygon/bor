@@ -2207,6 +2207,12 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 // buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	// Must be the first defer so the prefetcher goroutine is signaled to exit
+	// on every return path — including the early return below when prepareWork
+	// fails. Otherwise runIdleTxProvider loops until gas exhaustion, burning
+	// CPU on throwaway EVM work while the block build is already aborted.
+	defer interruptPrefetch.Store(true)
+
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
 		return
@@ -2224,8 +2230,6 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		genParams.builderGasFreedCh = make(chan uint64, 256)
 		genParams.builderStarted.Store(true) // immediately interrupts idle Prefetch() + mode switch
 	}
-	// Kill the prefetcher goroutine entirely when block building completes (covers all exit paths).
-	defer interruptPrefetch.Store(true)
 
 	stopFn := func() {}
 	defer func() {
