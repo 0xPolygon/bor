@@ -872,6 +872,24 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 // path after the pipeline exits or aborts. A short delay lets the latest head
 // become visible first, so the retry builds on the correct parent instead of
 // recursively calling commitWork from inside the speculative-work handler.
+// handleSpeculativeWork runs a pipelined speculative-work request and, when
+// shouldRetry=true, requeues a normal commitWork via the newWorkCh path.
+// Extracted from mainLoop so the main dispatch select stays compact.
+// Requeueing instead of recursing avoids building on a stale parent and is
+// deliberately skipped when commitSpeculativeWork fell back to sequential
+// (fallbackToSequential already sealed block N via taskCh, and retrying would
+// loop-restart Seal() with fresh timestamps).
+func (w *worker) handleSpeculativeWork(req *speculativeWorkReq) {
+	shouldRetry, abortRecovery := w.commitSpeculativeWork(req)
+	if !shouldRetry {
+		return
+	}
+	if abortRecovery {
+		w.nextCommitAbortRecovery.Store(true)
+	}
+	w.schedulePipelineRetry()
+}
+
 func (w *worker) schedulePipelineRetry() {
 	go func() {
 		timer := time.NewTimer(25 * time.Millisecond)
@@ -936,22 +954,7 @@ func (w *worker) mainLoop() {
 			}
 
 		case req := <-w.speculativeWorkCh:
-			if shouldRetry, abortRecovery := w.commitSpeculativeWork(req); shouldRetry {
-				if abortRecovery {
-					w.nextCommitAbortRecovery.Store(true)
-				}
-				// The pipeline exited normally (last block via sealBlockViaTaskCh)
-				// or was aborted (EIP-2935/BLOCKHASH). Re-enter through the normal
-				// newWorkCh path using the latest visible head. This avoids
-				// recursively calling commitWork from inside the speculative-work
-				// handler, which can build on a stale parent or wedge recovery.
-				//
-				// NOT called when commitSpeculativeWork fell back to sequential —
-				// fallbackToSequential already sealed block N via taskCh, and
-				// retrying here would create a tight loop that keeps restarting
-				// Seal() with fresh timestamps, preventing blocks from being sealed.
-				w.schedulePipelineRetry()
-			}
+			w.handleSpeculativeWork(req)
 
 		case req := <-w.getWorkCh:
 			req.result <- w.generateWork(req.params, false)
@@ -1186,93 +1189,26 @@ func (w *worker) resultLoop() {
 				witness.SetHeader(block.Header())
 			}
 
-			// Execution metrics: emitted before write because these values are final after
-			// FinalizeAndAssemble and do not depend on write success — matching the import path
-			// which emits read/update/hash/execution/bor metrics before writeBlockAndSetHead.
-			// Emitting here avoids losing these observations on a rare write failure.
-			if metrics.Enabled() {
-				workerAccountReadTimer.Update(task.state.AccountReads)
-				workerStorageReadTimer.Update(task.state.StorageReads)
-				workerSnapshotAccountReadTimer.Update(task.state.SnapshotAccountReads)
-				workerSnapshotStorageReadTimer.Update(task.state.SnapshotStorageReads)
-				workerAccountUpdateTimer.Update(task.state.AccountUpdates)
-				workerStorageUpdateTimer.Update(task.state.StorageUpdates)
-				workerAccountHashTimer.Update(task.state.AccountHashes)
-				workerStorageHashTimer.Update(task.state.StorageHashes)
-				workerBorConsensusTimer.Update(task.state.BorConsensusTime)
-				trieRead := task.state.SnapshotAccountReads + task.state.AccountReads +
-					task.state.SnapshotStorageReads + task.state.StorageReads
-				// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads,
-				// Bor consensus time, and IntermediateRoot time to isolate pure EVM execution time.
-				// Mirrors the import path formula in blockchain.go (writeBlockAndSetHead),
-				// where ptime already excludes vtime (IntermediateRoot) via explicit subtraction.
-				// Clamped to zero to avoid negative histogram samples from measurement jitter.
-				execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime - task.intermediateRootTime
-				if execTime < 0 {
-					execTime = 0
-				}
-				workerBlockExecutionTimer.Update(execTime)
-			}
+			emitExecutionMetrics(task)
 
-			// Commit block and state to database.
-			// For pipelined blocks, state was already committed by the SRC goroutine —
-			// use WriteBlockAndSetHeadPipelined to skip the redundant CommitWithUpdate.
 			writeStart := time.Now()
-			if task.pipelined {
-				_, err = w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, true, task.witnessBytes)
-			} else {
-				_, err = w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
-			}
+			_, err = w.writeTaskBlock(task, block, receipts, logs)
 			writeElapsed := time.Since(writeStart)
 			writeBlockAndSetHeadTimer.Update(writeElapsed)
-
 			if err != nil {
 				log.Error("Failed writing block to chain", "err", err)
-				// Error writing block to chain, delete the pending task.
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealhash)
 				w.pendingMu.Unlock()
 				continue
 			}
 
-			// Commit metrics: emitted only after a successful write because these values are
-			// populated by WriteBlockAndSetHead → CommitWithUpdate. Emitting on failure would
-			// record zeroes or stale data — matching the import path which also gates commit
-			// metrics after a successful writeBlockAndSetHead.
-			if metrics.Enabled() {
-				workerAccountCommitTimer.Update(task.state.AccountCommits)
-				workerStorageCommitTimer.Update(task.state.StorageCommits)
-				workerSnapshotCommitTimer.Update(task.state.SnapshotCommits)
-				workerTriedbCommitTimer.Update(task.state.TrieDBCommits)
-				workerWitnessCollectionTimer.Update(task.state.WitnessCollection)
-
-				// MGas/s: denominator includes both production and write time, matching blockchain.go
-				// which measures elapsed after writeBlockAndSetHead returns
-				// (gas * 1000 / elapsed_nanoseconds stores milli-gas/ns = MGas/s as a Duration value).
-				if total := task.productionElapsed + writeElapsed; total > 0 {
-					workerMgaspsTimer.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(total)))
-				}
-				workerGasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
-				workerTxsPerBlockHistogram.Update(int64(block.Transactions().Len()))
-			}
+			emitCommitMetrics(task, block, writeElapsed)
 
 			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 
-			// Broadcast the block and announce chain insertion event
-			announceAt := time.Now()
-			if !task.productionStart.IsZero() {
-				workerBuildToAnnounceTimer.UpdateSince(task.productionStart)
-			}
-			if task.pipelined {
-				// Parity for sealBlockViaTaskCh path: inlineSealAndBroadcast emits these
-				// on the inline path; mirror them here so speculative blocks sealed via
-				// taskCh (last-of-pipeline, eligibility-fail, etc.) are also counted.
-				earlyMs := block.Header().GetActualTime().Sub(announceAt).Milliseconds()
-				pipelineAnnounceEarlinessMs.Update(earlyMs)
-				pipelineSpeculativeCommittedCounter.Inc(1)
-			}
-			w.mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
+			announceTaskBlock(w.mux, task, block, witness)
 
 			sealedBlocksCounter.Inc(1)
 
@@ -1290,24 +1226,106 @@ func (w *worker) resultLoop() {
 	}
 }
 
+// emitExecutionMetrics reports the task's pre-write statedb timers + execution
+// time. Matches the import path which emits read/update/hash/execution/bor
+// metrics before writeBlockAndSetHead so observations aren't lost on write
+// failure. No-op when metrics are disabled.
+func emitExecutionMetrics(task *task) {
+	if !metrics.Enabled() {
+		return
+	}
+	workerAccountReadTimer.Update(task.state.AccountReads)
+	workerStorageReadTimer.Update(task.state.StorageReads)
+	workerSnapshotAccountReadTimer.Update(task.state.SnapshotAccountReads)
+	workerSnapshotStorageReadTimer.Update(task.state.SnapshotStorageReads)
+	workerAccountUpdateTimer.Update(task.state.AccountUpdates)
+	workerStorageUpdateTimer.Update(task.state.StorageUpdates)
+	workerAccountHashTimer.Update(task.state.AccountHashes)
+	workerStorageHashTimer.Update(task.state.StorageHashes)
+	workerBorConsensusTimer.Update(task.state.BorConsensusTime)
+	trieRead := task.state.SnapshotAccountReads + task.state.AccountReads +
+		task.state.SnapshotStorageReads + task.state.StorageReads
+	// productionElapsed covers fillTx + FinalizeAndAssemble; subtract trie reads,
+	// Bor consensus, and IntermediateRoot time to isolate pure EVM execution.
+	// Mirrors blockchain.go's ptime = productionElapsed - trieRead (clamped
+	// to zero for measurement jitter).
+	execTime := task.productionElapsed - trieRead - task.state.BorConsensusTime - task.intermediateRootTime
+	if execTime < 0 {
+		execTime = 0
+	}
+	workerBlockExecutionTimer.Update(execTime)
+}
+
+// writeTaskBlock commits the sealed block + state to disk. Pipelined tasks go
+// through WriteBlockAndSetHeadPipelined so the SRC goroutine's earlier
+// CommitWithUpdate isn't duplicated; normal tasks go through the standard
+// path. Returns the write status for parity with the original inline call.
+func (w *worker) writeTaskBlock(task *task, block *types.Block, receipts []*types.Receipt, logs []*types.Log) (core.WriteStatus, error) {
+	if task.pipelined {
+		return w.chain.WriteBlockAndSetHeadPipelined(block, receipts, logs, task.state, true, task.witnessBytes)
+	}
+	return w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, true)
+}
+
+// emitCommitMetrics reports the task's post-write statedb timers, mgas/s,
+// and per-block throughput histograms. Must run only after a successful
+// write — the commit fields are populated by CommitWithUpdate inside
+// WriteBlockAndSetHead. No-op when metrics are disabled.
+func emitCommitMetrics(task *task, block *types.Block, writeElapsed time.Duration) {
+	if !metrics.Enabled() {
+		return
+	}
+	workerAccountCommitTimer.Update(task.state.AccountCommits)
+	workerStorageCommitTimer.Update(task.state.StorageCommits)
+	workerSnapshotCommitTimer.Update(task.state.SnapshotCommits)
+	workerTriedbCommitTimer.Update(task.state.TrieDBCommits)
+	workerWitnessCollectionTimer.Update(task.state.WitnessCollection)
+	// MGas/s: denominator is production + write (matches blockchain.go's
+	// elapsed, measured after writeBlockAndSetHead returns). Duration stores
+	// milli-gas/ns = MGas/s.
+	if total := task.productionElapsed + writeElapsed; total > 0 {
+		workerMgaspsTimer.Update(time.Duration(float64(block.GasUsed()) * 1000 / float64(total)))
+	}
+	workerGasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
+	workerTxsPerBlockHistogram.Update(int64(block.Transactions().Len()))
+}
+
+// announceTaskBlock broadcasts the sealed block to peers and updates the
+// build-to-announce + PIP-66 earliness + committed metrics for pipelined
+// tasks sealed via taskCh (last-of-pipeline, eligibility-fail, or fallback).
+// inlineSealAndBroadcast emits the same signals on the inline path.
+func announceTaskBlock(mux *event.TypeMux, task *task, block *types.Block, witness *stateless.Witness) {
+	announceAt := time.Now()
+	if !task.productionStart.IsZero() {
+		workerBuildToAnnounceTimer.UpdateSince(task.productionStart)
+	}
+	if task.pipelined {
+		earlyMs := block.Header().GetActualTime().Sub(announceAt).Milliseconds()
+		pipelineAnnounceEarlinessMs.Update(earlyMs)
+		pipelineSpeculativeCommittedCounter.Inc(1)
+	}
+	mux.Post(core.NewMinedBlockEvent{Block: block, Witness: witness, SealedAt: announceAt})
+}
+
+// resolveStateFor returns the caller-supplied statedb if any (from commitWork's
+// dual-reader path), otherwise opens one at the parent's root. Kept as a helper
+// so makeEnv itself fits within the function-size budget.
+func (w *worker) resolveStateFor(header *types.Header, genParams *generateParams) (*state.StateDB, error) {
+	if genParams.statedb != nil {
+		return genParams.statedb, nil
+	}
+	parent := w.chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return nil, fmt.Errorf("parent block not found")
+	}
+	return w.chain.StateAt(parent.Root)
+}
+
 // makeEnv creates a new environment for the sealing block.
 func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness bool, genParams *generateParams) (*environment, error) {
-	var state *state.StateDB
-
-	// If statedb is not provided (e.g., from getSealingBlock path), create it
-	if genParams.statedb == nil {
-		parent := w.chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
-		if parent == nil {
-			return nil, fmt.Errorf("parent block not found")
-		}
-		var err error
-		state, err = w.chain.StateAt(parent.Root)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Use the provided statedb (from commitWork with dual readers)
-		state = genParams.statedb
+	state, err := w.resolveStateFor(header, genParams)
+	if err != nil {
+		return nil, err
 	}
 
 	if witness {
@@ -1672,7 +1690,6 @@ mainloop:
 
 func (w *worker) updateTxDependencyMetadata(env *environment) error {
 	var deps map[int]map[int]bool
-
 	if env.depsBuilder != nil && !env.depsFailed {
 		deps = env.depsBuilder.GetDeps()
 	}
@@ -1681,7 +1698,6 @@ func (w *worker) updateTxDependencyMetadata(env *environment) error {
 	}
 
 	var blockExtraData types.BlockExtraData
-
 	tempVanity := env.header.Extra[:types.ExtraVanityLength]
 	tempSeal := env.header.Extra[len(env.header.Extra)-types.ExtraSealLength:]
 
@@ -1691,40 +1707,7 @@ func (w *worker) updateTxDependencyMetadata(env *environment) error {
 		return err
 	}
 
-	// deps is nil when DepsBuilder errored, and non-nil empty when no transactions were added.
-	if deps != nil && len(env.mvReadMapList) > 0 {
-		tempDeps := make([][]uint64, len(env.mvReadMapList))
-
-		for j := range deps[0] {
-			tempDeps[0] = append(tempDeps[0], uint64(j))
-		}
-
-		delayFlag := true
-
-		for i := 1; i <= len(env.mvReadMapList)-1; i++ {
-			reads := env.mvReadMapList[i]
-
-			// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
-			_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
-			_, ok2 := reads[blockstm.NewSubpathKey(common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64())), state.BalancePath)]
-			if ok1 || ok2 {
-				delayFlag = false
-				break
-			}
-
-			for j := range deps[i] {
-				tempDeps[i] = append(tempDeps[i], uint64(j))
-			}
-		}
-
-		if delayFlag {
-			blockExtraData.TxDependency = tempDeps
-		} else {
-			blockExtraData.TxDependency = nil
-		}
-	} else {
-		blockExtraData.TxDependency = nil
-	}
+	blockExtraData.TxDependency = w.buildTxDependencyArray(env, deps)
 
 	blockExtraDataBytes, err := rlp.EncodeToBytes(blockExtraData)
 	if err != nil {
@@ -1735,8 +1718,36 @@ func (w *worker) updateTxDependencyMetadata(env *environment) error {
 	env.header.Extra = []byte{}
 	env.header.Extra = append(tempVanity, blockExtraDataBytes...)
 	env.header.Extra = append(env.header.Extra, tempSeal...)
-
 	return nil
+}
+
+// buildTxDependencyArray projects the DepsBuilder output into the block's
+// TxDependency encoding. Returns nil when deps are unavailable or when any
+// transaction reads coinbase/burn-contract balance (implicit ordering the
+// DAG doesn't capture — signalled by delayFlag=false in the original code).
+func (w *worker) buildTxDependencyArray(env *environment, deps map[int]map[int]bool) [][]uint64 {
+	// deps is nil when DepsBuilder errored; non-nil empty when no txs were added.
+	if deps == nil || len(env.mvReadMapList) == 0 {
+		return nil
+	}
+	tempDeps := make([][]uint64, len(env.mvReadMapList))
+	for j := range deps[0] {
+		tempDeps[0] = append(tempDeps[0], uint64(j))
+	}
+	burntContract := common.HexToAddress(w.chainConfig.Bor.CalculateBurntContract(env.header.Number.Uint64()))
+	for i := 1; i <= len(env.mvReadMapList)-1; i++ {
+		reads := env.mvReadMapList[i]
+		// Coinbase and burn-contract balance reads create an implicit ordering not captured by the DAG.
+		_, ok1 := reads[blockstm.NewSubpathKey(env.coinbase, state.BalancePath)]
+		_, ok2 := reads[blockstm.NewSubpathKey(burntContract, state.BalancePath)]
+		if ok1 || ok2 {
+			return nil
+		}
+		for j := range deps[i] {
+			tempDeps[i] = append(tempDeps[i], uint64(j))
+		}
+	}
+	return tempDeps
 }
 
 // generateParams wraps various of settings for generating sealing task.
@@ -1948,26 +1959,37 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
-	// Fill the block with all available pending transactions.
-	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, timeoutInterrupt)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, timeoutInterrupt)
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
-			return err
-		}
+	// Fill with priority (locals/first-class) txs first — no heap-init timing
+	// for the priority pool (matches prior behavior).
+	if err := w.commitTxMaps(env, prioPlainTxs, prioBlobTxs, timeoutInterrupt, interrupt, false); err != nil {
+		return err
 	}
-	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
-		heapInitTime := time.Now()
-		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, timeoutInterrupt)
-		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, timeoutInterrupt)
-		txHeapInitTimer.Update(time.Since(heapInitTime))
+	// Then fill with normal pool txs; records txHeapInitTimer for the normal
+	// heap construction (the hot path for the producer under load).
+	return w.commitTxMaps(env, normalPlainTxs, normalBlobTxs, timeoutInterrupt, interrupt, true)
+}
 
-		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt); err != nil {
-			return err
-		}
+// commitTxMaps runs commitTransactions on the given plain/blob maps when at
+// least one is non-empty. measureHeapInit gates the txHeapInitTimer update so
+// only the normal-pool path records it (priority-pool heap is typically
+// smaller and not the tail-latency hot spot).
+func (w *worker) commitTxMaps(
+	env *environment,
+	plainMap, blobMap map[common.Address][]*txpool.LazyTransaction,
+	timeoutInterrupt *atomic.Bool,
+	interrupt *atomic.Int32,
+	measureHeapInit bool,
+) error {
+	if len(plainMap) == 0 && len(blobMap) == 0 {
+		return nil
 	}
-
-	return nil
+	heapInitStart := time.Now()
+	plainTxs := newTransactionsByPriceAndNonce(env.signer, plainMap, env.header.BaseFee, timeoutInterrupt)
+	blobTxs := newTransactionsByPriceAndNonce(env.signer, blobMap, env.header.BaseFee, timeoutInterrupt)
+	if measureHeapInit {
+		txHeapInitTimer.Update(time.Since(heapInitStart))
+	}
+	return w.commitTransactions(env, plainTxs, blobTxs, interrupt)
 }
 
 // generateWork generates a sealing block based on the given parameters.
@@ -2039,24 +2061,11 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64, abortRecovery bool) {
-	// Abort committing if node is still syncing
 	if w.syncing.Load() {
 		return
 	}
+	defer w.clearPendingWorkOnExit()()
 
-	// Clear the pending work block number when commitWork completes (success or failure).
-	// If the pipelined path was taken, pendingWorkBlock was set to N+1 by
-	// buildAndCommitBlock — don't overwrite it back to 0 in that case.
-	currentBlockNum := w.chain.CurrentBlock().Number.Uint64()
-	defer func() {
-		// Only clear if the pipeline didn't advance pendingWorkBlock beyond
-		// what commitWork originally set it to.
-		if w.pendingWorkBlock.Load() <= currentBlockNum+1 {
-			w.pendingWorkBlock.Store(0)
-		}
-	}()
-
-	// Set the coinbase if the worker is running or it's required
 	var coinbase common.Address
 	if w.IsRunning() {
 		coinbase = w.etherbase()
@@ -2066,10 +2075,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		}
 	}
 
-	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
-
-	// Retrieve the parent state to execute on top, with separate readers for stats tracking.
 	state, throwaway, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
 	if err != nil {
 		return
@@ -2087,26 +2093,60 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 
 	var interruptPrefetch atomic.Bool
-	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
-	if w.config.EnablePrefetch && w.chainConfig.Bor != nil && w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))
-					prefetchPanicMeter.Mark(1)
-				}
-			}()
-			w.prefetchFromPool(parent, throwaway, &genParams, &interruptPrefetch)
-			// Goroutine exits naturally after prefetch completes.
-			// Go's GC keeps throwaway StateDB alive while this goroutine references it.
-			// When the goroutine exits, the reference is released and GC can collect it.
-		}()
-	}
-
+	w.maybeStartPrefetch(parent, throwaway, &genParams, &interruptPrefetch)
 	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
 }
 
+// clearPendingWorkOnExit returns a deferred closure that resets pendingWorkBlock
+// to 0 once commitWork returns — but only if the pipeline didn't advance it
+// beyond this invocation's starting head+1 (meaning buildAndCommitBlock took
+// the pipelined path and is now handling N+1). Captured head is sampled up
+// front so concurrent inserts don't confuse the "pipeline advanced" check.
+func (w *worker) clearPendingWorkOnExit() func() {
+	currentBlockNum := w.chain.CurrentBlock().Number.Uint64()
+	return func() {
+		if w.pendingWorkBlock.Load() <= currentBlockNum+1 {
+			w.pendingWorkBlock.Store(0)
+		}
+	}
+}
+
+// maybeStartPrefetch launches the tx-prefetch goroutine when enabled AND
+// the next block is Giugliano-activated. Giugliano gating prevents pre-fork
+// blocks from triggering speculative prefetch, which can read storage slots
+// the current block's EVM hasn't touched yet and cause cache thrash.
+func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.StateDB, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
+	if !w.config.EnablePrefetch || w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("Prefetch goroutine panicked", "err", r, "stack", string(debug.Stack()))
+				prefetchPanicMeter.Mark(1)
+			}
+		}()
+		// Go's GC keeps throwaway alive while this goroutine references it;
+		// released when the goroutine exits after prefetch completes.
+		w.prefetchFromPool(parent, throwaway, genParams, interruptPrefetch)
+	}()
+}
+
 // buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
+// submitForSealing dispatches the built block to either the pipelined path
+// (overlap SRC for N with N+1's execution) or the sequential path. The
+// pendingWorkBlock bump is what de-duplicates ChainHeadEvent-triggered
+// commitWork in newWorkLoop when the pipeline is already handling N+1.
+func (w *worker) submitForSealing(work *environment, start time.Time, genParams *generateParams) {
+	if w.isPipelineEligible(work.header.Number.Uint64()) {
+		w.pendingWorkBlock.Store(work.header.Number.Uint64() + 1)
+		_ = w.commitPipelined(work, start)
+		return
+	}
+	_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
+}
+
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
@@ -2179,17 +2219,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		work.discard()
 		return
 	}
-	// Submit the generated block for consensus sealing.
-	// If pipelining is eligible, use commitPipelined to overlap SRC with N+1 execution.
-	if w.isPipelineEligible(work.header.Number.Uint64()) {
-		// Set pendingWorkBlock to N+1 so that when ChainHeadEvent fires for
-		// block N, newWorkLoop's de-duplication check sees that N+1 is already
-		// being worked on and skips the redundant commitWork.
-		w.pendingWorkBlock.Store(work.header.Number.Uint64() + 1)
-		_ = w.commitPipelined(work, start)
-	} else {
-		_ = w.commit(work.copy(), w.fullTaskHook, true, start, genParams)
-	}
+	w.submitForSealing(work, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.

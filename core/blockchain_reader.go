@@ -198,31 +198,39 @@ func (bc *BlockChain) waitForPipelinedWitness(hash common.Hash) []byte {
 	if !bc.cfg.EnablePipelinedImportSRC {
 		return nil
 	}
+	if w, ok := bc.waitForPendingSRCWitness(hash); ok {
+		return w
+	}
+	return bc.pollWitnessCache(hash, 2*time.Second, 10*time.Millisecond)
+}
 
-	// Fast path: check if this is the current pending SRC block.
+// waitForPendingSRCWitness returns the witness when hash matches the single
+// in-flight pending SRC block — blocking on collectedCh ensures the witness
+// has been written to cache or store. ok=false means hash is not this block
+// (caller should fall back to polling the cache).
+func (bc *BlockChain) waitForPendingSRCWitness(hash common.Hash) ([]byte, bool) {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRCMu.Unlock()
-
-	if pending != nil && pending.block.Hash() == hash {
-		<-pending.collectedCh
-		if w, ok := bc.witnessCache.Get(hash); ok {
-			return w
-		}
-		return bc.witnessStore.ReadWitness(hash)
+	if pending == nil || pending.block.Hash() != hash {
+		return nil, false
 	}
+	<-pending.collectedCh
+	if w, ok := bc.witnessCache.Get(hash); ok {
+		return w, true
+	}
+	return bc.witnessStore.ReadWitness(hash), true
+}
 
-	// Slow path: the block might be in the current import batch but not yet
-	// processed, or the SRC just completed and the witness is being written.
-	// Poll the witness cache with a short interval. The import pipeline
-	// processes blocks at ~2ms each and caches the witness immediately when
-	// SRC completes, so the wait is typically very short.
-	deadline := time.NewTimer(2 * time.Second)
+// pollWitnessCache waits up to `timeout` for the witness to land in the
+// in-memory cache, checking every `interval`. Used when the block isn't
+// the current pending SRC (may be in an earlier import batch, or SRC just
+// finished and the cache insert is racing with our read).
+func (bc *BlockChain) pollWitnessCache(hash common.Hash, timeout, interval time.Duration) []byte {
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ticker.C:

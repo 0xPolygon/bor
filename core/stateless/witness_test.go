@@ -974,3 +974,93 @@ func TestCalculatePageThreshold(t *testing.T) {
 		}
 	})
 }
+
+// makeValidatePreStateFixture builds a consistent witness + mockReader + context
+// header where the witness pre-state matches the chain's parent block. Callers
+// can mutate the returned expectedBlock to test the anti-malicious-peer guards.
+func makeValidatePreStateFixture() (*Witness, HeaderReader, *types.Header) {
+	parentStateRoot := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+
+	parentHeader := &types.Header{
+		Number:     big.NewInt(99),
+		ParentHash: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
+		Root:       parentStateRoot,
+	}
+	parentHash := parentHeader.Hash()
+
+	contextHeader := &types.Header{
+		Number:     big.NewInt(100),
+		ParentHash: parentHash,
+		Root:       common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222"),
+	}
+
+	mockReader := NewMockHeaderReader()
+	mockReader.AddHeader(parentHeader)
+
+	witness := &Witness{
+		context: contextHeader,
+		Headers: []*types.Header{parentHeader},
+		Codes:   make(map[string]struct{}),
+		State:   make(map[string]struct{}),
+	}
+
+	// expectedBlock mirrors the context header — tests mutate individual fields
+	// (ParentHash / Number) to exercise the ValidateWitnessPreState guards.
+	expectedBlock := &types.Header{
+		Number:     big.NewInt(100),
+		ParentHash: parentHash,
+	}
+	return witness, mockReader, expectedBlock
+}
+
+// TestValidateWitnessPreState_ExpectedBlockMatches exercises the non-nil
+// expectedBlock branch with matching ParentHash and Number so the full
+// function runs to completion.
+func TestValidateWitnessPreState_ExpectedBlockMatches(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	if err := ValidateWitnessPreState(witness, reader, expectedBlock); err != nil {
+		t.Errorf("expected validation to succeed, got %v", err)
+	}
+}
+
+// TestValidateWitnessPreState_ExpectedBlockParentHashMismatch rejects a witness
+// whose context ParentHash disagrees with the expected block — defends against
+// a malicious peer substituting a witness for a different fork.
+func TestValidateWitnessPreState_ExpectedBlockParentHashMismatch(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	expectedBlock.ParentHash = common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+	err := ValidateWitnessPreState(witness, reader, expectedBlock)
+	if err == nil {
+		t.Fatal("expected ParentHash mismatch error, got nil")
+	}
+	if !containsSubstring(err.Error(), "witness ParentHash mismatch") {
+		t.Errorf("expected ParentHash mismatch error, got: %v", err)
+	}
+}
+
+// TestValidateWitnessPreState_ExpectedBlockNumberMismatch rejects a witness
+// whose context Number disagrees with the expected block — defends against a
+// malicious peer substituting a witness for a different block at the same
+// ParentHash (e.g., after a reorg).
+func TestValidateWitnessPreState_ExpectedBlockNumberMismatch(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+	expectedBlock.Number = big.NewInt(999) // ParentHash still matches
+
+	err := ValidateWitnessPreState(witness, reader, expectedBlock)
+	if err == nil {
+		t.Fatal("expected Number mismatch error, got nil")
+	}
+	if !containsSubstring(err.Error(), "witness block number mismatch") {
+		t.Errorf("expected Number mismatch error, got: %v", err)
+	}
+}
+
+func containsSubstring(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

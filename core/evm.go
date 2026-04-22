@@ -174,41 +174,44 @@ func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash
 // completes. It may block.
 func SpeculativeGetHashFn(blockN1Header *types.Header, chain ChainContext, pendingBlockN uint64, srcDone func() common.Hash, blockhashNAccessed *atomic.Bool) func(uint64) common.Hash {
 	blockN1Hash := blockN1Header.Hash()
-
-	// olderFn handles blocks N-2 and below via the standard chain walk.
-	olderFn := GetHashFn(blockN1Header, chain)
-
-	var resolvedBlockNHash common.Hash
-	var resolved bool
-	var resolveMu sync.Mutex
-
+	olderFn := GetHashFn(blockN1Header, chain) // blocks N-2 and below
+	resolveN := newPendingBlockNResolver(srcDone, blockhashNAccessed)
 	return func(n uint64) common.Hash {
-		if n >= pendingBlockN+1 {
+		switch {
+		case n >= pendingBlockN+1:
 			return common.Hash{} // future block
-		}
-		if n == pendingBlockN {
-			// Tier 1: lazy-resolve block N's hash.
-			// Flag that BLOCKHASH(N) was accessed — the resolved hash is
-			// pre-seal (no signature in Extra) and will differ from the
-			// final on-chain hash. The caller must abort speculative
-			// execution and fall back to the sequential path.
-			if blockhashNAccessed != nil {
-				blockhashNAccessed.Store(true)
-			}
-			resolveMu.Lock()
-			defer resolveMu.Unlock()
-			if !resolved {
-				resolvedBlockNHash = srcDone()
-				resolved = true
-			}
-			return resolvedBlockNHash
-		}
-		if n == pendingBlockN-1 {
-			// Tier 2: block N-1 is fully committed.
+		case n == pendingBlockN:
+			return resolveN()
+		case n == pendingBlockN-1:
 			return blockN1Hash
+		default:
+			return olderFn(n)
 		}
-		// Tier 3: blocks N-2 and older via standard chain walk.
-		return olderFn(n)
+	}
+}
+
+// newPendingBlockNResolver returns a closure that lazily resolves pending
+// block N's hash via srcDone. On every invocation it flags blockhashNAccessed
+// so the caller knows the speculative block read BLOCKHASH(N) — the resolved
+// hash is pre-seal (no signature in Extra) and will differ from the final
+// on-chain hash, so the speculative execution must be aborted.
+func newPendingBlockNResolver(srcDone func() common.Hash, blockhashNAccessed *atomic.Bool) func() common.Hash {
+	var (
+		resolvedHash common.Hash
+		resolved     bool
+		mu           sync.Mutex
+	)
+	return func() common.Hash {
+		if blockhashNAccessed != nil {
+			blockhashNAccessed.Store(true)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !resolved {
+			resolvedHash = srcDone()
+			resolved = true
+		}
+		return resolvedHash
 	}
 }
 

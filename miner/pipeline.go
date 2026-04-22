@@ -118,7 +118,7 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 		return nil
 	}
 
-	// Phase 1: Finalize (state sync, span commits) without IntermediateRoot
+	// Phase 1: Finalize (state sync, span commits) without IntermediateRoot.
 	stateSyncData, err := borEngine.FinalizeForPipeline(w.chain, env.header, env.state, &types.Body{
 		Transactions: env.txs,
 	}, env.receipts)
@@ -127,42 +127,62 @@ func (w *worker) commitPipelined(env *environment, start time.Time) error {
 		return err
 	}
 
-	// Phase 2: Extract FlatDiff (~1ms, no trie operations)
+	// Phase 2: Extract FlatDiff, record mode-visible side-effects, build the
+	// speculative work request. The SRC goroutine is NOT spawned here —
+	// commitSpeculativeWork spawns it after confirming Prepare() succeeds.
+	req, ok := w.buildSpeculativeReq(env, stateSyncData)
+	if !ok {
+		return nil
+	}
+
+	// Phase 3: Hand off to mainLoop's speculative path.
+	select {
+	case w.speculativeWorkCh <- req:
+	case <-w.exitCh:
+	}
+	return nil
+}
+
+// buildSpeculativeReq extracts block N's FlatDiff, resolves the committed
+// parent root, and composes the speculativeWorkReq for block N+1.
+// Returns ok=false only when the parent header cannot be located (treated as
+// a soft failure — the caller skips pipelining rather than returning an error,
+// matching the pre-refactor behavior).
+func (w *worker) buildSpeculativeReq(env *environment, stateSyncData []*types.StateSyncData) (*speculativeWorkReq, bool) {
 	flatDiffStart := time.Now()
 	flatDiff := env.state.CommitSnapshot(w.chainConfig.IsEIP158(env.header.Number))
 	pipelineFlatDiffExtractTimer.Update(time.Since(flatDiffStart))
 
-	// The parent root is root_{N-1}, stored in the parent header.
 	parent := w.chain.GetHeader(env.header.ParentHash, env.header.Number.Uint64()-1)
 	if parent == nil {
 		log.Error("Pipelined SRC: parent not found", "parentHash", env.header.ParentHash)
-		return nil
+		return nil, false
 	}
-	parentRoot := parent.Root
 
-	w.chain.SetLastFlatDiff(flatDiff, env.header.Number.Uint64(), parentRoot, common.Hash{})
-	// Note: this counts block N as "entering the pipeline." If Prepare() fails
-	// and fallbackToSequential produces the block inline, the counter is slightly
-	// inflated — the block was produced sequentially, not speculatively.
+	w.chain.SetLastFlatDiff(flatDiff, env.header.Number.Uint64(), parent.Root, common.Hash{})
+	// Counts block N as "entering the pipeline." If Prepare() fails and
+	// fallbackToSequential produces the block inline, this counter is slightly
+	// inflated — block was produced sequentially, not speculatively.
 	pipelineSpeculativeBlocksCounter.Inc(1)
 
-	// Phase 3: Send speculative work request for block N+1.
-	// The SRC goroutine is NOT spawned here — commitSpeculativeWork spawns it
-	// after confirming Prepare() succeeds. If Prepare() fails, fallbackToSequential
-	// uses the normal inline FinalizeAndAssemble path (no SRC goroutine).
-	select {
-	case w.speculativeWorkCh <- &speculativeWorkReq{
+	return &speculativeWorkReq{
 		parentHeader:  env.header,
 		flatDiff:      flatDiff,
-		parentRoot:    parentRoot,
+		parentRoot:    parent.Root,
 		blockNEnv:     env,
 		stateSyncData: stateSyncData,
-	}:
-	case <-w.exitCh:
-		return nil
-	}
+	}, true
+}
 
-	return nil
+// spawnSRCForFinalBlock conditionally spawns the SRC goroutine + publishes the
+// FlatDiff for the last block of a pipeline run (used by sealBlockViaTaskCh).
+func (w *worker) spawnSRCForFinalBlock(finalHeader *types.Header, rootN common.Hash, flatDiff *state.FlatDiff, spawnSRC bool) {
+	if !spawnSRC {
+		return
+	}
+	tmpBlock := types.NewBlockWithHeader(finalHeader)
+	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff)
+	w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
 }
 
 // shouldLateRefillSpeculativeBlock reports whether a speculative block should
@@ -232,118 +252,259 @@ func (w *worker) fillSpeculativeTransactions(env *environment, interrupt *atomic
 // work in this case creates a tight loop that keeps restarting Seal() with
 // fresh timestamps, preventing any block from ever being sealed.
 func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry bool, abortRecovery bool) {
-	// Default: retry commitWork after this function returns. This handles the
-	// race where ChainHeadEvent from the last pipeline block arrives before
-	// pendingWorkBlock is cleared. Fallback paths set shouldRetry = false
-	// because they already sealed block N via taskCh (resultLoop handles it).
+	// Default: retry commitWork after this function returns. Fallback paths
+	// set shouldRetry = false because they already sealed block N via taskCh
+	// (resultLoop handles it).
 	shouldRetry = true
-
-	// Ensure pendingWorkBlock is cleared when this function exits, so the
-	// next ChainHeadEvent-triggered commitWork can proceed.
+	// Ensure pendingWorkBlock is cleared on every exit path.
 	defer w.pendingWorkBlock.Store(0)
 
-	blockNHeader := req.parentHeader
-	blockNNumber := blockNHeader.Number.Uint64()
-	nextBlockNumber := blockNNumber + 1
+	s := newSpecSession(w, req)
+	if !s.setupInitial() {
+		return false, false
+	}
+	defer func() { <-s.initialFillDone }()
 
-	log.Debug("Pipelined SRC: starting speculative execution", "speculativeBlock", nextBlockNumber, "parent", blockNNumber)
+	if !s.waitForSRCAndSealBlockN() {
+		return s.exitDuringBlockN, false
+	}
+	<-s.initialFillDone
 
-	// --- Build speculative header for N+1 ---
-	placeholder := placeholderParentHash(blockNNumber)
-	specReader := newSpeculativeChainReader(w.chain, blockNHeader, placeholder)
-	specContext := newSpeculativeChainContext(specReader, w.engine)
+	for {
+		switch s.runOneIteration() {
+		case iterContinue:
+			continue
+		case iterBreakAbort:
+			abortRecovery = true
+		case iterExitEarly:
+			return false, false
+		}
+		break
+	}
+	if s.prevDBWriteDone != nil {
+		<-s.prevDBWriteDone
+	}
+	return shouldRetry, abortRecovery
+}
 
-	// Resolve the EVM coinbase the same way the importer does in
-	// NewEVMBlockContext(header, chain, nil) — for post-Rio blocks, this
-	// uses CalculateCoinbase (from the Bor config), falling back to
-	// w.etherbase() if not configured. We must NOT use w.etherbase()
-	// directly because the Bor config's Coinbase field may specify a
-	// different address (e.g. 0xba5e on some networks).
+// iterResult enumerates how a single pipeline iteration ends.
+type iterResult int
+
+const (
+	iterContinue   iterResult = iota // shifted to the next block; keep looping
+	iterBreak                        // normal exit (error, last block sealed via taskCh)
+	iterBreakAbort                   // speculative block was discarded (abortRecovery=true)
+	iterExitEarly                    // w.exitCh fired mid-iteration; caller returns shouldRetry=false
+)
+
+// runOneIteration finalizes the current speculative block, prepares the next
+// one, seals the current block, and shifts state. Each return value tells
+// commitSpeculativeWork how to proceed; see iterResult.
+func (s *specSession) runOneIteration() iterResult {
+	if s.checkCurrentAbort() {
+		return iterBreakAbort
+	}
+	s.drainPrevDBWrite()
+
+	finalSpecHeader, flatDiff, stateSyncData, ok := s.finalizeCurrent()
+	if !ok {
+		return iterBreak
+	}
+	// Last block in pipeline (eligibility failed) → seal via taskCh so
+	// resultLoop emits ChainHeadEvent and normal production resumes.
+	if !s.w.isPipelineEligible(s.nextBlockNumber) || !s.w.IsRunning() {
+		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs,
+			s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, true, s.curBuildStart)
+		return iterBreak
+	}
+
+	next, cont := s.prepareNextIteration(finalSpecHeader, flatDiff, stateSyncData)
+	if !cont {
+		return iterBreak
+	}
+	sealed, exitEarly, ok := s.sealCurrentAndAdvance(finalSpecHeader, stateSyncData, next)
+	if exitEarly {
+		return iterExitEarly
+	}
+	if !ok {
+		return iterBreak
+	}
+	s.shiftToNext(sealed, next)
+	return iterContinue
+}
+
+// specSession holds the rotating per-invocation state of commitSpeculativeWork.
+// It exists so the orchestrator can decompose the 600-line original into
+// focused methods that share state through the receiver — avoiding 15-parameter
+// helper signatures. Fields are mutated through shiftToNext() as each
+// speculative block is sealed.
+type specSession struct {
+	w         *worker
+	req       *speculativeWorkReq
+	borEngine *bor.Bor
+
+	blockNHeader    *types.Header
+	blockNNumber    uint64
+	nextBlockNumber uint64
+
+	// Current speculative block state (rotates each iteration).
+	specHeader        *types.Header
+	specState         *state.StateDB
+	specEnv           *environment
+	coinbase          common.Address
+	blockhashAccessed *atomic.Bool // set true if speculative block read BLOCKHASH(N)
+	eip2935Abort      bool         // set by initial-fill goroutine (for first iteration)
+	curBuildStart     time.Time    // wall clock when this block's fill began
+
+	// Updated as blocks are sealed.
+	realBlockNHash   common.Hash
+	rootN            common.Hash
+	lastSealedHeader *types.Header
+
+	// Iteration coordination.
+	initialFillDone  chan struct{}
+	prevDBWriteDone  chan struct{}
+	exitDuringBlockN bool
+}
+
+// specNextIteration bundles everything prepareNextIteration allocates for the
+// next speculative block, so sealCurrentAndAdvance/shiftToNext can consume it
+// without 10-parameter helper signatures.
+type specNextIteration struct {
+	specHeaderNext    *types.Header
+	specStateNext     *state.StateDB
+	specEnvNext       *environment
+	coinbaseNext      common.Address
+	blockhashAccessed *atomic.Bool // *atomic.Bool for the next block
+	eip2935AbortPtr   *bool        // set true by fill goroutine if EIP-2935 slot read
+	nextBuildStart    time.Time
+	fillDone          chan struct{}
+	fillElapsed       *time.Duration // pointer so goroutine writes are visible after <-fillDone
+	srcSpawnTime      time.Time
+}
+
+func newSpecSession(w *worker, req *speculativeWorkReq) *specSession {
+	blockNNumber := req.parentHeader.Number.Uint64()
+	return &specSession{
+		w:               w,
+		req:             req,
+		blockNHeader:    req.parentHeader,
+		blockNNumber:    blockNNumber,
+		nextBlockNumber: blockNNumber + 1,
+		curBuildStart:   time.Now(),
+	}
+}
+
+// setupInitial builds the first speculative environment (N+1), runs Prepare,
+// spawns SRC for block N, and starts the initial fill goroutine. Returns
+// false if Prepare fails or state cannot be opened — in both cases the
+// function has already called fallbackToSequential and the caller should
+// return shouldRetry=false.
+func (s *specSession) setupInitial() bool {
+	log.Debug("Pipelined SRC: starting speculative execution", "speculativeBlock", s.nextBlockNumber, "parent", s.blockNNumber)
+
+	borEngine, ok := s.w.engine.(*bor.Bor)
+	if !ok {
+		log.Error("Pipelined SRC: engine is not Bor")
+		return false
+	}
+	s.borEngine = borEngine
+
+	specReader, specContext, specHeader, coinbase := s.buildInitialSpecHeader()
+	if err := s.w.engine.Prepare(specReader, specHeader); err != nil {
+		log.Warn("Pipelined SRC: speculative Prepare failed, falling back", "err", err)
+		s.w.fallbackToSequential(s.req)
+		return false
+	}
+	s.specHeader = specHeader
+	s.coinbase = coinbase
+
+	// Prepare() succeeded — spawn the background SRC goroutine for block N.
+	// Done AFTER Prepare to avoid a trie DB race with fallbackToSequential's
+	// inline FinalizeAndAssemble on the same parent root.
+	tmpBlock := types.NewBlockWithHeader(s.req.parentHeader)
+	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff)
+
+	specState, err := s.w.chain.StateAtWithFlatDiff(s.req.parentRoot, s.req.flatDiff)
+	if err != nil {
+		log.Error("Pipelined SRC: failed to open speculative state", "err", err)
+		s.w.chain.WaitForSRC() //nolint:errcheck
+		s.w.fallbackToSequential(s.req)
+		return false
+	}
+	specState.StartPrefetcher("miner-speculative", nil, nil)
+	s.specState = specState
+
+	blockN1Header := s.w.chain.GetHeader(s.blockNHeader.ParentHash, s.blockNNumber-1)
+	if blockN1Header == nil {
+		log.Error("Pipelined SRC: grandparent header not found")
+		s.w.chain.WaitForSRC() //nolint:errcheck
+		s.w.fallbackToSequential(s.req)
+		return false
+	}
+
+	var blockhashAccessed atomic.Bool
+	s.blockhashAccessed = &blockhashAccessed
+	s.specEnv = s.buildSpecEnv(specHeader, specState, coinbase, specContext, blockN1Header, s.blockNNumber, s.newBlockNHashResolver())
+	s.resetTxPoolState(s.blockNHeader, s.req.parentRoot, s.req.flatDiff)
+	s.startInitialFillGoroutine()
+	return true
+}
+
+// buildInitialSpecHeader constructs the first speculative header (N+1) with
+// placeholder ParentHash and resolved coinbase. Prepare() has not yet run.
+func (s *specSession) buildInitialSpecHeader() (*speculativeChainReader, *speculativeChainContext, *types.Header, common.Address) {
+	placeholder := placeholderParentHash(s.blockNNumber)
+	specReader := newSpeculativeChainReader(s.w.chain, s.blockNHeader, placeholder)
+	specContext := newSpeculativeChainContext(specReader, s.w.engine)
+	coinbase := s.w.resolveSpecCoinbase(s.nextBlockNumber)
+	specHeader := &types.Header{
+		ParentHash: placeholder,
+		Number:     new(big.Int).SetUint64(s.nextBlockNumber),
+		GasLimit:   core.CalcGasLimit(s.blockNHeader.GasLimit, s.w.config.GasCeil),
+		Time:       s.blockNHeader.Time + s.w.chainConfig.Bor.CalculatePeriod(s.nextBlockNumber),
+		Coinbase:   coinbase,
+	}
+	if s.w.chainConfig.IsLondon(specHeader.Number) {
+		specHeader.BaseFee = eip1559.CalcBaseFee(s.w.chainConfig, s.blockNHeader)
+	}
+	return specReader, specContext, specHeader, coinbase
+}
+
+// resolveSpecCoinbase matches the importer's NewEVMBlockContext(header, chain, nil)
+// logic: post-Rio uses BorConfig.CalculateCoinbase, otherwise w.etherbase().
+// We must not use w.etherbase() directly because Bor config may specify a
+// different coinbase address (e.g. 0xba5e on some networks).
+func (w *worker) resolveSpecCoinbase(blockNumber uint64) common.Address {
 	var coinbase common.Address
-	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(nextBlockNumber)) {
-		coinbase = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(nextBlockNumber))
+	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(blockNumber)) {
+		coinbase = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(blockNumber))
 	}
 	if coinbase == (common.Address{}) {
 		coinbase = w.etherbase()
 	}
+	return coinbase
+}
 
-	specHeader := &types.Header{
-		ParentHash: placeholder,
-		Number:     new(big.Int).SetUint64(nextBlockNumber),
-		GasLimit:   core.CalcGasLimit(blockNHeader.GasLimit, w.config.GasCeil),
-		Time:       blockNHeader.Time + w.chainConfig.Bor.CalculatePeriod(nextBlockNumber),
-		Coinbase:   coinbase,
-	}
-	if w.chainConfig.IsLondon(specHeader.Number) {
-		specHeader.BaseFee = eip1559.CalcBaseFee(w.chainConfig, blockNHeader)
-	}
-
-	// Call Prepare() via the speculative chain reader.
-	// This sets Difficulty, Extra (validator bytes at sprint boundary), and timestamp
-	// without sleeping. The timing wait is deferred until after the abort check
-	// to avoid wasting a full block period if the speculative block is discarded.
-	// NOTE: Prepare() will zero out specHeader.Coinbase. The real coinbase
-	// is preserved in the local `coinbase` variable above.
-	if err := w.engine.Prepare(specReader, specHeader); err != nil {
-		log.Warn("Pipelined SRC: speculative Prepare failed, falling back", "err", err)
-		w.fallbackToSequential(req)
-		// fallbackToSequential already sealed block N via taskCh. Don't retry —
-		// resultLoop will emit ChainHeadEvent which triggers the next commitWork.
-		shouldRetry = false
-		return
-	}
-
-	// Prepare() succeeded — now spawn the background SRC goroutine for block N.
-	// This is done HERE (not in commitPipelined) to avoid a trie DB race:
-	// if Prepare() fails and we fall back, the fallback path does an inline
-	// FinalizeAndAssemble which also commits to the trie. Having both an SRC
-	// goroutine AND an inline commit operating on the same parent root causes
-	// "missing trie node / layer stale" errors.
-	tmpBlock := types.NewBlockWithHeader(req.parentHeader)
-	w.chain.SpawnSRCGoroutine(tmpBlock, req.parentRoot, req.flatDiff)
-
-	// --- Open speculative StateDB ---
-	specState, err := w.chain.StateAtWithFlatDiff(req.parentRoot, req.flatDiff)
-	if err != nil {
-		log.Error("Pipelined SRC: failed to open speculative state", "err", err)
-		// SRC goroutine is already running — wait for it to finish before
-		// fallbackToSequential does IntermediateRoot on the same parent root.
-		w.chain.WaitForSRC() //nolint:errcheck
-		w.fallbackToSequential(req)
-		shouldRetry = false
-		return
-	}
-	specState.StartPrefetcher("miner-speculative", nil, nil)
-
-	// --- Create speculative EVM with SpeculativeGetHashFn ---
-	blockN1Header := w.chain.GetHeader(blockNHeader.ParentHash, blockNNumber-1)
-	if blockN1Header == nil {
-		log.Error("Pipelined SRC: grandparent header not found")
-		// SRC goroutine is already running — wait for it to finish before
-		// fallbackToSequential does IntermediateRoot on the same parent root.
-		w.chain.WaitForSRC() //nolint:errcheck
-		w.fallbackToSequential(req)
-		shouldRetry = false
-		return
-	}
-
-	// srcDone is a lazy resolver for block N's hash, used by SpeculativeGetHashFn.
-	// Block N's hash isn't known until SRC completes (it depends on the state root).
-	// If a tx in the speculative block calls BLOCKHASH(N), SpeculativeGetHashFn
-	// calls srcDone() which blocks on WaitForSRC, resolves the hash, and sets the
-	// blockhashNAccessed flag to trigger an abort (since the pre-seal hash won't
-	// match the final on-chain hash).
-	var blockNHash common.Hash
-	var blockNHashResolved bool
-	var resolveMu sync.Mutex
-
-	srcDone := func() common.Hash {
-		resolveMu.Lock()
-		defer resolveMu.Unlock()
-		if blockNHashResolved {
-			return blockNHash
+// newBlockNHashResolver returns a lazy resolver for block N's signed hash used
+// by SpeculativeGetHashFn. Block N's hash isn't known until SRC completes
+// because it depends on the state root — if a speculative tx calls BLOCKHASH(N)
+// we wait for SRC, compute the pre-seal hash, and the hashAccessed flag on the
+// outer speculative block triggers a discard (pre-seal hash ≠ final on-chain).
+func (s *specSession) newBlockNHashResolver() func() common.Hash {
+	var (
+		hash     common.Hash
+		resolved bool
+		mu       sync.Mutex
+	)
+	blockNHeader := s.blockNHeader
+	return func() common.Hash {
+		mu.Lock()
+		defer mu.Unlock()
+		if resolved {
+			return hash
 		}
-		root, _, err := w.chain.WaitForSRC()
+		root, _, err := s.w.chain.WaitForSRC()
 		if err != nil {
 			log.Error("Pipelined SRC: SRC failed during BLOCKHASH resolution", "err", err)
 			return common.Hash{}
@@ -351,484 +512,451 @@ func (w *worker) commitSpeculativeWork(req *speculativeWorkReq) (shouldRetry boo
 		finalHeader := types.CopyHeader(blockNHeader)
 		finalHeader.Root = root
 		finalHeader.UncleHash = types.CalcUncleHash(nil)
-		blockNHash = finalHeader.Hash()
-		blockNHashResolved = true
-		return blockNHash
+		hash = finalHeader.Hash()
+		resolved = true
+		return hash
 	}
+}
 
-	var blockhashNAccessed atomic.Bool
-	specGetHash := core.SpeculativeGetHashFn(blockN1Header, specContext, blockNNumber, srcDone, &blockhashNAccessed)
-
-	evmContext := core.NewEVMBlockContext(specHeader, specContext, &coinbase)
+// buildSpecEnv assembles the *environment used for speculative transaction
+// execution. Used by both the initial setup and each loop iteration's
+// next-block preparation.
+func (s *specSession) buildSpecEnv(header *types.Header, state *state.StateDB, coinbase common.Address, specContext *speculativeChainContext, grandparent *types.Header, grandparentNumber uint64, srcDone func() common.Hash) *environment {
+	specGetHash := core.SpeculativeGetHashFn(grandparent, specContext, grandparentNumber, srcDone, s.blockhashAccessed)
+	evmContext := core.NewEVMBlockContext(header, specContext, &coinbase)
 	evmContext.GetHash = specGetHash
-
-	specEnv := &environment{
-		signer:         types.MakeSigner(w.chainConfig, specHeader.Number, specHeader.Time),
-		state:          specState,
-		size:           uint64(specHeader.Size()),
+	env := &environment{
+		signer:         types.MakeSigner(s.w.chainConfig, header.Number, header.Time),
+		state:          state,
+		size:           uint64(header.Size()),
 		coinbase:       coinbase,
 		buildInterrupt: newBuildInterruptState(),
-		header:         specHeader,
-		evm:            vm.NewEVM(evmContext, specState, w.chainConfig, vm.Config{}),
+		header:         header,
+		evm:            vm.NewEVM(evmContext, state, s.w.chainConfig, vm.Config{}),
 	}
-	specEnv.evm.SetInterrupt(specEnv.buildInterrupt.timeoutFlag())
-	specEnv.tcount = 0
+	env.evm.SetInterrupt(env.buildInterrupt.timeoutFlag())
+	env.tcount = 0
+	return env
+}
 
-	// NOTE: ProcessParentBlockHash is NOT called during speculative execution.
-	// It will be called after block N is written and the real hash is known,
-	// before FinalizeAndAssemble for N+1.
-
-	// --- Reset txpool state for speculative execution ---
-	specTxPoolState, err := w.chain.StateAtWithFlatDiff(req.parentRoot, req.flatDiff)
+// resetTxPoolState publishes a fresh speculative state to the txpool so tx
+// selection sees the new block's post-parent view (nonces, balances).
+func (s *specSession) resetTxPoolState(parent *types.Header, parentRoot common.Hash, flatDiff *state.FlatDiff) {
+	specTxPoolState, err := s.w.chain.StateAtWithFlatDiff(parentRoot, flatDiff)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to create txpool speculative state", "err", err)
-	} else {
-		w.eth.TxPool().ResetSpeculativeState(blockNHeader, specTxPoolState)
+		return
+	}
+	s.w.eth.TxPool().ResetSpeculativeState(parent, specTxPoolState)
+}
+
+// startInitialFillGoroutine kicks off the speculative tx fill for N+1 and
+// the EIP-2935 abort check. The goroutine closes initialFillDone when done;
+// s.eip2935Abort is only safe to read after <-s.initialFillDone.
+func (s *specSession) startInitialFillGoroutine() {
+	s.initialFillDone = make(chan struct{})
+	go func() {
+		defer close(s.initialFillDone)
+		stop := createInterruptTimer(s.specHeader.Number.Uint64(), s.specHeader.GetActualTime(), s.specEnv.buildInterrupt, true)
+		var interrupt atomic.Int32
+		s.w.fillSpeculativeTransactions(s.specEnv, &interrupt)
+		stop()
+		// Final discard log is emitted in the main loop so each aborted block is logged once.
+		if s.w.chainConfig.IsPrague(s.specHeader.Number) {
+			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(s.blockNNumber % params.HistoryServeWindow))
+			if s.specState.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
+				s.eip2935Abort = true
+				pipelineEIP2935AbortsCounter.Inc(1)
+			}
+		}
+	}()
+}
+
+// waitForSRCAndSealBlockN waits for block N's SRC goroutine to complete,
+// assembles block N with the real root, submits it via taskCh, and waits for
+// resultLoop to persist it. Returns false on any failure; sets
+// exitDuringBlockN when the failure was w.exitCh.
+func (s *specSession) waitForSRCAndSealBlockN() bool {
+	srcStart := time.Now()
+	root, witnessN, err := s.w.chain.WaitForSRC()
+	srcWaitN := time.Since(srcStart)
+	pipelineSRCTimer.Update(srcWaitN)
+	pipelineSRCWaitTimer.Update(srcWaitN)
+	if err != nil {
+		log.Error("Pipelined SRC: SRC(N) failed", "block", s.blockNNumber, "err", err)
+		pipelineSpeculativeAbortsCounter.Inc(1)
+		pipelineAbortSRCFailedCounter.Inc(1)
+		return false
+	}
+	finalHeaderN := types.CopyHeader(s.blockNHeader)
+	finalHeaderN.Root = root
+	blockN, receiptsN, err := s.borEngine.AssembleBlock(s.w.chain, finalHeaderN, s.req.blockNEnv.state, &types.Body{
+		Transactions: s.req.blockNEnv.txs,
+	}, s.req.blockNEnv.receipts, root, s.req.stateSyncData)
+	if err != nil {
+		log.Error("Pipelined SRC: AssembleBlock(N) failed", "err", err)
+		return false
+	}
+	// Block N uses the pipelined write path to avoid a double CommitWithUpdate
+	// from the SRC goroutine and writeBlockWithState. Witness from SRC is complete.
+	select {
+	case s.w.taskCh <- &task{receipts: receiptsN, state: s.req.blockNEnv.state, block: blockN, createdAt: time.Now(), pipelined: true, witnessBytes: witnessN}:
+		if s.w.config.PipelinedSRCLogs {
+			log.Info("Pipelined SRC: block N sent for sealing", "number", blockN.Number(), "txs", len(blockN.Transactions()), "root", root)
+		}
+	case <-s.w.exitCh:
+		s.exitDuringBlockN = true
+		return false
+	}
+	realHash, ok := s.waitForChainHead(blockN.NumberU64())
+	if !ok {
+		return false
+	}
+	s.realBlockNHash = realHash
+	s.rootN = root
+	return true
+}
+
+// waitForChainHead blocks until the chain head reaches blockNum (up to 30s)
+// so we can read the real (signed) block N hash from the canonical chain.
+// resultLoop writes the final header after Seal() modifies Extra, so we
+// can't use blockN.Hash() directly.
+func (s *specSession) waitForChainHead(blockNum uint64) (common.Hash, bool) {
+	waitDeadline := time.After(30 * time.Second)
+	for {
+		if current := s.w.chain.CurrentBlock(); current != nil && current.Number.Uint64() >= blockNum {
+			if current.Number.Uint64() != blockNum {
+				log.Error("Pipelined SRC: chain head mismatch after waiting", "expected", blockNum, "got", current.Number.Uint64())
+				return common.Hash{}, false
+			}
+			return current.Hash(), true
+		}
+		select {
+		case <-time.After(50 * time.Millisecond):
+		case <-waitDeadline:
+			log.Error("Pipelined SRC: timed out waiting for block N to be written", "number", blockNum)
+			return common.Hash{}, false
+		case <-s.w.exitCh:
+			s.exitDuringBlockN = true
+			return common.Hash{}, false
+		}
+	}
+}
+
+// checkCurrentAbort inspects the abort flags set by the current fill goroutine:
+// EIP-2935 history-slot read, or BLOCKHASH(N) read before SRC resolved. Returns
+// true when the speculative block must be discarded (caller sets abortRecovery).
+func (s *specSession) checkCurrentAbort() bool {
+	if s.eip2935Abort {
+		log.Warn("Pipelined SRC: discarding speculative block — EIP-2935 slot accessed", "block", s.nextBlockNumber)
+		pipelineSpeculativeAbortsCounter.Inc(1)
+		return true
+	}
+	if s.blockhashAccessed.Load() {
+		log.Warn("Pipelined SRC: discarding speculative block — BLOCKHASH(N) was accessed",
+			"block", s.nextBlockNumber, "pendingBlockN", s.blockNNumber)
+		pipelineSpeculativeAbortsCounter.Inc(1)
+		pipelineAbortBlockhashCounter.Inc(1)
+		return true
+	}
+	return false
+}
+
+// drainPrevDBWrite waits for the previous iteration's async DB write before
+// FinalizeForPipeline runs. FinalizeForPipeline may read block headers and
+// state sync / span data from the chain DB — if the previous inline-sealed
+// block hasn't persisted, those lookups fail.
+func (s *specSession) drainPrevDBWrite() {
+	if s.prevDBWriteDone != nil {
+		<-s.prevDBWriteDone
+		s.prevDBWriteDone = nil
+	}
+}
+
+// finalizeCurrent runs FinalizeForPipeline on the current speculative block,
+// extracts its FlatDiff, and returns the final header + stateSync data.
+// Returns ok=false if FinalizeForPipeline errors (caller should break).
+func (s *specSession) finalizeCurrent() (*types.Header, *state.FlatDiff, []*types.StateSyncData, bool) {
+	finalSpecHeader := types.CopyHeader(s.specHeader)
+	finalSpecHeader.ParentHash = s.realBlockNHash
+	if s.w.chainConfig.IsPrague(finalSpecHeader.Number) {
+		evmCtx := core.NewEVMBlockContext(finalSpecHeader, s.w.chain, &s.coinbase)
+		vmenv := vm.NewEVM(evmCtx, s.specState, s.w.chainConfig, vm.Config{})
+		core.ProcessParentBlockHash(s.realBlockNHash, vmenv)
+	}
+	stateSyncData, err := s.borEngine.FinalizeForPipeline(s.w.chain, finalSpecHeader, s.specState, &types.Body{
+		Transactions: s.specEnv.txs,
+	}, s.specEnv.receipts)
+	if err != nil {
+		log.Error("Pipelined SRC: FinalizeForPipeline failed", "block", s.nextBlockNumber, "err", err)
+		return nil, nil, nil, false
+	}
+	flatDiff := s.specState.CommitSnapshot(s.w.chainConfig.IsEIP158(finalSpecHeader.Number))
+	return finalSpecHeader, flatDiff, stateSyncData, true
+}
+
+// prepareNextIteration builds the N+2 speculative environment: header,
+// Prepare (may seal current via taskCh on failure), SRC spawn for current
+// block, state open, EVM+srcDone for next, fill goroutine. cont=false means
+// the main loop should break (we already handed off the current block).
+func (s *specSession) prepareNextIteration(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData) (*specNextIteration, bool) {
+	specHeaderNext, specContextNext, coinbaseNext, ok := s.buildAndPrepareNextHeader(finalSpecHeader, flatDiff, stateSyncData)
+	if !ok {
+		return nil, false
+	}
+	srcSpawnTime := s.spawnSRCForCurrent(finalSpecHeader, flatDiff)
+	specStateNext, specEnvNext, blockhashAccessedNext, ok := s.openNextSpecEnv(finalSpecHeader, flatDiff, stateSyncData, specHeaderNext, specContextNext, coinbaseNext)
+	if !ok {
+		return nil, false
+	}
+	s.resetTxPoolState(finalSpecHeader, s.rootN, flatDiff)
+	fillDone, eip2935AbortPtr, fillElapsedPtr := s.startNextFillGoroutine(specHeaderNext, specEnvNext, specStateNext)
+	return &specNextIteration{
+		specHeaderNext:    specHeaderNext,
+		specStateNext:     specStateNext,
+		specEnvNext:       specEnvNext,
+		coinbaseNext:      coinbaseNext,
+		blockhashAccessed: blockhashAccessedNext,
+		eip2935AbortPtr:   eip2935AbortPtr,
+		nextBuildStart:    time.Now(),
+		fillDone:          fillDone,
+		fillElapsed:       fillElapsedPtr,
+		srcSpawnTime:      srcSpawnTime,
+	}, true
+}
+
+// buildAndPrepareNextHeader constructs the next speculative header (N+2),
+// runs Prepare via the speculative chain reader, and on Prepare failure
+// hands off the CURRENT speculative block via taskCh (spawnSRC=true) before
+// returning ok=false so the caller can break out of the loop.
+func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData) (*types.Header, *speculativeChainContext, common.Address, bool) {
+	nextNextBlockNumber := s.nextBlockNumber + 1
+	specReaderNext := newSpeculativeChainReader(s.w.chain, finalSpecHeader, placeholderParentHash(s.nextBlockNumber))
+	specContextNext := newSpeculativeChainContext(specReaderNext, s.w.engine)
+	coinbaseNext := s.w.resolveSpecCoinbase(nextNextBlockNumber)
+	specHeaderNext := &types.Header{
+		ParentHash: placeholderParentHash(s.nextBlockNumber),
+		Number:     new(big.Int).SetUint64(nextNextBlockNumber),
+		GasLimit:   core.CalcGasLimit(finalSpecHeader.GasLimit, s.w.config.GasCeil),
+		Time:       finalSpecHeader.Time + s.w.chainConfig.Bor.CalculatePeriod(nextNextBlockNumber),
+		Coinbase:   coinbaseNext,
+	}
+	if s.w.chainConfig.IsLondon(specHeaderNext.Number) {
+		specHeaderNext.BaseFee = eip1559.CalcBaseFee(s.w.chainConfig, finalSpecHeader)
+	}
+	if err := s.w.engine.Prepare(specReaderNext, specHeaderNext); err != nil {
+		log.Warn("Pipelined SRC: Prepare failed for next block, sealing current", "block", nextNextBlockNumber, "err", err)
+		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs, s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, true, s.curBuildStart)
+		return nil, nil, common.Address{}, false
+	}
+	return specHeaderNext, specContextNext, coinbaseNext, true
+}
+
+// spawnSRCForCurrent starts the SRC goroutine that computes the state root
+// for the current speculative block (now finalized) while the next block's
+// execution runs. Returns the srcSpawnTime used for pipelineSRCTimer.
+func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff *state.FlatDiff) time.Time {
+	srcSpawnTime := time.Now()
+	tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
+	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff)
+	s.w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), s.rootN, common.Hash{})
+	if s.w.config.PipelinedSRCLogs {
+		log.Info("Pipelined SRC: spawned SRC, starting speculative exec", "srcBlock", s.nextBlockNumber, "specExecBlock", s.nextBlockNumber+1)
+	}
+	return srcSpawnTime
+}
+
+// openNextSpecEnv opens the state + environment for the next speculative
+// block (N+2). On failure (state open error or grandparent not found), hands
+// off the CURRENT speculative block via taskCh with spawnSRC=false (SRC for
+// the current block is already in flight from spawnSRCForCurrent).
+func (s *specSession) openNextSpecEnv(finalSpecHeader *types.Header, flatDiff *state.FlatDiff, stateSyncData []*types.StateSyncData, specHeaderNext *types.Header, specContextNext *speculativeChainContext, coinbaseNext common.Address) (*state.StateDB, *environment, *atomic.Bool, bool) {
+	specStateNext, err := s.w.chain.StateAtWithFlatDiff(s.rootN, flatDiff)
+	if err != nil {
+		log.Error("Pipelined SRC: failed to open speculative state for next block", "block", s.nextBlockNumber+1, "err", err)
+		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs, s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, false, s.curBuildStart)
+		return nil, nil, nil, false
+	}
+	specStateNext.StartPrefetcher("miner-speculative", nil, nil)
+
+	grandparent := s.resolveGrandparent()
+	if grandparent == nil {
+		log.Error("Pipelined SRC: grandparent header not found for next block", "number", s.blockNNumber)
+		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs, s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, false, s.curBuildStart)
+		return nil, nil, nil, false
 	}
 
-	// --- Fill transactions for N+1 (in goroutine) ---
-	// fillTransactions runs concurrently with SRC(N) so that sealing block N
-	// is not delayed by filling block N+1's transactions.
-	initialFillDone := make(chan struct{})
-	defer func() { <-initialFillDone }() // ensure goroutine is drained on all return paths
-	var eip2935Abort bool
-	// Track wall-clock from fill begin → announce for each speculative block.
-	// Rotates together with specHeader/specState during the loop shift.
-	curSpecBuildStart := time.Now()
+	blockhashAccessedNext := new(atomic.Bool)
+	specGetHashNext := core.SpeculativeGetHashFn(grandparent, specContextNext, s.nextBlockNumber, s.makeNextHashResolver(finalSpecHeader), blockhashAccessedNext)
+	evmContextNext := core.NewEVMBlockContext(specHeaderNext, specContextNext, &coinbaseNext)
+	evmContextNext.GetHash = specGetHashNext
 
+	specEnvNext := &environment{
+		signer:         types.MakeSigner(s.w.chainConfig, specHeaderNext.Number, specHeaderNext.Time),
+		state:          specStateNext,
+		size:           uint64(specHeaderNext.Size()),
+		coinbase:       coinbaseNext,
+		buildInterrupt: newBuildInterruptState(),
+		header:         specHeaderNext,
+		evm:            vm.NewEVM(evmContextNext, specStateNext, s.w.chainConfig, vm.Config{}),
+	}
+	specEnvNext.evm.SetInterrupt(specEnvNext.buildInterrupt.timeoutFlag())
+	specEnvNext.tcount = 0
+	return specStateNext, specEnvNext, blockhashAccessedNext, true
+}
+
+// resolveGrandparent returns the grandparent header for the next iteration.
+// Prefers lastSealedHeader (the async DB write may not have persisted yet)
+// and falls back to the chain DB.
+func (s *specSession) resolveGrandparent() *types.Header {
+	if s.lastSealedHeader != nil && s.lastSealedHeader.Number.Uint64() == s.blockNNumber {
+		return s.lastSealedHeader
+	}
+	return s.w.chain.GetHeaderByNumber(s.blockNNumber)
+}
+
+// makeNextHashResolver returns a lazy resolver for the current speculative
+// block's signed hash, used by SpeculativeGetHashFn of the NEXT speculative
+// block. Mirrors newBlockNHashResolver but for mid-pipeline iterations.
+func (s *specSession) makeNextHashResolver(finalSpecHeader *types.Header) func() common.Hash {
+	var (
+		hash     common.Hash
+		resolved bool
+		mu       sync.Mutex
+	)
+	return func() common.Hash {
+		mu.Lock()
+		defer mu.Unlock()
+		if resolved {
+			return hash
+		}
+		rootSpec, _, err := s.w.chain.WaitForSRC()
+		if err != nil {
+			log.Error("Pipelined SRC: SRC failed during BLOCKHASH resolution", "err", err)
+			return common.Hash{}
+		}
+		finalH := types.CopyHeader(finalSpecHeader)
+		finalH.Root = rootSpec
+		finalH.UncleHash = types.CalcUncleHash(nil)
+		hash = finalH.Hash()
+		resolved = true
+		return hash
+	}
+}
+
+// startNextFillGoroutine fills N+2 speculatively in parallel with the current
+// block's seal, and flags EIP-2935 aborts for N+2. Returns the done channel
+// and pointers to the abort/elapsed fields set by the goroutine (only safe to
+// read after <-fillDone).
+func (s *specSession) startNextFillGoroutine(headerNext *types.Header, envNext *environment, stateNext *state.StateDB) (chan struct{}, *bool, *time.Duration) {
+	fillDone := make(chan struct{})
+	var (
+		eip2935Abort bool
+		fillElapsed  time.Duration
+	)
 	go func() {
-		defer close(initialFillDone)
-
-		specStopFn := createInterruptTimer(
-			specHeader.Number.Uint64(),
-			specHeader.GetActualTime(),
-			specEnv.buildInterrupt,
-			true, // pipelinedSRC — no 500ms buffer
-		)
-
-		var specInterrupt atomic.Int32
-		w.fillSpeculativeTransactions(specEnv, &specInterrupt)
-		specStopFn()
-
-		// Check abort conditions (needs fill to be done). The final discard
-		// log is emitted in the main loop so each aborted block is logged once.
-		if w.chainConfig.IsPrague(specHeader.Number) {
-			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(blockNNumber % params.HistoryServeWindow))
-			if specState.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
+		defer close(fillDone)
+		stop := createInterruptTimer(headerNext.Number.Uint64(), headerNext.GetActualTime(), envNext.buildInterrupt, true)
+		var interrupt atomic.Int32
+		fillElapsed = s.w.fillSpeculativeTransactions(envNext, &interrupt)
+		stop()
+		if s.w.chainConfig.IsPrague(headerNext.Number) {
+			dangerousSlot := common.BigToHash(new(big.Int).SetUint64(s.nextBlockNumber % params.HistoryServeWindow))
+			if stateNext.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
 				eip2935Abort = true
 				pipelineEIP2935AbortsCounter.Inc(1)
 			}
 		}
 	}()
+	return fillDone, &eip2935Abort, &fillElapsed
+}
 
-	// --- Wait for SRC(N) to complete ---
-	// No longer blocked by fillTransactions — block N is sealed as soon as SRC finishes.
-	srcStart := time.Now()
-	root, witnessN, err := w.chain.WaitForSRC()
-	srcWaitN := time.Since(srcStart)
-	pipelineSRCTimer.Update(srcWaitN)
-	pipelineSRCWaitTimer.Update(srcWaitN)
+// sealCurrentAndAdvance waits for SRC of the current speculative block,
+// assembles it, waits for header.Time, inline-seals + broadcasts, and hands
+// back the sealed block. Returns exitEarly=true if w.exitCh fired during the
+// timestamp wait (caller returns false, abortRecovery).
+func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, stateSyncData []*types.StateSyncData, next *specNextIteration) (*types.Block, bool, bool) {
+	srcWaitStart := time.Now()
+	rootSpec, witnessSpec, err := s.w.chain.WaitForSRC()
+	srcWaitElapsed := time.Since(srcWaitStart)
+	pipelineSRCTimer.Update(time.Since(next.srcSpawnTime))
+	pipelineSRCWaitTimer.Update(srcWaitElapsed)
 	if err != nil {
-		log.Error("Pipelined SRC: SRC(N) failed", "block", blockNNumber, "err", err)
+		log.Error("Pipelined SRC: SRC failed", "block", s.nextBlockNumber, "err", err)
 		pipelineSpeculativeAbortsCounter.Inc(1)
 		pipelineAbortSRCFailedCounter.Inc(1)
-		return
+		<-next.fillDone
+		return nil, false, false
 	}
-
-	// --- Assemble and seal block N ---
-	borEngine, ok := w.engine.(*bor.Bor)
-	if !ok {
-		log.Error("Pipelined SRC: engine is not Bor")
-		return
+	if s.w.config.PipelinedSRCLogs {
+		log.Info("Pipelined SRC: SRC completed", "block", s.nextBlockNumber, "srcWait", srcWaitElapsed)
 	}
-
-	finalHeaderN := types.CopyHeader(blockNHeader)
-	finalHeaderN.Root = root
-	blockN, receiptsN, err := borEngine.AssembleBlock(w.chain, finalHeaderN, req.blockNEnv.state, &types.Body{
-		Transactions: req.blockNEnv.txs,
-	}, req.blockNEnv.receipts, root, req.stateSyncData)
+	blockSpec, receiptsSpec, err := s.borEngine.AssembleBlock(s.w.chain, finalSpecHeader, s.specState, &types.Body{
+		Transactions: s.specEnv.txs,
+	}, s.specEnv.receipts, rootSpec, stateSyncData)
 	if err != nil {
-		log.Error("Pipelined SRC: AssembleBlock(N) failed", "err", err)
-		return
+		log.Error("Pipelined SRC: AssembleBlock failed", "block", s.nextBlockNumber, "err", err)
+		<-next.fillDone
+		return nil, false, false
 	}
+	// Update pendingWorkBlock BEFORE inline write so that newWorkLoop skips
+	// the ChainHeadEvent for this block. pendingWorkBlock = nextBlockNumber+1
+	// means "working on nextBlockNumber+1, so skip ChainHeadEvent for nextBlockNumber".
+	s.w.pendingWorkBlock.Store(s.nextBlockNumber + 1)
+	if exit := s.waitForBlockTime(finalSpecHeader, next.fillDone); exit {
+		return nil, true, false
+	}
+	sealedBlock, dbWriteDone, err := s.w.inlineSealAndBroadcast(blockSpec, receiptsSpec, s.specState, witnessSpec, s.curBuildStart)
+	if err != nil {
+		log.Error("Pipelined SRC: inline seal failed", "block", s.nextBlockNumber, "err", err)
+		<-next.fillDone
+		return nil, false, false
+	}
+	<-next.fillDone
+	s.prevDBWriteDone = dbWriteDone
+	pipelineSpeculativeBlocksCounter.Inc(1)
+	if s.w.config.PipelinedSRCLogs {
+		log.Info("Pipelined SRC: block sealed (inline)", "number", sealedBlock.Number(),
+			"txs", len(sealedBlock.Transactions()), "root", rootSpec, "fillBlock", s.nextBlockNumber+1, "fillElapsed", *next.fillElapsed)
+	}
+	return sealedBlock, false, true
+}
 
-	// Block N uses the pipelined write path to avoid a double CommitWithUpdate
-	// from the same parent root (one from the SRC goroutine, one from the normal
-	// writeBlockWithState). The SRC goroutine's witness is complete.
+// waitForBlockTime blocks until the speculative block's target announce time
+// is reached, draining the fill and previous-DB-write channels on shutdown
+// so goroutines aren't left hanging. Returns exit=true on w.exitCh.
+func (s *specSession) waitForBlockTime(finalSpecHeader *types.Header, fillDone chan struct{}) bool {
+	delay := time.Until(finalSpecHeader.GetActualTime())
+	if delay <= 0 {
+		return false
+	}
 	select {
-	case w.taskCh <- &task{receipts: receiptsN, state: req.blockNEnv.state, block: blockN, createdAt: time.Now(), pipelined: true, witnessBytes: witnessN}:
-		if w.config.PipelinedSRCLogs {
-			log.Info("Pipelined SRC: block N sent for sealing", "number", blockN.Number(), "txs", len(blockN.Transactions()), "root", root)
-		}
-	case <-w.exitCh:
-		shouldRetry = false
-		return
-	}
-
-	// Wait for block N to be written to the chain before sending N+1.
-	blockNNum := blockN.NumberU64()
-	waitDeadline := time.After(30 * time.Second)
-	for {
-		if current := w.chain.CurrentBlock(); current != nil && current.Number.Uint64() >= blockNNum {
-			break
-		}
-		select {
-		case <-time.After(50 * time.Millisecond):
-		case <-waitDeadline:
-			log.Error("Pipelined SRC: timed out waiting for block N to be written", "number", blockNNum)
-			return
-		case <-w.exitCh:
-			shouldRetry = false
-			return
-		}
-	}
-
-	// Get the REAL block N hash from the chain — this is the signed hash
-	// written by resultLoop after Seal() modified header.Extra.
-	chainHead := w.chain.CurrentBlock()
-	if chainHead == nil {
-		log.Error("Pipelined SRC: chain head is nil after waiting", "expected", blockNNum)
-		return
-	}
-	if chainHead.Number.Uint64() != blockNNum {
-		log.Error("Pipelined SRC: chain head mismatch after waiting", "expected", blockNNum,
-			"got", chainHead.Number.Uint64())
-		return
-	}
-	realBlockNHash := chainHead.Hash()
-	rootN := root // state root of the last written block
-
-	// Wait for the initial fillTransactions goroutine to finish before entering
-	// the loop — the loop's first iteration checks abort conditions from the fill.
-	// (The defer also drains this, but we need the results here, not just cleanup.)
-	<-initialFillDone
-
-	// --- CONTINUOUS PIPELINE LOOP ---
-	// State at this point:
-	//   - Block N is written to chain, realBlockNHash is known
-	//   - Speculative execution of N+1 is complete (specHeader, specState, specEnv)
-	//   - rootN is block N's committed state root
-	//   - eip2935Abort and blockhashNAccessed track N+1's abort conditions
-	curBlockhashAccessed := &blockhashNAccessed
-	var prevDBWriteDone chan struct{}  // tracks the previous iteration's async DB write
-	var lastSealedHeader *types.Header // header of the last inline-sealed block (for grandparent lookup)
-
-	for {
-		// --- Check abort conditions for current speculative block ---
-		shouldAbort := false
-		if eip2935Abort {
-			log.Warn("Pipelined SRC: discarding speculative block — EIP-2935 slot accessed",
-				"block", nextBlockNumber)
-			pipelineSpeculativeAbortsCounter.Inc(1)
-			shouldAbort = true
-		}
-		if !shouldAbort && curBlockhashAccessed.Load() {
-			log.Warn("Pipelined SRC: discarding speculative block — BLOCKHASH(N) was accessed",
-				"block", nextBlockNumber, "pendingBlockN", blockNNumber)
-			pipelineSpeculativeAbortsCounter.Inc(1)
-			pipelineAbortBlockhashCounter.Inc(1)
-			shouldAbort = true
-		}
-		if shouldAbort {
-			// Break out of the loop — mainLoop always calls commitWork after
-			// this function returns, which rebuilds the block sequentially.
-			// Mark the next commit as abort recovery so Bor.Prepare keeps the
-			// original slot instead of pushing late rebuilds into the next one.
-			abortRecovery = true
-			break
-		}
-
-		// --- Wait for previous async DB write before finalize ---
-		// FinalizeForPipeline may call into state sync / span commit code that
-		// reads block headers and state from the chain DB. If the previous
-		// inline-sealed block hasn't been persisted yet, those lookups fail.
-		if prevDBWriteDone != nil {
-			<-prevDBWriteDone
-			prevDBWriteDone = nil
-		}
-
-		// --- Finalize current speculative block ---
-		finalSpecHeader := types.CopyHeader(specHeader)
-		finalSpecHeader.ParentHash = realBlockNHash
-
-		if w.chainConfig.IsPrague(finalSpecHeader.Number) {
-			evmCtx := core.NewEVMBlockContext(finalSpecHeader, w.chain, &coinbase)
-			vmenv := vm.NewEVM(evmCtx, specState, w.chainConfig, vm.Config{})
-			core.ProcessParentBlockHash(realBlockNHash, vmenv)
-		}
-
-		specStateSyncData, err := borEngine.FinalizeForPipeline(w.chain, finalSpecHeader, specState, &types.Body{
-			Transactions: specEnv.txs,
-		}, specEnv.receipts)
-		if err != nil {
-			log.Error("Pipelined SRC: FinalizeForPipeline failed", "block", nextBlockNumber, "err", err)
-			break
-		}
-
-		flatDiff := specState.CommitSnapshot(w.chainConfig.IsEIP158(finalSpecHeader.Number))
-
-		// --- Check if we can continue the pipeline for the next block ---
-		nextNextBlockNumber := nextBlockNumber + 1
-		if !w.isPipelineEligible(nextBlockNumber) || !w.IsRunning() {
-			// Last block in the pipeline — seal synchronously via taskCh so that
-			// resultLoop emits ChainHeadEvent and normal block production resumes.
-			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, true, curSpecBuildStart)
-			break
-		}
-
-		// --- Build speculative environment for the NEXT block (N+2) ---
-		placeholderNext := placeholderParentHash(nextBlockNumber)
-		specReaderNext := newSpeculativeChainReader(w.chain, finalSpecHeader, placeholderNext)
-		specContextNext := newSpeculativeChainContext(specReaderNext, w.engine)
-
-		var coinbaseNext common.Address
-		if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(nextNextBlockNumber)) {
-			coinbaseNext = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(nextNextBlockNumber))
-		}
-		if coinbaseNext == (common.Address{}) {
-			coinbaseNext = w.etherbase()
-		}
-
-		specHeaderNext := &types.Header{
-			ParentHash: placeholderNext,
-			Number:     new(big.Int).SetUint64(nextNextBlockNumber),
-			GasLimit:   core.CalcGasLimit(finalSpecHeader.GasLimit, w.config.GasCeil),
-			Time:       finalSpecHeader.Time + w.chainConfig.Bor.CalculatePeriod(nextNextBlockNumber),
-			Coinbase:   coinbaseNext,
-		}
-		if w.chainConfig.IsLondon(specHeaderNext.Number) {
-			specHeaderNext.BaseFee = eip1559.CalcBaseFee(w.chainConfig, finalSpecHeader)
-		}
-
-		// Prepare() sets header fields without sleeping.
-		// The timing wait is deferred to just before sealing, after the abort check.
-		// This avoids wasting a full block period if the speculative block is aborted.
-		if err := w.engine.Prepare(specReaderNext, specHeaderNext); err != nil {
-			log.Warn("Pipelined SRC: Prepare failed for next block, sealing current",
-				"block", nextNextBlockNumber, "err", err)
-			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, true, curSpecBuildStart)
-			break
-		}
-
-		// --- Spawn SRC for current speculative block (overlaps with next block's execution) ---
-		srcSpawnTime := time.Now()
-		tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
-		w.chain.SpawnSRCGoroutine(tmpBlockCur, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), rootN, common.Hash{})
-		if w.config.PipelinedSRCLogs {
-			log.Info("Pipelined SRC: spawned SRC, starting speculative exec",
-				"srcBlock", nextBlockNumber, "specExecBlock", nextNextBlockNumber)
-		}
-
-		// --- Open speculative state for next block ---
-		specStateNext, err := w.chain.StateAtWithFlatDiff(rootN, flatDiff)
-		if err != nil {
-			log.Error("Pipelined SRC: failed to open speculative state for next block",
-				"block", nextNextBlockNumber, "err", err)
-			// SRC is already running — wait for it and seal current block
-			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, false, curSpecBuildStart)
-			break
-		}
-		specStateNext.StartPrefetcher("miner-speculative", nil, nil)
-
-		// --- Build SpeculativeGetHashFn for next block ---
-		// Use lastSealedHeader if available (the async DB write may not have
-		// persisted it yet), otherwise fall back to the chain DB.
-		var grandparentHeader *types.Header
-		if lastSealedHeader != nil && lastSealedHeader.Number.Uint64() == blockNNumber {
-			grandparentHeader = lastSealedHeader
-		} else {
-			grandparentHeader = w.chain.GetHeaderByNumber(blockNNumber)
-		}
-		if grandparentHeader == nil {
-			log.Error("Pipelined SRC: grandparent header not found for next block", "number", blockNNumber)
-			w.sealBlockViaTaskCh(borEngine, finalSpecHeader, specState, specEnv.txs,
-				specEnv.receipts, specStateSyncData, rootN, flatDiff, false, curSpecBuildStart)
-			break
-		}
-
-		var nextBlockHash common.Hash
-		var nextBlockHashResolved bool
-		var nextResolveMu sync.Mutex
-
-		srcDoneNext := func() common.Hash {
-			nextResolveMu.Lock()
-			defer nextResolveMu.Unlock()
-			if nextBlockHashResolved {
-				return nextBlockHash
-			}
-			rootSpec, _, err := w.chain.WaitForSRC()
-			if err != nil {
-				log.Error("Pipelined SRC: SRC failed during BLOCKHASH resolution", "err", err)
-				return common.Hash{}
-			}
-			finalH := types.CopyHeader(finalSpecHeader)
-			finalH.Root = rootSpec
-			finalH.UncleHash = types.CalcUncleHash(nil)
-			nextBlockHash = finalH.Hash()
-			nextBlockHashResolved = true
-			return nextBlockHash
-		}
-
-		nextBlockhashAccessed := new(atomic.Bool)
-		specGetHashNext := core.SpeculativeGetHashFn(grandparentHeader, specContextNext, nextBlockNumber, srcDoneNext, nextBlockhashAccessed)
-
-		evmContextNext := core.NewEVMBlockContext(specHeaderNext, specContextNext, &coinbaseNext)
-		evmContextNext.GetHash = specGetHashNext
-
-		specEnvNext := &environment{
-			signer:         types.MakeSigner(w.chainConfig, specHeaderNext.Number, specHeaderNext.Time),
-			state:          specStateNext,
-			size:           uint64(specHeaderNext.Size()),
-			coinbase:       coinbaseNext,
-			buildInterrupt: newBuildInterruptState(),
-			header:         specHeaderNext,
-			evm:            vm.NewEVM(evmContextNext, specStateNext, w.chainConfig, vm.Config{}),
-		}
-		specEnvNext.evm.SetInterrupt(specEnvNext.buildInterrupt.timeoutFlag())
-		specEnvNext.tcount = 0
-
-		// --- Reset txpool and fill transactions for next block (in goroutine) ---
-		// fillTransactions runs concurrently with SRC so that sealing block N
-		// is not delayed by filling block N+1's transactions.
-		specTxPoolStateNext, err := w.chain.StateAtWithFlatDiff(rootN, flatDiff)
-		if err != nil {
-			log.Error("Pipelined SRC: failed to create txpool state for next block", "err", err)
-		} else {
-			w.eth.TxPool().ResetSpeculativeState(finalSpecHeader, specTxPoolStateNext)
-		}
-
-		fillDone := make(chan struct{})
-		var nextEIP2935Abort bool
-		var fillElapsed time.Duration
-		nextSpecBuildStart := time.Now()
-
-		go func() {
-			defer close(fillDone)
-
-			specStopFnNext := createInterruptTimer(
-				specHeaderNext.Number.Uint64(),
-				specHeaderNext.GetActualTime(),
-				specEnvNext.buildInterrupt,
-				true, // pipelinedSRC — no 500ms buffer
-			)
-
-			var specInterruptNext atomic.Int32
-			fillElapsed = w.fillSpeculativeTransactions(specEnvNext, &specInterruptNext)
-			specStopFnNext()
-
-			// Check EIP-2935 abort for next block (needs fill to be done
-			// so WasStorageSlotRead can inspect accessed slots). The final
-			// discard log is emitted in the main loop so each aborted block is
-			// logged once.
-			if w.chainConfig.IsPrague(specHeaderNext.Number) {
-				dangerousSlot := common.BigToHash(new(big.Int).SetUint64(nextBlockNumber % params.HistoryServeWindow))
-				if specStateNext.WasStorageSlotRead(params.HistoryStorageAddress, dangerousSlot) {
-					nextEIP2935Abort = true
-					pipelineEIP2935AbortsCounter.Inc(1)
-				}
-			}
-		}()
-
-		// --- Wait for SRC of current speculative block ---
-		// No longer blocked by fillTransactions — SRC result is collected as
-		// soon as the goroutine completes, allowing immediate sealing.
-		srcWaitStart := time.Now()
-		rootSpec, witnessSpec, err := w.chain.WaitForSRC()
-		srcWaitElapsed := time.Since(srcWaitStart)
-		srcTotalElapsed := time.Since(srcSpawnTime)
-		pipelineSRCTimer.Update(srcTotalElapsed)
-		pipelineSRCWaitTimer.Update(srcWaitElapsed)
-		if err != nil {
-			log.Error("Pipelined SRC: SRC failed", "block", nextBlockNumber, "err", err)
-			pipelineSpeculativeAbortsCounter.Inc(1)
-			pipelineAbortSRCFailedCounter.Inc(1)
-			<-fillDone // wait for goroutine before breaking
-			break
-		}
-		if w.config.PipelinedSRCLogs {
-			log.Info("Pipelined SRC: SRC completed",
-				"block", nextBlockNumber, "srcWait", srcWaitElapsed)
-		}
-
-		// --- Assemble current speculative block ---
-		blockSpec, receiptsSpec, err := borEngine.AssembleBlock(w.chain, finalSpecHeader, specState, &types.Body{
-			Transactions: specEnv.txs,
-		}, specEnv.receipts, rootSpec, specStateSyncData)
-		if err != nil {
-			log.Error("Pipelined SRC: AssembleBlock failed", "block", nextBlockNumber, "err", err)
-			<-fillDone // wait for goroutine before breaking
-			break
-		}
-
-		// Update pendingWorkBlock BEFORE inline write so that newWorkLoop skips
-		// the ChainHeadEvent for this block. pendingWorkBlock = nextBlockNumber + 1
-		// means "we're working on nextBlockNumber+1, so skip ChainHeadEvent for nextBlockNumber".
-		w.pendingWorkBlock.Store(nextBlockNumber + 1)
-
-		// --- Wait for the block's target timestamp before sealing ---
-		// Since Prepare() was called without sleeping, we wait here instead.
-		// This is AFTER the abort check — if the block was aborted, we skip
-		// this wait entirely (zero wasted time).
-		if delay := time.Until(finalSpecHeader.GetActualTime()); delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-w.exitCh:
-				<-fillDone // wait for goroutine before returning
-				if prevDBWriteDone != nil {
-					<-prevDBWriteDone
-				}
-				shouldRetry = false
-				return // defer clears pendingWorkBlock
-			}
-		}
-
-		// --- Inline seal + broadcast (bypass taskLoop/resultLoop) ---
-		// prevDBWriteDone was already awaited before FinalizeForPipeline above.
-		// The DB write runs asynchronously — the pipeline proceeds without waiting.
-		sealedBlock, dbWriteDone, err := w.inlineSealAndBroadcast(blockSpec, receiptsSpec, specState, witnessSpec, curSpecBuildStart)
-		if err != nil {
-			log.Error("Pipelined SRC: inline seal failed", "block", nextBlockNumber, "err", err)
-			<-fillDone // wait for goroutine before breaking
-			break
-		}
-
-		// Wait for fillTransactions goroutine to finish before next iteration.
-		// The abort conditions (EIP-2935, BLOCKHASH) are checked at the top of
-		// the next loop iteration, which requires fill to be complete.
+	case <-time.After(delay):
+		return false
+	case <-s.w.exitCh:
 		<-fillDone
-		prevDBWriteDone = dbWriteDone
-		pipelineSpeculativeBlocksCounter.Inc(1)
-
-		if w.config.PipelinedSRCLogs {
-			log.Info("Pipelined SRC: block sealed (inline)", "number", sealedBlock.Number(),
-				"txs", len(sealedBlock.Transactions()), "root", rootSpec,
-				"fillBlock", nextNextBlockNumber, "fillElapsed", fillElapsed)
+		if s.prevDBWriteDone != nil {
+			<-s.prevDBWriteDone
 		}
-
-		// --- Shift variables for next iteration ---
-		lastSealedHeader = sealedBlock.Header()
-		blockNNumber = nextBlockNumber
-		nextBlockNumber = nextNextBlockNumber
-		rootN = rootSpec
-		realBlockNHash = sealedBlock.Hash()
-		specHeader = specHeaderNext
-		specState = specStateNext
-		specEnv = specEnvNext
-		coinbase = coinbaseNext
-		eip2935Abort = nextEIP2935Abort
-		curBlockhashAccessed = nextBlockhashAccessed
-		curSpecBuildStart = nextSpecBuildStart
+		return true
 	}
+}
 
-	// Wait for the last async DB write to complete before exiting.
-	if prevDBWriteDone != nil {
-		<-prevDBWriteDone
-	}
-	return shouldRetry, abortRecovery
+// shiftToNext rotates the session's per-iteration state to the block just
+// prepared by prepareNextIteration. Called after a successful inline seal.
+func (s *specSession) shiftToNext(sealed *types.Block, next *specNextIteration) {
+	s.lastSealedHeader = sealed.Header()
+	s.blockNNumber = s.nextBlockNumber
+	s.nextBlockNumber++
+	s.rootN = sealed.Root()
+	s.realBlockNHash = sealed.Hash()
+	s.specHeader = next.specHeaderNext
+	s.specState = next.specStateNext
+	s.specEnv = next.specEnvNext
+	s.coinbase = next.coinbaseNext
+	s.eip2935Abort = *next.eip2935AbortPtr
+	s.blockhashAccessed = next.blockhashAccessed
+	s.curBuildStart = next.nextBuildStart
 }
 
 // fallbackToSequential computes the state root inline and assembles block N
@@ -881,11 +1009,7 @@ func (w *worker) sealBlockViaTaskCh(
 	spawnSRC bool, // false if SRC goroutine is already running
 	buildStart time.Time, // wall clock when this block's speculative fill began — for worker/build_to_announce
 ) {
-	if spawnSRC {
-		tmpBlock := types.NewBlockWithHeader(finalHeader)
-		w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff)
-		w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
-	}
+	w.spawnSRCForFinalBlock(finalHeader, rootN, flatDiff, spawnSRC)
 	pipelineSpeculativeBlocksCounter.Inc(1)
 
 	rootSpec, witnessSpec, err := w.chain.WaitForSRC()
@@ -935,61 +1059,15 @@ func (w *worker) sealBlockViaTaskCh(
 // commitSpeculativeWork, so chainHeadFeed.Send would eventually block when
 // newWorkLoop's channel fills up.
 func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Receipt, statedb *state.StateDB, witnessBytes []byte, buildStart time.Time) (*types.Block, chan struct{}, error) {
-	// Seal the block via a private channel — reuses Seal() without contention
-	// on the shared w.resultCh. For primary producers on Bhilai+, delay=0.
-	sealCh := make(chan *consensus.NewSealedBlockEvent, 1)
-	stopCh := make(chan struct{})
-
-	sealStart := time.Now()
-	if err := w.engine.Seal(w.chain, block, nil, sealCh, stopCh); err != nil {
-		return nil, nil, fmt.Errorf("seal failed: %w", err)
+	sealedBlock, err := w.sealViaPrivateChannel(block)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	var sealedBlock *types.Block
-	select {
-	case ev := <-sealCh:
-		if ev == nil || ev.Block == nil {
-			return nil, nil, errors.New("nil sealed block from Seal")
-		}
-		sealedBlock = ev.Block
-	case <-time.After(5 * time.Second):
-		close(stopCh)
-		return nil, nil, errors.New("inline seal timed out")
-	case <-w.exitCh:
-		close(stopCh)
-		return nil, nil, errors.New("worker stopped during inline seal")
-	}
-	pipelineSealDurationTimer.UpdateSince(sealStart)
-
 	hash := sealedBlock.Hash()
-
-	// Fix up receipt block hashes (same as resultLoop)
-	sealedReceipts := make([]*types.Receipt, len(receipts))
-	var logs []*types.Log
-
-	for i, r := range receipts {
-		receipt := new(types.Receipt)
-		sealedReceipts[i] = receipt
-		*receipt = *r
-
-		receipt.BlockHash = hash
-		receipt.BlockNumber = sealedBlock.Number()
-		receipt.TransactionIndex = uint(i)
-
-		receipt.Logs = make([]*types.Log, len(r.Logs))
-		for j, l := range r.Logs {
-			logCopy := new(types.Log)
-			receipt.Logs[j] = logCopy
-			*logCopy = *l
-			logCopy.BlockHash = hash
-		}
-
-		logs = append(logs, receipt.Logs...)
-	}
+	sealedReceipts, logs := rebindReceiptsToSealedBlock(receipts, sealedBlock)
 
 	log.Info("Successfully sealed new block", "number", sealedBlock.Number(),
-		"sealhash", w.engine.SealHash(sealedBlock.Header()), "hash", hash,
-		"elapsed", "inline")
+		"sealhash", w.engine.SealHash(sealedBlock.Header()), "hash", hash, "elapsed", "inline")
 
 	// Cache the witness so the WIT protocol can serve it to stateless peers
 	// immediately, without waiting for the async DB write.
@@ -997,25 +1075,7 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 		w.chain.CacheWitness(hash, witnessBytes)
 	}
 
-	// Broadcast to peers BEFORE writing to DB — the block is fully valid and
-	// sealed, so peers can start processing it immediately. The DB write is
-	// not needed for broadcast.
-	announceAt := time.Now()
-	// Positive when announced before header.GetActualTime (PIP-66 early). Negative when late.
-	earlyMs := sealedBlock.Header().GetActualTime().Sub(announceAt).Milliseconds()
-	pipelineAnnounceEarlinessMs.Update(earlyMs)
-	pipelineSpeculativeCommittedCounter.Inc(1)
-	if !buildStart.IsZero() {
-		workerBuildToAnnounceTimer.UpdateSince(buildStart)
-	}
-	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: announceAt})
-
-	sealedBlocksCounter.Inc(1)
-	if sealedBlock.Transactions().Len() == 0 {
-		sealedEmptyBlocksCounter.Inc(1)
-	}
-	workerGasUsedPerBlockHistogram.Update(int64(sealedBlock.GasUsed()))
-	workerTxsPerBlockHistogram.Update(int64(sealedBlock.Transactions().Len()))
+	w.announceInlineSealedBlock(sealedBlock, buildStart)
 	w.clearPending(sealedBlock.NumberU64())
 
 	// Write to chain DB asynchronously — the pipeline can proceed with the
@@ -1031,6 +1091,79 @@ func (w *worker) inlineSealAndBroadcast(block *types.Block, receipts []*types.Re
 			log.Error("Pipelined SRC: async DB write failed", "block", sealedBlock.Number(), "err", err)
 		}
 	}()
-
 	return sealedBlock, writeDone, nil
+}
+
+// sealViaPrivateChannel runs engine.Seal on a private channel (no contention
+// with the shared resultCh) and waits up to 5s for the sealed block.
+// For primary producers on Bhilai+, delay=0, so the wait is effectively
+// bounded by the Seal signature computation.
+func (w *worker) sealViaPrivateChannel(block *types.Block) (*types.Block, error) {
+	sealCh := make(chan *consensus.NewSealedBlockEvent, 1)
+	stopCh := make(chan struct{})
+	sealStart := time.Now()
+	if err := w.engine.Seal(w.chain, block, nil, sealCh, stopCh); err != nil {
+		return nil, fmt.Errorf("seal failed: %w", err)
+	}
+	select {
+	case ev := <-sealCh:
+		pipelineSealDurationTimer.UpdateSince(sealStart)
+		if ev == nil || ev.Block == nil {
+			return nil, errors.New("nil sealed block from Seal")
+		}
+		return ev.Block, nil
+	case <-time.After(5 * time.Second):
+		close(stopCh)
+		return nil, errors.New("inline seal timed out")
+	case <-w.exitCh:
+		close(stopCh)
+		return nil, errors.New("worker stopped during inline seal")
+	}
+}
+
+// rebindReceiptsToSealedBlock copies receipts with BlockHash/BlockNumber/
+// TransactionIndex pointing at the sealed block, deep-copies logs, and
+// returns the flat logs slice (same behavior as resultLoop's receipt fixup).
+func rebindReceiptsToSealedBlock(receipts []*types.Receipt, sealedBlock *types.Block) ([]*types.Receipt, []*types.Log) {
+	hash := sealedBlock.Hash()
+	sealedReceipts := make([]*types.Receipt, len(receipts))
+	var logs []*types.Log
+	for i, r := range receipts {
+		receipt := new(types.Receipt)
+		sealedReceipts[i] = receipt
+		*receipt = *r
+		receipt.BlockHash = hash
+		receipt.BlockNumber = sealedBlock.Number()
+		receipt.TransactionIndex = uint(i)
+		receipt.Logs = make([]*types.Log, len(r.Logs))
+		for j, l := range r.Logs {
+			logCopy := new(types.Log)
+			receipt.Logs[j] = logCopy
+			*logCopy = *l
+			logCopy.BlockHash = hash
+		}
+		logs = append(logs, receipt.Logs...)
+	}
+	return sealedReceipts, logs
+}
+
+// announceInlineSealedBlock emits the pipelined-sealed block to peers and
+// updates the build-to-announce / earliness / committed / throughput metrics.
+// Broadcast happens BEFORE the async DB write so peers don't wait on disk.
+func (w *worker) announceInlineSealedBlock(sealedBlock *types.Block, buildStart time.Time) {
+	announceAt := time.Now()
+	// Positive when announced before header.GetActualTime (PIP-66 early). Negative when late.
+	earlyMs := sealedBlock.Header().GetActualTime().Sub(announceAt).Milliseconds()
+	pipelineAnnounceEarlinessMs.Update(earlyMs)
+	pipelineSpeculativeCommittedCounter.Inc(1)
+	if !buildStart.IsZero() {
+		workerBuildToAnnounceTimer.UpdateSince(buildStart)
+	}
+	w.mux.Post(core.NewMinedBlockEvent{Block: sealedBlock, SealedAt: announceAt})
+	sealedBlocksCounter.Inc(1)
+	if sealedBlock.Transactions().Len() == 0 {
+		sealedEmptyBlocksCounter.Inc(1)
+	}
+	workerGasUsedPerBlockHistogram.Update(int64(sealedBlock.GasUsed()))
+	workerTxsPerBlockHistogram.Update(int64(sealedBlock.Transactions().Len()))
 }
