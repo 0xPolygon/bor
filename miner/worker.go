@@ -1934,8 +1934,11 @@ func scanOverflow(
 			continue
 		}
 		if ltx.Gas > remaining {
-			h.Pop() // Too large for freed capacity; abandon this account
-			continue
+			// Don't pop: extendedBudget accumulates across iterations, so an
+			// account too large for this window may fit in a later one. Popping
+			// would permanently evict price-leading accounts that the builder
+			// is most likely to include.
+			break
 		}
 		tx := ltx.Resolve()
 		if tx == nil {
@@ -2591,6 +2594,12 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 		extendedBudget += delta
 
 		if extendedBudget > 0 {
+			// Mark the plan batch as in-flight before the overflow scan so
+			// scanOverflow won't re-emit the same tx within this iteration
+			// (collectPlanBatch returns before forwardTxs records hashes).
+			for _, tx := range batch {
+				sentThisPhase[tx.Hash()] = struct{}{}
+			}
 			var bonus []*types.Transaction
 			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, sentThisPhase)
 			batch = append(batch, bonus...)

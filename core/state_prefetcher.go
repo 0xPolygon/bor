@@ -131,6 +131,10 @@ func (p *StatePrefetcher) PrefetchStream(
 			// recover only catches panics in its own goroutine, not children.
 			defer func() {
 				if r := recover(); r != nil {
+					// processTx already incremented txIndex before dispatching
+					// to prefetchOneTx, so a panicked tx must count as a
+					// failure to keep valid+invalid meters consistent.
+					ctx.fails.Add(1)
 					blockPrefetchWorkerPanicMeter.Mark(1)
 					log.Error("prefetch worker panicked", "err", r)
 				}
