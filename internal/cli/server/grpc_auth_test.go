@@ -65,6 +65,28 @@ func TestAuthenticate_CorrectToken(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestAuthenticate_CaseInsensitiveBearerPrefix verifies the auth scheme name is case-insensitive.
+func TestAuthenticate_CaseInsensitiveBearerPrefix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		hdr  string
+	}{
+		{"canonical", "Bearer secret"},
+		{"lowercase", "bearer secret"},
+		{"uppercase", "BEARER secret"},
+		{"mixed-case", "BeArEr secret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", tc.hdr))
+			require.NoError(t, authenticate(ctx, "secret"))
+		})
+	}
+}
+
 // TestAuthenticate_ConstantTimeCompare verifies that both a close-miss token and
 // a completely different token both return Unauthenticated (no behavioral
 // difference based on byte position — the unit test checks that both fail).

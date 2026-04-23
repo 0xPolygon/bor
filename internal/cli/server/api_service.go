@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"math"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -106,7 +105,7 @@ func (s *Server) HeaderByNumber(ctx context.Context, req *protobor.GetHeaderByNu
 	}
 
 	if header == nil {
-		return nil, errors.New("header not found")
+		return nil, status.Error(codes.NotFound, "header not found")
 	}
 
 	return &protobor.GetHeaderByNumberResponse{Header: headerToProtoBorHeader(header)}, nil
@@ -123,7 +122,7 @@ func (s *Server) BlockByNumber(ctx context.Context, req *protobor.GetBlockByNumb
 	}
 
 	if block == nil {
-		return nil, errors.New("block not found")
+		return nil, status.Error(codes.NotFound, "block not found")
 	}
 
 	return &protobor.GetBlockByNumberResponse{Block: blockToProtoBlock(block)}, nil
@@ -148,11 +147,11 @@ func (s *Server) TransactionReceipt(ctx context.Context, req *protobor.ReceiptRe
 	}
 
 	if receipts == nil {
-		return nil, errors.New("no receipts found")
+		return nil, status.Error(codes.NotFound, "no receipts found")
 	}
 
 	if len(receipts) <= int(txnIndex) {
-		return nil, errors.New("transaction index out of bounds")
+		return nil, status.Error(codes.OutOfRange, "transaction index out of bounds")
 	}
 
 	return &protobor.ReceiptResponse{Receipt: ConvertReceiptToProtoReceipt(receipts[txnIndex])}, nil
@@ -182,7 +181,7 @@ func (s *Server) GetAuthor(ctx context.Context, req *protobor.GetAuthorRequest) 
 		return nil, err
 	}
 	if header == nil {
-		return nil, errors.New("header not found")
+		return nil, status.Error(codes.NotFound, "header not found")
 	}
 
 	author, err := s.backend.Engine().Author(header)
@@ -201,10 +200,10 @@ func (s *Server) GetTdByHash(ctx context.Context, req *protobor.GetTdByHashReque
 
 	td := s.backend.APIBackend.GetTd(ctx, hash)
 	if td == nil {
-		return nil, errors.New("total difficulty not found")
+		return nil, status.Error(codes.NotFound, "total difficulty not found")
 	}
 	if !td.IsUint64() {
-		return nil, errors.New("total difficulty overflows uint64")
+		return nil, status.Error(codes.OutOfRange, "total difficulty overflows uint64")
 	}
 	return &protobor.GetTdResponse{TotalDifficulty: td.Uint64()}, nil
 }
@@ -221,14 +220,14 @@ func (s *Server) GetTdByNumber(ctx context.Context, req *protobor.GetTdByNumberR
 		return nil, err
 	}
 	if header == nil {
-		return nil, errors.New("header not found")
+		return nil, status.Error(codes.NotFound, "header not found")
 	}
 	td := s.backend.APIBackend.GetTd(ctx, header.Hash())
 	if td == nil {
-		return nil, errors.New("total difficulty not found")
+		return nil, status.Error(codes.NotFound, "total difficulty not found")
 	}
 	if !td.IsUint64() {
-		return nil, errors.New("total difficulty overflows uint64")
+		return nil, status.Error(codes.OutOfRange, "total difficulty overflows uint64")
 	}
 	return &protobor.GetTdResponse{TotalDifficulty: td.Uint64()}, nil
 }
@@ -296,7 +295,7 @@ func (s *Server) fetchBlockInfo(ctx context.Context, blockNum uint64) (*protobor
 		return nil, false, nil
 	}
 	if !td.IsUint64() {
-		return nil, false, errors.New("total difficulty overflows uint64")
+		return nil, false, status.Error(codes.OutOfRange, "total difficulty overflows uint64")
 	}
 
 	info := &protobor.BlockInfo{
@@ -332,10 +331,10 @@ func getRpcBlockNumberFromString(blockNumber string) (rpc.BlockNumber, error) {
 	default:
 		blckNum, err := hexutil.DecodeUint64(blockNumber)
 		if err != nil {
-			return rpc.BlockNumber(0), errors.New("invalid block number")
+			return rpc.BlockNumber(0), status.Error(codes.InvalidArgument, "invalid block number")
 		}
 		if blckNum > math.MaxInt64 {
-			return rpc.BlockNumber(0), errors.New("block number out of range")
+			return rpc.BlockNumber(0), status.Error(codes.InvalidArgument, "block number out of range")
 		}
 		return rpc.BlockNumber(blckNum), nil
 	}
