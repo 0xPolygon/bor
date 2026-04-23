@@ -2592,7 +2592,7 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 
 	for {
 		batch, newGasFreedCh, delta, builderDone := collectPlanBatch(
-			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes,
+			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes, sentThisPhase,
 		)
 		gasFreedCh = newGasFreedCh
 		extendedBudget += delta
@@ -2645,15 +2645,23 @@ func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool)
 }
 
 // collectPlanBatch runs a single batch-collection window. It reads from the plan
-// channel into batch (skipping already-prefetched txs), accumulates freed-gas signals
-// into budgetDelta, and returns when the window timer fires or the plan channel closes.
-// When gasFreedCh closes, it is disabled by returning a nil newGasFreedCh so the
+// channel into batch (skipping already-prefetched txs and any tx already forwarded
+// earlier in this builder phase), accumulates freed-gas signals into budgetDelta,
+// and returns when the window timer fires or the plan channel closes. When
+// gasFreedCh closes, it is disabled by returning a nil newGasFreedCh so the
 // caller can stop selecting on it in subsequent calls.
+//
+// sentThisPhase closes the scanOverflow→plan cross-iteration edge of the dedup
+// matrix: a tx emitted by scanOverflow in an earlier iteration and still
+// executing on a worker is absent from prefetchedHashes (onSuccess trails
+// multi-ms EVM) but present in sentThisPhase — without this check, a buffered
+// copy of the same tx in planCh would get forwarded a second time.
 func collectPlanBatch(
 	planCh <-chan *types.Transaction,
 	gasFreedCh <-chan uint64,
 	window time.Duration,
 	prefetchedHashes *sync.Map,
+	sentThisPhase map[common.Hash]struct{},
 ) (batch []*types.Transaction, newGasFreedCh <-chan uint64, budgetDelta uint64, builderDone bool) {
 	timer := time.NewTimer(window)
 	defer timer.Stop()
@@ -2665,13 +2673,15 @@ func collectPlanBatch(
 				builderDone = true
 				return
 			}
-			skip := false
 			if prefetchedHashes != nil {
-				_, skip = prefetchedHashes.Load(tx.Hash())
+				if _, done := prefetchedHashes.Load(tx.Hash()); done {
+					continue
+				}
 			}
-			if !skip {
-				batch = append(batch, tx)
+			if _, inflight := sentThisPhase[tx.Hash()]; inflight {
+				continue
 			}
+			batch = append(batch, tx)
 		case freed, ok := <-newGasFreedCh:
 			if !ok {
 				newGasFreedCh = nil

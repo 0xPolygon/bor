@@ -252,7 +252,7 @@ func TestCollectPlanBatch_ClosedPlanCh(t *testing.T) {
 	}
 	close(planCh)
 
-	batch, newGasCh, delta, done := collectPlanBatch(planCh, nil, 50*time.Millisecond, nil)
+	batch, newGasCh, delta, done := collectPlanBatch(planCh, nil, 50*time.Millisecond, nil, nil)
 	require.True(t, done, "closed planCh must surface builderDone=true")
 	require.Len(t, batch, len(rawTxs), "buffered txs must be drained into batch")
 	require.Equal(t, uint64(0), delta)
@@ -267,7 +267,7 @@ func TestCollectPlanBatch_TimerFiresOnEmptyInput(t *testing.T) {
 	gasCh := make(chan uint64)
 
 	start := time.Now()
-	batch, newGasCh, delta, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil)
+	batch, newGasCh, delta, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil, nil)
 	elapsed := time.Since(start)
 
 	require.False(t, done, "timer expiry must not mark the builder done")
@@ -290,7 +290,7 @@ func TestCollectPlanBatch_FreedGasAccumulates(t *testing.T) {
 	gasCh <- 2_500
 	gasCh <- 500
 
-	_, _, delta, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil)
+	_, _, delta, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil, nil)
 	require.False(t, done)
 	require.Equal(t, uint64(4_000), delta,
 		"budgetDelta must sum all freed-gas values received within the window")
@@ -313,7 +313,7 @@ func TestCollectPlanBatch_SkipsPrefetched(t *testing.T) {
 	prefetched := &sync.Map{}
 	prefetched.Store(rawTxs[0].Hash(), struct{}{})
 
-	batch, _, _, done := collectPlanBatch(planCh, nil, 25*time.Millisecond, prefetched)
+	batch, _, _, done := collectPlanBatch(planCh, nil, 25*time.Millisecond, prefetched, nil)
 	require.True(t, done)
 	require.Len(t, batch, 1, "prefetched tx must be filtered out")
 	require.Equal(t, rawTxs[1].Hash(), batch[0].Hash())
@@ -425,6 +425,37 @@ func TestBuilderTxProvider_NoDuplicateForwards(t *testing.T) {
 		len(counts), len(poolTxs))
 }
 
+// TestCollectPlanBatch_SkipsInflight is the regression test for the
+// scanOverflow→plan cross-iteration dedup edge: a tx already in sentThisPhase
+// (from a prior scanOverflow emission whose worker is still mid-EVM and hasn't
+// populated prefetchedHashes yet) arriving via planCh must be dropped, not
+// forwarded a second time.
+func TestCollectPlanBatch_SkipsInflight(t *testing.T) {
+	t.Parallel()
+	_, _, _, rawTxs := scanOverflowFixture(t,
+		[]uint64{21_000, 21_000, 21_000},
+		[]int64{1, 2, 3},
+	)
+	planCh := make(chan *types.Transaction, len(rawTxs))
+	for _, tx := range rawTxs {
+		planCh <- tx
+	}
+	close(planCh)
+
+	// Simulate: rawTxs[0] was already forwarded by a prior scanOverflow
+	// iteration; its worker is still executing so prefetchedHashes is empty
+	// but sentThisPhase has the hash.
+	sentThisPhase := map[common.Hash]struct{}{rawTxs[0].Hash(): {}}
+
+	batch, _, _, done := collectPlanBatch(planCh, nil, 25*time.Millisecond, nil, sentThisPhase)
+	require.True(t, done)
+	require.Len(t, batch, 2, "in-flight tx must be filtered out")
+	for _, tx := range batch {
+		require.NotEqual(t, rawTxs[0].Hash(), tx.Hash(),
+			"tx already in sentThisPhase must not appear in batch")
+	}
+}
+
 // TestCollectPlanBatch_ClosedGasChPassesThrough: once gasCh is closed, the
 // returned channel must be nil so subsequent iterations stop selecting on it.
 func TestCollectPlanBatch_ClosedGasChPassesThrough(t *testing.T) {
@@ -433,7 +464,7 @@ func TestCollectPlanBatch_ClosedGasChPassesThrough(t *testing.T) {
 	gasCh := make(chan uint64)
 	close(gasCh)
 
-	_, newGasCh, _, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil)
+	_, newGasCh, _, done := collectPlanBatch(planCh, gasCh, 25*time.Millisecond, nil, nil)
 	require.False(t, done)
 	require.Nil(t, newGasCh, "closed gasCh must be nilled out so the next iteration ignores it")
 }
