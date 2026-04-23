@@ -9,10 +9,22 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	protobor "github.com/0xPolygon/polyproto/bor"
+	commonproto "github.com/0xPolygon/polyproto/common"
 	protoutil "github.com/0xPolygon/polyproto/utils"
 )
+
+// protoHashToCommon safely converts a proto H256 to a common.Hash. Returns
+// codes.InvalidArgument if the outer pointer or any inner H128 sub-message is nil
+func protoHashToCommon(h *commonproto.H256) (common.Hash, error) {
+	if h == nil || h.Hi == nil || h.Lo == nil {
+		return common.Hash{}, status.Error(codes.InvalidArgument, "hash is required with non-nil Hi/Lo")
+	}
+	return common.Hash(protoutil.ConvertH256ToHash(h)), nil
+}
 
 // maxBlockInfoBatchSize caps the per-call range to prevent abuse of the batch endpoint.
 // Must be >= heimdall's MaxMilestonePropositionLength.
@@ -124,7 +136,11 @@ func blockToProtoBlock(h *types.Block) *protobor.Block {
 }
 
 func (s *Server) TransactionReceipt(ctx context.Context, req *protobor.ReceiptRequest) (*protobor.ReceiptResponse, error) {
-	_, _, blockHash, _, txnIndex := s.backend.APIBackend.GetTransaction(protoutil.ConvertH256ToHash(req.Hash))
+	txHash, err := protoHashToCommon(req.Hash)
+	if err != nil {
+		return nil, err
+	}
+	_, _, blockHash, _, txnIndex := s.backend.APIBackend.GetTransaction(txHash)
 
 	receipts, err := s.backend.APIBackend.GetReceipts(ctx, blockHash)
 	if err != nil {
@@ -143,7 +159,11 @@ func (s *Server) TransactionReceipt(ctx context.Context, req *protobor.ReceiptRe
 }
 
 func (s *Server) BorBlockReceipt(ctx context.Context, req *protobor.ReceiptRequest) (*protobor.ReceiptResponse, error) {
-	receipt, err := s.backend.APIBackend.GetBorBlockReceipt(ctx, protoutil.ConvertH256ToHash(req.Hash))
+	txHash, err := protoHashToCommon(req.Hash)
+	if err != nil {
+		return nil, err
+	}
+	receipt, err := s.backend.APIBackend.GetBorBlockReceipt(ctx, txHash)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +194,10 @@ func (s *Server) GetAuthor(ctx context.Context, req *protobor.GetAuthorRequest) 
 }
 
 func (s *Server) GetTdByHash(ctx context.Context, req *protobor.GetTdByHashRequest) (*protobor.GetTdResponse, error) {
-	hash := common.Hash(protoutil.ConvertH256ToHash(req.Hash))
+	hash, err := protoHashToCommon(req.Hash)
+	if err != nil {
+		return nil, err
+	}
 
 	td := s.backend.APIBackend.GetTd(ctx, hash)
 	if td == nil {
@@ -191,7 +214,16 @@ func (s *Server) GetTdByNumber(ctx context.Context, req *protobor.GetTdByNumberR
 	if err != nil {
 		return nil, err
 	}
-	td := s.backend.APIBackend.GetTdByNumber(ctx, bN)
+	// Resolve the block number (including special tags) to a concrete header
+	// before looking up TD by hash.
+	header, err := s.backend.APIBackend.HeaderByNumber(ctx, bN)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil {
+		return nil, errors.New("header not found")
+	}
+	td := s.backend.APIBackend.GetTd(ctx, header.Hash())
 	if td == nil {
 		return nil, errors.New("total difficulty not found")
 	}
@@ -221,7 +253,10 @@ func (s *Server) GetBlockInfoInBatch(ctx context.Context, req *protobor.GetBlock
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		info, ok := s.fetchBlockInfo(ctx, req.StartBlockNumber+j)
+		info, ok, err := s.fetchBlockInfo(ctx, req.StartBlockNumber+j)
+		if err != nil {
+			return nil, err
+		}
 		// this requires APIBackend mock returning a missing block mid-range
 		// mutator-disable-next-line gap-stop semantics
 		if !ok {
@@ -235,23 +270,31 @@ func (s *Server) GetBlockInfoInBatch(ctx context.Context, req *protobor.GetBlock
 }
 
 // fetchBlockInfo loads header, total difficulty, and author for blockNum.
-// Returns (nil, false) if any piece is missing — the caller should stop the loop.
-// Author is left as a nil *H160 for genesis; callers must nil-check before
-// decoding.
-func (s *Server) fetchBlockInfo(ctx context.Context, blockNum uint64) (*protobor.BlockInfo, bool) {
+// Return semantics:
+//   - (info, true, nil): success, append to the batch
+//   - (nil, false, nil): legitimate gap (header not yet on chain / TD missing); caller should break the loop and return the partial prefix, matching HTTP side
+//   - (nil, false, err): real failure (backend error, ecrecover failure, overflow); caller should propagate the error
+//
+// Author is left as a nil *H160 for genesis; callers must nil-check before decoding.
+func (s *Server) fetchBlockInfo(ctx context.Context, blockNum uint64) (*protobor.BlockInfo, bool, error) {
 	if blockNum > math.MaxInt64 {
-		return nil, false
+		return nil, false, status.Error(codes.InvalidArgument, "block number exceeds max int64")
 	}
 	header, err := s.backend.APIBackend.HeaderByNumber(ctx, rpc.BlockNumber(blockNum))
-	// the negate_conditional requires mocking both err!=nil and nil-header paths
-	// mutator-disable-next-line defensive APIBackend guard
-	if err != nil || header == nil {
-		return nil, false
+	if err != nil {
+		return nil, false, err
+	}
+	if header == nil {
+		return nil, false, nil
 	}
 
 	td := s.backend.APIBackend.GetTd(ctx, header.Hash())
-	if td == nil || !td.IsUint64() {
-		return nil, false
+	if td == nil {
+		// TD not yet indexed — treat as a gap
+		return nil, false, nil
+	}
+	if !td.IsUint64() {
+		return nil, false, errors.New("total difficulty overflows uint64")
 	}
 
 	info := &protobor.BlockInfo{
@@ -262,12 +305,14 @@ func (s *Server) fetchBlockInfo(ctx context.Context, blockNum uint64) (*protobor
 	if blockNum > 0 {
 		author, err := s.backend.Engine().Author(header)
 		if err != nil {
-			return nil, false
+			// Author() failure on a validated header indicates a corrupted
+			// seal — propagate the error.
+			return nil, false, err
 		}
 		info.Author = protoutil.ConvertAddressToH160(author)
 	}
 
-	return info, true
+	return info, true, nil
 }
 
 func getRpcBlockNumberFromString(blockNumber string) (rpc.BlockNumber, error) {
