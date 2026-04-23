@@ -61,6 +61,14 @@ func ConvertTopicsToProtoTopics(topics []common.Hash) []*protocommon.H256 {
 }
 
 func ConvertReceiptToProtoReceipt(receipt *types.Receipt) *protobor.Receipt {
+	var egp int64
+	if receipt.EffectiveGasPrice != nil {
+		egp = receipt.EffectiveGasPrice.Int64()
+	}
+	var blockNum int64
+	if receipt.BlockNumber != nil {
+		blockNum = receipt.BlockNumber.Int64()
+	}
 	return &protobor.Receipt{
 		Type:              uint64(receipt.Type),
 		PostState:         receipt.PostState,
@@ -71,10 +79,10 @@ func ConvertReceiptToProtoReceipt(receipt *types.Receipt) *protobor.Receipt {
 		TxHash:            protoutil.ConvertHashToH256(receipt.TxHash),
 		ContractAddress:   protoutil.ConvertAddressToH160(receipt.ContractAddress),
 		GasUsed:           receipt.GasUsed,
-		EffectiveGasPrice: receipt.EffectiveGasPrice.Int64(),
+		EffectiveGasPrice: egp,
 		BlobGasUsed:       receipt.BlobGasUsed,
 		BlockHash:         protoutil.ConvertHashToH256(receipt.BlockHash),
-		BlockNumber:       receipt.BlockNumber.Int64(),
+		BlockNumber:       blockNum,
 		TransactionIndex:  uint64(receipt.TransactionIndex),
 	}
 }

@@ -139,7 +139,10 @@ func (s *Server) TransactionReceipt(ctx context.Context, req *protobor.ReceiptRe
 	if err != nil {
 		return nil, err
 	}
-	_, _, blockHash, _, txnIndex := s.backend.APIBackend.GetTransaction(txHash)
+	found, _, blockHash, _, txnIndex := s.backend.APIBackend.GetTransaction(txHash)
+	if !found {
+		return nil, status.Error(codes.NotFound, "transaction not found")
+	}
 
 	receipts, err := s.backend.APIBackend.GetReceipts(ctx, blockHash)
 	if err != nil {

@@ -1537,7 +1537,9 @@ func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	c.apiOnce.Do(func() {
 		a := &API{chain: chain, bor: c}
 		if err := a.initializeRootHashCache(); err != nil {
-			panic(fmt.Errorf("bor: failed to initialize rootHashCache: %w", err))
+			// log.Crit logs at the highest severity and then exits the process;
+			// This is currently unreachable (size is a constant in initializeRootHashCache),
+			log.Crit("bor: failed to initialize rootHashCache", "err", err)
 		}
 		c.api = a
 	})
