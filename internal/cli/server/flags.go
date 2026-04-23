@@ -1224,6 +1224,12 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Value:   &c.cliConfig.GRPC.Addr,
 		Default: c.cliConfig.GRPC.Addr,
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "grpc.token",
+		Usage:   "Bearer token required for incoming gRPC calls (empty disables auth)",
+		Value:   &c.cliConfig.GRPC.Token,
+		Default: c.cliConfig.GRPC.Token,
+	})
 
 	// developer
 	f.BoolFlag(&flagset.BoolFlag{

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,7 +24,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -434,7 +438,10 @@ func (s *Server) gRPCServerByAddress(addr string) error {
 }
 
 func (s *Server) gRPCServerByListener(listener net.Listener) error {
-	s.grpcServer = grpc.NewServer(s.withLoggingUnaryInterceptor())
+	s.grpcServer = grpc.NewServer(
+		grpc.UnaryInterceptor(s.combinedUnaryInterceptor()),
+		grpc.StreamInterceptor(s.combinedStreamInterceptor()),
+	)
 	proto.RegisterBorServer(s.grpcServer, s)
 	protobor.RegisterBorApiServer(s.grpcServer, s)
 	reflection.Register(s.grpcServer)
@@ -450,17 +457,62 @@ func (s *Server) gRPCServerByListener(listener net.Listener) error {
 	return nil
 }
 
-func (s *Server) withLoggingUnaryInterceptor() grpc.ServerOption {
-	return grpc.UnaryInterceptor(s.loggingServerInterceptor)
+// combinedUnaryInterceptor returns a single unary server interceptor that
+// optionally enforces bearer-token authentication (when a token is configured)
+// and always logs the request duration.
+func (s *Server) combinedUnaryInterceptor() grpc.UnaryServerInterceptor {
+	token := s.config.GRPC.Token
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if token != "" {
+			if err := authenticate(ctx, token); err != nil {
+				return nil, err
+			}
+		}
+		start := time.Now()
+		h, err := handler(ctx, req)
+		log.Trace("Request", "method", info.FullMethod, "duration", time.Since(start), "error", err)
+		return h, err
+	}
 }
 
-func (s *Server) loggingServerInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	start := time.Now()
-	h, err := handler(ctx, req)
+// combinedStreamInterceptor mirrors combinedUnaryInterceptor for stream RPCs.
+// Needed so the reflection service is gated by the same bearer-token check as unary calls.
+func (s *Server) combinedStreamInterceptor() grpc.StreamServerInterceptor {
+	token := s.config.GRPC.Token
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if token != "" {
+			if err := authenticate(ss.Context(), token); err != nil {
+				return err
+			}
+		}
+		start := time.Now()
+		err := handler(srv, ss)
+		log.Trace("Stream", "method", info.FullMethod, "duration", time.Since(start), "error", err)
+		return err
+	}
+}
 
-	log.Trace("Request", "method", info.FullMethod, "duration", time.Since(start), "error", err)
-
-	return h, err
+// authenticate validates the bearer token in the gRPC metadata against the
+// configured token using a constant-time comparison.
+func authenticate(ctx context.Context, expected string) error {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "missing metadata")
+	}
+	headers := md.Get("authorization")
+	if len(headers) == 0 {
+		return status.Error(codes.Unauthenticated, "missing authorization header")
+	}
+	const prefix = "Bearer "
+	h := headers[0]
+	if !strings.HasPrefix(h, prefix) {
+		return status.Error(codes.Unauthenticated, "invalid authorization header")
+	}
+	got := h[len(prefix):]
+	if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+		return status.Error(codes.Unauthenticated, "invalid token")
+	}
+	return nil
 }
 
 func setupLogger(logLevel int, loggingInfo LoggingConfig) {
@@ -620,8 +672,8 @@ func (s *Server) customHealthServiceHandler() http.Handler {
 
 		healthResponse["node_info"] = s.getBorInfo()
 
-		status := s.performHealthChecks(healthResponse)
-		healthResponse["status"] = status
+		sts := s.performHealthChecks(healthResponse)
+		healthResponse["status"] = sts
 
 		healthResponse["error"] = false
 		healthResponse["error_message"] = ""
