@@ -459,12 +459,15 @@ func (s *Server) gRPCServerByListener(listener net.Listener) error {
 
 // combinedUnaryInterceptor returns a single unary server interceptor that
 // optionally enforces bearer-token authentication (when a token is configured)
-// and always logs the request duration.
+// and logs the request outcome — both successful handler invocations and
+// auth-rejected attempts. Rejected attempts are logged, successful calls are
+// logged at Trace, rejections at Debug.
 func (s *Server) combinedUnaryInterceptor() grpc.UnaryServerInterceptor {
 	token := s.config.GRPC.Token
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if token != "" {
 			if err := authenticate(ctx, token); err != nil {
+				log.Debug("gRPC auth rejected", "method", info.FullMethod, "error", err)
 				return nil, err
 			}
 		}
@@ -476,12 +479,15 @@ func (s *Server) combinedUnaryInterceptor() grpc.UnaryServerInterceptor {
 }
 
 // combinedStreamInterceptor mirrors combinedUnaryInterceptor for stream RPCs.
-// Needed so the reflection service is gated by the same bearer-token check as unary calls.
+// Needed so the reflection service is gated by the same bearer-token check as
+// unary calls. Logging behavior matches combinedUnaryInterceptor: rejected
+// auth at Debug, successful stream duration at Trace.
 func (s *Server) combinedStreamInterceptor() grpc.StreamServerInterceptor {
 	token := s.config.GRPC.Token
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if token != "" {
 			if err := authenticate(ss.Context(), token); err != nil {
+				log.Debug("gRPC auth rejected (stream)", "method", info.FullMethod, "error", err)
 				return err
 			}
 		}
@@ -493,7 +499,10 @@ func (s *Server) combinedStreamInterceptor() grpc.StreamServerInterceptor {
 }
 
 // authenticate validates the bearer token in the gRPC metadata against the
-// configured token using a constant-time comparison.
+// configured token.
+// Token byte-comparison uses subtle.ConstantTimeCompare, which is constant-time
+// for equal-length inputs; length-mismatched inputs short-circuit.
+// Scheme matching is case-insensitive per RFC 6750 §2.1.
 func authenticate(ctx context.Context, expected string) error {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -505,7 +514,7 @@ func authenticate(ctx context.Context, expected string) error {
 	}
 	const prefix = "Bearer "
 	h := headers[0]
-	if !strings.HasPrefix(h, prefix) {
+	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
 		return status.Error(codes.Unauthenticated, "invalid authorization header")
 	}
 	got := h[len(prefix):]

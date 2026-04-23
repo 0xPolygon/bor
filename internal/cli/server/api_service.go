@@ -234,14 +234,16 @@ func (s *Server) GetTdByNumber(ctx context.Context, req *protobor.GetTdByNumberR
 }
 
 func (s *Server) GetBlockInfoInBatch(ctx context.Context, req *protobor.GetBlockInfoInBatchRequest) (*protobor.GetBlockInfoInBatchResponse, error) {
+	// Input validation returns codes.InvalidArgument so clients can
+	// distinguish malformed requests from internal failures
 	if req.EndBlockNumber < req.StartBlockNumber {
-		return nil, errors.New("invalid range: end < start")
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end < start")
 	}
 	if req.EndBlockNumber-req.StartBlockNumber >= uint64(maxBlockInfoBatchSize) {
-		return nil, errors.New("invalid range: exceeds max batch size")
+		return nil, status.Error(codes.InvalidArgument, "invalid range: exceeds max batch size")
 	}
 	if req.EndBlockNumber > math.MaxInt64 {
-		return nil, errors.New("invalid range: end exceeds max int64")
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end exceeds max int64")
 	}
 
 	count := req.EndBlockNumber - req.StartBlockNumber + 1
