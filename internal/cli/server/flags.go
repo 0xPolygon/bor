@@ -1226,7 +1226,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "grpc.token",
-		Usage:   "Bearer token required for incoming gRPC calls (empty disables auth)",
+		Usage:   "Raw token expected in the `authorization: Bearer <token>` header of incoming gRPC calls (empty disables auth; the `Bearer ` prefix is stripped before comparison). Prefer the BOR_GRPC_TOKEN environment variable over this flag.",
 		Value:   &c.cliConfig.GRPC.Token,
 		Default: c.cliConfig.GRPC.Token,
 	})

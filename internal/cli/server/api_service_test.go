@@ -158,6 +158,21 @@ func TestGetBlockInfoInBatch_RangeOverflow(t *testing.T) {
 	}
 }
 
+// TestGetBlockInfoInBatch_NearMaxUint64 guards against a narrow range near MaxUint64.
+func TestGetBlockInfoInBatch_NearMaxUint64(t *testing.T) {
+	srv := &Server{}
+	_, err := srv.GetBlockInfoInBatch(context.Background(), &protobor.GetBlockInfoInBatchRequest{
+		StartBlockNumber: math.MaxUint64 - 3,
+		EndBlockNumber:   math.MaxUint64,
+	})
+	if err == nil {
+		t.Fatalf("expected error on near-MaxUint64 range, got nil (would wrap and walk chain)")
+	}
+	if !strings.Contains(err.Error(), "exceeds max int64") {
+		t.Fatalf("expected int64-overflow error, got: %v", err)
+	}
+}
+
 // TestGetBlockInfoInBatch_SizeGateBoundary tests the boundaries.
 // A range of exactly maxBlockInfoBatchSize must pass the size gate,
 // and a range of maxBlockInfoBatchSize+1 must fail it with the specific error.

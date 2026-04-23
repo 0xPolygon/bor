@@ -1529,9 +1529,17 @@ func (c *Bor) SealHash(header *types.Header) common.Hash {
 // rootHashCache) persists across calls. JSON-RPC only invokes APIs() once at
 // node startup, but the gRPC backend fetches it on every handler call — without
 // the cache those calls would each start from an empty state.
+//
+// rootHashCache is initialized here (inside the sync.Once) rather than lazily
+// in GetRootHash so that concurrent gRPC handlers sharing the cached *API
+// cannot race in initializeRootHashCache.
 func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 	c.apiOnce.Do(func() {
-		c.api = &API{chain: chain, bor: c}
+		a := &API{chain: chain, bor: c}
+		if err := a.initializeRootHashCache(); err != nil {
+			panic(fmt.Errorf("bor: failed to initialize rootHashCache: %w", err))
+		}
+		c.api = a
 	})
 	return []rpc.API{{
 		Namespace: "bor",

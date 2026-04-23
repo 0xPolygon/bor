@@ -46,12 +46,12 @@ func headerToProtoBorHeader(h *types.Header) *protobor.Header {
 		StateRoot:   protoutil.ConvertHashToH256(h.Root),
 		TxRoot:      protoutil.ConvertHashToH256(h.TxHash),
 		ReceiptRoot: protoutil.ConvertHashToH256(h.ReceiptHash),
-		Bloom:       h.Bloom.Bytes(),
+		Bloom:       append([]byte(nil), h.Bloom.Bytes()...),
 		GasLimit:    h.GasLimit,
 		GasUsed:     h.GasUsed,
 		ExtraData:   append([]byte(nil), h.Extra...),
 		MixDigest:   protoutil.ConvertHashToH256(h.MixDigest),
-		Nonce:       h.Nonce[:],
+		Nonce:       append([]byte(nil), h.Nonce[:]...),
 	}
 	if h.Difficulty != nil {
 		out.Difficulty = h.Difficulty.Bytes()
@@ -62,10 +62,18 @@ func headerToProtoBorHeader(h *types.Header) *protobor.Header {
 	if h.WithdrawalsHash != nil {
 		out.WithdrawalsHash = protoutil.ConvertHashToH256(*h.WithdrawalsHash)
 	}
-	// BlobGasUsed and ExcessBlobGas are proto3 optional
-	// using *uint64 as a direct pointer, so the copy preserves nil vs.zero.
-	out.BlobGasUsed = h.BlobGasUsed
-	out.ExcessBlobGas = h.ExcessBlobGas
+	// BlobGasUsed and ExcessBlobGas are proto3 optional. *uint64 preserves
+	// nil-vs-zero; we copy through a fresh variable so the proto doesn't alias
+	// the source header's pointers (consistent with how ExtraData/Bloom/Nonce
+	// are handled above).
+	if h.BlobGasUsed != nil {
+		v := *h.BlobGasUsed
+		out.BlobGasUsed = &v
+	}
+	if h.ExcessBlobGas != nil {
+		v := *h.ExcessBlobGas
+		out.ExcessBlobGas = &v
+	}
 	if h.ParentBeaconRoot != nil {
 		out.ParentBeaconBlockRoot = protoutil.ConvertHashToH256(*h.ParentBeaconRoot)
 	}
@@ -166,8 +174,7 @@ func (s *Server) GetAuthor(ctx context.Context, req *protobor.GetAuthorRequest) 
 }
 
 func (s *Server) GetTdByHash(ctx context.Context, req *protobor.GetTdByHashRequest) (*protobor.GetTdResponse, error) {
-	hashBytes := protoutil.ConvertH256ToHash(req.Hash)
-	hash := common.BytesToHash(hashBytes[:])
+	hash := common.Hash(protoutil.ConvertH256ToHash(req.Hash))
 
 	td := s.backend.APIBackend.GetTd(ctx, hash)
 	if td == nil {
@@ -201,16 +208,20 @@ func (s *Server) GetBlockInfoInBatch(ctx context.Context, req *protobor.GetBlock
 	if req.EndBlockNumber-req.StartBlockNumber >= uint64(maxBlockInfoBatchSize) {
 		return nil, errors.New("invalid range: exceeds max batch size")
 	}
-
-	size := int(req.EndBlockNumber-req.StartBlockNumber) + 1
-	out := &protobor.GetBlockInfoInBatchResponse{
-		Blocks: make([]*protobor.BlockInfo, 0, size),
+	if req.EndBlockNumber > math.MaxInt64 {
+		return nil, errors.New("invalid range: end exceeds max int64")
 	}
 
-	// the i++ -> i-- requires an integration test with a multi-block batch
-	// mutator-disable-next-line loop-step
-	for i := req.StartBlockNumber; i <= req.EndBlockNumber; i++ {
-		info, ok := s.fetchBlockInfo(ctx, i)
+	count := req.EndBlockNumber - req.StartBlockNumber + 1
+	out := &protobor.GetBlockInfoInBatchResponse{
+		Blocks: make([]*protobor.BlockInfo, 0, count),
+	}
+
+	for j := uint64(0); j < count; j++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, ok := s.fetchBlockInfo(ctx, req.StartBlockNumber+j)
 		// this requires APIBackend mock returning a missing block mid-range
 		// mutator-disable-next-line gap-stop semantics
 		if !ok {
@@ -225,8 +236,12 @@ func (s *Server) GetBlockInfoInBatch(ctx context.Context, req *protobor.GetBlock
 
 // fetchBlockInfo loads header, total difficulty, and author for blockNum.
 // Returns (nil, false) if any piece is missing — the caller should stop the loop.
-// Author is left zero-valued for genesis (matching bor_getAuthor behavior).
+// Author is left as a nil *H160 for genesis; callers must nil-check before
+// decoding.
 func (s *Server) fetchBlockInfo(ctx context.Context, blockNum uint64) (*protobor.BlockInfo, bool) {
+	if blockNum > math.MaxInt64 {
+		return nil, false
+	}
 	header, err := s.backend.APIBackend.HeaderByNumber(ctx, rpc.BlockNumber(blockNum))
 	// the negate_conditional requires mocking both err!=nil and nil-header paths
 	// mutator-disable-next-line defensive APIBackend guard

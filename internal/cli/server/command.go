@@ -134,6 +134,13 @@ func (c *Command) extractFlags(args []string) error {
 	// Handle multiple flags for tx lookup limit
 	c.cliConfig.Cache.TxLookupLimit = handleTxLookupLimitFlag(tomlConfig, args, c.cliConfig)
 
+	// Env-var fallback for the gRPC auth token.
+	if c.cliConfig.GRPC != nil && c.cliConfig.GRPC.Token == "" {
+		if envTok := os.Getenv("BOR_GRPC_TOKEN"); envTok != "" {
+			c.cliConfig.GRPC.Token = envTok
+		}
+	}
+
 	c.config = c.cliConfig
 
 	return nil
