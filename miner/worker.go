@@ -1792,18 +1792,8 @@ func (w *worker) makeHeader(genParams *generateParams) (*types.Header, common.Ad
 		timestamp = parent.Time + 1
 	}
 
-	var coinbase common.Address
 	newBlockNumber := new(big.Int).Add(parent.Number, common.Big1)
-	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(newBlockNumber) {
-		coinbase = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(newBlockNumber.Uint64()))
-
-		// In case of coinbase is not set post Rio, use the default coinbase
-		if coinbase == (common.Address{}) {
-			coinbase = genParams.coinbase
-		}
-	} else {
-		coinbase = genParams.coinbase
-	}
+	coinbase := w.resolveCoinbase(newBlockNumber.Uint64(), genParams.coinbase)
 
 	// Calculate desired gas limit (may be dynamically adjusted based on base fee)
 	desiredGasLimit := w.calculateDesiredGasLimit(parent)

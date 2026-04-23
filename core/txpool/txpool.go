@@ -57,10 +57,10 @@ type BlockChain interface {
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
 
-	// PostExecutionStateAt returns a StateDB representing the post-execution
+	// PostExecState returns a StateDB representing the post-execution
 	// state of the given block header. Under pipelined SRC, uses a non-blocking
 	// FlatDiff overlay when available; otherwise falls back to StateAt.
-	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
+	PostExecState(header *types.Header) (*state.StateDB, error)
 }
 
 // TxPool is an aggregator for various transaction specific pools, collectively
@@ -93,7 +93,7 @@ func New(gasTip uint64, chain BlockChain, subpools []SubPool) (*TxPool, error) {
 	// Initialize the state with head block, or fallback to empty one in
 	// case the head state is not available (might occur when node is not
 	// fully synced).
-	statedb, err := chain.PostExecutionStateAt(head)
+	statedb, err := chain.PostExecState(head)
 	if err != nil {
 		statedb, err = chain.StateAt(types.EmptyRootHash)
 	}
@@ -198,7 +198,7 @@ func (p *TxPool) loop(head *types.Header) {
 			case resetBusy <- struct{}{}:
 				// Updates the statedb with the new chain head. The head state may be
 				// unavailable if the initial state sync has not yet completed.
-				if statedb, err := p.chain.PostExecutionStateAt(newHead); err != nil {
+				if statedb, err := p.chain.PostExecState(newHead); err != nil {
 					log.Error("Failed to reset txpool state", "err", err)
 				} else {
 					p.stateLock.Lock()
@@ -559,27 +559,27 @@ func (p *TxPool) Clear() {
 	}
 }
 
-// SpeculativeResetter is implemented by subpools that support speculative
-// state resets for pipelined SRC. This avoids import cycles between txpool
+// SpeculativeSetter is implemented by subpools that support speculative
+// state updates for pipelined SRC. This avoids import cycles between txpool
 // and legacypool packages.
-type SpeculativeResetter interface {
-	ResetSpeculativeState(newHead *types.Header, statedb *state.StateDB)
+type SpeculativeSetter interface {
+	SetSpeculativeState(newHead *types.Header, statedb *state.StateDB)
 }
 
-// ResetSpeculativeState updates the txpool's state to reflect a block that
+// SetSpeculativeState updates the txpool's state to reflect a block that
 // hasn't been written to the chain yet. This is used by pipelined SRC so that
 // speculative execution of block N+1 gets correct pending transactions
 // (reflecting block N's post-execution nonces and balances via FlatDiff overlay).
-func (p *TxPool) ResetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+func (p *TxPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
 	// Update the aggregator's state
 	p.stateLock.Lock()
 	p.state = statedb
 	p.stateLock.Unlock()
 
-	// Update subpools that support speculative resets
+	// Update subpools that support speculative state
 	for _, subpool := range p.subpools {
-		if sr, ok := subpool.(SpeculativeResetter); ok {
-			sr.ResetSpeculativeState(newHead, statedb)
+		if ss, ok := subpool.(SpeculativeSetter); ok {
+			ss.SetSpeculativeState(newHead, statedb)
 		}
 	}
 }

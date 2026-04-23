@@ -451,13 +451,20 @@ func (s *specSession) setupInitial() bool {
 	return true
 }
 
-// buildInitialSpecHeader constructs the first speculative header (N+1) with
-// placeholder ParentHash and resolved coinbase. Prepare() has not yet run.
+// buildInitialSpecHeader constructs the header for speculative execution of
+// block N+1 while block N is still being sealed. It intentionally does NOT
+// reuse makeHeader because the inputs diverge fundamentally: the parent is a
+// placeholder hash (block N not sealed yet), the timestamp is deterministic
+// (blockN.Time + bor period — no genParams / user input), the gas limit uses
+// config.GasCeil directly (no dynamic base-fee adjustment), and engine.Prepare
+// is deliberately skipped (it would fail against the placeholder parent). The
+// overlap is limited to coinbase resolution — unified via resolveCoinbase so
+// both headers pick the same address and don't diverge on state root.
 func (s *specSession) buildInitialSpecHeader() (*speculativeChainReader, *speculativeChainContext, *types.Header, common.Address) {
 	placeholder := placeholderParentHash(s.blockNNumber)
 	specReader := newSpeculativeChainReader(s.w.chain, s.blockNHeader, placeholder)
 	specContext := newSpeculativeChainContext(specReader, s.w.engine)
-	coinbase := s.w.resolveSpecCoinbase(s.nextBlockNumber)
+	coinbase := s.w.resolveCoinbase(s.nextBlockNumber, s.w.etherbase())
 	specHeader := &types.Header{
 		ParentHash: placeholder,
 		Number:     new(big.Int).SetUint64(s.nextBlockNumber),
@@ -471,17 +478,18 @@ func (s *specSession) buildInitialSpecHeader() (*speculativeChainReader, *specul
 	return specReader, specContext, specHeader, coinbase
 }
 
-// resolveSpecCoinbase matches the importer's NewEVMBlockContext(header, chain, nil)
-// logic: post-Rio uses BorConfig.CalculateCoinbase, otherwise w.etherbase().
-// We must not use w.etherbase() directly because Bor config may specify a
-// different coinbase address (e.g. 0xba5e on some networks).
-func (w *worker) resolveSpecCoinbase(blockNumber uint64) common.Address {
+// resolveCoinbase matches the importer's NewEVMBlockContext(header, chain, nil)
+// logic: post-Rio uses BorConfig.CalculateCoinbase, otherwise the caller-provided
+// fallback (genParams.coinbase for makeHeader, etherbase for the speculative
+// path). Unifying this ensures the speculative header and the later real header
+// resolve coinbase identically — a mismatch would cause a state root divergence.
+func (w *worker) resolveCoinbase(blockNumber uint64, fallback common.Address) common.Address {
 	var coinbase common.Address
 	if w.chainConfig.Bor != nil && w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(blockNumber)) {
 		coinbase = common.HexToAddress(w.chainConfig.Bor.CalculateCoinbase(blockNumber))
 	}
 	if coinbase == (common.Address{}) {
-		coinbase = w.etherbase()
+		coinbase = fallback
 	}
 	return coinbase
 }
@@ -547,7 +555,7 @@ func (s *specSession) resetTxPoolState(parent *types.Header, parentRoot common.H
 		log.Error("Pipelined SRC: failed to create txpool speculative state", "err", err)
 		return
 	}
-	s.w.eth.TxPool().ResetSpeculativeState(parent, specTxPoolState)
+	s.w.eth.TxPool().SetSpeculativeState(parent, specTxPoolState)
 }
 
 // startInitialFillGoroutine kicks off the speculative tx fill for N+1 and
@@ -733,7 +741,7 @@ func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, f
 	nextNextBlockNumber := s.nextBlockNumber + 1
 	specReaderNext := newSpeculativeChainReader(s.w.chain, finalSpecHeader, placeholderParentHash(s.nextBlockNumber))
 	specContextNext := newSpeculativeChainContext(specReaderNext, s.w.engine)
-	coinbaseNext := s.w.resolveSpecCoinbase(nextNextBlockNumber)
+	coinbaseNext := s.w.resolveCoinbase(nextNextBlockNumber, s.w.etherbase())
 	specHeaderNext := &types.Header{
 		ParentHash: placeholderParentHash(s.nextBlockNumber),
 		Number:     new(big.Int).SetUint64(nextNextBlockNumber),

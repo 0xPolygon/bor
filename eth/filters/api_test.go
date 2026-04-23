@@ -243,7 +243,6 @@ func TestResolveBlockNumForRangeCheck(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := resolveBlockNumForRangeCheck(tc.n, head); got != tc.want {
@@ -279,7 +278,6 @@ func TestCheckBlockRangeLimit(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := checkBlockRangeLimit(tc.begin, tc.end, head, tc.limit)

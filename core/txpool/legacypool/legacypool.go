@@ -172,10 +172,10 @@ type BlockChain interface {
 	// StateAt returns a state database for a given root hash (generally the head).
 	StateAt(root common.Hash) (*state.StateDB, error)
 
-	// PostExecutionStateAt returns a StateDB representing the post-execution
+	// PostExecState returns a StateDB representing the post-execution
 	// state of the given block header. Under pipelined SRC, uses a non-blocking
 	// FlatDiff overlay when available; otherwise falls back to StateAt.
-	PostExecutionStateAt(header *types.Header) (*state.StateDB, error)
+	PostExecState(header *types.Header) (*state.StateDB, error)
 }
 
 // Config are the configuration parameters of the transaction pool.
@@ -407,7 +407,7 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserver txpool.
 	// Initialize the state with head block, or fallback to empty one in
 	// case the head state is not available (might occur when node is not
 	// fully synced).
-	statedb, err := pool.chain.PostExecutionStateAt(head)
+	statedb, err := pool.chain.PostExecState(head)
 	if err != nil {
 		statedb, err = pool.chain.StateAt(types.EmptyRootHash)
 	}
@@ -1786,7 +1786,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	if newHead == nil {
 		newHead = pool.chain.CurrentBlock() // Special case during testing
 	}
-	statedb, err := pool.chain.PostExecutionStateAt(newHead)
+	statedb, err := pool.chain.PostExecState(newHead)
 	if err != nil {
 		log.Error("Failed to reset txpool state", "err", err)
 		return
@@ -1803,7 +1803,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.addTxs(reinject, false)
 }
 
-// ResetSpeculativeState updates the pool's internal state to reflect a new
+// SetSpeculativeState updates the pool's internal state to reflect a new
 // block that hasn't been written to the chain yet. This is used by pipelined
 // SRC: after block N's transactions are executed but before block N is sealed,
 // the miner calls this to update the txpool so that speculative execution of
@@ -1815,7 +1815,7 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 //  2. Sets currentHead to the new header
 //  3. Demotes transactions with stale nonces
 //  4. Promotes newly executable transactions
-func (pool *LegacyPool) ResetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
+func (pool *LegacyPool) SetSpeculativeState(newHead *types.Header, statedb *state.StateDB) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 

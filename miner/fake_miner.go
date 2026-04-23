@@ -261,7 +261,7 @@ func (bc *testBlockChainBor) StateAt(common.Hash) (*state.StateDB, error) {
 	return bc.statedb, nil
 }
 
-func (bc *testBlockChainBor) PostExecutionStateAt(header *types.Header) (*state.StateDB, error) {
+func (bc *testBlockChainBor) PostExecState(header *types.Header) (*state.StateDB, error) {
 	return bc.statedb, nil
 }
 
