@@ -219,7 +219,7 @@ devfakeauthor = false
   disable-bor-wallet = true
 
 [grpc]
-  addr = ":3131"
+  addr = "127.0.0.1:3131"
 
 [developer]
   dev = false
@@ -238,7 +238,7 @@ devfakeauthor = false
   parallel-stateless-import = false
   parallel-stateless-import-workers = 0
   witnessapi = false
-  filestore = false
+  filestore = true
   fastforwardthreshold = 6400
 
 [pprof]

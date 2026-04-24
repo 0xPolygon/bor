@@ -465,7 +465,7 @@ func (s *StateDB) GetReadMapDump() []DumpStruct {
 
 // GetWriteMapDump gets writeMap Dump of format: "TxIdx, Inc, Path, Write"
 func (s *StateDB) GetWriteMapDump() []DumpStruct {
-	writeList := s.MVReadList()
+	writeList := s.MVWriteList()
 	res := make([]DumpStruct, 0, len(writeList))
 
 	for _, val := range writeList {

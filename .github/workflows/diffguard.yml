@@ -1,0 +1,81 @@
+name: diffguard
+
+on:
+  pull_request:
+    branches:
+      - '**'
+    types: [opened, synchronize]
+
+concurrency:
+  group: diffguard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diffguard:
+    name: Quality metrics
+    if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
+    # Mutation testing is CPU-heavy (one `go test` invocation per mutant,
+    # parallelized across cores). The 16-core runner matches the one used
+    # by govulncheck and keeps PR turnaround under ~10 min on typical diffs.
+    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # diffguard needs the base branch history for `git diff` and
+          # `git log --follow`, so fetch the full history (shallow clones
+          # break merge-base resolution).
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-diffguard-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-diffguard-
+
+      - name: Install diffguard
+        run: go install github.com/0xPolygon/diffguard/cmd/diffguard@latest
+
+      - name: Run diffguard
+        id: diffguard
+        # Sample 10% of generated mutants — statistically representative
+        # for tier scores while keeping CI cost bounded. Each mutant runs
+        # the full test suite of its package, hence the 5m test-timeout
+        # (eth/fetcher alone takes ~2.3m).
+        #
+        # Gating: --fail-on warn + default tier thresholds means the job
+        # FAILs when Tier-1 (logic) score drops below 90% and WARNs on
+        # Tier-2 below 70%. Tier-3 (observability) is report-only.
+        run: |
+          diffguard \
+            --base origin/${{ github.base_ref }} \
+            --mutation-sample-rate 10 \
+            --test-timeout 5m \
+            --output text \
+            --fail-on warn \
+            . | tee $GITHUB_STEP_SUMMARY
+
+      - name: Upload JSON report
+        # Run even on failure so the survivor list is available for
+        # triage. Skip mutation here to keep the second run cheap — the
+        # text report above already contains the full mutation results.
+        if: always()
+        run: |
+          diffguard \
+            --base origin/${{ github.base_ref }} \
+            --skip-mutation \
+            --output json \
+            --fail-on none \
+            . > diffguard-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diffguard-report
+          path: diffguard-report.json
+          retention-days: 14

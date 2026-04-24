@@ -1173,28 +1173,27 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
-func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
-	headerNumber := header.Number.Uint64()
+func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.Receipt, error) {
+	// Reject the block if it has withdrawals or requests
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return nil
+		return nil, consensus.ErrUnexpectedWithdrawals
 	}
 	if header.RequestsHash != nil {
-		return nil
+		return nil, consensus.ErrUnexpectedRequests
 	}
 
 	var (
+		headerNumber  = header.Number.Uint64()
 		stateSyncData []*types.StateSyncData
 		err           error
 	)
-
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
 			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil
+				return nil, fmt.Errorf("error while committing span: %w", err)
 			}
 		}
 
@@ -1202,8 +1201,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			// commit states
 			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil
+				return nil, fmt.Errorf("%w: error while committing states: %w", core.ErrStateSyncProcessing, err)
 			}
 		}
 		// Get the underlying state for updating consensus time
@@ -1215,31 +1213,42 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	// the wrapped state here as it may have a hooked state db instance which can help
 	// in tracing if it's enabled.
 	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
-		log.Error("Error changing contract code", "error", err)
-		return nil
+		return nil, fmt.Errorf("error changing contract code: %w", err)
 	}
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
-		if len(body.Transactions) > 0 {
-			// Craft a state-sync tx to validate it against the tx in block body
-			stateSyncTx := types.NewTx(&types.StateSyncTx{
-				StateSyncData: stateSyncData,
-			})
-			lastTx := body.Transactions[len(body.Transactions)-1]
-			if stateSyncTx.Hash() != lastTx.Hash() {
-				log.Error("Invalid state-sync tx in block body", "got", lastTx.Hash(), "want", stateSyncTx.Hash())
-				return receipts
-			}
-			if lastTx.Type() == types.StateSyncTxType {
-				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
-			}
-		}
-	} else {
-		// set state sync
-		hc := chain.(*core.HeaderChain)
+	// Set state-sync in any case
+	if hc, ok := chain.(*core.HeaderChain); ok {
 		hc.SetStateSync(stateSyncData)
 	}
-	return receipts
+
+	if len(stateSyncData) == 0 {
+		return receipts, nil
+	}
+
+	txs := body.Transactions
+	isMadhugiri := c.config != nil && c.config.IsMadhugiri(header.Number)
+
+	// Pre-Madhugiri, state-sync transactions were not included in block body so we can safely return
+	if !isMadhugiri {
+		return receipts, nil
+	}
+
+	// Reject the block as heimdall suggests presence of state-sync event(s) but state-sync
+	// transaction is missing from block body.
+	if len(txs) == 0 || txs[len(txs)-1].Type() != types.StateSyncTxType {
+		return nil, fmt.Errorf("%w: block body missing state-sync transaction, heimdall reported %d event(s)", core.ErrStateSyncMismatch, len(stateSyncData))
+	}
+
+	// Craft a state-sync tx to validate it against the tx in block body
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: stateSyncData,
+	})
+	lastTx := txs[len(txs)-1]
+	if stateSyncTx.Hash() != lastTx.Hash() {
+		return nil, fmt.Errorf("%w: hash mismatch, got %s want %s", core.ErrStateSyncMismatch, lastTx.Hash(), stateSyncTx.Hash())
+	}
+	receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
+	return receipts, nil
 }
 
 func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {

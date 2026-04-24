@@ -104,24 +104,43 @@ func TestExpDecaySample(t *testing.T) {
 // nanosecond duration since start rather than second duration since start.
 // The priority becomes +Inf quickly after starting if this is done,
 // effectively freezing the set of samples until a rescale step happens.
+//
+// Uses the unexported update() with synthesised monotonic timestamps and a
+// seeded RNG so the test is not sensitive to wall-clock jitter or scheduler
+// delay under -race. The regression this test guards against is priority
+// overflow, which would freeze the reservoir at the first batch and stick the
+// average at 10 — any determinism-preserving setup still reproduces that
+// signal.
 func TestExpDecaySampleNanosecondRegression(t *testing.T) {
-	sw := NewExpDecaySample(100, 0.99)
-	for i := 0; i < 100; i++ {
-		sw.Update(10)
-	}
-	time.Sleep(1 * time.Millisecond)
+	sw := NewExpDecaySample(100, 0.99).(*ExpDecaySample)
+	sw.SetRand(rand.New(rand.NewSource(1)))
 
+	// Anchor t0 so update() sees positive dt and matches the original
+	// wall-clock version's timing shape: a tight burst of nanosecond-spaced
+	// samples, a 1ms gap, then another tight burst. The gap makes batch-2's
+	// priorities systematically higher and drives the reservoir average into
+	// [14, 16]. NewExpDecaySample set t0 to time.Now(); we reset both t0 and
+	// the rescale marker t1 to stay clock-independent.
+	sw.t0 = time.Unix(0, 0)
+	sw.t1 = sw.t0.Add(rescaleThreshold)
+
+	step := 100 * time.Nanosecond
+	base := sw.t0
 	for i := 0; i < 100; i++ {
-		sw.Update(20)
+		sw.update(base.Add(time.Duration(i)*step), 10)
 	}
+	base = sw.t0.Add(1 * time.Millisecond).Add(100 * step)
+	for i := 0; i < 100; i++ {
+		sw.update(base.Add(time.Duration(i)*step), 20)
+	}
+
 	v := sw.Snapshot().values
 	avg := float64(0)
-
 	for i := 0; i < len(v); i++ {
 		avg += float64(v[i])
 	}
-
 	avg /= float64(len(v))
+
 	if avg > 16 || avg < 14 {
 		t.Errorf("out of range [14, 16]: %v\n", avg)
 	}

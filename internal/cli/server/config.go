@@ -1025,7 +1025,7 @@ func DefaultConfig() *Config {
 			DisableBorWallet:    true,
 		},
 		GRPC: &GRPCConfig{
-			Addr: ":3131",
+			Addr: "127.0.0.1:3131",
 		},
 		Developer: &DeveloperConfig{
 			Enabled:  false,
@@ -1052,7 +1052,7 @@ func DefaultConfig() *Config {
 			EnableParallelStatelessImport:  false,
 			ParallelStatelessImportWorkers: 0,
 			WitnessAPI:                     false,
-			FileStore:                      false,
+			FileStore:                      true,
 			FastForwardThreshold:           6400,
 		},
 		History: &HistoryConfig{

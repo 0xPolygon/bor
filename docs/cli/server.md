@@ -64,7 +64,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```gpo.percentile```: Suggested gas price is the given percentile of a set of recent transaction gas prices (default: 60)
 
-- ```grpc.addr```: Address and port to bind the GRPC server (default: :3131)
+- ```grpc.addr```: Address and port to bind the GRPC server (default: 127.0.0.1:3131)
 
 - ```history.logs```: Number of recent blocks to maintain log search index for (default = about 2 months, 0 = entire chain) (default: 2350000)
 
@@ -120,7 +120,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```witness.fastforwardthreshold```: Minimum necessary distance between local header and chain tip to trigger fast forward (default: 6400)
 
-- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: false)
+- ```witness.filestore```: Store witness blobs on the filesystem instead of the key-value database (default: true)
 
 - ```witness.parallelstatelessimport```: Enable parallel stateless block import (default: false)
 

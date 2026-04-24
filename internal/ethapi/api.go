@@ -913,10 +913,9 @@ func doCall(ctx context.Context, b Backend, args TransactionArgs, state *state.S
 	// this makes sure resources are cleaned up.
 	defer cancel()
 
-	// Note: Don't put a cap on gas if it's a system tx (coming from bor consensus). The
-	// easiest way to enforce this is to set globalGasCap for this call to 0 which will
-	// use the max possible limit.
-	if isBorSystemTx(b.ChainConfig().Bor, args.To) {
+	// Only bypass the RPC gas cap for system contract calls that originate from
+	// internal consensus code (marked via WithBorInternalCall ctx).
+	if isBorInternalCall(ctx) && isBorSystemTx(b.ChainConfig().Bor, args.To) {
 		globalGasCap = 0
 	}
 	gp := new(core.GasPool)
@@ -1069,12 +1068,20 @@ func (api *BlockChainAPI) CallWithState(ctx context.Context, args TransactionArg
 // Note, this function doesn't make any changes in the state/blockchain and is
 // useful to execute and retrieve values.
 func (api *BlockChainAPI) SimulateV1(ctx context.Context, opts simOpts, blockNrOrHash *rpc.BlockNumberOrHash) ([]*simBlockResult, error) {
-	return nil, errors.New("eth_simulateV1 is not supported on Bor")
-	//nolint:govet // Unreachable code kept intentionally so it can be re-enabled easily.
 	if len(opts.BlockStateCalls) == 0 {
 		return nil, &invalidParamsError{message: "empty input"}
 	} else if len(opts.BlockStateCalls) > maxSimulateBlocks {
 		return nil, &clientLimitExceededError{message: "too many blocks"}
+	}
+	var totalCalls int
+	for _, block := range opts.BlockStateCalls {
+		if len(block.Calls) > maxSimulateCallsPerBlock {
+			return nil, &clientLimitExceededError{message: fmt.Sprintf("too many calls in block: %d > %d", len(block.Calls), maxSimulateCallsPerBlock)}
+		}
+		totalCalls += len(block.Calls)
+		if totalCalls > maxSimulateTotalCalls {
+			return nil, &clientLimitExceededError{message: fmt.Sprintf("too many calls: %d > %d", totalCalls, maxSimulateTotalCalls)}
+		}
 	}
 	if blockNrOrHash == nil {
 		n := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
@@ -1084,17 +1091,12 @@ func (api *BlockChainAPI) SimulateV1(ctx context.Context, opts simOpts, blockNrO
 	if state == nil || err != nil {
 		return nil, err
 	}
-	gasCap := api.b.RPCGasCap()
-	if gasCap == 0 {
-		gasCap = gomath.MaxUint64
-	}
 	sim := &simulator{
-		b:           api.b,
-		state:       state,
-		base:        base,
-		chainConfig: api.b.ChainConfig(),
-		// Each tx and all the series of txes shouldn't consume more gas than cap
-		gp:             new(core.GasPool).AddGas(gasCap),
+		b:              api.b,
+		state:          state,
+		base:           base,
+		chainConfig:    api.b.ChainConfig(),
+		budget:         newGasBudget(api.b.RPCGasCap()),
 		traceTransfers: opts.TraceTransfers,
 		validate:       opts.Validation,
 		fullTx:         opts.ReturnFullTransactions,
@@ -2795,6 +2797,10 @@ func (api *DebugAPI) AccountAt(ctx context.Context, blockHash common.Hash, txInd
 	}
 
 	for idx := uint64(0); idx <= lastTxIdx && idx < uint64(len(block.Transactions())); idx++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		tx := block.Transactions()[idx]
 		// Skip state-sync transactions
 		if tx.Type() == types.StateSyncTxType {
