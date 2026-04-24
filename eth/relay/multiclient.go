@@ -27,6 +27,10 @@ var (
 	rpcErrorInPreconfMeter     = metrics.NewRegisteredMeter("preconfs/rpcerror", nil)
 	belowThresholdPreconfMeter = metrics.NewRegisteredMeter("preconfs/belowthreshold", nil)
 	alreadyKnownErrMeter       = metrics.NewRegisteredMeter("relay/txalreadyknown", nil)
+
+	// Track BP level RPC rejections for all tx submissions
+	preconfRejectionMeter   = metrics.NewRegisteredMeter("relay/bprpc/preconf/error", nil)
+	privateTxRejectionMeter = metrics.NewRegisteredMeter("relay/bprpc/privatetx/error", nil)
 )
 
 // isAlreadyKnownError checks if the error indicates the transaction is already known to the node
@@ -43,6 +47,10 @@ type multiClient struct {
 	clients       []*rpc.Client // rpc client instances dialed to each block producer
 	closed        atomic.Bool
 	retryInterval time.Duration // 0 means use privateTxRetryInterval; configurable for testing
+
+	rejectionTracker rejectionTracker
+	reporterDone     chan struct{} // closed to signal the reporter goroutine to exit
+	closeOnce        sync.Once
 }
 
 func newMultiClient(urls []string) *multiClient {
@@ -94,9 +102,12 @@ func newMultiClient(urls []string) *multiClient {
 	}
 
 	log.Info("[tx-relay] Initialised rpc client for each block producer", "success", len(clients), "failed", failed)
-	return &multiClient{
-		clients: clients,
+	mc := &multiClient{
+		clients:      clients,
+		reporterDone: make(chan struct{}),
 	}
+	go mc.reportRejections()
+	return mc
 }
 
 type SendTxForPreconfResponse struct {
@@ -129,6 +140,8 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 					preconfOfferedCount.Add(1)
 					return
 				}
+				preconfRejectionMeter.Mark(1)
+				mc.rejectionTracker.record(err)
 				setError.Do(func() {
 					firstErr = err
 				})
@@ -194,6 +207,8 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 					successfulIndices = append(successfulIndices, index)
 					return
 				}
+				privateTxRejectionMeter.Mark(1)
+				mc.rejectionTracker.record(err)
 				setError.Do(func() {
 					firstErr = err
 				})
@@ -284,6 +299,8 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 						alreadyKnownErrMeter.Mark(1)
 						return
 					}
+					privateTxRejectionMeter.Mark(1)
+					mc.rejectionTracker.record(err)
 					mu.Lock()
 					newFailedIndices = append(newFailedIndices, idx)
 					mu.Unlock()
@@ -354,8 +371,33 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 
 // Close closes all rpc client connections
 func (mc *multiClient) close() {
-	mc.closed.Store(true)
-	for _, client := range mc.clients {
-		client.Close()
+	mc.closeOnce.Do(func() {
+		mc.closed.Store(true)
+		if mc.reporterDone != nil {
+			close(mc.reporterDone)
+		}
+		for _, client := range mc.clients {
+			client.Close()
+		}
+	})
+}
+
+// reportRejections runs in the background and flushes the rejection tracker on a
+// fixed interval, emitting one aggregated error log for different error types.
+func (mc *multiClient) reportRejections() {
+	ticker := time.NewTicker(rejectionReportInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			total, counts := mc.rejectionTracker.flush()
+			log.Info("[tx-relay] BP rejection summary",
+				"total", total,
+				"errors", formatRejectionCounts(counts),
+			)
+		case <-mc.reporterDone:
+			return
+		}
 	}
 }
