@@ -24,8 +24,8 @@ type rejectionTracker struct {
 	total  uint64
 }
 
-// record adds an error to the tracker. "already known" errors are filtered out by the
-// caller — only genuine rejections should reach here.
+// record adds an error to the tracker. Callers typically filter out "already known"
+// error type while other RPC related errors reach here.
 func (t *rejectionTracker) record(err error) {
 	if err == nil {
 		return
