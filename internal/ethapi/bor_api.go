@@ -47,6 +47,24 @@ const (
 	GetLogsMaxBlockRange = 1000
 )
 
+// borInternalCallKey is an unexported type used as a context key.
+// Because the type is unexported, no package outside internal/ethapi
+// can construct a value of this type, making it impossible for
+// external RPC callers to forge this context value.
+type borInternalCallKey struct{}
+
+// WithBorInternalCall marks a context as originating from an internal
+// consensus call. This allows Call to differentiate internal calls.
+func WithBorInternalCall(ctx context.Context) context.Context {
+	return context.WithValue(ctx, borInternalCallKey{}, true)
+}
+
+// isBorInternalCall returns true if the context was marked as an internal call.
+func isBorInternalCall(ctx context.Context) bool {
+	v, _ := ctx.Value(borInternalCallKey{}).(bool)
+	return v
+}
+
 // isBorSystemTx checks if the tx is for bor genesis contract addresses or not
 func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
 	if borCfg == nil {
@@ -927,6 +945,10 @@ func (api *BorAPI) GetLogs(ctx context.Context, crit FilterCriteria) ([]*types.L
 
 	// Iterate blocks from the beginning to the end
 	for blockNum := begin; blockNum <= end; blockNum++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		block, receipts, err := api.getBlockAndReceipts(ctx, blockNum)
 		if err != nil {
 			return nil, err
@@ -1020,6 +1042,10 @@ func (api *BorAPI) GetLatestLogs(ctx context.Context, crit FilterCriteria, logOp
 
 	// Iterate blocks from the end to the beginning
 	for blockNum := end; blockNum >= begin && blockNum <= end; blockNum-- {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		// Check the block count limit
 		if blockCount > 0 && blocksScanned >= blockCount {
 			break
