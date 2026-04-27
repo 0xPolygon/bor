@@ -87,6 +87,25 @@ const (
 
 	// interruptBuffer is the buffer time to give some buffer for state root computation
 	interruptBuffer = 100 * time.Millisecond
+
+	// prefetchChanBufSize is the default buffer for the unified prefetcher's tx
+	// stream channel. ≈ one full block's worth of 21k-gas txs at the 100M-gas
+	// block limit. Sized to absorb the idle provider's per-loop burst (bounded
+	// by gas budget) without ever blocking a sender; workers drain far faster
+	// than the idle heap can fill in practice. Channel memory is ~33 KB.
+	prefetchChanBufSize = 4096
+
+	// prefetchIdleLoopInterval is the minimum cadence between idle-phase pool
+	// snapshots in runIdleTxProvider.
+	prefetchIdleLoopInterval = 100 * time.Millisecond
+
+	// prefetchDefaultGasLimitPercent is the default percentage of header
+	// gas limit used as the idle-phase prefetch budget when unconfigured.
+	prefetchDefaultGasLimitPercent = 100
+
+	// prefetchMaxGasLimitPercent caps the idle-phase prefetch gas budget to
+	// guard against misconfiguration DoS.
+	prefetchMaxGasLimitPercent = 150
 )
 
 var (
@@ -1899,6 +1918,42 @@ func buildTxPlan(h *transactionsByPriceAndNonce, gasLimit uint64, prefetchedHash
 	return plan
 }
 
+// sendPlan forwards the residual (not-yet-prefetched) transactions to the prefetcher
+// plan channel before execution begins. The heap clone is made synchronously — it
+// must happen before commitTransactions consumes the heap. The scan and channel sends
+// run in a goroutine so the builder's critical path is not blocked.
+//
+// Already-prefetched txs are excluded from the send but still counted in the gas
+// budget so the estimate stays accurate. Bonus txs that fit due to freed gas are
+// covered by the prefetcher's own overflow heap driven by builderGasFreedCh.
+func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams, plainTxs *transactionsByPriceAndNonce, gasLimit uint64) {
+	if builderPlanCh == nil || plainTxs == nil {
+		return
+	}
+	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
+	clone := plainTxs.clone()
+	var prefetchedHashes *sync.Map
+	if genParams != nil {
+		prefetchedHashes = genParams.prefetchedTxHashes
+	}
+	genParams.planWg.Add(1)
+	go func() {
+		defer genParams.planWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("sendPlan goroutine panicked", "err", r, "stack", string(debug.Stack()))
+				prefetchPanicMeter.Mark(1)
+			}
+		}()
+		for _, tx := range buildTxPlan(clone, gasLimit, prefetchedHashes) {
+			select {
+			case builderPlanCh <- tx:
+			default:
+			}
+		}
+	}()
+}
+
 // scanOverflow greedily pops transactions from the heap that fit within the freed-gas
 // budget, returning new txs to prefetch and the remaining budget. Already-prefetched
 // txs are skipped entirely (not counted against the budget) because the freed gas
@@ -1908,7 +1963,7 @@ func scanOverflow(
 	h *transactionsByPriceAndNonce,
 	budget uint64,
 	prefetchedHashes *sync.Map,
-	sentThisPhase map[common.Hash]struct{},
+	inFlightHashes map[common.Hash]struct{},
 ) ([]*types.Transaction, uint64) {
 	var bonus []*types.Transaction
 	remaining := budget
@@ -1929,7 +1984,7 @@ func scanOverflow(
 		// aren't in prefetchedHashes yet (onSuccess hasn't fired), but a worker
 		// is already executing them — emitting again just burns a second worker
 		// on the same tx.
-		if _, inflight := sentThisPhase[ltx.Hash]; inflight {
+		if _, inflight := inFlightHashes[ltx.Hash]; inflight {
 			h.Shift()
 			continue
 		}
@@ -2001,43 +2056,6 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		}
 	}
 
-	// sendPlan sends the residual (not-yet-prefetched) transactions to the prefetcher
-	// channel before execution begins. The heap clone is made synchronously — it must
-	// happen before commitTransactions consumes the heap. The scan and channel sends
-	// run in a goroutine so the builder's critical path is not blocked.
-	//
-	// Already-prefetched txs are excluded from the send but still counted in the gas
-	// budget so the estimate stays accurate. Bonus txs that fit due to freed gas are
-	// covered by the prefetcher's own overflow heap driven by builderGasFreedCh.
-	sendPlan := func(plainTxs *transactionsByPriceAndNonce, gasLimit uint64) {
-		if builderPlanCh == nil || plainTxs == nil {
-			return
-		}
-		// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
-		clone := plainTxs.clone()
-		var prefetchedHashes *sync.Map
-		if genParams != nil {
-			prefetchedHashes = genParams.prefetchedTxHashes
-		}
-		ch := builderPlanCh
-		genParams.planWg.Add(1)
-		go func() {
-			defer genParams.planWg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					log.Error("sendPlan goroutine panicked", "err", r, "stack", string(debug.Stack()))
-					prefetchPanicMeter.Mark(1)
-				}
-			}()
-			for _, tx := range buildTxPlan(clone, gasLimit, prefetchedHashes) {
-				select {
-				case ch <- tx:
-				default:
-				}
-			}
-		}()
-	}
-
 	// remainingGas returns the block gas still available for the next
 	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
 	// fall back to the full header limit.
@@ -2052,7 +2070,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
-		sendPlan(plainTxs, remainingGas())
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}
@@ -2062,7 +2080,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, &w.interruptBlockBuilding)
 		txHeapInitTimer.Update(time.Since(heapInitTime))
-		sendPlan(plainTxs, remainingGas())
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
 		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
 			return err
 		}
@@ -2222,11 +2240,11 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	start := time.Now()
 
 	// Create the builder plan channel before signalling builder mode so the prefetcher goroutine
-	// always finds a valid channel when it transitions. Buffer of 4096 covers a full block's
-	// worth of transactions with room to spare; the builder never blocks on a full buffer because
+	// always finds a valid channel when it transitions. The buffer covers a full block's worth
+	// of transactions with room to spare; the builder never blocks on a full buffer because
 	// all sends are non-blocking.
 	if genParams.builderStarted != nil {
-		genParams.builderPlanCh = make(chan *types.Transaction, 4096)
+		genParams.builderPlanCh = make(chan *types.Transaction, prefetchChanBufSize)
 		genParams.builderGasFreedCh = make(chan uint64, 256)
 		genParams.builderStarted.Store(true) // immediately interrupts idle Prefetch() + mode switch
 	}
@@ -2337,11 +2355,7 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	}
 
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
-	// 4096 ≈ one full block's worth of 21k-gas txs at the 100M-gas block limit.
-	// Sized to absorb the idle provider's per-loop burst (bounded by gas budget)
-	// without ever blocking a sender; workers drain far faster than the idle
-	// heap can fill in practice. Channel memory is ~33 KB — negligible.
-	txsCh := make(chan *types.Transaction, 4096)
+	txsCh := make(chan *types.Transaction, prefetchChanBufSize)
 	evmAbort := new(atomic.Bool)
 	// inBuilderPhase gates builder-phase attribution. Flipped to true only
 	// after the idle→builder handoff completes (evmAbort drain + reset), so
@@ -2440,8 +2454,6 @@ func drainTxChan(ch <-chan *types.Transaction) {
 // Gas accounting uses declared tx gas (not actual execution gas) — close enough
 // since the budget only bounds speculative work, not correctness.
 func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *types.Header, genParams *generateParams, interrupt *atomic.Bool) {
-	const minLoopInterval = 100 * time.Millisecond
-
 	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
 	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
 	filter.BlobTxs = false
@@ -2462,20 +2474,22 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interrupt)
 		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit)
 
-		waitUntilNextLoop(loopStart, minLoopInterval, shouldExit)
+		waitUntilNextLoop(loopStart, prefetchIdleLoopInterval, shouldExit)
 	}
 }
 
 // idleGasLimitPercent returns the configured prefetch gas budget percent, capped
-// defensively at 150 and defaulted to 100 when unset.
+// defensively at prefetchMaxGasLimitPercent and defaulted to
+// prefetchDefaultGasLimitPercent when unset.
 func idleGasLimitPercent(cfg *Config) uint64 {
 	pct := cfg.PrefetchGasLimitPercent
 	if pct == 0 {
-		return 100
+		return prefetchDefaultGasLimitPercent
 	}
-	if pct > 150 {
-		log.Warn("Prefetch gas limit percent exceeds maximum, capping at 150%", "configured", pct)
-		return 150
+	if pct > prefetchMaxGasLimitPercent {
+		log.Warn("Prefetch gas limit percent exceeds maximum, capping",
+			"configured", pct, "max", prefetchMaxGasLimitPercent)
+		return prefetchMaxGasLimitPercent
 	}
 	return pct
 }
@@ -2582,17 +2596,17 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 	var extendedBudget uint64
 	var gasFreedCh <-chan uint64 = genParams.builderGasFreedCh
 
-	// sentThisPhase tracks hashes already forwarded on txsCh within the builder
+	// inFlightHashes tracks hashes already forwarded on txsCh within the builder
 	// phase. genParams.prefetchedTxHashes is only written after onSuccess fires,
 	// which trails the EVM execution window; a plan tx still in-flight could
 	// otherwise be re-emitted by scanOverflow from a fresh pool snapshot, wasting
 	// a second worker on the same tx. Local map is safe because this provider
 	// runs single-threaded.
-	sentThisPhase := make(map[common.Hash]struct{})
+	inFlightHashes := make(map[common.Hash]struct{})
 
 	for {
 		batch, newGasFreedCh, delta, builderDone := collectPlanBatch(
-			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes, sentThisPhase,
+			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes, inFlightHashes,
 		)
 		gasFreedCh = newGasFreedCh
 		extendedBudget += delta
@@ -2602,14 +2616,14 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 			// scanOverflow won't re-emit the same tx within this iteration
 			// (collectPlanBatch returns before forwardTxs records hashes).
 			for _, tx := range batch {
-				sentThisPhase[tx.Hash()] = struct{}{}
+				inFlightHashes[tx.Hash()] = struct{}{}
 			}
 			var bonus []*types.Transaction
-			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, sentThisPhase)
+			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, inFlightHashes)
 			batch = append(batch, bonus...)
 		}
 
-		forwardTxs(txsCh, batch, sentThisPhase)
+		forwardTxs(txsCh, batch, inFlightHashes)
 
 		if builderDone || interrupt.Load() {
 			return
@@ -2619,13 +2633,13 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 
 // forwardTxs does a non-blocking send of each tx to ch. Drops silently if the
 // buffer is full — prefetch is best-effort. Tracks each forwarded hash in
-// sentThisPhase so follow-up overflow scans don't re-emit in-flight txs.
-func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, sentThisPhase map[common.Hash]struct{}) {
+// inFlightHashes so follow-up overflow scans don't re-emit in-flight txs.
+func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}) {
 	for _, tx := range txs {
 		select {
 		case ch <- tx:
-			if sentThisPhase != nil {
-				sentThisPhase[tx.Hash()] = struct{}{}
+			if inFlightHashes != nil {
+				inFlightHashes[tx.Hash()] = struct{}{}
 			}
 		default:
 		}
@@ -2651,17 +2665,17 @@ func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool)
 // gasFreedCh closes, it is disabled by returning a nil newGasFreedCh so the
 // caller can stop selecting on it in subsequent calls.
 //
-// sentThisPhase closes the scanOverflow→plan cross-iteration edge of the dedup
+// inFlightHashes closes the scanOverflow→plan cross-iteration edge of the dedup
 // matrix: a tx emitted by scanOverflow in an earlier iteration and still
 // executing on a worker is absent from prefetchedHashes (onSuccess trails
-// multi-ms EVM) but present in sentThisPhase — without this check, a buffered
+// multi-ms EVM) but present in inFlightHashes — without this check, a buffered
 // copy of the same tx in planCh would get forwarded a second time.
 func collectPlanBatch(
 	planCh <-chan *types.Transaction,
 	gasFreedCh <-chan uint64,
 	window time.Duration,
 	prefetchedHashes *sync.Map,
-	sentThisPhase map[common.Hash]struct{},
+	inFlightHashes map[common.Hash]struct{},
 ) (batch []*types.Transaction, newGasFreedCh <-chan uint64, budgetDelta uint64, builderDone bool) {
 	timer := time.NewTimer(window)
 	defer timer.Stop()
@@ -2678,7 +2692,7 @@ func collectPlanBatch(
 					continue
 				}
 			}
-			if _, inflight := sentThisPhase[tx.Hash()]; inflight {
+			if _, inflight := inFlightHashes[tx.Hash()]; inflight {
 				continue
 			}
 			batch = append(batch, tx)
