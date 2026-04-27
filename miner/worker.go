@@ -2386,7 +2386,13 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	streamDone := make(chan struct{})
 	go func() {
 		defer close(streamDone)
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+		// intermediateRootPrefetch=false: benchmarks (state_prefetcher_intermediate_root_test.go)
+		// show the per-tx IntermediateRoot adds ~80–130% prefetch wall time for ≤10%
+		// commit speedup (≈0.1 ms). With snapshots active, the warming target is
+		// pebble's block cache, which under realistic clean-cache sizes is already
+		// resident. Upstream go-ethereum's prefetcher does not compute intermediate
+		// roots either.
+		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), false,
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 
