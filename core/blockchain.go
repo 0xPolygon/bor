@@ -168,6 +168,28 @@ var (
 	// from "metric is zero because the pipelined code path bypassed its emit site".
 	pipelineImportEnabledGauge = metrics.NewRegisteredGauge("chain/imports/pipelined/enabled", nil)
 
+	// Cheap-exec timer for pipelined import. Wraps the synchronous
+	// ProcessBlock call (FlatDiff overlay path). Disambiguates "cheap exec
+	// is itself slow" from "main path waited on prev SRC" — chain/imports/
+	// pipelined/collect covers only the wait, and the parity chain/execution
+	// timer wraps the entire persistPipelinedImport (which includes that wait),
+	// so neither pinpoints the cheap exec on its own.
+	pipelineImportCheapExecTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
+
+	// Auto-collection phase timers. The auto-collection goroutine runs
+	// asynchronously after persistPipelinedImport returns:
+	//   WaitForSRC -> verifyImportSRCRoot -> publishImportWitness -> handleImportTrieGC
+	// The main path's collect-wait (chain/imports/pipelined/collect) blocks
+	// until ALL these phases finish, so a sustained main-path wait is not
+	// necessarily a slow SRC compute — it could be slow witness publish or
+	// trie GC. WaitForSRC duration is already covered by chain/imports/
+	// pipelined/src; total covers the whole runImportAutoCollection wall
+	// time so dashboards can verify verify+publish+gc sums to total minus src.
+	pipelineImportAutoCollectTotalTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/auto_collect/total", nil)
+	pipelineImportAutoCollectVerifyTimer  = metrics.NewRegisteredTimer("chain/imports/pipelined/auto_collect/verify", nil)
+	pipelineImportAutoCollectPublishTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/auto_collect/publish", nil)
+	pipelineImportAutoCollectGCTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/auto_collect/gc", nil)
+
 	// preloadFlatDiffReads instrumentation.
 	pipelineSRCPreloadTimer                    = metrics.NewRegisteredTimer("chain/pipelined/src/preload", nil)
 	pipelineSRCPreloadReadAccountsHistogram    = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/read_accounts", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -3255,7 +3277,11 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			}
 		}
 
+		cheapExecStart := time.Now()
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, pipeOpts)
+		if pipelineActive {
+			pipelineImportCheapExecTimer.UpdateSince(cheapExecStart)
+		}
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
 		activeState = statedb
@@ -4955,7 +4981,15 @@ func (bc *BlockChain) buildPipelineImportOpts(block *types.Block, parent *types.
 // collectPendingImportSRC can surface it synchronously.
 func (bc *BlockChain) runImportAutoCollection(p *pendingImportSRCState) {
 	defer bc.wg.Done()
-	defer close(p.collectedCh)
+	autoCollectStart := time.Now()
+	// Defer order is LIFO: this runs before bc.wg.Done above, matching the
+	// original behaviour where close(p.collectedCh) happens before wg.Done.
+	// The total timer wraps the full goroutine wall time so the main path's
+	// collect-wait can be reconciled against (src + verify + publish + gc).
+	defer func() {
+		pipelineImportAutoCollectTotalTimer.UpdateSince(autoCollectStart)
+		close(p.collectedCh)
+	}()
 	srcStart := time.Now()
 	root, witnessBytes, err := bc.WaitForSRC()
 	pipelineImportSRCTimer.UpdateSince(srcStart)
@@ -4964,18 +4998,25 @@ func (bc *BlockChain) runImportAutoCollection(p *pendingImportSRCState) {
 		p.collectedErr = err
 		return
 	}
-	if !bc.verifyImportSRCRoot(p, root) {
+	verifyStart := time.Now()
+	verifyOk := bc.verifyImportSRCRoot(p, root)
+	pipelineImportAutoCollectVerifyTimer.UpdateSince(verifyStart)
+	if !verifyOk {
 		return
 	}
 	p.collectedRoot = root
 	if bc.cfg.PipelinedImportSRCLogs {
 		log.Info("Pipelined import: SRC verified", "block", p.block.NumberU64(), "root", root)
 	}
+	publishStart := time.Now()
 	bc.publishImportWitness(p, witnessBytes)
+	pipelineImportAutoCollectPublishTimer.UpdateSince(publishStart)
 	if !p.blockStart.IsZero() {
 		witnessReadyEndToEndTimer.UpdateSince(p.blockStart)
 	}
+	gcStart := time.Now()
 	bc.handleImportTrieGC(root, p.block.NumberU64(), p.procTime)
+	pipelineImportAutoCollectGCTimer.UpdateSince(gcStart)
 	pipelineImportBlocksCounter.Inc(1)
 }
 
