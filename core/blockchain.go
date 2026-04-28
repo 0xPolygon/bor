@@ -168,6 +168,14 @@ var (
 	// from "metric is zero because the pipelined code path bypassed its emit site".
 	pipelineImportEnabledGauge = metrics.NewRegisteredGauge("chain/imports/pipelined/enabled", nil)
 
+	// preloadFlatDiffReads instrumentation.
+	pipelineSRCPreloadTimer                    = metrics.NewRegisteredTimer("chain/pipelined/src/preload", nil)
+	pipelineSRCPreloadReadAccountsHistogram    = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/read_accounts", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineSRCPreloadSlotsHistogram           = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/slots", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineSRCPreloadDestructsHistogram       = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/destructs", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineSRCPreloadNonexistentHistogram     = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/nonexistent", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineSRCPreloadSlotsPerAccountHistogram = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/slots_per_account", nil, metrics.NewExpDecaySample(1028, 0.015))
+
 	// Throughput histograms (mode-agnostic — emitted from both normal and pipelined import paths).
 	gasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
 	txsPerBlockHistogram     = metrics.NewRegisteredHistogram("chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -4516,7 +4524,26 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		return
 	}
 	tmpDB.ApplyFlatDiffForCommit(flatDiff)
+
+	// measure the preload step's wall-time and the size of its read surface. ReadStorage
+	// is iterated directly (not via ReadSet) because it also contains
+	// read-only slots on mutated accounts — answers "how is storage-read
+	// load distributed", which is what shapes any future parallelisation.
+	// Fires for both import and miner SRC since runSRCCompute is shared.
+	readAccounts := len(flatDiff.ReadSet)
+	preloadSlots := 0
+	for _, slots := range flatDiff.ReadStorage {
+		preloadSlots += len(slots)
+		pipelineSRCPreloadSlotsPerAccountHistogram.Update(int64(len(slots)))
+	}
+	pipelineSRCPreloadReadAccountsHistogram.Update(int64(readAccounts))
+	pipelineSRCPreloadSlotsHistogram.Update(int64(preloadSlots))
+	pipelineSRCPreloadDestructsHistogram.Update(int64(len(flatDiff.Destructs)))
+	pipelineSRCPreloadNonexistentHistogram.Update(int64(len(flatDiff.NonExistentReads)))
+
+	preloadStart := time.Now()
 	preloadFlatDiffReads(tmpDB, flatDiff)
+	pipelineSRCPreloadTimer.UpdateSince(preloadStart)
 
 	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
 	commitStart := time.Now()
