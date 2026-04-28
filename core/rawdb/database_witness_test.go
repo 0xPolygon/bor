@@ -72,6 +72,41 @@ func TestOpen_FSWitnessStore(t *testing.T) {
 	}
 }
 
+// TestOpen_FSWitnessStore_ReadWitnessSizeFallbackToFile verifies that when
+// witness size metadata is missing from DB, ReadWitnessSize recovers it from
+// the filesystem-backed witness blob.
+func TestOpen_FSWitnessStore_ReadWitnessSizeFallbackToFile(t *testing.T) {
+	witnessDir := filepath.Join(t.TempDir(), "witnesses")
+
+	db, err := Open(memorydb.New(), OpenOptions{
+		DisableFreeze:    true,
+		WitnessFileStore: true,
+		WitnessStoreDir:  witnessDir,
+	})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	ws := db.(witnessStoreDB).WitnessStore()
+	hash := testHash(111)
+	payload := []byte("fs-size-fallback")
+	ws.WriteWitness(hash, payload)
+
+	// Simulate crash residue: file exists but DB size metadata is missing.
+	if err := db.Delete(witnessSizeKey(hash)); err != nil {
+		t.Fatalf("failed to delete witness size key: %v", err)
+	}
+
+	size := ReadWitnessSize(db, hash)
+	if size == nil {
+		t.Fatal("expected witness size fallback from filesystem")
+	}
+	if *size != uint64(len(payload)) {
+		t.Fatalf("unexpected fallback size: want %d, got %d", len(payload), *size)
+	}
+}
+
 // TestOpen_FSWitnessStore_FlagTrueButDirEmpty verifies that when
 // WitnessFileStore is true but WitnessStoreDir is empty, the DB backend
 // is used instead (guard against misconfiguration).
