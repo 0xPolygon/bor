@@ -324,6 +324,8 @@ type Config struct {
 	EnablePreconfs            bool
 	EnablePrivateTx           bool
 	BlockProducerRpcEndpoints []string
+	MaxConcurrentPreconfs     uint64
+	MaxConcurrentPrivateTxs   uint64
 
 	// Preconf / Private transaction related settings for block producers
 	AcceptPreconfTx bool

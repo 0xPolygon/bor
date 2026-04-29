@@ -1424,6 +1424,20 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Relay.BlockProducerRpcEndpoints,
 		Group:   "P2P",
 	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "relay.max-concurrent-preconfs",
+		Usage:   "Maximum number of concurrent preconf submissions to block producers",
+		Value:   &c.cliConfig.Relay.MaxConcurrentPreconfs,
+		Default: c.cliConfig.Relay.MaxConcurrentPreconfs,
+		Group:   "P2P",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "relay.max-concurrent-private-tx",
+		Usage:   "Maximum number of concurrent private transaction submissions to block producers",
+		Value:   &c.cliConfig.Relay.MaxConcurrentPrivateTxs,
+		Default: c.cliConfig.Relay.MaxConcurrentPrivateTxs,
+		Group:   "P2P",
+	})
 
 	return f
 }

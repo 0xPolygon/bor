@@ -230,7 +230,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		closeCh:         make(chan struct{}),
 	}
 
-	relayService := relay.Init(config.EnablePreconfs, config.EnablePrivateTx, config.AcceptPreconfTx, config.AcceptPrivateTx, config.BlockProducerRpcEndpoints)
+	relayService := relay.Init(config.EnablePreconfs, config.EnablePrivateTx, config.AcceptPreconfTx, config.AcceptPrivateTx, config.BlockProducerRpcEndpoints, config.MaxConcurrentPreconfs, config.MaxConcurrentPrivateTxs)
 	privateTxGetter := relayService.GetPrivateTxGetter()
 
 	// START: Bor changes

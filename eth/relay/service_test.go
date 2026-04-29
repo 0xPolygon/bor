@@ -38,7 +38,8 @@ func TestNewService(t *testing.T) {
 		require.NotNil(t, service.store, "expected non-nil store")
 		require.NotNil(t, service.taskCh, "expected non-nil task channel")
 		require.Equal(t, defaultConfig.maxQueuedTasks, cap(service.taskCh), "expected task channel capacity to match maxQueuedTasks")
-		require.Equal(t, defaultConfig.maxConcurrentTasks, cap(service.semaphore), "expected semaphore capacity to match maxConcurrentTasks")
+		require.Equal(t, defaultConfig.maxConcurrentPreconfs, cap(service.preconfSemaphore), "expected preconf semaphore capacity to match maxConcurrentPreconfs")
+		require.Equal(t, defaultConfig.maxConcurrentPrivateTxs, cap(service.privateSemaphore), "expected private semaphore capacity to match maxConcurrentPrivateTxs")
 
 		service.close()
 	})
@@ -123,14 +124,14 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 		// Update the config to a reasonable size for testing
 		config := DefaultServiceConfig
 		config.maxQueuedTasks = 10
-		config.maxConcurrentTasks = 5
+		config.maxConcurrentPreconfs = 5
 
 		service := NewService(urls, &config)
 		defer service.close()
 
-		// Block the semaphore so that tasks are queued entirely
-		for i := 0; i < config.maxConcurrentTasks; i++ {
-			service.semaphore <- struct{}{}
+		// Block the preconf semaphore so that tasks are queued entirely
+		for i := 0; i < int(config.maxConcurrentPreconfs); i++ {
+			service.preconfSemaphore <- struct{}{}
 		}
 
 		// Fill the queue to full capacity. We need to do config.maxQueuedTasks+1 because
@@ -156,7 +157,7 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 		// Update the config to a reasonable size for testing
 		config := DefaultServiceConfig
 		config.maxQueuedTasks = 10
-		config.maxConcurrentTasks = 5
+		config.maxConcurrentPreconfs = 5
 
 		// Update the rpc server handlers to have a delay in processing tasks
 		for _, s := range rpcServers {
@@ -169,8 +170,8 @@ func TestSubmitTransactionForPreconf(t *testing.T) {
 		service := NewService(urls, &config)
 		defer service.close()
 
-		// Start sending `maxConcurrentTasks` tasks to block the queue
-		for i := 0; i <= config.maxConcurrentTasks; i++ {
+		// Start sending `maxConcurrentPreconfs` tasks to block the queue
+		for i := 0; i <= int(config.maxConcurrentPreconfs); i++ {
 			tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
 			err := service.SubmitTransactionForPreconf(tx)
 			require.NoError(t, err, "expected no error for task %d", i)
@@ -334,6 +335,62 @@ func TestServiceSubmitPrivateTx(t *testing.T) {
 
 		wg.Wait()
 		require.Equal(t, int32(numTxs), successCount.Load(), "expected all private txs to be submitted successfully")
+	})
+
+	t.Run("releases the semaphore slot on success and on error", func(t *testing.T) {
+		service := NewService(urls, nil)
+		defer service.close()
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+
+		// Success path: slot must be released after a clean submission.
+		err := service.SubmitPrivateTx(tx, false)
+		require.NoError(t, err, "expected clean submission")
+		require.Equal(t, 0, len(service.privateSemaphore), "private semaphore must be drained after success")
+
+		// Error path: slot must still be released when submission fails.
+		rpcServers[0].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32601, "internal server error")
+		})
+		err = service.SubmitPrivateTx(tx, false)
+		require.Equal(t, errPrivateTxSubmissionFailed, err, "expected errPrivateTxSubmissionFailed")
+		require.Equal(t, 0, len(service.privateSemaphore), "private semaphore must be drained after error")
+		rpcServers[0].setHandleSendPrivateTx(defaultHandleSendPrivateTx)
+	})
+
+	t.Run("blocks while semaphore is full and unblocks when a slot frees", func(t *testing.T) {
+		config := DefaultServiceConfig
+		config.maxConcurrentPrivateTxs = 1
+		service := NewService(urls, &config)
+		defer service.close()
+
+		// Fill the only slot manually.
+		service.privateSemaphore <- struct{}{}
+
+		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+		done := make(chan error, 1)
+		go func() {
+			done <- service.SubmitPrivateTx(tx, false)
+		}()
+
+		// Submission must not complete while the semaphore is full.
+		select {
+		case <-done:
+			t.Fatal("SubmitPrivateTx returned while semaphore was full")
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		// Free the slot; submission should now proceed.
+		<-service.privateSemaphore
+
+		select {
+		case err := <-done:
+			require.NoError(t, err, "expected submission to succeed once a slot freed")
+		case <-time.After(2 * time.Second):
+			t.Fatal("SubmitPrivateTx did not return after semaphore drained")
+		}
+
+		require.Equal(t, 0, len(service.privateSemaphore), "private semaphore must be drained after completion")
 	})
 }
 

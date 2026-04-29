@@ -295,7 +295,7 @@ func TestRelayMethodWiring(t *testing.T) {
 
 	t.Run("all flags enabled", func(t *testing.T) {
 		t.Parallel()
-		rs := relay.Init(true, true, true, true, nil)
+		rs := relay.Init(true, true, true, true, nil, 0, 0)
 		defer rs.Close()
 		b := &EthAPIBackend{relay: rs}
 
@@ -307,7 +307,7 @@ func TestRelayMethodWiring(t *testing.T) {
 
 	t.Run("all flags disabled", func(t *testing.T) {
 		t.Parallel()
-		rs := relay.Init(false, false, false, false, nil)
+		rs := relay.Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 		b := &EthAPIBackend{relay: rs}
 
@@ -321,7 +321,7 @@ func TestRelayMethodWiring(t *testing.T) {
 		t.Parallel()
 		// Init with enablePreconf=true, enablePrivateTx=true but no URLs
 		// → txRelay created with nil multiclient → methods return errors, proving wiring works
-		rs := relay.Init(true, true, false, false, nil)
+		rs := relay.Init(true, true, false, false, nil, 0, 0)
 		defer rs.Close()
 		b := &EthAPIBackend{relay: rs}
 
@@ -339,7 +339,7 @@ func TestRelayMethodWiring(t *testing.T) {
 
 	t.Run("record and purge private tx do not panic", func(t *testing.T) {
 		t.Parallel()
-		rs := relay.Init(false, false, false, true, nil) // creates privateTxStore
+		rs := relay.Init(false, false, false, true, nil, 0, 0) // creates privateTxStore
 		defer rs.Close()
 		b := &EthAPIBackend{relay: rs}
 
@@ -368,7 +368,7 @@ func TestRelayGracefulShutdownOnStop(t *testing.T) {
 		t.Parallel()
 		// enablePreconf=true creates a Service with background goroutines
 		// (processPreconfTasks, cleanup). Close() must signal them and wait.
-		rs := relay.Init(true, true, true, true, nil)
+		rs := relay.Init(true, true, true, true, nil, 0, 0)
 		b := &EthAPIBackend{relay: rs}
 
 		require.True(t, b.PreconfEnabled(), "relay should be operational before shutdown")

@@ -32,7 +32,7 @@ type RelayService struct {
 	txRelay        *Service
 }
 
-func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool, blockProducerURLs []string) *RelayService {
+func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool, blockProducerURLs []string, maxConcurrentPreconfs, maxConcurrentPrivateTxs uint64) *RelayService {
 	config := Config{
 		enablePreconf:   enablePreconf,
 		enablePrivateTx: enablePrivateTx,
@@ -48,7 +48,16 @@ func Init(enablePreconf, enablePrivateTx, acceptPreconfTx, acceptPrivateTx bool,
 		if len(blockProducerURLs) == 0 {
 			log.Warn("Relay service enabled but no block producer URLs provided; relay will be non-functional")
 		}
-		txRelay = NewService(blockProducerURLs, nil)
+		// Build a service config from defaults, then override the two
+		// operator-tunable concurrency caps when callers supplied non-zero values.
+		serviceConfig := DefaultServiceConfig
+		if maxConcurrentPreconfs > 0 {
+			serviceConfig.maxConcurrentPreconfs = maxConcurrentPreconfs
+		}
+		if maxConcurrentPrivateTxs > 0 {
+			serviceConfig.maxConcurrentPrivateTxs = maxConcurrentPrivateTxs
+		}
+		txRelay = NewService(blockProducerURLs, &serviceConfig)
 	}
 	return &RelayService{
 		config:         config,

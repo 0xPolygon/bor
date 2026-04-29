@@ -12,7 +12,7 @@ func TestInit(t *testing.T) {
 	t.Parallel()
 
 	t.Run("all flags disabled creates neither component", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.txRelay, "expected nil txRelay when all flags disabled")
@@ -20,7 +20,7 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("enablePreconf only creates txRelay", func(t *testing.T) {
-		rs := Init(true, false, false, false, nil)
+		rs := Init(true, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.NotNil(t, rs.txRelay, "expected txRelay when enablePreconf is true")
@@ -28,7 +28,7 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("enablePrivateTx creates both components", func(t *testing.T) {
-		rs := Init(false, true, false, false, nil)
+		rs := Init(false, true, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.NotNil(t, rs.txRelay, "expected txRelay when enablePrivateTx is true")
@@ -36,7 +36,7 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("acceptPreconfTx only creates neither component", func(t *testing.T) {
-		rs := Init(false, false, true, false, nil)
+		rs := Init(false, false, true, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.txRelay, "expected nil txRelay when only acceptPreconfTx is true")
@@ -44,7 +44,7 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("acceptPrivateTx only creates store", func(t *testing.T) {
-		rs := Init(false, false, false, true, nil)
+		rs := Init(false, false, false, true, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.txRelay, "expected nil txRelay when only acceptPrivateTx is true")
@@ -55,7 +55,7 @@ func TestInit(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(true, true, true, true, []string{server.server.URL})
+		rs := Init(true, true, true, true, []string{server.server.URL}, 0, 0)
 		defer rs.Close()
 
 		require.NotNil(t, rs.txRelay, "expected txRelay when all flags enabled")
@@ -63,7 +63,7 @@ func TestInit(t *testing.T) {
 	})
 
 	t.Run("empty URLs creates txRelay with nil multiclient", func(t *testing.T) {
-		rs := Init(true, false, false, false, []string{})
+		rs := Init(true, false, false, false, []string{}, 0, 0)
 		defer rs.Close()
 
 		require.NotNil(t, rs.txRelay, "expected txRelay to be created")
@@ -74,7 +74,7 @@ func TestInit(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(true, false, false, false, []string{server.server.URL})
+		rs := Init(true, false, false, false, []string{server.server.URL}, 0, 0)
 		defer rs.Close()
 
 		require.NotNil(t, rs.txRelay, "expected txRelay to be created")
@@ -85,7 +85,7 @@ func TestInit(t *testing.T) {
 func TestConfigAccessors(t *testing.T) {
 	t.Parallel()
 
-	rs := Init(true, false, true, false, nil)
+	rs := Init(true, false, true, false, nil, 0, 0)
 	defer rs.Close()
 
 	require.True(t, rs.PreconfEnabled(), "expected PreconfEnabled to be true")
@@ -98,7 +98,7 @@ func TestRelaySubmitPreconfTransaction(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns wrapped error when txRelay is nil", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -110,7 +110,7 @@ func TestRelaySubmitPreconfTransaction(t *testing.T) {
 
 	t.Run("wraps underlying service error", func(t *testing.T) {
 		// Empty URLs → nil multiclient → SubmitTransactionForPreconf returns errRpcClientUnavailable
-		rs := Init(true, false, false, false, []string{})
+		rs := Init(true, false, false, false, []string{}, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -124,7 +124,7 @@ func TestRelaySubmitPreconfTransaction(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(true, false, false, false, []string{server.server.URL})
+		rs := Init(true, false, false, false, []string{server.server.URL}, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -137,7 +137,7 @@ func TestRelaySubmitPrivateTransaction(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns wrapped error when txRelay is nil", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -150,7 +150,7 @@ func TestRelaySubmitPrivateTransaction(t *testing.T) {
 	t.Run("returns unwrapped error from underlying service", func(t *testing.T) {
 		// Empty URLs → nil multiclient → SubmitPrivateTx returns errRpcClientUnavailable
 		// SubmitPrivateTransaction returns it as-is (no "request dropped:" wrapping)
-		rs := Init(false, true, false, false, []string{})
+		rs := Init(false, true, false, false, []string{}, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -165,7 +165,7 @@ func TestRelaySubmitPrivateTransaction(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(false, true, false, false, []string{server.server.URL})
+		rs := Init(false, true, false, false, []string{server.server.URL}, 0, 0)
 		defer rs.Close()
 
 		tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
@@ -178,7 +178,7 @@ func TestRelayCheckPreconfStatus(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns wrapped error when txRelay is nil", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		hash := common.HexToHash("0x1")
@@ -191,7 +191,7 @@ func TestRelayCheckPreconfStatus(t *testing.T) {
 
 	t.Run("wraps underlying service error", func(t *testing.T) {
 		// Empty URLs → nil multiclient → CheckTxPreconfStatus returns errRpcClientUnavailable
-		rs := Init(true, false, false, false, []string{})
+		rs := Init(true, false, false, false, []string{}, 0, 0)
 		defer rs.Close()
 
 		hash := common.HexToHash("0x1")
@@ -207,7 +207,7 @@ func TestRelayCheckPreconfStatus(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(true, false, false, false, []string{server.server.URL})
+		rs := Init(true, false, false, false, []string{server.server.URL}, 0, 0)
 		defer rs.Close()
 
 		hash := common.HexToHash("0x1")
@@ -221,7 +221,7 @@ func TestRelayClose(t *testing.T) {
 	t.Parallel()
 
 	t.Run("no panic when both components are nil", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		require.Nil(t, rs.txRelay)
 		require.Nil(t, rs.privateTxStore)
 
@@ -234,7 +234,7 @@ func TestRelayClose(t *testing.T) {
 		server := newMockRpcServer()
 		defer server.close()
 
-		rs := Init(true, true, true, true, []string{server.server.URL})
+		rs := Init(true, true, true, true, []string{server.server.URL}, 0, 0)
 		require.NotNil(t, rs.txRelay)
 		require.NotNil(t, rs.privateTxStore)
 
@@ -244,7 +244,7 @@ func TestRelayClose(t *testing.T) {
 	})
 
 	t.Run("no panic when only privateTxStore exists", func(t *testing.T) {
-		rs := Init(false, false, false, true, nil)
+		rs := Init(false, false, false, true, nil, 0, 0)
 		require.Nil(t, rs.txRelay)
 		require.NotNil(t, rs.privateTxStore)
 
@@ -258,7 +258,7 @@ func TestGetPrivateTxGetter(t *testing.T) {
 	t.Parallel()
 
 	t.Run("returns nil interface when store is nil", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		getter := rs.GetPrivateTxGetter()
@@ -266,7 +266,7 @@ func TestGetPrivateTxGetter(t *testing.T) {
 	})
 
 	t.Run("returns working getter when store exists", func(t *testing.T) {
-		rs := Init(false, false, false, true, nil)
+		rs := Init(false, false, false, true, nil, 0, 0)
 		defer rs.Close()
 
 		getter := rs.GetPrivateTxGetter()
@@ -285,7 +285,7 @@ func TestRelayNilSafety(t *testing.T) {
 	t.Parallel()
 
 	t.Run("RecordPrivateTx with nil store", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.privateTxStore)
@@ -295,7 +295,7 @@ func TestRelayNilSafety(t *testing.T) {
 	})
 
 	t.Run("PurgePrivateTx with nil store", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.privateTxStore)
@@ -305,7 +305,7 @@ func TestRelayNilSafety(t *testing.T) {
 	})
 
 	t.Run("SetTxGetter with nil txRelay", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.txRelay)
@@ -317,7 +317,7 @@ func TestRelayNilSafety(t *testing.T) {
 	})
 
 	t.Run("SetchainEventSubFn with nil store", func(t *testing.T) {
-		rs := Init(false, false, false, false, nil)
+		rs := Init(false, false, false, false, nil, 0, 0)
 		defer rs.Close()
 
 		require.Nil(t, rs.privateTxStore)
@@ -330,7 +330,7 @@ func TestRelayNilSafety(t *testing.T) {
 func TestRecordAndPurgePrivateTx(t *testing.T) {
 	t.Parallel()
 
-	rs := Init(false, false, false, true, nil)
+	rs := Init(false, false, false, true, nil, 0, 0)
 	defer rs.Close()
 
 	getter := rs.GetPrivateTxGetter()

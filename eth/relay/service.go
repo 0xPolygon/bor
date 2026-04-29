@@ -39,17 +39,19 @@ var (
 type TxGetter func(hash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64)
 
 type ServiceConfig struct {
-	expiryTickerInterval time.Duration
-	expiryInterval       time.Duration
-	maxQueuedTasks       int
-	maxConcurrentTasks   int
+	expiryTickerInterval    time.Duration
+	expiryInterval          time.Duration
+	maxQueuedTasks          int
+	maxConcurrentPreconfs   uint64
+	maxConcurrentPrivateTxs uint64
 }
 
 var DefaultServiceConfig = ServiceConfig{
-	expiryTickerInterval: time.Minute,
-	expiryInterval:       10 * time.Minute,
-	maxQueuedTasks:       40_000,
-	maxConcurrentTasks:   1024,
+	expiryTickerInterval:    time.Minute,
+	expiryInterval:          10 * time.Minute,
+	maxQueuedTasks:          40_000,
+	maxConcurrentPreconfs:   512,
+	maxConcurrentPrivateTxs: 2048,
 }
 
 // TxTask represents a transaction submission task
@@ -63,14 +65,15 @@ type TxTask struct {
 }
 
 type Service struct {
-	config      *ServiceConfig
-	multiclient *multiClient
-	store       map[common.Hash]TxTask
-	storeMu     sync.RWMutex
-	wg          sync.WaitGroup // tracks all active goroutines for clean shutdown
-	taskCh      chan TxTask    // channel to queue new tasks
-	semaphore   chan struct{}
-	closeCh     chan struct{} // to limit concurrent tasks
+	config           *ServiceConfig
+	multiclient      *multiClient
+	store            map[common.Hash]TxTask
+	storeMu          sync.RWMutex
+	wg               sync.WaitGroup // tracks all active goroutines for clean shutdown
+	taskCh           chan TxTask    // channel to queue new tasks
+	preconfSemaphore chan struct{}  // bounds concurrent preconf BP submissions
+	privateSemaphore chan struct{}  // bounds concurrent private-tx BP submissions
+	closeCh          chan struct{}
 
 	txGetter TxGetter // function to get transaction from local database
 }
@@ -81,12 +84,13 @@ func NewService(urls []string, config *ServiceConfig) *Service {
 		config = &defaultConfig
 	}
 	s := &Service{
-		config:      config,
-		multiclient: newMultiClient(urls),
-		store:       make(map[common.Hash]TxTask),
-		taskCh:      make(chan TxTask, config.maxQueuedTasks),
-		semaphore:   make(chan struct{}, config.maxConcurrentTasks),
-		closeCh:     make(chan struct{}),
+		config:           config,
+		multiclient:      newMultiClient(urls),
+		store:            make(map[common.Hash]TxTask),
+		taskCh:           make(chan TxTask, config.maxQueuedTasks),
+		preconfSemaphore: make(chan struct{}, config.maxConcurrentPreconfs),
+		privateSemaphore: make(chan struct{}, config.maxConcurrentPrivateTxs),
+		closeCh:          make(chan struct{}),
 	}
 	s.wg.Add(2)
 	go func() { defer s.wg.Done(); s.processPreconfTasks() }()
@@ -140,7 +144,7 @@ func (s *Service) processPreconfTasks() {
 		case task := <-s.taskCh:
 			// Acquire semaphore to limit concurrent submissions
 			select {
-			case s.semaphore <- struct{}{}:
+			case s.preconfSemaphore <- struct{}{}:
 			case <-s.closeCh:
 				log.Info("[tx-relay] Stopping preconf task processing, service closing")
 				return
@@ -148,7 +152,7 @@ func (s *Service) processPreconfTasks() {
 			s.wg.Add(1)
 			go func(task TxTask) {
 				defer s.wg.Done()
-				defer func() { <-s.semaphore }()
+				defer func() { <-s.preconfSemaphore }()
 				s.processPreconfTask(task)
 			}(task)
 		case <-s.closeCh:
@@ -282,6 +286,15 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 		log.Warn("[tx-relay] Failed to marshal transaction", "hash", tx.Hash(), "err", err)
 		return err
 	}
+
+	// Bound concurrent private-tx BP submissions. Block until a slot is free
+	// or the service is closing.
+	select {
+	case s.privateSemaphore <- struct{}{}:
+	case <-s.closeCh:
+		return errRpcClientUnavailable
+	}
+	defer func() { <-s.privateSemaphore }()
 
 	uniquePrivateTxRequestMeter.Mark(1)
 	start := time.Now()

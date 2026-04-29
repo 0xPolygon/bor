@@ -805,6 +805,12 @@ type RelayConfig struct {
 
 	// BlockProducerRpcEndpoints is a list of block producer rpc endpoints to submit transactions to
 	BlockProducerRpcEndpoints []string `hcl:"bp-rpc-endpoints,optional" toml:"bp-rpc-endpoints,optional"`
+
+	// MaxConcurrentPreconfs caps concurrent preconf submissions to block producers.
+	MaxConcurrentPreconfs uint64 `hcl:"max-concurrent-preconfs,optional" toml:"max-concurrent-preconfs,optional"`
+
+	// MaxConcurrentPrivateTxs caps concurrent private-tx submissions to block producers.
+	MaxConcurrentPrivateTxs uint64 `hcl:"max-concurrent-private-tx,optional" toml:"max-concurrent-private-tx,optional"`
 }
 
 func DefaultConfig() *Config {
@@ -1066,6 +1072,8 @@ func DefaultConfig() *Config {
 			EnablePreconfs:            false,
 			EnablePrivateTx:           false,
 			BlockProducerRpcEndpoints: []string{},
+			MaxConcurrentPreconfs:     512,
+			MaxConcurrentPrivateTxs:   2048,
 		},
 	}
 }
@@ -1695,6 +1703,8 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.EnablePreconfs = c.Relay.EnablePreconfs
 	n.EnablePrivateTx = c.Relay.EnablePrivateTx
 	n.BlockProducerRpcEndpoints = c.Relay.BlockProducerRpcEndpoints
+	n.MaxConcurrentPreconfs = c.Relay.MaxConcurrentPreconfs
+	n.MaxConcurrentPrivateTxs = c.Relay.MaxConcurrentPrivateTxs
 
 	// Set preconf / private transaction flags for block producers
 	n.AcceptPreconfTx = c.JsonRPC.AcceptPreconfTx
