@@ -30,7 +30,7 @@ func (t *rejectionTracker) record(err error) {
 	if err == nil {
 		return
 	}
-	msg := err.Error()
+	msg := normalizeRejectionMessage(err.Error())
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.counts == nil {
@@ -45,6 +45,18 @@ func (t *rejectionTracker) record(err error) {
 		t.counts[msg]++
 	}
 	t.total++
+}
+
+// normalizeRejectionMessage strips the dynamic context (nonces, gas prices, balances)
+// from a rejection error so semantically identical rejections collapse into one bucket.
+// e.g. "nonce too low: next nonce 67693, tx nonce 67692" and "nonce too low: next nonce
+// 80001, tx nonce 80000" both normalize to "nonce too low". Messages without a colon
+// (plain sentinels, transport errors like "EOF") are returned unchanged.
+func normalizeRejectionMessage(msg string) string {
+	if i := strings.IndexByte(msg, ':'); i > 0 {
+		return msg[:i]
+	}
+	return msg
 }
 
 // flush returns the accumulated counts and total, then resets the tracker.

@@ -1418,6 +1418,23 @@ func TestRejectionTracker(t *testing.T) {
 		require.Equal(t, uint64(1), counts["transaction underpriced"])
 	})
 
+	t.Run("record collapses errors with varying dynamic context", func(t *testing.T) {
+		var tr rejectionTracker
+		// Real BP rejections carry per-tx context (nonces, gas prices) after the
+		// sentinel prefix. They should all bucket under the prefix only.
+		tr.record(fmt.Errorf("nonce too low: next nonce 67693, tx nonce 67692"))
+		tr.record(fmt.Errorf("nonce too low: next nonce 80001, tx nonce 80000"))
+		tr.record(fmt.Errorf("nonce too low"))
+		tr.record(fmt.Errorf("transaction gas price below minimum: gas tip cap 0, minimum needed 24000000000"))
+		tr.record(fmt.Errorf("transaction gas price below minimum: gas tip cap 1, minimum needed 30000000000"))
+
+		total, counts := tr.flush()
+		require.Equal(t, uint64(5), total)
+		require.Len(t, counts, 2, "all variants must collapse into two buckets")
+		require.Equal(t, uint64(3), counts["nonce too low"])
+		require.Equal(t, uint64(2), counts["transaction gas price below minimum"])
+	})
+
 	t.Run("flush resets state", func(t *testing.T) {
 		var tr rejectionTracker
 		tr.record(fmt.Errorf("boom"))
@@ -1479,6 +1496,29 @@ func TestRejectionTracker(t *testing.T) {
 		total, _ := tr.flush()
 		require.Equal(t, uint64(expectTotal), total)
 	})
+}
+
+func TestNormalizeRejectionMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"nonce too low with context", "nonce too low: next nonce 67693, tx nonce 67692", "nonce too low"},
+		{"gas price below minimum with context", "transaction gas price below minimum: gas tip cap 0, minimum needed 24000000000", "transaction gas price below minimum"},
+		{"multiple colons keeps only first prefix", "kzg verification failed: invalid blob proof: detail", "kzg verification failed"},
+		{"sentinel without colon is unchanged", "nonce too low", "nonce too low"},
+		{"transport error without colon is unchanged", "EOF", "EOF"},
+		{"empty string is unchanged", "", ""},
+		{"leading colon is treated as no useful prefix", ":foo", ":foo"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, normalizeRejectionMessage(tc.in))
+		})
+	}
 }
 
 func TestFormatRejectionCounts(t *testing.T) {
