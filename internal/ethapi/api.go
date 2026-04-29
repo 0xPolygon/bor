@@ -2317,7 +2317,8 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 }
 
 // SendRawTransactionForPreconf will accept a preconf transaction from relay if enabled. It will
-// offer a soft inclusion confirmation if the transaction is accepted into the pending pool.
+// offer a soft inclusion confirmation if the transaction is accepted into the pending pool. Note
+// that this is an internal API used only by the relay for submitting transactions.
 func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (map[string]interface{}, error) {
 	if !api.b.AcceptPreconfTxs() {
 		return nil, errors.New("preconf transactions are not accepted on this node")
@@ -2354,6 +2355,30 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 		"hash":         hash,
 		"preconfirmed": txConfirmed,
 	}, nil
+}
+
+// SendRawTransactionPreconf will accept a preconf transaction if allowed. It will offer a
+// soft inclusion confirmation if the transaction is accepted into the pending pool. Note
+// that this is an external API.
+func (api *TransactionAPI) SendRawTransactionPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
+	if !api.b.PreconfEnabled() {
+		return common.Hash{}, errors.New("preconf transactions are not accepted on this node")
+	}
+
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return common.Hash{}, err
+	}
+
+	hash, err := SubmitTransaction(ctx, api.b, tx)
+
+	// Submit tx directly to BP. Preconf processing mostly happens in background so don't
+	// float the error back to the user.
+	if err := api.b.SubmitTxForPreconf(tx); err != nil {
+		log.Error("Transaction accepted locally but submission for preconf failed", "err", err)
+	}
+
+	return hash, err
 }
 
 // SendRawTransactionPrivate will accept a private transaction from relay if enabled. It will ensure
