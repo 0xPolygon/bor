@@ -164,24 +164,55 @@ func (s *PrivateTxStore) sweep() {
 
 // sweepOnce performs one pass of the sweep logic. Extracted from sweep so tests
 // can invoke the real eviction logic deterministically without waiting on a ticker.
+//
+// The work is split into three phases so that s.mu is never held while calling
+// s.txPoolChecker (wired to txPool.Has, which acquires the txpool's own lock).
+// Holding ours through that call would serialise Add/Purge/IsTxPrivate against
+// txpool latency and lock in a store.mu → txpool.lock ordering that any future
+// txpool path calling back into the store would deadlock against.
 func (s *PrivateTxStore) sweepOnce() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	type entry struct {
+		hash    common.Hash
+		addedAt time.Time
+	}
 
-	expired := uint64(0)
+	// Snapshot under the read lock.
+	s.mu.RLock()
+	entries := make([]entry, 0, len(s.txs))
+	for h, t := range s.txs {
+		entries = append(entries, entry{h, t})
+	}
+	s.mu.RUnlock()
+
+	// Filter transactions without holding lock
 	now := time.Now()
-	for hash, addedAt := range s.txs {
-		age := now.Sub(addedAt)
+	toDelete := make([]entry, 0)
+	for _, entry := range entries {
+		age := now.Sub(entry.addedAt)
 		if age > privateTxTTL {
 			// Hard TTL: remove regardless of txpool status
-			delete(s.txs, hash)
-			expired++
-		} else if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(hash) {
+			toDelete = append(toDelete, entry)
+		} else if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
 			// Tx no longer in txpool and past grace period: remove
-			delete(s.txs, hash)
+			toDelete = append(toDelete, entry)
+		}
+	}
+	if len(toDelete) == 0 {
+		return
+	}
+
+	// Delete the entries under write lock. Only delete those whose `addedAt` time
+	// hasn't changed as it's possible that the tx was re-added to the pool after
+	// snapshot was taken.
+	expired := uint64(0)
+	s.mu.Lock()
+	for _, entry := range toDelete {
+		if cur, ok := s.txs[entry.hash]; ok && cur.Equal(entry.addedAt) {
+			delete(s.txs, entry.hash)
 			expired++
 		}
 	}
+	s.mu.Unlock()
 	s.txsExpired.Add(expired)
 }
 
