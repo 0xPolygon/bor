@@ -61,8 +61,12 @@ import (
 // allowed to produce in order to speed up calculations.
 const estimateGasErrorRatio = 0.015
 
-var errBlobTxNotSupported = errors.New("signing blob transactions not supported")
-var errSubClosed = errors.New("chain subscription closed")
+var (
+	errBlobTxNotSupported  = errors.New("signing blob transactions not supported")
+	errSubClosed           = errors.New("chain subscription closed")
+	errPreconfNotEnabled   = errors.New("preconf transactions are not accepted on this node")
+	errPrivateTxNotEnabled = errors.New("private transactions are not accepted on this node")
+)
 
 // EthereumAPI provides an API to access Ethereum related information.
 type EthereumAPI struct {
@@ -2321,7 +2325,7 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 // that this is an internal API used only by the relay for submitting transactions.
 func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, input hexutil.Bytes) (map[string]interface{}, error) {
 	if !api.b.AcceptPreconfTxs() {
-		return nil, errors.New("preconf transactions are not accepted on this node")
+		return nil, errPreconfNotEnabled
 	}
 
 	tx := new(types.Transaction)
@@ -2362,7 +2366,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 // that this is an external API.
 func (api *TransactionAPI) SendRawTransactionPreconf(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
 	if !api.b.PreconfEnabled() {
-		return common.Hash{}, errors.New("preconf transactions are not accepted on this node")
+		return common.Hash{}, errPreconfNotEnabled
 	}
 
 	tx := new(types.Transaction)
@@ -2385,7 +2389,7 @@ func (api *TransactionAPI) SendRawTransactionPreconf(ctx context.Context, input 
 // that the transaction is not gossiped over public network.
 func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
 	if !api.b.AcceptPrivateTxs() && !api.b.PrivateTxEnabled() {
-		return common.Hash{}, errors.New("private transactions are not accepted on this node")
+		return common.Hash{}, errPrivateTxNotEnabled
 	}
 
 	tx := new(types.Transaction)
@@ -2425,7 +2429,7 @@ func (api *TransactionAPI) submitPrivateTransaction(ctx context.Context, tx *typ
 
 func (api *TransactionAPI) CheckPreconfStatus(ctx context.Context, hash common.Hash) (bool, error) {
 	if !api.b.PreconfEnabled() {
-		return false, errors.New("preconf transactions are not accepted on this node")
+		return false, errPreconfNotEnabled
 	}
 	return api.b.CheckPreconfStatus(hash)
 }
