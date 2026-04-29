@@ -17,7 +17,8 @@ syncmode = "full"
 # snapshot = true
 # "bor.logs" = false
 # ethstats = ""
-# witnessprotocol = false
+# [witness]
+# enable = false
 # devfakeauthor = false
 # ["eth.requiredblocks"]
 
