@@ -2189,6 +2189,13 @@ func (api *TransactionAPI) SendRawTransaction(ctx context.Context, input hexutil
 		}
 	}
 
+	// On a node that relays private transactions, route every raw tx through the
+	// private path so it never enters the public mempool. Private takes precedence
+	// over preconf; clients wanting preconf must use SendRawTransactionForPreconf.
+	if api.b.PrivateTxEnabled() {
+		return api.submitPrivateTransaction(ctx, tx)
+	}
+
 	hash, err := SubmitTransaction(ctx, api.b, tx)
 
 	// If preconf is enabled, submit tx directly to BP
@@ -2226,7 +2233,17 @@ func (api *TransactionAPI) SendRawTransactionSync(ctx context.Context, input hex
 	sub := api.b.SubscribeChainEvent(ch)
 	defer sub.Unsubscribe()
 
-	hash, err := SubmitTransaction(ctx, api.b, tx)
+	var (
+		hash common.Hash
+		err  error
+	)
+	// On a private-tx-enabled node, route through the private path so the tx is
+	// not gossiped publicly. Receipt-wait below works the same either way.
+	if api.b.PrivateTxEnabled() {
+		hash, err = api.submitPrivateTransaction(ctx, tx)
+	} else {
+		hash, err = SubmitTransaction(ctx, api.b, tx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2339,7 +2356,7 @@ func (api *TransactionAPI) SendRawTransactionForPreconf(ctx context.Context, inp
 	}, nil
 }
 
-// SendRawTransactionForPreconf will accept a private transaction from relay if enabled. It will ensure
+// SendRawTransactionPrivate will accept a private transaction from relay if enabled. It will ensure
 // that the transaction is not gossiped over public network.
 func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input hexutil.Bytes) (common.Hash, error) {
 	if !api.b.AcceptPrivateTxs() && !api.b.PrivateTxEnabled() {
@@ -2351,7 +2368,13 @@ func (api *TransactionAPI) SendRawTransactionPrivate(ctx context.Context, input 
 		return common.Hash{}, err
 	}
 
-	// Track the tx hash to ensure it is not gossiped in public
+	return api.submitPrivateTransaction(ctx, tx)
+}
+
+// submitPrivateTransaction tracks the tx hash so it is not gossiped on the
+// public network, submits it to the local pool, and (when this node is
+// configured to relay) forwards it directly to block producers.
+func (api *TransactionAPI) submitPrivateTransaction(ctx context.Context, tx *types.Transaction) (common.Hash, error) {
 	api.b.RecordPrivateTx(tx.Hash())
 
 	hash, err := SubmitTransaction(ctx, api.b, tx)
