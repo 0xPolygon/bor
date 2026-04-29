@@ -4802,7 +4802,7 @@ func TestSendRawTransactionPrivate(t *testing.T) {
 
 		hash, err := api.SendRawTransactionPrivate(context.Background(), raw)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "private tx accepted locally, submission failed")
+		require.Contains(t, err.Error(), "tx accepted locally, submission failed")
 		require.Contains(t, err.Error(), "relay down")
 		require.Equal(t, tx.Hash(), hash, "hash should be returned even on SubmitPrivateTx failure")
 	})
@@ -4942,24 +4942,28 @@ func TestTxPoolAPI_TxStatus(t *testing.T) {
 func TestSendRawTransaction_PreconfPath(t *testing.T) {
 	t.Parallel()
 
-	t.Run("preconf disabled, SubmitTxForPreconf not called", func(t *testing.T) {
+	t.Run("neither flag enabled, no relay calls", func(t *testing.T) {
 		t.Parallel()
 		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
 		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
-		// preconfEnabled defaults to false
+		// preconfEnabled and privateTxEnabled both default to false
 
-		var preconfCount atomic.Int32
-		b.submitTxForPreconfFn = func(tx *types.Transaction) error {
-			preconfCount.Add(1)
-			return nil
-		}
+		var preconfCount, submitPrivateCount, recordCount, purgeCount atomic.Int32
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+		b.recordPrivateTxFn = func(common.Hash) { recordCount.Add(1) }
+		b.purgePrivateTxFn = func(common.Hash) { purgeCount.Add(1) }
 
 		api := NewTransactionAPI(b, new(AddrLocker))
-		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
 
-		_, err := api.SendRawTransaction(context.Background(), raw)
-		require.NoError(t, err)
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err, "endpoint must work for non-relay nodes")
+		require.Equal(t, tx.Hash(), hash)
 		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should NOT be called when preconf is disabled")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should NOT be called when private is disabled")
+		require.Equal(t, int32(0), recordCount.Load(), "RecordPrivateTx should NOT be called when private is disabled")
+		require.Equal(t, int32(0), purgeCount.Load(), "PurgePrivateTx should NOT be called when private is disabled")
 	})
 
 	t.Run("preconf enabled, SubmitTxForPreconf called", func(t *testing.T) {
@@ -5001,6 +5005,194 @@ func TestSendRawTransaction_PreconfPath(t *testing.T) {
 		hash, err := api.SendRawTransaction(context.Background(), raw)
 		require.NoError(t, err, "SendRawTransaction should NOT propagate SubmitTxForPreconf errors")
 		require.Equal(t, tx.Hash(), hash)
+	})
+}
+
+func TestSendRawTransaction_Unified(t *testing.T) {
+	t.Parallel()
+
+	t.Run("private only, success path", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true
+
+		var recordCount, submitPrivateCount, preconfCount atomic.Int32
+		b.recordPrivateTxFn = func(common.Hash) { recordCount.Add(1) }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called once")
+		require.Equal(t, int32(1), submitPrivateCount.Load(), "SubmitPrivateTx should be called once")
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should not be called when preconf is disabled")
+	})
+
+	t.Run("private only, SubmitPrivateTx fails returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true
+		b.submitPrivateTxFn = func(*types.Transaction) error { return errors.New("relay down") }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "tx accepted locally, submission failed")
+		require.Contains(t, err.Error(), "relay down")
+		require.Equal(t, tx.Hash(), hash, "hash should be returned even on SubmitPrivateTx failure")
+	})
+
+	t.Run("private only, SubmitTransaction fails (non-AlreadyKnown) purges record", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true
+		b.sendTxErr = errors.New("pool full")
+
+		var recordCount, purgeCount, submitPrivateCount, preconfCount atomic.Int32
+		b.recordPrivateTxFn = func(common.Hash) { recordCount.Add(1) }
+		b.purgePrivateTxFn = func(common.Hash) { purgeCount.Add(1) }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransaction(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "pool full")
+		// Record-before-submit invariant: record count == 1 even though
+		// SendTx failed proves RecordPrivateTx ran before SubmitTransaction.
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should be called before SubmitTransaction")
+		require.Equal(t, int32(1), purgeCount.Load(), "PurgePrivateTx should be called on non-AlreadyKnown failure")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should not be called when local pool rejects")
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should not be called when local pool rejects")
+	})
+
+	t.Run("private only, ErrAlreadyKnown short-circuits BP submit no purge", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.privateTxEnabled = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+
+		var recordCount, purgeCount, submitPrivateCount, preconfCount atomic.Int32
+		b.recordPrivateTxFn = func(common.Hash) { recordCount.Add(1) }
+		b.purgePrivateTxFn = func(common.Hash) { purgeCount.Add(1) }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransaction(context.Background(), raw)
+		require.ErrorIs(t, err, txpool.ErrAlreadyKnown)
+		require.Equal(t, int32(1), recordCount.Load(), "RecordPrivateTx should still be called")
+		require.Equal(t, int32(0), purgeCount.Load(), "PurgePrivateTx should NOT be called for ErrAlreadyKnown")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should NOT be called on ErrAlreadyKnown")
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should NOT be called on ErrAlreadyKnown")
+	})
+
+	t.Run("both flags on, both submits called", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.privateTxEnabled = true
+
+		var preconfCount, submitPrivateCount atomic.Int32
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err)
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), preconfCount.Load(), "SubmitTxForPreconf should be called once")
+		require.Equal(t, int32(1), submitPrivateCount.Load(), "SubmitPrivateTx should be called once")
+	})
+
+	t.Run("both flags on, preconf fails private succeeds no error to user", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.privateTxEnabled = true
+
+		var preconfCount, submitPrivateCount atomic.Int32
+		b.submitTxForPreconfFn = func(*types.Transaction) error {
+			preconfCount.Add(1)
+			return errors.New("preconf relay down")
+		}
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.NoError(t, err, "preconf failures should be swallowed when private succeeds")
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), preconfCount.Load())
+		require.Equal(t, int32(1), submitPrivateCount.Load(), "private submit should still run after preconf failure")
+	})
+
+	t.Run("both flags on, preconf succeeds private fails returns wrapped error", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.privateTxEnabled = true
+
+		var preconfCount, submitPrivateCount atomic.Int32
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+		b.submitPrivateTxFn = func(*types.Transaction) error {
+			submitPrivateCount.Add(1)
+			return errors.New("private relay down")
+		}
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, tx := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		hash, err := api.SendRawTransaction(context.Background(), raw)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "tx accepted locally, submission failed")
+		require.Contains(t, err.Error(), "private relay down")
+		require.Equal(t, tx.Hash(), hash)
+		require.Equal(t, int32(1), preconfCount.Load(), "preconf submit should run before private submit")
+		require.Equal(t, int32(1), submitPrivateCount.Load())
+	})
+
+	t.Run("both flags on, ErrAlreadyKnown short-circuits both BP submits", func(t *testing.T) {
+		t.Parallel()
+		genesis := &core.Genesis{Config: params.TestChainConfig, Alloc: types.GenesisAlloc{}}
+		b := newTestBackend(t, 0, genesis, ethash.NewFaker(), nil)
+		b.preconfEnabled = true
+		b.privateTxEnabled = true
+		b.sendTxErr = txpool.ErrAlreadyKnown
+
+		var preconfCount, submitPrivateCount, purgeCount atomic.Int32
+		b.submitTxForPreconfFn = func(*types.Transaction) error { preconfCount.Add(1); return nil }
+		b.submitPrivateTxFn = func(*types.Transaction) error { submitPrivateCount.Add(1); return nil }
+		b.purgePrivateTxFn = func(common.Hash) { purgeCount.Add(1) }
+
+		api := NewTransactionAPI(b, new(AddrLocker))
+		raw, _ := makeSelfSignedRaw(t, api, b.acc.Address)
+
+		_, err := api.SendRawTransaction(context.Background(), raw)
+		require.ErrorIs(t, err, txpool.ErrAlreadyKnown)
+		require.Equal(t, int32(0), preconfCount.Load(), "SubmitTxForPreconf should NOT be called on ErrAlreadyKnown")
+		require.Equal(t, int32(0), submitPrivateCount.Load(), "SubmitPrivateTx should NOT be called on ErrAlreadyKnown")
+		require.Equal(t, int32(0), purgeCount.Load(), "PurgePrivateTx should NOT be called for ErrAlreadyKnown")
 	})
 }
 func (b *testBackend) ProtocolVersion() uint {
