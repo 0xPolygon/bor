@@ -3537,3 +3537,45 @@ func TestPrefetchStream_BlockEquivalence(t *testing.T) {
 	t.Logf("block-equivalence: %d txs, TotalGasUsed=%d (matched across both paths)",
 		len(resultA.SuccessfulTxs), resultA.TotalGasUsed)
 }
+
+// TestDisablePendingBlock validates if setting `DisablePendingBlock` affects the
+// creation of pending block or not.
+func TestDisablePendingBlock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pending block is nil when flag is enabled", func(t *testing.T) {
+		t.Parallel()
+
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = true
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+
+		require.Never(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil || receipts != nil || stateDB != nil
+		}, 500*time.Millisecond, 100*time.Millisecond, "pending block, receipts and state should be nil when DisablePendingBlock is true")
+	})
+
+	t.Run("pending block is created when flag is disabled", func(t *testing.T) {
+		t.Parallel()
+
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = false
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+
+		require.Eventually(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil && receipts != nil && stateDB != nil
+		}, 2*time.Second, 100*time.Millisecond, "pending block, receipts and state should not be nil when DisablePendingBlock is false")
+	})
+}

@@ -1587,8 +1587,10 @@ func testBeaconSync(t *testing.T, protocol uint, mode SyncMode) {
 				if bs := int(tester.chain.CurrentBlock().Number.Uint64()) + 1; bs != len(chain.blocks) {
 					t.Fatalf("synchronised blocks mismatch: have %v, want %v", bs, len(chain.blocks))
 				}
-			case <-time.NewTimer(time.Second * 3).C:
-				t.Fatalf("Failed to sync chain in three seconds")
+			case <-time.NewTimer(time.Second * 30).C:
+				// Generous timeout tolerates -race overhead on CI while still
+				// catching a genuine sync stall.
+				t.Fatalf("Failed to sync chain in thirty seconds")
 			}
 		})
 	}

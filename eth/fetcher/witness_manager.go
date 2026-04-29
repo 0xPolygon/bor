@@ -134,15 +134,19 @@ func newWitnessManager(
 		witnessTimer:        time.NewTimer(0),
 		pokeCh:              make(chan struct{}, 1),
 	}
-	// Clear the timer channel initially
+	m.stopAndDrainTimer()
+	return m
+}
+
+// stopAndDrainTimer stops the witness timer and drains its channel if it
+// already fired. Safe to call whether or not the timer is active.
+func (m *witnessManager) stopAndDrainTimer() {
 	if !m.witnessTimer.Stop() {
-		// Non-blocking read in case the timer fired
 		select {
 		case <-m.witnessTimer.C:
 		default:
 		}
 	}
-	return m
 }
 
 // start begins the witness manager's internal loop in a new goroutine.
@@ -167,39 +171,14 @@ func (m *witnessManager) loop() {
 	lastTick := time.Now()
 
 	for {
-		var timerChan <-chan time.Time
-
-		// Check pending count under mutex protection
-		m.mu.Lock()
-		pendingCount := len(m.pending)
-		m.mu.Unlock()
-
-		if pendingCount > 0 {
-			// Only listen to timer if there are pending items
-			timerChan = m.witnessTimer.C
-			// If too long since last tick, reset the timer to ensure we don't get stuck
-			if time.Since(lastTick) > 10*time.Second {
-				log.Debug("[wm] Long time since last tick, forcing timer reset", "sinceLastTick", time.Since(lastTick))
-				m.rescheduleWitness()
-				lastTick = time.Now()
-			}
-		} else {
-			// Ensure timer is stopped if nothing is pending
-			if !m.witnessTimer.Stop() {
-				select {
-				case <-m.witnessTimer.C:
-				default:
-				}
-			}
-		}
+		timerChan, updatedLastTick := m.armTimerChan(lastTick)
+		lastTick = updatedLastTick
 
 		select {
-		// Handle signals from parent BlockFetcher
 		case <-m.parentQuit:
 			log.Info("Witness manager stopping")
 			return
 
-		// Handle injected blocks needing witness
 		case msg, ok := <-m.injectNeedWitnessCh:
 			if !ok {
 				log.Debug("Witness manager injectNeedWitnessCh closed unexpectedly")
@@ -209,7 +188,6 @@ func (m *witnessManager) loop() {
 			log.Debug("[wm] Received injectNeedWitnessCh message", "hash", msg.block.Hash())
 			m.handleNeed(msg)
 
-		// Handle injected witnesses from broadcast
 		case msg, ok := <-m.injectWitnessCh:
 			if !ok {
 				log.Debug("Witness manager injectWitnessCh closed unexpectedly")
@@ -219,17 +197,11 @@ func (m *witnessManager) loop() {
 			log.Debug("[wm] Received injectWitnessCh message", "hash", msg.witness.Header().Hash())
 			m.handleBroadcast(msg)
 
-		// Handle witness timer triggers
-		case <-timerChan: // Listen on the conditional channel
+		case <-timerChan:
 			lastTick = time.Now()
-			// Check pending count under mutex protection
-			m.mu.Lock()
-			pendingCount := len(m.pending)
-			m.mu.Unlock()
-			log.Debug("[wm] Witness timer triggered", "time", lastTick, "pendingCount", pendingCount)
+			m.logTimerTick(lastTick)
 			m.tick()
 
-		// Handle periodic cleanup of the unavailable witness cache
 		case <-cleanupTicker.C:
 			log.Debug("[wm] Cleanup ticker triggered")
 			m.cleanupUnavailableCache()
@@ -242,6 +214,38 @@ func (m *witnessManager) loop() {
 			continue
 		}
 	}
+}
+
+// armTimerChan prepares the timer channel for the next select iteration.
+// Returns nil channel (never fires) when nothing is pending. Forces a timer
+// reset if too long has passed since the last tick to recover from stuck
+// timers, updating lastTick when it does so.
+func (m *witnessManager) armTimerChan(lastTick time.Time) (<-chan time.Time, time.Time) {
+	m.mu.Lock()
+	pendingCount := len(m.pending)
+	m.mu.Unlock()
+
+	if pendingCount == 0 {
+		// Nothing to fetch — drain the timer so a stale fire doesn't wake us up.
+		m.stopAndDrainTimer()
+		return nil, lastTick
+	}
+
+	// If too long since last tick, reset the timer to ensure we don't get stuck.
+	if time.Since(lastTick) > 10*time.Second {
+		log.Debug("[wm] Long time since last tick, forcing timer reset", "sinceLastTick", time.Since(lastTick))
+		m.rescheduleWitness()
+		lastTick = time.Now()
+	}
+	return m.witnessTimer.C, lastTick
+}
+
+// logTimerTick emits a debug log with the current pending count.
+func (m *witnessManager) logTimerTick(t time.Time) {
+	m.mu.Lock()
+	pendingCount := len(m.pending)
+	m.mu.Unlock()
+	log.Debug("[wm] Witness timer triggered", "time", t, "pendingCount", pendingCount)
 }
 
 // handleNeed processes a block injected via InjectBlockWithWitnessRequirement.
@@ -273,7 +277,10 @@ func (m *witnessManager) handleNeed(msg *injectBlockNeedWitnessMsg) {
 		return
 	}
 
-	// Check distance (using parent's function)
+	// Check distance (using parent's function). Match block_fetcher.go's
+	// `<` comparison so a block at exactly dist == -maxUncleDist is treated
+	// the same by both: accepted. An inconsistent boundary would let
+	// block_fetcher import such a block while witness_manager drops it.
 	if dist := int64(number) - int64(m.parentChainHeight()); dist < -maxUncleDist {
 		m.mu.Unlock()
 		log.Debug("[wm] Discarded injected block, too far away", "peer", msg.origin, "number", number, "hash", hash, "distance", dist)
@@ -372,133 +379,163 @@ func (m *witnessManager) handleBroadcast(msg *injectedWitnessMsg) {
 // tick is called when the witnessTimer fires, triggering witness fetches.
 func (m *witnessManager) tick() {
 	log.Debug("[wm] Witness timer tick", "pending", len(m.pending))
-	// Map from peer ID -> map of block hash -> announce struct
-	requests := make(map[string]map[common.Hash]*blockAnnounce)
-
 	now := time.Now()
-	readyToFetch := []common.Hash{}
 
 	m.mu.Lock()
+	m.logPendingStatesAtTickLocked(now)
+	readyToFetch, toMarkUnavailable := m.collectReadyHashesLocked(now)
+	prematureOps := m.extractPrematureOpsLocked(readyToFetch)
+	m.mu.Unlock()
 
-	// Debug: Log current pending items at tick time
-	if len(m.pending) > 0 {
-		pendingStates := make([]string, 0, len(m.pending))
-		for h, state := range m.pending {
-			readyStr := "not-ready"
-			if state.announce != nil && now.After(state.announce.time) {
-				readyStr = "ready"
-			}
-
-			statusStr := "no-witness"
-			if state.op != nil && state.op.witness != nil {
-				statusStr = "has-witness"
-			}
-
-			pendingStates = append(pendingStates,
-				fmt.Sprintf("%s:%s:%s:%d", h.Hex()[:8], readyStr, statusStr, state.retries))
-		}
-		log.Debug("[wm] Pending states at tick", "states", pendingStates)
+	// Mark exhausted retries as unavailable (acquires lock internally, reschedules timer).
+	for _, hash := range toMarkUnavailable {
+		m.markWitnessUnavailable(hash)
 	}
 
-	// Identify pending requests that are ready to be fetched
+	// Enqueue any pending entries that already have a witness attached (e.g. arrived via broadcast).
+	for _, op := range prematureOps {
+		log.Debug("[wm] Enqueueing pending block with already attached witness", "hash", op.hash())
+		m.safeEnqueue(op)
+	}
+
+	m.mu.Lock()
+	requests := m.buildPeerRequestsLocked(readyToFetch, now)
+	m.mu.Unlock()
+
+	m.dispatchPeerRequests(requests)
+
+	// Schedule the next fetch if blocks are still pending
+	m.rescheduleWitness()
+}
+
+// logPendingStatesAtTickLocked emits a debug trace of the current pending
+// witness requests. Caller must hold m.mu.
+func (m *witnessManager) logPendingStatesAtTickLocked(now time.Time) {
+	if len(m.pending) == 0 {
+		return
+	}
+	pendingStates := make([]string, 0, len(m.pending))
+	for h, state := range m.pending {
+		readyStr := "not-ready"
+		if state.announce != nil && now.After(state.announce.time) {
+			readyStr = "ready"
+		}
+		statusStr := "no-witness"
+		if state.op != nil && state.op.witness != nil {
+			statusStr = "has-witness"
+		}
+		pendingStates = append(pendingStates,
+			fmt.Sprintf("%s:%s:%s:%d", h.Hex()[:8], readyStr, statusStr, state.retries))
+	}
+	log.Debug("[wm] Pending states at tick", "states", pendingStates)
+}
+
+// collectReadyHashesLocked walks the pending map and partitions entries into
+// hashes that are ready to fetch and hashes that have exhausted their retry
+// budget and should be marked unavailable. Caller must hold m.mu.
+//
+// Invalid entries (missing op or announce) are cleaned up in place.
+func (m *witnessManager) collectReadyHashesLocked(now time.Time) (readyToFetch, toMarkUnavailable []common.Hash) {
 	for hash, state := range m.pending {
 		// Must have an op and announce to be fetchable
 		if state.op == nil || state.announce == nil {
 			log.Debug("[wm] Invalid pending state found", "hash", hash)
-			delete(m.pending, hash) // Clean up invalid state
+			delete(m.pending, hash)
 			continue
 		}
 
 		// Witness already present? Should have been enqueued.
 		if state.op.witness != nil {
 			log.Debug("[wm] Pending state found with witness already present", "hash", hash)
-			// we will enqueue outside of lock to avoid deadlock
-			readyToFetch = append(readyToFetch, hash) // mark for enqueue path
+			readyToFetch = append(readyToFetch, hash)
 			continue
 		}
 
-		// Check if ready (announce time is in the past)
-		if now.After(state.announce.time) {
-			// Give up if we've retried too many times
-			if state.retries >= maxWitnessFetchRetries {
-				log.Debug("[wm] Max witness retries reached, marking unavailable", "hash", hash, "retries", state.retries)
-				toMark := hash // avoid referencing loop var later
-				m.mu.Unlock()
-				m.markWitnessUnavailable(toMark)
-				m.mu.Lock()
-				continue
-			}
-			// Increment retry counter and schedule fetch
-			state.retries++
-			log.Debug("[wm] Scheduling witness fetch", "hash", hash, "retry", state.retries)
-			readyToFetch = append(readyToFetch, hash)
+		// Not ready yet (announce time still in the future).
+		if !now.After(state.announce.time) {
+			continue
 		}
-	}
 
-	// We may need to enqueue those that already had witness present
-	prematureStates := []*blockOrHeaderInject{}
+		// Give up if we've retried too many times.
+		if state.retries >= maxWitnessFetchRetries {
+			log.Debug("[wm] Max witness retries reached, marking unavailable", "hash", hash, "retries", state.retries)
+			toMarkUnavailable = append(toMarkUnavailable, hash)
+			continue
+		}
+
+		// Increment retry counter and schedule fetch.
+		state.retries++
+		log.Debug("[wm] Scheduling witness fetch", "hash", hash, "retry", state.retries)
+		readyToFetch = append(readyToFetch, hash)
+	}
+	return readyToFetch, toMarkUnavailable
+}
+
+// extractPrematureOpsLocked returns the ops for entries that already have
+// their witness attached, so they can be enqueued immediately. Caller must
+// hold m.mu.
+func (m *witnessManager) extractPrematureOpsLocked(readyToFetch []common.Hash) []*blockOrHeaderInject {
+	var ops []*blockOrHeaderInject
 	for _, h := range readyToFetch {
 		if st := m.pending[h]; st != nil && st.op != nil && st.op.witness != nil {
-			prematureStates = append(prematureStates, st.op)
+			ops = append(ops, st.op)
 		}
 	}
-	m.mu.Unlock()
+	return ops
+}
 
-	// Enqueue outside lock using captured states
-	for _, op := range prematureStates {
-		log.Debug("[wm] Enqueueing pending block with already attached witness", "hash", op.hash())
-		m.safeEnqueue(op)
-	}
-
-	// Prepare requests per peer
-	m.mu.Lock()
+// buildPeerRequestsLocked groups ready hashes by peer and updates announce
+// timestamps to enforce per-request backoff. Caller must hold m.mu.
+func (m *witnessManager) buildPeerRequestsLocked(readyToFetch []common.Hash, now time.Time) map[string]map[common.Hash]*blockAnnounce {
+	requests := make(map[string]map[common.Hash]*blockAnnounce)
 	for _, hash := range readyToFetch {
 		state := m.pending[hash]
-		if state == nil || state.announce == nil { // Check again, might have been removed
+		if state == nil || state.announce == nil {
 			continue
 		}
 		announce := state.announce
 
-		// Add to request map
 		if _, ok := requests[announce.origin]; !ok {
 			requests[announce.origin] = make(map[common.Hash]*blockAnnounce)
 		}
 		requests[announce.origin][hash] = announce
 
-		// Update announce time for backoff - prevent immediate retry
-		// This effectively marks the request as "in-flight"
+		// Update announce time for backoff — prevents immediate retry and
+		// effectively marks the request as "in-flight".
 		announce.time = now.Add(fetchTimeout)
-		// state.announce = announce // announce is a pointer, modification is reflected
 	}
-	m.mu.Unlock()
+	return requests
+}
 
-	// Send out all block witness requests
+// dispatchPeerRequests spawns a fetch goroutine per (peer, hash) pair.
+// Must be called without holding m.mu.
+func (m *witnessManager) dispatchPeerRequests(requests map[string]map[common.Hash]*blockAnnounce) {
 	for peer, hashAnnounceMap := range requests {
-		// Collect hashes for logging
-		hashesToFetch := make([]common.Hash, 0, len(hashAnnounceMap))
-		for hash := range hashAnnounceMap {
-			hashesToFetch = append(hashesToFetch, hash)
-		}
-		if len(hashesToFetch) == 0 {
+		m.dispatchPeerFetches(peer, hashAnnounceMap)
+	}
+}
+
+// dispatchPeerFetches launches fetch goroutines for a single peer's hashes,
+// handling invalid announcements as hard failures.
+func (m *witnessManager) dispatchPeerFetches(peer string, hashAnnounceMap map[common.Hash]*blockAnnounce) {
+	if len(hashAnnounceMap) == 0 {
+		return
+	}
+
+	// Collect hashes for logging only.
+	hashesToFetch := make([]common.Hash, 0, len(hashAnnounceMap))
+	for hash := range hashAnnounceMap {
+		hashesToFetch = append(hashesToFetch, hash)
+	}
+	log.Debug("[wm] Fetching scheduled witnesses", "peer", peer, "list", hashesToFetch)
+
+	for hash, announce := range hashAnnounceMap {
+		if announce == nil || announce.fetchWitness == nil {
+			m.handleWitnessFetchFailureExt(hash, "", errors.New("missing fetch configuration"), true)
 			continue
 		}
-		log.Debug("[wm] Fetching scheduled witnesses", "peer", peer, "list", hashesToFetch)
-
-		// Process each hash for the peer individually
-		for hash, announce := range hashAnnounceMap {
-			// Ensure we have a valid announce and fetchWitness function
-			if announce == nil || announce.fetchWitness == nil {
-				m.handleWitnessFetchFailureExt(hash, "", errors.New("missing fetch configuration"), true)
-				continue
-			}
-
-			// Launch goroutine for fetch
-			go m.fetchWitness(peer, hash, announce)
-		}
+		go m.fetchWitness(peer, hash, announce)
 	}
-
-	// Schedule the next fetch if blocks are still pending
-	m.rescheduleWitness()
 }
 
 // fetchWitness performs a single witness fetch in a goroutine.
@@ -511,81 +548,96 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 
 	witnessFetchMeter.Mark(1)
 
-	req, err := announce.fetchWitness(hash, resCh)
-	if req != nil {
-		peer = req.Peer
-	} else {
-		peer = ""
-	}
-	if err != nil {
-		log.Debug("[wm] Failed to initiate witness fetch request", "peer", peer, "hash", hash, "err", err)
-		// Check if the error specifically indicates no peers were available
-		if strings.Contains(err.Error(), "no peer with witness for hash") {
-			m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("request initiation failed: %w", err), false)
-			return
-		}
-
-		// For other errors, check if still pending before handling failure
-		m.mu.Lock()
-		if _, exists := m.pending[hash]; !exists {
-			m.mu.Unlock()
-			log.Debug("[wm] Skipping witness fetch failure handling, block no longer pending", "peer", peer, "hash", hash)
-			return
-		}
-		m.mu.Unlock()
-		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("request initiation failed: %w", err), false)
+	req, effectivePeer, ok := m.initiateWitnessFetch(hash, announce, resCh)
+	if !ok {
 		return
 	}
+	defer req.Close()
 
-	// Check if still pending after successful request creation
-	m.mu.Lock()
-	if _, exists := m.pending[hash]; !exists {
-		m.mu.Unlock()
+	m.awaitWitnessResponse(effectivePeer, hash, resCh, announcedAt)
+}
+
+// initiateWitnessFetch requests a witness from a peer and checks that the
+// block is still pending afterwards. Returns the created request on success,
+// or ok=false after handling the failure.
+func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockAnnounce, resCh chan *eth.Response) (*eth.Request, string, bool) {
+	req, err := announce.fetchWitness(hash, resCh)
+	peer := ""
+	if req != nil {
+		peer = req.Peer
+	}
+
+	if err != nil {
+		log.Debug("[wm] Failed to initiate witness fetch request", "peer", peer, "hash", hash, "err", err)
+		wrappedErr := fmt.Errorf("request initiation failed: %w", err)
+
+		// "No peer with witness" is a soft failure with no peer to penalize.
+		if strings.Contains(err.Error(), "no peer with witness for hash") {
+			m.handleWitnessFetchFailureExt(hash, "", wrappedErr, false)
+			return nil, "", false
+		}
+
+		// For other errors, check if still pending before handling failure.
+		if !m.isPending(hash) {
+			log.Debug("[wm] Skipping witness fetch failure handling, block no longer pending", "peer", peer, "hash", hash)
+			return nil, "", false
+		}
+		m.handleWitnessFetchFailureExt(hash, peer, wrappedErr, false)
+		return nil, "", false
+	}
+
+	// Successful request creation — verify the block is still pending.
+	if !m.isPending(hash) {
 		log.Debug("[wm] Skipping witness fetch, block no longer pending", "peer", peer, "hash", hash)
 		m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("request initiation failed: %w", err), false)
 		req.Close()
-		return
+		return nil, "", false
 	}
-	m.mu.Unlock()
-	defer req.Close()
+	return req, peer, true
+}
 
+// awaitWitnessResponse waits for the fetch response, delegating to success
+// or failure handlers depending on the outcome.
+func (m *witnessManager) awaitWitnessResponse(peer string, hash common.Hash, resCh chan *eth.Response, announcedAt time.Time) {
 	timeout := time.NewTimer(2 * fetchTimeout) // 2x leeway before dropping the peer
 	defer timeout.Stop()
 
 	select {
 	case res := <-resCh:
-		if res == nil {
-			log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
-			return
-		}
-		res.Done <- nil // Signal consumption
-
-		// Assuming NewWitnessPacket contains only one witness.
-		witness, ok := res.Res.([]*stateless.Witness)
-		if !ok {
-			log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
-			return
-		}
-
-		if len(witness) == 0 {
-			log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-			m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
-			return
-		}
-
-		metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
-
-		// Process successful fetch
-		m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
-
+		m.processWitnessResponse(peer, hash, res, announcedAt)
 	case <-timeout.C:
 		log.Info("[wm] Witness fetch timed out for peer", "peer", peer, "hash", hash)
 		m.handleWitnessFetchFailureExt(hash, peer, errors.New("fetch timeout"), false)
 	case <-m.parentQuit:
 		log.Debug("[wm] Witness fetch cancelled due to shutdown", "peer", peer, "hash", hash)
 	}
+}
+
+// processWitnessResponse validates the witness payload and dispatches to the
+// success handler if it passes checks.
+func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, res *eth.Response, announcedAt time.Time) {
+	if res == nil {
+		log.Debug("[wm] Witness response channel closed unexpectedly", "peer", peer, "hash", hash)
+		m.handleWitnessFetchFailureExt(hash, peer, errors.New("response channel closed"), false)
+		return
+	}
+	res.Done <- nil // Signal consumption
+
+	// Assuming NewWitnessPacket contains only one witness.
+	witness, ok := res.Res.([]*stateless.Witness)
+	if !ok {
+		log.Debug("[wm] Invalid witness response type received", "peer", peer, "hash", hash, "type", fmt.Sprintf("%T", res.Res))
+		m.handleWitnessFetchFailureExt(hash, peer, errors.New("invalid response type"), false)
+		return
+	}
+	if len(witness) == 0 {
+		log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
+		m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
+		return
+	}
+
+	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
+	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.
@@ -627,24 +679,8 @@ func (m *witnessManager) handleWitnessFetchSuccess(fetchPeer string, hash common
 // rescheduleWitness resets the internal timer to the next required wake-up time.
 func (m *witnessManager) rescheduleWitness() {
 	m.mu.Lock()
-	// Stop any existing timer safely under lock
-	if !m.witnessTimer.Stop() {
-		select {
-		case <-m.witnessTimer.C:
-		default:
-		}
-	}
-	// Find the earliest time we need to wake up
-	var earliest time.Time
-	pendingFetches := 0
-	for _, state := range m.pending {
-		if state.announce != nil && state.op != nil && state.op.witness == nil {
-			pendingFetches++
-			if earliest.IsZero() || state.announce.time.Before(earliest) {
-				earliest = state.announce.time
-			}
-		}
-	}
+	m.stopAndDrainTimer()
+	earliest := m.earliestPendingAnnounceLocked()
 	m.mu.Unlock()
 
 	if earliest.IsZero() {
@@ -652,18 +688,34 @@ func (m *witnessManager) rescheduleWitness() {
 		return
 	}
 
+	// Clamp to a small positive value so we don't spin on already-due fetches.
 	delay := time.Until(earliest.Add(gatherSlack))
-	// If delay is negative or zero, set it to a small positive value to trigger soon
 	if delay <= 0 {
-		delay = 10 * time.Millisecond // Small delay to avoid CPU spinning
+		delay = 10 * time.Millisecond
 	}
 	m.witnessTimer.Reset(delay)
 
-	// Nudge the main loop to wake up
+	// Nudge the main loop to re-evaluate the select with the new timer.
 	select {
 	case m.pokeCh <- struct{}{}:
 	default:
 	}
+}
+
+// earliestPendingAnnounceLocked returns the earliest announce time among
+// pending entries that still need a witness fetched. Returns zero time if
+// no such entries exist. Caller must hold m.mu.
+func (m *witnessManager) earliestPendingAnnounceLocked() time.Time {
+	var earliest time.Time
+	for _, state := range m.pending {
+		if state.announce == nil || state.op == nil || state.op.witness != nil {
+			continue
+		}
+		if earliest.IsZero() || state.announce.time.Before(earliest) {
+			earliest = state.announce.time
+		}
+	}
+	return earliest
 }
 
 // handleWitnessFetchFailureExt handles a witness fetch failure with an option
@@ -770,6 +822,7 @@ func (m *witnessManager) markWitnessUnavailable(hash common.Hash) {
 	// Remove from pending state if it exists, as we won't fetch it now
 	delete(m.pending, hash)
 	m.mu.Unlock()
+
 	m.rescheduleWitness() // Recalculate timer based on remaining pending items
 }
 

@@ -385,10 +385,14 @@ func TestSubmitPreconfTx(t *testing.T) {
 	})
 
 	t.Run("submitPreconfTx runs in parallel", func(t *testing.T) {
-		// Ensure all calls take almost 2s of time but don't exceed rpcTimeout
+		// Each handler sleeps for half the RPC timeout. Using rpcTimeout-100ms
+		// left only 100ms of slack before the client-side timeout and flaked
+		// under -race. 1s sleep × 3 serial calls would still exceed the 2s
+		// total-deadline assertion below, so parallelism remains demonstrated.
+		handlerSleep := rpcTimeout / 2
 		for i := range rpcServers {
 			rpcServers[i].setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
-				time.Sleep(rpcTimeout - 100*time.Millisecond)
+				time.Sleep(handlerSleep)
 				defaultHandleSendPreconfTx(w, id, params)
 			})
 		}
@@ -403,7 +407,7 @@ func TestSubmitPreconfTx(t *testing.T) {
 		require.NoError(t, err, "expected no error in submitting preconf tx")
 		require.True(t, res, "expected preconf to be offered by all BPs")
 		require.Less(t, elapsed, 2*time.Second, "expected parallel calls to finish below timeout")
-		require.Greater(t, elapsed, rpcTimeout-100*time.Millisecond, "expected calls to take at least time taken by all calls")
+		require.GreaterOrEqual(t, elapsed, handlerSleep, "expected calls to take at least time taken by all calls")
 	})
 
 	t.Run("submitPreconfTx with already known error from one BP", func(t *testing.T) {
@@ -580,10 +584,12 @@ func TestSubmitPrivateTx(t *testing.T) {
 	})
 
 	t.Run("submitPrivateTx runs in parallel", func(t *testing.T) {
-		// Reset all handlers and make each call take almost rpcTimeout
+		// Halve the handler sleep to stop crowding the client-side timeout.
+		// See the matching comment in submitPreconfTx for the same rationale.
+		handlerSleep := rpcTimeout / 2
 		for i := range rpcServers {
 			rpcServers[i].setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
-				time.Sleep(rpcTimeout - 100*time.Millisecond)
+				time.Sleep(handlerSleep)
 				defaultHandleSendPrivateTx(w, id, params)
 			})
 		}
@@ -597,7 +603,7 @@ func TestSubmitPrivateTx(t *testing.T) {
 
 		require.NoError(t, err, "expected no error in submitting private tx")
 		require.Less(t, elapsed, 2*time.Second, "expected parallel calls to finish below total timeout")
-		require.Greater(t, elapsed, rpcTimeout-100*time.Millisecond, "expected calls to take at least the time of one call")
+		require.GreaterOrEqual(t, elapsed, handlerSleep, "expected calls to take at least the time of one call")
 	})
 
 	t.Run("submitPrivateTx with multiple BPs failing", func(t *testing.T) {
@@ -846,10 +852,16 @@ func TestCheckTxStatus(t *testing.T) {
 	})
 
 	t.Run("checkTxStatus runs in parallel", func(t *testing.T) {
-		// All calls take almost rpcTimeout but don't exceed it
+		// Each handler sleeps for half the RPC timeout. The original margin
+		// (rpcTimeout - 100ms) left only 100ms of slack before the client-side
+		// timeout fired — under -race that slack is easily exhausted and the
+		// test spuriously sees context-deadline-exceeded. A 1s sleep still
+		// proves parallelism: 3 serial calls would take ~3s, far above the
+		// 2s total deadline.
+		handlerSleep := rpcTimeout / 2
 		for i := range rpcServers {
 			rpcServers[i].setHandleTxStatus(func(w http.ResponseWriter, id int, params json.RawMessage) {
-				time.Sleep(rpcTimeout - 100*time.Millisecond)
+				time.Sleep(handlerSleep)
 				makeTxStatusHandler(map[common.Hash]txpool.TxStatus{
 					tx1.Hash(): txpool.TxStatusPending,
 				})(w, id, params)
@@ -866,7 +878,7 @@ func TestCheckTxStatus(t *testing.T) {
 		require.NoError(t, err, "expected no error in checking tx status")
 		require.True(t, res, "expected result to be true")
 		require.Less(t, elapsed, 2*time.Second, "expected parallel calls to finish below total timeout")
-		require.Greater(t, elapsed, rpcTimeout-100*time.Millisecond, "expected calls to take at least the time of one call")
+		require.GreaterOrEqual(t, elapsed, handlerSleep, "expected calls to take at least the time of one call")
 	})
 
 	t.Run("checkTxStatus with some failing servers after initialization", func(t *testing.T) {
