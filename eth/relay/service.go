@@ -19,19 +19,20 @@ var (
 )
 
 var (
-	preconfSubmitTimer   = metrics.NewRegisteredTimer("preconfs/submit", nil)
-	checkTxStatusTimer   = metrics.NewRegisteredTimer("preconfs/checkstatus", nil)
-	privateTxSubmitTimer = metrics.NewRegisteredTimer("privatetx/submit", nil)
+	// Latency timers when interacting with BPs via multiclient
+	preconfSubmitTimer   = metrics.NewRegisteredTimer("relay/preconf/submit/latency", nil)
+	checkTxStatusTimer   = metrics.NewRegisteredTimer("relay/preconf/checkstatus/latency", nil)
+	privateTxSubmitTimer = metrics.NewRegisteredTimer("relay/privatetx/submit/latency", nil)
 
-	uniquePreconfsTaskMeter     = metrics.NewRegisteredMeter("preconfs/tasks", nil)
-	validPreconfsMeter          = metrics.NewRegisteredMeter("preconfs/valid", nil)
-	invalidPreconfsMeter        = metrics.NewRegisteredMeter("preconfs/invalid", nil)
-	invalidToValidPreconfsMeter = metrics.NewRegisteredMeter("preconfs/invalidtovalid", nil)
-	txInDbMeter                 = metrics.NewRegisteredMeter("preconfs/txindb", nil)
+	uniquePreconfsTaskMeter     = metrics.NewRegisteredMeter("relay/preconf/tasks", nil)
+	validPreconfsMeter          = metrics.NewRegisteredMeter("relay/preconf/result/valid", nil)
+	invalidPreconfsMeter        = metrics.NewRegisteredMeter("relay/preconf/result/invalid", nil)
+	invalidToValidPreconfsMeter = metrics.NewRegisteredMeter("relay/preconf/result/recovered", nil)
+	txInDbMeter                 = metrics.NewRegisteredMeter("relay/preconf/checkstatus/dbhit", nil)
 
-	uniquePrivateTxRequestMeter     = metrics.NewRegisteredMeter("privatetx/request", nil)
-	privateTxSubmissionSuccessMeter = metrics.NewRegisteredMeter("privatetx/success", nil)
-	privateTxSubmissionFailureMeter = metrics.NewRegisteredMeter("privatetx/failure", nil)
+	uniquePrivateTxRequestMeter     = metrics.NewRegisteredMeter("relay/privatetx/request", nil)
+	privateTxSubmissionSuccessMeter = metrics.NewRegisteredMeter("relay/privatetx/success", nil)
+	privateTxSubmissionFailureMeter = metrics.NewRegisteredMeter("relay/privatetx/failure", nil)
 )
 
 // TxGetter defines a function that retrieves a transaction by its hash from local database.

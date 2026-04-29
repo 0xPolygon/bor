@@ -22,15 +22,21 @@ const (
 )
 
 var (
-	rpcCallsSuccessMeter       = metrics.NewRegisteredMeter("preconfs/rpc/success", nil)
-	rpcCallsFailureMeter       = metrics.NewRegisteredMeter("preconfs/rpc/failure", nil)
-	rpcErrorInPreconfMeter     = metrics.NewRegisteredMeter("preconfs/rpcerror", nil)
-	belowThresholdPreconfMeter = metrics.NewRegisteredMeter("preconfs/belowthreshold", nil)
-	alreadyKnownErrMeter       = metrics.NewRegisteredMeter("relay/txalreadyknown", nil)
+	// Metrics for each request made to BP tracking success and failures
+	preconfRpcSuccessMeter        = metrics.NewRegisteredMeter("relay/bp/rpc/preconf/success", nil)
+	preconfRpcFailureMeter        = metrics.NewRegisteredMeter("relay/bp/rpc/preconf/failure", nil)
+	preconfRpcAlreadyKnownMeter   = metrics.NewRegisteredMeter("relay/bp/rpc/preconf/alreadyknown", nil)
+	privateTxRpcSuccessMeter      = metrics.NewRegisteredMeter("relay/bp/rpc/privatetx/success", nil)
+	privateTxRpcFailureMeter      = metrics.NewRegisteredMeter("relay/bp/rpc/privatetx/failure", nil)
+	privateTxRpcAlreadyKnownMeter = metrics.NewRegisteredMeter("relay/bp/rpc/privatetx/alreadyknown", nil)
+	checkStatusRpcSuccessMeter    = metrics.NewRegisteredMeter("relay/bp/rpc/checkstatus/success", nil)
+	checkStatusRpcFailureMeter    = metrics.NewRegisteredMeter("relay/bp/rpc/checkstatus/failure", nil)
 
-	// Track BP level RPC rejections for all tx submissions
-	preconfRejectionMeter   = metrics.NewRegisteredMeter("relay/bprpc/preconf/error", nil)
-	privateTxRejectionMeter = metrics.NewRegisteredMeter("relay/bprpc/privatetx/error", nil)
+	// Metric for preconf submissions where tx were accepted by all BPs but not preconfirmed
+	belowThresholdPreconfMeter = metrics.NewRegisteredMeter("relay/preconf/result/belowthreshold", nil)
+
+	// Metric for private tx submissions that were accepted by all BPs after retries.
+	privateTxRetrySuccessMeter = metrics.NewRegisteredMeter("relay/privatetx/retry/success", nil)
 )
 
 // isAlreadyKnownError checks if the error indicates the transaction is already known to the node
@@ -133,21 +139,20 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 			err := client.CallContext(ctx, &preconfResponse, "eth_sendRawTransactionForPreconf", hexutil.Encode(rawTx))
 			cancel()
 			if err != nil {
-				rpcCallsFailureMeter.Mark(1)
+				preconfRpcFailureMeter.Mark(1)
+				mc.rejectionTracker.record(err)
 				// If the tx is already known, treat it as preconfirmed for this node
 				if isAlreadyKnownError(err) {
-					alreadyKnownErrMeter.Mark(1)
+					preconfRpcAlreadyKnownMeter.Mark(1)
 					preconfOfferedCount.Add(1)
 					return
 				}
-				preconfRejectionMeter.Mark(1)
-				mc.rejectionTracker.record(err)
 				setError.Do(func() {
 					firstErr = err
 				})
 				return
 			}
-			rpcCallsSuccessMeter.Mark(1)
+			preconfRpcSuccessMeter.Mark(1)
 			if preconfResponse.Preconfirmed {
 				preconfOfferedCount.Add(1)
 			}
@@ -161,9 +166,8 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 		return true, nil
 	}
 
-	if firstErr != nil {
-		rpcErrorInPreconfMeter.Mark(1)
-	} else {
+	// All BPs accepted the tx but at least one of them didn't offer a preconf
+	if firstErr == nil {
 		belowThresholdPreconfMeter.Mark(1)
 	}
 
@@ -200,22 +204,21 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				rpcCallsFailureMeter.Mark(1)
+				privateTxRpcFailureMeter.Mark(1)
+				mc.rejectionTracker.record(err)
 				// If the tx is already known, treat it as successful submission
 				if isAlreadyKnownError(err) {
-					alreadyKnownErrMeter.Mark(1)
+					privateTxRpcAlreadyKnownMeter.Mark(1)
 					successfulIndices = append(successfulIndices, index)
 					return
 				}
-				privateTxRejectionMeter.Mark(1)
-				mc.rejectionTracker.record(err)
 				setError.Do(func() {
 					firstErr = err
 				})
 				failedIndices = append(failedIndices, index)
 				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash)
 			} else {
-				rpcCallsSuccessMeter.Mark(1)
+				privateTxRpcSuccessMeter.Mark(1)
 				successfulIndices = append(successfulIndices, index)
 			}
 		}(client, i)
@@ -255,6 +258,7 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 
 		// If no more failed producers, we're done
 		if len(currentFailedIndices) == 0 {
+			privateTxRetrySuccessMeter.Mark(1)
 			return
 		}
 
@@ -272,6 +276,7 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 		if txGetter != nil {
 			found, tx, _, _, _ := txGetter(hash)
 			if found && tx != nil {
+				privateTxRetrySuccessMeter.Mark(1)
 				log.Debug("[tx-relay] Transaction found in local database, stopping retry", "hash", hash)
 				return
 			}
@@ -293,19 +298,18 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 				cancel()
 
 				if err != nil {
-					rpcCallsFailureMeter.Mark(1)
+					privateTxRpcFailureMeter.Mark(1)
+					mc.rejectionTracker.record(err)
 					// If the tx is already known, treat it as successful submission
 					if isAlreadyKnownError(err) {
-						alreadyKnownErrMeter.Mark(1)
+						privateTxRpcAlreadyKnownMeter.Mark(1)
 						return
 					}
-					privateTxRejectionMeter.Mark(1)
-					mc.rejectionTracker.record(err)
 					mu.Lock()
 					newFailedIndices = append(newFailedIndices, idx)
 					mu.Unlock()
 				} else {
-					rpcCallsSuccessMeter.Mark(1)
+					privateTxRpcSuccessMeter.Mark(1)
 				}
 			}(mc.clients[index], index)
 		}
@@ -319,6 +323,7 @@ func (mc *multiClient) retryPrivateTxSubmission(hexTx string, hash common.Hash, 
 		log.Debug("[tx-relay] Finished retry attempts with some producers still failing",
 			"hash", hash, "failed", len(currentFailedIndices))
 	} else {
+		privateTxRetrySuccessMeter.Mark(1)
 		log.Debug("[tx-relay] All producers accepted private tx after retries", "hash", hash)
 	}
 }
@@ -341,13 +346,13 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 			err := client.CallContext(ctx, &txStatus, "txpool_txStatus", hash)
 			cancel()
 			if err != nil {
-				rpcCallsFailureMeter.Mark(1)
+				checkStatusRpcFailureMeter.Mark(1)
 				setError.Do(func() {
 					firstErr = err
 				})
 				return
 			}
-			rpcCallsSuccessMeter.Mark(1)
+			checkStatusRpcSuccessMeter.Mark(1)
 			if txStatus == txpool.TxStatusPending {
 				preconfOfferedCount.Add(1)
 			}
@@ -360,9 +365,8 @@ func (mc *multiClient) checkTxStatus(hash common.Hash) (bool, error) {
 		return true, nil
 	}
 
-	if firstErr != nil {
-		rpcErrorInPreconfMeter.Mark(1)
-	} else {
+	// All BPs accepted the tx but at least one of them didn't offer a preconf
+	if firstErr == nil {
 		belowThresholdPreconfMeter.Mark(1)
 	}
 

@@ -19,7 +19,7 @@ const (
 	sweepInterval        = 1 * time.Minute  // how often the sweep goroutine runs
 )
 
-var totalPrivateTxsMeter = metrics.NewRegisteredMeter("privatetxs/count", nil)
+var privateTxStoreSizeGauge = metrics.NewRegisteredGauge("relay/privatetx/store/size", nil)
 
 type PrivateTxGetter interface {
 	IsTxPrivate(hash common.Hash) bool
@@ -195,7 +195,7 @@ func (s *PrivateTxStore) report() {
 			s.mu.RLock()
 			storeSize := len(s.txs)
 			s.mu.RUnlock()
-			totalPrivateTxsMeter.Mark(int64(storeSize))
+			privateTxStoreSizeGauge.Update(int64(storeSize))
 			log.Info("[private-tx-store] stats", "len", storeSize, "added", s.txsAdded.Load(), "purged", s.txsPurged.Load(), "deleted", s.txsDeleted.Load(), "expired", s.txsExpired.Load())
 			s.txsAdded.Store(0)
 			s.txsPurged.Store(0)
