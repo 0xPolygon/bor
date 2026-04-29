@@ -37,9 +37,9 @@ func TestNewService(t *testing.T) {
 		require.NotNil(t, service.multiclient, "expected non-nil multiclient")
 		require.NotNil(t, service.store, "expected non-nil store")
 		require.NotNil(t, service.taskCh, "expected non-nil task channel")
-		require.Equal(t, defaultConfig.maxQueuedTasks, cap(service.taskCh), "expected task channel capacity to match maxQueuedTasks")
-		require.Equal(t, defaultConfig.maxConcurrentPreconfs, cap(service.preconfSemaphore), "expected preconf semaphore capacity to match maxConcurrentPreconfs")
-		require.Equal(t, defaultConfig.maxConcurrentPrivateTxs, cap(service.privateSemaphore), "expected private semaphore capacity to match maxConcurrentPrivateTxs")
+		require.Equal(t, int(defaultConfig.maxQueuedTasks), cap(service.taskCh), "expected task channel capacity to match maxQueuedTasks")
+		require.Equal(t, int(defaultConfig.maxConcurrentPreconfs), cap(service.preconfSemaphore), "expected preconf semaphore capacity to match maxConcurrentPreconfs")
+		require.Equal(t, int(defaultConfig.maxConcurrentPrivateTxs), cap(service.privateSemaphore), "expected private semaphore capacity to match maxConcurrentPrivateTxs")
 
 		service.close()
 	})
