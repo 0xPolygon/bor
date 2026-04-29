@@ -3029,6 +3029,12 @@ func (w *worker) deletePendingTask(sealHash common.Hash) bool {
 // vmConfig returns the VM config.
 func (w *worker) vmConfig() vm.Config {
 	cfg := *w.chain.GetVMConfig()
+	// Miner pulls its vm.Config from the chain instance, this brought up the vm.Config.Tracer
+	// in which should be active only for live tracing and no for mining. So here, we explicitly
+	// sets the tracer to nil to avoid having the miner tracing a block while it's produced conflicting
+	// with the live tracing.
+	cfg.Tracer = nil
+
 	return cfg
 }
 
