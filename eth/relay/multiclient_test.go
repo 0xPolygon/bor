@@ -1547,7 +1547,7 @@ func TestFormatRejectionCounts(t *testing.T) {
 
 // TestRejectionTrackerWiredToSubmit verifies the full production path: BP
 // rejections from both submitPrivateTx and submitPreconfTx flow into the same
-// tracker on the multiClient, while "already known" is filtered out in both cases.
+// tracker on the multiClient, including "already known" responses.
 func TestRejectionTrackerWiredToSubmit(t *testing.T) {
 	t.Parallel()
 
@@ -1555,7 +1555,7 @@ func TestRejectionTrackerWiredToSubmit(t *testing.T) {
 	rawTx, err := tx.MarshalBinary()
 	require.NoError(t, err)
 
-	t.Run("private tx rejection is tracked, already-known is not", func(t *testing.T) {
+	t.Run("private tx rejections including already-known are tracked", func(t *testing.T) {
 		s1 := newMockRpcServer()
 		s2 := newMockRpcServer()
 		defer s1.close()
@@ -1574,12 +1574,12 @@ func TestRejectionTrackerWiredToSubmit(t *testing.T) {
 		_, _ = mc.submitPrivateTx(rawTx, tx.Hash(), false, nil)
 
 		total, counts := mc.rejectionTracker.flush()
-		require.Equal(t, uint64(1), total, "only the non-already-known rejection should be tracked")
+		require.Equal(t, uint64(2), total, "both the rejection and already-known should be tracked")
 		require.Equal(t, uint64(1), counts["tx fee (1.00 ether) exceeds the configured cap (0.50 ether)"])
-		require.NotContains(t, counts, "already known", "already-known must not be classified as a rejection")
+		require.Equal(t, uint64(1), counts["already known"], "already-known should be tracked as its own bucket")
 	})
 
-	t.Run("preconf rejection is tracked, already-known is not", func(t *testing.T) {
+	t.Run("preconf rejections including already-known are tracked", func(t *testing.T) {
 		s1 := newMockRpcServer()
 		s2 := newMockRpcServer()
 		defer s1.close()
@@ -1598,9 +1598,9 @@ func TestRejectionTrackerWiredToSubmit(t *testing.T) {
 		_, _ = mc.submitPreconfTx(rawTx)
 
 		total, counts := mc.rejectionTracker.flush()
-		require.Equal(t, uint64(1), total, "only the non-already-known rejection should be tracked")
+		require.Equal(t, uint64(2), total, "both the rejection and already-known should be tracked")
 		require.Equal(t, uint64(1), counts["tx fee (1.00 ether) exceeds the configured cap (0.50 ether)"])
-		require.NotContains(t, counts, "already known", "already-known must not be classified as a rejection")
+		require.Equal(t, uint64(1), counts["already known"], "already-known should be tracked as its own bucket")
 	})
 
 	t.Run("preconf and private rejections aggregate into the same tracker", func(t *testing.T) {
