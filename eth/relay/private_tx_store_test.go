@@ -205,38 +205,6 @@ func TestPrivateTxStoreCleanup(t *testing.T) {
 	require.Equal(t, uint64(1), store.txsDeleted.Load(), "expected txsDeleted metric to be 1")
 }
 
-// TestPrivateTxStoreSweepTTL tests that the sweep goroutine removes entries
-// older than the TTL.
-func TestPrivateTxStoreSweepTTL(t *testing.T) {
-	t.Parallel()
-
-	store := NewPrivateTxStore()
-	defer store.Close()
-
-	hash1 := common.HexToHash("0x1")
-	hash2 := common.HexToHash("0x2")
-	hash3 := common.HexToHash("0x3")
-
-	store.Add(hash1)
-	store.Add(hash2)
-	store.Add(hash3)
-
-	// Manually backdate hash1 and hash2 to be older than TTL
-	store.mu.Lock()
-	store.txs[hash1] = time.Now().Add(-(privateTxTTL + time.Minute))
-	store.txs[hash2] = time.Now().Add(-(privateTxTTL + 2*time.Minute))
-	// hash3 stays fresh
-	store.mu.Unlock()
-
-	// Exercise the actual sweep code path used by the background goroutine
-	store.sweepOnce()
-
-	require.False(t, store.IsTxPrivate(hash1), "hash1 should be removed after TTL")
-	require.False(t, store.IsTxPrivate(hash2), "hash2 should be removed after TTL")
-	require.True(t, store.IsTxPrivate(hash3), "hash3 should still be present (not expired)")
-	require.Equal(t, uint64(2), store.txsExpired.Load(), "expected 2 txsExpired")
-}
-
 // TestPrivateTxStoreSweepTxPoolCheck tests that the sweep removes entries
 // that are no longer in the txpool (after the grace period).
 func TestPrivateTxStoreSweepTxPoolCheck(t *testing.T) {

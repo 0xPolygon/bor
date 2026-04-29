@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	privateTxTTL         = 10 * time.Minute // hard TTL: remove from store after this duration regardless
-	privateTxGracePeriod = 2 * time.Minute  // min age before txpool presence check applies
-	sweepInterval        = 1 * time.Minute  // how often the sweep goroutine runs
+	privateTxGracePeriod = 2 * time.Minute // min age before txpool presence check applies
+	sweepInterval        = 1 * time.Minute // how often the sweep goroutine runs
 )
 
 var privateTxStoreSizeGauge = metrics.NewRegisteredGauge("relay/privatetx/store/size", nil)
@@ -145,9 +144,10 @@ func (s *PrivateTxStore) SetTxPoolChecker(checker TxPoolChecker) {
 	s.txPoolChecker = checker
 }
 
-// sweep periodically removes stale entries from the store. It uses two strategies:
-// 1. Txpool check: if the tx is no longer in the txpool and old enough, remove it.
-// 2. TTL backstop: unconditionally remove entries older than privateTxTTL.
+// sweep periodically removes stale entries from the store. An entry is removed
+// once it has been in the store longer than privateTxGracePeriod and is no
+// longer present in the local txpool — the txpool's own eviction is treated as
+// the source of truth.
 func (s *PrivateTxStore) sweep() {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
@@ -164,12 +164,7 @@ func (s *PrivateTxStore) sweep() {
 
 // sweepOnce performs one pass of the sweep logic. Extracted from sweep so tests
 // can invoke the real eviction logic deterministically without waiting on a ticker.
-//
-// The work is split into three phases so that s.mu is never held while calling
-// s.txPoolChecker (wired to txPool.Has, which acquires the txpool's own lock).
-// Holding ours through that call would serialise Add/Purge/IsTxPrivate against
-// txpool latency and lock in a store.mu → txpool.lock ordering that any future
-// txpool path calling back into the store would deadlock against.
+// The work is performed in three phases to minimise lock contention.
 func (s *PrivateTxStore) sweepOnce() {
 	type entry struct {
 		hash    common.Hash
@@ -184,16 +179,13 @@ func (s *PrivateTxStore) sweepOnce() {
 	}
 	s.mu.RUnlock()
 
-	// Filter transactions without holding lock
+	// Filter transactions without holding lock. An entry is removed only if the
+	// txpool no longer holds it and the grace period has elapsed.
 	now := time.Now()
 	toDelete := make([]entry, 0)
 	for _, entry := range entries {
 		age := now.Sub(entry.addedAt)
-		if age > privateTxTTL {
-			// Hard TTL: remove regardless of txpool status
-			toDelete = append(toDelete, entry)
-		} else if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
-			// Tx no longer in txpool and past grace period: remove
+		if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
 			toDelete = append(toDelete, entry)
 		}
 	}
