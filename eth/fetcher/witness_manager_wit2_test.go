@@ -232,13 +232,14 @@ func TestProcessWitnessResponseSkipsCheckWhenNoSignature(t *testing.T) {
 	}
 }
 
-// TestCacheVerifiedWitnessSkipsWhenNoSignedHash is the regression for the
-// blame-asymmetry bug: caching unverified bytes for serving means a downstream
-// peer would ask us for the body, get bytes that don't match THEIR BP-signed
-// hash (because we never had one to compare against), and drop us. The fix
-// gates serving-cache population on having a BP-signed hash on file —
-// mirroring the broadcast path's invariant.
-func TestCacheVerifiedWitnessSkipsWhenNoSignedHash(t *testing.T) {
+// TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash is the regression
+// for the blame-asymmetry bug: caching unverified bytes for serving means a
+// downstream peer would ask us for the body, get bytes that don't match THEIR
+// BP-signed hash (because we never had one to compare against), and drop us.
+// The fix gates serving-cache population on having a BP-signed hash on file —
+// verifyAgainstSignedHash returns body=nil on the WIT1 path, and the caller
+// short-circuits the cache call (no-op when body is empty).
+func TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash(t *testing.T) {
 	tw := newTestWitnessManager()
 	defer tw.Close()
 
@@ -250,12 +251,20 @@ func TestCacheVerifiedWitnessSkipsWhenNoSignedHash(t *testing.T) {
 	tw.manager.parentCacheWitnessForServing = func(common.Hash, []byte, common.Hash) {
 		cacheCalls++
 	}
-	// No signed hash on file for any block → cache must not be populated.
+	// No signed hash on file for any block → verification must return
+	// body=nil so the caller skips the cache.
 	tw.manager.parentSignedWitnessHash = func(common.Hash) (common.Hash, bool) {
 		return common.Hash{}, false
 	}
 
-	tw.manager.cacheVerifiedWitnessForServing(hash, witness)
+	body, _, ok := tw.manager.verifyAgainstSignedHash("peer1", hash, witness)
+	if !ok {
+		t.Fatalf("verifyAgainstSignedHash returned ok=false on WIT1 path")
+	}
+	if body != nil {
+		t.Fatalf("WIT1 path returned non-nil body; downstream peers will see uncovered bytes (len=%d)", len(body))
+	}
+	tw.manager.cacheVerifiedWitnessForServing(hash, body, common.Hash{})
 	if cacheCalls != 0 {
 		t.Fatalf("cache populated without BP-signed hash on file; downstream peers will drop us as liars (calls=%d)", cacheCalls)
 	}

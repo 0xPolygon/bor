@@ -91,32 +91,30 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	// witnessHash on file — otherwise an upstream that lied about the bytes
 	// would make us serve garbage and get dropped by downstream peers as
 	// liars, even though we just relayed what we received. If no signed
-	// announcement is on file (WIT1 path), we skip the pre-import cache so
-	// we don't take on byte-blame risk for unverified content; the import
-	// path is unaffected.
-	var buf bytes.Buffer
-	if err := witness.EncodeRLP(&buf); err != nil {
-		peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
-	} else {
-		bodyBytes := buf.Bytes()
-		bodyHash := stateless.WitnessCommitHash(bodyBytes)
-		signed, hasSigned := (*handler)(h).signedWitnesses.get(hash)
-		switch {
-		case hasSigned && signed.WitnessHash == bodyHash:
-			(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
-		case hasSigned && signed.WitnessHash != bodyHash:
-			// Upstream sent bytes that don't match the BP-signed commitment.
-			// Don't cache for serving and surface this peer as misbehaving.
-			wit2BroadcastByteMismatchMeter.Mark(1)
-			peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; not caching for serving",
-				"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
-		default:
-			// No signed announcement on file: WIT1 fallback. Don't expose
-			// for WIT2 pre-import serving since we cannot prove byte-
-			// correctness to downstream peers. The body still flows into
-			// the import path below.
-			wit2BroadcastUnverifiedSkippedMeter.Mark(1)
+	// announcement is on file (WIT1 path), skip the encode+hash entirely
+	// so WIT1 broadcasts don't pay the cost of work we'd just discard.
+	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
+		var buf bytes.Buffer
+		if err := witness.EncodeRLP(&buf); err != nil {
+			peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
+		} else {
+			bodyBytes := buf.Bytes()
+			bodyHash := stateless.WitnessCommitHash(bodyBytes)
+			if signed.WitnessHash == bodyHash {
+				(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
+			} else {
+				// Upstream sent bytes that don't match the BP-signed commitment.
+				// Don't cache for serving and surface this peer as misbehaving.
+				wit2BroadcastByteMismatchMeter.Mark(1)
+				peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; not caching for serving",
+					"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
+			}
 		}
+	} else {
+		// No signed announcement on file: WIT1 fallback. Don't expose for
+		// WIT2 pre-import serving since we cannot prove byte-correctness to
+		// downstream peers. The body still flows into the import path below.
+		wit2BroadcastUnverifiedSkippedMeter.Mark(1)
 	}
 
 	// Inject the witness into the block fetcher's cache

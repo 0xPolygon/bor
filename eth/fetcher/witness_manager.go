@@ -668,87 +668,67 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	// file for this block, the encoded witness bytes must hash to the
 	// signed witnessHash. State-root failures (content-correctness) are
 	// handled later in the import path and do NOT drop the server.
-	if !m.verifyAgainstSignedHash(peer, hash, witness[0]) {
+	body, witnessHash, ok := m.verifyAgainstSignedHash(peer, hash, witness[0])
+	if !ok {
 		return
 	}
 
 	// WIT2: hand the verified bytes to the handler for pre-import serving.
 	// Done before import-side enqueue so a peer asking us for the body
 	// during the chain-write window gets bytes from the in-flight cache
-	// rather than empty results.
-	m.cacheVerifiedWitnessForServing(hash, witness[0])
+	// rather than empty results. body is nil on the WIT1 path (no signed
+	// hash on file) — cacheVerifiedWitnessForServing no-ops in that case.
+	m.cacheVerifiedWitnessForServing(hash, body, witnessHash)
 
 	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
 	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
 }
 
-// cacheVerifiedWitnessForServing canonical-encodes the witness and forwards
-// the bytes to the handler so other peers can fetch them pre-import. No-op
-// when no cache callback is configured (legacy WIT1-only paths) or when no
-// BP-signed witness hash is on file for this block — without a signature we
-// cannot prove byte-correctness to downstream peers, mirroring the same
-// guard that handleWitnessBroadcast applies on the broadcast path. EncodeRLP
-// failure is logged but does not drop the server — failure to share is not
-// a peer's fault and the import path is unaffected.
-func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, witness *stateless.Witness) {
-	if m.parentCacheWitnessForServing == nil || witness == nil {
+// cacheVerifiedWitnessForServing forwards canonical-encoded witness bytes
+// (already verified against a BP-signed witness hash by the caller) to the
+// handler so other peers can fetch them pre-import. No-op when no cache
+// callback is configured (legacy WIT1-only paths) or when body is empty —
+// the latter signals the WIT1 path with no signed hash on file, where
+// caching unverified bytes would expose us to byte-blame from downstream
+// peers.
+func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, body []byte, witnessHash common.Hash) {
+	if m.parentCacheWitnessForServing == nil || len(body) == 0 {
 		return
 	}
-	if m.parentSignedWitnessHash == nil {
-		return
-	}
-	if _, has := m.parentSignedWitnessHash(blockHash); !has {
-		return
-	}
-	var buf bytes.Buffer
-	if err := witness.EncodeRLP(&buf); err != nil {
-		log.Warn("[wm] Failed to encode witness for pre-import serving cache", "hash", blockHash, "err", err)
-		return
-	}
-	body := buf.Bytes()
-	m.parentCacheWitnessForServing(blockHash, body, stateless.WitnessCommitHash(body))
+	m.parentCacheWitnessForServing(blockHash, body, witnessHash)
 }
 
-// verifyAgainstSignedHash returns false (and reports the failure to the
-// fetch-failure handler, which drops the peer) when a BP-signed witness hash
-// is on file for this block and the received witness's encoded bytes don't
-// hash to it. Returns true when no signed hash is on file (WIT1 path) or the
-// hash matches.
-func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) bool {
+// verifyAgainstSignedHash returns the canonically-encoded witness bytes and
+// the BP-signed witness hash they match, when a signed hash is on file and
+// verification succeeds. body is nil on the WIT1 path (no signed hash to
+// verify against) so callers can skip the pre-import serving cache. ok is
+// false when verification fails; the offending peer has already been
+// reported. Local EncodeRLP failure on a successfully-decoded witness is
+// the local node's bug, not peer misbehavior, so it does not drop the peer.
+func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) (body []byte, witnessHash common.Hash, ok bool) {
 	if m.parentSignedWitnessHash == nil {
-		return true
+		return nil, common.Hash{}, true
 	}
 	expected, has := m.parentSignedWitnessHash(hash)
 	if !has {
-		return true
+		return nil, common.Hash{}, true
 	}
-	actual, err := encodedWitnessHash(witness)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
 		log.Warn("[wm] Failed to encode received witness for hash check", "peer", peer, "hash", hash, "err", err)
-		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("witness encode failed: %w", err), false)
-		return false
+		m.handleWitnessFetchFailureExt(hash, "", fmt.Errorf("witness encode failed: %w", err), false)
+		return nil, common.Hash{}, false
 	}
+	encoded := buf.Bytes()
+	actual := stateless.WitnessCommitHash(encoded)
 	if actual != expected {
 		witnessByteMismatchMeter.Mark(1)
 		log.Warn("[wm] Witness bytes do not match BP-signed hash; dropping peer",
 			"peer", peer, "block", hash, "expected", expected, "actual", actual)
 		m.handleWitnessFetchFailureExt(hash, peer, errors.New("witness hash mismatch"), false)
-		return false
+		return nil, common.Hash{}, false
 	}
-	return true
-}
-
-// encodedWitnessHash returns keccak256 over the canonical RLP encoding of the
-// witness. Witness.EncodeRLP sorts state nodes lexicographically so the output
-// is byte-identical for any two witnesses with the same logical contents,
-// which is what makes BP-signed witness-hash verification work across nodes.
-// The producer side mirrors this through eth.handler.canonicalWitnessHash.
-func encodedWitnessHash(w *stateless.Witness) (common.Hash, error) {
-	var buf bytes.Buffer
-	if err := w.EncodeRLP(&buf); err != nil {
-		return common.Hash{}, err
-	}
-	return stateless.WitnessCommitHash(buf.Bytes()), nil
+	return encoded, expected, true
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.
