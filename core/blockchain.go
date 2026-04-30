@@ -4857,6 +4857,13 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // it.index when returning the error (because the failure belongs to the
 // previously pending block, not the current one).
 func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.Header, statedb *state.StateDB, receipts []*types.Receipt, logs []*types.Log, start time.Time) (adjustBack bool, err error) {
+	// The pipelined path doesn't commit this StateDB; the SRC goroutine opens
+	// its own NewTrieOnly tmpDB. Stop the prefetcher *before* CommitSnapshot
+	// so Finalise can't queue more prefetch tasks that we'd then synchronously
+	// wait to drain. Without this, every block in a multi-block batch except
+	// the last leaks its prefetcher (the deferred StopPrefetcher in
+	// insertChainWithWitnesses only fires on the final activeState).
+	statedb.StopPrefetcher()
 	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
 	committedRoot, err := bc.collectPrevImportSRCIfAny(block, parent)
 	if err != nil {
