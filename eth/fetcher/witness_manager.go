@@ -77,15 +77,15 @@ type cacheWitnessForServingFn func(blockHash common.Hash, witnessBytes []byte, w
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
-	parentQuit               <-chan struct{}        // Parent fetcher's quit channel
-	parentDropPeer           peerDropFn             // Function to drop a misbehaving peer
-	parentJailPeer           peerJailFn             // Function to jail a peer to prevent reconnection (optional)
-	parentEnqueueCh          chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
-	parentGetBlock           blockRetrievalFn       // Function to check if block is known locally
-	parentGetHeader          HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
-	parentChainHeight        chainHeightFn          // Retrieve chain height for distance checks
-	parentCurrentHeader      currentHeaderFn        // Retrieve current block header for gas limit
-	parentSignedWitnessHash  signedWitnessHashFn      // WIT2: lookup a BP-signed witness hash for byte-correctness verification
+	parentQuit                   <-chan struct{}          // Parent fetcher's quit channel
+	parentDropPeer               peerDropFn               // Function to drop a misbehaving peer
+	parentJailPeer               peerJailFn               // Function to jail a peer to prevent reconnection (optional)
+	parentEnqueueCh              chan<- *enqueueRequest   // Channel to send completed blocks+witnesses back
+	parentGetBlock               blockRetrievalFn         // Function to check if block is known locally
+	parentGetHeader              HeaderRetrievalFn        // Function to check if header is known locally (needed for checks)
+	parentChainHeight            chainHeightFn            // Retrieve chain height for distance checks
+	parentCurrentHeader          currentHeaderFn          // Retrieve current block header for gas limit
+	parentSignedWitnessHash      signedWitnessHashFn      // WIT2: lookup a BP-signed witness hash for byte-correctness verification
 	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand bytes to the handler for pre-import serving by peers
 
 	// Witness-specific state
@@ -137,24 +137,24 @@ func newWitnessManager(
 	)
 
 	m := &witnessManager{
-		parentQuit:              parentQuit,
-		parentDropPeer:          parentDropPeer,
-		parentJailPeer:          parentJailPeer,
-		parentEnqueueCh:         parentEnqueueCh,
-		parentGetBlock:          parentGetBlock,
-		parentGetHeader:         parentGetHeader,
-		parentChainHeight:       parentChainHeight,
-		parentCurrentHeader:     parentCurrentHeader,
+		parentQuit:                   parentQuit,
+		parentDropPeer:               parentDropPeer,
+		parentJailPeer:               parentJailPeer,
+		parentEnqueueCh:              parentEnqueueCh,
+		parentGetBlock:               parentGetBlock,
+		parentGetHeader:              parentGetHeader,
+		parentChainHeight:            parentChainHeight,
+		parentCurrentHeader:          parentCurrentHeader,
 		parentSignedWitnessHash:      parentSignedWitnessHash,
 		parentCacheWitnessForServing: parentCacheWitnessForServing,
-		pending:             make(map[common.Hash]*witnessRequestState),
-		witnessUnavailable:  make(map[common.Hash]time.Time),
-		witnessCache:        witnessCache,
-		gasCeil:             gasCeil,
-		injectNeedWitnessCh: make(chan *injectBlockNeedWitnessMsg, 10),
-		injectWitnessCh:     make(chan *injectedWitnessMsg, 10),
-		witnessTimer:        time.NewTimer(0),
-		pokeCh:              make(chan struct{}, 1),
+		pending:                      make(map[common.Hash]*witnessRequestState),
+		witnessUnavailable:           make(map[common.Hash]time.Time),
+		witnessCache:                 witnessCache,
+		gasCeil:                      gasCeil,
+		injectNeedWitnessCh:          make(chan *injectBlockNeedWitnessMsg, 10),
+		injectWitnessCh:              make(chan *injectedWitnessMsg, 10),
+		witnessTimer:                 time.NewTimer(0),
+		pokeCh:                       make(chan struct{}, 1),
 	}
 	m.stopAndDrainTimer()
 	return m

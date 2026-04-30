@@ -232,7 +232,6 @@ func TestProcessWitnessResponseSkipsCheckWhenNoSignature(t *testing.T) {
 	}
 }
 
-
 // TestCacheVerifiedWitnessSkipsWhenNoSignedHash is the regression for the
 // blame-asymmetry bug: caching unverified bytes for serving means a downstream
 // peer would ask us for the body, get bytes that don't match THEIR BP-signed

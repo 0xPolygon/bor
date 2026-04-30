@@ -1,7 +1,6 @@
 package eth
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"time"
@@ -17,22 +16,16 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 )
 
-var (
-	errInvalidSignatureLength = errors.New("invalid wit2 announce signature length")
-	errInvalidSigner          = errors.New("wit2 announce signer is not a current validator")
-)
-
-func contextBackground() context.Context { return context.Background() }
+var errInvalidSignatureLength = errors.New("invalid wit2 announce signature length")
 
 // Metrics for WIT2 signed-announce path. Emitted only when metrics are enabled.
 var (
-	wit2RelayInMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/relay_in", nil)
-	wit2RelayOutMeter       = metrics.NewRegisteredMeter("eth/wit2/announce/relay_out", nil)
-	wit2InvalidSigMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/invalid_sig", nil)
-	wit2NotValidatorMeter   = metrics.NewRegisteredMeter("eth/wit2/announce/not_validator", nil)
-	wit2SpanLookupMissMeter = metrics.NewRegisteredMeter("eth/wit2/announce/span_lookup_miss", nil)
-	wit2DuplicateMeter      = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
-	wit2BroadcastByteMismatchMeter     = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
+	wit2RelayInMeter                    = metrics.NewRegisteredMeter("eth/wit2/announce/relay_in", nil)
+	wit2RelayOutMeter                   = metrics.NewRegisteredMeter("eth/wit2/announce/relay_out", nil)
+	wit2InvalidSigMeter                 = metrics.NewRegisteredMeter("eth/wit2/announce/invalid_sig", nil)
+	wit2NotValidatorMeter               = metrics.NewRegisteredMeter("eth/wit2/announce/not_validator", nil)
+	wit2DuplicateMeter                  = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
+	wit2BroadcastByteMismatchMeter      = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
 	wit2BroadcastUnverifiedSkippedMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
 	wit2HeaderUnknownMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/header_unknown", nil)
 	wit2ConflictingWitnessHashMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
@@ -58,10 +51,10 @@ const (
 // Lifecycle is tied to the eth handler's peer registration; entries are
 // cleaned up when the peer disconnects.
 type peerWit2State struct {
-	tokens         float64
-	lastRefill     time.Time
-	strikeCount    int
-	firstStrikeAt  time.Time
+	tokens        float64
+	lastRefill    time.Time
+	strikeCount   int
+	firstStrikeAt time.Time
 }
 
 type peerWit2Tracker struct {

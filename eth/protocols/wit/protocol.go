@@ -37,13 +37,13 @@ var protocolLengths = map[uint]uint64{WIT2: 7, WIT1: 6, WIT0: 4}
 const maxMessageSize = 16 * 1024 * 1024
 
 const (
-	NewWitnessMsg              = 0x00
-	NewWitnessHashesMsg        = 0x01
-	GetMsgWitness              = 0x02
-	MsgWitness                 = 0x03
-	GetWitnessMetadataMsg      = 0x04
-	WitnessMetadataMsg         = 0x05
-	SignedNewWitnessHashesMsg  = 0x06 // WIT2: signed witness announcement, safe to relay
+	NewWitnessMsg             = 0x00
+	NewWitnessHashesMsg       = 0x01
+	GetMsgWitness             = 0x02
+	MsgWitness                = 0x03
+	GetWitnessMetadataMsg     = 0x04
+	WitnessMetadataMsg        = 0x05
+	SignedNewWitnessHashesMsg = 0x06 // WIT2: signed witness announcement, safe to relay
 )
 
 // SignatureLength is the length of a BP signature over a witness announcement (r||s||v).

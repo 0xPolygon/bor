@@ -209,6 +209,7 @@ func merkleRoot(leaves []common.Hash) common.Hash {
 //     walker's per-node hash work is amortized into existing state-prep.
 //   - The walker traversal is O(num_nodes × avg_refs_per_node) map lookups,
 //     dwarfed by keccak throughput on the underlying bytes.
+//
 // We measure D's incremental cost over the chain-prep baseline as just the
 // parallel keccak phase. The reachability walk lives in
 // candidateD_IntrinsicWalk for the correctness test below.

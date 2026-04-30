@@ -118,15 +118,14 @@ func BenchmarkCommit_C_PerNodeMerkle(b *testing.B) {
 func BenchmarkCommit_B_ChunkSize(b *testing.B) {
 	pw := prepareWitness(b, 50)
 	chunks := []int{
-		512 * 1024,        // 512 KiB
-		1 * 1024 * 1024,   // 1 MiB
-		2 * 1024 * 1024,   // 2 MiB
-		4 * 1024 * 1024,   // 4 MiB
-		8 * 1024 * 1024,   // 8 MiB
-		15 * 1024 * 1024,  // 15 MiB (current wire page)
+		512 * 1024,       // 512 KiB
+		1 * 1024 * 1024,  // 1 MiB
+		2 * 1024 * 1024,  // 2 MiB
+		4 * 1024 * 1024,  // 4 MiB
+		8 * 1024 * 1024,  // 8 MiB
+		15 * 1024 * 1024, // 15 MiB (current wire page)
 	}
 	for _, c := range chunks {
-		c := c
 		b.Run(fmt.Sprintf("chunk=%dKiB/cores=8", c>>10), func(b *testing.B) {
 			b.SetBytes(int64(len(pw.rlpBytes)))
 			b.ReportAllocs()
@@ -139,7 +138,6 @@ func BenchmarkCommit_B_ChunkSize(b *testing.B) {
 	// Also try cores=12 (all logical cores) at the smallest chunks to
 	// see if the M4 Pro's E-cores help at finer granularity.
 	for _, c := range []int{512 * 1024, 1 * 1024 * 1024, 2 * 1024 * 1024} {
-		c := c
 		b.Run(fmt.Sprintf("chunk=%dKiB/cores=12", c>>10), func(b *testing.B) {
 			b.SetBytes(int64(len(pw.rlpBytes)))
 			b.ReportAllocs()
