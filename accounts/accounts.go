@@ -41,6 +41,7 @@ const (
 	MimetypeTypedData         = "data/typed"
 	MimetypeClique            = "application/x-clique-header"
 	MimetypeBor               = "application/x-bor-header"
+	MimetypeBorWitnessAnnounce = "application/x-bor-wit2-announce"
 	MimetypeTextPlain         = "text/plain"
 )
 

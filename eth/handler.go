@@ -184,6 +184,22 @@ type handler struct {
 	syncWithWitnesses       bool
 	syncAndProduceWitnesses bool // Whether to sync blocks and produce witnesses simultaneously
 
+	// WIT2: cache of BP-signed witness announcements, keyed by block hash.
+	// Populated by both produced (signed locally) and received-and-verified
+	// announcements. Consulted by the relay path to dedup, by the body
+	// broadcast path to re-emit signed announces, and by the fetch path to
+	// supply the byte-correctness comparison hash.
+	signedWitnesses *signedWitnessCache
+
+	// WIT2: in-flight witness bodies received via NewWitness broadcast but
+	// not yet written to chain storage. Lets serving peers answer GetWitness
+	// requests during the import gap, which is what unlocks fast multi-hop
+	// propagation — without it, only the producer/post-import nodes can
+	// serve and stateless nodes more than 1 hop away wait per-hop on full
+	// validation before they can pull from anyone.
+	pendingWitnessBodies *pendingWitnessBodyCache
+	wit2PeerTracker      *peerWit2Tracker
+
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
 
@@ -223,6 +239,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		syncWithWitnesses:       config.syncWithWitnesses,
 		syncAndProduceWitnesses: config.syncAndProduceWitnesses,
 		privateTxGetter:         config.privateTxGetter,
+		signedWitnesses:         newSignedWitnessCache(),
+		pendingWitnessBodies:    newPendingWitnessBodyCache(witnessBodyCacheCapacity),
+		wit2PeerTracker:         newPeerWit2Tracker(),
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -306,7 +325,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 	}
 
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil)
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock, heighter, h.chain.CurrentHeader, nil, inserter, h.removePeer, h.jailPeer, h.enableBlockTracking, h.statelessSync.Load() || h.syncWithWitnesses, config.gasCeil, h.lookupSignedWitnessHash, h.cacheVerifiedWitnessForServing)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
 		p := h.peers.peer(peer)
@@ -556,6 +575,25 @@ func (h *handler) removePeer(id string) {
 		log.Debug("Handler: removing peer", "peer", peer.ID(), "inbound", peer.Peer.Inbound(), "duration", common.PrettyDuration(peer.Peer.Lifetime()))
 		peer.Peer.Disconnect(p2p.DiscUselessPeer)
 	}
+	if h.wit2PeerTracker != nil {
+		h.wit2PeerTracker.forget(id)
+	}
+}
+
+// strikeWit2Peer records a wit2 misbehavior strike (bad sig, wrong producer)
+// and disconnects the peer once the strike threshold is exceeded inside the
+// decay window. Single bad announcements are tolerated to allow for stray
+// pre-fork content; sustained misbehavior is not.
+func (h *handler) strikeWit2Peer(peer *wit.Peer) {
+	if h.wit2PeerTracker == nil {
+		return
+	}
+	if !h.wit2PeerTracker.strike(peer.ID()) {
+		return
+	}
+	wit2StrikeDisconnectMeter.Mark(1)
+	peer.Log().Warn("wit2: disconnecting peer for repeated invalid signed announcements")
+	h.removePeer(peer.ID())
 }
 
 // unregisterPeer removes a peer from the downloader, fetchers and main peer set.
@@ -715,6 +753,11 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 			peer.AsyncSendNewBlock(block, td)
 		}
 
+		// WIT2: co-send the witness announcement to every direct block
+		// recipient that doesn't yet have the witness. Closes the gap where
+		// blocks fan out at sqrt(N) but witnesses didn't.
+		h.cosendWitnessAnnouncement(hash, block.NumberU64(), transfer, staticAndTrustedPeers)
+
 		log.Debug("Propagated block", "hash", hash, "recipients", len(transfer), "static and trusted recipients", len(staticAndTrustedPeers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 
 		return
@@ -727,8 +770,17 @@ func (h *handler) BroadcastBlock(block *types.Block, witness *stateless.Witness,
 	}
 
 	if h.chain.HasWitness(hash) {
+		// Try to attach a BP signature so WIT2 peers can fast-validate and
+		// transitively relay. Falls through to unsigned WIT1 announces for
+		// peers below WIT2 (and for any peer if signing is unavailable, e.g.,
+		// non-producer nodes that didn't receive a signed announce upstream).
+		signedAnn, hasSigned := h.signLocalWitnessAnnouncement(hash, block.NumberU64())
 		for _, peer := range peersWithoutWitness {
-			peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+			if hasSigned && peer.Peer.Version() >= wit.WIT2 {
+				peer.Peer.AsyncSendSignedWitnessAnnouncement(signedAnn)
+			} else {
+				peer.Peer.AsyncSendNewWitnessHash(block.Header().Hash(), block.NumberU64())
+			}
 		}
 		log.Debug("Announced witness", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}

@@ -1,6 +1,7 @@
 package eth
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
@@ -55,6 +56,8 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 		return h.handleWitnessBroadcast(peer, packet.Witness)
 	case *wit.NewWitnessHashesPacket:
 		return h.handleWitnessHashesAnnounce(peer, packet.Hashes, packet.Numbers)
+	case *wit.SignedNewWitnessHashesPacket:
+		return h.handleSignedWitnessAnnouncements(peer, packet.Announcements)
 	case *wit.GetWitnessPacket:
 		// Call handleGetWitness which returns the raw RLP data
 		response, err := h.handleGetWitness(peer, packet)
@@ -83,6 +86,39 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	peer.AddKnownWitness(witness.Header().Hash())
 	hash := witness.Header().Hash()
 
+	// WIT2: cache the encoded body so this node can serve it pre-import. We
+	// only expose the cache for serving when bytes match a BP-signed
+	// witnessHash on file — otherwise an upstream that lied about the bytes
+	// would make us serve garbage and get dropped by downstream peers as
+	// liars, even though we just relayed what we received. If no signed
+	// announcement is on file (WIT1 path), we skip the pre-import cache so
+	// we don't take on byte-blame risk for unverified content; the import
+	// path is unaffected.
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
+	} else {
+		bodyBytes := buf.Bytes()
+		bodyHash := stateless.WitnessCommitHash(bodyBytes)
+		signed, hasSigned := (*handler)(h).signedWitnesses.get(hash)
+		switch {
+		case hasSigned && signed.WitnessHash == bodyHash:
+			(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
+		case hasSigned && signed.WitnessHash != bodyHash:
+			// Upstream sent bytes that don't match the BP-signed commitment.
+			// Don't cache for serving and surface this peer as misbehaving.
+			wit2BroadcastByteMismatchMeter.Mark(1)
+			peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; not caching for serving",
+				"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
+		default:
+			// No signed announcement on file: WIT1 fallback. Don't expose
+			// for WIT2 pre-import serving since we cannot prove byte-
+			// correctness to downstream peers. The body still flows into
+			// the import path below.
+			wit2BroadcastUnverifiedSkippedMeter.Mark(1)
+		}
+	}
+
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
 		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID())
@@ -110,53 +146,142 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 	return nil
 }
 
+// handleSignedWitnessAnnouncements verifies BP signatures on incoming WIT2
+// announcements and relays valid ones to peers that have not seen them.
+// Body fetches are driven elsewhere (the block fetcher's witness manager
+// kicks them off when an announcement materialises). Each announcement is
+// processed independently so a single bad entry does not poison a batch.
+//
+// On verification failure (bad signature, unknown signer) the sender is
+// **not** dropped at this layer — they may simply be relaying a bad upstream
+// announcement. Drops are reserved for byte-correctness failures at fetch
+// time. We do, however, count invalid announcements via metrics to surface
+// misbehaving relayers.
+func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit.SignedWitnessAnnouncement) error {
+	wit2RelayInMeter.Mark(int64(len(anns)))
+
+	// Per-peer rate limit: every announcement consumes one token. Rejected
+	// packets are dropped wholesale to keep accounting simple — an honest
+	// peer should never trip this in practice.
+	if !(*handler)(h).wit2PeerTracker.allow(peer.ID(), len(anns)) {
+		wit2RateLimitDropMeter.Mark(int64(len(anns)))
+		peer.Log().Debug("wit2: rate-limited signed announcements", "count", len(anns))
+		return nil
+	}
+
+	for _, ann := range anns {
+		// Sender saw this announcement; suppress relay back to them. Do NOT
+		// mark them as a body-holder — they may be relaying without bytes.
+		peer.AddKnownAnnounce(ann.BlockHash)
+
+		if !h.acceptSignedAnnouncement(peer, ann) {
+			continue
+		}
+
+		// Cache + dedup. Skip relay if we've already relayed this hash recently.
+		if !h.signedWitnesses.putIfNewer(ann) {
+			wit2DuplicateMeter.Mark(1)
+			continue
+		}
+
+		// Relay to every WIT2 peer that doesn't already have this witness,
+		// excluding the sender we received it from.
+		(*handler)(h).relaySignedAnnouncement(peer.ID(), ann)
+	}
+
+	return nil
+}
+
+// acceptSignedAnnouncement runs signature recovery and producer-binding for a
+// single announcement. Returns true when the announcement is verified and the
+// caller should proceed to cache + relay; false when the caller should skip
+// it. Strikes are issued only on confirmed misbehavior (bad signature or
+// signer ≠ scheduled producer for a known header). Pre-import deferral
+// (header not yet local) is silent: no strike, no relay, retry on the next
+// packet for the same hash once the block arrives.
+func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitnessAnnouncement) bool {
+	signer, err := verifySignedAnnouncement(ann)
+	if err != nil {
+		wit2InvalidSigMeter.Mark(1)
+		peer.Log().Debug("wit2: invalid signed announcement", "blockHash", ann.BlockHash, "err", err)
+		(*handler)(h).strikeWit2Peer(peer)
+		return false
+	}
+
+	ok, headerAvailable := (*handler)(h).isScheduledProducer(signer, ann.BlockNumber, ann.BlockHash)
+	if ok {
+		return true
+	}
+	if !headerAvailable {
+		peer.Log().Debug("wit2: header not yet local for announced block; deferring announce",
+			"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber)
+		return false
+	}
+	wit2NotValidatorMeter.Mark(1)
+	peer.Log().Debug("wit2: signer is not the scheduled producer for this block",
+		"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber, "signer", signer)
+	(*handler)(h).strikeWit2Peer(peer)
+	return false
+}
+
+// relaySignedAnnouncement forwards a verified signed announcement to all WIT2
+// peers in `peersWithoutWitness` excluding the original sender. WIT0/WIT1
+// peers are skipped — they don't speak the signed wire format. Their slow
+// path remains: they'll learn about the witness through the existing post-
+// import unsigned announce path on adjacent WIT2 nodes when those nodes
+// finish importing.
+func (h *handler) relaySignedAnnouncement(senderID string, ann wit.SignedWitnessAnnouncement) {
+	recipients := h.peers.peersWithoutSignedAnnounce(ann.BlockHash)
+	relayed := 0
+	for _, peer := range recipients {
+		if peer.Peer.ID() == senderID {
+			continue
+		}
+		if peer.Peer.Version() < wit.WIT2 {
+			continue
+		}
+		peer.Peer.AsyncSendSignedWitnessAnnouncement(ann)
+		relayed++
+	}
+	if relayed > 0 {
+		wit2RelayOutMeter.Mark(int64(relayed))
+	}
+}
+
 // handleGetWitness retrieves witnesses for the requested block hashes and returns them as raw RLP data.
-// It now returns the data and error, rather than sending the reply directly.
-// The returned data is [][]byte, as rlp.RawValue is essentially []byte.
+//
+// WIT2: per-block lookup consults the in-flight body cache before falling back
+// to chain storage. This lets nodes serve witnesses they have received from
+// the network but not yet imported. Byte-correctness blame attaches to the
+// server only on hash mismatch (the requester verifies bytes against the BP-
+// signed WitnessHash); content-correctness failures during execution attach
+// to the BP, so this server is not at additional risk by serving early.
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
-	// list different witnesses to query
-	seen := make(map[common.Hash]struct{}, len(req.WitnessPages))
-	for _, witnessPage := range req.WitnessPages {
-		seen[witnessPage.Hash] = struct{}{}
-	}
 
-	// witness sizes query
-	witnessSize := make(map[common.Hash]uint64, len(seen))
-	for witnessBlockHash := range seen {
-		size := rawdb.ReadWitnessSize(h.Chain().DB(), witnessBlockHash)
-		if size == nil {
-			witnessSize[witnessBlockHash] = 0
-		} else {
-			witnessSize[witnessBlockHash] = *size
-		}
-	}
+	witnessCache, witnessSize := h.resolveWitnessBytes(req.WitnessPages)
 
-	// query witnesses by demand
 	var response wit.WitnessPacketResponse
-	witnessCache := make(map[common.Hash][]byte, len(seen))
-
 	totalResponsePayloadDataAmount := 0 // fast fail check
 	totalCached := 0                    // protection against heavy memory requests
 
 	for _, witnessPage := range req.WitnessPages {
-		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize // integer trick for: ceil(witnessSize/PageSize)
-		var witnessPageResponse wit.WitnessPageResponse
-		witnessPageResponse.Page = witnessPage.Page
-		witnessPageResponse.Hash = witnessPage.Hash
-		witnessPageResponse.TotalPages = totalPages
+		totalPages := (witnessSize[witnessPage.Hash] + PageSize - 1) / PageSize // ceil(witnessSize/PageSize)
+		pageResponse := wit.WitnessPageResponse{
+			Page:       witnessPage.Page,
+			Hash:       witnessPage.Hash,
+			TotalPages: totalPages,
+		}
 
-		needToQuery := witnessPage.Page < totalPages
-		if needToQuery {
-			var witnessBytes []byte
-			if cachedRLPBytes, exists := witnessCache[witnessPage.Hash]; exists {
-				witnessBytes = cachedRLPBytes
-			} else {
-				// Use GetWitness to benefit from the blockchain's witness cache
-				queriedBytes := h.Chain().GetWitness(witnessPage.Hash)
-				witnessCache[witnessPage.Hash] = queriedBytes
-				witnessBytes = queriedBytes
-				totalCached += len(queriedBytes)
+		if witnessPage.Page < totalPages {
+			witnessBytes, ok := witnessCache[witnessPage.Hash]
+			if !ok {
+				// Post-import fallback: fetch from chain storage on demand.
+				// If both this and the in-flight cache missed during resolveWitnessBytes,
+				// witnessSize[hash] would be 0 and we wouldn't reach this branch.
+				witnessBytes = h.Chain().GetWitness(witnessPage.Hash)
+				witnessCache[witnessPage.Hash] = witnessBytes
+				totalCached += len(witnessBytes)
 			}
 
 			start := PageSize * witnessPage.Page
@@ -164,24 +289,47 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 			if end > uint64(len(witnessBytes)) {
 				end = uint64(len(witnessBytes))
 			}
-			witnessPageResponse.Data = witnessBytes[start:end]
-			totalResponsePayloadDataAmount += len(witnessPageResponse.Data)
+			pageResponse.Data = witnessBytes[start:end]
+			totalResponsePayloadDataAmount += len(pageResponse.Data)
 		}
-		response = append(response, witnessPageResponse)
+		response = append(response, pageResponse)
 
-		// fast fail check
 		if totalCached >= MaximumCachedWitnessOnARequest {
 			return nil, errors.New("requests demans huge amount of memory")
 		}
-		// memory protection check
 		if totalResponsePayloadDataAmount >= MaximumResponseSize {
 			return nil, errors.New("response exceeds maximum p2p payload size")
 		}
 	}
 
-	// Return the collected RLP data
 	log.Debug("handleGetWitness returning witnesses pages", "peer", peer.ID(), "reqID", req.RequestId, "count", len(response))
 	return response, nil
+}
+
+// resolveWitnessBytes resolves witness bytes and sizes for each unique block
+// hash referenced by the request. Prefers the in-flight body cache (WIT2
+// pre-import serving) and falls back to chain-storage size lookup. Bytes for
+// the chain-storage path are read lazily during page serving; only sizes are
+// resolved up front so the response can carry accurate TotalPages even for
+// pages this peer cannot fulfil.
+func (h *witHandler) resolveWitnessBytes(pages []wit.WitnessPageRequest) (map[common.Hash][]byte, map[common.Hash]uint64) {
+	seen := make(map[common.Hash]struct{}, len(pages))
+	for _, p := range pages {
+		seen[p.Hash] = struct{}{}
+	}
+	bytesByHash := make(map[common.Hash][]byte, len(seen))
+	sizeByHash := make(map[common.Hash]uint64, len(seen))
+	for blockHash := range seen {
+		if cached, _, ok := (*handler)(h).pendingWitnessBodies.get(blockHash); ok {
+			bytesByHash[blockHash] = cached
+			sizeByHash[blockHash] = uint64(len(cached))
+			continue
+		}
+		if size := rawdb.ReadWitnessSize(h.Chain().DB(), blockHash); size != nil {
+			sizeByHash[blockHash] = *size
+		}
+	}
+	return bytesByHash, sizeByHash
 }
 
 // handleGetWitnessMetadata retrieves only the metadata (page count, size, block number) for the requested witness hashes.
@@ -196,12 +344,16 @@ func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnes
 	var response []wit.WitnessMetadataResponse
 
 	for _, hash := range req.Hashes {
-		// Get witness size from database
-		size := rawdb.ReadWitnessSize(h.Chain().DB(), hash)
-		witnessSize := uint64(0)
-		available := false
+		var (
+			witnessSize uint64
+			available   bool
+		)
 
-		if size != nil {
+		// Prefer in-flight body cache (WIT2 fast path).
+		if cached, _, ok := (*handler)(h).pendingWitnessBodies.get(hash); ok {
+			witnessSize = uint64(len(cached))
+			available = true
+		} else if size := rawdb.ReadWitnessSize(h.Chain().DB(), hash); size != nil {
 			witnessSize = *size
 			available = true
 		}
@@ -209,11 +361,14 @@ func (h *witHandler) handleGetWitnessMetadata(peer *wit.Peer, req *wit.GetWitnes
 		// Calculate total pages
 		totalPages := (witnessSize + PageSize - 1) / PageSize // ceil(witnessSize/PageSize)
 
-		// Get block number from header
+		// Get block number from header. Pre-import we may not yet have the
+		// header, so fall back to the announcement-cached number if a signed
+		// announcement is on file.
 		blockNumber := uint64(0)
-		header := h.Chain().GetHeaderByHash(hash)
-		if header != nil {
+		if header := h.Chain().GetHeaderByHash(hash); header != nil {
 			blockNumber = header.Number.Uint64()
+		} else if ann, ok := (*handler)(h).signedWitnesses.get(hash); ok {
+			blockNumber = ann.BlockNumber
 		}
 
 		response = append(response, wit.WitnessMetadataResponse{

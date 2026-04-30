@@ -298,16 +298,33 @@ func (ps *peerSet) peer(id string) *ethPeer {
 	return ps.peers[id]
 }
 
+// getOnePeerWithWitness returns a candidate body source for `hash`. Body-known
+// peers (those that broadcast or served the body) are preferred; if none is
+// available we fall back to peers that have only relayed a WIT2 signed
+// announcement. The fast-path latency win depends on this fallback: at hop>=2
+// the signed announce arrives long before the body broadcast, and the only
+// peer that could serve us bytes is the one that forwarded the announce.
+//
+// Asking an announce-only peer is safe because byte-blame in
+// witnessManager.verifyAgainstSignedHash only drops on a confirmed hash
+// mismatch — empty/unavailable responses surface as soft failures, not drops.
 func (ps *peerSet) getOnePeerWithWitness(hash common.Hash) *ethPeer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
+	var announceFallback *ethPeer
 	for _, p := range ps.peers {
-		if p.witPeer != nil && p.witPeer.Peer.KnownWitnessContainsHash(hash) {
+		if p.witPeer == nil {
+			continue
+		}
+		if p.witPeer.Peer.KnownWitnessContainsHash(hash) {
 			return p
 		}
+		if announceFallback == nil && p.witPeer.Peer.KnownAnnounceContainsHash(hash) {
+			announceFallback = p
+		}
 	}
-	return nil
+	return announceFallback
 }
 
 // peersWithoutWitness retrives a list of peers that do nor have a given witness
@@ -323,6 +340,32 @@ func (ps *peerSet) peersWithoutWitness(hash common.Hash) []*witPeer {
 		if p.witPeer != nil && !p.witPeer.Peer.KnownWitnessContainsHash(hash) {
 			list = append(list, p.witPeer)
 		}
+	}
+
+	return list
+}
+
+// peersWithoutSignedAnnounce returns peers that have neither received the body
+// for `hash` nor seen a signed announcement for it. Used by WIT2 relay to skip
+// peers that already know about the announcement, preventing announce storms,
+// without ever assuming a peer that only saw an announcement holds the body.
+func (ps *peerSet) peersWithoutSignedAnnounce(hash common.Hash) []*witPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	list := make([]*witPeer, 0, len(ps.peers))
+
+	for _, p := range ps.peers {
+		if p.witPeer == nil {
+			continue
+		}
+		if p.witPeer.Peer.KnownWitnessContainsHash(hash) {
+			continue
+		}
+		if p.witPeer.Peer.KnownAnnounceContainsHash(hash) {
+			continue
+		}
+		list = append(list, p.witPeer)
 	}
 
 	return list

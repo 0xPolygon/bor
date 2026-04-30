@@ -1540,6 +1540,42 @@ func Sign(signFn SignerFn, signer common.Address, header *types.Header, c *param
 	return nil
 }
 
+// SignBytes signs the supplied preimage bytes under a context-specific
+// mimetype using the engine's currently authorized signer. The mimetype is the
+// domain tag the underlying signer (clef, keystore) sees, so callers MUST pass
+// a context-specific value (e.g. accounts.MimetypeBorWitnessAnnounce) and
+// never reuse accounts.MimetypeBor outside of header sealing — that would let
+// a signature produced here be replayed as a block-seal signature on any
+// header BorRLP that hashes to the same digest.
+//
+// Callers pass the unhashed preimage; the wallet's SignData implementation
+// applies keccak256 once before signing. Verifiers must independently hash
+// the same preimage and ecrecover against the resulting digest.
+func (c *Bor) SignBytes(mimetype string, digest []byte) (signer common.Address, sig []byte, err error) {
+	if mimetype == "" || mimetype == accounts.MimetypeBor {
+		return common.Address{}, nil, errors.New("bor: SignBytes requires a non-empty, non-header mimetype")
+	}
+	current := c.authorizedSigner.Load()
+	if current == nil || current.signer == (common.Address{}) {
+		return common.Address{}, nil, errors.New("bor: no authorized signer configured")
+	}
+	sig, err = current.signFn(accounts.Account{Address: current.signer}, mimetype, digest)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	return current.signer, sig, nil
+}
+
+// CurrentSigner returns the address of the currently authorized signer, or
+// the zero address if none has been configured.
+func (c *Bor) CurrentSigner() common.Address {
+	current := c.authorizedSigner.Load()
+	if current == nil {
+		return common.Address{}
+	}
+	return current.signer
+}
+
 // CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
 // that a new block should have based on the previous blocks in the chain and the
 // current signer.

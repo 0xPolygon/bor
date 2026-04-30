@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,18 +58,35 @@ type cachedWitness struct {
 	timestamp time.Time
 }
 
+// signedWitnessHashFn returns the BP-signed witness content hash for a block,
+// if a WIT2 signed announcement has been received and verified locally. It is
+// used by the witness manager on fetch success to verify byte-correctness:
+// if the encoded witness bytes don't hash to the signed witnessHash, the
+// serving peer lied and is dropped. If no signed announcement is on file
+// (e.g., WIT1-only fetch), the check is skipped.
+type signedWitnessHashFn func(blockHash common.Hash) (witnessHash common.Hash, ok bool)
+
+// cacheWitnessForServingFn hands successfully-fetched witness bytes to the
+// network handler so peers can serve them pre-import. Called only after the
+// byte-correctness check (vs. BP-signed witnessHash, when present) has passed,
+// so the cached bytes are safe to serve. The witnessHash is the canonical
+// keccak256 of the canonical encoding, identical to what the BP signed.
+type cacheWitnessForServingFn func(blockHash common.Hash, witnessBytes []byte, witnessHash common.Hash)
+
 // witnessManager handles the logic specific to fetching and managing witnesses
 // for blocks, isolating it from the main BlockFetcher loop.
 type witnessManager struct {
 	// Parent fetcher fields/methods required
-	parentQuit          <-chan struct{}        // Parent fetcher's quit channel
-	parentDropPeer      peerDropFn             // Function to drop a misbehaving peer
-	parentJailPeer      peerJailFn             // Function to jail a peer to prevent reconnection (optional)
-	parentEnqueueCh     chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
-	parentGetBlock      blockRetrievalFn       // Function to check if block is known locally
-	parentGetHeader     HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
-	parentChainHeight   chainHeightFn          // Retrieve chain height for distance checks
-	parentCurrentHeader currentHeaderFn        // Retrieve current block header for gas limit
+	parentQuit               <-chan struct{}        // Parent fetcher's quit channel
+	parentDropPeer           peerDropFn             // Function to drop a misbehaving peer
+	parentJailPeer           peerJailFn             // Function to jail a peer to prevent reconnection (optional)
+	parentEnqueueCh          chan<- *enqueueRequest // Channel to send completed blocks+witnesses back
+	parentGetBlock           blockRetrievalFn       // Function to check if block is known locally
+	parentGetHeader          HeaderRetrievalFn      // Function to check if header is known locally (needed for checks)
+	parentChainHeight        chainHeightFn          // Retrieve chain height for distance checks
+	parentCurrentHeader      currentHeaderFn        // Retrieve current block header for gas limit
+	parentSignedWitnessHash  signedWitnessHashFn      // WIT2: lookup a BP-signed witness hash for byte-correctness verification
+	parentCacheWitnessForServing cacheWitnessForServingFn // WIT2: hand bytes to the handler for pre-import serving by peers
 
 	// Witness-specific state
 	pending            map[common.Hash]*witnessRequestState         // Blocks waiting for witness or actively fetching.
@@ -108,6 +126,8 @@ func newWitnessManager(
 	parentGetHeader HeaderRetrievalFn,
 	parentChainHeight chainHeightFn,
 	parentCurrentHeader currentHeaderFn,
+	parentSignedWitnessHash signedWitnessHashFn,
+	parentCacheWitnessForServing cacheWitnessForServingFn,
 	gasCeil uint64,
 ) *witnessManager {
 	// Create TTL cache with 1 minute expiration for witnesses
@@ -117,14 +137,16 @@ func newWitnessManager(
 	)
 
 	m := &witnessManager{
-		parentQuit:          parentQuit,
-		parentDropPeer:      parentDropPeer,
-		parentJailPeer:      parentJailPeer,
-		parentEnqueueCh:     parentEnqueueCh,
-		parentGetBlock:      parentGetBlock,
-		parentGetHeader:     parentGetHeader,
-		parentChainHeight:   parentChainHeight,
-		parentCurrentHeader: parentCurrentHeader,
+		parentQuit:              parentQuit,
+		parentDropPeer:          parentDropPeer,
+		parentJailPeer:          parentJailPeer,
+		parentEnqueueCh:         parentEnqueueCh,
+		parentGetBlock:          parentGetBlock,
+		parentGetHeader:         parentGetHeader,
+		parentChainHeight:       parentChainHeight,
+		parentCurrentHeader:     parentCurrentHeader,
+		parentSignedWitnessHash:      parentSignedWitnessHash,
+		parentCacheWitnessForServing: parentCacheWitnessForServing,
 		pending:             make(map[common.Hash]*witnessRequestState),
 		witnessUnavailable:  make(map[common.Hash]time.Time),
 		witnessCache:        witnessCache,
@@ -631,13 +653,102 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 		return
 	}
 	if len(witness) == 0 {
+		// Empty/unavailable response: the peer doesn't have the body yet
+		// (e.g. WIT2 announce-only relayer that has not finished importing).
+		// This is a soft failure — back off the request so another peer can
+		// be tried, but do NOT drop the responder. Dropping on "no body" is
+		// what makes announce-only fallback peers unsafe to ask, which would
+		// erase the WIT2 multi-hop latency win at hop>=2.
 		log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("empty witness response"), false)
+		m.handleWitnessFetchFailureExt(hash, "", errors.New("empty witness response"), false)
 		return
 	}
 
+	// WIT2: byte-correctness check. If we have a BP-signed announcement on
+	// file for this block, the encoded witness bytes must hash to the
+	// signed witnessHash. State-root failures (content-correctness) are
+	// handled later in the import path and do NOT drop the server.
+	if !m.verifyAgainstSignedHash(peer, hash, witness[0]) {
+		return
+	}
+
+	// WIT2: hand the verified bytes to the handler for pre-import serving.
+	// Done before import-side enqueue so a peer asking us for the body
+	// during the chain-write window gets bytes from the in-flight cache
+	// rather than empty results.
+	m.cacheVerifiedWitnessForServing(hash, witness[0])
+
 	metrics.RecordPerItemDuration(blockWitnessItemDownloadTimer, res.Time, 1)
 	m.handleWitnessFetchSuccess(peer, hash, witness[0], announcedAt)
+}
+
+// cacheVerifiedWitnessForServing canonical-encodes the witness and forwards
+// the bytes to the handler so other peers can fetch them pre-import. No-op
+// when no cache callback is configured (legacy WIT1-only paths) or when no
+// BP-signed witness hash is on file for this block — without a signature we
+// cannot prove byte-correctness to downstream peers, mirroring the same
+// guard that handleWitnessBroadcast applies on the broadcast path. EncodeRLP
+// failure is logged but does not drop the server — failure to share is not
+// a peer's fault and the import path is unaffected.
+func (m *witnessManager) cacheVerifiedWitnessForServing(blockHash common.Hash, witness *stateless.Witness) {
+	if m.parentCacheWitnessForServing == nil || witness == nil {
+		return
+	}
+	if m.parentSignedWitnessHash == nil {
+		return
+	}
+	if _, has := m.parentSignedWitnessHash(blockHash); !has {
+		return
+	}
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		log.Warn("[wm] Failed to encode witness for pre-import serving cache", "hash", blockHash, "err", err)
+		return
+	}
+	body := buf.Bytes()
+	m.parentCacheWitnessForServing(blockHash, body, stateless.WitnessCommitHash(body))
+}
+
+// verifyAgainstSignedHash returns false (and reports the failure to the
+// fetch-failure handler, which drops the peer) when a BP-signed witness hash
+// is on file for this block and the received witness's encoded bytes don't
+// hash to it. Returns true when no signed hash is on file (WIT1 path) or the
+// hash matches.
+func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, witness *stateless.Witness) bool {
+	if m.parentSignedWitnessHash == nil {
+		return true
+	}
+	expected, has := m.parentSignedWitnessHash(hash)
+	if !has {
+		return true
+	}
+	actual, err := encodedWitnessHash(witness)
+	if err != nil {
+		log.Warn("[wm] Failed to encode received witness for hash check", "peer", peer, "hash", hash, "err", err)
+		m.handleWitnessFetchFailureExt(hash, peer, fmt.Errorf("witness encode failed: %w", err), false)
+		return false
+	}
+	if actual != expected {
+		witnessByteMismatchMeter.Mark(1)
+		log.Warn("[wm] Witness bytes do not match BP-signed hash; dropping peer",
+			"peer", peer, "block", hash, "expected", expected, "actual", actual)
+		m.handleWitnessFetchFailureExt(hash, peer, errors.New("witness hash mismatch"), false)
+		return false
+	}
+	return true
+}
+
+// encodedWitnessHash returns keccak256 over the canonical RLP encoding of the
+// witness. Witness.EncodeRLP sorts state nodes lexicographically so the output
+// is byte-identical for any two witnesses with the same logical contents,
+// which is what makes BP-signed witness-hash verification work across nodes.
+// The producer side mirrors this through eth.handler.canonicalWitnessHash.
+func encodedWitnessHash(w *stateless.Witness) (common.Hash, error) {
+	var buf bytes.Buffer
+	if err := w.EncodeRLP(&buf); err != nil {
+		return common.Hash{}, err
+	}
+	return stateless.WitnessCommitHash(buf.Bytes()), nil
 }
 
 // handleWitnessFetchSuccess processes a successfully fetched witness.

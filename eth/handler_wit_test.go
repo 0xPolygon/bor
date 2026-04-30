@@ -56,6 +56,37 @@ func newTestWitPeerWithReader() (*wit.Peer, func()) {
 	return peer, cleanup
 }
 
+// newTestWit2PeerWithReader creates a wit.Peer negotiated at WIT2, with the
+// same draining behavior as newTestWitPeerWithReader. WIT2-specific paths
+// (signed announce, AsyncSendSignedWitnessAnnouncement) early-return on a
+// WIT1 peer, so tests that exercise them must use this helper.
+func newTestWit2PeerWithReader() (*wit.Peer, func()) {
+	var id enode.ID
+	rand.Read(id[:])
+	p2pPeer := p2p.NewPeer(id, "test-peer-wit2", nil)
+	app, net := p2p.MsgPipe()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			msg, err := app.ReadMsg()
+			if err != nil {
+				close(done)
+				return
+			}
+			msg.Discard()
+		}
+	}()
+
+	peer := wit.NewPeer(wit.WIT2, p2pPeer, net, log.New())
+	cleanup := func() {
+		app.Close()
+		peer.Close()
+		<-done
+	}
+	return peer, cleanup
+}
+
 // mockUnknownPacket is a mock packet type that implements wit.Packet
 // but is not recognized by the Handle method's switch statement
 type mockUnknownPacket struct{}
