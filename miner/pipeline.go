@@ -181,7 +181,8 @@ func (w *worker) spawnSRCForFinalBlock(finalHeader *types.Header, rootN common.H
 		return
 	}
 	tmpBlock := types.NewBlockWithHeader(finalHeader)
-	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff)
+	// Miner pipeline always produces witnesses for now; gating is import-side only.
+	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff, true)
 	w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
 }
 
@@ -423,7 +424,8 @@ func (s *specSession) setupInitial() bool {
 	// Done AFTER Prepare to avoid a trie DB race with fallbackToSequential's
 	// inline FinalizeAndAssemble on the same parent root.
 	tmpBlock := types.NewBlockWithHeader(s.req.parentHeader)
-	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff)
+	// Miner pipeline always produces witnesses for now; gating is import-side only.
+	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff, true)
 
 	specState, err := s.w.chain.StateAtWithFlatDiff(s.req.parentRoot, s.req.flatDiff)
 	if err != nil {
@@ -766,7 +768,8 @@ func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, f
 func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff *state.FlatDiff) time.Time {
 	srcSpawnTime := time.Now()
 	tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
-	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff)
+	// Miner pipeline always produces witnesses for now; gating is import-side only.
+	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true)
 	s.w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), s.rootN, common.Hash{})
 	if s.w.config.PipelinedSRCLogs {
 		log.Info("Pipelined SRC: spawned SRC, starting speculative exec", "srcBlock", s.nextBlockNumber, "specExecBlock", s.nextBlockNumber+1)

@@ -445,6 +445,7 @@ type pendingImportSRCState struct {
 	committedRoot common.Hash   // last committed trie root when SRC was spawned
 	procTime      time.Duration // for gcproc accumulation
 	blockStart    time.Time     // block processing start — used for chain/imports/witness_ready_end_to_end
+	makeWitness   bool          // whether the SRC goroutine is producing a witness for this block
 
 	// collectedCh is closed when auto-collection completes (verify root,
 	// write witness, trie GC). Callers block on <-collectedCh.
@@ -3304,7 +3305,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// --- Pipelined import: extract FlatDiff, collect previous SRC, write metadata, spawn SRC ---
 		if pipelineActive {
-			adjustBack, err := bc.persistPipelinedImport(block, parent, statedb, receipts, logs, start)
+			adjustBack, err := bc.persistPipelinedImport(block, parent, statedb, receipts, logs, start, computeWitness)
 			if err != nil {
 				followupInterrupt.Store(true)
 				idx := it.index
@@ -4513,9 +4514,12 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 }
 
 // SpawnSRCGoroutine launches a background goroutine that computes the actual
-// state root for block by replaying flatDiff on top of parentRoot.
+// state root for block by replaying flatDiff on top of parentRoot. When
+// makeWitness is true, the goroutine also produces a stateless witness;
+// when false, witness creation, FlatDiff read-surface preload, and witness
+// encoding are all skipped — only deferred state-root validation runs.
 // The result is stored in pending.root; pending.wg is decremented when finished.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff) {
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool) {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4526,15 +4530,18 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness)
 }
 
 // runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
-// committed parent root, replays the FlatDiff + preloads all read-set slots,
-// then commits to produce block N's state root and a complete witness. All
+// committed parent root, replays the FlatDiff, and commits to produce block
+// N's state root. When makeWitness is true, also preloads the FlatDiff read
+// surface so the witness covers proof-path nodes the speculative execution
+// skipped, and encodes + caches the resulting witness. When false, preload
+// and witness encoding are skipped — only deferred root validation runs. All
 // observable side effects (pending.root, pending.err, pending.witness,
 // witness cache) happen here before wg.Done().
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff) {
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	defer func() {
@@ -4544,32 +4551,37 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		}
 	}()
 
-	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block)
+	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness)
 	if err != nil {
 		pending.err = err
 		return
 	}
 	tmpDB.ApplyFlatDiffForCommit(flatDiff)
 
-	// measure the preload step's wall-time and the size of its read surface. ReadStorage
-	// is iterated directly (not via ReadSet) because it also contains
-	// read-only slots on mutated accounts — answers "how is storage-read
-	// load distributed", which is what shapes any future parallelisation.
-	// Fires for both import and miner SRC since runSRCCompute is shared.
-	readAccounts := len(flatDiff.ReadSet)
-	preloadSlots := 0
-	for _, slots := range flatDiff.ReadStorage {
-		preloadSlots += len(slots)
-		pipelineSRCPreloadSlotsPerAccountHistogram.Update(int64(len(slots)))
-	}
-	pipelineSRCPreloadReadAccountsHistogram.Update(int64(readAccounts))
-	pipelineSRCPreloadSlotsHistogram.Update(int64(preloadSlots))
-	pipelineSRCPreloadDestructsHistogram.Update(int64(len(flatDiff.Destructs)))
-	pipelineSRCPreloadNonexistentHistogram.Update(int64(len(flatDiff.NonExistentReads)))
+	// Preload + read-surface histograms only fire when the witness is being
+	// produced — preloadFlatDiffReads exists solely to populate the witness
+	// with proof-path trie nodes, and the histograms describe its work.
+	if makeWitness {
+		// measure the preload step's wall-time and the size of its read surface. ReadStorage
+		// is iterated directly (not via ReadSet) because it also contains
+		// read-only slots on mutated accounts — answers "how is storage-read
+		// load distributed", which is what shapes any future parallelisation.
+		// Fires for both import and miner SRC since runSRCCompute is shared.
+		readAccounts := len(flatDiff.ReadSet)
+		preloadSlots := 0
+		for _, slots := range flatDiff.ReadStorage {
+			preloadSlots += len(slots)
+			pipelineSRCPreloadSlotsPerAccountHistogram.Update(int64(len(slots)))
+		}
+		pipelineSRCPreloadReadAccountsHistogram.Update(int64(readAccounts))
+		pipelineSRCPreloadSlotsHistogram.Update(int64(preloadSlots))
+		pipelineSRCPreloadDestructsHistogram.Update(int64(len(flatDiff.Destructs)))
+		pipelineSRCPreloadNonexistentHistogram.Update(int64(len(flatDiff.NonExistentReads)))
 
-	preloadStart := time.Now()
-	preloadFlatDiffReads(tmpDB, flatDiff)
-	pipelineSRCPreloadTimer.UpdateSince(preloadStart)
+		preloadStart := time.Now()
+		preloadFlatDiffReads(tmpDB, flatDiff)
+		pipelineSRCPreloadTimer.UpdateSince(preloadStart)
+	}
 
 	deleteEmptyObjects := bc.chainConfig.IsEIP158(block.Number())
 	commitStart := time.Now()
@@ -4584,20 +4596,28 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	if bc.stateSizer != nil {
 		bc.stateSizer.Notify(stateUpdate)
 	}
-	bc.encodeAndCachePendingWitness(pending, witness, block)
+	if makeWitness {
+		bc.encodeAndCachePendingWitness(pending, witness, block)
+	}
 	pending.root = root
 }
 
-// openSRCStateDB opens a NewTrieOnly StateDB at parentRoot and attaches a
-// witness so IntermediateRoot (inside CommitWithUpdate) captures every trie
-// node it walks. NewTrieOnly bypasses flat/snapshot readers — every read
-// must go through the MPT, which is what lets the witness cover FlatDiff
-// overlay accounts whose nodes weren't touched during execution.
-func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block) (*state.StateDB, *stateless.Witness, error) {
+// openSRCStateDB opens a NewTrieOnly StateDB at parentRoot. When makeWitness
+// is true, also attaches a witness so IntermediateRoot (inside CommitWithUpdate)
+// captures every trie node it walks. NewTrieOnly bypasses flat/snapshot readers
+// — every read must go through the MPT, which is what lets the witness cover
+// FlatDiff overlay accounts whose nodes weren't touched during execution.
+// When makeWitness is false, no witness is created or attached; the SRC
+// goroutine still computes and validates the state root, just without
+// producing a witness for stateless peers.
+func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool) (*state.StateDB, *stateless.Witness, error) {
 	tmpDB, err := state.NewTrieOnly(parentRoot, bc.statedb)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 		return nil, nil, err
+	}
+	if !makeWitness {
+		return tmpDB, nil, nil
 	}
 	witness, witnessErr := stateless.NewWitness(block.Header(), bc)
 	if witnessErr != nil {
@@ -4856,7 +4876,7 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // start auto-collection. adjustBack=true signals the caller to decrement
 // it.index when returning the error (because the failure belongs to the
 // previously pending block, not the current one).
-func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.Header, statedb *state.StateDB, receipts []*types.Receipt, logs []*types.Log, start time.Time) (adjustBack bool, err error) {
+func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.Header, statedb *state.StateDB, receipts []*types.Receipt, logs []*types.Log, start time.Time, makeWitness bool) (adjustBack bool, err error) {
 	// The pipelined path doesn't commit this StateDB; the SRC goroutine opens
 	// its own NewTrieOnly tmpDB. Stop the prefetcher *before* CommitSnapshot
 	// so Finalise can't queue more prefetch tasks that we'd then synchronously
@@ -4895,13 +4915,14 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	}
 
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff)
+	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness)
 	newPending := &pendingImportSRCState{
 		block:         block,
 		flatDiff:      flatDiff,
 		committedRoot: committedRoot,
 		procTime:      time.Since(start),
 		blockStart:    start,
+		makeWitness:   makeWitness,
 		collectedCh:   make(chan struct{}),
 	}
 	bc.pendingImportSRCMu.Lock()

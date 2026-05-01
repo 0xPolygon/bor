@@ -7043,3 +7043,171 @@ func TestPipelineFlatDiffHitMeters(t *testing.T) {
 	// Storage hits depend on the specific SSTORE pattern; pure balance-transfer
 	// blocks may not hit storage slots. We only assert account-side hits here.
 }
+
+// TestPipelinedImportSRC_MakeWitnessFalse verifies that when the pipelined
+// import path is invoked with makeWitness=false (the producewitnesses=false
+// configuration), the SRC goroutine still computes and validates the state
+// root — but skips witness construction, FlatDiff read-surface preload, and
+// witness encoding/caching entirely.
+func TestPipelinedImportSRC_MakeWitnessFalse(t *testing.T) {
+	metrics.Enable()
+
+	const numBlocks = 5
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	// Snapshot the metrics that should NOT advance when makeWitness=false.
+	preloadTimerBefore := pipelineSRCPreloadTimer.Snapshot().Count()
+	preloadSlotsBefore := pipelineSRCPreloadSlotsHistogram.Snapshot().Count()
+	preloadAccountsBefore := pipelineSRCPreloadReadAccountsHistogram.Snapshot().Count()
+	// And the one that SHOULD advance — metrics are package-global, so we must
+	// compare deltas rather than absolute counts.
+	stateCommitBefore := stateCommitTimer.Snapshot().Count()
+
+	// makeWitness=false is the default for InsertChain.
+	if _, err := pipeChain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("pipeline InsertChain failed: %v", err)
+	}
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC failed: %v", err)
+	}
+
+	// State roots must match the canonical roots from GenerateChainWithGenesis
+	// — root validation runs even with witness off.
+	for i := uint64(1); i <= numBlocks; i++ {
+		pipeBlock := pipeChain.GetBlockByNumber(i)
+		if pipeBlock == nil {
+			t.Fatalf("block %d: missing on pipeline chain", i)
+		}
+		if pipeBlock.Root() != blocks[i-1].Root() {
+			t.Errorf("block %d: state root mismatch pipeline=%s expected=%s", i, pipeBlock.Root(), blocks[i-1].Root())
+		}
+	}
+
+	// No witness should be produced or persisted — neither cache nor store.
+	// HasWitness covers both surfaces; check both explicitly so a future
+	// refactor that splits the write paths still trips the assertion.
+	for i := uint64(1); i <= numBlocks; i++ {
+		hash := pipeChain.GetBlockByNumber(i).Hash()
+		if pipeChain.witnessCache.Contains(hash) {
+			t.Errorf("block %d: witnessCache unexpectedly contains witness when makeWitness=false", i)
+		}
+		if pipeChain.witnessStore.HasWitness(hash) {
+			t.Errorf("block %d: witnessStore unexpectedly contains witness when makeWitness=false", i)
+		}
+		if pipeChain.HasWitness(hash) {
+			t.Errorf("block %d: HasWitness=true when makeWitness=false", i)
+		}
+	}
+
+	// Preload timer + histograms must not have fired — they exist solely to
+	// populate the witness with proof-path nodes.
+	if delta := pipelineSRCPreloadTimer.Snapshot().Count() - preloadTimerBefore; delta != 0 {
+		t.Errorf("pipelineSRCPreloadTimer delta = %d, want 0 when makeWitness=false", delta)
+	}
+	if delta := pipelineSRCPreloadSlotsHistogram.Snapshot().Count() - preloadSlotsBefore; delta != 0 {
+		t.Errorf("pipelineSRCPreloadSlotsHistogram delta = %d, want 0 when makeWitness=false", delta)
+	}
+	if delta := pipelineSRCPreloadReadAccountsHistogram.Snapshot().Count() - preloadAccountsBefore; delta != 0 {
+		t.Errorf("pipelineSRCPreloadReadAccountsHistogram delta = %d, want 0 when makeWitness=false", delta)
+	}
+
+	// stateCommitTimer should still fire once per block — CommitWithUpdate
+	// runs unconditionally, witness or not.
+	if delta := stateCommitTimer.Snapshot().Count() - stateCommitBefore; delta != numBlocks {
+		t.Errorf("stateCommitTimer delta = %d, want %d when makeWitness=false (CommitWithUpdate must still run)", delta, numBlocks)
+	}
+}
+
+// TestPipelinedImportSRC_MakeWitnessTrue verifies that when InsertChain is
+// called with makeWitness=true and the pipeline is enabled, the SRC goroutine
+// produces a witness, caches it, and preload metrics fire as expected.
+func TestPipelinedImportSRC_MakeWitnessTrue(t *testing.T) {
+	metrics.Enable()
+
+	const numBlocks = 3
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	preloadTimerBefore := pipelineSRCPreloadTimer.Snapshot().Count()
+	preloadSlotsBefore := pipelineSRCPreloadSlotsHistogram.Snapshot().Count()
+	preloadAccountsBefore := pipelineSRCPreloadReadAccountsHistogram.Snapshot().Count()
+
+	if _, err := pipeChain.InsertChain(blocks, true); err != nil {
+		t.Fatalf("pipeline InsertChain (makeWitness=true) failed: %v", err)
+	}
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC failed: %v", err)
+	}
+
+	// Witness should be cached for every imported block.
+	for i := uint64(1); i <= numBlocks; i++ {
+		hash := pipeChain.GetBlockByNumber(i).Hash()
+		if !pipeChain.witnessCache.Contains(hash) {
+			t.Errorf("block %d: witnessCache missing witness when makeWitness=true", i)
+		}
+	}
+
+	// Preload timer + histograms should fire once per block.
+	if delta := pipelineSRCPreloadTimer.Snapshot().Count() - preloadTimerBefore; delta != numBlocks {
+		t.Errorf("pipelineSRCPreloadTimer delta = %d, want %d when makeWitness=true", delta, numBlocks)
+	}
+	if delta := pipelineSRCPreloadSlotsHistogram.Snapshot().Count() - preloadSlotsBefore; delta != numBlocks {
+		t.Errorf("pipelineSRCPreloadSlotsHistogram delta = %d, want %d when makeWitness=true", delta, numBlocks)
+	}
+	if delta := pipelineSRCPreloadReadAccountsHistogram.Snapshot().Count() - preloadAccountsBefore; delta != numBlocks {
+		t.Errorf("pipelineSRCPreloadReadAccountsHistogram delta = %d, want %d when makeWitness=true", delta, numBlocks)
+	}
+}

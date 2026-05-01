@@ -207,13 +207,19 @@ func (bc *BlockChain) waitForPipelinedWitness(hash common.Hash) []byte {
 // waitForPendingSRCWitness returns the witness when hash matches the single
 // in-flight pending SRC block — blocking on collectedCh ensures the witness
 // has been written to cache or store. ok=false means hash is not this block
-// (caller should fall back to polling the cache).
+// (caller should fall back to polling the cache). When the pending block was
+// imported with makeWitness=false, returns (nil, true) immediately — the
+// witness will never be produced, so neither blocking on collectedCh nor
+// falling through to the 2s cache poll would help.
 func (bc *BlockChain) waitForPendingSRCWitness(hash common.Hash) ([]byte, bool) {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRCMu.Unlock()
 	if pending == nil || pending.block.Hash() != hash {
 		return nil, false
+	}
+	if !pending.makeWitness {
+		return nil, true
 	}
 	<-pending.collectedCh
 	if w, ok := bc.witnessCache.Get(hash); ok {
