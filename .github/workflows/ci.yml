@@ -153,7 +153,8 @@ jobs:
           path: cover.out
 
   codecov:
-    if: (github.event.action != 'closed' || github.event.pull_request.merged == true)
+    # Fork PRs do not receive CODECOV_TOKEN, so skip this job in untrusted contexts.
+    if: (github.event.action != 'closed' || github.event.pull_request.merged == true) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
     strategy:
       matrix:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
@@ -163,9 +164,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       - name: Download artifacts
-        uses: actions/download-artifact@v6.0.0
+        uses: actions/download-artifact@v7
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true

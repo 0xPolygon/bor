@@ -39,7 +39,8 @@ jobs:
           restore-keys: ${{ runner.os }}-diffguard-
 
       - name: Install diffguard
-        run: go install github.com/0xPolygon/diffguard/cmd/diffguard@latest
+        # Pin to a known-good commit; @latest can break when the upstream repo force-pushes.
+        run: go install github.com/0xPolygon/diffguard/cmd/diffguard@cbf402dd181b7e1afc850de2e06357807a052317
 
       - name: Run diffguard
         id: diffguard
