@@ -627,9 +627,9 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 // Finalize implements consensus.Engine. There is no post-transaction
 // consensus rules in clique, do nothing here.
-func (c *Clique) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
+func (c *Clique) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.Receipt, error) {
 	// No block rewards in PoA, so the state remains as is
-	return receipts
+	return receipts, nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
@@ -639,7 +639,10 @@ func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 		return nil, nil, 0, errors.New("clique does not support withdrawals")
 	}
 	// Finalize block
-	receipts = c.Finalize(chain, header, state, body, receipts)
+	receipts, err := c.Finalize(chain, header, state, body, receipts)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 
 	// Assign the final state root to header.
 	start := time.Now()
