@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/ethereum/go-ethereum/triedb/pathdb"
 )
 
 func TestWasStorageSlotRead(t *testing.T) {
@@ -516,4 +517,181 @@ func TestPrefetchRoot_DeepCopyPreserves(t *testing.T) {
 	require.NotNil(t, copiedObj)
 	require.Equal(t, obj.prefetchRoot, copiedObj.prefetchRoot, "deepCopy should preserve prefetchRoot")
 	require.Equal(t, obj.getPrefetchRoot(), copiedObj.getPrefetchRoot(), "getPrefetchRoot should match after deepCopy")
+}
+
+// TestPipelinedSRC_RootParity_NewVsTrieOnly is a consensus-critical parity
+// check for mitigation (2.5): when the SRC goroutine runs without producing a
+// witness, openSRCStateDB uses state.New (multi-reader, flat-reader-eligible)
+// instead of state.NewTrieOnly. Both reader paths must produce byte-identical
+// state roots from the same FlatDiff applied at the same parent root —
+// otherwise consensus would split between witness-producing and witness-off
+// nodes.
+//
+// The FlatDiff exercises every shape that touches origin reads:
+//   - balance/nonce mutation on existing account
+//   - storage zero-write (slot deletion) and fresh storage write
+//   - pure self-destruct (no resurrection)
+//   - self-destruct followed by resurrection with new state
+//   - code deploy on a new account
+//   - read-only access to an existing account (flatDiff.ReadSet)
+//   - non-existent address probe (flatDiff.NonExistentReads)
+//
+// Uses path scheme so state.New actually wires a flat reader (pathdb
+// StateReader), making the trie-only vs multi-reader distinction
+// observable. Under hash scheme without a snapshot the multi-reader
+// degenerates to trie-only and the test would be trivially true.
+func TestPipelinedSRC_RootParity_NewVsTrieOnly(t *testing.T) {
+	disk := rawdb.NewMemoryDatabase()
+	defer disk.Close()
+	tdb := triedb.NewDatabase(disk, &triedb.Config{PathDB: pathdb.Defaults})
+	defer tdb.Close()
+	sdb := NewDatabase(tdb, nil)
+
+	addrMutate := common.HexToAddress("0xa1")    // existing → balance/nonce mutation
+	addrZeroSlot := common.HexToAddress("0xa2")  // existing storage → zero a slot, write a fresh slot
+	addrPureDest := common.HexToAddress("0xa3")  // existing → pure self-destruct
+	addrResurrect := common.HexToAddress("0xa4") // existing → destruct + resurrect with new state
+	addrReadOnly := common.HexToAddress("0xa5")  // existing → read-only access only
+	addrCodeNew := common.HexToAddress("0xa6")   // new → balance + code deploy
+	addrNonExist := common.HexToAddress("0xa7")  // never exists → probed only
+
+	slotZeroed := common.HexToHash("0x01")
+	slotFresh := common.HexToHash("0x02")
+	slotResurrectOld := common.HexToHash("0x03")
+	slotResurrectNew := common.HexToHash("0x04")
+	slotReadOnly := common.HexToHash("0x05")
+
+	// --- Build initial committed state ---
+	initial, err := New(types.EmptyRootHash, sdb)
+	require.NoError(t, err)
+
+	initial.CreateAccount(addrMutate)
+	initial.SetBalance(addrMutate, uint256.NewInt(100), 0)
+	initial.SetNonce(addrMutate, 1, 0)
+
+	initial.CreateAccount(addrZeroSlot)
+	initial.SetBalance(addrZeroSlot, uint256.NewInt(50), 0)
+	initial.SetState(addrZeroSlot, slotZeroed, common.HexToHash("0xbeef"))
+
+	initial.CreateAccount(addrPureDest)
+	initial.SetBalance(addrPureDest, uint256.NewInt(200), 0)
+
+	initial.CreateAccount(addrResurrect)
+	initial.SetBalance(addrResurrect, uint256.NewInt(300), 0)
+	initial.SetNonce(addrResurrect, 5, 0)
+	initial.SetCode(addrResurrect, []byte{0x60, 0x01}, 0)
+	initial.SetState(addrResurrect, slotResurrectOld, common.HexToHash("0xbbbb"))
+
+	initial.CreateAccount(addrReadOnly)
+	initial.SetBalance(addrReadOnly, uint256.NewInt(400), 0)
+	initial.SetState(addrReadOnly, slotReadOnly, common.HexToHash("0xdddd"))
+
+	parentRoot, _, err := initial.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+	require.NoError(t, tdb.Commit(parentRoot, false))
+
+	// Confirm the multi-reader path will actually wire a flat reader at
+	// parentRoot. state.New silently falls back to trie-only if
+	// triedb.StateReader errors, which would let the parity assertion below
+	// pass without exercising the mitigation. Asserting StateReader resolves
+	// makes the test fail loudly if path-mode setup ever regresses.
+	if _, err := tdb.StateReader(parentRoot); err != nil {
+		t.Fatalf("path-scheme StateReader unavailable at parentRoot — "+
+			"multi-reader would silently fall back to trie-only, defeating the parity test: %v", err)
+	}
+
+	// --- Simulate block N execution at parentRoot to produce a FlatDiff ---
+	exec, err := New(parentRoot, sdb)
+	require.NoError(t, err)
+
+	exec.SetBalance(addrMutate, uint256.NewInt(150), 0)
+	exec.SetNonce(addrMutate, 2, 0)
+
+	exec.SetState(addrZeroSlot, slotZeroed, common.Hash{})
+	exec.SetState(addrZeroSlot, slotFresh, common.HexToHash("0x1234"))
+
+	exec.SelfDestruct(addrPureDest)
+
+	// Destruct in one tx, resurrect in the next. Finalise between the two so
+	// the destructed object lands in stateObjectsDestruct before the new
+	// CreateAccount replaces stateObjects[addr]; without this, the new object
+	// overwrites the destruct trail and CommitSnapshot would emit only an
+	// Accounts entry, not the destruct+resurrect shape we want to exercise.
+	exec.SelfDestruct(addrResurrect)
+	exec.Finalise(false)
+	exec.CreateAccount(addrResurrect)
+	exec.SetBalance(addrResurrect, uint256.NewInt(999), 0)
+	exec.SetNonce(addrResurrect, 1, 0)
+	exec.SetCode(addrResurrect, []byte{0x60, 0x02}, 0)
+	exec.SetState(addrResurrect, slotResurrectNew, common.HexToHash("0xffff"))
+
+	exec.CreateAccount(addrCodeNew)
+	exec.SetBalance(addrCodeNew, uint256.NewInt(77), 0)
+	exec.SetCode(addrCodeNew, []byte{0x60, 0x03}, 0)
+
+	exec.GetBalance(addrReadOnly)
+	exec.GetState(addrReadOnly, slotReadOnly)
+
+	exec.GetBalance(addrNonExist)
+
+	flatDiff := exec.CommitSnapshot(false)
+
+	// Sanity: FlatDiff captured every shape we exercise.
+	require.Contains(t, flatDiff.Accounts, addrMutate)
+	require.Contains(t, flatDiff.Accounts, addrZeroSlot)
+	require.Contains(t, flatDiff.Destructs, addrPureDest)
+	require.Contains(t, flatDiff.Destructs, addrResurrect)
+	require.Contains(t, flatDiff.Accounts, addrResurrect)
+	require.Contains(t, flatDiff.Accounts, addrCodeNew)
+	zeroedSlots, ok := flatDiff.Storage[addrZeroSlot]
+	require.True(t, ok)
+	require.Equal(t, common.Hash{}, zeroedSlots[slotZeroed])
+	require.Equal(t, common.HexToHash("0x1234"), zeroedSlots[slotFresh])
+
+	// --- Path A: NewTrieOnly (witness-producing path) ---
+	trieOnlyDB, err := NewTrieOnly(parentRoot, sdb)
+	require.NoError(t, err)
+	trieOnlyDB.ApplyFlatDiffForCommit(flatDiff)
+	rootTrieOnly := trieOnlyDB.IntermediateRoot(false)
+
+	// --- Path B: state.New (witness-off multi-reader path) ---
+	multiDB, err := New(parentRoot, sdb)
+	require.NoError(t, err)
+	multiDB.ApplyFlatDiffForCommit(flatDiff)
+	rootMulti := multiDB.IntermediateRoot(false)
+
+	// --- Parity assertion: byte-identical state roots ---
+	require.Equal(t, rootTrieOnly, rootMulti,
+		"state root must be byte-identical between NewTrieOnly and state.New paths — "+
+			"any divergence is a consensus-splitting bug between witness-producing and witness-off nodes")
+
+	// Cross-check against a third path: directly executing the same mutations
+	// on a fresh StateDB at parentRoot (no FlatDiff replay). This catches any
+	// hypothetical bug where ApplyFlatDiffForCommit produces a root that
+	// differs from the original execution.
+	direct, err := New(parentRoot, sdb)
+	require.NoError(t, err)
+	direct.SetBalance(addrMutate, uint256.NewInt(150), 0)
+	direct.SetNonce(addrMutate, 2, 0)
+	direct.SetState(addrZeroSlot, slotZeroed, common.Hash{})
+	direct.SetState(addrZeroSlot, slotFresh, common.HexToHash("0x1234"))
+	direct.SelfDestruct(addrPureDest)
+	direct.SelfDestruct(addrResurrect)
+	// Mirror the exec-path transaction boundary: Finalise after SelfDestruct
+	// so the destructed object is recorded in stateObjectsDestruct before the
+	// resurrection. Without this, the cross-check would diverge from the
+	// FlatDiff path because the FlatDiff captured a destruct+resurrect shape
+	// that only exists when there is a Finalise between the two operations.
+	direct.Finalise(false)
+	direct.CreateAccount(addrResurrect)
+	direct.SetBalance(addrResurrect, uint256.NewInt(999), 0)
+	direct.SetNonce(addrResurrect, 1, 0)
+	direct.SetCode(addrResurrect, []byte{0x60, 0x02}, 0)
+	direct.SetState(addrResurrect, slotResurrectNew, common.HexToHash("0xffff"))
+	direct.CreateAccount(addrCodeNew)
+	direct.SetBalance(addrCodeNew, uint256.NewInt(77), 0)
+	direct.SetCode(addrCodeNew, []byte{0x60, 0x03}, 0)
+	rootDirect := direct.IntermediateRoot(false)
+	require.Equal(t, rootDirect, rootTrieOnly,
+		"FlatDiff replay path must produce the same root as direct execution")
 }

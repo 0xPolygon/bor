@@ -7211,3 +7211,121 @@ func TestPipelinedImportSRC_MakeWitnessTrue(t *testing.T) {
 		t.Errorf("pipelineSRCPreloadReadAccountsHistogram delta = %d, want %d when makeWitness=true", delta, numBlocks)
 	}
 }
+
+// TestPipelinedImportSRC_RootParityWitnessOnVsOff is the consensus-critical
+// parity check for mitigation (2.5): the pipelined SRC goroutine uses
+// state.NewTrieOnly when makeWitness=true and state.New (multi-reader) when
+// makeWitness=false. Both reader paths must produce byte-identical state
+// roots when importing the same blocks — otherwise consensus would split
+// between witness-producing and witness-off nodes on the same network.
+//
+// Two import shapes are exercised:
+//   - shape A: a single InsertChain(blocks) call — batch behaviour
+//   - shape B: two consecutive InsertChain calls — exercises cross-call
+//     pending-SRC reuse (the FlatDiff overlay path between batches)
+//
+// Path scheme is used because state.New only differs from state.NewTrieOnly
+// when a flat reader is actually wired (pathdb StateReader); under hash
+// scheme without a snapshot the multi-reader degenerates to trie-only and
+// the test would not detect a real parity bug.
+func TestPipelinedImportSRC_RootParityWitnessOnVsOff(t *testing.T) {
+	const numBlocks = 8
+	const splitAt = 3 // shape B: insert blocks[:splitAt] then blocks[splitAt:]
+
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	// Witness=true path: NewTrieOnly reader, single InsertChain batch.
+	witnessOnChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.PathScheme))
+	if err != nil {
+		t.Fatalf("witness-on chain: %v", err)
+	}
+	defer witnessOnChain.Stop()
+	if _, err := witnessOnChain.InsertChain(blocks, true); err != nil {
+		t.Fatalf("witness-on InsertChain: %v", err)
+	}
+	if err := witnessOnChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("witness-on flush: %v", err)
+	}
+
+	// Witness=false path, shape A: single InsertChain batch with state.New reader.
+	witnessOffBatch, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.PathScheme))
+	if err != nil {
+		t.Fatalf("witness-off batch chain: %v", err)
+	}
+	defer witnessOffBatch.Stop()
+	if _, err := witnessOffBatch.InsertChain(blocks, false); err != nil {
+		t.Fatalf("witness-off batch InsertChain: %v", err)
+	}
+	if err := witnessOffBatch.flushPendingImportSRC(); err != nil {
+		t.Fatalf("witness-off batch flush: %v", err)
+	}
+
+	// Witness=false path, shape B: split insertion exercises cross-call
+	// pending-SRC reuse — the second InsertChain opens with a pending FlatDiff
+	// from the first batch and must produce the same roots as the batched
+	// path.
+	witnessOffSplit, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.PathScheme))
+	if err != nil {
+		t.Fatalf("witness-off split chain: %v", err)
+	}
+	defer witnessOffSplit.Stop()
+	if _, err := witnessOffSplit.InsertChain(blocks[:splitAt], false); err != nil {
+		t.Fatalf("witness-off split first batch: %v", err)
+	}
+	if _, err := witnessOffSplit.InsertChain(blocks[splitAt:], false); err != nil {
+		t.Fatalf("witness-off split second batch: %v", err)
+	}
+	if err := witnessOffSplit.flushPendingImportSRC(); err != nil {
+		t.Fatalf("witness-off split flush: %v", err)
+	}
+
+	// Per-block parity: every chain must agree with the canonical root from
+	// the generator AND with each other.
+	for i := uint64(1); i <= numBlocks; i++ {
+		canonical := blocks[i-1].Root()
+
+		on := witnessOnChain.GetBlockByNumber(i)
+		offBatch := witnessOffBatch.GetBlockByNumber(i)
+		offSplit := witnessOffSplit.GetBlockByNumber(i)
+		if on == nil || offBatch == nil || offSplit == nil {
+			t.Fatalf("block %d: missing on one of the chains (on=%v offBatch=%v offSplit=%v)",
+				i, on == nil, offBatch == nil, offSplit == nil)
+		}
+
+		if on.Root() != canonical {
+			t.Errorf("block %d: witness-on root %s != canonical %s", i, on.Root(), canonical)
+		}
+		if offBatch.Root() != canonical {
+			t.Errorf("block %d: witness-off batch root %s != canonical %s", i, offBatch.Root(), canonical)
+		}
+		if offSplit.Root() != canonical {
+			t.Errorf("block %d: witness-off split root %s != canonical %s", i, offSplit.Root(), canonical)
+		}
+		if on.Root() != offBatch.Root() {
+			t.Errorf("block %d: witness-on vs witness-off-batch root mismatch %s != %s", i, on.Root(), offBatch.Root())
+		}
+		if offBatch.Root() != offSplit.Root() {
+			t.Errorf("block %d: witness-off batch vs split root mismatch %s != %s", i, offBatch.Root(), offSplit.Root())
+		}
+	}
+}

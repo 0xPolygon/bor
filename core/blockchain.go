@@ -4602,22 +4602,38 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	pending.root = root
 }
 
-// openSRCStateDB opens a NewTrieOnly StateDB at parentRoot. When makeWitness
-// is true, also attaches a witness so IntermediateRoot (inside CommitWithUpdate)
-// captures every trie node it walks. NewTrieOnly bypasses flat/snapshot readers
-// — every read must go through the MPT, which is what lets the witness cover
-// FlatDiff overlay accounts whose nodes weren't touched during execution.
-// When makeWitness is false, no witness is created or attached; the SRC
-// goroutine still computes and validates the state root, just without
-// producing a witness for stateless peers.
+// openSRCStateDB opens a StateDB at parentRoot for the pipelined SRC goroutine.
+// Reader choice depends on makeWitness:
+//
+//   - makeWitness=true:  NewTrieOnly. Every read walks the MPT, which is what
+//     lets the witness capture proof-path nodes for FlatDiff overlay accounts
+//     whose trie nodes weren't touched during speculative execution. Flat
+//     readers would short-circuit the trie and leave the witness incomplete.
+//   - makeWitness=false: state.New (multi-reader). Pre-state reads performed
+//     by ApplyFlatDiffForCommit (origin balance, origin storage, code lookup
+//     via getOrNewStateObject) and SelfDestruct can hit a flat reader (pathdb
+//     StateReader in path mode, snapshot in hash mode) instead of the MPT.
+//     state.New falls back to the trie reader when no flat reader is
+//     installed or StateReader errors, so correctness does not depend on the
+//     flat reader being present. Root-consistency between readers at an
+//     in-memory committed root is validated by the parity tests.
+//
+// CommitWithUpdate walks the MPT for hashing regardless of reader choice, so
+// the state-root computation cost is unaffected; only the pre-state reads
+// avoid cold trie traversals.
 func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool) (*state.StateDB, *stateless.Witness, error) {
+	if !makeWitness {
+		tmpDB, err := state.New(parentRoot, bc.statedb)
+		if err != nil {
+			log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
+			return nil, nil, err
+		}
+		return tmpDB, nil, nil
+	}
 	tmpDB, err := state.NewTrieOnly(parentRoot, bc.statedb)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 		return nil, nil, err
-	}
-	if !makeWitness {
-		return tmpDB, nil, nil
 	}
 	witness, witnessErr := stateless.NewWitness(block.Header(), bc)
 	if witnessErr != nil {
