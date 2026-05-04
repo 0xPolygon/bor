@@ -157,7 +157,11 @@ func (s *Server) TransactionReceipt(ctx context.Context, req *protobor.ReceiptRe
 		return nil, status.Error(codes.OutOfRange, "transaction index out of bounds")
 	}
 
-	return &protobor.ReceiptResponse{Receipt: ConvertReceiptToProtoReceipt(receipts[txnIndex])}, nil
+	pr, err := ConvertReceiptToProtoReceipt(receipts[txnIndex])
+	if err != nil {
+		return nil, err
+	}
+	return &protobor.ReceiptResponse{Receipt: pr}, nil
 }
 
 func (s *Server) BorBlockReceipt(ctx context.Context, req *protobor.ReceiptRequest) (*protobor.ReceiptResponse, error) {
@@ -170,7 +174,11 @@ func (s *Server) BorBlockReceipt(ctx context.Context, req *protobor.ReceiptReque
 		return nil, err
 	}
 
-	return &protobor.ReceiptResponse{Receipt: ConvertReceiptToProtoReceipt(receipt)}, nil
+	pr, err := ConvertReceiptToProtoReceipt(receipt)
+	if err != nil {
+		return nil, err
+	}
+	return &protobor.ReceiptResponse{Receipt: pr}, nil
 }
 
 func (s *Server) GetAuthor(ctx context.Context, req *protobor.GetAuthorRequest) (*protobor.GetAuthorResponse, error) {

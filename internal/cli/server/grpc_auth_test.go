@@ -219,6 +219,8 @@ func TestIsLoopbackHostPort(t *testing.T) {
 		{"127.0.0.5:3131", true}, // anywhere in 127.0.0.0/8
 		{"[::1]:3131", true},
 		{"localhost:3131", true},
+		{"LOCALHOST:3131", true}, // hostnames are case-insensitive (RFC 4343)
+		{"LocalHost:3131", true},
 
 		{"0.0.0.0:3131", false},
 		{"[::]:3131", false},
