@@ -84,8 +84,40 @@ func init() {
 
 func WithGRPCAddress() serverOption {
 	return func(srv *Server, config *Config) error {
-		return srv.gRPCServerByAddress(config.GRPC.Addr)
+		addr := config.GRPC.Addr
+		if addr == "" {
+			log.Info("gRPC server disabled (grpc.addr is empty)")
+			return nil
+		}
+		// Mirror heimdall's client-side posture: warn (don't block) when the
+		// operator opts into a non-loopback bind without a bearer token. The
+		// startup log entry is what operators are expected to act on.
+		if config.GRPC.Token == "" && !isLoopbackHostPort(addr) {
+			log.Warn(
+				"Starting unauthenticated gRPC server on non-loopback address; "+
+					"set --grpc.token / BOR_GRPC_TOKEN to require authentication.",
+				"addr", addr,
+			)
+		}
+		return srv.gRPCServerByAddress(addr)
 	}
+}
+
+// isLoopbackHostPort reports whether hostport refers to a loopback host. It
+// returns false for wildcard binds (":3131", "0.0.0.0:3131", "[::]:3131").
+func isLoopbackHostPort(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func WithGRPCListener(lis net.Listener) serverOption {

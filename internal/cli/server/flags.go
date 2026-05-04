@@ -1220,7 +1220,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// grpc
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "grpc.addr",
-		Usage:   "Address and port to bind the GRPC server",
+		Usage:   "Address and port to bind the GRPC server. Empty disables the server. Non-loopback binds without --grpc.token log a startup warning.",
 		Value:   &c.cliConfig.GRPC.Addr,
 		Default: c.cliConfig.GRPC.Addr,
 	})

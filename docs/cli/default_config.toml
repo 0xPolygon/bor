@@ -218,7 +218,8 @@ devfakeauthor = false
   disable-bor-wallet = true
 
 [grpc]
-  addr = ":3131"
+  addr = "127.0.0.1:3131"
+  token = ""
 
 [developer]
   dev = false

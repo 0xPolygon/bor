@@ -207,3 +207,43 @@ type fakeServerStream struct {
 }
 
 func (f *fakeServerStream) Context() context.Context { return f.ctx }
+
+func TestIsLoopbackHostPort(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		hostport string
+		want     bool
+	}{
+		{"127.0.0.1:3131", true},
+		{"127.0.0.5:3131", true}, // anywhere in 127.0.0.0/8
+		{"[::1]:3131", true},
+		{"localhost:3131", true},
+
+		{"0.0.0.0:3131", false},
+		{"[::]:3131", false},
+		{":3131", false}, // wildcard via empty host
+		{"10.0.0.1:3131", false},
+		{"192.168.1.5:3131", false},
+		{"bor.example.net:3131", false}, // unresolved hostname — conservative
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.hostport, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, isLoopbackHostPort(tc.hostport))
+		})
+	}
+}
+
+// TestWithGRPCAddress_EmptyAddrSkipsStartup verifies that an empty grpc.addr
+// is treated as a clean disable — the closure returns nil without trying to
+// bind a listener. Other configurations actually bind a listener and are
+// covered by the integration-style tests in server_test.go.
+func TestWithGRPCAddress_EmptyAddrSkipsStartup(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{GRPC: &GRPCConfig{Addr: "", Token: ""}}
+	// nil Server is safe here — the guard returns before touching it.
+	err := WithGRPCAddress()(nil, cfg)
+	require.NoError(t, err)
+}
