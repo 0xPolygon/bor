@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"math"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -170,8 +172,18 @@ func (s *Server) BorBlockReceipt(ctx context.Context, req *protobor.ReceiptReque
 		return nil, err
 	}
 	receipt, err := s.backend.APIBackend.GetBorBlockReceipt(ctx, txHash)
+	// EthAPIBackend returns ethereum.NotFound when the receipt is missing;
+	// other backends may return (nil, nil). Map both to codes.NotFound so
+	// callers can branch on canonical gRPC codes instead of seeing Unknown
+	// or panicking on a nil dereference inside the converter.
+	if errors.Is(err, ethereum.NotFound) {
+		return nil, status.Error(codes.NotFound, "bor block receipt not found")
+	}
 	if err != nil {
 		return nil, err
+	}
+	if receipt == nil {
+		return nil, status.Error(codes.NotFound, "bor block receipt not found")
 	}
 
 	pr, err := ConvertReceiptToProtoReceipt(receipt)
