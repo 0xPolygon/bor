@@ -585,6 +585,79 @@ func TestPendingWitnessBodyCacheGetEvictsExpired(t *testing.T) {
 	}
 }
 
+// TestDeferredSignedAnnounceDrainedAfterHeaderArrives is the regression for
+// the cosend-race liveness gap: when a signed announcement arrives before the
+// corresponding block header (block + announce travel independently and can
+// race in either order), the handler MUST retain the announcement and re-
+// evaluate it once the header arrives, rather than dropping it on the floor
+// and silently degrading subsequent witness fetches to the unsigned WIT1
+// fallback path.
+//
+// Without this:
+//  1. announce arrives → header-unknown → acceptSignedAnnouncement returns
+//     false, announcement is forgotten.
+//  2. block arrives shortly after, but no second announce reaches us (sparse
+//     mesh, single-cosend window) → signedWitnesses never holds the hash.
+//  3. fetcher selects a peer, gets bytes, parentSignedWitnessHash returns
+//     false → byte-verification skipped, WIT2 trust model silently leaks.
+//
+// The deferred queue holds the announcement until the chain catches up; the
+// drain (here invoked directly; in production fired from the chainHeadCh
+// subscription) re-runs verification and caches the hash on success.
+func TestDeferredSignedAnnounceDrainedAfterHeaderArrives(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("key gen: %v", err)
+	}
+	header := &types.Header{Number: big.NewInt(99_999)} // NOT in chain
+	blockHash := header.Hash()
+
+	ann := wit.SignedWitnessAnnouncement{
+		BlockHash:   blockHash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xc0ffee01"),
+	}
+	digest := wit.WitnessAnnouncementSigningHash(ann.BlockHash, ann.BlockNumber, ann.WitnessHash)
+	sig, err := crypto.Sign(digest.Bytes(), key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	ann.Signature = sig
+
+	// Phase 1: header is not yet local. The announce must be deferred — not
+	// cached, not relayed, not credited to the sender as announce-known.
+	if err := witH.handleSignedWitnessAnnouncements(peer, []wit.SignedWitnessAnnouncement{ann}); err != nil {
+		t.Fatalf("handleSignedWitnessAnnouncements: %v", err)
+	}
+	if _, ok := h.handler.signedWitnesses.get(blockHash); ok {
+		t.Fatal("announce cached prematurely; verification should defer when header is unknown")
+	}
+	if peer.KnownAnnounceContainsHash(blockHash) {
+		t.Fatal("peer marked announce-known on deferred path; re-relay recovery is suppressed")
+	}
+	if !h.handler.deferredAnnounces.has(blockHash) {
+		t.Fatal("deferred-announce queue did not retain the announce; the race window is uncovered")
+	}
+
+	// Phase 2: header arrives. Drain the queue (production wires this from
+	// the chainHeadCh subscription on each new block).
+	rawdb.WriteHeader(h.chain.DB(), header)
+	h.handler.drainDeferredAnnouncesFor(blockHash)
+
+	if _, ok := h.handler.signedWitnesses.get(blockHash); !ok {
+		t.Fatal("announce not cached after header arrival; drain is broken")
+	}
+	if h.handler.deferredAnnounces.has(blockHash) {
+		t.Fatal("deferred entry should be cleared after successful drain")
+	}
+}
+
 // TestVerifyScheduledProducerRejectsBlockNumberMismatch covers the case where
 // the local header is present but disagrees with the announce on block
 // number. This is a confirmed bad announce and the caller must strike, so

@@ -233,6 +233,106 @@ func (c *pendingWitnessBodyCache) gcLocked() {
 	}
 }
 
+// deferredAnnounceCapacity bounds how many header-unknown signed announcements
+// we hold while waiting for the corresponding block to arrive. Each entry is
+// ~200 bytes; the cap is sized for a worst-case stall window where the local
+// chain falls a few hundred blocks behind a busy mesh and announcements
+// arrive ahead of headers en masse.
+const deferredAnnounceCapacity = 256
+
+// deferredAnnounceEntry holds a signed announcement whose producer-binding
+// could not be checked yet because the corresponding block header wasn't
+// local. The drain path re-runs verification once the chain catches up.
+type deferredAnnounceEntry struct {
+	announcement wit.SignedWitnessAnnouncement
+	peerID       string
+	receivedAt   time.Time
+}
+
+// deferredAnnounceCache holds signed announcements deferred on header-unknown
+// rejection so the chain-head loop can re-evaluate them when the matching
+// block arrives. Without it, an announce that races ahead of its block — the
+// expected outcome of independent block + announce gossip streams — is lost
+// for good and subsequent witness fetches silently fall back to unsigned
+// (WIT1) verification, leaking the WIT2 trust property for that block.
+type deferredAnnounceCache struct {
+	mu       sync.RWMutex
+	entries  map[common.Hash]*deferredAnnounceEntry
+	capacity int
+}
+
+func newDeferredAnnounceCache(capacity int) *deferredAnnounceCache {
+	return &deferredAnnounceCache{
+		entries:  make(map[common.Hash]*deferredAnnounceEntry),
+		capacity: capacity,
+	}
+}
+
+// put stores the announcement keyed by block hash. If the cache is full, the
+// oldest entry is evicted (linear scan; the cap keeps it cheap). A second put
+// for the same hash refreshes receivedAt and overwrites the announcement —
+// the more recent gossip wins, which is desirable when the original sender
+// disconnected and a different peer now carries the announce forward.
+func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gcLocked()
+	if _, exists := c.entries[ann.BlockHash]; !exists && len(c.entries) >= c.capacity {
+		var oldestHash common.Hash
+		var oldest time.Time
+		for h, e := range c.entries {
+			if oldest.IsZero() || e.receivedAt.Before(oldest) {
+				oldest = e.receivedAt
+				oldestHash = h
+			}
+		}
+		delete(c.entries, oldestHash)
+	}
+	c.entries[ann.BlockHash] = &deferredAnnounceEntry{
+		announcement: ann,
+		peerID:       peerID,
+		receivedAt:   time.Now(),
+	}
+}
+
+// take removes and returns the entry for blockHash if present and fresh.
+// Returns ok=false on miss or expiry; expired entries are deleted in place.
+func (c *deferredAnnounceCache) take(blockHash common.Hash) (*deferredAnnounceEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[blockHash]
+	if !ok {
+		return nil, false
+	}
+	delete(c.entries, blockHash)
+	if time.Since(e.receivedAt) > wit2AnnounceTTL {
+		return nil, false
+	}
+	return e, true
+}
+
+// has reports whether a fresh entry exists for blockHash. Test-facing only;
+// production code uses take to ensure the entry is consumed.
+func (c *deferredAnnounceCache) has(blockHash common.Hash) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[blockHash]
+	if !ok {
+		return false
+	}
+	return time.Since(e.receivedAt) <= wit2AnnounceTTL
+}
+
+// gcLocked drops entries past the TTL. Caller must hold the write lock.
+func (c *deferredAnnounceCache) gcLocked() {
+	cutoff := time.Now().Add(-wit2AnnounceTTL)
+	for h, e := range c.entries {
+		if e.receivedAt.Before(cutoff) {
+			delete(c.entries, h)
+		}
+	}
+}
+
 // signedWitnessCache stores BP-signed announcements by block hash. The cache
 // is consulted by:
 //   - the relay path on receive (skip if already seen recently),
@@ -466,17 +566,81 @@ func (h *handler) canonicalWitnessHash(blockHash common.Hash) (common.Hash, bool
 //   - ok=false, headerAvailable=false: header not yet local. The announce
 //     cannot be bound to a producer right now. The caller MUST NOT strike —
 //     this is expected during the cosend window where a signed announce
-//     races the block to the receiver. The fast path recovers naturally
-//     once the block header arrives and a subsequent announce for the same
-//     hash is re-evaluated.
+//     races the block to the receiver. The handler stashes the announce in
+//     the deferred queue and the chain-head loop re-evaluates it once the
+//     block arrives.
+//
+// Header presence is checked first regardless of engine: an announce we
+// cannot match to a local block is by definition unverifiable here. Only
+// after the header is on file do we route into the bor-specific producer
+// recovery (or short-circuit to ok=true on non-bor test chains).
 func (h *handler) isScheduledProducer(signer common.Address, blockNumber uint64, blockHash common.Hash) (bool, bool) {
+	header := h.chain.GetHeaderByHash(blockHash)
+	if header == nil {
+		wit2HeaderUnknownMeter.Mark(1)
+		return false, false
+	}
 	borEngine, isBor := h.chain.Engine().(*bor.Bor)
 	if !isBor {
-		// Non-bor chain: skip the producer check.
+		// Non-bor chain (tests): header presence already validated above; the
+		// producer check is bor-specific and intentionally skipped here.
+		if header.Number.Uint64() != blockNumber {
+			return false, true
+		}
 		return true, true
 	}
-	header := h.chain.GetHeaderByHash(blockHash)
 	return verifyScheduledProducer(borEngine, header, signer, blockNumber, blockHash)
+}
+
+// drainDeferredAnnouncesFor re-evaluates any deferred announcement whose
+// blockHash now matches a header that has just been imported. On verification
+// success the announce is cached in signedWitnesses, the original sender is
+// credited as announce-known, and the announce is relayed to peers that have
+// not seen it. On confirmed mis-binding (signer ≠ producer) the deferred
+// entry is dropped — relayers cannot be re-struck post-hoc since we lost the
+// peer reference between deferral and drain.
+//
+// Called from the chain-head subscription on each new block. Also exposed for
+// direct invocation in tests.
+func (h *handler) drainDeferredAnnouncesFor(blockHash common.Hash) {
+	if h.deferredAnnounces == nil {
+		return
+	}
+	entry, ok := h.deferredAnnounces.take(blockHash)
+	if !ok {
+		return
+	}
+	signer, err := verifySignedAnnouncement(entry.announcement)
+	if err != nil {
+		// Should be unreachable: we re-verified the same bytes that already
+		// passed the signature check at acceptSignedAnnouncement time.
+		// Surfaced via metric in case a future refactor reorders this.
+		wit2InvalidSigMeter.Mark(1)
+		log.Debug("wit2: deferred announce failed signature re-check", "blockHash", blockHash, "err", err)
+		return
+	}
+	prodOk, headerAvailable := h.isScheduledProducer(signer, entry.announcement.BlockNumber, blockHash)
+	if !prodOk {
+		if !headerAvailable {
+			// Header still not local — re-stash with fresh receivedAt so the
+			// next chain-head event can try again before the TTL expires.
+			h.deferredAnnounces.put(entry.announcement, entry.peerID)
+			return
+		}
+		wit2NotValidatorMeter.Mark(1)
+		log.Debug("wit2: deferred announce signer is not the scheduled producer",
+			"blockHash", blockHash, "signer", signer)
+		return
+	}
+	if !h.signedWitnesses.putIfNewer(entry.announcement) {
+		wit2DuplicateMeter.Mark(1)
+		return
+	}
+	// Credit the original sender as announce-known so we don't re-relay back.
+	if peer := h.peers.peer(entry.peerID); peer != nil && peer.witPeer != nil {
+		peer.witPeer.Peer.AddKnownAnnounce(blockHash)
+	}
+	h.relaySignedAnnouncement(entry.peerID, entry.announcement)
 }
 
 // verifyScheduledProducer is the pure decision logic for binding a wit2

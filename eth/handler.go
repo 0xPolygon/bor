@@ -200,6 +200,15 @@ type handler struct {
 	pendingWitnessBodies *pendingWitnessBodyCache
 	wit2PeerTracker      *peerWit2Tracker
 
+	// WIT2: signed announcements whose producer-binding could not be checked
+	// at receive time because the matching block header wasn't local yet.
+	// Drained from the chain-head subscription on each new block so the race
+	// between block and announce gossip streams self-heals once the chain
+	// catches up.
+	deferredAnnounces *deferredAnnounceCache
+	wit2HeadCh        chan core.ChainHeadEvent
+	wit2HeadSub       event.Subscription
+
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
 
@@ -242,6 +251,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		signedWitnesses:         newSignedWitnessCache(),
 		pendingWitnessBodies:    newPendingWitnessBodyCache(witnessBodyCacheCapacity),
 		wit2PeerTracker:         newPeerWit2Tracker(),
+		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -669,6 +679,39 @@ func (h *handler) Start(maxPeers int) {
 	// start peer handler tracker
 	h.wg.Add(1)
 	go h.protoTracker()
+
+	// WIT2: drain deferred signed announces on each new chain head. This
+	// closes the cosend race: when a signed announcement arrives ahead of
+	// its block, we hold it in deferredAnnounces and re-evaluate as soon as
+	// the matching header lands.
+	h.wit2HeadCh = make(chan core.ChainHeadEvent, chainHeadChanSize)
+	h.wit2HeadSub = h.chain.SubscribeChainHeadEvent(h.wit2HeadCh)
+	h.wg.Add(1)
+	go h.deferredAnnouncesLoop()
+}
+
+// deferredAnnouncesLoop re-evaluates any deferred WIT2 announcements whose
+// matching block has just been imported. Exits cleanly when the chain-head
+// subscription returns (chain stop) or quitSync is closed.
+func (h *handler) deferredAnnouncesLoop() {
+	defer h.wg.Done()
+	defer h.wit2HeadSub.Unsubscribe()
+
+	for {
+		select {
+		case ev, ok := <-h.wit2HeadCh:
+			if !ok {
+				return
+			}
+			if ev.Header != nil {
+				h.drainDeferredAnnouncesFor(ev.Header.Hash())
+			}
+		case <-h.wit2HeadSub.Err():
+			return
+		case <-h.quitSync:
+			return
+		}
+	}
 }
 
 func (h *handler) Stop() {

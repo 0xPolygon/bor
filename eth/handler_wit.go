@@ -204,8 +204,11 @@ func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit
 // caller should proceed to cache + relay; false when the caller should skip
 // it. Strikes are issued only on confirmed misbehavior (bad signature or
 // signer ≠ scheduled producer for a known header). Pre-import deferral
-// (header not yet local) is silent: no strike, no relay, retry on the next
-// packet for the same hash once the block arrives.
+// (header not yet local) is silent: no strike, no relay. The announcement is
+// stashed in the deferred queue so the chain-head loop can re-evaluate it
+// once the block arrives — without that, an announce that races ahead of its
+// block is lost permanently and subsequent witness fetches silently skip
+// byte-verification.
 func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitnessAnnouncement) bool {
 	signer, err := verifySignedAnnouncement(ann)
 	if err != nil {
@@ -222,6 +225,7 @@ func (h *witHandler) acceptSignedAnnouncement(peer *wit.Peer, ann wit.SignedWitn
 	if !headerAvailable {
 		peer.Log().Debug("wit2: header not yet local for announced block; deferring announce",
 			"blockHash", ann.BlockHash, "blockNumber", ann.BlockNumber)
+		(*handler)(h).deferredAnnounces.put(ann, peer.ID())
 		return false
 	}
 	wit2NotValidatorMeter.Mark(1)
