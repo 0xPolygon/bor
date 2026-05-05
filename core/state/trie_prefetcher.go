@@ -101,6 +101,37 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 	}
 }
 
+// snapshotWarmNodes collects the trie nodes accumulated by every subfetcher
+// into a list of (owner, path -> blob) maps. It MUST be called only after
+// terminate(false) has returned — once subfetcher goroutines have exited their
+// loops, their tries are quiescent and trie.Witness() can be read safely. The
+// caller (StopAndSnapshotPrefetcher) sequences this between terminate(false)
+// and report so the prefetcher's lifecycle remains intact.
+//
+// Returns nil when called on a nil receiver, an already-closed prefetcher
+// without subfetchers, or when no subfetcher loaded any nodes — callers must
+// tolerate a nil result.
+func (p *triePrefetcher) snapshotWarmNodes() []TrieWarmNodes {
+	if p == nil {
+		return nil
+	}
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	if len(p.fetchers) == 0 {
+		return nil
+	}
+	out := make([]TrieWarmNodes, 0, len(p.fetchers))
+	for _, fetcher := range p.fetchers {
+		nodes := fetcher.warmNodes()
+		if len(nodes) == 0 {
+			continue
+		}
+		out = append(out, TrieWarmNodes{Owner: fetcher.owner, Nodes: nodes})
+	}
+	return out
+}
+
 // terminate iterates over all the subfetchers and issues a termination request
 // to all of them. Depending on the async parameter, the method will either block
 // until all subfetchers spin down, or return immediately.
@@ -388,6 +419,18 @@ func (sf *subfetcher) terminate(async bool) {
 		return
 	}
 	<-sf.term
+}
+
+// warmNodes returns the (path -> blob) map of trie nodes this subfetcher has
+// loaded into its trie. It must be called only after the subfetcher's loop
+// has exited — terminate(false) provides that ordering by waiting on
+// <-sf.term. Returns nil if the trie was never opened (openTrie failed) or
+// has not loaded any nodes.
+func (sf *subfetcher) warmNodes() map[string][]byte {
+	if sf == nil || sf.trie == nil {
+		return nil
+	}
+	return sf.trie.Witness()
 }
 
 // openTrie resolves the target trie from database for prefetching.

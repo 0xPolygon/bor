@@ -209,6 +209,23 @@ func NewTrieOnly(root common.Hash, db *CachingDB) (*StateDB, error) {
 	return NewWithReader(root, db, reader)
 }
 
+// NewTrieOnlyWithSnapshot is the warm-cache variant of NewTrieOnly. Trie reads
+// consult a WarmSnapshot (typically captured from the execution-side trie
+// prefetcher) before falling through to the regular pathdb-backed NodeReader.
+// Hits with matching hash skip diff-layer/disk-layer/pebble work entirely;
+// misses or hash mismatches are served by the underlying reader unchanged.
+// NewTrieOnly semantics are preserved — the trie still walks, prevalueTracer
+// still records, witness is still complete.
+//
+// A nil snapshot is equivalent to NewTrieOnly.
+func NewTrieOnlyWithSnapshot(root common.Hash, db *CachingDB, snapshot *WarmSnapshot) (*StateDB, error) {
+	reader, err := db.TrieOnlyReaderWithSnapshot(root, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithReader(root, db, reader)
+}
+
 // NewWithReader creates a new state for the specified state root. Unlike New,
 // this function accepts an additional Reader which is bound to the given root.
 func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
@@ -551,6 +568,41 @@ func (s *StateDB) StopPrefetcher() {
 		s.prefetcher.report()
 		s.prefetcher = nil
 	}
+}
+
+// StopAndSnapshotPrefetcher terminates a running prefetcher synchronously,
+// captures the trie nodes its subfetchers had loaded into a quiesced
+// snapshot, then reports stats and clears the prefetcher reference. The
+// returned snapshot is owned by the caller, contains copies of the source
+// blobs (no aliasing into prefetcher state) and is safe for concurrent
+// readers.
+//
+// Step ordering matters and is enforced here:
+//
+//  1. terminate(false) — signal stop, wait for every subfetcher loop to exit
+//     (writers-exited semantics via <-sf.term gated on `defer close(sf.term)`).
+//  2. snapshotWarmNodes — read each subfetcher's trie.Witness() while no
+//     writer remains. Quiescent state guarantees the read is race-free.
+//  3. report — emit metrics from the same fetchers (unchanged from
+//     StopPrefetcher).
+//  4. nil out s.prefetcher — releases the prefetcher for GC.
+//
+// Returns nil when no prefetcher is installed or the snapshot would be
+// empty (no subfetchers loaded any nodes). Callers must tolerate a nil
+// snapshot and treat it as "no warm data; fall through to the underlying
+// reader for every node".
+func (s *StateDB) StopAndSnapshotPrefetcher() *WarmSnapshot {
+	if s.prefetcher == nil {
+		return nil
+	}
+	s.prefetcher.terminate(false)
+	tries := s.prefetcher.snapshotWarmNodes()
+	s.prefetcher.report()
+	s.prefetcher = nil
+	if len(tries) == 0 {
+		return nil
+	}
+	return NewWarmSnapshot(tries)
 }
 
 // ResetPrefetcher cleans the prefetcher from a State, commonly used in tempStates to track witness while no impacting block building

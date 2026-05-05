@@ -136,6 +136,13 @@ type Config struct {
 	EnablePipelinedImportSRC bool
 	PipelinedImportSRCLogs   bool
 
+	// PipelinedSRCWarmSnapshot enables warm-cache handoff from the
+	// execution-side trie prefetcher to the pipelined SRC goroutine. Trie
+	// reads in SRC consult a hash-verified snapshot before falling through
+	// to pathdb. Targets cold-cache restart/catch-up CPU. NewTrieOnly
+	// semantics, witness completeness, and root determinism are unaffected.
+	PipelinedSRCWarmSnapshot bool
+
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
 

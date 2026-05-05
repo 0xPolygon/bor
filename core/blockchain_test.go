@@ -6441,6 +6441,14 @@ func pipelinedConfig(scheme string) *BlockChainConfig {
 	return cfg
 }
 
+// pipelinedConfigWithWarmSnapshot returns the standard pipelined config with
+// the warm-snapshot handoff enabled. Used by snapshot-on-vs-off parity tests.
+func pipelinedConfigWithWarmSnapshot(scheme string) *BlockChainConfig {
+	cfg := pipelinedConfig(scheme)
+	cfg.PipelinedSRCWarmSnapshot = true
+	return cfg
+}
+
 // TestPipelinedImportSRC_MultipleBlocks generates 10 blocks with transactions and
 // inserts them into two chains — one with pipelined SRC enabled and one without.
 // The state roots of every canonical block must match between both chains.
@@ -7383,7 +7391,7 @@ func TestPipelinedImportSRC_WitnessHardFailsWithoutExecWitness(t *testing.T) {
 	// out before touching it.
 	parent := chain.GetBlockByNumber(0)
 	target := blocks[0]
-	chain.SpawnSRCGoroutine(target, parent.Root(), &state.FlatDiff{}, true, nil, false)
+	chain.SpawnSRCGoroutine(target, parent.Root(), &state.FlatDiff{}, true, nil, false, nil)
 
 	// Drain via the public wait API: the goroutine sets pending.err and exits.
 	chain.pendingSRCMu.Lock()
@@ -7594,4 +7602,434 @@ func TestPipelinedImportSRC_WitnessEncodeDecodeRoundtrip(t *testing.T) {
 			t.Errorf("block %d: ValidateWitnessPreState failed: %v", i, err)
 		}
 	}
+}
+
+// TestPipelinedImportSRC_WarmSnapshotWitnessParity is the consensus-critical
+// parity test for the warm-snapshot handoff. The same chain is imported
+// twice — once with PipelinedSRCWarmSnapshot=false (baseline pathdb-only
+// reader) and once with PipelinedSRCWarmSnapshot=true (snapshot-aware
+// reader). Per-block state roots, decoded witnesses, and the State proof
+// node sets must be identical, AND each published witness must replay
+// statelessly via ProcessBlockWithWitnesses to the same root the chain
+// produced. Any divergence proves the snapshot path silently dropped or
+// substituted proof nodes.
+//
+// Root parity alone is necessary but not sufficient: it proves the commit
+// walk produced the same hash, not that the published witness covers the
+// same proof surface. Stateless replay is the strongest assertion — it
+// reconstructs state from the witness alone (plus the receiver's local
+// codes/headers) and recomputes the post-state root.
+//
+// Runs under both HashScheme and PathScheme; PathScheme is the production
+// target and exercises the pathdb fallthrough path in the snapshot reader.
+func TestPipelinedImportSRC_WarmSnapshotWitnessParity(t *testing.T) {
+	testPipelinedImportSRC_WarmSnapshotWitnessParity(t, rawdb.HashScheme)
+	testPipelinedImportSRC_WarmSnapshotWitnessParity(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_WarmSnapshotWitnessParity(t *testing.T, scheme string) {
+	t.Run(scheme, func(t *testing.T) {
+		const numBlocks = 8
+		var (
+			key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+			addr      = crypto.PubkeyToAddress(key.PublicKey)
+			recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+			funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+			gspec     = &Genesis{
+				Config:  params.AllEthashProtocolChanges,
+				Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+				BaseFee: big.NewInt(params.InitialBaseFee),
+			}
+			signer = types.LatestSigner(gspec.Config)
+			engine = ethash.NewFaker()
+		)
+
+		_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+			tx, _ := types.SignTx(
+				types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+				signer, key,
+			)
+			gen.AddTx(tx)
+		})
+
+		importInto := func(t *testing.T, label string, cfg *BlockChainConfig) *BlockChain {
+			t.Helper()
+			chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+			if err != nil {
+				t.Fatalf("%s: NewBlockChain: %v", label, err)
+			}
+			t.Cleanup(chain.Stop)
+			if _, err := chain.InsertChain(blocks, true); err != nil {
+				t.Fatalf("%s: InsertChain: %v", label, err)
+			}
+			if err := chain.flushPendingImportSRC(); err != nil {
+				t.Fatalf("%s: flushPendingImportSRC: %v", label, err)
+			}
+			return chain
+		}
+
+		chainOff := importInto(t, "snapshot-off", pipelinedConfig(scheme))
+		chainOn := importInto(t, "snapshot-on", pipelinedConfigWithWarmSnapshot(scheme))
+
+		for i := uint64(1); i <= numBlocks; i++ {
+			blkOff := chainOff.GetBlockByNumber(i)
+			blkOn := chainOn.GetBlockByNumber(i)
+			if blkOff == nil || blkOn == nil {
+				t.Fatalf("block %d: missing on one of the chains (off=%v on=%v)", i, blkOff == nil, blkOn == nil)
+			}
+			if blkOff.Root() != blkOn.Root() {
+				t.Errorf("block %d: state root mismatch off=%s on=%s", i, blkOff.Root(), blkOn.Root())
+			}
+
+			encOff := chainOff.GetWitness(blkOff.Hash())
+			encOn := chainOn.GetWitness(blkOn.Hash())
+			if encOff == nil || encOn == nil {
+				t.Fatalf("block %d: witness missing (off=%v on=%v)", i, encOff == nil, encOn == nil)
+			}
+
+			var wOff, wOn stateless.Witness
+			if err := rlp.DecodeBytes(encOff, &wOff); err != nil {
+				t.Fatalf("block %d: decode off witness: %v", i, err)
+			}
+			if err := rlp.DecodeBytes(encOn, &wOn); err != nil {
+				t.Fatalf("block %d: decode on witness: %v", i, err)
+			}
+
+			if err := stateless.ValidateWitnessPreState(&wOff, chainOff, blkOff.Header()); err != nil {
+				t.Errorf("block %d: off witness pre-state validation: %v", i, err)
+			}
+			if err := stateless.ValidateWitnessPreState(&wOn, chainOn, blkOn.Header()); err != nil {
+				t.Errorf("block %d: on witness pre-state validation: %v", i, err)
+			}
+
+			// State proof-node parity: the snapshot path must produce the
+			// same set of trie proof nodes as the no-snapshot path. The
+			// State map's keys are RLP node blobs; equal sets = equal proof
+			// coverage.
+			if len(wOff.State) != len(wOn.State) {
+				t.Errorf("block %d: State size off=%d on=%d", i, len(wOff.State), len(wOn.State))
+			}
+			for k := range wOff.State {
+				if _, ok := wOn.State[k]; !ok {
+					t.Errorf("block %d: snapshot-on witness missing proof node present in baseline (len=%d)", i, len(k))
+					break
+				}
+			}
+			for k := range wOn.State {
+				if _, ok := wOff.State[k]; !ok {
+					t.Errorf("block %d: snapshot-on witness has proof node not in baseline (len=%d)", i, len(k))
+					break
+				}
+			}
+
+			// Headers parity: BLOCKHASH ancestor inclusion must be identical
+			// across snapshot-on/off. (For this transfer-only chain there are
+			// no BLOCKHASH ops; Headers is just [parent].)
+			if len(wOff.Headers) != len(wOn.Headers) {
+				t.Errorf("block %d: Headers length off=%d on=%d", i, len(wOff.Headers), len(wOn.Headers))
+			}
+
+			// Stateless replay parity: each chain's published witness must
+			// reconstruct state and recompute the post-state root via
+			// ProcessBlockWithWitnesses. ExecuteStateless returns an error
+			// if the recomputed root diverges from block.Root() — that's
+			// exactly the assertion we want. SetHeader installs the
+			// context header (the block being replayed) on the decoded
+			// witness, which RLP decode does not preserve. The witness's
+			// HeaderReader (used to resolve BLOCKHASH ancestor lookups) is
+			// also dropped by RLP decode, but ProcessBlockWithWitnesses
+			// falls back to the BlockChain itself when the witness has no
+			// HeaderReader set — so for in-memory test chains nothing
+			// further needs wiring here.
+			wOff.SetHeader(blkOff.Header())
+			wOn.SetHeader(blkOn.Header())
+			if _, _, err := chainOff.ProcessBlockWithWitnesses(blkOff, &wOff); err != nil {
+				t.Errorf("block %d: stateless replay (off chain witness) failed: %v", i, err)
+			}
+			if _, _, err := chainOn.ProcessBlockWithWitnesses(blkOn, &wOn); err != nil {
+				t.Errorf("block %d: stateless replay (on chain witness) failed: %v", i, err)
+			}
+		}
+	})
+}
+
+// TestPipelinedImportSRC_WarmSnapshotPreservesBlockHashAncestors mirrors
+// TestPipelinedImportSRC_WitnessIncludesBlockHashAncestors but with the
+// warm-snapshot handoff enabled. BLOCKHASH ancestor coverage is collected on
+// the execution witness during EVM execution, before SRC starts; the
+// snapshot path only changes how SRC's trie reads are served, not the
+// witness ownership chain. Therefore Headers must still extend to include
+// the BLOCKHASH-referenced ancestor, and the published witness must
+// statelessly replay.
+//
+// Runs under both HashScheme and PathScheme.
+func TestPipelinedImportSRC_WarmSnapshotPreservesBlockHashAncestors(t *testing.T) {
+	testPipelinedImportSRC_WarmSnapshotPreservesBlockHashAncestors(t, rawdb.HashScheme)
+	testPipelinedImportSRC_WarmSnapshotPreservesBlockHashAncestors(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_WarmSnapshotPreservesBlockHashAncestors(t *testing.T, scheme string) {
+	t.Run(scheme, func(t *testing.T) {
+		runWarmSnapshotBlockHashTest(t, scheme)
+	})
+}
+
+func runWarmSnapshotBlockHashTest(t *testing.T, scheme string) {
+	contractCode := []byte{0x60, 0x00, 0x40, 0x50, 0x00}
+	contractAddr := common.HexToAddress("0xb1a5cab1ec0de")
+
+	var (
+		key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr   = crypto.PubkeyToAddress(key.PublicKey)
+		funds  = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec  = &Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				addr:         {Balance: funds},
+				contractAddr: {Code: contractCode, Balance: big.NewInt(0)},
+			},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	db := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
+	genesisBlock := gspec.MustCommit(db, tdb)
+	prefix, _ := GenerateChain(gspec.Config, genesisBlock, engine, db, 1, func(i int, gen *BlockGen) {})
+
+	ctxChain, err := NewBlockChain(db, gspec, engine, DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("ctxChain: %v", err)
+	}
+	if _, err := ctxChain.InsertChain(prefix, false); err != nil {
+		t.Fatalf("ctxChain insert prefix: %v", err)
+	}
+	block2Slice, _ := GenerateChain(gspec.Config, prefix[0], engine, db, 1, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), contractAddr, big.NewInt(0), 100_000, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTxWithChain(ctxChain, tx)
+	})
+	ctxChain.Stop()
+
+	allBlocks := append(append([]*types.Block{}, prefix...), block2Slice...)
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfigWithWarmSnapshot(scheme))
+	if err != nil {
+		t.Fatalf("pipeChain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if _, err := pipeChain.InsertChain(allBlocks, true); err != nil {
+		t.Fatalf("InsertChain (snapshot=true, witness=true): %v", err)
+	}
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC: %v", err)
+	}
+
+	target := block2Slice[0]
+	encoded := pipeChain.GetWitness(target.Hash())
+	if encoded == nil {
+		t.Fatalf("block 2: witness missing from cache")
+	}
+	var w stateless.Witness
+	if err := rlp.DecodeBytes(encoded, &w); err != nil {
+		t.Fatalf("decode witness: %v", err)
+	}
+	if len(w.Headers) < 2 {
+		t.Fatalf("Headers length = %d, want >= 2 (parent + genesis from BLOCKHASH(0)) — "+
+			"warm-snapshot path must preserve BLOCKHASH ancestor coverage", len(w.Headers))
+	}
+	parentHeader := prefix[0].Header()
+	if w.Headers[0].Hash() != parentHeader.Hash() {
+		t.Errorf("Headers[0] = %s, want parent %s", w.Headers[0].Hash(), parentHeader.Hash())
+	}
+	foundGenesis := false
+	for _, h := range w.Headers {
+		if h.Number.Uint64() == 0 && h.Hash() == genesisBlock.Hash() {
+			foundGenesis = true
+			break
+		}
+	}
+	if !foundGenesis {
+		t.Errorf("Headers does not contain genesis (BLOCKHASH(0) referenced it); Headers=%d entries", len(w.Headers))
+	}
+	if err := stateless.ValidateWitnessPreState(&w, pipeChain, target.Header()); err != nil {
+		t.Errorf("ValidateWitnessPreState failed on snapshot-on witness: %v", err)
+	}
+
+	// Stateless replay: the published witness must reconstruct state
+	// (including the BLOCKHASH ancestor lookup) and recompute the same
+	// post-state root via ExecuteStateless. This is the consumer-side
+	// check that the snapshot path's witness is actually replayable, not
+	// just structurally well-formed.
+	w.SetHeader(target.Header())
+	if _, _, err := pipeChain.ProcessBlockWithWitnesses(target, &w); err != nil {
+		t.Errorf("stateless replay of snapshot-on BLOCKHASH witness failed: %v", err)
+	}
+}
+
+// TestPipelinedImportSRC_WarmSnapshotStorageTrieParity is the storage-trie
+// counterpart to the witness parity test. The snapshot reader is wrapped at
+// the database.NodeReader layer used by both account and storage tries; this
+// test specifically exercises storage-trie reads (SLOAD) and writes (SSTORE)
+// so the storage-owner branch of newSnapshotNodeDatabase / trieReader.Storage
+// is covered. A single contract is deployed with pre-populated storage; each
+// block's transaction loads a previously-set slot and writes a new one,
+// progressively growing the storage trie. The witness must include the
+// storage proof nodes touched by both the SLOAD and the SSTORE update path.
+//
+// Snapshot-off and snapshot-on import the same chain into independent
+// blockchains; per-block roots, decoded witness State sets, and stateless
+// replay must all agree. Runs under both HashScheme and PathScheme.
+func TestPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T) {
+	testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t, rawdb.HashScheme)
+	testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t, rawdb.PathScheme)
+}
+
+func testPipelinedImportSRC_WarmSnapshotStorageTrieParity(t *testing.T, scheme string) {
+	t.Run(scheme, func(t *testing.T) {
+		// Contract program:
+		//   SLOAD(NUMBER - 1) ; POP   — read a previously-set slot, forcing
+		//                               a storage-trie pre-state read whose
+		//                               proof nodes must be in the witness
+		//   SSTORE(NUMBER, NUMBER)    — write a new slot, growing the trie
+		//                               (the update walks the proof path)
+		contractCode := []byte{
+			byte(vm.PUSH1), 0x01,
+			byte(vm.NUMBER),
+			byte(vm.SUB),
+			byte(vm.SLOAD),
+			byte(vm.POP),
+			byte(vm.NUMBER),
+			byte(vm.NUMBER),
+			byte(vm.SSTORE),
+			byte(vm.STOP),
+		}
+		contractAddr := common.HexToAddress("0x5707a6e500000000000000000000000000000001")
+
+		// Pre-populate slots 0..7 in the contract's storage trie so block 1's
+		// SLOAD(0) hits a real entry rather than an empty slot, ensuring the
+		// pre-state read actually walks storage-trie nodes.
+		preStorage := make(map[common.Hash]common.Hash, 8)
+		for i := 0; i < 8; i++ {
+			preStorage[common.BigToHash(big.NewInt(int64(i)))] = common.BigToHash(big.NewInt(int64(i + 1000)))
+		}
+
+		const numBlocks = 6
+		var (
+			key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+			addr   = crypto.PubkeyToAddress(key.PublicKey)
+			funds  = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+			gspec  = &Genesis{
+				Config: params.AllEthashProtocolChanges,
+				Alloc: types.GenesisAlloc{
+					addr: {Balance: funds},
+					contractAddr: {
+						Code:    contractCode,
+						Balance: big.NewInt(0),
+						Storage: preStorage,
+					},
+				},
+				BaseFee: big.NewInt(params.InitialBaseFee),
+			}
+			signer = types.LatestSigner(gspec.Config)
+			engine = ethash.NewFaker()
+		)
+
+		_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+			tx, _ := types.SignTx(
+				types.NewTransaction(gen.TxNonce(addr), contractAddr, big.NewInt(0), 100_000, gen.header.BaseFee, nil),
+				signer, key,
+			)
+			gen.AddTx(tx)
+		})
+
+		importInto := func(t *testing.T, label string, cfg *BlockChainConfig) *BlockChain {
+			t.Helper()
+			chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, cfg)
+			if err != nil {
+				t.Fatalf("%s: NewBlockChain: %v", label, err)
+			}
+			t.Cleanup(chain.Stop)
+			if _, err := chain.InsertChain(blocks, true); err != nil {
+				t.Fatalf("%s: InsertChain: %v", label, err)
+			}
+			if err := chain.flushPendingImportSRC(); err != nil {
+				t.Fatalf("%s: flushPendingImportSRC: %v", label, err)
+			}
+			return chain
+		}
+
+		chainOff := importInto(t, "snapshot-off", pipelinedConfig(scheme))
+		chainOn := importInto(t, "snapshot-on", pipelinedConfigWithWarmSnapshot(scheme))
+
+		for i := uint64(1); i <= numBlocks; i++ {
+			blkOff := chainOff.GetBlockByNumber(i)
+			blkOn := chainOn.GetBlockByNumber(i)
+			if blkOff == nil || blkOn == nil {
+				t.Fatalf("block %d: missing on one of the chains (off=%v on=%v)", i, blkOff == nil, blkOn == nil)
+			}
+			if blkOff.Root() != blkOn.Root() {
+				t.Errorf("block %d: state root mismatch off=%s on=%s", i, blkOff.Root(), blkOn.Root())
+			}
+
+			encOff := chainOff.GetWitness(blkOff.Hash())
+			encOn := chainOn.GetWitness(blkOn.Hash())
+			if encOff == nil || encOn == nil {
+				t.Fatalf("block %d: witness missing (off=%v on=%v)", i, encOff == nil, encOn == nil)
+			}
+
+			var wOff, wOn stateless.Witness
+			if err := rlp.DecodeBytes(encOff, &wOff); err != nil {
+				t.Fatalf("block %d: decode off witness: %v", i, err)
+			}
+			if err := rlp.DecodeBytes(encOn, &wOn); err != nil {
+				t.Fatalf("block %d: decode on witness: %v", i, err)
+			}
+
+			if err := stateless.ValidateWitnessPreState(&wOff, chainOff, blkOff.Header()); err != nil {
+				t.Errorf("block %d: off witness pre-state validation: %v", i, err)
+			}
+			if err := stateless.ValidateWitnessPreState(&wOn, chainOn, blkOn.Header()); err != nil {
+				t.Errorf("block %d: on witness pre-state validation: %v", i, err)
+			}
+
+			// State proof-node parity. The snapshot path must produce the same
+			// set of trie proof nodes as the pathdb-only path. For this test
+			// the State map covers both account-trie and storage-trie nodes.
+			if len(wOff.State) != len(wOn.State) {
+				t.Errorf("block %d: State size off=%d on=%d", i, len(wOff.State), len(wOn.State))
+			}
+			for k := range wOff.State {
+				if _, ok := wOn.State[k]; !ok {
+					t.Errorf("block %d: snapshot-on witness missing proof node present in baseline (len=%d)", i, len(k))
+					break
+				}
+			}
+			for k := range wOn.State {
+				if _, ok := wOff.State[k]; !ok {
+					t.Errorf("block %d: snapshot-on witness has proof node not in baseline (len=%d)", i, len(k))
+					break
+				}
+			}
+
+			// Stateless replay parity. ExecuteStateless reconstructs the
+			// pre-state from the witness's State proof nodes (including
+			// storage subtries) and recomputes the post-state root. Failure
+			// here indicates the snapshot path served a storage-trie node
+			// whose blob disagrees with what pathdb would have served.
+			wOff.SetHeader(blkOff.Header())
+			wOn.SetHeader(blkOn.Header())
+			if _, _, err := chainOff.ProcessBlockWithWitnesses(blkOff, &wOff); err != nil {
+				t.Errorf("block %d: stateless replay (off chain witness) failed: %v", i, err)
+			}
+			if _, _, err := chainOn.ProcessBlockWithWitnesses(blkOn, &wOn); err != nil {
+				t.Errorf("block %d: stateless replay (on chain witness) failed: %v", i, err)
+			}
+		}
+	})
 }

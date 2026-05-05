@@ -668,6 +668,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.Pipeline.ImportSRCLogs,
 		Group:   "Pipeline",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "pipeline.warm-snapshot",
+		Usage:   "Enable warm-cache handoff from execution prefetcher to pipelined SRC (default false)",
+		Value:   &c.cliConfig.Pipeline.WarmSnapshot,
+		Default: c.cliConfig.Pipeline.WarmSnapshot,
+		Group:   "Pipeline",
+	})
 	f.IntFlag(&flagset.IntFlag{
 		Name:    "fdlimit",
 		Usage:   "Raise the open file descriptor resource limit (default = system fd limit)",

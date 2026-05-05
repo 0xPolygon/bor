@@ -824,6 +824,11 @@ type PipelineConfig struct {
 
 	// ImportSRCLogs enables verbose logging for pipelined import SRC
 	ImportSRCLogs bool `hcl:"import-src-logs,optional" toml:"import-src-logs,optional"`
+
+	// WarmSnapshot enables warm-cache handoff from the execution-side trie
+	// prefetcher to the pipelined SRC goroutine. Targets cold-cache
+	// restart/catch-up CPU; no effect on correctness or witness completeness.
+	WarmSnapshot bool `hcl:"warm-snapshot,optional" toml:"warm-snapshot,optional"`
 }
 
 func DefaultConfig() *Config {
@@ -1577,6 +1582,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Preimages = c.Cache.Preimages
 		n.EnablePipelinedImportSRC = c.Pipeline.EnableImportSRC
 		n.PipelinedImportSRCLogs = c.Pipeline.ImportSRCLogs
+		n.PipelinedSRCWarmSnapshot = c.Pipeline.WarmSnapshot
 		// Note that even the values set by `history.transactions` will be written in the old flag until it's removed.
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout

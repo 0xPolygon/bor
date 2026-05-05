@@ -213,6 +213,25 @@ func (db *CachingDB) TrieOnlyReader(stateRoot common.Hash) (Reader, error) {
 	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), tr), nil
 }
 
+// TrieOnlyReaderWithSnapshot is the snapshot-aware variant of TrieOnlyReader.
+// Trie reads consult the WarmSnapshot first; on miss or hash mismatch, they
+// fall through to the regular pathdb-backed reader. NewTrieOnly semantics are
+// preserved — every read still walks the trie, the trie still records into
+// its prevalueTracer, witness collection is unchanged. The snapshot only
+// short-circuits the underlying NodeReader fetch.
+//
+// A nil snapshot is equivalent to TrieOnlyReader.
+func (db *CachingDB) TrieOnlyReaderWithSnapshot(stateRoot common.Hash, snapshot *WarmSnapshot) (Reader, error) {
+	if snapshot == nil || snapshot.Len() == 0 {
+		return db.TrieOnlyReader(stateRoot)
+	}
+	tr, err := newTrieReaderWithSnapshot(stateRoot, db.triedb, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), tr), nil
+}
+
 // Reader returns a state reader associated with the specified state root.
 func (db *CachingDB) Reader(stateRoot common.Hash) (Reader, error) {
 	var readers []StateReader

@@ -328,6 +328,21 @@ type BlockChainConfig struct {
 
 	// PipelinedImportSRCLogs enables verbose logging for the import pipeline.
 	PipelinedImportSRCLogs bool
+
+	// PipelinedSRCWarmSnapshot enables a warm-cache handoff from the
+	// execution-side trie prefetcher to the pipelined SRC goroutine. When
+	// true, persistPipelinedImport captures the trie nodes the prefetcher had
+	// loaded into a quiesced WarmSnapshot and passes it to SRC; SRC's
+	// NewTrieOnly reader then consults the snapshot before falling through to
+	// pathdb. Targets the cold-cache restart/catch-up cost where the SRC
+	// goroutine repeats trie reads the prefetcher already performed.
+	//
+	// Default false. NewTrieOnly semantics, witness completeness, and root
+	// determinism are unaffected — the snapshot only short-circuits the
+	// underlying NodeReader fetch; trie walks and prevalueTracer recording
+	// fire identically whether the served node came from the snapshot or
+	// pathdb.
+	PipelinedSRCWarmSnapshot bool
 }
 
 // PipelineImportOpts configures ProcessBlock for pipelined import mode.
@@ -4528,7 +4543,7 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // trie-proof nodes during ApplyFlatDiffForCommit + CommitWithUpdate. Call
 // sites with no execution witness in scope set execWitness=nil and
 // allowOwnWitness=true to explicitly permit SRC to create its own witness.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool) {
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshot *state.WarmSnapshot) {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4539,7 +4554,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, warmSnapshot)
 }
 
 // runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
@@ -4577,7 +4592,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     prefetcher-spawned goroutine.
 //   - No terminate(true) (async) call on the SRC handoff path.
 //   - No reuse of W on the main thread after SpawnSRCGoroutine.
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool) {
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshot *state.WarmSnapshot) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	defer func() {
@@ -4603,7 +4618,7 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		return
 	}
 
-	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness)
+	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot)
 	if err != nil {
 		pending.err = err
 		return
@@ -4688,8 +4703,12 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 // CommitWithUpdate walks the MPT for hashing regardless of reader choice, so
 // the state-root computation cost is unaffected; only the pre-state reads
 // avoid cold trie traversals.
-func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness) (*state.StateDB, *stateless.Witness, error) {
+func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness, warmSnapshot *state.WarmSnapshot) (*state.StateDB, *stateless.Witness, error) {
 	if !makeWitness {
+		// Witness-off path uses the multi-reader (flat reader where
+		// available) and does not need the warm-snapshot handoff: flat
+		// readers already short-circuit pathdb diff-layer walks for hot
+		// state.
 		tmpDB, err := state.New(parentRoot, bc.statedb)
 		if err != nil {
 			log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
@@ -4697,7 +4716,14 @@ func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block,
 		}
 		return tmpDB, nil, nil
 	}
-	tmpDB, err := state.NewTrieOnly(parentRoot, bc.statedb)
+	// Witness-on path uses NewTrieOnly so every read walks the MPT and the
+	// witness captures proof-path nodes. When a warm snapshot is supplied,
+	// install a snapshot-aware reader: trie reads consult the snapshot
+	// (hash-verified) before falling through to pathdb. NewTrieOnly
+	// semantics, prevalueTracer recording, and witness completeness are
+	// unaffected — the snapshot only short-circuits the underlying
+	// NodeReader fetch.
+	tmpDB, err := state.NewTrieOnlyWithSnapshot(parentRoot, bc.statedb, warmSnapshot)
 	if err != nil {
 		log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 		return nil, nil, err
@@ -4972,9 +4998,28 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// wait to drain. Without this, every block in a multi-block batch except
 	// the last leaks its prefetcher (the deferred StopPrefetcher in
 	// insertChainWithWitnesses only fires on the final activeState).
-	statedb.StopPrefetcher()
-	// Capture the execution witness so SRC can complete it. After
-	// StopPrefetcher returns, every subfetcher goroutine has exited (sync
+	// Stop the prefetcher synchronously. When PipelinedSRCWarmSnapshot is
+	// enabled AND this block produces a witness, capture the trie nodes the
+	// prefetcher had loaded into a quiesced snapshot in the same call so SRC
+	// can avoid re-reading them from cold pebble. The snapshot is
+	// constructed AFTER the prefetcher goroutines have exited
+	// (writers-exited drain), so the source tries are quiescent and safe to
+	// read; the returned WarmSnapshot is an immutable copy with no aliasing
+	// into prefetcher state. A nil snapshot (flag off, witness-off path,
+	// no prefetcher, or no warm nodes) reduces to the pre-snapshot
+	// behaviour: SRC's NodeReader is the plain pathdb chain. The
+	// makeWitness gate matters because the witness-off SRC path uses the
+	// multi-reader (with flat reader) which doesn't consult the snapshot
+	// (see openSRCStateDB), so capturing one would burn copy + Keccak cost
+	// for no benefit.
+	var warmSnapshot *state.WarmSnapshot
+	if makeWitness && bc.cfg.PipelinedSRCWarmSnapshot {
+		warmSnapshot = statedb.StopAndSnapshotPrefetcher()
+	} else {
+		statedb.StopPrefetcher()
+	}
+	// Capture the execution witness so SRC can complete it. After the
+	// prefetcher stop above, every subfetcher goroutine has exited (sync
 	// drain via terminate(false) → <-sf.term). The trie prefetcher does not
 	// write to the witness — subfetcher.loop only populates trie-local
 	// prevalueTracer state — and the drain ordering is the structural
@@ -5017,8 +5062,10 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
 	// Import passes execWitness from execution and requires SRC to publish
 	// that same witness object. runSRCCompute hard-fails on a nil witness
-	// when allowOwnWitness=false.
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false)
+	// when allowOwnWitness=false. warmSnapshot may be nil (flag off or no
+	// warm nodes); SRC tolerates that and falls back to the plain pathdb
+	// reader chain.
+	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, warmSnapshot)
 	newPending := &pendingImportSRCState{
 		block:         block,
 		flatDiff:      flatDiff,
