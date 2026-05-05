@@ -27,6 +27,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -7326,6 +7327,271 @@ func TestPipelinedImportSRC_RootParityWitnessOnVsOff(t *testing.T) {
 		}
 		if offBatch.Root() != offSplit.Root() {
 			t.Errorf("block %d: witness-off batch vs split root mismatch %s != %s", i, offBatch.Root(), offSplit.Root())
+		}
+	}
+}
+
+// TestPipelinedImportSRC_WitnessHardFailsWithoutExecWitness verifies that
+// runSRCCompute rejects the configuration where a witness is requested but
+// none is supplied by the caller. The import path always hands the
+// EVM-populated witness through to SRC; only miner/legacy callers may set
+// allowOwnWitness=true to opt into SRC creating its own witness. Spawning
+// the SRC goroutine with makeWitness=true, execWitness=nil, and
+// allowOwnWitness=false must set pending.err.
+func TestPipelinedImportSRC_WitnessHardFailsWithoutExecWitness(t *testing.T) {
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, 1, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create chain: %v", err)
+	}
+	defer chain.Stop()
+
+	// First import a block normally so we have a committed parent root and a
+	// FlatDiff to feed the SRC. The import path's makeWitness=false is used so
+	// no witness work runs in the legitimate insertion.
+	if _, err := chain.InsertChain(blocks, false); err != nil {
+		t.Fatalf("InsertChain failed: %v", err)
+	}
+	if err := chain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC failed: %v", err)
+	}
+
+	// Now manually spawn an SRC goroutine with makeWitness=true,
+	// execWitness=nil, allowOwnWitness=false. Use a dummy FlatDiff to keep
+	// ApplyFlatDiffForCommit from being reached; runSRCCompute should error
+	// out before touching it.
+	parent := chain.GetBlockByNumber(0)
+	target := blocks[0]
+	chain.SpawnSRCGoroutine(target, parent.Root(), &state.FlatDiff{}, true, nil, false)
+
+	// Drain via the public wait API: the goroutine sets pending.err and exits.
+	chain.pendingSRCMu.Lock()
+	pending := chain.pendingSRC
+	chain.pendingSRCMu.Unlock()
+	if pending == nil {
+		t.Fatal("expected pendingSRC after SpawnSRCGoroutine")
+	}
+	pending.wg.Wait()
+
+	if pending.err == nil {
+		t.Fatal("expected pending.err to be set when execWitness=nil and allowOwnWitness=false; " +
+			"got nil — the hard-fail check is not enforcing the witness contract")
+	}
+	if !strings.Contains(pending.err.Error(), "without execution witness") {
+		t.Errorf("pending.err = %v, want error mentioning 'without execution witness'", pending.err)
+	}
+}
+
+// TestPipelinedImportSRC_WitnessIncludesBlockHashAncestors verifies that
+// BLOCKHASH opcode access during EVM execution is reflected in the witness
+// published by the pipelined SRC path.
+//
+// The pipelined import path runs EVM execution and SRC commit on different
+// goroutines but must publish a single completed witness. AddBlockHash fires
+// during execution (vm/instructions.go::opBlockhash) on the witness attached
+// to the executing StateDB; the published witness must therefore include
+// those Headers entries. BLOCKHASH ancestor coverage is checked through
+// Headers because BorWitness serialises Headers but not Codes; verifiers
+// source bytecode from local storage.
+//
+// Test setup:
+//   - Block 1: regular value transfer, no BLOCKHASH.
+//   - Block 2: calls a contract whose bytecode runs BLOCKHASH(0). At block 2
+//     this triggers Witness.AddBlockHash(0), which extends Headers to include
+//     genesis (parent=block-1 is already in Headers from NewWitness; reaching
+//     back to genesis adds the second entry).
+//
+// Generation requires a real chain context for AddTxWithChain to satisfy the
+// EVM's blockhash lookup — chain_makers.go's plain AddTx uses a fake
+// BlockChain with no headers and crashes on GetHashFn. The test builds a
+// separate ctxChain for generation, then imports all blocks into a fresh
+// pipeChain configured with pipelined SRC.
+func TestPipelinedImportSRC_WitnessIncludesBlockHashAncestors(t *testing.T) {
+	// Bytecode: PUSH1 0x00 ; BLOCKHASH ; POP ; STOP
+	// Reads the hash of block 0 (genesis), discards it. Triggers
+	// witness.AddBlockHash(0) inside vm/instructions.go::opBlockhash on
+	// whichever StateDB owns the witness at execution time.
+	contractCode := []byte{0x60, 0x00, 0x40, 0x50, 0x00}
+	contractAddr := common.HexToAddress("0xb1a5cab1ec0de")
+
+	var (
+		key, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr   = crypto.PubkeyToAddress(key.PublicKey)
+		funds  = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec  = &Genesis{
+			Config: params.AllEthashProtocolChanges,
+			Alloc: types.GenesisAlloc{
+				addr:         {Balance: funds},
+				contractAddr: {Code: contractCode, Balance: big.NewInt(0)},
+			},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	// Phase 1: Generate block 1 (no BLOCKHASH yet) using a fresh shared db
+	// that we'll reuse for ctxChain so headers are written exactly once.
+	db := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(db, triedb.HashDefaults)
+	genesisBlock := gspec.MustCommit(db, tdb)
+	prefix, _ := GenerateChain(gspec.Config, genesisBlock, engine, db, 1, func(i int, gen *BlockGen) {})
+
+	// Phase 2: Build ctxChain on the same db so BlockGen.AddTxWithChain has
+	// a real HeaderChain to satisfy the BLOCKHASH lookup in block 2.
+	ctxChain, err := NewBlockChain(db, gspec, engine, DefaultConfig().WithStateScheme(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("ctxChain: %v", err)
+	}
+	if _, err := ctxChain.InsertChain(prefix, false); err != nil {
+		t.Fatalf("ctxChain: insert prefix: %v", err)
+	}
+
+	// Phase 3: Generate block 2 with a tx that calls the contract → BLOCKHASH(0)
+	// fires during EVM execution, extending the execution witness's Headers.
+	block2Slice, _ := GenerateChain(gspec.Config, prefix[0], engine, db, 1, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), contractAddr, big.NewInt(0), 100_000, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTxWithChain(ctxChain, tx)
+	})
+	ctxChain.Stop()
+
+	allBlocks := append(append([]*types.Block{}, prefix...), block2Slice...)
+
+	// Phase 4: Fresh pipeChain, import everything with witness=true
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("pipeChain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if _, err := pipeChain.InsertChain(allBlocks, true); err != nil {
+		t.Fatalf("InsertChain (makeWitness=true): %v", err)
+	}
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC: %v", err)
+	}
+
+	// Phase 5: Decode the published witness for block 2 and verify Headers
+	// extends past parent, which is what AddBlockHash(0) records during
+	// execution.
+	target := block2Slice[0]
+	encoded := pipeChain.GetWitness(target.Hash())
+	if encoded == nil {
+		t.Fatalf("block 2: witness missing from cache")
+	}
+	var w stateless.Witness
+	if err := rlp.DecodeBytes(encoded, &w); err != nil {
+		t.Fatalf("decode witness: %v", err)
+	}
+
+	// AddBlockHash(0) walks back from parent (block 1) to genesis, so the
+	// published witness's Headers slice should have length 2: [block 1, genesis].
+	if len(w.Headers) < 2 {
+		t.Fatalf("Headers length = %d, want >= 2 (parent + genesis from BLOCKHASH(0)); "+
+			"the published witness must include execution-time AddBlockHash entries",
+			len(w.Headers))
+	}
+
+	parentHeader := prefix[0].Header()
+	if w.Headers[0].Hash() != parentHeader.Hash() {
+		t.Errorf("Headers[0] = %s, want parent (block 1) %s", w.Headers[0].Hash(), parentHeader.Hash())
+	}
+	foundGenesis := false
+	for _, h := range w.Headers {
+		if h.Number.Uint64() == 0 && h.Hash() == genesisBlock.Hash() {
+			foundGenesis = true
+			break
+		}
+	}
+	if !foundGenesis {
+		t.Errorf("Headers does not contain genesis (BLOCKHASH(0) referenced it); Headers=%d entries", len(w.Headers))
+	}
+
+	if err := stateless.ValidateWitnessPreState(&w, pipeChain, target.Header()); err != nil {
+		t.Errorf("ValidateWitnessPreState failed on the published witness: %v", err)
+	}
+}
+
+// TestPipelinedImportSRC_WitnessEncodeDecodeRoundtrip verifies that pipelined
+// witnesses encode-decode cleanly and pass canonical pre-state validation,
+// covering the basic shared-witness contract: the same Witness object that
+// EVM execution populated must round-trip through RLP and validate.
+func TestPipelinedImportSRC_WitnessEncodeDecodeRoundtrip(t *testing.T) {
+	const numBlocks = 3
+	var (
+		key, _    = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		addr      = crypto.PubkeyToAddress(key.PublicKey)
+		recipient = common.HexToAddress("0x00000000000000000000000000000000deadbeef")
+		funds     = new(big.Int).Mul(big.NewInt(1000), big.NewInt(params.Ether))
+		gspec     = &Genesis{
+			Config:  params.AllEthashProtocolChanges,
+			Alloc:   types.GenesisAlloc{addr: {Balance: funds}},
+			BaseFee: big.NewInt(params.InitialBaseFee),
+		}
+		signer = types.LatestSigner(gspec.Config)
+		engine = ethash.NewFaker()
+	)
+
+	_, blocks, _ := GenerateChainWithGenesis(gspec, engine, numBlocks, func(i int, gen *BlockGen) {
+		tx, _ := types.SignTx(
+			types.NewTransaction(gen.TxNonce(addr), recipient, big.NewInt(1000), params.TxGas, gen.header.BaseFee, nil),
+			signer, key,
+		)
+		gen.AddTx(tx)
+	})
+
+	pipeChain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, pipelinedConfig(rawdb.HashScheme))
+	if err != nil {
+		t.Fatalf("failed to create pipeline chain: %v", err)
+	}
+	defer pipeChain.Stop()
+
+	if _, err := pipeChain.InsertChain(blocks, true); err != nil {
+		t.Fatalf("InsertChain (makeWitness=true) failed: %v", err)
+	}
+	if err := pipeChain.flushPendingImportSRC(); err != nil {
+		t.Fatalf("flushPendingImportSRC failed: %v", err)
+	}
+
+	for i := uint64(1); i <= numBlocks; i++ {
+		block := pipeChain.GetBlockByNumber(i)
+		encoded := pipeChain.GetWitness(block.Hash())
+		if encoded == nil {
+			t.Fatalf("block %d: witness missing from cache", i)
+		}
+		var w stateless.Witness
+		if err := rlp.DecodeBytes(encoded, &w); err != nil {
+			t.Fatalf("block %d: decode witness: %v", i, err)
+		}
+		if len(w.Headers) == 0 {
+			t.Errorf("block %d: decoded witness has no Headers", i)
+		}
+		if err := stateless.ValidateWitnessPreState(&w, pipeChain, block.Header()); err != nil {
+			t.Errorf("block %d: ValidateWitnessPreState failed: %v", i, err)
 		}
 	}
 }

@@ -181,8 +181,10 @@ func (w *worker) spawnSRCForFinalBlock(finalHeader *types.Header, rootN common.H
 		return
 	}
 	tmpBlock := types.NewBlockWithHeader(finalHeader)
-	// Miner pipeline always produces witnesses for now; gating is import-side only.
-	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff, true)
+	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
+	// explicitly permits SRC to create its own witness when no execution
+	// witness is handed in by the caller.
+	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff, true, nil, true)
 	w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
 }
 
@@ -424,8 +426,10 @@ func (s *specSession) setupInitial() bool {
 	// Done AFTER Prepare to avoid a trie DB race with fallbackToSequential's
 	// inline FinalizeAndAssemble on the same parent root.
 	tmpBlock := types.NewBlockWithHeader(s.req.parentHeader)
-	// Miner pipeline always produces witnesses for now; gating is import-side only.
-	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff, true)
+	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
+	// explicitly permits SRC to create its own witness when no execution
+	// witness is handed in by the caller.
+	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff, true, nil, true)
 
 	specState, err := s.w.chain.StateAtWithFlatDiff(s.req.parentRoot, s.req.flatDiff)
 	if err != nil {
@@ -768,8 +772,10 @@ func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, f
 func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff *state.FlatDiff) time.Time {
 	srcSpawnTime := time.Now()
 	tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
-	// Miner pipeline always produces witnesses for now; gating is import-side only.
-	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true)
+	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
+	// explicitly permits SRC to create its own witness when no execution
+	// witness is handed in by the caller.
+	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true, nil, true)
 	s.w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), s.rootN, common.Hash{})
 	if s.w.config.PipelinedSRCLogs {
 		log.Info("Pipelined SRC: spawned SRC, starting speculative exec", "srcBlock", s.nextBlockNumber, "specExecBlock", s.nextBlockNumber+1)

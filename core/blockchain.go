@@ -4515,11 +4515,20 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 
 // SpawnSRCGoroutine launches a background goroutine that computes the actual
 // state root for block by replaying flatDiff on top of parentRoot. When
-// makeWitness is true, the goroutine also produces a stateless witness;
-// when false, witness creation, FlatDiff read-surface preload, and witness
-// encoding are all skipped — only deferred state-root validation runs.
-// The result is stored in pending.root; pending.wg is decremented when finished.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool) {
+// makeWitness is true, the goroutine also completes (or, for legacy call
+// sites, produces) a stateless witness; when false, witness work, FlatDiff
+// read-surface preload, and witness encoding are all skipped — only deferred
+// state-root validation runs. The result is stored in pending.root;
+// pending.wg is decremented when finished.
+//
+// Witness ownership (when makeWitness=true) follows the LINEAR OWNERSHIP
+// INVARIANT documented at runSRCCompute. The import path passes execWitness =
+// the witness already populated by EVM execution (AddCode + AddBlockHash)
+// with allowOwnWitness=false; SRC then completes that single witness with
+// trie-proof nodes during ApplyFlatDiffForCommit + CommitWithUpdate. Call
+// sites with no execution witness in scope set execWitness=nil and
+// allowOwnWitness=true to explicitly permit SRC to create its own witness.
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool) {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4530,7 +4539,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness)
 }
 
 // runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
@@ -4541,7 +4550,34 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 // and witness encoding are skipped — only deferred root validation runs. All
 // observable side effects (pending.root, pending.err, pending.witness,
 // witness cache) happen here before wg.Done().
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool) {
+//
+// LINEAR OWNERSHIP INVARIANT for the execution witness W:
+//
+//  1. The main thread writes to W during ProcessBlock:
+//     - AddCode via statedb.go (GetCode/GetCodeSize on contract calls)
+//     - AddBlockHash via vm/instructions.go (BLOCKHASH opcode)
+//     - AddState via statedb.go Finalise/IntermediateRoot reads
+//  2. The trie prefetcher does not write to W — subfetcher.loop only
+//     populates trie-local prevalueTracer state. terminate(false)'s
+//     writers-exited semantics (trie_prefetcher.go: <-sf.term gated on
+//     loop's `defer close(sf.term)`) provide the ordering guarantee should
+//     that ever change.
+//  3. StopPrefetcher() runs synchronously in persistPipelinedImport before
+//     this goroutine is spawned. After StopPrefetcher returns, every
+//     subfetcher goroutine has exited.
+//  4. The main thread hands W to this goroutine via SpawnSRCGoroutine and
+//     never touches W again — it moves on to the next block with a fresh
+//     witness.
+//  5. This goroutine writes to W during ApplyFlatDiffForCommit +
+//     CommitWithUpdate, then encodes via encodeAndCachePendingWitness. The
+//     cached bytes are immutable thereafter.
+//
+// The invariant requires:
+//   - No AddState / AddCode / AddBlockHash call site reachable from a
+//     prefetcher-spawned goroutine.
+//   - No terminate(true) (async) call on the SRC handoff path.
+//   - No reuse of W on the main thread after SpawnSRCGoroutine.
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	defer func() {
@@ -4551,7 +4587,23 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		}
 	}()
 
-	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness)
+	// Hard-fail when a caller asked for a witness but did not hand one in.
+	// allowOwnWitness=true is the explicit opt-in for call sites that want
+	// SRC to create its own witness. Without it, the caller's contract is
+	// that the published witness is the same object EVM execution populated,
+	// preserving execution-time entries such as BLOCKHASH headers. BorWitness
+	// encoding intentionally excludes Codes (see core/stateless/encoding.go),
+	// so bytecode entries collected on the in-memory witness are not part of
+	// the canonical Bor witness wire format.
+	if makeWitness && execWitness == nil && !allowOwnWitness {
+		pending.err = fmt.Errorf(
+			"pipelined SRC witness requested without execution witness: block=%d hash=%s allowOwnWitness=false",
+			block.NumberU64(), block.Hash(),
+		)
+		return
+	}
+
+	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness)
 	if err != nil {
 		pending.err = err
 		return
@@ -4618,10 +4670,25 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 //     flat reader being present. Root-consistency between readers at an
 //     in-memory committed root is validated by the parity tests.
 //
+// Witness ownership when makeWitness=true:
+//
+//   - execWitness != nil: caller hands in the witness already populated by
+//     EVM execution (AddCode + AddBlockHash + execution-time AddState). SRC
+//     reuses it by attaching it to tmpDB so subsequent AddState calls during
+//     ApplyFlatDiffForCommit and CommitWithUpdate land in the same object.
+//   - execWitness == nil: only legal for call sites that opted in via
+//     allowOwnWitness=true at the SpawnSRCGoroutine call site. SRC creates
+//     its own witness, which contains only entries collected by the SRC path.
+//     Callers that require execution-time witness entries must pass
+//     execWitness != nil (enforced at the top of runSRCCompute).
+//
+// BorWitness serialises Headers and State only. Codes collected on the
+// in-memory witness are not part of the canonical Bor witness wire format.
+//
 // CommitWithUpdate walks the MPT for hashing regardless of reader choice, so
 // the state-root computation cost is unaffected; only the pre-state reads
 // avoid cold trie traversals.
-func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool) (*state.StateDB, *stateless.Witness, error) {
+func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block, makeWitness bool, execWitness *stateless.Witness) (*state.StateDB, *stateless.Witness, error) {
 	if !makeWitness {
 		tmpDB, err := state.New(parentRoot, bc.statedb)
 		if err != nil {
@@ -4635,12 +4702,18 @@ func (bc *BlockChain) openSRCStateDB(parentRoot common.Hash, block *types.Block,
 		log.Error("Pipelined SRC: failed to open tmpDB", "parentRoot", parentRoot, "err", err)
 		return nil, nil, err
 	}
-	witness, witnessErr := stateless.NewWitness(block.Header(), bc)
-	if witnessErr != nil {
-		log.Warn("Pipelined SRC: failed to create witness", "block", block.NumberU64(), "err", witnessErr)
-	} else {
-		tmpDB.SetWitness(witness)
+	witness := execWitness
+	if witness == nil {
+		// Miner / legacy fallback only; runSRCCompute already rejected this
+		// branch for the import path via the allowOwnWitness check.
+		newWitness, witnessErr := stateless.NewWitness(block.Header(), bc)
+		if witnessErr != nil {
+			log.Warn("Pipelined SRC: failed to create witness", "block", block.NumberU64(), "err", witnessErr)
+			return tmpDB, nil, nil
+		}
+		witness = newWitness
 	}
+	tmpDB.SetWitness(witness)
 	return tmpDB, witness, nil
 }
 
@@ -4900,6 +4973,17 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// the last leaks its prefetcher (the deferred StopPrefetcher in
 	// insertChainWithWitnesses only fires on the final activeState).
 	statedb.StopPrefetcher()
+	// Capture the execution witness so SRC can complete it. After
+	// StopPrefetcher returns, every subfetcher goroutine has exited (sync
+	// drain via terminate(false) → <-sf.term). The trie prefetcher does not
+	// write to the witness — subfetcher.loop only populates trie-local
+	// prevalueTracer state — and the drain ordering is the structural
+	// guarantee that must be preserved if that ever changes. See LINEAR
+	// OWNERSHIP INVARIANT at runSRCCompute.
+	var execWitness *stateless.Witness
+	if makeWitness {
+		execWitness = statedb.Witness()
+	}
 	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
 	committedRoot, err := bc.collectPrevImportSRCIfAny(block, parent)
 	if err != nil {
@@ -4931,7 +5015,10 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	}
 
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness)
+	// Import passes execWitness from execution and requires SRC to publish
+	// that same witness object. runSRCCompute hard-fails on a nil witness
+	// when allowOwnWitness=false.
+	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false)
 	newPending := &pendingImportSRCState{
 		block:         block,
 		flatDiff:      flatDiff,
