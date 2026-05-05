@@ -510,6 +510,81 @@ func TestVerifyScheduledProducerDeferredWhenHeaderUnknown(t *testing.T) {
 	}
 }
 
+// TestHandleSignedWitnessAnnouncementsBadSigDoesNotMarkAnnounceKnown is the
+// regression for the verification-ordering bug: handleSignedWitnessAnnouncements
+// must not mark a peer as announce-known until the announcement has passed the
+// signature/producer-binding gate. The previous order called
+// peer.AddKnownAnnounce(hash) unconditionally before acceptSignedAnnouncement,
+// so a peer relaying a structurally invalid announcement still became
+// announce-known for that hash. Two bad consequences flowed from that:
+//   - this node refused to ever relay a *valid* later announcement back to that
+//     peer for the same hash, leaving them unable to recover;
+//   - this node short-circuited its own re-evaluation paths when a good
+//     announcement for the same hash arrived from another peer, because the
+//     original sender's announce-known bit served as a relay-suppression hint.
+//
+// Using a structurally invalid signature (length 3) is sufficient to drive the
+// reject path through verifySignedAnnouncement → strikeWit2Peer without needing
+// a bor engine or block header.
+func TestHandleSignedWitnessAnnouncementsBadSigDoesNotMarkAnnounceKnown(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	blockHash := common.HexToHash("0xfeedface")
+	ann := wit.SignedWitnessAnnouncement{
+		BlockHash:   blockHash,
+		BlockNumber: 1,
+		WitnessHash: common.HexToHash("0xc0ffee"),
+		Signature:   []byte{0x00, 0x01, 0x02}, // structurally invalid
+	}
+
+	if err := witH.handleSignedWitnessAnnouncements(peer, []wit.SignedWitnessAnnouncement{ann}); err != nil {
+		t.Fatalf("handleSignedWitnessAnnouncements: %v", err)
+	}
+
+	if peer.KnownAnnounceContainsHash(blockHash) {
+		t.Fatal("peer marked announce-known despite invalid signature; verification ordering is broken")
+	}
+	if _, ok := h.handler.signedWitnesses.get(blockHash); ok {
+		t.Fatal("signed announcement cached despite invalid signature")
+	}
+}
+
+// TestPendingWitnessBodyCacheGetEvictsExpired pins the leak fix for the TTL
+// path. Before the fix, get() returned false on expiry but left the entry in
+// the map; gcLocked only ran from put(), so a node that stopped receiving new
+// witnesses retained up to capacity (10) full witness blobs (~50 MiB each)
+// indefinitely, producing a long-lived OOM risk under bursty traffic.
+//
+// The contract this test enforces: any get() that observes an expired entry
+// MUST delete it in place so memory pressure does not persist past the TTL.
+func TestPendingWitnessBodyCacheGetEvictsExpired(t *testing.T) {
+	c := newPendingWitnessBodyCache(4)
+	hash := common.HexToHash("0xfade")
+	c.put(hash, []byte("expensive-body"), common.HexToHash("0xab"))
+
+	// Force the entry's receivedAt back beyond the TTL, mirroring the same
+	// approach used by TestSignedWitnessCacheTTLExpiry above.
+	c.mu.Lock()
+	c.entries[hash].receivedAt = time.Now().Add(-2 * wit2AnnounceTTL)
+	c.mu.Unlock()
+
+	if _, _, ok := c.get(hash); ok {
+		t.Fatal("expired entry must not be returned")
+	}
+
+	c.mu.RLock()
+	entriesAfter := len(c.entries)
+	c.mu.RUnlock()
+	if entriesAfter != 0 {
+		t.Fatalf("expired entry must be deleted on get; len(entries)=%d, want 0", entriesAfter)
+	}
+}
+
 // TestVerifyScheduledProducerRejectsBlockNumberMismatch covers the case where
 // the local header is present but disagrees with the announce on block
 // number. This is a confirmed bad announce and the caller must strike, so

@@ -8,7 +8,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
@@ -26,65 +25,60 @@ func blockAnnounceForTest(origin string, hash common.Hash, number uint64) *block
 	}
 }
 
-// TestProcessWitnessResponseDropsOnHashMismatch is the load-bearing safety
-// guarantee for WIT2 pre-import serving: a peer that returns bytes whose
-// keccak256 doesn't match the BP-signed witnessHash must be dropped, even
-// if every other check passes.
+// TestProcessWitnessResponseDoesNotDropOnByteMismatch encodes the post-
+// adversarial-review safety policy: when the served witness bytes do not
+// match the BP-signed witnessHash on file, the manager must back off and
+// retry, but it MUST NOT drop the byte-server. The accepted announcement
+// only proves *some* BP signed *some* hash — not that the hash matches the
+// canonical witness. A faulty or malicious scheduled producer that signs a
+// bogus hash would otherwise weaponise this code path to disconnect every
+// honest peer serving the real witness.
 //
-// Without this, a malicious server could pollute downstream relayers with
-// bytes the BP never committed to, and the relayers would face state-root
-// failures during execution that they cannot attribute to the right party.
-func TestProcessWitnessResponseDropsOnHashMismatch(t *testing.T) {
+// The mismatched bytes are still rejected (not cached for serving), and the
+// pending state stays alive with a fresh back-off so another peer (or another
+// announcement) gets a chance. Blame-pinning belongs at execution time, where
+// import-side validation can attribute fault to signer vs. server vs. caller.
+func TestProcessWitnessResponseDoesNotDropOnByteMismatch(t *testing.T) {
 	tw := newTestWitnessManager()
 	defer tw.Close()
 
 	block := createTestBlock(101)
 	hash := block.Hash()
 
-	// Prepare a "correct" witness that the BP signed over.
-	correct := createTestWitnessForBlock(block)
-	var buf bytes.Buffer
-	if err := correct.EncodeRLP(&buf); err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	signedWitnessHash := stateless.WitnessCommitHash(buf.Bytes())
+	// The honest server returns the canonical witness for this block — its
+	// keccak commitment is `canonical`.
+	canonical := createTestWitnessForBlock(block)
 
-	// The peer will return a different witness — same block number, but
-	// the trie differs, producing different bytes and a different hash.
-	differentHeader := types.CopyHeader(block.Header())
-	differentHeader.GasUsed = 999_999_999
-	differentBlock := types.NewBlockWithHeader(differentHeader)
-	rogueWitness := createTestWitnessForBlock(differentBlock)
-
-	// Inject the signed-witness lookup so processWitnessResponse uses it.
+	// Simulate a malicious / faulty BP that signed a bogus, unrelated hash.
+	// processWitnessResponse will see canonical bytes whose hash does not
+	// match what parentSignedWitnessHash reports.
+	rogueSignedHash := common.HexToHash("0xdeadbeef")
 	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
 		if h == hash {
-			return signedWitnessHash, true
+			return rogueSignedHash, true
 		}
 		return common.Hash{}, false
 	}
 
-	// Seed pending state so the failure handler back-off path is exercised.
 	tw.manager.mu.Lock()
 	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "rogue", block: block},
-		announce: blockAnnounceForTest("rogue", hash, block.NumberU64()),
+		op:       &blockOrHeaderInject{origin: "honest", block: block},
+		announce: blockAnnounceForTest("honest", hash, block.NumberU64()),
 	}
 	tw.manager.mu.Unlock()
 
-	// Fabricate the response container expected by processWitnessResponse.
 	res := &eth.Response{
 		Time: time.Millisecond,
 		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{rogueWitness},
+		Res:  []*stateless.Witness{canonical},
 	}
 
-	tw.manager.processWitnessResponse("rogue", hash, res, time.Now())
+	tw.manager.processWitnessResponse("honest-server", hash, res, time.Now())
 
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if len(tw.droppedPeers) != 1 || tw.droppedPeers[0] != "rogue" {
-		t.Fatalf("expected the lying peer to be dropped, got drops=%v", tw.droppedPeers)
+	if len(tw.droppedPeers) != 0 {
+		t.Fatalf("byte-server must not be dropped on signed-hash mismatch (BP may have signed bogus); drops=%v", tw.droppedPeers)
 	}
 }
 

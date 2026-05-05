@@ -168,13 +168,22 @@ func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit
 	}
 
 	for _, ann := range anns {
-		// Sender saw this announcement; suppress relay back to them. Do NOT
-		// mark them as a body-holder — they may be relaying without bytes.
-		peer.AddKnownAnnounce(ann.BlockHash)
-
 		if !h.acceptSignedAnnouncement(peer, ann) {
+			// Verification failed (bad signature, signer ≠ producer, or
+			// header not yet local). MUST NOT mark the sender as
+			// announce-known: doing so would (a) suppress our own later
+			// re-relay back to this peer if we receive a valid version of
+			// the same hash from someone else, and (b) leave us no path
+			// to recover from a header-arrival race once a re-gossip for
+			// the same hash arrives. Recovery on this branch relies on
+			// re-receipt, which the empty knownAnnounces set permits.
 			continue
 		}
+
+		// Sender produced a valid announcement; suppress relay back to them.
+		// Do NOT mark them as a body-holder — they may be relaying without
+		// bytes. Body fetches are gated on knownWitnesses, set elsewhere.
+		peer.AddKnownAnnounce(ann.BlockHash)
 
 		// Cache + dedup. Skip relay if we've already relayed this hash recently.
 		if !h.signedWitnesses.putIfNewer(ann) {

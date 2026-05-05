@@ -723,9 +723,18 @@ func (m *witnessManager) verifyAgainstSignedHash(peer string, hash common.Hash, 
 	actual := stateless.WitnessCommitHash(encoded)
 	if actual != expected {
 		witnessByteMismatchMeter.Mark(1)
-		log.Warn("[wm] Witness bytes do not match BP-signed hash; dropping peer",
+		// We cannot blame the byte-server on signed-hash disagreement alone:
+		// the announcement only proves *some* BP signed *some* hash. A faulty
+		// or malicious scheduled producer that signed a bogus hash would
+		// otherwise weaponise this path to disconnect every honest peer
+		// serving the canonical witness. Reject the bytes (don't cache for
+		// serving), back off the pending request so another peer/announcement
+		// gets tried, and let import-time execution validation pin blame.
+		// TODO(wit2): wire signer-quarantine once the manager has access to
+		// (signer, announcement-relayer) provenance from the handler.
+		log.Warn("[wm] Witness bytes do not match BP-signed hash; not caching, retrying with another peer",
 			"peer", peer, "block", hash, "expected", expected, "actual", actual)
-		m.handleWitnessFetchFailureExt(hash, peer, errors.New("witness hash mismatch"), false)
+		m.handleWitnessFetchFailureExt(hash, "", errors.New("witness hash mismatch"), false)
 		return nil, common.Hash{}, false
 	}
 	return encoded, expected, true

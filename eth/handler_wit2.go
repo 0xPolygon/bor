@@ -194,14 +194,27 @@ func (c *pendingWitnessBodyCache) put(blockHash common.Hash, bytes []byte, witne
 
 func (c *pendingWitnessBodyCache) get(blockHash common.Hash) ([]byte, common.Hash, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	e, ok := c.entries[blockHash]
 	if !ok {
+		c.mu.RUnlock()
 		return nil, common.Hash{}, false
 	}
 	if time.Since(e.receivedAt) > wit2AnnounceTTL {
+		// Expired: drop the large byte slice now rather than waiting for the
+		// next put() to gc. Without this, a node that stops receiving witness
+		// bodies retains up to capacity (10) ~50MB blobs indefinitely past the
+		// TTL, since gcLocked() only fires on put().
+		c.mu.RUnlock()
+		c.mu.Lock()
+		// Re-check under the write lock: a concurrent put() may have replaced
+		// the entry with a fresh one we should not delete.
+		if cur, ok2 := c.entries[blockHash]; ok2 && cur == e {
+			delete(c.entries, blockHash)
+		}
+		c.mu.Unlock()
 		return nil, common.Hash{}, false
 	}
+	c.mu.RUnlock()
 	return e.bytes, e.witnessHash, true
 }
 
