@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -32,21 +33,75 @@ func protoHashToCommon(h *commonproto.H256) (common.Hash, error) {
 const maxBlockInfoBatchSize = 256
 
 func (s *Server) GetRootHash(ctx context.Context, req *protobor.GetRootHashRequest) (*protobor.GetRootHashResponse, error) {
+	// Pre-validate the request so malformed inputs surface as
+	// codes.InvalidArgument instead of being passed to the backend (which
+	// would return them as the default codes.Unknown).
+	if req.EndBlockNumber < req.StartBlockNumber {
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end < start")
+	}
+	if req.EndBlockNumber > math.MaxInt64 {
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end exceeds max int64")
+	}
+
 	rootHash, err := s.backend.APIBackend.GetRootHash(ctx, req.StartBlockNumber, req.EndBlockNumber)
 	if err != nil {
-		return nil, err
+		return nil, mapBorAPIError(err)
 	}
 
 	return &protobor.GetRootHashResponse{RootHash: rootHash}, nil
 }
 
 func (s *Server) GetVoteOnHash(ctx context.Context, req *protobor.GetVoteOnHashRequest) (*protobor.GetVoteOnHashResponse, error) {
+	if req.EndBlockNumber < req.StartBlockNumber {
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end < start")
+	}
+	if req.EndBlockNumber > math.MaxInt64 {
+		return nil, status.Error(codes.InvalidArgument, "invalid range: end exceeds max int64")
+	}
+	if req.Hash == "" {
+		return nil, status.Error(codes.InvalidArgument, "hash is required")
+	}
+	if req.MilestoneId == "" {
+		return nil, status.Error(codes.InvalidArgument, "milestone id is required")
+	}
+
 	vote, err := s.backend.APIBackend.GetVoteOnHash(ctx, req.StartBlockNumber, req.EndBlockNumber, req.Hash, req.MilestoneId)
 	if err != nil {
-		return nil, err
+		return nil, mapBorAPIError(err)
 	}
 
 	return &protobor.GetVoteOnHashResponse{Response: vote}, nil
+}
+
+// mapBorAPIError translates the most common backend error sentinels emitted by
+// EthAPIBackend.GetRootHash / GetVoteOnHash into canonical gRPC status codes.
+// Unknown errors are wrapped as codes.Internal instead of default codes.Unknown,
+// so clients can distinguish what went wrong.
+func mapBorAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	// Already a gRPC status (e.g., from a nested handler) — pass through.
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	msg := err.Error()
+	switch {
+	case msg == "Only available in Bor engine":
+		// Server is misconfigured / not running bor consensus.
+		return status.Error(codes.FailedPrecondition, msg)
+	case msg == "unknown block":
+		return status.Error(codes.NotFound, msg)
+	case msg == "end block number is out of safe range":
+		return status.Error(codes.OutOfRange, msg)
+	case msg == "failed to get end block", msg == "failed to get tip confirmation block":
+		return status.Error(codes.NotFound, msg)
+	case strings.HasPrefix(msg, "Failed to get end block for bor in range"),
+		strings.HasPrefix(msg, "hash mismatch"):
+		return status.Error(codes.InvalidArgument, msg)
+	default:
+		return status.Error(codes.Internal, msg)
+	}
 }
 
 func headerToProtoBorHeader(h *types.Header) *protobor.Header {

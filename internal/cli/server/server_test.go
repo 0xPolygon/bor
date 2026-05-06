@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	protobor "github.com/0xPolygon/polyproto/bor"
-	commonproto "github.com/0xPolygon/polyproto/common"
 	protoutil "github.com/0xPolygon/polyproto/utils"
 )
 
@@ -366,7 +365,3 @@ func TestWithGRPCListener(t *testing.T) {
 	// listener so the test doesn't leak.
 	srv.grpcServer.GracefulStop()
 }
-
-// silence unused-import warnings if the heavy test is selectively skipped.
-var _ = commonproto.H256{}
-

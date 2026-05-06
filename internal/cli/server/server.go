@@ -84,6 +84,13 @@ func init() {
 
 func WithGRPCAddress() serverOption {
 	return func(srv *Server, config *Config) error {
+		// readConfigFile may leave config.GRPC nil when the HCL/TOML config
+		// omits the [grpc] block. Treat that as "gRPC disabled" instead of
+		// dereferencing into a panic at startup.
+		if config.GRPC == nil {
+			log.Info("gRPC server disabled (no [grpc] block in config)")
+			return nil
+		}
 		addr := config.GRPC.Addr
 		if addr == "" {
 			log.Info("gRPC server disabled (grpc.addr is empty)")
