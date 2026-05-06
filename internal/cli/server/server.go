@@ -99,7 +99,7 @@ func WithGRPCAddress() serverOption {
 		// Mirror heimdall's client-side posture: warn (don't block) when the
 		// operator opts into a non-loopback bind without a bearer token. The
 		// startup log entry is what operators are expected to act on.
-		if config.GRPC.Token == "" && !isLoopbackHostPort(addr) {
+		if config.GRPC.Token == "" && !IsLoopbackHostPort(addr) {
 			log.Warn(
 				"Starting unauthenticated gRPC server on non-loopback address; "+
 					"set --grpc.token / BOR_GRPC_TOKEN to require authentication.",
@@ -110,9 +110,9 @@ func WithGRPCAddress() serverOption {
 	}
 }
 
-// isLoopbackHostPort reports whether hostport refers to a loopback host. It
+// IsLoopbackHostPort reports whether hostport refers to a loopback host. It
 // returns false for wildcard binds (":3131", "0.0.0.0:3131", "[::]:3131").
-func isLoopbackHostPort(hostport string) bool {
+func IsLoopbackHostPort(hostport string) bool {
 	host, _, err := net.SplitHostPort(hostport)
 	if err != nil {
 		host = hostport
@@ -502,7 +502,7 @@ func (s *Server) gRPCServerByListener(listener net.Listener) error {
 // auth-rejected attempts. Rejected attempts are logged, successful calls are
 // logged at Trace, rejections at Debug.
 func (s *Server) combinedUnaryInterceptor() grpc.UnaryServerInterceptor {
-	token := s.config.GRPC.Token
+	token := s.tokenForInterceptor()
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if token != "" {
 			if err := authenticate(ctx, token); err != nil {
@@ -522,7 +522,7 @@ func (s *Server) combinedUnaryInterceptor() grpc.UnaryServerInterceptor {
 // unary calls. Logging behavior matches combinedUnaryInterceptor: rejected
 // auth at Debug, successful stream duration at Trace.
 func (s *Server) combinedStreamInterceptor() grpc.StreamServerInterceptor {
-	token := s.config.GRPC.Token
+	token := s.tokenForInterceptor()
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if token != "" {
 			if err := authenticate(ss.Context(), token); err != nil {
@@ -535,6 +535,18 @@ func (s *Server) combinedStreamInterceptor() grpc.StreamServerInterceptor {
 		log.Trace("Stream", "method", info.FullMethod, "duration", time.Since(start), "error", err)
 		return err
 	}
+}
+
+// tokenForInterceptor returns the configured bearer token, or empty when no
+// [grpc] block exists in the config. Empty disables auth — callers like
+// gRPCServerByListener may run with a partial Config (e.g., tests, embedders),
+// so reading s.config.GRPC.Token directly would nil-deref. Mirrors the same
+// "missing block = disabled" treatment WithGRPCAddress applies.
+func (s *Server) tokenForInterceptor() string {
+	if s.config == nil || s.config.GRPC == nil {
+		return ""
+	}
+	return s.config.GRPC.Token
 }
 
 // authenticate validates the bearer token in the gRPC metadata against the

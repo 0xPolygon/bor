@@ -9,6 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	borconsensus "github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"google.golang.org/grpc/codes"
@@ -85,6 +87,17 @@ func mapBorAPIError(err error) error {
 	if _, ok := status.FromError(err); ok {
 		return err
 	}
+	// Struct-typed errors come first: their messages contain dynamic %d
+	// fields, so equality matching against the message string can never hit
+	// them. Walk wrapped chains via errors.As.
+	var invalidRange *valset.InvalidStartEndBlockError
+	if errors.As(err, &invalidRange) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	var rangeTooLong *borconsensus.MaxCheckpointLengthExceededError
+	if errors.As(err, &rangeTooLong) {
+		return status.Error(codes.OutOfRange, err.Error())
+	}
 	msg := err.Error()
 	switch {
 	case msg == "Only available in Bor engine":
@@ -96,8 +109,7 @@ func mapBorAPIError(err error) error {
 		return status.Error(codes.OutOfRange, msg)
 	case msg == "failed to get end block", msg == "failed to get tip confirmation block":
 		return status.Error(codes.NotFound, msg)
-	case strings.HasPrefix(msg, "Failed to get end block for bor in range"),
-		strings.HasPrefix(msg, "hash mismatch"):
+	case strings.HasPrefix(msg, "hash mismatch"):
 		return status.Error(codes.InvalidArgument, msg)
 	default:
 		return status.Error(codes.Internal, msg)

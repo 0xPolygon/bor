@@ -356,9 +356,9 @@ func TestWithGRPCListener(t *testing.T) {
 	require.NoError(t, err)
 
 	opt := WithGRPCListener(lis)
-	// gRPCServerByListener registers interceptors that read s.config.GRPC.Token.
-	// Provide a minimal config so combinedUnaryInterceptor doesn't panic.
-	srv := &Server{config: &Config{GRPC: &GRPCConfig{}}}
+	// Server with no [grpc] block: tokenForInterceptor handles the nil case
+	// internally, so the option must succeed without manual scaffolding.
+	srv := &Server{}
 	require.NoError(t, opt(srv, &Config{}))
 	require.NotNil(t, srv.grpcServer, "WithGRPCListener must wire grpcServer")
 	// GracefulStop drains the in-flight serve goroutine and closes the

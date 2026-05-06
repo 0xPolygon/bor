@@ -272,6 +272,15 @@ func (m *Meta2) Conn() (*grpc.ClientConn, error) {
 
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if token != "" {
+		// Symmetric with heimdall's client-side guarantee: refuse to send the
+		// bearer token in cleartext to a non-loopback peer.
+		if !server.IsLoopbackHostPort(m.addr) {
+			return nil, fmt.Errorf(
+				"refusing to send bearer token to non-loopback address %q over plaintext; "+
+					"use --address with a loopback host (e.g. 127.0.0.1:3131) or extend the CLI with TLS support",
+				m.addr,
+			)
+		}
 		opts = append(opts, grpc.WithPerRPCCredentials(bearerCreds{token: token}))
 	}
 

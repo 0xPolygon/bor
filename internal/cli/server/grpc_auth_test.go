@@ -233,7 +233,7 @@ func TestIsLoopbackHostPort(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.hostport, func(t *testing.T) {
 			t.Parallel()
-			require.Equal(t, tc.want, isLoopbackHostPort(tc.hostport))
+			require.Equal(t, tc.want, IsLoopbackHostPort(tc.hostport))
 		})
 	}
 }

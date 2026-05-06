@@ -2,14 +2,19 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	borconsensus "github.com/ethereum/go-ethereum/consensus/bor"
+	"github.com/ethereum/go-ethereum/consensus/bor/valset"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -386,16 +391,144 @@ func TestHandlersInputValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("GetRootHash rejects end < start", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetRootHash(ctx, &protobor.GetRootHashRequest{StartBlockNumber: 100, EndBlockNumber: 50})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetRootHash rejects end > MaxInt64", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetRootHash(ctx, &protobor.GetRootHashRequest{StartBlockNumber: 1, EndBlockNumber: math.MaxInt64 + 1})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetVoteOnHash rejects end < start", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetVoteOnHash(ctx, &protobor.GetVoteOnHashRequest{
+			StartBlockNumber: 100, EndBlockNumber: 50,
+			Hash: "0x0", MilestoneId: "m",
+		})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetVoteOnHash rejects end > MaxInt64", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetVoteOnHash(ctx, &protobor.GetVoteOnHashRequest{
+			StartBlockNumber: 1, EndBlockNumber: math.MaxInt64 + 1,
+			Hash: "0x0", MilestoneId: "m",
+		})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetVoteOnHash rejects empty hash", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetVoteOnHash(ctx, &protobor.GetVoteOnHashRequest{
+			StartBlockNumber: 1, EndBlockNumber: 2,
+			Hash: "", MilestoneId: "m",
+		})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetVoteOnHash rejects empty milestone id", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetVoteOnHash(ctx, &protobor.GetVoteOnHashRequest{
+			StartBlockNumber: 1, EndBlockNumber: 2,
+			Hash: "0x0", MilestoneId: "",
+		})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
 	t.Run("GetAuthor rejects invalid number", func(t *testing.T) {
 		t.Parallel()
-		// Already covered by TestGetAuthor_InvalidBlockNumber, but kept here
-		// to assert the canonical gRPC code rather than just non-nil err.
 		_, err := srv.GetAuthor(ctx, &protobor.GetAuthorRequest{Number: "0xZZ"})
 		st, ok := status.FromError(err)
 		if !ok || st.Code() != codes.InvalidArgument {
 			t.Fatalf("want InvalidArgument, got %v", err)
 		}
 	})
+}
+
+// TestMapBorAPIError covers the canonical-code mapping for both struct-typed
+// errors (which carry %d-formatted dynamic messages and so cannot be matched
+// by string equality) and the literal sentinels.
+func TestMapBorAPIError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"nil passes through", nil, codes.OK},
+		{"already a status code is preserved",
+			status.Error(codes.PermissionDenied, "x"), codes.PermissionDenied},
+		{"InvalidStartEndBlockError → InvalidArgument",
+			&valset.InvalidStartEndBlockError{Start: 100, End: 50_000, CurrentHeader: 1000},
+			codes.InvalidArgument},
+		{"MaxCheckpointLengthExceededError → OutOfRange",
+			&borconsensus.MaxCheckpointLengthExceededError{Start: 0, End: 50_000},
+			codes.OutOfRange},
+		{"engine missing → FailedPrecondition",
+			errors.New("Only available in Bor engine"), codes.FailedPrecondition},
+		{"unknown block → NotFound",
+			errors.New("unknown block"), codes.NotFound},
+		{"end-block out of safe range → OutOfRange",
+			errors.New("end block number is out of safe range"), codes.OutOfRange},
+		{"failed to get end block → NotFound",
+			errors.New("failed to get end block"), codes.NotFound},
+		{"failed to get tip confirmation block → NotFound",
+			errors.New("failed to get tip confirmation block"), codes.NotFound},
+		{"hash mismatch prefix → InvalidArgument",
+			fmt.Errorf("hash mismatch: localChainHash 0xaa, milestoneHash 0xbb"), codes.InvalidArgument},
+		{"unknown error → Internal (not Unknown)",
+			errors.New("totally novel failure"), codes.Internal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mapBorAPIError(tc.err)
+			if tc.want == codes.OK {
+				require.Nil(t, got)
+				return
+			}
+			st, ok := status.FromError(got)
+			require.True(t, ok, "expected gRPC status, got %v", got)
+			require.Equal(t, tc.want, st.Code(), "msg=%s", st.Message())
+		})
+	}
+}
+
+// TestFetchBlockInfo_BlockNumOverflow exercises the defensive uint64→int64
+// guard. Reaching it from GetBlockInfoInBatch is impossible (the outer cap
+// catches MaxInt64 first), so we call fetchBlockInfo directly.
+func TestFetchBlockInfo_BlockNumOverflow(t *testing.T) {
+	t.Parallel()
+	srv := &Server{}
+	_, ok, err := srv.fetchBlockInfo(context.Background(), uint64(math.MaxInt64)+1)
+	require.False(t, ok)
+	require.Error(t, err)
+	st, sok := status.FromError(err)
+	require.True(t, sok)
+	require.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 // TestBlockToProtoBlock confirms the pure converter delegates to the header
