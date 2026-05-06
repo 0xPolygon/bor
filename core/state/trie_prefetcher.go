@@ -110,16 +110,19 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 //
 // Returns nil when called on a nil receiver, an already-closed prefetcher
 // without subfetchers, or when no subfetcher loaded any nodes — callers must
-// tolerate a nil result.
-func (p *triePrefetcher) snapshotWarmNodes() []TrieWarmNodes {
+// tolerate a nil result. The stats return describes the subfetcher count and
+// warm-node mix observed while collecting the maps.
+func (p *triePrefetcher) snapshotWarmNodes() ([]TrieWarmNodes, PrefetcherSnapshotStats) {
+	var stats PrefetcherSnapshotStats
 	if p == nil {
-		return nil
+		return nil, stats
 	}
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 
+	stats.Fetchers = len(p.fetchers)
 	if len(p.fetchers) == 0 {
-		return nil
+		return nil, stats
 	}
 	out := make([]TrieWarmNodes, 0, len(p.fetchers))
 	for _, fetcher := range p.fetchers {
@@ -127,9 +130,23 @@ func (p *triePrefetcher) snapshotWarmNodes() []TrieWarmNodes {
 		if len(nodes) == 0 {
 			continue
 		}
+		stats.LoadedFetchers++
+		var bytes int
+		for _, blob := range nodes {
+			bytes += len(blob)
+		}
+		if fetcher.owner == (common.Hash{}) {
+			stats.AccountFetchers++
+			stats.AccountNodes += len(nodes)
+			stats.AccountBytes += bytes
+		} else {
+			stats.StorageFetchers++
+			stats.StorageNodes += len(nodes)
+			stats.StorageBytes += bytes
+		}
 		out = append(out, TrieWarmNodes{Owner: fetcher.owner, Nodes: nodes})
 	}
-	return out
+	return out, stats
 }
 
 // terminate iterates over all the subfetchers and issues a termination request

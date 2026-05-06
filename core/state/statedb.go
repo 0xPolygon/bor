@@ -576,6 +576,25 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
+// PrefetcherSnapshotStats describes the synchronous phases and warm-node mix
+// observed while stopping and snapshotting a trie prefetcher.
+type PrefetcherSnapshotStats struct {
+	Drain   time.Duration
+	Collect time.Duration
+	Build   time.Duration
+	Report  time.Duration
+
+	Fetchers        int
+	LoadedFetchers  int
+	AccountFetchers int
+	StorageFetchers int
+
+	AccountNodes int
+	StorageNodes int
+	AccountBytes int
+	StorageBytes int
+}
+
 // StopAndSnapshotPrefetcher terminates a running prefetcher synchronously,
 // captures the trie nodes its subfetchers had loaded into a quiesced
 // snapshot, then reports stats and clears the prefetcher reference. The
@@ -591,24 +610,48 @@ func (s *StateDB) StopPrefetcher() {
 //     writer remains. Quiescent state guarantees the read is race-free.
 //  3. report — emit metrics from the same fetchers (unchanged from
 //     StopPrefetcher).
-//  4. nil out s.prefetcher — releases the prefetcher for GC.
+//  4. nil out s.prefetcher — detach the StateDB from the prefetcher.
+//  5. NewWarmSnapshot — copy/hash the collected trie-node blobs into an
+//     immutable snapshot. The local collected maps keep the source nodes alive
+//     until this copy finishes.
 //
 // Returns nil when no prefetcher is installed or the snapshot would be
 // empty (no subfetchers loaded any nodes). Callers must tolerate a nil
 // snapshot and treat it as "no warm data; fall through to the underlying
-// reader for every node".
-func (s *StateDB) StopAndSnapshotPrefetcher() *WarmSnapshot {
+// reader for every node". The returned stats are populated even when the
+// snapshot is nil, as long as a prefetcher existed.
+func (s *StateDB) StopAndSnapshotPrefetcher() (*WarmSnapshot, PrefetcherSnapshotStats) {
+	var stats PrefetcherSnapshotStats
 	if s.prefetcher == nil {
-		return nil
+		return nil, stats
 	}
+	phaseStart := time.Now()
 	s.prefetcher.terminate(false)
-	tries := s.prefetcher.snapshotWarmNodes()
+	stats.Drain = time.Since(phaseStart)
+
+	phaseStart = time.Now()
+	tries, snapshotStats := s.prefetcher.snapshotWarmNodes()
+	stats.Collect = time.Since(phaseStart)
+	stats.Fetchers = snapshotStats.Fetchers
+	stats.LoadedFetchers = snapshotStats.LoadedFetchers
+	stats.AccountFetchers = snapshotStats.AccountFetchers
+	stats.StorageFetchers = snapshotStats.StorageFetchers
+	stats.AccountNodes = snapshotStats.AccountNodes
+	stats.StorageNodes = snapshotStats.StorageNodes
+	stats.AccountBytes = snapshotStats.AccountBytes
+	stats.StorageBytes = snapshotStats.StorageBytes
+
+	phaseStart = time.Now()
 	s.prefetcher.report()
+	stats.Report = time.Since(phaseStart)
 	s.prefetcher = nil
 	if len(tries) == 0 {
-		return nil
+		return nil, stats
 	}
-	return NewWarmSnapshot(tries)
+	phaseStart = time.Now()
+	snapshot := NewWarmSnapshot(tries)
+	stats.Build = time.Since(phaseStart)
+	return snapshot, stats
 }
 
 // ResetPrefetcher cleans the prefetcher from a State, commonly used in tempStates to track witness while no impacting block building

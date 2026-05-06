@@ -175,18 +175,28 @@ var (
 	// pipelined/collect covers only the wait, and the parity chain/execution
 	// timer wraps the entire persistPipelinedImport (which includes that wait),
 	// so neither pinpoints the cheap exec on its own.
-	pipelineImportCheapExecTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
-	pipelineImportCheapValidationTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
-	pipelineImportPostExecTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
-	pipelineImportPrefetchStopTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop", nil)
-	pipelineImportCommitSnapshotTimer  = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
-	pipelineImportStateSyncFeedTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
-	pipelineImportReorgCheckTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/reorg_check", nil)
-	pipelineImportSetFlatDiffTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/set_flatdiff", nil)
-	pipelineImportWriteHeadTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/write_head", nil)
-	pipelineImportSpawnSRCTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/spawn_src", nil)
-	pipelineImportWarmSnapshotNodes    = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
-	pipelineImportWarmSnapshotBytes    = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportCheapExecTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
+	pipelineImportCheapValidationTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
+	pipelineImportPostExecTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
+	pipelineImportPrefetchStopTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop", nil)
+	pipelineImportPrefetchDrainTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop/drain", nil)
+	pipelineImportPrefetchReportTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop/report", nil)
+	pipelineImportCommitSnapshotTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
+	pipelineImportStateSyncFeedTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
+	pipelineImportReorgCheckTimer          = metrics.NewRegisteredTimer("chain/imports/pipelined/reorg_check", nil)
+	pipelineImportSetFlatDiffTimer         = metrics.NewRegisteredTimer("chain/imports/pipelined/set_flatdiff", nil)
+	pipelineImportWriteHeadTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/write_head", nil)
+	pipelineImportSpawnSRCTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/spawn_src", nil)
+	pipelineImportWarmSnapshotCollect      = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/collect", nil)
+	pipelineImportWarmSnapshotBuild        = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/build", nil)
+	pipelineImportWarmSnapshotFetchers     = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/fetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportPrefetchSubfetchers      = metrics.NewRegisteredHistogram("chain/imports/pipelined/prefetch_stop/subfetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotNodes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotBytes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotAccountNodes = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/account_nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotStorageNodes = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/storage_nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotAccountBytes = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/account_bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotStorageBytes = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/storage_bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
 
 	// Normal import phase timers. These mirror the pipelined phase timers enough
 	// to compare the "Imported new chain segment" elapsed breakdown between
@@ -5031,6 +5041,10 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // not part of ProcessBlock itself.
 type pipelinedImportPersistTimings struct {
 	prefetchStop   time.Duration
+	prefetchDrain  time.Duration
+	prefetchReport time.Duration
+	warmCollect    time.Duration
+	warmBuild      time.Duration
 	commitSnapshot time.Duration
 	collect        time.Duration
 	stateSyncFeed  time.Duration
@@ -5042,6 +5056,12 @@ type pipelinedImportPersistTimings struct {
 
 	warmSnapshotNodes int
 	warmSnapshotBytes int
+	warmAccountNodes  int
+	warmStorageNodes  int
+	warmAccountBytes  int
+	warmStorageBytes  int
+	warmFetchers      int
+	prefetchFetchers  int
 }
 
 // persistPipelinedImport handles the post-ProcessBlock work for a pipelined
@@ -5080,17 +5100,43 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// (see openSRCStateDB), so capturing one would burn copy + Keccak cost
 	// for no benefit.
 	var warmSnapshot *state.WarmSnapshot
+	var snapshotStats state.PrefetcherSnapshotStats
+	warmSnapshotEnabled := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
 	phaseStart := time.Now()
-	if makeWitness && bc.cfg.PipelinedSRCWarmSnapshot {
-		warmSnapshot = statedb.StopAndSnapshotPrefetcher()
+	if warmSnapshotEnabled {
+		warmSnapshot, snapshotStats = statedb.StopAndSnapshotPrefetcher()
 	} else {
 		statedb.StopPrefetcher()
 	}
 	timings.prefetchStop = time.Since(phaseStart)
+	timings.prefetchDrain = snapshotStats.Drain
+	timings.warmCollect = snapshotStats.Collect
+	timings.warmBuild = snapshotStats.Build
+	timings.prefetchReport = snapshotStats.Report
+	timings.warmFetchers = snapshotStats.LoadedFetchers
+	timings.prefetchFetchers = snapshotStats.Fetchers
+	timings.warmAccountNodes = snapshotStats.AccountNodes
+	timings.warmStorageNodes = snapshotStats.StorageNodes
+	timings.warmAccountBytes = snapshotStats.AccountBytes
+	timings.warmStorageBytes = snapshotStats.StorageBytes
 	pipelineImportPrefetchStopTimer.Update(timings.prefetchStop)
+	if warmSnapshotEnabled {
+		pipelineImportPrefetchDrainTimer.Update(snapshotStats.Drain)
+		pipelineImportWarmSnapshotCollect.Update(snapshotStats.Collect)
+		pipelineImportWarmSnapshotBuild.Update(snapshotStats.Build)
+		pipelineImportPrefetchReportTimer.Update(snapshotStats.Report)
+		pipelineImportPrefetchSubfetchers.Update(int64(snapshotStats.Fetchers))
+		pipelineImportWarmSnapshotFetchers.Update(int64(snapshotStats.LoadedFetchers))
+		pipelineImportWarmSnapshotAccountNodes.Update(int64(snapshotStats.AccountNodes))
+		pipelineImportWarmSnapshotStorageNodes.Update(int64(snapshotStats.StorageNodes))
+		pipelineImportWarmSnapshotAccountBytes.Update(int64(snapshotStats.AccountBytes))
+		pipelineImportWarmSnapshotStorageBytes.Update(int64(snapshotStats.StorageBytes))
+	}
 	if warmSnapshot != nil {
 		timings.warmSnapshotNodes = warmSnapshot.Len()
 		timings.warmSnapshotBytes = warmSnapshot.SizeBytes()
+	}
+	if warmSnapshotEnabled {
 		pipelineImportWarmSnapshotNodes.Update(int64(timings.warmSnapshotNodes))
 		pipelineImportWarmSnapshotBytes.Update(int64(timings.warmSnapshotBytes))
 	}
@@ -5202,8 +5248,18 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 		"validation", common.PrettyDuration(validation),
 		"postExec", common.PrettyDuration(timings.total),
 		"prefetchStop", common.PrettyDuration(timings.prefetchStop),
+		"prefetchDrain", common.PrettyDuration(timings.prefetchDrain),
+		"warmCollect", common.PrettyDuration(timings.warmCollect),
+		"warmBuild", common.PrettyDuration(timings.warmBuild),
+		"prefetchReport", common.PrettyDuration(timings.prefetchReport),
+		"prefetchFetchers", timings.prefetchFetchers,
+		"warmFetchers", timings.warmFetchers,
 		"warmNodes", timings.warmSnapshotNodes,
 		"warmBytes", common.StorageSize(timings.warmSnapshotBytes),
+		"warmAccountNodes", timings.warmAccountNodes,
+		"warmStorageNodes", timings.warmStorageNodes,
+		"warmAccountBytes", common.StorageSize(timings.warmAccountBytes),
+		"warmStorageBytes", common.StorageSize(timings.warmStorageBytes),
 		"commitSnapshot", common.PrettyDuration(timings.commitSnapshot),
 		"collect", common.PrettyDuration(timings.collect),
 		"stateSyncFeed", common.PrettyDuration(timings.stateSyncFeed),
