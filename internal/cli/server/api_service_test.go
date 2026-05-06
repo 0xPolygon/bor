@@ -9,6 +9,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	protobor "github.com/0xPolygon/polyproto/bor"
 	commonproto "github.com/0xPolygon/polyproto/common"
@@ -212,6 +215,208 @@ func TestGetBlockInfoInBatch_SizeGateBoundary(t *testing.T) {
 			t.Fatalf("expected size-gate error message, got: %v", err)
 		}
 	})
+}
+
+// TestProtoHashToCommon covers every branch of the H256 → common.Hash decoder.
+// All branches happen before any backend access, so they're exercised with
+// just the plain function — no Server needed.
+func TestProtoHashToCommon(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil outer pointer returns InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := protoHashToCommon(nil)
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("nil Hi returns InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		valid := protoutil.ConvertHashToH256(common.HexToHash("0x01"))
+		bad := &commonproto.H256{Hi: nil, Lo: valid.Lo}
+		_, err := protoHashToCommon(bad)
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("nil Lo returns InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		valid := protoutil.ConvertHashToH256(common.HexToHash("0x02"))
+		bad := &commonproto.H256{Hi: valid.Hi, Lo: nil}
+		_, err := protoHashToCommon(bad)
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("valid H256 round-trips to the same hash", func(t *testing.T) {
+		t.Parallel()
+		want := common.HexToHash("0xdeadbeefcafebabe112233445566778899aabbccddeeff00112233445566778899")
+		out, err := protoHashToCommon(protoutil.ConvertHashToH256(want))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out != want {
+			t.Fatalf("hash mismatch: got %x want %x", out, want)
+		}
+	})
+}
+
+// TestGetRpcBlockNumberFromString covers every tag plus invalid and overflow
+// branches of the helper that every block-number-taking handler funnels
+// through.
+func TestGetRpcBlockNumberFromString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		input   string
+		want    rpc.BlockNumber
+		wantErr codes.Code
+	}{
+		{"latest", "latest", rpc.LatestBlockNumber, codes.OK},
+		{"earliest", "earliest", rpc.EarliestBlockNumber, codes.OK},
+		{"pending", "pending", rpc.PendingBlockNumber, codes.OK},
+		{"finalized", "finalized", rpc.FinalizedBlockNumber, codes.OK},
+		{"safe", "safe", rpc.SafeBlockNumber, codes.OK},
+		{"hex zero", "0x0", rpc.BlockNumber(0), codes.OK},
+		{"hex value", "0x2a", rpc.BlockNumber(42), codes.OK},
+		{"not a number", "garbage", 0, codes.InvalidArgument},
+		{"missing 0x prefix", "42", 0, codes.InvalidArgument},
+		// math.MaxInt64 + 1 in hex = 0x8000000000000000.
+		{"overflow int64", "0x8000000000000000", 0, codes.InvalidArgument},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := getRpcBlockNumberFromString(tc.input)
+			if tc.wantErr == codes.OK {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if got != tc.want {
+					t.Fatalf("got %d want %d", got, tc.want)
+				}
+				return
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != tc.wantErr {
+				t.Fatalf("want code %v, got err %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestHandlersInputValidation walks every gRPC handler that runs input
+// validation BEFORE touching the backend. We pass invalid inputs and assert
+// the canonical gRPC code; the backend pointer stays nil because validation
+// short-circuits before any deref. This is the slice of patch coverage that
+// doesn't need a real *eth.Ethereum.
+func TestHandlersInputValidation(t *testing.T) {
+	t.Parallel()
+	srv := &Server{}
+	ctx := context.Background()
+
+	t.Run("HeaderByNumber rejects invalid number", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.HeaderByNumber(ctx, &protobor.GetHeaderByNumberRequest{Number: "not-hex"})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("BlockByNumber rejects invalid number", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.BlockByNumber(ctx, &protobor.GetBlockByNumberRequest{Number: "0xZZ"})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("TransactionReceipt rejects nil hash", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.TransactionReceipt(ctx, &protobor.ReceiptRequest{Hash: nil})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("BorBlockReceipt rejects nil hash", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.BorBlockReceipt(ctx, &protobor.ReceiptRequest{Hash: nil})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetTdByHash rejects nil hash", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetTdByHash(ctx, &protobor.GetTdByHashRequest{Hash: nil})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetTdByHash rejects H256 with nil Hi", func(t *testing.T) {
+		t.Parallel()
+		valid := protoutil.ConvertHashToH256(common.HexToHash("0x01"))
+		_, err := srv.GetTdByHash(ctx, &protobor.GetTdByHashRequest{Hash: &commonproto.H256{Hi: nil, Lo: valid.Lo}})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetTdByNumber rejects invalid number", func(t *testing.T) {
+		t.Parallel()
+		_, err := srv.GetTdByNumber(ctx, &protobor.GetTdByNumberRequest{Number: "0xZZ"})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+
+	t.Run("GetAuthor rejects invalid number", func(t *testing.T) {
+		t.Parallel()
+		// Already covered by TestGetAuthor_InvalidBlockNumber, but kept here
+		// to assert the canonical gRPC code rather than just non-nil err.
+		_, err := srv.GetAuthor(ctx, &protobor.GetAuthorRequest{Number: "0xZZ"})
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.InvalidArgument {
+			t.Fatalf("want InvalidArgument, got %v", err)
+		}
+	})
+}
+
+// TestBlockToProtoBlock confirms the pure converter delegates to the header
+// converter unchanged — no backend needed.
+func TestBlockToProtoBlock(t *testing.T) {
+	t.Parallel()
+
+	header := &types.Header{
+		Number:     big.NewInt(7),
+		Difficulty: big.NewInt(1),
+		GasLimit:   30_000_000,
+		Time:       1_700_000_000,
+	}
+	block := types.NewBlockWithHeader(header)
+	pb := blockToProtoBlock(block)
+	if pb == nil || pb.Header == nil {
+		t.Fatalf("nil result: %+v", pb)
+	}
+	if pb.Header.Number != 7 {
+		t.Fatalf("number mismatch: got %d want 7", pb.Header.Number)
+	}
 }
 
 // protoHeaderToEthHeaderLocal is the test-side inverse of headerToProtoBorHeader.
