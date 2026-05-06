@@ -21,8 +21,6 @@ env:
 
 jobs:
   build-bor:
-    # Fork PRs cannot get OIDC tokens/secrets required by setup, so skip early.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,8 +41,6 @@ jobs:
           retention-days: 1
 
   build-heimdall-v2:
-    # Fork PRs cannot get OIDC tokens/secrets required by setup, so skip early.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -68,8 +64,6 @@ jobs:
           retention-days: 1
 
   e2e-tests:
-    # Fork PRs cannot get OIDC tokens/secrets required by setup, so skip early.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     needs:
       - build-bor
       - build-heimdall-v2
