@@ -19,8 +19,20 @@ package state
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb/database"
+)
+
+var (
+	// These meters are intentionally emitted from snapshotNodeReader.Node so
+	// hit/miss attribution includes every trie-node fetch SRC attempts. If this
+	// shows up in CPU profiles, batch these counts per block and emit them once
+	// from the import handoff instead.
+	warmSnapshotAccountHitMeter  = metrics.NewRegisteredMeter("chain/imports/pipelined/warm_snapshot/account/hit", nil)
+	warmSnapshotAccountMissMeter = metrics.NewRegisteredMeter("chain/imports/pipelined/warm_snapshot/account/miss", nil)
+	warmSnapshotStorageHitMeter  = metrics.NewRegisteredMeter("chain/imports/pipelined/warm_snapshot/storage/hit", nil)
+	warmSnapshotStorageMissMeter = metrics.NewRegisteredMeter("chain/imports/pipelined/warm_snapshot/storage/miss", nil)
 )
 
 // WarmSnapshot is an immutable, hash-verified copy of trie nodes loaded by the
@@ -100,6 +112,20 @@ func (s *WarmSnapshot) Len() int {
 		return 0
 	}
 	return len(s.nodes)
+}
+
+// SizeBytes returns the total retained trie-node blob bytes. It intentionally
+// excludes map/key overhead; use it as a stable payload-size signal rather than
+// a precise heap-size estimate.
+func (s *WarmSnapshot) SizeBytes() int {
+	if s == nil {
+		return 0
+	}
+	var size int
+	for _, blob := range s.nodes {
+		size += len(blob)
+	}
+	return size
 }
 
 // Lookup returns the cached trie-node blob for (owner, path, expectedHash) if
@@ -297,7 +323,17 @@ type snapshotNodeReader struct {
 
 func (r *snapshotNodeReader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	if blob, ok := r.snapshot.Lookup(owner, path, hash); ok {
+		if owner == (common.Hash{}) {
+			warmSnapshotAccountHitMeter.Mark(1)
+		} else {
+			warmSnapshotStorageHitMeter.Mark(1)
+		}
 		return blob, nil
+	}
+	if owner == (common.Hash{}) {
+		warmSnapshotAccountMissMeter.Mark(1)
+	} else {
+		warmSnapshotStorageMissMeter.Mark(1)
 	}
 	return r.inner.Node(owner, path, hash)
 }

@@ -157,6 +157,7 @@ var (
 
 	// Pipelined import SRC metrics
 	pipelineImportBlocksCounter       = metrics.NewRegisteredCounter("chain/imports/pipelined/blocks", nil)
+	pipelineImportTotalTimer          = metrics.NewRegisteredTimer("chain/imports/pipelined/total", nil)
 	pipelineImportSRCTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/src", nil)
 	pipelineImportCollectTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/collect", nil)
 	pipelineImportFallbackCounter     = metrics.NewRegisteredCounter("chain/imports/pipelined/fallback", nil)
@@ -174,7 +175,27 @@ var (
 	// pipelined/collect covers only the wait, and the parity chain/execution
 	// timer wraps the entire persistPipelinedImport (which includes that wait),
 	// so neither pinpoints the cheap exec on its own.
-	pipelineImportCheapExecTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
+	pipelineImportCheapExecTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
+	pipelineImportCheapValidationTimer = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
+	pipelineImportPostExecTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
+	pipelineImportPrefetchStopTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop", nil)
+	pipelineImportCommitSnapshotTimer  = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
+	pipelineImportStateSyncFeedTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
+	pipelineImportReorgCheckTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/reorg_check", nil)
+	pipelineImportSetFlatDiffTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/set_flatdiff", nil)
+	pipelineImportWriteHeadTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/write_head", nil)
+	pipelineImportSpawnSRCTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/spawn_src", nil)
+	pipelineImportWarmSnapshotNodes    = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportWarmSnapshotBytes    = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
+
+	// Normal import phase timers. These mirror the pipelined phase timers enough
+	// to compare the "Imported new chain segment" elapsed breakdown between
+	// develop-style import and pipelined import.
+	normalImportTotalTimer      = metrics.NewRegisteredTimer("chain/imports/normal/total", nil)
+	normalImportProcessTimer    = metrics.NewRegisteredTimer("chain/imports/normal/process", nil)
+	normalImportValidationTimer = metrics.NewRegisteredTimer("chain/imports/normal/validation", nil)
+	normalImportReorgCheckTimer = metrics.NewRegisteredTimer("chain/imports/normal/reorg_check", nil)
+	normalImportWriteTimer      = metrics.NewRegisteredTimer("chain/imports/normal/write", nil)
 
 	// Auto-collection phase timers. The auto-collection goroutine runs
 	// asynchronously after persistPipelinedImport returns:
@@ -199,8 +220,12 @@ var (
 	pipelineSRCPreloadSlotsPerAccountHistogram = metrics.NewRegisteredHistogram("chain/pipelined/src/preload/slots_per_account", nil, metrics.NewExpDecaySample(1028, 0.015))
 
 	// Throughput histograms (mode-agnostic — emitted from both normal and pipelined import paths).
-	gasUsedPerBlockHistogram = metrics.NewRegisteredHistogram("chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
-	txsPerBlockHistogram     = metrics.NewRegisteredHistogram("chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	gasUsedPerBlockHistogram      = metrics.NewRegisteredHistogram("chain/gas_used_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	txsPerBlockHistogram          = metrics.NewRegisteredHistogram("chain/txs_per_block", nil, metrics.NewExpDecaySample(1028, 0.015))
+	importSegmentBlocksHistogram  = metrics.NewRegisteredHistogram("chain/imports/segment/blocks", nil, metrics.NewExpDecaySample(1028, 0.015))
+	importSegmentElapsedTimer     = metrics.NewRegisteredTimer("chain/imports/segment/elapsed", nil)
+	importSegmentGasUsedHistogram = metrics.NewRegisteredHistogram("chain/imports/segment/gas_used", nil, metrics.NewExpDecaySample(1028, 0.015))
+	importSegmentMgaspsHistogram  = metrics.NewRegisteredHistogram("chain/imports/segment/mgasps", nil, metrics.NewExpDecaySample(1028, 0.015))
 	// Witness size histogram in bytes. Spikes here directly drive stateless-peer bandwidth cost.
 	witnessSizeBytesHistogram = metrics.NewRegisteredHistogram("chain/witness/size_bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
 	// End-to-end import timer: from block processing start until the witness is
@@ -222,6 +247,11 @@ const (
 	blockCacheLimit    = 256
 	receiptsCacheLimit = 1024
 	txLookupCacheLimit = 1024
+
+	slowImportBlockThreshold    = time.Second
+	slowImportPostExecThreshold = 500 * time.Millisecond
+	slowImportCollectThreshold  = 100 * time.Millisecond
+	slowImportSnapshotThreshold = 100 * time.Millisecond
 
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
@@ -3295,8 +3325,13 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		cheapExecStart := time.Now()
 		receipts, logs, usedGas, statedb, vtime, err := bc.ProcessBlock(block, parent, witness, &followupInterrupt, pipeOpts)
+		cheapExecElapsed := time.Since(cheapExecStart)
 		if pipelineActive {
-			pipelineImportCheapExecTimer.UpdateSince(cheapExecStart)
+			pipelineImportCheapExecTimer.Update(cheapExecElapsed)
+			pipelineImportCheapValidationTimer.Update(vtime)
+		} else {
+			normalImportProcessTimer.Update(cheapExecElapsed)
+			normalImportValidationTimer.Update(vtime)
 		}
 		bc.statedb.TrieDB().SetReadBackend(nil)
 		bc.statedb.EnableSnapInReader()
@@ -3320,7 +3355,7 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 
 		// --- Pipelined import: extract FlatDiff, collect previous SRC, write metadata, spawn SRC ---
 		if pipelineActive {
-			adjustBack, err := bc.persistPipelinedImport(block, parent, statedb, receipts, logs, start, computeWitness)
+			adjustBack, err := bc.persistPipelinedImport(block, parent, statedb, receipts, logs, start, cheapExecElapsed, vtime, computeWitness)
 			if err != nil {
 				followupInterrupt.Store(true)
 				idx := it.index
@@ -3384,7 +3419,10 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		// available sometime before) and the block turns out to be invalid (i.e. not
 		// honouring the milestone or checkpoint). Use the block itself as current block
 		// so that it's considered as a `past` chain and the validation doesn't get bypassed.
+		reorgCheckStart := time.Now()
 		isValid, err = bc.forker.ValidateReorg(block.Header(), []*types.Header{block.Header()})
+		reorgCheckElapsed := time.Since(reorgCheckStart)
+		normalImportReorgCheckTimer.Update(reorgCheckElapsed)
 		if err != nil {
 			return nil, it.index, err
 		}
@@ -3399,6 +3437,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		} else {
 			status, err = bc.writeBlockAndSetHead(block, receipts, logs, statedb, false, false)
 		}
+		writeElapsed := time.Since(wstart)
+		normalImportWriteTimer.Update(writeElapsed)
 
 		followupInterrupt.Store(true)
 
@@ -3416,6 +3456,8 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 		blockWriteTimer.Update(time.Since(wstart) - statedb.AccountCommits - statedb.StorageCommits - statedb.SnapshotCommits - statedb.TrieDBCommits)
 		elapsedNormal := time.Since(start)
 		blockInsertTimer.Update(elapsedNormal)
+		normalImportTotalTimer.Update(elapsedNormal)
+		bc.logSlowNormalImport(block, cheapExecElapsed, vtime, reorgCheckElapsed, writeElapsed, elapsedNormal, statedb)
 		gasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
 		txsPerBlockHistogram.Update(int64(len(block.Transactions())))
 		if elapsedNormal > 0 {
@@ -4984,6 +5026,24 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 	return validator.ValidateState(block, statedb, res, false)
 }
 
+// pipelinedImportPersistTimings captures the synchronous post-execution phases
+// that are included in the "Imported new chain segment" elapsed time but are
+// not part of ProcessBlock itself.
+type pipelinedImportPersistTimings struct {
+	prefetchStop   time.Duration
+	commitSnapshot time.Duration
+	collect        time.Duration
+	stateSyncFeed  time.Duration
+	reorgCheck     time.Duration
+	setFlatDiff    time.Duration
+	writeHead      time.Duration
+	spawnSRC       time.Duration
+	total          time.Duration
+
+	warmSnapshotNodes int
+	warmSnapshotBytes int
+}
+
 // persistPipelinedImport handles the post-ProcessBlock work for a pipelined
 // imported block: extract FlatDiff, collect any still-pending SRC from the
 // previous block, publish the state-sync feed, write block metadata
@@ -4991,7 +5051,14 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // start auto-collection. adjustBack=true signals the caller to decrement
 // it.index when returning the error (because the failure belongs to the
 // previously pending block, not the current one).
-func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.Header, statedb *state.StateDB, receipts []*types.Receipt, logs []*types.Log, start time.Time, makeWitness bool) (adjustBack bool, err error) {
+func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.Header, statedb *state.StateDB, receipts []*types.Receipt, logs []*types.Log, start time.Time, cheapExec, validation time.Duration, makeWitness bool) (adjustBack bool, err error) {
+	persistStart := time.Now()
+	timings := pipelinedImportPersistTimings{}
+	defer func() {
+		timings.total = time.Since(persistStart)
+		pipelineImportPostExecTimer.Update(timings.total)
+		bc.logSlowPipelinedImport(block, time.Since(start), cheapExec, validation, timings, statedb)
+	}()
 	// The pipelined path doesn't commit this StateDB; the SRC goroutine opens
 	// its own NewTrieOnly tmpDB. Stop the prefetcher *before* CommitSnapshot
 	// so Finalise can't queue more prefetch tasks that we'd then synchronously
@@ -5013,10 +5080,19 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// (see openSRCStateDB), so capturing one would burn copy + Keccak cost
 	// for no benefit.
 	var warmSnapshot *state.WarmSnapshot
+	phaseStart := time.Now()
 	if makeWitness && bc.cfg.PipelinedSRCWarmSnapshot {
 		warmSnapshot = statedb.StopAndSnapshotPrefetcher()
 	} else {
 		statedb.StopPrefetcher()
+	}
+	timings.prefetchStop = time.Since(phaseStart)
+	pipelineImportPrefetchStopTimer.Update(timings.prefetchStop)
+	if warmSnapshot != nil {
+		timings.warmSnapshotNodes = warmSnapshot.Len()
+		timings.warmSnapshotBytes = warmSnapshot.SizeBytes()
+		pipelineImportWarmSnapshotNodes.Update(int64(timings.warmSnapshotNodes))
+		pipelineImportWarmSnapshotBytes.Update(int64(timings.warmSnapshotBytes))
 	}
 	// Capture the execution witness so SRC can complete it. After the
 	// prefetcher stop above, every subfetcher goroutine has exited (sync
@@ -5029,19 +5105,30 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	if makeWitness {
 		execWitness = statedb.Witness()
 	}
+	phaseStart = time.Now()
 	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
-	committedRoot, err := bc.collectPrevImportSRCIfAny(block, parent)
+	timings.commitSnapshot = time.Since(phaseStart)
+	pipelineImportCommitSnapshotTimer.Update(timings.commitSnapshot)
+
+	committedRoot, collectElapsed, err := bc.collectPrevImportSRCIfAny(block, parent)
+	timings.collect = collectElapsed
 	if err != nil {
 		return true, err
 	}
+	phaseStart = time.Now()
 	bc.emitStateSyncFeed()
+	timings.stateSyncFeed = time.Since(phaseStart)
+	pipelineImportStateSyncFeedTimer.Update(timings.stateSyncFeed)
 
 	// Verify the block against the whitelisted milestone/checkpoint. Mirrors
 	// the non-pipelined path's per-block check — guards the race where Heimdall
 	// whitelists a milestone AFTER the upfront check at the start of insertChain
 	// but BEFORE this block is written. The block itself is passed as the
 	// current head so the validation treats it as a `past` chain.
+	phaseStart = time.Now()
 	isValid, err := bc.forker.ValidateReorg(block.Header(), []*types.Header{block.Header()})
+	timings.reorgCheck = time.Since(phaseStart)
+	pipelineImportReorgCheckTimer.Update(timings.reorgCheck)
 	if err != nil {
 		return false, err
 	}
@@ -5052,12 +5139,20 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// Store FlatDiff BEFORE writing metadata. writeBlockAndSetHeadPipelined
 	// emits ChainEvent which triggers subscribers that read state; FlatDiff
 	// must be available so PostExecState works for those reads.
+	phaseStart = time.Now()
 	bc.SetLastFlatDiff(flatDiff, block.NumberU64(), committedRoot, block.Root())
+	timings.setFlatDiff = time.Since(phaseStart)
+	pipelineImportSetFlatDiffTimer.Update(timings.setFlatDiff)
 	// State commit is deferred to the SRC goroutine. emitHeadEvent=false
 	// because the deferred ChainHeadEvent at end of insertChain handles it.
+	phaseStart = time.Now()
 	if _, err := bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, false, nil); err != nil {
+		timings.writeHead = time.Since(phaseStart)
+		pipelineImportWriteHeadTimer.Update(timings.writeHead)
 		return false, err
 	}
+	timings.writeHead = time.Since(phaseStart)
+	pipelineImportWriteHeadTimer.Update(timings.writeHead)
 
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
 	// Import passes execWitness from execution and requires SRC to publish
@@ -5065,7 +5160,10 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// when allowOwnWitness=false. warmSnapshot may be nil (flag off or no
 	// warm nodes); SRC tolerates that and falls back to the plain pathdb
 	// reader chain.
+	phaseStart = time.Now()
 	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, warmSnapshot)
+	timings.spawnSRC = time.Since(phaseStart)
+	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
 	newPending := &pendingImportSRCState{
 		block:         block,
 		flatDiff:      flatDiff,
@@ -5088,17 +5186,79 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	return false, nil
 }
 
+func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExec, validation time.Duration, timings pipelinedImportPersistTimings, statedb *state.StateDB) {
+	if total < slowImportBlockThreshold &&
+		timings.total < slowImportPostExecThreshold &&
+		timings.collect < slowImportCollectThreshold &&
+		timings.prefetchStop < slowImportSnapshotThreshold {
+		return
+	}
+	log.Warn("Slow pipelined import phase",
+		"block", block.NumberU64(),
+		"txs", len(block.Transactions()),
+		"mgas", float64(block.GasUsed())/1_000_000,
+		"total", common.PrettyDuration(total),
+		"cheapExec", common.PrettyDuration(cheapExec),
+		"validation", common.PrettyDuration(validation),
+		"postExec", common.PrettyDuration(timings.total),
+		"prefetchStop", common.PrettyDuration(timings.prefetchStop),
+		"warmNodes", timings.warmSnapshotNodes,
+		"warmBytes", common.StorageSize(timings.warmSnapshotBytes),
+		"commitSnapshot", common.PrettyDuration(timings.commitSnapshot),
+		"collect", common.PrettyDuration(timings.collect),
+		"stateSyncFeed", common.PrettyDuration(timings.stateSyncFeed),
+		"reorgCheck", common.PrettyDuration(timings.reorgCheck),
+		"setFlatDiff", common.PrettyDuration(timings.setFlatDiff),
+		"writeHead", common.PrettyDuration(timings.writeHead),
+		"spawnSRC", common.PrettyDuration(timings.spawnSRC),
+		"accountReads", common.PrettyDuration(statedb.AccountReads),
+		"storageReads", common.PrettyDuration(statedb.StorageReads),
+		"snapshotAccountReads", common.PrettyDuration(statedb.SnapshotAccountReads),
+		"snapshotStorageReads", common.PrettyDuration(statedb.SnapshotStorageReads),
+		"accountUpdates", common.PrettyDuration(statedb.AccountUpdates),
+		"storageUpdates", common.PrettyDuration(statedb.StorageUpdates),
+		"accountHashes", common.PrettyDuration(statedb.AccountHashes),
+		"storageHashes", common.PrettyDuration(statedb.StorageHashes),
+		"witnessCollection", common.PrettyDuration(statedb.WitnessCollection))
+}
+
+func (bc *BlockChain) logSlowNormalImport(block *types.Block, process, validation, reorgCheck, write, total time.Duration, statedb *state.StateDB) {
+	if total < slowImportBlockThreshold && write < slowImportPostExecThreshold {
+		return
+	}
+	log.Warn("Slow normal import phase",
+		"block", block.NumberU64(),
+		"txs", len(block.Transactions()),
+		"mgas", float64(block.GasUsed())/1_000_000,
+		"total", common.PrettyDuration(total),
+		"process", common.PrettyDuration(process),
+		"validation", common.PrettyDuration(validation),
+		"reorgCheck", common.PrettyDuration(reorgCheck),
+		"write", common.PrettyDuration(write),
+		"accountReads", common.PrettyDuration(statedb.AccountReads),
+		"storageReads", common.PrettyDuration(statedb.StorageReads),
+		"accountUpdates", common.PrettyDuration(statedb.AccountUpdates),
+		"storageUpdates", common.PrettyDuration(statedb.StorageUpdates),
+		"accountHashes", common.PrettyDuration(statedb.AccountHashes),
+		"storageHashes", common.PrettyDuration(statedb.StorageHashes),
+		"accountCommits", common.PrettyDuration(statedb.AccountCommits),
+		"storageCommits", common.PrettyDuration(statedb.StorageCommits),
+		"snapshotCommits", common.PrettyDuration(statedb.SnapshotCommits),
+		"trieDBCommits", common.PrettyDuration(statedb.TrieDBCommits),
+		"witnessCollection", common.PrettyDuration(statedb.WitnessCollection))
+}
+
 // collectPrevImportSRCIfAny blocks on the auto-collection channel of the
 // previous pending SRC (if any) and returns its committed root. If no SRC
 // is pending (first block of the insertChain call), parent.Root is the
 // committed root. Errors propagate as "this block belongs to the previous
 // pending one" — caller returns it.index - 1.
-func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *types.Header) (common.Hash, error) {
+func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *types.Header) (common.Hash, time.Duration, error) {
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRCMu.Unlock()
 	if pending == nil {
-		return parent.Root, nil
+		return parent.Root, 0, nil
 	}
 	if bc.cfg.PipelinedImportSRCLogs {
 		log.Info("Pipelined import: collecting previous SRC",
@@ -5106,8 +5266,9 @@ func (bc *BlockChain) collectPrevImportSRCIfAny(block *types.Block, parent *type
 	}
 	collectStart := time.Now()
 	committedRoot, err := bc.collectPendingImportSRC()
-	pipelineImportCollectTimer.UpdateSince(collectStart)
-	return committedRoot, err
+	elapsed := time.Since(collectStart)
+	pipelineImportCollectTimer.Update(elapsed)
+	return committedRoot, elapsed, err
 }
 
 // emitStateSyncFeed publishes any queued state-sync events under the
@@ -5259,6 +5420,7 @@ func emitPipelinedImportParityMetrics(statedb *state.StateDB, start, pstart time
 	borConsensusTime.Update(statedb.BorConsensusTime)
 	elapsedPipelined := time.Since(start)
 	blockInsertTimer.Update(elapsedPipelined)
+	pipelineImportTotalTimer.Update(elapsedPipelined)
 	gasUsedPerBlockHistogram.Update(int64(block.GasUsed()))
 	txsPerBlockHistogram.Update(int64(len(block.Transactions())))
 	if elapsedPipelined > 0 {
