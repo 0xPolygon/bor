@@ -76,7 +76,10 @@ func isBorSystemTx(borCfg *params.BorConfig, to *common.Address) bool {
 
 	validatorContract := common.HexToAddress(borCfg.ValidatorContract)
 	stateReceiverContract := common.HexToAddress(borCfg.StateReceiverContract)
-	if to.Cmp(validatorContract) == 0 || to.Cmp(stateReceiverContract) == 0 {
+	reservedRegistryContract := common.HexToAddress(borCfg.ReservedRegistryContract)
+	if to.Cmp(validatorContract) == 0 ||
+		to.Cmp(stateReceiverContract) == 0 ||
+		(borCfg.ReservedRegistryContract != "" && to.Cmp(reservedRegistryContract) == 0) {
 		return true
 	}
 
