@@ -499,6 +499,10 @@ func TestMapBorAPIError(t *testing.T) {
 			errors.New("failed to get tip confirmation block"), codes.NotFound},
 		{"hash mismatch prefix → InvalidArgument",
 			fmt.Errorf("hash mismatch: localChainHash 0xaa, milestoneHash 0xbb"), codes.InvalidArgument},
+		{"reorg sentinel → Aborted",
+			errors.New("reorg occurred while computing checkpoint root"), codes.Aborted},
+		{"non-contiguous range → DataLoss",
+			errors.New("non-contiguous headers in checkpoint range"), codes.DataLoss},
 		{"unknown error → Internal (not Unknown)",
 			errors.New("totally novel failure"), codes.Internal},
 	}

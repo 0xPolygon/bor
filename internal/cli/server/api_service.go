@@ -111,6 +111,17 @@ func mapBorAPIError(err error) error {
 		return status.Error(codes.NotFound, msg)
 	case strings.HasPrefix(msg, "hash mismatch"):
 		return status.Error(codes.InvalidArgument, msg)
+	// Reorg during checkpoint root computation: transient/retriable. Aborted
+	// signals "the operation was cancelled, typically due to a concurrency
+	// issue" — the heimdall caller can branch on this and retry once the
+	// chain settles instead of treating it as a server bug.
+	case msg == "reorg occurred while computing checkpoint root":
+		return status.Error(codes.Aborted, msg)
+	// Non-contiguous header range = ancient pruning / DB inconsistency.
+	// DataLoss conveys "unrecoverable state on the server" without the
+	// "this is a bug" implication of Internal.
+	case msg == "non-contiguous headers in checkpoint range":
+		return status.Error(codes.DataLoss, msg)
 	default:
 		return status.Error(codes.Internal, msg)
 	}
