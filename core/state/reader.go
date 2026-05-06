@@ -290,11 +290,11 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 	}, nil
 }
 
-// newTrieReaderWithSnapshot mirrors newTrieReader but threads a WarmSnapshot
-// through the trie's NodeDatabase so trie reads consult the snapshot before
-// falling through to pathdb/pebble. The snapshot is hash-verified per
-// lookup; misses or hash mismatches transparently fall through. The trie
-// itself is unchanged (NewStateTrie sees a wrapped NodeDatabase only) — its
+// newTrieReaderWithSnapshot mirrors newTrieReader but receives a snapshot-aware
+// NodeDatabase so trie reads can consult a WarmSnapshot before falling through
+// to pathdb/pebble. The snapshot is hash-verified by the supplied NodeDatabase;
+// misses or hash mismatches transparently fall through. The trie itself is
+// unchanged (NewStateTrie sees a wrapped NodeDatabase only) — its
 // resolveAndTrack path and prevalueTracer recording fire identically whether
 // the served node came from the snapshot or pathdb, so witness completeness
 // under NewTrieOnly semantics is preserved.
@@ -302,11 +302,10 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 // Verkle is not supported by this path: pipelined SRC is MPT-only and the
 // snapshot is constructed from MPT trie nodes. Callers that need verkle
 // readers must use newTrieReader.
-func newTrieReaderWithSnapshot(root common.Hash, db *triedb.Database, snapshot *WarmSnapshot) (*trieReader, error) {
+func newTrieReaderWithSnapshot(root common.Hash, db *triedb.Database, nodeDB database.NodeDatabase) (*trieReader, error) {
 	if db.IsVerkle() {
 		return nil, errors.New("warm snapshot reader: verkle scheme is not supported")
 	}
-	nodeDB := newSnapshotNodeDatabase(db, snapshot)
 	tr, err := trie.NewStateTrie(trie.StateTrieID(root), nodeDB)
 	if err != nil {
 		return nil, err

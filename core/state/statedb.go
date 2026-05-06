@@ -215,15 +215,21 @@ func NewTrieOnly(root common.Hash, db *CachingDB) (*StateDB, error) {
 // Hits with matching hash skip diff-layer/disk-layer/pebble work entirely;
 // misses or hash mismatches are served by the underlying reader unchanged.
 // NewTrieOnly semantics are preserved — the trie still walks, prevalueTracer
-// still records, witness is still complete.
+// still records, witness is still complete. The snapshot wrapper is installed
+// on the StateDB database itself, not just the initial Reader, so commit-time
+// OpenTrie/OpenStorageTrie calls also use the same warm handoff.
 //
 // A nil snapshot is equivalent to NewTrieOnly.
 func NewTrieOnlyWithSnapshot(root common.Hash, db *CachingDB, snapshot *WarmSnapshot) (*StateDB, error) {
-	reader, err := db.TrieOnlyReaderWithSnapshot(root, snapshot)
+	if snapshot == nil || snapshot.Len() == 0 {
+		return NewTrieOnly(root, db)
+	}
+	snapshotDB := newSnapshotStateDatabase(db, snapshot)
+	reader, err := snapshotDB.Reader(root)
 	if err != nil {
 		return nil, err
 	}
-	return NewWithReader(root, db, reader)
+	return NewWithReader(root, snapshotDB, reader)
 }
 
 // NewWithReader creates a new state for the specified state root. Unlike New,

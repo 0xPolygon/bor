@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
@@ -175,6 +176,29 @@ func TestWarmSnapshot_NilAndEmpty(t *testing.T) {
 	// Direct Lookup on empty snapshot is a miss.
 	_, ok = empty.Lookup(owner, path, hash)
 	require.False(t, ok)
+}
+
+// TestNewTrieOnlyWithSnapshotInstallsStateDBWrapper verifies that the snapshot
+// handoff is installed on StateDB.db, not only on the initial Reader. Commit
+// paths call StateDB.db.OpenTrie/OpenStorageTrie directly; if db remained the
+// plain CachingDB those calls would bypass WarmSnapshot.
+func TestNewTrieOnlyWithSnapshotInstallsStateDBWrapper(t *testing.T) {
+	cdb := NewDatabaseForTesting()
+	snap := NewWarmSnapshot([]TrieWarmNodes{{
+		Owner: common.Hash{},
+		Nodes: map[string][]byte{"warm": []byte("warm-node")},
+	}})
+	require.Equal(t, 1, snap.Len())
+
+	sdb, err := NewTrieOnlyWithSnapshot(types.EmptyRootHash, cdb, snap)
+	require.NoError(t, err)
+	_, ok := sdb.db.(*snapshotStateDatabase)
+	require.True(t, ok, "StateDB.db must be snapshot-aware so commit-time trie opens use the warm handoff")
+
+	sdb, err = NewTrieOnlyWithSnapshot(types.EmptyRootHash, cdb, nil)
+	require.NoError(t, err)
+	_, ok = sdb.db.(*snapshotStateDatabase)
+	require.False(t, ok, "nil snapshot must preserve the plain trie-only database path")
 }
 
 // TestWarmSnapshot_RetainsDistinctHashesAtSamePath verifies that two warm

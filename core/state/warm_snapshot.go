@@ -19,6 +19,7 @@ package state
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb/database"
 )
 
@@ -121,6 +122,68 @@ func (s *WarmSnapshot) Lookup(owner common.Hash, path []byte, expectedHash commo
 		return nil, false
 	}
 	return blob, true
+}
+
+// snapshotStateDatabase wraps CachingDB for a single SRC StateDB so every trie
+// opening path can consult the same WarmSnapshot. The plain snapshot reader
+// wrapper is enough for StateDB.reader reads, but CommitWithUpdate also opens
+// tries through StateDB.db.OpenTrie/OpenStorageTrie. If those methods keep
+// using the unwrapped CachingDB, the commit and witness-collection walks miss
+// the warm handoff entirely.
+//
+// The wrapper preserves NewTrieOnly semantics: account and storage reads still
+// walk MPT tries, and trie resolveAndTrack still records proof nodes. The only
+// change is the NodeDatabase behind those tries: snapshot hits return an
+// already-loaded RLP node blob, while misses fall through to the underlying
+// triedb/pathdb chain.
+type snapshotStateDatabase struct {
+	*CachingDB
+
+	nodeDB   database.NodeDatabase
+	snapshot *WarmSnapshot
+}
+
+func newSnapshotStateDatabase(inner *CachingDB, snapshot *WarmSnapshot) *snapshotStateDatabase {
+	return &snapshotStateDatabase{
+		CachingDB: inner,
+		nodeDB:    newSnapshotNodeDatabase(inner.triedb, snapshot),
+		snapshot:  snapshot,
+	}
+}
+
+// Reader intentionally returns a trie-only snapshot-aware reader, not
+// CachingDB.Reader's multi-reader. This wrapper is meant for short-lived SRC
+// StateDB instances that are discarded after CommitWithUpdate; do not reuse it
+// for long-lived StateDBs that expect flat/snapshot reader semantics after
+// commit-time reader refreshes.
+func (db *snapshotStateDatabase) Reader(stateRoot common.Hash) (Reader, error) {
+	tr, err := newTrieReaderWithSnapshot(stateRoot, db.triedb, db.nodeDB)
+	if err != nil {
+		return nil, err
+	}
+	return newReader(newCachingCodeReader(db.disk, db.codeCache, db.codeSizeCache), tr), nil
+}
+
+func (db *snapshotStateDatabase) OpenTrie(root common.Hash) (Trie, error) {
+	if db.triedb.IsVerkle() {
+		return db.CachingDB.OpenTrie(root)
+	}
+	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.nodeDB)
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
+
+func (db *snapshotStateDatabase) OpenStorageTrie(stateRoot common.Hash, address common.Address, root common.Hash, self Trie) (Trie, error) {
+	if db.triedb.IsVerkle() {
+		return self, nil
+	}
+	tr, err := trie.NewStateTrie(trie.StorageTrieID(stateRoot, crypto.Keccak256Hash(address.Bytes()), root), db.nodeDB)
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
 }
 
 // preimageForwarder is the interface trie.NewStateTrie checks at construction
