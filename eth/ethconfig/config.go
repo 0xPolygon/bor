@@ -170,6 +170,8 @@ type Config struct {
 	SnapshotCache  int
 	Preimages      bool
 	TriesInMemory  uint64
+	// Directory path to the journal used for persisting trie data across node restarts.
+	TrieJournalDirectory string
 
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int

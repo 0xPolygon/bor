@@ -1558,6 +1558,11 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
+		trieJournalDirectory := c.Cache.TrieJournalDirectory
+		if trieJournalDirectory == "" {
+			trieJournalDirectory = "triedb"
+		}
+		n.TrieJournalDirectory = stack.ResolvePath(trieJournalDirectory)
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
 
 		// Parse address-specific cache sizes
