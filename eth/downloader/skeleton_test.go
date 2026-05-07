@@ -914,13 +914,27 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 			return nil
 		}
 
+		// Wait for the sync loop to settle: both subchain state AND the served
+		// header counter must converge. Under -race the background serving
+		// goroutines trail the subchain update, so reading served the instant
+		// subchain matches can observe a partial count (seen as a 1/20 flake
+		// on CI). Polling until served reaches the expected total removes the
+		// window. 10s budget tolerates -race overhead.
+		midserved := func() uint64 {
+			var s uint64
+			for _, peer := range tt.peers {
+				s += peer.served.Load()
+			}
+			return s
+		}
 		waitStart := time.Now()
-		for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
-			time.Sleep(waitTime)
-			// Check the post-init end state if it matches the required results
+		for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 30*time.Second; waitTime = waitTime * 2 {
+			time.Sleep(min(waitTime, 500*time.Millisecond))
 			json.Unmarshal(rawdb.ReadSkeletonSyncStatus(db), &progress)
-
-			if err := check(); err == nil {
+			if err := check(); err != nil {
+				continue
+			}
+			if tt.unpredictable || midserved() >= tt.midserve {
 				break
 			}
 		}
@@ -931,19 +945,14 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 		}
 
 		if !tt.unpredictable {
-			var served uint64
-			for _, peer := range tt.peers {
-				served += peer.served.Load()
-			}
-
-			if served != tt.midserve {
+			if served := midserved(); served != tt.midserve {
 				t.Errorf("test %d, mid state: served headers mismatch: have %d, want %d", i, served, tt.midserve)
 			}
 
 			// Wait for expected peer drops (may happen asynchronously after subchain state updates)
 			var drops uint64
 			waitStart = time.Now()
-			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
+			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 30*time.Second; waitTime = waitTime * 2 {
 				drops = 0
 				for _, peer := range tt.peers {
 					drops += peer.dropped.Load()
@@ -951,7 +960,7 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 				if drops >= tt.middrop {
 					break
 				}
-				time.Sleep(waitTime)
+				time.Sleep(min(waitTime, 500*time.Millisecond))
 			}
 
 			if drops != tt.middrop {
@@ -987,14 +996,27 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 
 			return nil
 		}
+		// Same polling shape as the mid-state check above: wait for both
+		// subchain state and total served count to settle before asserting.
+		endserved := func() uint64 {
+			var s uint64
+			for _, peer := range tt.peers {
+				s += peer.served.Load()
+			}
+			if tt.newPeer != nil {
+				s += tt.newPeer.served.Load()
+			}
+			return s
+		}
 		waitStart = time.Now()
 
-		for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
-			time.Sleep(waitTime)
-			// Check the post-init end state if it matches the required results
+		for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 30*time.Second; waitTime = waitTime * 2 {
+			time.Sleep(min(waitTime, 500*time.Millisecond))
 			json.Unmarshal(rawdb.ReadSkeletonSyncStatus(db), &progress)
-
-			if err := check(); err == nil {
+			if err := check(); err != nil {
+				continue
+			}
+			if tt.unpredictable || endserved() >= tt.endserve {
 				break
 			}
 		}
@@ -1005,23 +1027,14 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 		}
 		// Check that the peers served no more headers than we actually needed
 		if !tt.unpredictable {
-			served := uint64(0)
-			for _, peer := range tt.peers {
-				served += peer.served.Load()
-			}
-
-			if tt.newPeer != nil {
-				served += tt.newPeer.served.Load()
-			}
-
-			if served != tt.endserve {
+			if served := endserved(); served != tt.endserve {
 				t.Errorf("test %d, end state: served headers mismatch: have %d, want %d", i, served, tt.endserve)
 			}
 
 			// Wait for expected peer drops (may happen asynchronously after subchain state updates)
 			var drops uint64
 			waitStart = time.Now()
-			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 2*time.Second; waitTime = waitTime * 2 {
+			for waitTime := 20 * time.Millisecond; time.Since(waitStart) < 30*time.Second; waitTime = waitTime * 2 {
 				drops = 0
 				for _, peer := range tt.peers {
 					drops += peer.dropped.Load()
@@ -1032,7 +1045,7 @@ func TestSkeletonSyncRetrievals(t *testing.T) {
 				if drops >= tt.enddrop {
 					break
 				}
-				time.Sleep(waitTime)
+				time.Sleep(min(waitTime, 500*time.Millisecond))
 			}
 
 			if drops != tt.enddrop {

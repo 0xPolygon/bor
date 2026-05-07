@@ -159,20 +159,12 @@ jobs:
         os: [ubuntu-22.04] # List of OS: https://github.com/actions/virtual-environments
     runs-on: ${{ matrix.os }}
     needs: [unit-tests, integration-tests]
-    env:
-      RUN_CODECOV_UPLOAD: ${{ secrets.CODECOV_TOKEN != '' }}
     steps:
-      - name: Skip Codecov upload when CODECOV_TOKEN is unavailable
-        if: env.RUN_CODECOV_UPLOAD != 'true'
-        run: echo "Skipping Codecov upload because CODECOV_TOKEN is not available for this run."
       - name: Checkout
-        if: env.RUN_CODECOV_UPLOAD == 'true'
         uses: actions/checkout@v5
       - name: Download artifacts
-        if: env.RUN_CODECOV_UPLOAD == 'true'
         uses: actions/download-artifact@v6.0.0
       - name: Upload coverage to Codecov
-        if: env.RUN_CODECOV_UPLOAD == 'true'
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

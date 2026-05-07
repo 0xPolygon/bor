@@ -282,7 +282,8 @@ func TestGenesisContractChange(t *testing.T) {
 			ParentHash: root,
 			Number:     big.NewInt(num),
 		}
-		b.Finalize(chain.HeaderChain(), h, statedb, &types.Body{Withdrawals: nil, Transactions: nil, Uncles: nil}, nil)
+		_, err = b.Finalize(chain.HeaderChain(), h, statedb, &types.Body{Withdrawals: nil, Transactions: nil, Uncles: nil}, nil)
+		require.NoError(t, err)
 
 		// write state to database
 		root, err := statedb.Commit(0, false, true)
@@ -2313,8 +2314,9 @@ func TestFinalize_WithdrawalsRejection(t *testing.T) {
 	statedb := newStateDBForTest(t, genesis.Root)
 
 	body := &types.Body{Withdrawals: []*types.Withdrawal{{Validator: 1}}}
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
-	require.Nil(t, result) // returns nil on withdrawals
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, consensus.ErrUnexpectedWithdrawals)
 }
 
 func TestFinalize_RequestsHashRejection(t *testing.T) {
@@ -2330,8 +2332,9 @@ func TestFinalize_RequestsHashRejection(t *testing.T) {
 	statedb := newStateDBForTest(t, genesis.Root)
 
 	body := &types.Body{}
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
-	require.Nil(t, result) // returns nil on requests hash
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, consensus.ErrUnexpectedRequests)
 }
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -2699,9 +2702,10 @@ func TestFinalize_NonSprintBlock(t *testing.T) {
 	h := &types.Header{Number: big.NewInt(5), ParentHash: genesis.Hash(), Time: genesis.Time + 10, GasLimit: genesis.GasLimit}
 	body := &types.Body{}
 
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
 	// For non-sprint blocks, Finalize returns the receipts (possibly nil)
 	// It should not error
+	require.NoError(t, err)
 	require.Nil(t, result) // nil receipts for non-sprint with no prior receipts
 }
 
@@ -2720,7 +2724,8 @@ func TestFinalize_SprintBlockWithoutHeimdall(t *testing.T) {
 	h := &types.Header{Number: big.NewInt(16), ParentHash: genesis.Hash(), Time: genesis.Time + 32, GasLimit: genesis.GasLimit}
 	body := &types.Body{}
 
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, nil)
+	require.NoError(t, err)
 	require.Nil(t, result) // nil receipts expected
 }
 func TestFetchAndCommitSpan_WithHeimdallClient(t *testing.T) {
@@ -3185,8 +3190,9 @@ func TestFinalize_SprintBlockWithCommitSpan(t *testing.T) {
 
 	body := &types.Body{}
 	inputReceipts := make([]*types.Receipt, 0)
-	receipts := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	receipts, err := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
 	// Should succeed (no HeimdallClient so CommitStates is skipped)
+	require.NoError(t, err)
 	require.NotNil(t, receipts)
 }
 func TestCalcDifficulty_WithSnapshot(t *testing.T) {
@@ -3464,7 +3470,8 @@ func TestFinalize_NonSprintBlockNoStateSync(t *testing.T) {
 
 	body := &types.Body{}
 	inputReceipts := make([]*types.Receipt, 0)
-	receipts := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	receipts, err := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	require.NoError(t, err)
 	require.NotNil(t, receipts)
 }
 func TestVerifySeal_BhilaiNonPrimaryFutureBlock(t *testing.T) {
@@ -3645,9 +3652,212 @@ func TestFinalize_SprintWithHeimdallCommitStates(t *testing.T) {
 
 	body := &types.Body{}
 	inputReceipts := make([]*types.Receipt, 0)
-	receipts := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	receipts, err := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	require.NoError(t, err)
 	require.NotNil(t, receipts)
 }
+
+// madhugiriBorConfig returns a BorConfig with Madhugiri enabled from genesis,
+// used for tests that exercise state-sync transaction validation in block bodies.
+func madhugiriBorConfig() *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:                     map[string]uint64{"0": 16},
+		Period:                     map[string]uint64{"0": 2},
+		IndoreBlock:                big.NewInt(0),
+		MadhugiriBlock:             big.NewInt(0),
+		StateSyncConfirmationDelay: map[string]uint64{"0": 0},
+		RioBlock:                   big.NewInt(1000000),
+	}
+}
+
+// setupMadhugiriStateSyncTest creates a Bor engine with Madhugiri enabled, a mock Heimdall
+// client returning the provided events, and a sprint-start header at block 16. It returns
+// the chain, engine, header, and genesis header for use in Finalize tests.
+func setupMadhugiriStateSyncTest(t *testing.T, events []*clerk.EventRecordWithTime, heimdallOverride IHeimdallClient) (*core.BlockChain, *Bor, *types.Header, *types.Header) {
+	t.Helper()
+
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+	mockGC := &mockGenesisContractForCommitStatesIndore{lastStateID: 0, gasUsed: 100}
+
+	borCfg := madhugiriBorConfig()
+	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr1, uint64(time.Now().Unix())-200)
+	b.GenesisContractsClient = mockGC
+
+	if heimdallOverride != nil {
+		b.SetHeimdallClient(heimdallOverride)
+	} else {
+		b.SetHeimdallClient(&mockHeimdallClient{
+			span: &borTypes.Span{
+				Id: 0, StartBlock: 0, EndBlock: 255, BorChainId: "1",
+				ValidatorSet: stakeTypes.ValidatorSet{
+					Validators: []*stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+				},
+				SelectedProducers: []stakeTypes.Validator{{ValId: 1, Signer: addr1.Hex(), VotingPower: 1}},
+			},
+			events: events,
+		})
+	}
+
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	h := &types.Header{
+		Number:     big.NewInt(16), // sprint start (16 % 16 == 0)
+		ParentHash: genesis.Hash(),
+		Time:       uint64(time.Now().Unix()),
+	}
+
+	return chain, b, h, genesis
+}
+
+// defaultStateSyncEvents returns a single state-sync event for testing.
+func defaultStateSyncEvents() []*clerk.EventRecordWithTime {
+	return []*clerk.EventRecordWithTime{{
+		EventRecord: clerk.EventRecord{
+			ID: 1, Contract: common.HexToAddress("0x1001"), Data: []byte{0x01}, ChainID: "1",
+		},
+		Time: time.Now().Add(-60 * time.Second),
+	}}
+}
+
+// matchingStateSyncTx returns a StateSyncTx that matches the data returned by
+// CommitStates when processing defaultStateSyncEvents.
+func matchingStateSyncTx() *types.Transaction {
+	return types.NewTx(&types.StateSyncTx{
+		StateSyncData: []*types.StateSyncData{{
+			ID:       1,
+			Contract: common.HexToAddress("0x1001"),
+			Data:     []byte{0x01},
+			TxHash:   common.Hash{},
+		}},
+	})
+}
+
+// TestFinalize_StateSyncMismatch_EmptyBody tests that a block which applies state-sync
+// transactions to state but doesn't have the transaction in block body (post Madhugiri)
+// is rejected with `ErrStateSyncMismatch` error.
+func TestFinalize_StateSyncMismatch_EmptyBody(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	body := &types.Body{}
+	receipts := make([]*types.Receipt, 0)
+
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "block body missing state-sync transaction")
+	require.Nil(t, result)
+}
+
+// TestFinalize_StateSyncMismatch_EmptyBody tests that a block which applies state-sync
+// transactions to state but last transaction in block body is not StateSyncTxType is
+// rejected with `ErrStateSyncMismatch` error.
+func TestFinalize_StateSyncMismatch_LastTxNotStateSyncType(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	// A legacy transaction — its Type() is not StateSyncTxType
+	addr := common.HexToAddress("0x1")
+	legacyTx := types.NewTx(&types.LegacyTx{Nonce: 0, To: &addr})
+
+	body := &types.Body{Transactions: []*types.Transaction{legacyTx}}
+	receipts := make([]*types.Receipt, 0)
+
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "block body missing state-sync transaction")
+	require.Nil(t, result)
+}
+
+// TestFinalize_StateSyncMismatch_WrongHash tests that a block body containing a StateSyncTx
+// with different data than what Heimdall returned is rejected with ErrStateSyncMismatch.
+func TestFinalize_StateSyncMismatch_WrongHash(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	// Construct a StateSyncTx with different data than what Heimdall returns
+	wrongTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: []*types.StateSyncData{{
+			ID:       1,
+			Contract: common.HexToAddress("0x1001"),
+			Data:     []byte{0x99, 0x99}, // different from []byte{0x01}
+			TxHash:   common.Hash{},
+		}},
+	})
+
+	body := &types.Body{Transactions: []*types.Transaction{wrongTx}}
+	receipts := make([]*types.Receipt, 0)
+
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.ErrorIs(t, err, core.ErrStateSyncMismatch)
+	require.ErrorContains(t, err, "hash mismatch")
+	require.Nil(t, result)
+}
+
+// TestFinalize_ValidStateSyncTx tests the happy path: Madhugiri is enabled, Heimdall reports
+// state-sync events, and the block body contains the correct matching StateSyncTx. Finalize
+// should succeed and append a state-sync receipt.
+func TestFinalize_ValidStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	body := &types.Body{Transactions: []*types.Transaction{matchingStateSyncTx()}}
+	inputReceipts := make([]*types.Receipt, 0)
+
+	receipts, err := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	require.NoError(t, err)
+	require.NotNil(t, receipts)
+	// Finalize should have appended the state-sync receipt
+	require.Len(t, receipts, 1, "expected one state-sync receipt")
+}
+
+// TestFinalize_StateSyncProcessingError tests that when CommitStates fails (e.g. LastStateId
+// returns an error), Finalize returns ErrStateSyncProcessing. Note: CommitStates swallows
+// StateSyncEvents fetch errors and returns empty data, so ErrStateSyncProcessing is only
+// reachable through genesis contract failures like LastStateId.
+func TestFinalize_StateSyncProcessingError(t *testing.T) {
+	t.Parallel()
+
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, defaultStateSyncEvents(), nil)
+	// Override genesis contract with one that fails, triggering CommitStates error
+	b.GenesisContractsClient = &failingGenesisContract{}
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	body := &types.Body{}
+	receipts := make([]*types.Receipt, 0)
+
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.ErrorIs(t, err, core.ErrStateSyncProcessing)
+	require.ErrorContains(t, err, "error while committing states")
+	require.Nil(t, result)
+}
+
+// TestFinalize_NoStateSyncEvents_EmptyBodyOK tests that when Heimdall returns no state-sync
+// events, an empty block body is accepted (no StateSyncTx required).
+func TestFinalize_NoStateSyncEvents_EmptyBodyOK(t *testing.T) {
+	t.Parallel()
+
+	// Empty events slice — no state sync to process
+	chain, b, h, genesis := setupMadhugiriStateSyncTest(t, []*clerk.EventRecordWithTime{}, nil)
+	statedb := newStateDBForTest(t, genesis.Root)
+
+	body := &types.Body{}
+	inputReceipts := make([]*types.Receipt, 0)
+
+	receipts, err := b.Finalize(chain.HeaderChain(), h, statedb, body, inputReceipts)
+	require.NoError(t, err)
+	require.NotNil(t, receipts)
+	require.Len(t, receipts, 0, "no state-sync receipt expected when there are no events")
+}
+
 func TestSnapshot_HeaderTraversal(t *testing.T) {
 	t.Parallel()
 
@@ -4156,8 +4366,9 @@ func TestFinalize_WithBlockAlloc(t *testing.T) {
 	body := &types.Body{}
 	receipts := make([]*types.Receipt, 0)
 
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
 	// Should process without error - exercises changeContractCodeIfNeeded
+	require.NoError(t, err)
 	require.NotNil(t, result)
 }
 func TestCommitStates_WithOverrideStateSyncRecordsInRange(t *testing.T) {
@@ -4376,8 +4587,9 @@ func TestFinalize_CheckAndCommitSpanError(t *testing.T) {
 	receipts := make([]*types.Receipt, 0)
 
 	// checkAndCommitSpan -> FetchAndCommitSpan -> CommitSpan should fail,
-	// which means Finalize returns nil
-	result := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	// which means Finalize returns an error
+	result, err := b.Finalize(chain.HeaderChain(), h, statedb, body, receipts)
+	require.Error(t, err)
 	require.Nil(t, result)
 }
 

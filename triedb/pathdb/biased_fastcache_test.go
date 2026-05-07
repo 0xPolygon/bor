@@ -3,6 +3,7 @@ package pathdb
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,7 +11,85 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/rlp"
 )
+
+// nibblesToCompact converts a nibble slice to compact encoding (inverse of compactKeyToNibbles).
+// isLeaf sets the terminator flag (bit 5 of first byte).
+func nibblesToCompact(nibbles []byte, isLeaf bool) []byte {
+	var termFlag byte
+	if isLeaf {
+		termFlag = 2 // 0x20 when shifted
+	}
+	if len(nibbles)%2 == 0 { // even
+		compact := []byte{termFlag << 4}
+		for i := 0; i < len(nibbles); i += 2 {
+			compact = append(compact, nibbles[i]<<4|nibbles[i+1])
+		}
+		return compact
+	}
+	// odd: bit 4 set, first nibble in low bits of header byte
+	compact := []byte{termFlag<<4 | 0x10 | nibbles[0]}
+	for i := 1; i < len(nibbles); i += 2 {
+		compact = append(compact, nibbles[i]<<4|nibbles[i+1])
+	}
+	return compact
+}
+
+// encodeBranchNode encodes a branch node with children at the given slots.
+// childHash is used as the placeholder child hash (should be 32 bytes).
+func encodeBranchNode(t *testing.T, presentSlots []byte, childHash []byte) []byte {
+	t.Helper()
+	var node [17][]byte
+	for _, s := range presentSlots {
+		node[s] = childHash
+	}
+	data, err := rlp.EncodeToBytes(node)
+	if err != nil {
+		t.Fatalf("failed to RLP-encode branch node: %v", err)
+	}
+	return data
+}
+
+// encodeShortNode encodes an extension or leaf node.
+func encodeShortNode(t *testing.T, compactKey, secondElement []byte) []byte {
+	t.Helper()
+	data, err := rlp.EncodeToBytes([2][]byte{compactKey, secondElement})
+	if err != nil {
+		t.Fatalf("failed to RLP-encode short node: %v", err)
+	}
+	return data
+}
+
+func allBranchSlots() []byte {
+	slots := make([]byte, 16)
+	for i := range slots {
+		slots[i] = byte(i)
+	}
+	return slots
+}
+
+type countingDatabase struct {
+	ethdb.Database
+	mu       sync.Mutex
+	getCount int
+}
+
+func (db *countingDatabase) Get(key []byte) ([]byte, error) {
+	db.mu.Lock()
+	db.getCount++
+	db.mu.Unlock()
+
+	return db.Database.Get(key)
+}
+
+func (db *countingDatabase) gets() int {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	return db.getCount
+}
 
 func TestAddressBiasedCache_RouteCache(t *testing.T) {
 	addr1 := common.HexToAddress("0x1234567890123456789012345678901234567890")
@@ -283,7 +362,7 @@ func TestAddressBiasedCache_PreloadWithData(t *testing.T) {
 	}
 
 	// Wait for async preloading to complete
-	time.Sleep(100 * time.Millisecond)
+	cache.wg.Wait()
 
 	// Verify root node was loaded
 	rootKey := accountHash.Bytes()
@@ -296,37 +375,303 @@ func TestAddressBiasedCache_PreloadWithData(t *testing.T) {
 	}
 }
 
-func TestAddressBiasedCache_GatherChildPaths(t *testing.T) {
-	cache := &AddressBiasedCache{}
+// TestDecodeChildPaths_BranchNode verifies that decodeChildPaths correctly
+// identifies non-nil children in a branch node and returns only their paths.
+func TestDecodeChildPaths_BranchNode(t *testing.T) {
+	hash := bytes.Repeat([]byte{0xab}, 32)
 
-	nodeData := []byte("dummy node data")
+	nodeData := encodeBranchNode(t, []byte{0, 5, 15}, hash)
 	currentPath := []byte{0x01}
 
-	childPaths := cache.gatherChildPaths(nodeData, currentPath)
-
-	// Verify 16 child paths are generated (one for each nibble)
-	if len(childPaths) != 16 {
-		t.Errorf("Expected 16 child paths, got %d", len(childPaths))
+	children := decodeChildPaths(nodeData, currentPath)
+	if len(children) != 3 {
+		t.Fatalf("expected 3 children, got %d", len(children))
 	}
 
-	// Verify each child path is correct
-	for i := byte(0); i < 16; i++ {
-		expectedPath := append([]byte{0x01}, i)
-		if !bytes.Equal(childPaths[i], expectedPath) {
-			t.Errorf("Child path %d mismatch: expected %v, got %v", i, expectedPath, childPaths[i])
+	wantPaths := map[string]bool{
+		string([]byte{0x01, 0x00}): true,
+		string([]byte{0x01, 0x05}): true,
+		string([]byte{0x01, 0x0f}): true,
+	}
+	for _, p := range children {
+		if !wantPaths[string(p)] {
+			t.Errorf("unexpected child path %v", p)
+		}
+		if len(p) != len(currentPath)+1 {
+			t.Errorf("child path length should be %d, got %d", len(currentPath)+1, len(p))
+		}
+	}
+}
+
+// TestDecodeChildPaths_EmptyBranch verifies that an all-nil branch node returns no children.
+func TestDecodeChildPaths_EmptyBranch(t *testing.T) {
+	nodeData := encodeBranchNode(t, nil, nil)
+	if got := decodeChildPaths(nodeData, nil); len(got) != 0 {
+		t.Errorf("expected no children for empty branch, got %v", got)
+	}
+}
+
+// TestDecodeChildPaths_ExtensionNodeEven verifies extension node decoding with an even-length key.
+func TestDecodeChildPaths_ExtensionNodeEven(t *testing.T) {
+	// Extension: key nibbles [1, 2] → compact [0x00, 0x12]
+	nibbles := []byte{1, 2}
+	nodeData := encodeShortNode(t, nibblesToCompact(nibbles, false), bytes.Repeat([]byte{0xcc}, 32))
+
+	children := decodeChildPaths(nodeData, []byte{0x05})
+	if len(children) != 1 {
+		t.Fatalf("expected 1 child for extension node, got %d", len(children))
+	}
+	want := []byte{0x05, 1, 2}
+	if !bytes.Equal(children[0], want) {
+		t.Errorf("expected child path %v, got %v", want, children[0])
+	}
+}
+
+// TestDecodeChildPaths_ExtensionNodeOdd verifies extension node decoding with an odd-length key.
+func TestDecodeChildPaths_ExtensionNodeOdd(t *testing.T) {
+	// Extension: key nibbles [1, 2, 3] → compact [0x11, 0x23]
+	nibbles := []byte{1, 2, 3}
+	nodeData := encodeShortNode(t, nibblesToCompact(nibbles, false), bytes.Repeat([]byte{0xcc}, 32))
+
+	children := decodeChildPaths(nodeData, []byte{0x05})
+	if len(children) != 1 {
+		t.Fatalf("expected 1 child for extension node, got %d", len(children))
+	}
+	want := []byte{0x05, 1, 2, 3}
+	if !bytes.Equal(children[0], want) {
+		t.Errorf("expected child path %v, got %v", want, children[0])
+	}
+}
+
+// TestDecodeChildPaths_LeafNode verifies that leaf nodes return no children.
+func TestDecodeChildPaths_LeafNode(t *testing.T) {
+	// Leaf node: key nibbles [1, 2] with terminator flag → compact [0x20, 0x12]
+	nodeData := encodeShortNode(t, nibblesToCompact([]byte{1, 2}, true), []byte("value"))
+	if got := decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
+		t.Errorf("expected no children for leaf node, got %v", got)
+	}
+
+	// Also test odd-length leaf
+	nodeData = encodeShortNode(t, nibblesToCompact([]byte{1, 2, 3}, true), []byte("value"))
+	if got := decodeChildPaths(nodeData, []byte{0x01}); len(got) != 0 {
+		t.Errorf("expected no children for odd leaf node, got %v", got)
+	}
+}
+
+// TestDecodeChildPaths_InvalidData verifies that non-RLP input returns nil.
+func TestDecodeChildPaths_InvalidData(t *testing.T) {
+	if got := decodeChildPaths([]byte("not valid rlp data"), nil); got != nil {
+		t.Errorf("expected nil for invalid data, got %v", got)
+	}
+	if got := decodeChildPaths(nil, nil); got != nil {
+		t.Errorf("expected nil for nil data, got %v", got)
+	}
+}
+
+// TestDecodeChildPaths_EmptyExtensionRejected verifies malformed empty
+// extension nodes do not produce a non-growing child path equal to currentPath.
+func TestDecodeChildPaths_EmptyExtensionRejected(t *testing.T) {
+	currentPath := []byte{0x05, 0x06}
+
+	// Compact key 0x00 decodes to an empty extension key, which should be ignored.
+	nodeData := encodeShortNode(t, []byte{0x00}, bytes.Repeat([]byte{0xdd}, 32))
+	if got := decodeChildPaths(nodeData, currentPath); len(got) != 0 {
+		t.Fatalf("expected malformed empty extension to be ignored, got %v", got)
+	}
+}
+
+// TestDecodeChildPaths_ExtensionWithoutChildRejected verifies malformed
+// extension nodes with an empty child reference are ignored.
+func TestDecodeChildPaths_ExtensionWithoutChildRejected(t *testing.T) {
+	nodeData := encodeShortNode(t, nibblesToCompact([]byte{0x0a}, false), nil)
+
+	if got := decodeChildPaths(nodeData, []byte{0x05}); len(got) != 0 {
+		t.Fatalf("expected malformed extension without child to be ignored, got %v", got)
+	}
+}
+
+// TestCompactKeyToNibbles verifies round-trip conversion through nibblesToCompact.
+func TestCompactKeyToNibbles(t *testing.T) {
+	cases := []struct {
+		nibbles []byte
+		isLeaf  bool
+	}{
+		{[]byte{1, 2}, false},       // even extension
+		{[]byte{1, 2, 3}, false},    // odd extension
+		{[]byte{1, 2}, true},        // even leaf
+		{[]byte{1, 2, 3}, true},     // odd leaf
+		{[]byte{}, false},           // empty extension
+		{[]byte{0}, false},          // single nibble (odd)
+		{[]byte{0, 0, 0, 0}, false}, // four nibbles
+	}
+	for _, tc := range cases {
+		compact := nibblesToCompact(tc.nibbles, tc.isLeaf)
+		got := compactKeyToNibbles(compact)
+		if !bytes.Equal(got, tc.nibbles) {
+			t.Errorf("round-trip failed for nibbles=%v isLeaf=%v: compact=%v got=%v",
+				tc.nibbles, tc.isLeaf, compact, got)
+		}
+		// decodeChildPaths must treat leaf compactKey[0] >= 0x20 as a leaf
+		isLeafDetected := len(compact) > 0 && compact[0] >= 0x20
+		if isLeafDetected != tc.isLeaf {
+			t.Errorf("leaf detection failed for nibbles=%v isLeaf=%v: compact=%v",
+				tc.nibbles, tc.isLeaf, compact)
+		}
+	}
+}
+
+// TestPreloadBFS_CycleFree proves that the BFS terminates and visits each trie
+// node exactly once. Without a visited set, this relies on the structural guarantee
+// that MPT child paths are strictly longer than their parent path.
+//
+// Trie structure (5 nodes total):
+//
+//	root (branch): children at [0] and [1]
+//	[0] → leaf
+//	[1] → branch: children at [1,2] and [1,3]
+//	[1,2] → leaf
+//	[1,3] → leaf
+func TestPreloadBFS_CycleFree(t *testing.T) {
+	addr := common.HexToAddress("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	db := rawdb.NewMemoryDatabase()
+
+	hash := bytes.Repeat([]byte{0x01}, 32)
+
+	// root: branch with children at slots 0 and 1
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, []byte{0, 1}, hash))
+
+	// path [0]: leaf node
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0},
+		encodeShortNode(t, nibblesToCompact([]byte{0xa}, true), []byte("v0")))
+
+	// path [1]: branch with children at slots 2 and 3
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1}, encodeBranchNode(t, []byte{2, 3}, hash))
+
+	// path [1, 2]: leaf node
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 2},
+		encodeShortNode(t, nibblesToCompact([]byte{0xb}, true), []byte("v12")))
+
+	// path [1, 3]: leaf node
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 3},
+		encodeShortNode(t, nibblesToCompact([]byte{0xc}, true), []byte("v13")))
+
+	cacheSize := 10 * 1024 * 1024 // 10 MiB — large enough to hold all 5 nodes
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: cacheSize}, 512*1024, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	// Wait for async preload to complete (no rate limit, so completes in microseconds)
+	cache.wg.Wait()
+
+	// All 5 nodes must be in the cache. If the BFS had looped or revisited
+	// nodes, it would either hang or overwrite newer data (caught by the
+	// Has-before-Set check), but the node count would be wrong.
+	cacheKey := func(path []byte) []byte { return append(accountHash.Bytes(), path...) }
+	paths := [][]byte{nil, {0}, {1}, {1, 2}, {1, 3}}
+	for _, p := range paths {
+		if !cache.Has(cacheKey(p)) {
+			t.Errorf("expected node at path %v to be in cache", p)
+		}
+	}
+}
+
+// TestPreloadBFS_EmptyExtensionReadOnce verifies preload ignores malformed
+// empty extensions instead of revisiting the same path.
+func TestPreloadBFS_EmptyExtensionReadOnce(t *testing.T) {
+	addr := common.HexToAddress("0xbeefdeadbeefdeadbeefdeadbeefdeadbeefdead")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	base := rawdb.NewMemoryDatabase()
+	db := &countingDatabase{Database: base}
+
+	// Compact key 0x00 is a malformed empty extension that would otherwise
+	// point back to the current path.
+	rawdb.WriteStorageTrieNode(base, accountHash, nil,
+		encodeShortNode(t, []byte{0x00}, bytes.Repeat([]byte{0xee}, 32)))
+
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 1024 * 1024}, 512*1024, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	cache.wg.Wait()
+
+	if got := db.gets(); got != 1 {
+		t.Fatalf("expected preload to read the malformed root once, got %d reads", got)
+	}
+}
+
+// TestPreloadBFS_ExtensionTraversal verifies preload follows a valid extension
+// edge and caches descendants at the decoded child path.
+func TestPreloadBFS_ExtensionTraversal(t *testing.T) {
+	addr := common.HexToAddress("0xfacefacefacefacefacefacefacefacefaceface")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	db := rawdb.NewMemoryDatabase()
+
+	hash := bytes.Repeat([]byte{0x11}, 32)
+
+	// root: extension with key [1, 2] pointing to path [1, 2]
+	rawdb.WriteStorageTrieNode(db, accountHash, nil,
+		encodeShortNode(t, nibblesToCompact([]byte{1, 2}, false), hash))
+
+	// path [1, 2]: branch with child at slot 3
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 2},
+		encodeBranchNode(t, []byte{3}, hash))
+
+	// path [1, 2, 3]: leaf node
+	rawdb.WriteStorageTrieNode(db, accountHash, []byte{1, 2, 3},
+		encodeShortNode(t, nibblesToCompact([]byte{0xd}, true), []byte("v123")))
+
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 1024 * 1024}, 512*1024, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+
+	cache.wg.Wait()
+
+	cacheKey := func(path []byte) []byte { return append(accountHash.Bytes(), path...) }
+	for _, path := range [][]byte{nil, {1, 2}, {1, 2, 3}} {
+		if !cache.Has(cacheKey(path)) {
+			t.Fatalf("expected node at path %v to be cached", path)
+		}
+	}
+}
+
+// TestAddressBiasedCache_RateLimitInterruption_ValidTrie verifies Close can
+// interrupt a genuinely in-flight traversal on a valid trie, not just on an
+// invalid root blob.
+func TestAddressBiasedCache_RateLimitInterruption_ValidTrie(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	addr := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	accountHash := crypto.Keccak256Hash(addr.Bytes())
+	hash := bytes.Repeat([]byte{0x22}, 32)
+	slots := allBranchSlots()
+
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, hash))
+
+	largeValue := bytes.Repeat([]byte{0xaa}, 4*1024)
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i}, encodeBranchNode(t, slots, hash))
+		for _, j := range slots {
+			rawdb.WriteStorageTrieNode(db, accountHash, []byte{i, j},
+				encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), largeValue))
 		}
 	}
 
-	// Test with empty current path
-	childPaths = cache.gatherChildPaths(nodeData, nil)
-	if len(childPaths) != 16 {
-		t.Errorf("Expected 16 child paths for root, got %d", len(childPaths))
+	cache, err := NewAddressBiasedCache(db, map[common.Address]int{addr: 8 * 1024 * 1024}, 512*1024, 1024)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i := byte(0); i < 16; i++ {
-		expectedPath := []byte{i}
-		if !bytes.Equal(childPaths[i], expectedPath) {
-			t.Errorf("Root child path %d mismatch: expected %v, got %v", i, expectedPath, childPaths[i])
-		}
+
+	time.Sleep(50 * time.Millisecond)
+
+	start := time.Now()
+	cache.Close()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Close took too long during valid-trie rate-limited preload: %v", elapsed)
 	}
 }
 
@@ -653,28 +998,34 @@ func TestAddressBiasedCache_RateLimitInterruption(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
 
-	// Create many nodes to ensure preload takes time
-	nodeCount := 1000
-	nodeData := make([]byte, 100)
-	for i := 0; i < nodeCount; i++ {
-		path := []byte{byte(i % 256), byte(i / 256)}
-		rawdb.WriteStorageTrieNode(db, accountHash, path, nodeData)
+	// Build a valid trie large enough to keep the preload busy at 1KB/s.
+	// Branch root → 16 branch children → 256 leaf grandchildren (5KB each).
+	// Total: 256 × 5KB = 1.28MB — at 1KB/s this takes >1000s without cancellation.
+	slots := allBranchSlots()
+	hash := bytes.Repeat([]byte{0x33}, 32)
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, hash))
+	leafValue := bytes.Repeat([]byte{0xcc}, 5*1024)
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i}, encodeBranchNode(t, slots, hash))
+		for _, j := range slots {
+			rawdb.WriteStorageTrieNode(db, accountHash, []byte{i, j},
+				encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), leafValue))
+		}
 	}
-	rawdb.WriteStorageTrieNode(db, accountHash, nil, nodeData)
 
 	addressCacheSizes := map[common.Address]int{
 		addr: 1024 * 1024,
 	}
 
 	// Very slow rate limit to ensure preload is still running when we cancel
-	rateLimit := int64(1024) // 1 KB/s - would take ~100 seconds normally
+	rateLimit := int64(1024) // 1 KB/s - would take ~1000 seconds normally
 
 	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, rateLimit)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
-	// Let preload start
+	// Let preload start and exhaust the burst
 	time.Sleep(50 * time.Millisecond)
 
 	// Cancel by closing
@@ -696,28 +1047,23 @@ func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 	addr := common.HexToAddress("0x1234567890123456789012345678901234567890")
 	accountHash := crypto.Keccak256Hash(addr.Bytes())
 
-	// Create root node and several child nodes with large data to consume burst quickly
-	// Burst is 64KB, so we need nodes that total > 64KB to ensure WaitN blocks
-	largeNodeData := make([]byte, 32*1024) // 32KB per node
-	for i := 0; i < len(largeNodeData); i++ {
-		largeNodeData[i] = byte(i % 256)
-	}
-
-	// Write root node
-	rawdb.WriteStorageTrieNode(db, accountHash, nil, largeNodeData)
-
-	// Write 4 child nodes (4 * 32KB = 128KB > 64KB burst)
-	for i := byte(0); i < 4; i++ {
-		path := []byte{i}
-		rawdb.WriteStorageTrieNode(db, accountHash, path, largeNodeData)
+	// Build a valid trie: branch root with 8 children, each a large leaf.
+	// 8 children × 10KB = 80KB > 64KB burst, so WaitN blocks partway through children.
+	slots := []byte{0, 1, 2, 3, 4, 5, 6, 7}
+	hash := bytes.Repeat([]byte{0xab}, 32)
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, slots, hash))
+	largeValue := bytes.Repeat([]byte{0xbb}, 10*1024) // 10KB per leaf
+	for _, i := range slots {
+		rawdb.WriteStorageTrieNode(db, accountHash, []byte{i},
+			encodeShortNode(t, nibblesToCompact([]byte{0x0f}, true), largeValue))
 	}
 
 	addressCacheSizes := map[common.Address]int{
 		addr: 1024 * 1024, // 1MB cache
 	}
 
-	// Very slow rate limit: 1KB/s with 64KB burst
-	// After burst is consumed, preload will block in WaitN for ~32 seconds per node
+	// Very slow rate limit: 1KB/s with 64KB burst.
+	// After ~6 children (~60KB) the burst is exhausted and WaitN blocks for ~10s per node.
 	rateLimit := int64(1024) // 1 KB/s
 
 	cache, err := NewAddressBiasedCache(db, addressCacheSizes, 512*1024, rateLimit)
@@ -725,9 +1071,7 @@ func TestAddressBiasedCache_ShutdownDuringRateLimitWait(t *testing.T) {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
-	// Wait long enough for burst to be consumed and WaitN to block
-	// Root (32KB) + first two children (64KB) = 96KB > 64KB burst
-	// So after ~100ms the preload should be blocked in WaitN
+	// Wait for burst to be consumed and WaitN to block
 	time.Sleep(200 * time.Millisecond)
 
 	// Now Close() should interrupt the WaitN call
@@ -763,8 +1107,8 @@ func TestAddressBiasedCache_BurstExceeded(t *testing.T) {
 		oversizedData[i] = byte(i % 256)
 	}
 
-	// Write a small root node so traversal proceeds to the child
-	rawdb.WriteStorageTrieNode(db, accountHash, nil, []byte("root"))
+	// Write a valid branch node as root so decodeChildPaths discovers children at [0x00] and [0x01]
+	rawdb.WriteStorageTrieNode(db, accountHash, nil, encodeBranchNode(t, []byte{0x00, 0x01}, bytes.Repeat([]byte{0x01}, 32)))
 
 	// Write an oversized child node that should be skipped
 	rawdb.WriteStorageTrieNode(db, accountHash, []byte{0x00}, oversizedData)

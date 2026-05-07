@@ -69,20 +69,14 @@ jobs:
       - build-heimdall-v2
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      RUN_PRIVILEGED_STEPS: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     # These permissions are required to log in to GCR
     permissions:
       contents: read
       actions: write
       id-token: write
     steps:
-      - name: Skip privileged e2e steps on fork pull requests
-        if: env.RUN_PRIVILEGED_STEPS != 'true'
-        run: echo "Skipping privileged e2e workflow because fork pull requests do not receive the required OIDC token and secrets."
       # Set up kurtosis
       - name: Checkout kurtosis-pos
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/kurtosis-pos
@@ -90,7 +84,6 @@ jobs:
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         uses: ./.github/actions/setup
         with:
           main_branch: develop
@@ -98,7 +91,6 @@ jobs:
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
       - name: Checkout pos-workflows
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         uses: actions/checkout@v5
         with:
           repository: 0xPolygon/pos-workflows
@@ -106,31 +98,26 @@ jobs:
           path: pos-workflows
 
       - name: Copy kurtosis config
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: cp ./pos-workflows/configs/kurtosis-stateless-e2e.yml ./kurtosis-stateless-e2e.yml
 
       # Load images
       - name: Download bor docker image
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         uses: actions/download-artifact@v4
         with:
           name: bor-image
 
       - name: Download heimdall-v2 docker image
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         uses: actions/download-artifact@v4
         with:
           name: heimdall-v2-image
 
       - name: Load bor docker image
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: |
           gunzip -c bor-image.tar.gz | docker load
           echo "Loaded bor docker image:"
           docker images bor:local --format "{{.ID}} {{.CreatedAt}}"
 
       - name: Load heimdall-v2 docker image
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: |
           gunzip -c heimdall-v2-image.tar.gz | docker load
           echo "Loaded heimdall-v2 docker image:"
@@ -138,16 +125,13 @@ jobs:
 
       # Deploy kurtosis enclave
       - name: Kurtosis run
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: kurtosis run --args-file=kurtosis-stateless-e2e.yml --enclave ${{ env.ENCLAVE_NAME }} .
 
       - name: Inspect enclave
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: kurtosis enclave inspect ${{ env.ENCLAVE_NAME }}
 
       # Run e2e tests
       - name: Install polycli
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         run: |
           tmp_dir=$(mktemp -d)
           curl -L https://github.com/0xPolygon/polygon-cli/releases/download/${{ env.POLYCLI_VERSION }}/polycli_${{ env.POLYCLI_VERSION }}_linux_amd64.tar.gz | tar -xz -C "$tmp_dir"
@@ -158,20 +142,19 @@ jobs:
 
       - name: Run stateless e2e tests
         id: stateless-tests
-        if: env.RUN_PRIVILEGED_STEPS == 'true'
         working-directory: pos-workflows/tests/stateless_tests
         run: bash kurtosis_stateless_test.sh
 
       # Collect diagnostics on failure
       - name: Collect network diagnostics and state dump
-        if: env.RUN_PRIVILEGED_STEPS == 'true' && always() && steps.stateless-tests.outcome == 'failure'
+        if: always() && steps.stateless-tests.outcome == 'failure'
         uses: ./pos-workflows/.github/actions/network-diagnostics-and-state-dump
         with:
           enclave_name: ${{ env.ENCLAVE_NAME }}
 
       # Clean up
       - name: Post kurtosis run
-        if: env.RUN_PRIVILEGED_STEPS == 'true' && always()
+        if: always()
         uses: ./.github/actions/cleanup
         with:
           main_branch: develop
