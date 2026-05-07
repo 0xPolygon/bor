@@ -146,9 +146,10 @@ func (s *PrivateTxStore) SetTxPoolChecker(checker TxPoolChecker) {
 }
 
 // sweep periodically removes stale entries from the store. An entry is removed
-// either if tx is old than hard TTL (10 mins default) or if tx is older than
-// privateTxGracePeriod and is no longer present in the local txpool (eviction
-// from local pool is treated as the source of truth).
+// either when it exceeds the hard TTL (10 minutes by default), regardless of
+// txpool state, or when it is older than privateTxGracePeriod and is no longer
+// present in the local txpool, which is treated as the source of truth for
+// eviction.
 func (s *PrivateTxStore) sweep() {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
