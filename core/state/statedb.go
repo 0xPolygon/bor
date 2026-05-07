@@ -581,7 +581,6 @@ func (s *StateDB) StopPrefetcher() {
 type PrefetcherSnapshotStats struct {
 	Drain   time.Duration
 	Collect time.Duration
-	Build   time.Duration
 	Report  time.Duration
 
 	Fetchers        int
@@ -595,12 +594,12 @@ type PrefetcherSnapshotStats struct {
 	StorageBytes int
 }
 
-// StopAndSnapshotPrefetcher terminates a running prefetcher synchronously,
-// captures the trie nodes its subfetchers had loaded into a quiesced
-// snapshot, then reports stats and clears the prefetcher reference. The
-// returned snapshot is owned by the caller, contains copies of the source
-// blobs (no aliasing into prefetcher state) and is safe for concurrent
-// readers.
+// StopAndCollectWarmSnapshot terminates a running prefetcher synchronously,
+// captures the trie nodes its subfetchers had loaded into a quiesced handoff
+// bundle, then reports stats and clears the prefetcher reference. The returned
+// input is owned by the caller and is safe to pass to another goroutine; the
+// final WarmSnapshot copy/hash/index build is intentionally deferred to
+// WarmSnapshotInput.Build.
 //
 // Step ordering matters and is enforced here:
 //
@@ -611,16 +610,12 @@ type PrefetcherSnapshotStats struct {
 //  3. report — emit metrics from the same fetchers (unchanged from
 //     StopPrefetcher).
 //  4. nil out s.prefetcher — detach the StateDB from the prefetcher.
-//  5. NewWarmSnapshot — copy/hash the collected trie-node blobs into an
-//     immutable snapshot. The local collected maps keep the source nodes alive
-//     until this copy finishes.
 //
-// Returns nil when no prefetcher is installed or the snapshot would be
-// empty (no subfetchers loaded any nodes). Callers must tolerate a nil
-// snapshot and treat it as "no warm data; fall through to the underlying
-// reader for every node". The returned stats are populated even when the
-// snapshot is nil, as long as a prefetcher existed.
-func (s *StateDB) StopAndSnapshotPrefetcher() (*WarmSnapshot, PrefetcherSnapshotStats) {
+// Returns nil when no prefetcher is installed or no subfetcher loaded any
+// nodes. Callers must tolerate a nil input and treat it as "no warm data; fall
+// through to the underlying reader for every node". The returned stats are
+// populated even when the input is nil, as long as a prefetcher existed.
+func (s *StateDB) StopAndCollectWarmSnapshot() (*WarmSnapshotInput, PrefetcherSnapshotStats) {
 	var stats PrefetcherSnapshotStats
 	if s.prefetcher == nil {
 		return nil, stats
@@ -648,10 +643,7 @@ func (s *StateDB) StopAndSnapshotPrefetcher() (*WarmSnapshot, PrefetcherSnapshot
 	if len(tries) == 0 {
 		return nil, stats
 	}
-	phaseStart = time.Now()
-	snapshot := NewWarmSnapshot(tries)
-	stats.Build = time.Since(phaseStart)
-	return snapshot, stats
+	return NewWarmSnapshotInput(tries), stats
 }
 
 // ResetPrefetcher cleans the prefetcher from a State, commonly used in tempStates to track witness while no impacting block building

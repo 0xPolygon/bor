@@ -4595,7 +4595,10 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // trie-proof nodes during ApplyFlatDiffForCommit + CommitWithUpdate. Call
 // sites with no execution witness in scope set execWitness=nil and
 // allowOwnWitness=true to explicitly permit SRC to create its own witness.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshot *state.WarmSnapshot) {
+// warmSnapshotInput is an optional quiesced prefetcher handoff; SRC builds the
+// immutable WarmSnapshot from it inside the goroutine so the import thread does
+// not pay the copy/hash/index cost.
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshotInput *state.WarmSnapshotInput) {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4606,7 +4609,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, warmSnapshot)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, warmSnapshotInput)
 }
 
 // runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
@@ -4629,9 +4632,9 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     writers-exited semantics (trie_prefetcher.go: <-sf.term gated on
 //     loop's `defer close(sf.term)`) provide the ordering guarantee should
 //     that ever change.
-//  3. StopPrefetcher() runs synchronously in persistPipelinedImport before
-//     this goroutine is spawned. After StopPrefetcher returns, every
-//     subfetcher goroutine has exited.
+//  3. The import path stops the prefetcher synchronously in
+//     persistPipelinedImport before this goroutine is spawned. After that
+//     stop returns, every subfetcher goroutine has exited.
 //  4. The main thread hands W to this goroutine via SpawnSRCGoroutine and
 //     never touches W again — it moves on to the next block with a fresh
 //     witness.
@@ -4644,7 +4647,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     prefetcher-spawned goroutine.
 //   - No terminate(true) (async) call on the SRC handoff path.
 //   - No reuse of W on the main thread after SpawnSRCGoroutine.
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshot *state.WarmSnapshot) {
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshotInput *state.WarmSnapshotInput) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	defer func() {
@@ -4670,6 +4673,16 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		return
 	}
 
+	var warmSnapshot *state.WarmSnapshot
+	if warmSnapshotInput != nil {
+		buildStart := time.Now()
+		warmSnapshot = warmSnapshotInput.Build()
+		pipelineImportWarmSnapshotBuild.UpdateSince(buildStart)
+		// Drop the handoff maps before SRC starts the trie walk. The final
+		// WarmSnapshot owns blob copies; keeping the input alive would retain a
+		// second copy of the same warm surface until the goroutine exits.
+		warmSnapshotInput = nil
+	}
 	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot)
 	if err != nil {
 		pending.err = err
@@ -5044,7 +5057,6 @@ type pipelinedImportPersistTimings struct {
 	prefetchDrain  time.Duration
 	prefetchReport time.Duration
 	warmCollect    time.Duration
-	warmBuild      time.Duration
 	commitSnapshot time.Duration
 	collect        time.Duration
 	stateSyncFeed  time.Duration
@@ -5087,31 +5099,29 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// insertChainWithWitnesses only fires on the final activeState).
 	// Stop the prefetcher synchronously. When PipelinedSRCWarmSnapshot is
 	// enabled AND this block produces a witness, capture the trie nodes the
-	// prefetcher had loaded into a quiesced snapshot in the same call so SRC
-	// can avoid re-reading them from cold pebble. The snapshot is
-	// constructed AFTER the prefetcher goroutines have exited
-	// (writers-exited drain), so the source tries are quiescent and safe to
-	// read; the returned WarmSnapshot is an immutable copy with no aliasing
-	// into prefetcher state. A nil snapshot (flag off, witness-off path,
-	// no prefetcher, or no warm nodes) reduces to the pre-snapshot
-	// behaviour: SRC's NodeReader is the plain pathdb chain. The
-	// makeWitness gate matters because the witness-off SRC path uses the
-	// multi-reader (with flat reader) which doesn't consult the snapshot
-	// (see openSRCStateDB), so capturing one would burn copy + Keccak cost
-	// for no benefit.
-	var warmSnapshot *state.WarmSnapshot
+	// prefetcher had loaded into a quiesced handoff bundle so SRC can avoid
+	// re-reading them from cold pebble. The bundle is collected AFTER the
+	// prefetcher goroutines have exited (writers-exited drain), so the source
+	// tries are quiescent and safe to read. The expensive final WarmSnapshot
+	// copy/hash/index build happens in the SRC goroutine, not on the import
+	// thread. A nil bundle (flag off, witness-off path, no prefetcher, or no
+	// warm nodes) reduces to the pre-snapshot behaviour: SRC's NodeReader is
+	// the plain pathdb chain. The makeWitness gate matters because the
+	// witness-off SRC path uses the multi-reader (with flat reader) which
+	// doesn't consult the snapshot (see openSRCStateDB), so capturing one would
+	// burn collect work for no benefit.
+	var warmSnapshotInput *state.WarmSnapshotInput
 	var snapshotStats state.PrefetcherSnapshotStats
 	warmSnapshotEnabled := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
 	phaseStart := time.Now()
 	if warmSnapshotEnabled {
-		warmSnapshot, snapshotStats = statedb.StopAndSnapshotPrefetcher()
+		warmSnapshotInput, snapshotStats = statedb.StopAndCollectWarmSnapshot()
 	} else {
 		statedb.StopPrefetcher()
 	}
 	timings.prefetchStop = time.Since(phaseStart)
 	timings.prefetchDrain = snapshotStats.Drain
 	timings.warmCollect = snapshotStats.Collect
-	timings.warmBuild = snapshotStats.Build
 	timings.prefetchReport = snapshotStats.Report
 	timings.warmFetchers = snapshotStats.LoadedFetchers
 	timings.prefetchFetchers = snapshotStats.Fetchers
@@ -5119,11 +5129,12 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	timings.warmStorageNodes = snapshotStats.StorageNodes
 	timings.warmAccountBytes = snapshotStats.AccountBytes
 	timings.warmStorageBytes = snapshotStats.StorageBytes
+	timings.warmSnapshotNodes = snapshotStats.AccountNodes + snapshotStats.StorageNodes
+	timings.warmSnapshotBytes = snapshotStats.AccountBytes + snapshotStats.StorageBytes
 	pipelineImportPrefetchStopTimer.Update(timings.prefetchStop)
 	if warmSnapshotEnabled {
 		pipelineImportPrefetchDrainTimer.Update(snapshotStats.Drain)
 		pipelineImportWarmSnapshotCollect.Update(snapshotStats.Collect)
-		pipelineImportWarmSnapshotBuild.Update(snapshotStats.Build)
 		pipelineImportPrefetchReportTimer.Update(snapshotStats.Report)
 		pipelineImportPrefetchSubfetchers.Update(int64(snapshotStats.Fetchers))
 		pipelineImportWarmSnapshotFetchers.Update(int64(snapshotStats.LoadedFetchers))
@@ -5131,10 +5142,6 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 		pipelineImportWarmSnapshotStorageNodes.Update(int64(snapshotStats.StorageNodes))
 		pipelineImportWarmSnapshotAccountBytes.Update(int64(snapshotStats.AccountBytes))
 		pipelineImportWarmSnapshotStorageBytes.Update(int64(snapshotStats.StorageBytes))
-	}
-	if warmSnapshot != nil {
-		timings.warmSnapshotNodes = warmSnapshot.Len()
-		timings.warmSnapshotBytes = warmSnapshot.SizeBytes()
 	}
 	if warmSnapshotEnabled {
 		pipelineImportWarmSnapshotNodes.Update(int64(timings.warmSnapshotNodes))
@@ -5203,11 +5210,11 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
 	// Import passes execWitness from execution and requires SRC to publish
 	// that same witness object. runSRCCompute hard-fails on a nil witness
-	// when allowOwnWitness=false. warmSnapshot may be nil (flag off or no
-	// warm nodes); SRC tolerates that and falls back to the plain pathdb
+	// when allowOwnWitness=false. warmSnapshotInput may be nil (flag off or
+	// no warm nodes); SRC tolerates that and falls back to the plain pathdb
 	// reader chain.
 	phaseStart = time.Now()
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, warmSnapshot)
+	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, warmSnapshotInput)
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
 	newPending := &pendingImportSRCState{
@@ -5250,7 +5257,6 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 		"prefetchStop", common.PrettyDuration(timings.prefetchStop),
 		"prefetchDrain", common.PrettyDuration(timings.prefetchDrain),
 		"warmCollect", common.PrettyDuration(timings.warmCollect),
-		"warmBuild", common.PrettyDuration(timings.warmBuild),
 		"prefetchReport", common.PrettyDuration(timings.prefetchReport),
 		"prefetchFetchers", timings.prefetchFetchers,
 		"warmFetchers", timings.warmFetchers,

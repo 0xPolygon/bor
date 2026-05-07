@@ -105,7 +105,7 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 // into a list of (owner, path -> blob) maps. It MUST be called only after
 // terminate(false) has returned — once subfetcher goroutines have exited their
 // loops, their tries are quiescent and trie.Witness() can be read safely. The
-// caller (StopAndSnapshotPrefetcher) sequences this between terminate(false)
+// caller (StopAndCollectWarmSnapshot) sequences this between terminate(false)
 // and report so the prefetcher's lifecycle remains intact.
 //
 // Returns nil when called on a nil receiver, an already-closed prefetcher

@@ -36,10 +36,9 @@ var (
 )
 
 // WarmSnapshot is an immutable, hash-verified copy of trie nodes loaded by the
-// execution-side prefetcher. It is constructed from a quiesced trie prefetcher
-// (after StopPrefetcher returned) and handed to the pipelined SRC goroutine so
-// SRC's NewTrieOnly reader can short-circuit pathdb/pebble lookups for nodes
-// the main thread already loaded.
+// execution-side prefetcher. It is constructed in the pipelined SRC goroutine
+// from a quiesced WarmSnapshotInput so SRC's NewTrieOnly reader can
+// short-circuit pathdb/pebble lookups for nodes the main thread already loaded.
 //
 // The snapshot is read-only after construction. Concurrent readers are safe
 // because a populated map is never mutated post-construction; the SRC handoff
@@ -103,6 +102,37 @@ func NewWarmSnapshot(tries []TrieWarmNodes) *WarmSnapshot {
 type TrieWarmNodes struct {
 	Owner common.Hash
 	Nodes map[string][]byte
+}
+
+// WarmSnapshotInput is the quiesced handoff from the execution-side
+// prefetcher to SRC. It contains cloned path->blob maps returned by
+// Trie.Witness() after all subfetcher goroutines have exited. The maps are
+// read-only after construction and may be passed to another goroutine.
+//
+// Build constructs the final immutable, hash-indexed WarmSnapshot. Keeping
+// this as a separate step lets the import thread stop and detach the
+// prefetcher quickly while SRC pays the copy/hash/index cost in the background.
+type WarmSnapshotInput struct {
+	tries []TrieWarmNodes
+}
+
+// NewWarmSnapshotInput wraps quiesced trie-node maps for later WarmSnapshot
+// construction. It does not copy blobs or compute hashes; callers must only
+// pass maps that will not be mutated after this point.
+func NewWarmSnapshotInput(tries []TrieWarmNodes) *WarmSnapshotInput {
+	if len(tries) == 0 {
+		return nil
+	}
+	return &WarmSnapshotInput{tries: tries}
+}
+
+// Build constructs the immutable WarmSnapshot from the input. The returned
+// snapshot owns copies of all node blobs and does not alias the input maps.
+func (in *WarmSnapshotInput) Build() *WarmSnapshot {
+	if in == nil || len(in.tries) == 0 {
+		return nil
+	}
+	return NewWarmSnapshot(in.tries)
 }
 
 // Len returns the number of nodes in the snapshot. Useful for tests and
