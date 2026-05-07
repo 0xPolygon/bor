@@ -134,10 +134,13 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 		go func(client *rpc.Client, index int) {
 			defer wg.Done()
 
+			callStart := time.Now()
 			var preconfResponse SendTxForPreconfResponse
 			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 			err := client.CallContext(ctx, &preconfResponse, "eth_sendRawTransactionForPreconf", hexutil.Encode(rawTx))
 			cancel()
+			elapsed := time.Since(callStart)
+
 			if err != nil {
 				preconfRpcFailureMeter.Mark(1)
 				mc.rejectionTracker.record(err)
@@ -147,6 +150,7 @@ func (mc *multiClient) submitPreconfTx(rawTx []byte) (bool, error) {
 					preconfOfferedCount.Add(1)
 					return
 				}
+				log.Debug("[tx-relay] Failed to submit preconf tx", "err", err, "producer", index, "elapsed", elapsed)
 				setError.Do(func() {
 					firstErr = err
 				})
@@ -196,10 +200,12 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 		go func(client *rpc.Client, index int) {
 			defer wg.Done()
 
+			callStart := time.Now()
 			var txHash common.Hash
 			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 			err := client.CallContext(ctx, &txHash, "eth_sendRawTransactionPrivate", hexTx)
 			cancel()
+			elapsed := time.Since(callStart)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -216,7 +222,7 @@ func (mc *multiClient) submitPrivateTx(rawTx []byte, hash common.Hash, retry boo
 					firstErr = err
 				})
 				failedIndices = append(failedIndices, index)
-				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash)
+				log.Debug("[tx-relay] Failed to submit private tx (initial attempt)", "err", err, "producer", index, "hash", hash, "elapsed", elapsed)
 			} else {
 				privateTxRpcSuccessMeter.Mark(1)
 				successfulIndices = append(successfulIndices, index)

@@ -172,7 +172,7 @@ func (s *Service) processPreconfTask(task TxTask) {
 		err = errPreconfValidationFailed
 	}
 	if err != nil {
-		log.Warn("[tx-relay] failed to submit preconf tx", "err", err)
+		log.Warn("[tx-relay] Error submitting preconf tx", "elapsed", time.Since(start), "err", err)
 	}
 	task.preconfirmed = res
 	task.err = err
@@ -290,7 +290,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 	privateTxSubmitTimer.UpdateSince(start)
 	if err != nil {
 		privateTxSubmissionFailureMeter.Mark(1)
-		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "err", err)
+		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "elapsed", time.Since(start), "err", err)
 		return errPrivateTxSubmissionFailed
 	}
 

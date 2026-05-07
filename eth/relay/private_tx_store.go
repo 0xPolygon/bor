@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	privateTxGracePeriod = 2 * time.Minute // min age before txpool presence check applies
-	sweepInterval        = 1 * time.Minute // how often the sweep goroutine runs
+	privateTxTTL         = 10 * time.Minute // hard TTL: remove tx from store after this duration regardless
+	privateTxGracePeriod = 2 * time.Minute  // min age before txpool presence check applies
+	sweepInterval        = 1 * time.Minute  // how often the sweep goroutine runs
 )
 
 var privateTxStoreSizeGauge = metrics.NewRegisteredGauge("relay/privatetx/store/size", nil)
@@ -145,9 +146,9 @@ func (s *PrivateTxStore) SetTxPoolChecker(checker TxPoolChecker) {
 }
 
 // sweep periodically removes stale entries from the store. An entry is removed
-// once it has been in the store longer than privateTxGracePeriod and is no
-// longer present in the local txpool — the txpool's own eviction is treated as
-// the source of truth.
+// either if tx is old than hard TTL (10 mins default) or if tx is older than
+// privateTxGracePeriod and is no longer present in the local txpool (eviction
+// from local pool is treated as the source of truth).
 func (s *PrivateTxStore) sweep() {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
@@ -185,7 +186,10 @@ func (s *PrivateTxStore) sweepOnce() {
 	toDelete := make([]entry, 0)
 	for _, entry := range entries {
 		age := now.Sub(entry.addedAt)
-		if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
+		if age > privateTxTTL {
+			// Hard TTL: remove regardless of txpool status
+			toDelete = append(toDelete, entry)
+		} else if age > privateTxGracePeriod && s.txPoolChecker != nil && !s.txPoolChecker(entry.hash) {
 			toDelete = append(toDelete, entry)
 		}
 	}

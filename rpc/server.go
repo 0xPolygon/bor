@@ -19,6 +19,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -191,9 +192,42 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	h.allowSubscribe = false
 	defer h.close(io.EOF, nil)
 
+	readStart := time.Now()
 	reqs, batch, err := codec.readBatch()
+	elapsed := time.Since(readStart)
+
 	if err != nil {
 		if msg := messageForReadError(err); msg != "" {
+			// Log some details about this failure to help diagnose whether it's an
+			// upstream stall (with net/http's issue around read timeout) or an
+			// actual bor delay.
+			var netErr net.Error
+			isNetErr := errors.As(err, &netErr)
+			var timeout bool
+			if isNetErr {
+				timeout = netErr.Timeout()
+			}
+			// Use PeerInfoFromContext(ctx) which returns the HTTP-enriched view which includes
+			// fields like User-Agent / Host / Origin to identify the upstream actor.
+			peer := PeerInfoFromContext(ctx)
+			codecPeer := codec.peerInfo()
+
+			log.Warn("RPC HTTP read failed before handler dispatch",
+				"msg", msg,
+				"err", err,
+				"errType", fmt.Sprintf("%T", err),
+				"isNetErr", isNetErr,
+				"timeout", timeout,
+				"elapsed", elapsed,
+				"remote", peer.RemoteAddr,
+				"codecRemote", codecPeer.RemoteAddr,
+				"transport", peer.Transport,
+				"httpVersion", peer.HTTP.Version,
+				"userAgent", peer.HTTP.UserAgent,
+				"origin", peer.HTTP.Origin,
+				"host", peer.HTTP.Host,
+			)
+
 			resp := errorMessage(&invalidMessageError{msg})
 			codec.writeJSON(ctx, resp, true)
 		}
