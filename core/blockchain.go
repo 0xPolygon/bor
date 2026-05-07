@@ -4628,10 +4628,10 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     - AddBlockHash via vm/instructions.go (BLOCKHASH opcode)
 //     - AddState via statedb.go Finalise/IntermediateRoot reads
 //  2. The trie prefetcher does not write to W — subfetcher.loop only
-//     populates trie-local prevalueTracer state. terminate(false)'s
-//     writers-exited semantics (trie_prefetcher.go: <-sf.term gated on
-//     loop's `defer close(sf.term)`) provide the ordering guarantee should
-//     that ever change.
+//     populates trie-local prevalueTracer state. The synchronous prefetcher
+//     stop used by the import handoff has writers-exited semantics
+//     (trie_prefetcher.go: <-sf.term gated on loop's `defer close(sf.term)`),
+//     which provides the ordering guarantee should that ever change.
 //  3. The import path stops the prefetcher synchronously in
 //     persistPipelinedImport before this goroutine is spawned. After that
 //     stop returns, every subfetcher goroutine has exited.
@@ -5102,14 +5102,16 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// prefetcher had loaded into a quiesced handoff bundle so SRC can avoid
 	// re-reading them from cold pebble. The bundle is collected AFTER the
 	// prefetcher goroutines have exited (writers-exited drain), so the source
-	// tries are quiescent and safe to read. The expensive final WarmSnapshot
-	// copy/hash/index build happens in the SRC goroutine, not on the import
-	// thread. A nil bundle (flag off, witness-off path, no prefetcher, or no
-	// warm nodes) reduces to the pre-snapshot behaviour: SRC's NodeReader is
-	// the plain pathdb chain. The makeWitness gate matters because the
-	// witness-off SRC path uses the multi-reader (with flat reader) which
-	// doesn't consult the snapshot (see openSRCStateDB), so capturing one would
-	// burn collect work for no benefit.
+	// tries are quiescent and safe to read. Queued speculative prefetch tasks
+	// may be discarded by StopAndCollectWarmSnapshot; missing warm nodes are
+	// just snapshot misses and SRC falls through to pathdb. The expensive final
+	// WarmSnapshot copy/hash/index build happens in the SRC goroutine, not on
+	// the import thread. A nil bundle (flag off, witness-off path, no
+	// prefetcher, or no warm nodes) reduces to the pre-snapshot behaviour:
+	// SRC's NodeReader is the plain pathdb chain. The makeWitness gate matters
+	// because the witness-off SRC path uses the multi-reader (with flat reader)
+	// which doesn't consult the snapshot (see openSRCStateDB), so capturing one
+	// would burn collect work for no benefit.
 	var warmSnapshotInput *state.WarmSnapshotInput
 	var snapshotStats state.PrefetcherSnapshotStats
 	warmSnapshotEnabled := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
@@ -5148,12 +5150,11 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 		pipelineImportWarmSnapshotBytes.Update(int64(timings.warmSnapshotBytes))
 	}
 	// Capture the execution witness so SRC can complete it. After the
-	// prefetcher stop above, every subfetcher goroutine has exited (sync
-	// drain via terminate(false) → <-sf.term). The trie prefetcher does not
-	// write to the witness — subfetcher.loop only populates trie-local
-	// prevalueTracer state — and the drain ordering is the structural
-	// guarantee that must be preserved if that ever changes. See LINEAR
-	// OWNERSHIP INVARIANT at runSRCCompute.
+	// prefetcher stop above, every subfetcher goroutine has exited (sync wait
+	// via <-sf.term). The trie prefetcher does not write to the witness —
+	// subfetcher.loop only populates trie-local prevalueTracer state — and the
+	// stop ordering is the structural guarantee that must be preserved if that
+	// ever changes. See LINEAR OWNERSHIP INVARIANT at runSRCCompute.
 	var execWitness *stateless.Witness
 	if makeWitness {
 		execWitness = statedb.Witness()

@@ -71,6 +71,161 @@ func TestUseAfterTerminate(t *testing.T) {
 	}
 }
 
+func TestSubfetcherSnapshotFastTerminateDiscardsQueuedTasks(t *testing.T) {
+	db := filledStateDB()
+	slot := common.HexToHash("aaa")
+	sf := &subfetcher{
+		db:            db.db,
+		state:         db.originalRoot,
+		root:          db.originalRoot,
+		wake:          make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		term:          make(chan struct{}),
+		seenReadAddr:  make(map[common.Address]struct{}),
+		seenWriteAddr: make(map[common.Address]struct{}),
+		seenReadSlot:  make(map[common.Hash]struct{}),
+		seenWriteSlot: make(map[common.Hash]struct{}),
+		tasks:         []*subfetcherTask{{slot: &slot}},
+	}
+	sf.terminateWithMode(true, prefetchStopSnapshotFast)
+
+	if got := len(sf.tasks); got != 0 {
+		t.Fatalf("snapshot-fast terminate left %d queued tasks, want 0", got)
+	}
+	select {
+	case <-sf.stop:
+	default:
+		t.Fatalf("snapshot-fast terminate did not close stop channel")
+	}
+	if err := sf.schedule(nil, []common.Hash{slot}, false); err != errTerminated {
+		t.Fatalf("schedule after snapshot-fast terminate error = %v, want %v", err, errTerminated)
+	}
+}
+
+func TestSubfetcherDrainTerminateKeepsQueuedTasks(t *testing.T) {
+	db := filledStateDB()
+	slot := common.HexToHash("aaa")
+	sf := &subfetcher{
+		db:            db.db,
+		state:         db.originalRoot,
+		root:          db.originalRoot,
+		wake:          make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		term:          make(chan struct{}),
+		seenReadAddr:  make(map[common.Address]struct{}),
+		seenWriteAddr: make(map[common.Address]struct{}),
+		seenReadSlot:  make(map[common.Hash]struct{}),
+		seenWriteSlot: make(map[common.Hash]struct{}),
+		tasks:         []*subfetcherTask{{slot: &slot}},
+	}
+	sf.terminateWithMode(true, prefetchStopDrain)
+
+	if got := len(sf.tasks); got != 1 {
+		t.Fatalf("full-drain terminate changed queued task count to %d, want 1", got)
+	}
+}
+
+func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
+	db := NewDatabaseForTesting()
+	tr := newBlockingPrefetchTrie()
+	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
+		Database: db,
+		triedb:   db.TrieDB(),
+		trie:     tr,
+	}, common.Hash{}, "snapshot-fast-terminate", false)
+	addr1 := common.HexToAddress("0x1")
+	addr2 := common.HexToAddress("0x2")
+
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, []common.Address{addr1}, nil, false); err != nil {
+		t.Fatalf("first prefetch failed: %v", err)
+	}
+	select {
+	case <-tr.started:
+	case <-time.After(time.Second):
+		t.Fatalf("first prefetch did not start")
+	}
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, []common.Address{addr2}, nil, false); err != nil {
+		t.Fatalf("second prefetch failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		prefetcher.terminateForSnapshot()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("snapshot-fast terminate returned before in-flight prefetch completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(tr.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("snapshot-fast terminate did not return after in-flight prefetch completed")
+	}
+
+	if calls, items := tr.accountStats(); calls != 1 || items != 1 {
+		t.Fatalf("executed account prefetch calls/items = %d/%d, want 1/1", calls, items)
+	}
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, []common.Address{addr2}, nil, false); err != errTerminated {
+		t.Fatalf("prefetch after snapshot-fast terminate error = %v, want %v", err, errTerminated)
+	}
+}
+
+type blockingPrefetchDB struct {
+	Database
+	triedb *triedb.Database
+	trie   *blockingPrefetchTrie
+}
+
+func (db *blockingPrefetchDB) OpenTrie(common.Hash) (Trie, error) {
+	return db.trie, nil
+}
+
+func (db *blockingPrefetchDB) TrieDB() *triedb.Database {
+	return db.triedb
+}
+
+type blockingPrefetchTrie struct {
+	Trie
+
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+
+	lock         sync.Mutex
+	accountCalls int
+	accountItems int
+}
+
+func newBlockingPrefetchTrie() *blockingPrefetchTrie {
+	return &blockingPrefetchTrie{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (t *blockingPrefetchTrie) PrefetchAccount(addrs []common.Address) error {
+	t.lock.Lock()
+	t.accountCalls++
+	t.accountItems += len(addrs)
+	first := t.accountCalls == 1
+	t.lock.Unlock()
+	if first {
+		t.once.Do(func() { close(t.started) })
+		<-t.release
+	}
+	return nil
+}
+
+func (t *blockingPrefetchTrie) accountStats() (int, int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	return t.accountCalls, t.accountItems
+}
+
 func TestVerklePrefetcher(t *testing.T) {
 	disk := rawdb.NewMemoryDatabase()
 	db := triedb.NewDatabase(disk, triedb.VerkleDefaults)

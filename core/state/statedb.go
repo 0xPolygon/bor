@@ -603,8 +603,11 @@ type PrefetcherSnapshotStats struct {
 //
 // Step ordering matters and is enforced here:
 //
-//  1. terminate(false) — signal stop, wait for every subfetcher loop to exit
-//     (writers-exited semantics via <-sf.term gated on `defer close(sf.term)`).
+//  1. terminateForSnapshot — signal stop, discard queued speculative work,
+//     and wait for every subfetcher loop to exit (writers-exited semantics via
+//     <-sf.term gated on `defer close(sf.term)`). Already-running trie reads
+//     are allowed to finish; unstarted queued reads are not required because
+//     missing warm nodes fall through to pathdb in SRC.
 //  2. snapshotWarmNodes — read each subfetcher's trie.Witness() while no
 //     writer remains. Quiescent state guarantees the read is race-free.
 //  3. report — emit metrics from the same fetchers (unchanged from
@@ -621,7 +624,7 @@ func (s *StateDB) StopAndCollectWarmSnapshot() (*WarmSnapshotInput, PrefetcherSn
 		return nil, stats
 	}
 	phaseStart := time.Now()
-	s.prefetcher.terminate(false)
+	s.prefetcher.terminateForSnapshot()
 	stats.Drain = time.Since(phaseStart)
 
 	phaseStart = time.Now()
