@@ -128,6 +128,7 @@ func TestSubfetcherDrainTerminateKeepsQueuedTasks(t *testing.T) {
 func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
 	db := NewDatabaseForTesting()
 	tr := newBlockingPrefetchTrie()
+	t.Cleanup(tr.releaseBlockedPrefetch)
 	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
 		Database: db,
 		triedb:   db.TrieDB(),
@@ -158,7 +159,7 @@ func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
 		t.Fatalf("snapshot-fast terminate returned before in-flight prefetch completed")
 	case <-time.After(20 * time.Millisecond):
 	}
-	close(tr.release)
+	tr.releaseBlockedPrefetch()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -173,6 +174,143 @@ func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
 	}
 }
 
+func TestTriePrefetcherSnapshotFastTerminateStopsBetweenAccountChunks(t *testing.T) {
+	db := NewDatabaseForTesting()
+	tr := newBlockingPrefetchTrie()
+	t.Cleanup(tr.releaseBlockedPrefetch)
+	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
+		Database: db,
+		triedb:   db.TrieDB(),
+		trie:     tr,
+	}, common.Hash{}, "snapshot-fast-account-chunks", false)
+
+	addrs := make([]common.Address, subfetcherAccountPrefetchChunk+1)
+	for i := range addrs {
+		addrs[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
+	}
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, addrs, nil, false); err != nil {
+		t.Fatalf("prefetch failed: %v", err)
+	}
+	select {
+	case <-tr.started:
+	case <-time.After(time.Second):
+		t.Fatalf("first account prefetch chunk did not start")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		prefetcher.terminateForSnapshot()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("snapshot-fast terminate returned before in-flight account chunk completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	tr.releaseBlockedPrefetch()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("snapshot-fast terminate did not return after in-flight account chunk completed")
+	}
+
+	if calls, items := tr.accountStats(); calls != 1 || items != subfetcherAccountPrefetchChunk {
+		t.Fatalf("executed account prefetch calls/items = %d/%d, want 1/%d", calls, items, subfetcherAccountPrefetchChunk)
+	}
+}
+
+func TestTriePrefetcherSnapshotFastTerminateStopsBetweenStorageChunks(t *testing.T) {
+	db := NewDatabaseForTesting()
+	tr := newBlockingPrefetchTrie()
+	t.Cleanup(tr.releaseBlockedPrefetch)
+	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
+		Database: db,
+		triedb:   db.TrieDB(),
+		trie:     tr,
+	}, common.Hash{}, "snapshot-fast-storage-chunks", false)
+
+	slots := make([]common.Hash, subfetcherStoragePrefetchChunk+1)
+	for i := range slots {
+		slots[i] = common.BigToHash(big.NewInt(int64(i + 1)))
+	}
+	owner := common.Hash{0x01}
+	addr := common.HexToAddress("0x1")
+	if err := prefetcher.prefetch(owner, common.Hash{}, addr, nil, slots, false); err != nil {
+		t.Fatalf("prefetch failed: %v", err)
+	}
+	select {
+	case <-tr.started:
+	case <-time.After(time.Second):
+		t.Fatalf("first storage prefetch chunk did not start")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		prefetcher.terminateForSnapshot()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("snapshot-fast terminate returned before in-flight storage chunk completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	tr.releaseBlockedPrefetch()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("snapshot-fast terminate did not return after in-flight storage chunk completed")
+	}
+
+	if calls, items := tr.storageStats(); calls != 1 || items != subfetcherStoragePrefetchChunk {
+		t.Fatalf("executed storage prefetch calls/items = %d/%d, want 1/%d", calls, items, subfetcherStoragePrefetchChunk)
+	}
+}
+
+func TestTriePrefetcherDrainTerminateCompletesAccountChunks(t *testing.T) {
+	db := NewDatabaseForTesting()
+	tr := newBlockingPrefetchTrie()
+	t.Cleanup(tr.releaseBlockedPrefetch)
+	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
+		Database: db,
+		triedb:   db.TrieDB(),
+		trie:     tr,
+	}, common.Hash{}, "drain-account-chunks", false)
+
+	addrs := make([]common.Address, subfetcherAccountPrefetchChunk+1)
+	for i := range addrs {
+		addrs[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
+	}
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, addrs, nil, false); err != nil {
+		t.Fatalf("prefetch failed: %v", err)
+	}
+	select {
+	case <-tr.started:
+	case <-time.After(time.Second):
+		t.Fatalf("first account prefetch chunk did not start")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		prefetcher.terminate(false)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("full-drain terminate returned before in-flight account chunk completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	tr.releaseBlockedPrefetch()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("full-drain terminate did not return after account chunks completed")
+	}
+
+	if calls, items := tr.accountStats(); calls != 2 || items != subfetcherAccountPrefetchChunk+1 {
+		t.Fatalf("executed account prefetch calls/items = %d/%d, want 2/%d", calls, items, subfetcherAccountPrefetchChunk+1)
+	}
+}
+
 type blockingPrefetchDB struct {
 	Database
 	triedb *triedb.Database
@@ -183,6 +321,10 @@ func (db *blockingPrefetchDB) OpenTrie(common.Hash) (Trie, error) {
 	return db.trie, nil
 }
 
+func (db *blockingPrefetchDB) OpenStorageTrie(common.Hash, common.Address, common.Hash, Trie) (Trie, error) {
+	return db.trie, nil
+}
+
 func (db *blockingPrefetchDB) TrieDB() *triedb.Database {
 	return db.triedb
 }
@@ -190,13 +332,16 @@ func (db *blockingPrefetchDB) TrieDB() *triedb.Database {
 type blockingPrefetchTrie struct {
 	Trie
 
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	started     chan struct{}
+	release     chan struct{}
+	once        sync.Once
+	releaseOnce sync.Once
 
 	lock         sync.Mutex
 	accountCalls int
 	accountItems int
+	storageCalls int
+	storageItems int
 }
 
 func newBlockingPrefetchTrie() *blockingPrefetchTrie {
@@ -219,11 +364,35 @@ func (t *blockingPrefetchTrie) PrefetchAccount(addrs []common.Address) error {
 	return nil
 }
 
+func (t *blockingPrefetchTrie) releaseBlockedPrefetch() {
+	t.releaseOnce.Do(func() { close(t.release) })
+}
+
+func (t *blockingPrefetchTrie) PrefetchStorage(_ common.Address, keys [][]byte) error {
+	t.lock.Lock()
+	t.storageCalls++
+	t.storageItems += len(keys)
+	first := t.storageCalls == 1
+	t.lock.Unlock()
+	if first {
+		t.once.Do(func() { close(t.started) })
+		<-t.release
+	}
+	return nil
+}
+
 func (t *blockingPrefetchTrie) accountStats() (int, int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
 	return t.accountCalls, t.accountItems
+}
+
+func (t *blockingPrefetchTrie) storageStats() (int, int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	return t.storageCalls, t.storageItems
 }
 
 func TestVerklePrefetcher(t *testing.T) {

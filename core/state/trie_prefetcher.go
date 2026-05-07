@@ -49,6 +49,16 @@ const (
 	prefetchStopSnapshotFast
 )
 
+const (
+	// subfetcherAccountPrefetchChunk and subfetcherStoragePrefetchChunk bound
+	// how long snapshot-fast shutdown can be stuck behind an already-started
+	// prefetch batch. Full-drain shutdown still processes every chunk; the
+	// snapshot-fast path may exit between chunks and treat uncached nodes as SRC
+	// warm-snapshot misses.
+	subfetcherAccountPrefetchChunk = 64
+	subfetcherStoragePrefetchChunk = 128
+)
+
 // triePrefetcher is an active prefetcher, which receives accounts or storage
 // items and does trie-loading of them. The goal is to get as much useful content
 // into the caches as possible.
@@ -504,6 +514,42 @@ func (sf *subfetcher) warmNodes() map[string][]byte {
 	return sf.trie.Witness()
 }
 
+func (sf *subfetcher) prefetchAccounts(addresses []common.Address) bool {
+	for start := 0; start < len(addresses); start += subfetcherAccountPrefetchChunk {
+		if sf.discardOnStop() {
+			return false
+		}
+		end := start + subfetcherAccountPrefetchChunk
+		if end > len(addresses) {
+			end = len(addresses)
+		}
+		startTime := time.Now()
+		if err := sf.trie.PrefetchAccount(addresses[start:end]); err != nil {
+			log.Error("Failed to prefetch accounts", "err", err)
+		}
+		sf.fetchTime += time.Since(startTime)
+	}
+	return true
+}
+
+func (sf *subfetcher) prefetchStorage(slots [][]byte) bool {
+	for start := 0; start < len(slots); start += subfetcherStoragePrefetchChunk {
+		if sf.discardOnStop() {
+			return false
+		}
+		end := start + subfetcherStoragePrefetchChunk
+		if end > len(slots) {
+			end = len(slots)
+		}
+		startTime := time.Now()
+		if err := sf.trie.PrefetchStorage(sf.addr, slots[start:end]); err != nil {
+			log.Error("Failed to prefetch storage", "err", err)
+		}
+		sf.fetchTime += time.Since(startTime)
+	}
+	return true
+}
+
 // openTrie resolves the target trie from database for prefetching.
 func (sf *subfetcher) openTrie() error {
 	// Open the verkle tree if the sub-fetcher is in verkle mode. Note, there is
@@ -616,19 +662,11 @@ func (sf *subfetcher) loop() {
 			if sf.discardOnStop() {
 				return
 			}
-			if len(addresses) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchAccount(addresses); err != nil {
-					log.Error("Failed to prefetch accounts", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+			if len(addresses) != 0 && !sf.prefetchAccounts(addresses) {
+				return
 			}
-			if len(slots) != 0 {
-				start := time.Now()
-				if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
-					log.Error("Failed to prefetch storage", "err", err)
-				}
-				sf.fetchTime += time.Since(start)
+			if len(slots) != 0 && !sf.prefetchStorage(slots) {
+				return
 			}
 
 		case <-sf.stop:
