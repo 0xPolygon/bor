@@ -290,7 +290,7 @@ func (s *Service) SubmitPrivateTx(tx *types.Transaction, retry bool) error {
 	privateTxSubmitTimer.UpdateSince(start)
 	if err != nil {
 		privateTxSubmissionFailureMeter.Mark(1)
-		log.Warn("[tx-relay] Error submitting private tx to atleast one block producer", "hash", tx.Hash(), "elapsed", time.Since(start), "err", err)
+		log.Warn("[tx-relay] Error submitting private tx to at least one block producer", "hash", tx.Hash(), "elapsed", time.Since(start), "err", err)
 		return errPrivateTxSubmissionFailed
 	}
 
