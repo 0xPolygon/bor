@@ -86,8 +86,8 @@ github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6 h1:+6AxZcMTWHaRHV0HILf/r
 github.com/0xPolygon/cosmos-sdk/client/v2 v2.0.0-beta.6/go.mod h1:4p0P6o0ro+FizakJUYS9SeM94RNbv0thLmkHRw5o5as=
 github.com/0xPolygon/crand v1.0.3 h1:BYYflmgLhmGPEgqtopG4muq6wV6DOkwD8uPymNz5WeQ=
 github.com/0xPolygon/crand v1.0.3/go.mod h1:km4366oC7EVFl1xNUCwzxUXNM10swZqd8LZ0E5SgbAE=
-github.com/0xPolygon/heimdall-v2 v0.6.0 h1:rA8RISMnns1w08PxTLvDBS5WiaTOFHJGSrhDWDJLtHc=
-github.com/0xPolygon/heimdall-v2 v0.6.0/go.mod h1:fVkGiODG6cGLaDyrE3qxIrvz1rbUr4Zdrr3dOm2SPgg=
+github.com/0xPolygon/heimdall-v2 v0.7.1 h1:L50HuFky97OvSF7uHlRXoClujKTFDeMP059GNeFc90g=
+github.com/0xPolygon/heimdall-v2 v0.7.1/go.mod h1:YrGakfr3jRlcXzGrBiJPxkfOfkqodzDZHNhf+2mYG5U=
 github.com/0xPolygon/polyproto v0.0.8-0.20260423132317-7d955b45ef8a h1:vVtSjO29FcFBZbNVsVGy6z3lv3RRr/sI1vPR7IzbZZE=
 github.com/0xPolygon/polyproto v0.0.8-0.20260423132317-7d955b45ef8a/go.mod h1:2Iw93k2LismvckKKeXQITuhJH9vLbqOa212AMskH6no=
 github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 h1:/vQbFIOMbk2FiG/kXiLl8BRyzTWDw7gX/Hz7Dd5eDMs=

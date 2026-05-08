@@ -58,6 +58,10 @@ import (
 	protobor "github.com/0xPolygon/polyproto/bor"
 )
 
+// maxGRPCMessageSize matches go-ethereum's BatchResponseMaxSize default
+// to keep the gRPC and JSON-RPC surfaces under comparable response-size protection.
+const maxGRPCMessageSize = 25 * 1000 * 1000
+
 type Server struct {
 	proto.UnimplementedBorServer
 	protobor.UnimplementedBorApiServer
@@ -480,6 +484,8 @@ func (s *Server) gRPCServerByListener(listener net.Listener) error {
 	s.grpcServer = grpc.NewServer(
 		grpc.UnaryInterceptor(s.combinedUnaryInterceptor()),
 		grpc.StreamInterceptor(s.combinedStreamInterceptor()),
+		grpc.MaxRecvMsgSize(maxGRPCMessageSize),
+		grpc.MaxSendMsgSize(maxGRPCMessageSize),
 	)
 	proto.RegisterBorServer(s.grpcServer, s)
 	protobor.RegisterBorApiServer(s.grpcServer, s)
