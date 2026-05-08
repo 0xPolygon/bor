@@ -614,6 +614,10 @@ func (s *Server) GetLatestBlockNumber() *big.Int {
 }
 
 func (s *Server) GetGrpcAddr() string {
+	// Treat "missing block" as "gRPC disabled" rather than nil-deref.
+	if s.config == nil || s.config.GRPC == nil {
+		return ""
+	}
 	return s.config.GRPC.Addr
 }
 
