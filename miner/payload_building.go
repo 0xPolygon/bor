@@ -263,7 +263,7 @@ func (w *worker) buildPayload(args *BuildPayloadArgs, witness bool) (*Payload, e
 				if r.err == nil {
 					payload.update(r, time.Since(start))
 				} else {
-					log.Info("Error while generating work", "id", payload.id, "err", r.err)
+					log.Warn("Error while generating work", "id", payload.id, "err", r.err)
 				}
 				timer.Reset(w.config.Recommit)
 			case <-payload.stop:
