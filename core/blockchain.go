@@ -178,9 +178,9 @@ var (
 	pipelineImportCheapExecTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
 	pipelineImportCheapValidationTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
 	pipelineImportPostExecTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
-	pipelineImportPrefetchStopTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop", nil)
-	pipelineImportPrefetchDrainTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop/drain", nil)
-	pipelineImportPrefetchReportTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_stop/report", nil)
+	pipelineImportPrefetchDetachTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_detach", nil)
+	pipelineImportSRCPrefetchWaitTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_wait", nil)
+	pipelineImportSRCPrefetchReportTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_report", nil)
 	pipelineImportCommitSnapshotTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
 	pipelineImportStateSyncFeedTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
 	pipelineImportReorgCheckTimer          = metrics.NewRegisteredTimer("chain/imports/pipelined/reorg_check", nil)
@@ -190,7 +190,7 @@ var (
 	pipelineImportWarmSnapshotCollect      = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/collect", nil)
 	pipelineImportWarmSnapshotBuild        = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/build", nil)
 	pipelineImportWarmSnapshotFetchers     = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/fetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
-	pipelineImportPrefetchSubfetchers      = metrics.NewRegisteredHistogram("chain/imports/pipelined/prefetch_stop/subfetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
+	pipelineImportSRCPrefetchSubfetchers   = metrics.NewRegisteredHistogram("chain/imports/pipelined/src/prefetch_subfetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportWarmSnapshotNodes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportWarmSnapshotBytes        = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/bytes", nil, metrics.NewExpDecaySample(1028, 0.015))
 	pipelineImportWarmSnapshotAccountNodes = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/account_nodes", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -4595,10 +4595,13 @@ func (bc *BlockChain) PostExecState(header *types.Header) (*state.StateDB, error
 // trie-proof nodes during ApplyFlatDiffForCommit + CommitWithUpdate. Call
 // sites with no execution witness in scope set execWitness=nil and
 // allowOwnWitness=true to explicitly permit SRC to create its own witness.
-// warmSnapshotInput is an optional quiesced prefetcher handoff; SRC builds the
-// immutable WarmSnapshot from it inside the goroutine so the import thread does
-// not pay the copy/hash/index cost.
-func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshotInput *state.WarmSnapshotInput) {
+// detachedPrefetcher is an optional execution-side prefetcher handoff. SRC
+// owns it after SpawnSRCGoroutine returns: it waits for the prefetcher to
+// finish and either discards the warm nodes (wait-only mode) or builds a
+// WarmSnapshot from them (useWarmSnapshot=true). This keeps the import thread
+// from blocking on prefetch completion while still letting SRC benefit from
+// the execution-side warmup.
+func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) {
 	pending := &pendingSRCState{
 		blockHash:   block.Hash(),
 		blockNumber: block.NumberU64(),
@@ -4609,7 +4612,44 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 
 	pending.wg.Add(1)
 	bc.wg.Add(1)
-	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, warmSnapshotInput)
+	go bc.runSRCCompute(pending, block, parentRoot, flatDiff, makeWitness, execWitness, allowOwnWitness, detachedPrefetcher, useWarmSnapshot)
+}
+
+func recordDetachedPrefetchStats(stats state.PrefetcherSnapshotStats, useWarmSnapshot bool) {
+	pipelineImportSRCPrefetchWaitTimer.Update(stats.Drain)
+	pipelineImportSRCPrefetchReportTimer.Update(stats.Report)
+	pipelineImportSRCPrefetchSubfetchers.Update(int64(stats.Fetchers))
+	if !useWarmSnapshot {
+		return
+	}
+	pipelineImportWarmSnapshotCollect.Update(stats.Collect)
+	pipelineImportWarmSnapshotFetchers.Update(int64(stats.LoadedFetchers))
+	pipelineImportWarmSnapshotAccountNodes.Update(int64(stats.AccountNodes))
+	pipelineImportWarmSnapshotStorageNodes.Update(int64(stats.StorageNodes))
+	pipelineImportWarmSnapshotAccountBytes.Update(int64(stats.AccountBytes))
+	pipelineImportWarmSnapshotStorageBytes.Update(int64(stats.StorageBytes))
+	pipelineImportWarmSnapshotNodes.Update(int64(stats.AccountNodes + stats.StorageNodes))
+	pipelineImportWarmSnapshotBytes.Update(int64(stats.AccountBytes + stats.StorageBytes))
+}
+
+func finishDetachedPrefetcher(detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) *state.WarmSnapshot {
+	if detachedPrefetcher == nil {
+		return nil
+	}
+	if !useWarmSnapshot {
+		stats := detachedPrefetcher.Stop()
+		recordDetachedPrefetchStats(stats, false)
+		return nil
+	}
+	warmSnapshotInput, stats := detachedPrefetcher.StopAndCollectWarmSnapshot()
+	recordDetachedPrefetchStats(stats, true)
+	if warmSnapshotInput == nil {
+		return nil
+	}
+	buildStart := time.Now()
+	warmSnapshot := warmSnapshotInput.Build()
+	pipelineImportWarmSnapshotBuild.UpdateSince(buildStart)
+	return warmSnapshot
 }
 
 // runSRCCompute is the SRC goroutine body. Opens a trie-only StateDB at the
@@ -4628,17 +4668,17 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     - AddBlockHash via vm/instructions.go (BLOCKHASH opcode)
 //     - AddState via statedb.go Finalise/IntermediateRoot reads
 //  2. The trie prefetcher does not write to W — subfetcher.loop only
-//     populates trie-local prevalueTracer state. The synchronous prefetcher
-//     stop used by the import handoff has writers-exited semantics
+//     populates trie-local prevalueTracer state. The import path detaches the
+//     prefetcher before this goroutine is spawned; this goroutine then stops
+//     the detached prefetcher synchronously before converting any warm nodes
+//     into a WarmSnapshot. That stop has writers-exited semantics
 //     (trie_prefetcher.go: <-sf.term gated on loop's `defer close(sf.term)`),
-//     which provides the ordering guarantee should that ever change.
-//  3. The import path stops the prefetcher synchronously in
-//     persistPipelinedImport before this goroutine is spawned. After that
-//     stop returns, every subfetcher goroutine has exited.
-//  4. The main thread hands W to this goroutine via SpawnSRCGoroutine and
+//     which provides the ordering guarantee should the prefetcher ever gain a
+//     witness write path.
+//  3. The main thread hands W to this goroutine via SpawnSRCGoroutine and
 //     never touches W again — it moves on to the next block with a fresh
 //     witness.
-//  5. This goroutine writes to W during ApplyFlatDiffForCommit +
+//  4. This goroutine writes to W during ApplyFlatDiffForCommit +
 //     CommitWithUpdate, then encodes via encodeAndCachePendingWitness. The
 //     cached bytes are immutable thereafter.
 //
@@ -4647,7 +4687,7 @@ func (bc *BlockChain) SpawnSRCGoroutine(block *types.Block, parentRoot common.Ha
 //     prefetcher-spawned goroutine.
 //   - No terminate(true) (async) call on the SRC handoff path.
 //   - No reuse of W on the main thread after SpawnSRCGoroutine.
-func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, warmSnapshotInput *state.WarmSnapshotInput) {
+func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block, parentRoot common.Hash, flatDiff *state.FlatDiff, makeWitness bool, execWitness *stateless.Witness, allowOwnWitness bool, detachedPrefetcher *state.DetachedPrefetcher, useWarmSnapshot bool) {
 	defer bc.wg.Done()
 	defer pending.wg.Done()
 	defer func() {
@@ -4666,6 +4706,7 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 	// so bytecode entries collected on the in-memory witness are not part of
 	// the canonical Bor witness wire format.
 	if makeWitness && execWitness == nil && !allowOwnWitness {
+		finishDetachedPrefetcher(detachedPrefetcher, false)
 		pending.err = fmt.Errorf(
 			"pipelined SRC witness requested without execution witness: block=%d hash=%s allowOwnWitness=false",
 			block.NumberU64(), block.Hash(),
@@ -4673,16 +4714,7 @@ func (bc *BlockChain) runSRCCompute(pending *pendingSRCState, block *types.Block
 		return
 	}
 
-	var warmSnapshot *state.WarmSnapshot
-	if warmSnapshotInput != nil {
-		buildStart := time.Now()
-		warmSnapshot = warmSnapshotInput.Build()
-		pipelineImportWarmSnapshotBuild.UpdateSince(buildStart)
-		// Drop the handoff maps before SRC starts the trie walk. The final
-		// WarmSnapshot owns blob copies; keeping the input alive would retain a
-		// second copy of the same warm surface until the goroutine exits.
-		warmSnapshotInput = nil
-	}
+	warmSnapshot := finishDetachedPrefetcher(detachedPrefetcher, useWarmSnapshot)
 	tmpDB, witness, err := bc.openSRCStateDB(parentRoot, block, makeWitness, execWitness, warmSnapshot)
 	if err != nil {
 		pending.err = err
@@ -5053,10 +5085,7 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // that are included in the "Imported new chain segment" elapsed time but are
 // not part of ProcessBlock itself.
 type pipelinedImportPersistTimings struct {
-	prefetchStop   time.Duration
-	prefetchDrain  time.Duration
-	prefetchReport time.Duration
-	warmCollect    time.Duration
+	prefetchDetach time.Duration
 	commitSnapshot time.Duration
 	collect        time.Duration
 	stateSyncFeed  time.Duration
@@ -5065,15 +5094,6 @@ type pipelinedImportPersistTimings struct {
 	writeHead      time.Duration
 	spawnSRC       time.Duration
 	total          time.Duration
-
-	warmSnapshotNodes int
-	warmSnapshotBytes int
-	warmAccountNodes  int
-	warmStorageNodes  int
-	warmAccountBytes  int
-	warmStorageBytes  int
-	warmFetchers      int
-	prefetchFetchers  int
 }
 
 // persistPipelinedImport handles the post-ProcessBlock work for a pipelined
@@ -5091,78 +5111,37 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 		pipelineImportPostExecTimer.Update(timings.total)
 		bc.logSlowPipelinedImport(block, time.Since(start), cheapExec, validation, timings, statedb)
 	}()
-	// The pipelined path doesn't commit this StateDB; the SRC goroutine opens
-	// its own NewTrieOnly tmpDB. Stop the prefetcher *before* CommitSnapshot
-	// so Finalise can't queue more prefetch tasks that we'd then synchronously
-	// wait to drain. Without this, every block in a multi-block batch except
-	// the last leaks its prefetcher (the deferred StopPrefetcher in
-	// insertChainWithWitnesses only fires on the final activeState).
-	// Stop the prefetcher synchronously. When PipelinedSRCWarmSnapshot is
-	// enabled AND this block produces a witness, capture the trie nodes the
-	// prefetcher had loaded into a quiesced handoff bundle so SRC can avoid
-	// re-reading them from cold pebble. The bundle is collected AFTER the
-	// prefetcher goroutines have exited (writers-exited drain), so the source
-	// tries are quiescent and safe to read. Queued speculative prefetch tasks
-	// may be discarded by StopAndCollectWarmSnapshot; missing warm nodes are
-	// just snapshot misses and SRC falls through to pathdb. The expensive final
-	// WarmSnapshot copy/hash/index build happens in the SRC goroutine, not on
-	// the import thread. A nil bundle (flag off, witness-off path, no
-	// prefetcher, or no warm nodes) reduces to the pre-snapshot behaviour:
-	// SRC's NodeReader is the plain pathdb chain. The makeWitness gate matters
-	// because the witness-off SRC path uses the multi-reader (with flat reader)
-	// which doesn't consult the snapshot (see openSRCStateDB), so capturing one
-	// would burn collect work for no benefit.
-	var warmSnapshotInput *state.WarmSnapshotInput
-	var snapshotStats state.PrefetcherSnapshotStats
-	warmSnapshotEnabled := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
-	phaseStart := time.Now()
-	if warmSnapshotEnabled {
-		warmSnapshotInput, snapshotStats = statedb.StopAndCollectWarmSnapshot()
-	} else {
-		statedb.StopPrefetcher()
-	}
-	timings.prefetchStop = time.Since(phaseStart)
-	timings.prefetchDrain = snapshotStats.Drain
-	timings.warmCollect = snapshotStats.Collect
-	timings.prefetchReport = snapshotStats.Report
-	timings.warmFetchers = snapshotStats.LoadedFetchers
-	timings.prefetchFetchers = snapshotStats.Fetchers
-	timings.warmAccountNodes = snapshotStats.AccountNodes
-	timings.warmStorageNodes = snapshotStats.StorageNodes
-	timings.warmAccountBytes = snapshotStats.AccountBytes
-	timings.warmStorageBytes = snapshotStats.StorageBytes
-	timings.warmSnapshotNodes = snapshotStats.AccountNodes + snapshotStats.StorageNodes
-	timings.warmSnapshotBytes = snapshotStats.AccountBytes + snapshotStats.StorageBytes
-	pipelineImportPrefetchStopTimer.Update(timings.prefetchStop)
-	if warmSnapshotEnabled {
-		pipelineImportPrefetchDrainTimer.Update(snapshotStats.Drain)
-		pipelineImportWarmSnapshotCollect.Update(snapshotStats.Collect)
-		pipelineImportPrefetchReportTimer.Update(snapshotStats.Report)
-		pipelineImportPrefetchSubfetchers.Update(int64(snapshotStats.Fetchers))
-		pipelineImportWarmSnapshotFetchers.Update(int64(snapshotStats.LoadedFetchers))
-		pipelineImportWarmSnapshotAccountNodes.Update(int64(snapshotStats.AccountNodes))
-		pipelineImportWarmSnapshotStorageNodes.Update(int64(snapshotStats.StorageNodes))
-		pipelineImportWarmSnapshotAccountBytes.Update(int64(snapshotStats.AccountBytes))
-		pipelineImportWarmSnapshotStorageBytes.Update(int64(snapshotStats.StorageBytes))
-	}
-	if warmSnapshotEnabled {
-		pipelineImportWarmSnapshotNodes.Update(int64(timings.warmSnapshotNodes))
-		pipelineImportWarmSnapshotBytes.Update(int64(timings.warmSnapshotBytes))
-	}
-	// Capture the execution witness so SRC can complete it. After the
-	// prefetcher stop above, every subfetcher goroutine has exited (sync wait
-	// via <-sf.term). The trie prefetcher does not write to the witness —
-	// subfetcher.loop only populates trie-local prevalueTracer state — and the
-	// stop ordering is the structural guarantee that must be preserved if that
-	// ever changes. See LINEAR OWNERSHIP INVARIANT at runSRCCompute.
+	// Capture the execution witness so SRC can complete it. The trie
+	// prefetcher does not write to this witness — subfetcher.loop only
+	// populates trie-local prevalueTracer state — so the witness can be handed
+	// to SRC independently of the detached prefetcher. See LINEAR OWNERSHIP
+	// INVARIANT at runSRCCompute.
 	var execWitness *stateless.Witness
 	if makeWitness {
 		execWitness = statedb.Witness()
 	}
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
 	timings.commitSnapshot = time.Since(phaseStart)
 	pipelineImportCommitSnapshotTimer.Update(timings.commitSnapshot)
+
+	// The pipelined path doesn't commit this StateDB; SRC opens its own tmpDB.
+	// Detach the execution prefetcher after CommitSnapshot so Finalise can
+	// still enqueue the dirty-object prefetch work it normally would. The
+	// import thread does not wait here: SRC owns the returned handle and will
+	// synchronously stop/report it before computing the root. If an error
+	// occurs before the handle is handed to SRC, the defer consumes it to avoid
+	// leaking prefetcher goroutines.
+	var detachedPrefetcher *state.DetachedPrefetcher
+	phaseStart = time.Now()
+	detachedPrefetcher = statedb.DetachPrefetcher()
+	timings.prefetchDetach = time.Since(phaseStart)
+	pipelineImportPrefetchDetachTimer.Update(timings.prefetchDetach)
+	defer func() {
+		if detachedPrefetcher != nil {
+			finishDetachedPrefetcher(detachedPrefetcher, false)
+		}
+	}()
 
 	committedRoot, collectElapsed, err := bc.collectPrevImportSRCIfAny(block, parent)
 	timings.collect = collectElapsed
@@ -5211,11 +5190,14 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
 	// Import passes execWitness from execution and requires SRC to publish
 	// that same witness object. runSRCCompute hard-fails on a nil witness
-	// when allowOwnWitness=false. warmSnapshotInput may be nil (flag off or
-	// no warm nodes); SRC tolerates that and falls back to the plain pathdb
-	// reader chain.
+	// when allowOwnWitness=false. The detached prefetcher is always passed in
+	// if present; the warm-snapshot flag only controls whether SRC converts
+	// the finished prefetcher into a WarmSnapshot or simply waits/reports and
+	// discards it.
 	phaseStart = time.Now()
-	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, warmSnapshotInput)
+	useWarmSnapshot := makeWitness && bc.cfg.PipelinedSRCWarmSnapshot
+	bc.SpawnSRCGoroutine(tmpBlock, committedRoot, flatDiff, makeWitness, execWitness, false, detachedPrefetcher, useWarmSnapshot)
+	detachedPrefetcher = nil
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
 	newPending := &pendingImportSRCState{
@@ -5244,7 +5226,7 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 	if total < slowImportBlockThreshold &&
 		timings.total < slowImportPostExecThreshold &&
 		timings.collect < slowImportCollectThreshold &&
-		timings.prefetchStop < slowImportSnapshotThreshold {
+		timings.prefetchDetach < slowImportSnapshotThreshold {
 		return
 	}
 	log.Warn("Slow pipelined import phase",
@@ -5255,18 +5237,7 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 		"cheapExec", common.PrettyDuration(cheapExec),
 		"validation", common.PrettyDuration(validation),
 		"postExec", common.PrettyDuration(timings.total),
-		"prefetchStop", common.PrettyDuration(timings.prefetchStop),
-		"prefetchDrain", common.PrettyDuration(timings.prefetchDrain),
-		"warmCollect", common.PrettyDuration(timings.warmCollect),
-		"prefetchReport", common.PrettyDuration(timings.prefetchReport),
-		"prefetchFetchers", timings.prefetchFetchers,
-		"warmFetchers", timings.warmFetchers,
-		"warmNodes", timings.warmSnapshotNodes,
-		"warmBytes", common.StorageSize(timings.warmSnapshotBytes),
-		"warmAccountNodes", timings.warmAccountNodes,
-		"warmStorageNodes", timings.warmStorageNodes,
-		"warmAccountBytes", common.StorageSize(timings.warmAccountBytes),
-		"warmStorageBytes", common.StorageSize(timings.warmStorageBytes),
+		"prefetchDetach", common.PrettyDuration(timings.prefetchDetach),
 		"commitSnapshot", common.PrettyDuration(timings.commitSnapshot),
 		"collect", common.PrettyDuration(timings.collect),
 		"stateSyncFeed", common.PrettyDuration(timings.stateSyncFeed),

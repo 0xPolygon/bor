@@ -576,6 +576,30 @@ func (s *StateDB) StopPrefetcher() {
 	}
 }
 
+// DetachedPrefetcher is a trie prefetcher that has been removed from its
+// StateDB and handed to another owner. It is used by pipelined SRC import so
+// the import thread can move on with a fresh StateDB while SRC waits for the
+// previous block's prefetcher to finish.
+//
+// A detached prefetcher must be consumed exactly once via Stop or
+// StopAndCollectWarmSnapshot. Both methods synchronously wait for all
+// subfetcher goroutines to exit before reporting stats.
+type DetachedPrefetcher struct {
+	prefetcher *triePrefetcher
+}
+
+// DetachPrefetcher removes the current prefetcher from the StateDB without
+// stopping it. The caller becomes responsible for eventually calling Stop or
+// StopAndCollectWarmSnapshot on the returned handle.
+func (s *StateDB) DetachPrefetcher() *DetachedPrefetcher {
+	if s.prefetcher == nil {
+		return nil
+	}
+	prefetcher := s.prefetcher
+	s.prefetcher = nil
+	return &DetachedPrefetcher{prefetcher: prefetcher}
+}
+
 // PrefetcherSnapshotStats describes the synchronous phases and warm-node mix
 // observed while stopping and snapshotting a trie prefetcher.
 type PrefetcherSnapshotStats struct {
@@ -594,41 +618,50 @@ type PrefetcherSnapshotStats struct {
 	StorageBytes int
 }
 
-// StopAndCollectWarmSnapshot terminates a running prefetcher synchronously,
-// captures the trie nodes its subfetchers had loaded into a quiesced handoff
-// bundle, then reports stats and clears the prefetcher reference. The returned
-// input is owned by the caller and is safe to pass to another goroutine; the
-// final WarmSnapshot copy/hash/index build is intentionally deferred to
-// WarmSnapshotInput.Build.
-//
-// Step ordering matters and is enforced here:
-//
-//  1. terminateForSnapshot — signal stop, discard queued speculative work,
-//     and wait for every subfetcher loop to exit (writers-exited semantics via
-//     <-sf.term gated on `defer close(sf.term)`). Already-running trie reads
-//     are allowed to finish; unstarted queued reads are not required because
-//     missing warm nodes fall through to pathdb in SRC.
-//  2. snapshotWarmNodes — read each subfetcher's trie.Witness() while no
-//     writer remains. Quiescent state guarantees the read is race-free.
-//  3. report — emit metrics from the same fetchers (unchanged from
-//     StopPrefetcher).
-//  4. nil out s.prefetcher — detach the StateDB from the prefetcher.
-//
-// Returns nil when no prefetcher is installed or no subfetcher loaded any
-// nodes. Callers must tolerate a nil input and treat it as "no warm data; fall
-// through to the underlying reader for every node". The returned stats are
-// populated even when the input is nil, as long as a prefetcher existed.
-func (s *StateDB) StopAndCollectWarmSnapshot() (*WarmSnapshotInput, PrefetcherSnapshotStats) {
+// Stop synchronously drains a detached prefetcher, reports its stats, and
+// discards any warm nodes it loaded. This is the wait-only pipelined SRC mode:
+// it lets the execution-side prefetcher finish warming shared lower-level
+// caches without installing a WarmSnapshot reader.
+func (p *DetachedPrefetcher) Stop() PrefetcherSnapshotStats {
 	var stats PrefetcherSnapshotStats
-	if s.prefetcher == nil {
+	if p == nil || p.prefetcher == nil {
+		return stats
+	}
+	prefetcher := p.prefetcher
+	p.prefetcher = nil
+
+	phaseStart := time.Now()
+	prefetcher.terminate(false)
+	stats.Drain = time.Since(phaseStart)
+	stats.Fetchers = prefetcher.fetcherCount()
+
+	phaseStart = time.Now()
+	prefetcher.report()
+	stats.Report = time.Since(phaseStart)
+	return stats
+}
+
+// StopAndCollectWarmSnapshot synchronously drains a detached prefetcher,
+// captures the trie nodes its subfetchers loaded, reports stats, and returns a
+// quiesced WarmSnapshotInput owned by the caller.
+//
+// This method uses full-drain termination. Execution can continue on the
+// import thread while SRC waits here, so queued prefetch work is allowed to
+// finish and increase the warm surface.
+func (p *DetachedPrefetcher) StopAndCollectWarmSnapshot() (*WarmSnapshotInput, PrefetcherSnapshotStats) {
+	var stats PrefetcherSnapshotStats
+	if p == nil || p.prefetcher == nil {
 		return nil, stats
 	}
+	prefetcher := p.prefetcher
+	p.prefetcher = nil
+
 	phaseStart := time.Now()
-	s.prefetcher.terminateForSnapshot()
+	prefetcher.terminate(false)
 	stats.Drain = time.Since(phaseStart)
 
 	phaseStart = time.Now()
-	tries, snapshotStats := s.prefetcher.snapshotWarmNodes()
+	tries, snapshotStats := prefetcher.snapshotWarmNodes()
 	stats.Collect = time.Since(phaseStart)
 	stats.Fetchers = snapshotStats.Fetchers
 	stats.LoadedFetchers = snapshotStats.LoadedFetchers
@@ -640,9 +673,8 @@ func (s *StateDB) StopAndCollectWarmSnapshot() (*WarmSnapshotInput, PrefetcherSn
 	stats.StorageBytes = snapshotStats.StorageBytes
 
 	phaseStart = time.Now()
-	s.prefetcher.report()
+	prefetcher.report()
 	stats.Report = time.Since(phaseStart)
-	s.prefetcher = nil
 	if len(tries) == 0 {
 		return nil, stats
 	}

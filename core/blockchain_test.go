@@ -7391,7 +7391,7 @@ func TestPipelinedImportSRC_WitnessHardFailsWithoutExecWitness(t *testing.T) {
 	// out before touching it.
 	parent := chain.GetBlockByNumber(0)
 	target := blocks[0]
-	chain.SpawnSRCGoroutine(target, parent.Root(), &state.FlatDiff{}, true, nil, false, nil)
+	chain.SpawnSRCGoroutine(target, parent.Root(), &state.FlatDiff{}, true, nil, false, nil, false)
 
 	// Drain via the public wait API: the goroutine sets pending.err and exits.
 	chain.pendingSRCMu.Lock()

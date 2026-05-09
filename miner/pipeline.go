@@ -183,10 +183,10 @@ func (w *worker) spawnSRCForFinalBlock(finalHeader *types.Header, rootN common.H
 	tmpBlock := types.NewBlockWithHeader(finalHeader)
 	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
 	// explicitly permits SRC to create its own witness when no execution
-	// witness is handed in by the caller. nil warmSnapshot — the miner-side
-	// path does not currently capture the prefetcher snapshot; SRC falls
-	// back to the plain pathdb reader chain.
-	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff, true, nil, true, nil)
+	// witness is handed in by the caller. nil detached prefetcher — the
+	// miner-side path does not currently hand execution prefetcher state to
+	// SRC, so SRC falls back to the plain pathdb reader chain.
+	w.chain.SpawnSRCGoroutine(tmpBlock, rootN, flatDiff, true, nil, true, nil, false)
 	w.chain.SetLastFlatDiff(flatDiff, finalHeader.Number.Uint64(), rootN, common.Hash{})
 }
 
@@ -430,10 +430,10 @@ func (s *specSession) setupInitial() bool {
 	tmpBlock := types.NewBlockWithHeader(s.req.parentHeader)
 	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
 	// explicitly permits SRC to create its own witness when no execution
-	// witness is handed in by the caller. nil warmSnapshot — the miner-side
-	// path does not currently capture the prefetcher snapshot; SRC falls
-	// back to the plain pathdb reader chain.
-	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff, true, nil, true, nil)
+	// witness is handed in by the caller. nil detached prefetcher — the
+	// miner-side path does not currently hand execution prefetcher state to
+	// SRC, so SRC falls back to the plain pathdb reader chain.
+	s.w.chain.SpawnSRCGoroutine(tmpBlock, s.req.parentRoot, s.req.flatDiff, true, nil, true, nil, false)
 
 	specState, err := s.w.chain.StateAtWithFlatDiff(s.req.parentRoot, s.req.flatDiff)
 	if err != nil {
@@ -778,10 +778,10 @@ func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff
 	tmpBlockCur := types.NewBlockWithHeader(finalSpecHeader)
 	// Miner pipeline always produces witnesses for now. allowOwnWitness=true
 	// explicitly permits SRC to create its own witness when no execution
-	// witness is handed in by the caller. nil warmSnapshot — the miner-side
-	// path does not currently capture the prefetcher snapshot; SRC falls
-	// back to the plain pathdb reader chain.
-	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true, nil, true, nil)
+	// witness is handed in by the caller. nil detached prefetcher — the
+	// miner-side path does not currently hand execution prefetcher state to
+	// SRC, so SRC falls back to the plain pathdb reader chain.
+	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true, nil, true, nil, false)
 	s.w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), s.rootN, common.Hash{})
 	if s.w.config.PipelinedSRCLogs {
 		log.Info("Pipelined SRC: spawned SRC, starting speculative exec", "srcBlock", s.nextBlockNumber, "specExecBlock", s.nextBlockNumber+1)

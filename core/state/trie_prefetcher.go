@@ -35,30 +35,6 @@ var (
 	errTerminated = errors.New("fetcher is already terminated")
 )
 
-type prefetchStopMode uint8
-
-const (
-	// prefetchStopDrain preserves the historical shutdown behaviour: once stop
-	// is requested, subfetchers finish queued work before exiting.
-	prefetchStopDrain prefetchStopMode = iota
-
-	// prefetchStopSnapshotFast is used by the pipelined SRC warm-snapshot
-	// handoff. Queued speculative work is discarded; already-running trie reads
-	// are allowed to finish, then the caller snapshots whatever nodes are
-	// available.
-	prefetchStopSnapshotFast
-)
-
-const (
-	// subfetcherAccountPrefetchChunk and subfetcherStoragePrefetchChunk bound
-	// how long snapshot-fast shutdown can be stuck behind an already-started
-	// prefetch batch. Full-drain shutdown still processes every chunk; the
-	// snapshot-fast path may exit between chunks and treat uncached nodes as SRC
-	// warm-snapshot misses.
-	subfetcherAccountPrefetchChunk = 64
-	subfetcherStoragePrefetchChunk = 128
-)
-
 // triePrefetcher is an active prefetcher, which receives accounts or storage
 // items and does trie-loading of them. The goal is to get as much useful content
 // into the caches as possible.
@@ -129,8 +105,9 @@ func newTriePrefetcher(db Database, root common.Hash, namespace string, noreads 
 // into a list of (owner, path -> blob) maps. It MUST be called only after a
 // synchronous termination has returned — once subfetcher goroutines have exited
 // their loops, their tries are quiescent and trie.Witness() can be read safely.
-// The caller (StopAndCollectWarmSnapshot) sequences this between the
-// snapshot-fast stop and report so the prefetcher's lifecycle remains intact.
+// Callers sequence this between a synchronous stop and report so the
+// prefetcher's lifecycle remains intact. The only requirement is that all
+// subfetcher goroutines have exited before collection starts.
 //
 // Returns nil when called on a nil receiver, an already-closed prefetcher
 // without subfetchers, or when no subfetcher loaded any nodes — callers must
@@ -173,23 +150,23 @@ func (p *triePrefetcher) snapshotWarmNodes() ([]TrieWarmNodes, PrefetcherSnapsho
 	return out, stats
 }
 
-// terminate iterates over all the subfetchers and issues a full-drain
-// termination request to all of them. Depending on the async parameter, the
-// method will either block until all subfetchers spin down, or return
-// immediately.
+// fetcherCount returns the number of subfetchers currently owned by the
+// prefetcher. It is safe to call after synchronous termination when reporting
+// wait-only detached prefetcher stats.
+func (p *triePrefetcher) fetcherCount() int {
+	if p == nil {
+		return 0
+	}
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	return len(p.fetchers)
+}
+
+// terminate iterates over all the subfetchers and issues a termination request
+// to all of them. Subfetchers finish queued work before exiting. Depending on
+// the async parameter, the method will either block until all subfetchers spin
+// down, or return immediately.
 func (p *triePrefetcher) terminate(async bool) {
-	p.terminateWithMode(async, prefetchStopDrain)
-}
-
-// terminateForSnapshot terminates the prefetcher for the pipelined SRC
-// warm-snapshot handoff. It discards queued speculative work and waits only for
-// subfetcher goroutines to exit, so the caller can safely snapshot the nodes
-// that were already loaded.
-func (p *triePrefetcher) terminateForSnapshot() {
-	p.terminateWithMode(false, prefetchStopSnapshotFast)
-}
-
-func (p *triePrefetcher) terminateWithMode(async bool, mode prefetchStopMode) {
 	p.lock.Lock()         // Lock for writing
 	defer p.lock.Unlock() // Ensure the lock is released after the function
 
@@ -201,7 +178,7 @@ func (p *triePrefetcher) terminateWithMode(async bool, mode prefetchStopMode) {
 	}
 	// Terminate all sub-fetchers, sync or async, depending on the request
 	for _, fetcher := range p.fetchers {
-		fetcher.terminateWithMode(async, mode)
+		fetcher.terminate(async)
 	}
 	close(p.term)
 }
@@ -350,9 +327,8 @@ type subfetcher struct {
 	addr  common.Address // Address of the account that the trie belongs to
 	trie  Trie           // Trie being populated with nodes
 
-	tasks    []*subfetcherTask // Items queued up for retrieval
-	stopMode prefetchStopMode  // Stop behaviour, guarded by lock
-	lock     sync.Mutex        // Lock protecting the task queue and stop mode
+	tasks []*subfetcherTask // Items queued up for retrieval
+	lock  sync.Mutex        // Lock protecting the task queue
 
 	wake chan struct{} // Wake channel if a new task is scheduled
 	stop chan struct{} // Channel to interrupt processing
@@ -473,17 +449,6 @@ func (sf *subfetcher) peek() Trie {
 // once queued work is drained. Depending on the async parameter, the method
 // will either block until all disk loads finish or return immediately.
 func (sf *subfetcher) terminate(async bool) {
-	sf.terminateWithMode(async, prefetchStopDrain)
-}
-
-func (sf *subfetcher) terminateWithMode(async bool, mode prefetchStopMode) {
-	sf.lock.Lock()
-	if mode == prefetchStopSnapshotFast {
-		sf.stopMode = mode
-		sf.tasks = nil
-	}
-	sf.lock.Unlock()
-
 	select {
 	case <-sf.stop:
 	default:
@@ -493,13 +458,6 @@ func (sf *subfetcher) terminateWithMode(async bool, mode prefetchStopMode) {
 		return
 	}
 	<-sf.term
-}
-
-func (sf *subfetcher) discardOnStop() bool {
-	sf.lock.Lock()
-	defer sf.lock.Unlock()
-
-	return sf.stopMode == prefetchStopSnapshotFast
 }
 
 // warmNodes returns the (path -> blob) map of trie nodes this subfetcher has
@@ -515,38 +473,20 @@ func (sf *subfetcher) warmNodes() map[string][]byte {
 }
 
 func (sf *subfetcher) prefetchAccounts(addresses []common.Address) bool {
-	for start := 0; start < len(addresses); start += subfetcherAccountPrefetchChunk {
-		if sf.discardOnStop() {
-			return false
-		}
-		end := start + subfetcherAccountPrefetchChunk
-		if end > len(addresses) {
-			end = len(addresses)
-		}
-		startTime := time.Now()
-		if err := sf.trie.PrefetchAccount(addresses[start:end]); err != nil {
-			log.Error("Failed to prefetch accounts", "err", err)
-		}
-		sf.fetchTime += time.Since(startTime)
+	startTime := time.Now()
+	if err := sf.trie.PrefetchAccount(addresses); err != nil {
+		log.Error("Failed to prefetch accounts", "err", err)
 	}
+	sf.fetchTime += time.Since(startTime)
 	return true
 }
 
 func (sf *subfetcher) prefetchStorage(slots [][]byte) bool {
-	for start := 0; start < len(slots); start += subfetcherStoragePrefetchChunk {
-		if sf.discardOnStop() {
-			return false
-		}
-		end := start + subfetcherStoragePrefetchChunk
-		if end > len(slots) {
-			end = len(slots)
-		}
-		startTime := time.Now()
-		if err := sf.trie.PrefetchStorage(sf.addr, slots[start:end]); err != nil {
-			log.Error("Failed to prefetch storage", "err", err)
-		}
-		sf.fetchTime += time.Since(startTime)
+	startTime := time.Now()
+	if err := sf.trie.PrefetchStorage(sf.addr, slots); err != nil {
+		log.Error("Failed to prefetch storage", "err", err)
 	}
+	sf.fetchTime += time.Since(startTime)
 	return true
 }
 
@@ -598,11 +538,7 @@ func (sf *subfetcher) loop() {
 			sf.lock.Lock()
 			tasks := sf.tasks
 			sf.tasks = nil
-			discard := sf.stopMode == prefetchStopSnapshotFast
 			sf.lock.Unlock()
-			if discard {
-				return
-			}
 
 			var (
 				addresses []common.Address
@@ -659,9 +595,6 @@ func (sf *subfetcher) loop() {
 					slots = append(slots, key.Bytes())
 				}
 			}
-			if sf.discardOnStop() {
-				return
-			}
 			if len(addresses) != 0 && !sf.prefetchAccounts(addresses) {
 				return
 			}
@@ -670,15 +603,11 @@ func (sf *subfetcher) loop() {
 			}
 
 		case <-sf.stop:
-			// Termination is requested. Snapshot-fast mode discards speculative
-			// queued tasks; full-drain mode keeps the historical behaviour and
-			// exhausts queued tasks before exiting.
+			// Termination is requested. Drain queued work before exiting so the
+			// caller can rely on the prefetcher having completed all scheduled
+			// warming by the time synchronous termination returns.
 			sf.lock.Lock()
 			done := len(sf.tasks) == 0
-			if sf.stopMode == prefetchStopSnapshotFast {
-				sf.tasks = nil
-				done = true
-			}
 			sf.lock.Unlock()
 
 			if done {

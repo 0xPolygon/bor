@@ -71,34 +71,49 @@ func TestUseAfterTerminate(t *testing.T) {
 	}
 }
 
-func TestSubfetcherSnapshotFastTerminateDiscardsQueuedTasks(t *testing.T) {
+func TestDetachedPrefetcherLifecycle(t *testing.T) {
 	db := filledStateDB()
-	slot := common.HexToHash("aaa")
-	sf := &subfetcher{
-		db:            db.db,
-		state:         db.originalRoot,
-		root:          db.originalRoot,
-		wake:          make(chan struct{}, 1),
-		stop:          make(chan struct{}),
-		term:          make(chan struct{}),
-		seenReadAddr:  make(map[common.Address]struct{}),
-		seenWriteAddr: make(map[common.Address]struct{}),
-		seenReadSlot:  make(map[common.Hash]struct{}),
-		seenWriteSlot: make(map[common.Hash]struct{}),
-		tasks:         []*subfetcherTask{{slot: &slot}},
+	db.StartPrefetcher("detach-lifecycle", nil, nil)
+	if db.prefetcher == nil {
+		t.Fatal("expected StartPrefetcher to install a prefetcher")
 	}
-	sf.terminateWithMode(true, prefetchStopSnapshotFast)
 
-	if got := len(sf.tasks); got != 0 {
-		t.Fatalf("snapshot-fast terminate left %d queued tasks, want 0", got)
+	detached := db.DetachPrefetcher()
+	if detached == nil {
+		t.Fatal("expected DetachPrefetcher to return a handle")
 	}
-	select {
-	case <-sf.stop:
-	default:
-		t.Fatalf("snapshot-fast terminate did not close stop channel")
+	if db.prefetcher != nil {
+		t.Fatal("DetachPrefetcher left StateDB.prefetcher installed")
 	}
-	if err := sf.schedule(nil, []common.Hash{slot}, false); err != errTerminated {
-		t.Fatalf("schedule after snapshot-fast terminate error = %v, want %v", err, errTerminated)
+	if second := db.DetachPrefetcher(); second != nil {
+		t.Fatal("second DetachPrefetcher returned a handle after prefetcher was detached")
+	}
+
+	stats := detached.Stop()
+	if stats.Fetchers == 0 {
+		t.Fatal("detached Stop reported zero fetchers; expected the account-trie prefetcher")
+	}
+	again := detached.Stop()
+	if again.Fetchers != 0 || again.Drain != 0 || again.Report != 0 {
+		t.Fatalf("second detached Stop returned non-zero stats: %+v", again)
+	}
+}
+
+func TestDetachedPrefetcherNilAndEmpty(t *testing.T) {
+	var nilDetached *DetachedPrefetcher
+	if stats := nilDetached.Stop(); stats.Fetchers != 0 || stats.Drain != 0 || stats.Report != 0 {
+		t.Fatalf("nil Stop returned non-zero stats: %+v", stats)
+	}
+	if input, stats := nilDetached.StopAndCollectWarmSnapshot(); input != nil || stats.Fetchers != 0 || stats.Drain != 0 || stats.Report != 0 {
+		t.Fatalf("nil StopAndCollectWarmSnapshot returned input=%v stats=%+v", input, stats)
+	}
+
+	empty := &DetachedPrefetcher{}
+	if stats := empty.Stop(); stats.Fetchers != 0 || stats.Drain != 0 || stats.Report != 0 {
+		t.Fatalf("empty Stop returned non-zero stats: %+v", stats)
+	}
+	if input, stats := empty.StopAndCollectWarmSnapshot(); input != nil || stats.Fetchers != 0 || stats.Drain != 0 || stats.Report != 0 {
+		t.Fatalf("empty StopAndCollectWarmSnapshot returned input=%v stats=%+v", input, stats)
 	}
 }
 
@@ -118,14 +133,14 @@ func TestSubfetcherDrainTerminateKeepsQueuedTasks(t *testing.T) {
 		seenWriteSlot: make(map[common.Hash]struct{}),
 		tasks:         []*subfetcherTask{{slot: &slot}},
 	}
-	sf.terminateWithMode(true, prefetchStopDrain)
+	sf.terminate(true)
 
 	if got := len(sf.tasks); got != 1 {
 		t.Fatalf("full-drain terminate changed queued task count to %d, want 1", got)
 	}
 }
 
-func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
+func TestTriePrefetcherDrainTerminateCompletesQueuedWork(t *testing.T) {
 	db := NewDatabaseForTesting()
 	tr := newBlockingPrefetchTrie()
 	t.Cleanup(tr.releaseBlockedPrefetch)
@@ -133,7 +148,7 @@ func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
 		Database: db,
 		triedb:   db.TrieDB(),
 		trie:     tr,
-	}, common.Hash{}, "snapshot-fast-terminate", false)
+	}, common.Hash{}, "drain-queued-work", false)
 	addr1 := common.HexToAddress("0x1")
 	addr2 := common.HexToAddress("0x2")
 
@@ -151,146 +166,6 @@ func TestTriePrefetcherSnapshotFastTerminateSkipsQueuedWork(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		prefetcher.terminateForSnapshot()
-		close(done)
-	}()
-	select {
-	case <-done:
-		t.Fatalf("snapshot-fast terminate returned before in-flight prefetch completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	tr.releaseBlockedPrefetch()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("snapshot-fast terminate did not return after in-flight prefetch completed")
-	}
-
-	if calls, items := tr.accountStats(); calls != 1 || items != 1 {
-		t.Fatalf("executed account prefetch calls/items = %d/%d, want 1/1", calls, items)
-	}
-	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, []common.Address{addr2}, nil, false); err != errTerminated {
-		t.Fatalf("prefetch after snapshot-fast terminate error = %v, want %v", err, errTerminated)
-	}
-}
-
-func TestTriePrefetcherSnapshotFastTerminateStopsBetweenAccountChunks(t *testing.T) {
-	db := NewDatabaseForTesting()
-	tr := newBlockingPrefetchTrie()
-	t.Cleanup(tr.releaseBlockedPrefetch)
-	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
-		Database: db,
-		triedb:   db.TrieDB(),
-		trie:     tr,
-	}, common.Hash{}, "snapshot-fast-account-chunks", false)
-
-	addrs := make([]common.Address, subfetcherAccountPrefetchChunk+1)
-	for i := range addrs {
-		addrs[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
-	}
-	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, addrs, nil, false); err != nil {
-		t.Fatalf("prefetch failed: %v", err)
-	}
-	select {
-	case <-tr.started:
-	case <-time.After(time.Second):
-		t.Fatalf("first account prefetch chunk did not start")
-	}
-
-	done := make(chan struct{})
-	go func() {
-		prefetcher.terminateForSnapshot()
-		close(done)
-	}()
-	select {
-	case <-done:
-		t.Fatalf("snapshot-fast terminate returned before in-flight account chunk completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	tr.releaseBlockedPrefetch()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("snapshot-fast terminate did not return after in-flight account chunk completed")
-	}
-
-	if calls, items := tr.accountStats(); calls != 1 || items != subfetcherAccountPrefetchChunk {
-		t.Fatalf("executed account prefetch calls/items = %d/%d, want 1/%d", calls, items, subfetcherAccountPrefetchChunk)
-	}
-}
-
-func TestTriePrefetcherSnapshotFastTerminateStopsBetweenStorageChunks(t *testing.T) {
-	db := NewDatabaseForTesting()
-	tr := newBlockingPrefetchTrie()
-	t.Cleanup(tr.releaseBlockedPrefetch)
-	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
-		Database: db,
-		triedb:   db.TrieDB(),
-		trie:     tr,
-	}, common.Hash{}, "snapshot-fast-storage-chunks", false)
-
-	slots := make([]common.Hash, subfetcherStoragePrefetchChunk+1)
-	for i := range slots {
-		slots[i] = common.BigToHash(big.NewInt(int64(i + 1)))
-	}
-	owner := common.Hash{0x01}
-	addr := common.HexToAddress("0x1")
-	if err := prefetcher.prefetch(owner, common.Hash{}, addr, nil, slots, false); err != nil {
-		t.Fatalf("prefetch failed: %v", err)
-	}
-	select {
-	case <-tr.started:
-	case <-time.After(time.Second):
-		t.Fatalf("first storage prefetch chunk did not start")
-	}
-
-	done := make(chan struct{})
-	go func() {
-		prefetcher.terminateForSnapshot()
-		close(done)
-	}()
-	select {
-	case <-done:
-		t.Fatalf("snapshot-fast terminate returned before in-flight storage chunk completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	tr.releaseBlockedPrefetch()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("snapshot-fast terminate did not return after in-flight storage chunk completed")
-	}
-
-	if calls, items := tr.storageStats(); calls != 1 || items != subfetcherStoragePrefetchChunk {
-		t.Fatalf("executed storage prefetch calls/items = %d/%d, want 1/%d", calls, items, subfetcherStoragePrefetchChunk)
-	}
-}
-
-func TestTriePrefetcherDrainTerminateCompletesAccountChunks(t *testing.T) {
-	db := NewDatabaseForTesting()
-	tr := newBlockingPrefetchTrie()
-	t.Cleanup(tr.releaseBlockedPrefetch)
-	prefetcher := newTriePrefetcher(&blockingPrefetchDB{
-		Database: db,
-		triedb:   db.TrieDB(),
-		trie:     tr,
-	}, common.Hash{}, "drain-account-chunks", false)
-
-	addrs := make([]common.Address, subfetcherAccountPrefetchChunk+1)
-	for i := range addrs {
-		addrs[i] = common.BigToAddress(big.NewInt(int64(i + 1)))
-	}
-	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, addrs, nil, false); err != nil {
-		t.Fatalf("prefetch failed: %v", err)
-	}
-	select {
-	case <-tr.started:
-	case <-time.After(time.Second):
-		t.Fatalf("first account prefetch chunk did not start")
-	}
-
-	done := make(chan struct{})
-	go func() {
 		prefetcher.terminate(false)
 		close(done)
 	}()
@@ -303,11 +178,14 @@ func TestTriePrefetcherDrainTerminateCompletesAccountChunks(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatalf("full-drain terminate did not return after account chunks completed")
+		t.Fatalf("full-drain terminate did not return after queued work completed")
 	}
 
-	if calls, items := tr.accountStats(); calls != 2 || items != subfetcherAccountPrefetchChunk+1 {
-		t.Fatalf("executed account prefetch calls/items = %d/%d, want 2/%d", calls, items, subfetcherAccountPrefetchChunk+1)
+	if calls, items := tr.accountStats(); calls != 2 || items != 2 {
+		t.Fatalf("executed account prefetch calls/items = %d/%d, want 2/2", calls, items)
+	}
+	if err := prefetcher.prefetch(common.Hash{}, common.Hash{}, common.Address{}, []common.Address{addr2}, nil, false); err != errTerminated {
+		t.Fatalf("prefetch after terminate error = %v, want %v", err, errTerminated)
 	}
 }
 
