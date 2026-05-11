@@ -68,7 +68,7 @@ func (c *ChainSpanner) GetCurrentSpan(ctx context.Context, headerHash common.Has
 	msgData := (hexutil.Bytes)(data)
 	toAddress := c.validatorContractAddress
 
-	result, err := c.ethAPI.CallWithState(ctx, ethapi.TransactionArgs{
+	result, err := c.ethAPI.CallWithState(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
 		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
@@ -167,7 +167,7 @@ func (c *ChainSpanner) getSpanByBlock(ctx context.Context, blockNrOrHash rpc.Blo
 
 	spanMsgData := (hexutil.Bytes)(spanData)
 
-	spanResult, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
+	spanResult, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
 		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &spanMsgData,
@@ -193,7 +193,7 @@ func (c *ChainSpanner) getProducersBySpanAndIndexMethod(ctx context.Context, blo
 
 	producerMsgData := (hexutil.Bytes)(producerData)
 
-	result, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
+	result, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
 		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &producerMsgData,
@@ -219,7 +219,7 @@ func (c *ChainSpanner) getFirstEndBlock(ctx context.Context, blockNrOrHash rpc.B
 
 	firstEndBlockMsgData := (hexutil.Bytes)(firstEndBlockData)
 
-	firstEndBlockResult, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
+	firstEndBlockResult, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
 		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &firstEndBlockMsgData,
@@ -248,7 +248,7 @@ func (c *ChainSpanner) getBorValidatorsWithoutId(ctx context.Context, blockNrOrH
 	// call
 	msgData := (hexutil.Bytes)(data)
 
-	result, err := c.ethAPI.Call(ctx, ethapi.TransactionArgs{
+	result, err := c.ethAPI.Call(ethapi.WithBorInternalCall(ctx), ethapi.TransactionArgs{
 		Gas:  &abi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,

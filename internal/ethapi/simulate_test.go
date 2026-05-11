@@ -84,6 +84,7 @@ func TestSimulateSanitizeBlockOrder(t *testing.T) {
 		sim := &simulator{
 			base:        &types.Header{Number: big.NewInt(int64(tc.baseNumber)), Time: tc.baseTimestamp},
 			chainConfig: params.TestChainConfig, // In real usage, sanitizeChain is always called with chainConfig
+			budget:      newGasBudget(0),
 		}
 		res, err := sim.sanitizeChain(tc.blocks)
 		if err != nil {

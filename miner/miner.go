@@ -67,6 +67,8 @@ type Config struct {
 	PendingFeeRecipient     common.Address `toml:"-"` // Address for pending block rewards.
 	EnablePrefetch          bool           // Enable transaction prefetching from pool during block building
 	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
+
+	DisablePendingBlock bool // Disable the pending block creation loop on non block producer nodes
 }
 
 // DefaultConfig contains default settings for miner.
@@ -89,6 +91,8 @@ var DefaultConfig = Config{
 	Recommit:                2 * time.Second,
 	EnablePrefetch:          true,
 	PrefetchGasLimitPercent: 100, // 100% of header gas limit
+
+	DisablePendingBlock: false,
 }
 
 // Miner is the main object which takes care of submitting new work to consensus

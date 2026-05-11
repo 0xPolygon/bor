@@ -832,6 +832,14 @@ func (w *worker) mainLoop() {
 	for {
 		select {
 		case req := <-w.newWorkCh:
+			// When DisablePendingBlock is set and the worker is not actively producing
+			// blocks (non-validator), skip commitWork entirely — its only purpose in
+			// that case is to maintain the pending block snapshot for RPC.
+			if w.config.DisablePendingBlock && !w.IsRunning() {
+				w.pendingWorkBlock.Store(0)
+				continue
+			}
+
 			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
 				if w.eth.PeerCount() > 0 || devFakeAuthor {
 					//nolint:contextcheck
@@ -852,7 +860,7 @@ func (w *worker) mainLoop() {
 			// already included in the current sealing block. These transactions will
 			// be automatically eliminated.
 			// nolint : nestif
-			if !w.IsRunning() && w.current != nil {
+			if !w.IsRunning() && !w.config.DisablePendingBlock && w.current != nil {
 				// If block is already full, abort
 				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
 					continue

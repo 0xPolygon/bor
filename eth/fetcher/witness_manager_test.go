@@ -2640,3 +2640,808 @@ func TestConcurrentWitnessVerification(t *testing.T) {
 		t.Log("Note: No peers were jailed, which may indicate the consensus logic needs review")
 	}
 }
+
+// TestFetchWitnessNoPeerError covers the soft-failure path in
+// initiateWitnessFetch when the fetch function reports "no peer with witness
+// for hash". In that case the returned (req, _, ok) must be (nil, _, false)
+// so the caller short-circuits before dereferencing req. A mutation flipping
+// the ok value to true would cause `defer req.Close()` to nil-panic; this
+// test catches that by exercising the code path and asserting no peer is
+// dropped (the peer argument passed to handleWitnessFetchFailureExt is "").
+func TestFetchWitnessNoPeerError(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropped := make(chan string, 1)
+	dropPeer := peerDropFn(func(id string) { dropped <- id })
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, nil, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, 0,
+	)
+
+	hash := common.HexToHash("0xabc")
+	peer := "test-peer"
+
+	// Seed a pending entry so handleWitnessFetchFailureExt has a state to
+	// back off on — mirrors the real code path.
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: peer},
+		announce: &blockAnnounce{
+			origin: peer,
+			hash:   hash,
+			number: 101,
+			time:   time.Now(),
+		},
+	}
+	manager.mu.Unlock()
+
+	announce := &blockAnnounce{
+		origin: peer,
+		hash:   hash,
+		number: 101,
+		time:   time.Now(),
+		// Return the exact error substring matched in initiateWitnessFetch.
+		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+			return nil, errors.New("no peer with witness for hash")
+		},
+	}
+
+	// Run synchronously so a nil-panic in the mutated variant fails the test
+	// rather than silently crashing a goroutine.
+	manager.fetchWitness(peer, hash, announce)
+
+	// The soft-failure path passes peer="" to handleWitnessFetchFailureExt,
+	// so no peer should be dropped.
+	select {
+	case id := <-dropped:
+		t.Errorf("unexpected peer drop on 'no peer with witness' path: %s", id)
+	default:
+	}
+}
+
+// TestTickPreservesValidPendingEntry guards the nil-check in
+// collectReadyHashesLocked:
+//
+//	if state.op == nil || state.announce == nil { delete(...) }
+//
+// A mutation flipping either `==` to `!=` would cause valid pending entries
+// (both fields non-nil) to be wrongly deleted. TestTickNotReadyYet only
+// checks the retry counter; this test verifies the entry itself survives
+// tick.
+func TestWitnessTickPreservesValidPendingEntry(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, nil, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, 0,
+	)
+
+	block := createTestBlock(101)
+	hash := block.Hash()
+
+	// Valid pending entry: both op and announce non-nil, future time so it
+	// isn't ready to fetch and won't be drained by the ready path.
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: "test-peer", block: block},
+		announce: &blockAnnounce{
+			origin: "test-peer",
+			hash:   hash,
+			number: block.NumberU64(),
+			time:   time.Now().Add(time.Hour),
+			fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+				return nil, nil
+			},
+		},
+	}
+	manager.mu.Unlock()
+
+	manager.tick()
+
+	if !manager.isPending(hash) {
+		t.Error("valid pending entry was incorrectly deleted by tick()")
+	}
+}
+
+// TestFetchWitnessOtherErrorKeepsPending covers the "other errors" branch in
+// initiateWitnessFetch — errors whose message does NOT contain "no peer with
+// witness for hash". This path must:
+//   - keep the pending entry (removePending=false, caught if line 582 mutates)
+//   - return ok=false so the caller short-circuits before defer req.Close()
+//     on a nil request (caught if line 583 mutates)
+//
+// TestFetchWitnessError exercises this path but never asserts the pending
+// state is retained, so the removePending bool is unverified.
+func TestFetchWitnessOtherErrorKeepsPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, nil, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, 0,
+	)
+
+	hash := common.HexToHash("0xfade")
+	peer := "test-peer"
+
+	// Seed a pending entry so initiateWitnessFetch reaches the
+	// "other errors" branch (the isPending check passes).
+	manager.mu.Lock()
+	manager.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: peer},
+		announce: &blockAnnounce{
+			origin: peer,
+			hash:   hash,
+			number: 101,
+			time:   time.Now(),
+		},
+	}
+	manager.mu.Unlock()
+
+	announce := &blockAnnounce{
+		origin: peer,
+		hash:   hash,
+		number: 101,
+		time:   time.Now(),
+		// Generic error — does NOT match the "no peer with witness for hash"
+		// substring, forcing the other-errors code path.
+		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+			return nil, errors.New("transient network error")
+		},
+	}
+
+	// Synchronous call: a nil-req panic from a mutated ok=true would fail
+	// the test rather than silently crashing a goroutine.
+	manager.fetchWitness(peer, hash, announce)
+
+	// Pending entry must still exist — the soft-failure path must NOT
+	// remove it (removePending=false).
+	if !manager.isPending(hash) {
+		t.Error("pending entry was removed on transient error; expected it to be retained for retry")
+	}
+}
+
+// TestCheckWitnessPageCountAtThreshold covers the exact-boundary case where
+// pageCount equals the computed threshold. The guard is `pageCount <=
+// threshold` — flipping to `<` would incorrectly trigger peer verification at
+// the boundary. The existing below-threshold tests all use threshold-1, so
+// the boundary itself was untested.
+func TestCheckWitnessPageCountAtThreshold(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(id string) { t.Errorf("unexpected drop for peer at threshold: %s", id) })
+	jailPeer := peerJailFn(func(id string) { t.Errorf("unexpected jail for peer at threshold: %s", id) })
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(hash common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(hash common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	// 30M gas / 1M per MB / 15MB per page → ceil(2.0) = 2 pages threshold.
+	currentHeader := currentHeaderFn(func() *types.Header {
+		return &types.Header{Number: big.NewInt(100), GasLimit: 30_000_000}
+	})
+
+	manager := newWitnessManager(
+		quit, dropPeer, jailPeer, enqueueCh,
+		getBlock, getHeader, chainHeight, currentHeader, 30_000_000,
+	)
+
+	threshold := manager.calculatePageThreshold()
+
+	// Explicit failure if verification is unexpectedly invoked. If the guard
+	// mutates from `<=` to `<`, pageCount == threshold will fall through to
+	// verification and these mocks will fire.
+	getRandomPeers := func() []string {
+		t.Error("getRandomPeers should not be called for pageCount == threshold")
+		return nil
+	}
+	getWitnessPageCount := func(string, common.Hash) (uint64, error) {
+		t.Error("getWitnessPageCount should not be called for pageCount == threshold")
+		return 0, errors.New("unreachable")
+	}
+
+	isHonest := manager.CheckWitnessPageCount(
+		common.HexToHash("0xdef"),
+		threshold, // exactly at the boundary
+		"test-peer",
+		getRandomPeers,
+		getWitnessPageCount,
+	)
+	if !isHonest {
+		t.Error("expected peer to be considered honest at pageCount == threshold")
+	}
+}
+
+// newWitnessManagerForTest returns a minimal witness manager wired up for
+// tests that directly invoke individual methods. The returned channel can
+// be read from to observe enqueued ops.
+func newWitnessManagerForTest(t *testing.T) (*witnessManager, <-chan *enqueueRequest) {
+	t.Helper()
+	quit := make(chan struct{})
+	t.Cleanup(func() { close(quit) })
+	enqueueCh := make(chan *enqueueRequest, 10)
+	m := newWitnessManager(
+		quit,
+		peerDropFn(func(string) {}),
+		nil,
+		enqueueCh,
+		blockRetrievalFn(func(common.Hash) *types.Block { return nil }),
+		HeaderRetrievalFn(func(common.Hash) *types.Header { return nil }),
+		chainHeightFn(func() uint64 { return 100 }),
+		nil,
+		0,
+	)
+	return m, enqueueCh
+}
+
+// addPendingEntry inserts a valid pending witness request for a hash with
+// the given announce time. Returns the hash for convenience.
+func addPendingEntry(m *witnessManager, hashHex string, peer string, announceTime time.Time) common.Hash {
+	hash := common.HexToHash(hashHex)
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: peer},
+		announce: &blockAnnounce{
+			origin: peer,
+			hash:   hash,
+			number: 101,
+			time:   announceTime,
+		},
+	}
+	m.mu.Unlock()
+	return hash
+}
+
+// TestProcessWitnessResponseErrorBranches covers all three early-return
+// error paths in processWitnessResponse:
+//
+//   - nil response (channel closed unexpectedly)
+//   - wrong response type (assertion failure)
+//   - empty witness slice
+//
+// Each must route through handleWitnessFetchFailureExt with removePending=false
+// and must not panic on nil. This kills the negate_conditional,
+// boolean_substitution, and branch_removal mutations on lines 616, 618,
+// 627, 630, 632.
+func TestProcessWitnessResponseErrorBranches(t *testing.T) {
+	peer := "test-peer"
+
+	t.Run("nil response", func(t *testing.T) {
+		m, _ := newWitnessManagerForTest(t)
+		hash := addPendingEntry(m, "0xa1", peer, time.Now())
+		m.processWitnessResponse(peer, hash, nil, time.Now())
+		// nil response → fetch failure path with removePending=false → entry retained.
+		if !m.isPending(hash) {
+			t.Error("pending entry should be retained on nil response")
+		}
+	})
+
+	t.Run("invalid response type", func(t *testing.T) {
+		m, _ := newWitnessManagerForTest(t)
+		hash := addPendingEntry(m, "0xa2", peer, time.Now())
+		done := make(chan error, 1)
+		res := &eth.Response{Res: "not-a-witness-slice", Done: done}
+		m.processWitnessResponse(peer, hash, res, time.Now())
+		if !m.isPending(hash) {
+			t.Error("pending entry should be retained on invalid response type")
+		}
+		select {
+		case <-done:
+		default:
+			t.Error("res.Done should be signaled before type check")
+		}
+	})
+
+	t.Run("empty witness slice", func(t *testing.T) {
+		m, _ := newWitnessManagerForTest(t)
+		hash := addPendingEntry(m, "0xa3", peer, time.Now())
+		done := make(chan error, 1)
+		res := &eth.Response{Res: []*stateless.Witness{}, Done: done}
+		m.processWitnessResponse(peer, hash, res, time.Now())
+		if !m.isPending(hash) {
+			t.Error("pending entry should be retained on empty witness slice")
+		}
+	})
+}
+
+// TestHandleBroadcastPreservesExistingWitness asserts the "already set"
+// guard at line 349: if a pending entry already has a witness attached, a
+// second broadcast must NOT overwrite it. Flipping `== nil` to `!= nil`
+// would cause the attached witness to be replaced.
+func TestHandleBroadcastPreservesExistingWitness(t *testing.T) {
+	m, enqueueCh := newWitnessManagerForTest(t)
+
+	block := createTestBlock(101)
+	hash := block.Hash()
+	firstWitness := createTestWitnessForBlock(block)
+	secondWitness := createTestWitnessForBlock(block)
+
+	// Seed a pending entry with a witness already attached via a prior broadcast.
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin:  "peer-1",
+			block:   block,
+			witness: firstWitness,
+		},
+		announce: &blockAnnounce{
+			origin: "peer-1",
+			hash:   hash,
+			number: block.NumberU64(),
+			time:   time.Now(),
+		},
+	}
+	m.mu.Unlock()
+
+	// Inject a second broadcast for the same hash.
+	m.handleBroadcast(&injectedWitnessMsg{
+		peer:    "peer-2",
+		witness: secondWitness,
+		time:    time.Now(),
+	})
+
+	// The first witness should still be attached — handleBroadcast goes on
+	// to enqueue via safeEnqueue which removes the pending entry, so we
+	// validate by reading the enqueued op.
+	select {
+	case req := <-enqueueCh:
+		if req.op.witness != firstWitness {
+			t.Error("second broadcast overwrote already-attached witness")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for enqueue")
+	}
+}
+
+// TestEarliestPendingAnnounceLockedSkipsInvalid verifies the three-way
+// filter in earliestPendingAnnounceLocked:
+//
+//	state.announce == nil || state.op == nil || state.op.witness != nil
+//
+// Each clause must filter out entries that don't qualify as "pending fetch".
+// This kills three negate_conditional mutations on line 708.
+func TestWitnessEarliestPendingAnnounceSkipsInvalid(t *testing.T) {
+	m, _ := newWitnessManagerForTest(t)
+
+	valid := common.HexToHash("0xb1")
+	nilAnnounce := common.HexToHash("0xb2")
+	nilOp := common.HexToHash("0xb3")
+	alreadyHasWitness := common.HexToHash("0xb4")
+
+	earliestTime := time.Now().Add(-time.Hour) // must be selected
+	laterTime := time.Now().Add(time.Hour)
+
+	m.mu.Lock()
+	m.pending[valid] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: "p"},
+		announce: &blockAnnounce{
+			origin: "p", hash: valid, number: 1, time: earliestTime,
+		},
+	}
+	// Should be skipped: announce nil.
+	m.pending[nilAnnounce] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: "p"},
+	}
+	// Should be skipped: op nil.
+	m.pending[nilOp] = &witnessRequestState{
+		announce: &blockAnnounce{hash: nilOp, time: laterTime},
+	}
+	// Should be skipped: witness already present.
+	block := createTestBlock(5)
+	m.pending[alreadyHasWitness] = &witnessRequestState{
+		op: &blockOrHeaderInject{
+			origin:  "p",
+			block:   block,
+			witness: createTestWitnessForBlock(block),
+		},
+		announce: &blockAnnounce{hash: alreadyHasWitness, time: laterTime},
+	}
+
+	got := m.earliestPendingAnnounceLocked()
+	m.mu.Unlock()
+
+	if !got.Equal(earliestTime) {
+		t.Errorf("earliest = %v, want %v (only valid entry should count)", got, earliestTime)
+	}
+}
+
+// TestCollectReadyHashesMaxRetriesBoundary exercises the exact-threshold
+// case for the max-retries guard:
+//
+//	if state.retries >= maxWitnessFetchRetries { ... mark unavailable }
+//
+// Flipping `>=` to `>` would let a request retry one additional time beyond
+// the limit before being marked unavailable. This also covers the incdec
+// mutation on `state.retries++` (line 464) — if that flipped to `--`,
+// retries would never reach the limit.
+func TestWitnessCollectReadyHashesMaxRetriesBoundary(t *testing.T) {
+	t.Run("below limit gets incremented and fetched", func(t *testing.T) {
+		m, _ := newWitnessManagerForTest(t)
+		hash := addPendingEntry(m, "0xc1", "p", time.Now().Add(-time.Second))
+		m.mu.Lock()
+		m.pending[hash].retries = 5
+		ready, toMark := m.collectReadyHashesLocked(time.Now())
+		retriesAfter := m.pending[hash].retries
+		m.mu.Unlock()
+
+		if len(ready) != 1 || ready[0] != hash {
+			t.Errorf("expected hash in readyToFetch, got ready=%v", ready)
+		}
+		if len(toMark) != 0 {
+			t.Errorf("expected nothing to mark, got %v", toMark)
+		}
+		if retriesAfter != 6 {
+			t.Errorf("retries = %d, want 6 (should be incremented)", retriesAfter)
+		}
+	})
+
+	t.Run("at limit gets marked unavailable", func(t *testing.T) {
+		m, _ := newWitnessManagerForTest(t)
+		hash := addPendingEntry(m, "0xc2", "p", time.Now().Add(-time.Second))
+		m.mu.Lock()
+		m.pending[hash].retries = maxWitnessFetchRetries
+		ready, toMark := m.collectReadyHashesLocked(time.Now())
+		m.mu.Unlock()
+
+		if len(ready) != 0 {
+			t.Errorf("expected empty ready, got %v", ready)
+		}
+		if len(toMark) != 1 || toMark[0] != hash {
+			t.Errorf("expected hash in toMarkUnavailable, got %v", toMark)
+		}
+	})
+}
+
+// TestCleanupUnavailableCacheExpiry verifies that cleanupUnavailableCache
+// correctly partitions entries by expiry time:
+//   - entries whose expiry is in the past are removed
+//   - entries whose expiry is in the future are retained
+//
+// This kills the conditional_boundary mutation on `now.After(expiry)` at
+// line 837 (e.g. `>` → `>=` would change which entries survive).
+func TestWitnessCleanupUnavailableCacheExpiry(t *testing.T) {
+	m, _ := newWitnessManagerForTest(t)
+	expired := common.HexToHash("0xd1")
+	live := common.HexToHash("0xd2")
+
+	now := time.Now()
+	m.mu.Lock()
+	m.witnessUnavailable[expired] = now.Add(-time.Hour)
+	m.witnessUnavailable[live] = now.Add(time.Hour)
+	m.mu.Unlock()
+
+	m.cleanupUnavailableCache()
+
+	m.mu.Lock()
+	_, expiredStillThere := m.witnessUnavailable[expired]
+	_, liveStillThere := m.witnessUnavailable[live]
+	m.mu.Unlock()
+
+	if expiredStillThere {
+		t.Error("expired entry should have been removed")
+	}
+	if !liveStillThere {
+		t.Error("unexpired entry should have been retained")
+	}
+}
+
+// TestCalculatePageThresholdMinimumClamp verifies that a tiny gas limit
+// (which would naturally compute to 0 pages) is clamped to a minimum of 1.
+// This covers the two `threshold < 1` guards in calculatePageThreshold
+// (header-path at line ~978 and config-path at line ~1003).
+func TestWitnessCalculatePageThresholdMinimumClamp(t *testing.T) {
+	t.Run("tiny header gas limit clamps to 1", func(t *testing.T) {
+		quit := make(chan struct{})
+		defer close(quit)
+		m := newWitnessManager(
+			quit,
+			peerDropFn(func(string) {}),
+			nil,
+			make(chan *enqueueRequest, 10),
+			blockRetrievalFn(func(common.Hash) *types.Block { return nil }),
+			HeaderRetrievalFn(func(common.Hash) *types.Header { return nil }),
+			chainHeightFn(func() uint64 { return 100 }),
+			currentHeaderFn(func() *types.Header {
+				return &types.Header{Number: big.NewInt(100), GasLimit: 1} // < 1MB → 0 pages pre-clamp
+			}),
+			0,
+		)
+		if got := m.calculatePageThreshold(); got < 1 {
+			t.Errorf("threshold = %d, want >= 1 (minimum clamp)", got)
+		}
+	})
+
+	t.Run("tiny gas ceil config clamps to 1", func(t *testing.T) {
+		quit := make(chan struct{})
+		defer close(quit)
+		m := newWitnessManager(
+			quit,
+			peerDropFn(func(string) {}),
+			nil,
+			make(chan *enqueueRequest, 10),
+			blockRetrievalFn(func(common.Hash) *types.Block { return nil }),
+			HeaderRetrievalFn(func(common.Hash) *types.Header { return nil }),
+			chainHeightFn(func() uint64 { return 100 }),
+			nil, // no current header → fallback to config path
+			1,   // 1 gas ceil → 0 pages pre-clamp
+		)
+		if got := m.calculatePageThreshold(); got < 1 {
+			t.Errorf("threshold = %d, want >= 1 (minimum clamp)", got)
+		}
+	})
+}
+
+// TestHandleFilterResultSkipsAlreadyPending verifies handleFilterResult
+// short-circuits when the hash is already in pending — flipping the `!=`
+// at line 875 (if already pending, we should NOT process further).
+func TestWitnessHandleFilterResultSkipsAlreadyPending(t *testing.T) {
+	m, _ := newWitnessManagerForTest(t)
+	block := createTestBlock(102)
+	hash := block.Hash()
+
+	fetchCalled := false
+	fetchWitness := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		fetchCalled = true
+		return nil, nil
+	}
+
+	// Seed an existing pending entry with that hash.
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: "old-peer", block: block},
+		announce: &blockAnnounce{origin: "old-peer", hash: hash, time: time.Now()},
+	}
+	origRetries := m.pending[hash].retries
+	m.mu.Unlock()
+
+	m.handleFilterResult(&blockAnnounce{
+		origin:       "new-peer",
+		hash:         hash,
+		number:       block.NumberU64(),
+		fetchWitness: fetchWitness,
+	}, block)
+
+	if fetchCalled {
+		t.Error("fetchWitness should not be invoked when already pending")
+	}
+
+	// Pending state must be the original one, not replaced.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.pending[hash]
+	if state == nil {
+		t.Fatal("pending entry was removed; expected original to remain")
+	}
+	if state.op.origin != "old-peer" {
+		t.Errorf("pending entry was replaced; origin=%q", state.op.origin)
+	}
+	if state.retries != origRetries {
+		t.Error("pending retries counter was modified")
+	}
+}
+
+// TestCheckCompletingSkipsAlreadyPending verifies the same already-pending
+// guard in checkCompleting at line 933.
+func TestWitnessCheckCompletingSkipsAlreadyPending(t *testing.T) {
+	m, _ := newWitnessManagerForTest(t)
+	block := createTestBlock(103)
+	hash := block.Hash()
+
+	fetchCalled := false
+	fetchWitness := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		fetchCalled = true
+		return nil, nil
+	}
+
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: "original", block: block},
+		announce: &blockAnnounce{origin: "original", hash: hash, time: time.Now()},
+	}
+	m.mu.Unlock()
+
+	m.checkCompleting(&blockAnnounce{
+		origin:       "new-peer",
+		hash:         hash,
+		number:       block.NumberU64(),
+		fetchWitness: fetchWitness,
+	}, block)
+
+	if fetchCalled {
+		t.Error("fetchWitness should not be invoked when already pending")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.pending[hash]
+	if state == nil {
+		t.Fatal("pending entry was removed; expected original to remain")
+	}
+	if state.op.origin != "original" {
+		t.Error("pending entry was replaced")
+	}
+}
+
+// TestHandleWitnessFetchSuccessUpdatesBlockTimestamps covers the guard at
+// line 665: if state.op.block is non-nil, ReceivedAt and AnnouncedAt must
+// be set. Flipping the `!= nil` guard would skip the timestamp updates
+// even when a block is present.
+func TestHandleWitnessFetchSuccessUpdatesBlockTimestamps(t *testing.T) {
+	m, enqueueCh := newWitnessManagerForTest(t)
+	block := createTestBlock(104)
+	hash := block.Hash()
+	witness := createTestWitnessForBlock(block)
+
+	m.mu.Lock()
+	m.pending[hash] = &witnessRequestState{
+		op: &blockOrHeaderInject{origin: "peer", block: block},
+		announce: &blockAnnounce{
+			origin: "peer", hash: hash, number: block.NumberU64(), time: time.Now(),
+		},
+	}
+	m.mu.Unlock()
+
+	announcedAt := time.Now().Add(-time.Second)
+	m.handleWitnessFetchSuccess("peer", hash, witness, announcedAt)
+
+	select {
+	case req := <-enqueueCh:
+		if req.op.block.ReceivedAt.IsZero() {
+			t.Error("ReceivedAt should be set after successful fetch")
+		}
+		if req.op.block.AnnouncedAt == nil {
+			t.Error("AnnouncedAt should be set after successful fetch")
+		} else if !req.op.block.AnnouncedAt.Equal(announcedAt) {
+			t.Errorf("AnnouncedAt = %v, want %v", *req.op.block.AnnouncedAt, announcedAt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for enqueue")
+	}
+}
+
+// TestVerifyWitnessPageCountDishonestPeer exercises the dishonest-peer
+// detection at line 1089:
+//
+//	if consensusPageCount != reportedPageCount && consensusPageCount != 0
+//
+// Flipping either `!=` to `==` would cause honest or no-consensus cases
+// to be classified as dishonest and incorrectly drop/jail the peer.
+func TestVerifyWitnessPageCountDishonestPeer(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	var droppedPeer, jailedPeer string
+	dropPeer := peerDropFn(func(id string) { droppedPeer = id })
+	jailPeer := peerJailFn(func(id string) { jailedPeer = id })
+
+	m := newWitnessManager(
+		quit, dropPeer, jailPeer,
+		make(chan *enqueueRequest, 10),
+		blockRetrievalFn(func(common.Hash) *types.Block { return nil }),
+		HeaderRetrievalFn(func(common.Hash) *types.Header { return nil }),
+		chainHeightFn(func() uint64 { return 100 }),
+		nil,
+		0,
+	)
+
+	// Reported: 999 (the lying peer). Consensus from other peers: 5 (x2).
+	// 999 vs consensus 5 → dishonest path.
+	getRandomPeers := func() []string { return []string{"honest1", "honest2"} }
+	getWitnessPageCount := func(peer string, _ common.Hash) (uint64, error) {
+		return 5, nil
+	}
+
+	isHonest := m.verifyWitnessPageCountSync(
+		common.HexToHash("0xe1"), 999, "liar",
+		getRandomPeers, getWitnessPageCount,
+	)
+	if isHonest {
+		t.Error("expected liar to be classified dishonest")
+	}
+	if droppedPeer != "liar" {
+		t.Errorf("expected drop of 'liar', got %q", droppedPeer)
+	}
+	if jailedPeer != "liar" {
+		t.Errorf("expected jail of 'liar', got %q", jailedPeer)
+	}
+}
+
+// TestGetConsensusPageCountMajority verifies that the majority vote is
+// correctly picked. This covers the `freq > maxCount` comparison at line
+// 1030 — flipping to `>=` could change which vote wins on ties (though in
+// most cases Go map iteration nondeterminism already makes ties undefined,
+// a clear-majority case must still pick the winner).
+func TestWitnessGetConsensusPageCountMajority(t *testing.T) {
+	m, _ := newWitnessManagerForTest(t)
+
+	// Original: 10. Peers vote 10, 10, 999 → consensus 10 (3/4 includes self).
+	peers := []string{"p1", "p2", "p3"}
+	votes := map[string]uint64{"p1": 10, "p2": 10, "p3": 999}
+	getCount := func(peer string, _ common.Hash) (uint64, error) {
+		return votes[peer], nil
+	}
+
+	consensus := m.getConsensusPageCountWithOriginal(
+		peers, common.HexToHash("0xe2"),
+		10, // original reported
+		getCount,
+	)
+	if consensus != 10 {
+		t.Errorf("consensus = %d, want 10 (clear majority)", consensus)
+	}
+}
+
+// TestWitnessLoopDrivesFetchesForPending guards against armTimerChan's
+// condition being inverted: when pending requests exist, the loop must
+// arm the timer so tick() eventually fires and invokes fetchWitness. The
+// existing TestLoop injects a message but never verifies the retry path
+// actually executes via the timer — it was insufficient to catch a bug
+// where armTimerChan returned a nil timer channel whenever pending > 0
+// (reported by code review on PR #2188).
+//
+// This test exercises the full loop→tick→fetchWitness pipeline through
+// real channels and asserts the fetch callback fires within a bounded
+// time.
+func TestWitnessLoopDrivesFetchesForPending(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+
+	dropPeer := peerDropFn(func(string) {})
+	enqueueCh := make(chan *enqueueRequest, 10)
+	getBlock := blockRetrievalFn(func(common.Hash) *types.Block { return nil })
+	getHeader := HeaderRetrievalFn(func(common.Hash) *types.Header { return nil })
+	chainHeight := chainHeightFn(func() uint64 { return 100 })
+
+	manager := newWitnessManager(
+		quit, dropPeer, nil, enqueueCh,
+		getBlock, getHeader, chainHeight, nil, 0,
+	)
+
+	fetchCalled := make(chan struct{}, 1)
+	fetchWitness := func(common.Hash, chan *eth.Response) (*eth.Request, error) {
+		select {
+		case fetchCalled <- struct{}{}:
+		default:
+		}
+		return nil, errors.New("no peer with witness for hash")
+	}
+
+	go manager.loop()
+	defer manager.stop()
+
+	block := createTestBlock(101)
+	manager.injectNeedWitnessCh <- &injectBlockNeedWitnessMsg{
+		origin:       "test-peer",
+		block:        block,
+		fetchWitness: fetchWitness,
+	}
+
+	// fetchWitness must be invoked within a reasonable window. If
+	// armTimerChan's condition is inverted (returns nil channel when
+	// pending > 0), tick() never fires through the timer and this
+	// times out.
+	select {
+	case <-fetchCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("fetchWitness was never invoked — loop is not driving tick for pending requests")
+	}
+}

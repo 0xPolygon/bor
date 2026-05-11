@@ -2157,7 +2157,7 @@ func TestInvalidStateSyncInBlockBody(t *testing.T) {
 	// shouldn't be applied and an error should be returned while inserting the block.
 	_, err := chain.InsertChain([]*types.Block{block}, false)
 	require.Error(t, err, "insert chain successed for block with invalid state-sync tx in body")
-	require.ErrorIs(t, err, core.ErrStateSyncProcessing, "received incorrect error for invalid state-sync tx in block body")
+	require.ErrorIs(t, err, core.ErrStateSyncMismatch, "received incorrect error for invalid state-sync tx in block body")
 }
 
 // TestDynamicGasLimit_LowBaseFee tests that when base fee is below the target-buffer,
