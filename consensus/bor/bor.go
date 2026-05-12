@@ -1489,10 +1489,13 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 				"headerDifficulty", header.Difficulty,
 			)
 		}
+		// Block on send (or exit on stop). A default branch here would
+		// drop the result silently when results is full, leaking the
+		// miner's pendingTasks entry.
 		select {
 		case results <- &consensus.NewSealedBlockEvent{Block: block.WithSeal(header), Witness: witness}:
-		default:
-			log.Warn("Sealing result was not read by miner", "number", number, "sealhash", SealHash(header, c.config))
+		case <-stop:
+			log.Info("Seal interrupted before result delivery", "number", number, "sealhash", SealHash(header, c.config))
 		}
 	}()
 

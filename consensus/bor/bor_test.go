@@ -2652,6 +2652,87 @@ func TestSeal_AuthorizedSigner(t *testing.T) {
 	}
 }
 
+// TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop is a regression test
+// for the silent-drop in Bor.Seal's result-delivery goroutine.
+//
+// Bug: the goroutine's second select used `default` as the not-sent path:
+//
+//	select {
+//	case results <- &consensus.NewSealedBlockEvent{...}:
+//	default:
+//	    log.Warn("Sealing result was not read by miner", ...)
+//	}
+//
+// When the result channel had no ready receiver (e.g., resultLoop blocked on
+// a slow chain.WriteBlockAndSetHead under elephant-contract load), `default`
+// fired immediately and the result was discarded without posting. The
+// worker's pendingTasks entry for this sealhash would then leak: resultLoop
+// never received it, never deleted it, and the producer's veblop fallback
+// would short-circuit on hasPendingTasks > 0 every tick afterwards. This is
+// post-mortem candidate 2 for the 2026-05-07 Amoy val4 stall.
+//
+// Fix: replace `default` with `case <-stop` so the goroutine either delivers
+// or exits cleanly on interrupt. The taskLoop's interrupt() (with its
+// pendingTasks-delete companion fix) is then the single place that cleans
+// up on the stop path.
+//
+// Test scheme: drive Seal with a zero-buffer results channel and NO reader
+// initially. With the bug, the goroutine immediately drops via `default`
+// and a subsequent receive times out. With the fix, the goroutine blocks
+// on send until our receive arrives, and we get the result back.
+func TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop(t *testing.T) {
+	t.Parallel()
+	setup := newSignedChainSetup(t)
+	b := setup.bor
+	b.fakeDiff = true
+
+	b.Authorize(setup.signerAddr, func(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), setup.privKey)
+	})
+
+	h := setup.makeSignedHeader(t, 1, setup.genesis)
+	// Use a Time slightly in the future so the goroutine exercises a real
+	// time.After(delay) wait. We need a non-trivial delay so we can ensure
+	// the goroutine reaches the second select *before* our receive — that
+	// is the precise condition under which the buggy `default` branch
+	// would fire (no receiver ready, no buffer slot, no fallback).
+	const delaySec = 1
+	h.Time = uint64(time.Now().Unix()) + delaySec
+
+	body := &types.Body{Transactions: types.Transactions{types.NewTx(&types.LegacyTx{})}}
+	block := types.NewBlock(h, body, nil, trie.NewStackTrie(nil))
+
+	// Zero-buffer channel + no receiver-ready at the moment the goroutine
+	// reaches the second select. Pre-fix: `default` fires → silent drop.
+	// Post-fix: send blocks until either a receiver pairs with it or stop
+	// closes — neither happens here, so the goroutine remains parked on
+	// send and our delayed receive pairs with it.
+	results := make(chan *consensus.NewSealedBlockEvent)
+	stop := make(chan struct{})
+
+	err := b.Seal(setup.chain.HeaderChain(), block, nil, results, stop)
+	require.NoError(t, err, "Seal should return nil and spawn the sealing goroutine")
+
+	// Wait long enough for the goroutine's time.After(delay) to fire AND
+	// for it to advance into the second select. This is the critical
+	// ordering: with the bug, by the time we start receiving below the
+	// goroutine has already taken the silent `default` path. With the fix
+	// the goroutine is parked on the send waiting for any receiver.
+	time.Sleep(time.Duration(delaySec)*time.Second + 500*time.Millisecond)
+
+	select {
+	case ev := <-results:
+		require.NotNil(t, ev, "expected a sealed block event")
+		require.NotNil(t, ev.Block, "expected ev.Block to be non-nil")
+		require.Equal(t, block.NumberU64(), ev.Block.NumberU64(),
+			"sealed block number should match the input block")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Bor.Seal silently dropped the result via the second-select default branch; " +
+			"expected the goroutine to remain blocked on send (or exit on <-stop) instead. " +
+			"This was the leak path for val4-style \"elected but silent\" stalls under load.")
+	}
+}
+
 func TestSeal_UnauthorizedSigner(t *testing.T) {
 	t.Parallel()
 

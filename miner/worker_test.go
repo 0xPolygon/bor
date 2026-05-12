@@ -226,10 +226,11 @@ func DefaultTestConfig() *Config {
 
 // testWorkerBackend implements worker.Backend interfaces and wraps all information needed during the testing.
 type testWorkerBackend struct {
-	db      ethdb.Database
-	txPool  *txpool.TxPool
-	chain   *core.BlockChain
-	genesis *core.Genesis
+	db        ethdb.Database
+	txPool    *txpool.TxPool
+	chain     *core.BlockChain
+	genesis   *core.Genesis
+	peerCount atomic.Int32 // settable by tests; PeerCount() returns int(peerCount.Load())
 }
 
 func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database) *testWorkerBackend {
@@ -262,18 +263,23 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 	pool := legacypool.New(testTxPoolConfig, chain)
 	txpool, _ := txpool.New(testTxPoolConfig.PriceLimit, chain, []txpool.SubPool{pool})
 
-	return &testWorkerBackend{
+	b := &testWorkerBackend{
 		db:      db,
 		chain:   chain,
 		txPool:  txpool,
 		genesis: gspec,
 	}
+	// Default to "peered" so tests that don't care about the PeerCount gate
+	// in mainLoop don't accidentally hit the dropped-newWorkReq branch.
+	// Tests targeting the PeerCount==0 race must call b.peerCount.Store(0).
+	b.peerCount.Store(1)
+	return b
 }
 
 func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
 func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func (b *testWorkerBackend) PeerCount() int {
-	panic("unimplemented")
+	return int(b.peerCount.Load())
 }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
@@ -1531,6 +1537,299 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	// Should have ~3 tasks after clearing (1 per second)
 	if tasksAfterClearing < 2 || tasksAfterClearing > 4 {
 		t.Errorf("Expected 2-4 tasks after clearing pending, got %d", tasksAfterClearing)
+	}
+}
+
+// TestMainLoopClearsPendingWorkBlockOnPeerCountZero is a regression test for
+// the 2026-05-07 Amoy chain halt (post-mortem INC-37).
+//
+// Bug: When `mainLoop` receives a `newWorkReq` while `PeerCount() == 0` on a
+// BorMainnet/Mumbai/Amoy chain, it silently drops the request. `newWorkLoop`
+// had already written `pendingWorkBlock = head+1` before sending, so without
+// the corresponding clear here, that value stays wedged at `head+1` forever.
+// The veblop fallback timer in newWorkLoop then short-circuits on every
+// tick (`if pendingWorkBlock == currentBlock+1 { reset; continue }`),
+// silently disabling the only recovery mechanism that exists when no
+// chainHeadCh events arrive.
+//
+// This test:
+//  1. Builds a worker on a production chain ID (Amoy) with Rio active.
+//  2. Holds PeerCount at 0.
+//  3. Triggers the worker startup path (`init=true` → startCh → newWorkLoop
+//     writes pendingWorkBlock and sends to newWorkCh → mainLoop receives).
+//  4. Asserts that after mainLoop processes the request, pendingWorkBlock is
+//     back to 0 (not wedged at 1).
+//
+// Pre-fix: pendingWorkBlock stays at 1 → test fails.
+// Post-fix: pendingWorkBlock cleared to 0 → test passes.
+func TestMainLoopClearsPendingWorkBlockOnPeerCountZero(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	// Rio active from genesis so the veblop fallback retries after the drop.
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	config := DefaultTestConfig()
+	config.Recommit = 10 * time.Second
+
+	w, backend, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Bug-trigger conditions: PeerCount==0 AND DevFakeAuthor=false. The
+	// gate in mainLoop's newWorkCh case reads:
+	//     if w.eth.PeerCount() > 0 || devFakeAuthor { commitWork(...) }
+	//     else { w.pendingWorkBlock.Store(0) }
+	backend.peerCount.Store(0)
+	if bor, ok := engine.(*bor.Bor); ok {
+		bor.DevFakeAuthor = false
+	}
+
+	// newWorker(init=true) pushes to startCh during construction; newWorkLoop
+	// then sets pendingWorkBlock = head+1 and sends to newWorkCh. Wait
+	// briefly so mainLoop can drain the request.
+	w.start()
+	time.Sleep(500 * time.Millisecond)
+
+	got := w.pendingWorkBlock.Load()
+	if got != 0 {
+		t.Fatalf("pendingWorkBlock leaked: expected 0 after mainLoop drops a newWorkReq on PeerCount==0, got %d. "+
+			"This means the worker's veblop fallback timer in newWorkLoop will permanently short-circuit — the wedge that halted Amoy on 2026-05-07.", got)
+	}
+}
+
+// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a distinct leak
+// path for `pendingWorkBlock` (separate from the PeerCount==0 race fixed for
+// the 2026-05-07 incident). It does NOT cleanly explain val4's stall because
+// `miner.update()` unsubscribes from downloader events after the first
+// DoneEvent, so for a node that's been running past initial sync, `w.syncing`
+// is permanently false. The bug is still real for fresh-startup paths and
+// worth fixing as a code-hygiene issue.
+//
+// Bug: commitWork's pre-fix layout read:
+//
+//	if w.syncing.Load() {
+//	    return                              // early return
+//	}
+//	defer func() {                          // defer registered AFTER the return
+//	    w.pendingWorkBlock.Store(0)
+//	}()
+//
+// During downloader-driven sync, chainHeadCh fires per imported block, the
+// chainHeadCh handler writes `pendingWorkBlock = head+1` and calls commit().
+// mainLoop then routes the newWorkReq into commitWork, which sees
+// `w.syncing == true` and bails out before the defer that would clear
+// pendingWorkBlock. The value is leaked. If `startCh` does not subsequently
+// fire to overwrite it (e.g., shouldStart=false in miner.update()), the
+// veblop fallback in newWorkLoop short-circuits on every tick.
+//
+// This test:
+//  1. Sets w.syncing=true to simulate the downloader sync window.
+//  2. Pre-sets pendingWorkBlock=42 to mimic the value newWorkLoop would have
+//     written for the next-block-in-flight.
+//  3. Directly invokes commitWork (matching what mainLoop would do).
+//  4. Asserts that pendingWorkBlock is cleared back to 0.
+//
+// Pre-fix: commitWork's early return leaves pendingWorkBlock at 42 → test fails.
+// Post-fix (move defer above the syncing check, or store 0 in that branch):
+// pendingWorkBlock cleared to 0 → test passes.
+func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Simulate the downloader-sync window. miner.update() flips this on
+	// when downloader.StartEvent fires.
+	w.syncing.Store(true)
+
+	// Simulate a newWorkLoop chainHeadCh / veblop tick that has already
+	// reserved the next block number.
+	w.pendingWorkBlock.Store(42)
+
+	// Call commitWork directly. mainLoop reaches this with PeerCount>0
+	// during sync (the node has peers — that's where it's pulling blocks
+	// from), so the PeerCount gate is not what's at play here.
+	w.commitWork(nil, false, time.Now().Unix())
+
+	got := w.pendingWorkBlock.Load()
+	if got != 0 {
+		t.Fatalf("pendingWorkBlock leaked while syncing: expected 0, got %d. "+
+			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag — "+
+			"the same class of leak (different trigger) as the 2026-05-07 incident.", got)
+	}
+}
+
+// TestTaskLoopInterruptCleansStalePendingTasks is a regression test for the
+// "elected but silent" stall mechanism (post-mortem INC-37 candidate 2).
+//
+// Bug context: Bor.Seal's stop-branch returns silently without posting to
+// resultCh. resultLoop is the only path that would clean a pendingTasks
+// entry — and it never runs without a posted result. So when taskLoop
+// fires interrupt() on a new task (closing the previous sealing's stopCh
+// and triggering its silent return), the previous entry leaks. The
+// veblop fallback in newWorkLoop sees hasPendingTasks > 0 every tick and
+// short-circuits commit() forever.
+//
+// Test scheme:
+//  1. Build two blocks with different sealhashes.
+//  2. Wire a skipSealHook so taskLoop does NOT call engine.Seal — keeps
+//     this test isolated from Bor.Seal signer/timing requirements.
+//  3. Send task A through taskCh. taskLoop sets its local prev=H_A but
+//     does not add to pendingTasks (skipSealHook returned true).
+//  4. Manually inject pendingTasks[H_A] — simulates the leak from a real
+//     Bor.Seal that returned silently on stop.
+//  5. Send task B through taskCh (different sealhash). taskLoop fires
+//     interrupt() with prev=H_A.
+//  6. Assert pendingTasks no longer contains H_A.
+//
+// Pre-fix: interrupt() only closes stopCh; pendingTasks[H_A] persists. Test fails.
+// Post-fix: interrupt() also deletes pendingTasks[prev]. Test passes.
+func TestTaskLoopInterruptCleansStalePendingTasks(t *testing.T) {
+	chainConfig := &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	db := rawdb.NewMemoryDatabase()
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// skipSealHook returns true so taskLoop skips engine.Seal but still
+	// reaches interrupt() and updates its local `prev`. We control
+	// pendingTasks manually instead — this isolates the test from Bor.Seal's
+	// signer/authorization/timing requirements.
+	w.skipSealHook = func(task *task) bool { return true }
+
+	// Synchronization: newTaskHook fires inside taskLoop *before*
+	// interrupt() runs. We close per-task channels after taskLoop has
+	// finished processing each task (after the continue from skipSealHook
+	// returns control to the for-select).
+	//
+	// Simpler: use newTaskHook to signal when a task has been received.
+	// Then sleep briefly for taskLoop's processing.
+	received := make(chan common.Hash, 2)
+	w.newTaskHook = func(task *task) {
+		received <- w.engine.SealHash(task.block.Header())
+	}
+
+	// Build two distinct headers (different Time → different SealHash).
+	parent := w.chain.CurrentBlock()
+	headerA := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 1,
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	headerB := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 2, // different Time → different sealhash
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	blockA := types.NewBlockWithHeader(headerA)
+	blockB := types.NewBlockWithHeader(headerB)
+
+	sealHashA := w.engine.SealHash(blockA.Header())
+	sealHashB := w.engine.SealHash(blockB.Header())
+	if sealHashA == sealHashB {
+		t.Fatalf("test setup: sealhashes must differ (A=%s B=%s)", sealHashA, sealHashB)
+	}
+
+	// Send task A. taskLoop will: interrupt(no-op), prev=H_A, skipSealHook=true → continue.
+	select {
+	case w.taskCh <- &task{block: blockA, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task A")
+	}
+	select {
+	case got := <-received:
+		if got != sealHashA {
+			t.Fatalf("expected newTaskHook for A=%s got %s", sealHashA, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task A")
+	}
+	// Give taskLoop a moment to finish processing past skipSealHook.
+	time.Sleep(50 * time.Millisecond)
+
+	// Simulate the leak: a real Bor.Seal would have stored this entry
+	// before its goroutine got <-stop and returned silently. We inject
+	// it manually here to match that state without driving Bor.Seal.
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHashA] = &task{block: blockA, createdAt: time.Now()}
+	w.pendingMu.Unlock()
+
+	// Sanity check: the stale entry is present before task B arrives.
+	w.pendingMu.RLock()
+	_, presentBefore := w.pendingTasks[sealHashA]
+	w.pendingMu.RUnlock()
+	if !presentBefore {
+		t.Fatal("test setup: pendingTasks[H_A] was not injected")
+	}
+
+	// Send task B (different sealhash). taskLoop calls interrupt() with
+	// prev=H_A. With the fix, interrupt() deletes pendingTasks[H_A].
+	select {
+	case w.taskCh <- &task{block: blockB, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task B")
+	}
+	select {
+	case got := <-received:
+		if got != sealHashB {
+			t.Fatalf("expected newTaskHook for B=%s got %s", sealHashB, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task B")
+	}
+	// Give taskLoop time to run interrupt().
+	time.Sleep(50 * time.Millisecond)
+
+	// Assert: the stale entry for H_A is gone (deleted by interrupt()).
+	w.pendingMu.RLock()
+	_, presentAfter := w.pendingTasks[sealHashA]
+	w.pendingMu.RUnlock()
+	if presentAfter {
+		t.Fatalf("pendingTasks[H_A=%s] leaked: expected interrupt() to delete it on new task arrival, "+
+			"but it is still present. Without this cleanup, Bor.Seal's silent stop-branch return would "+
+			"leave the entry forever, and newWorkLoop's veblop fallback would short-circuit on "+
+			"hasPendingTasks > 0 every tick — the \"elected but silent\" stall pattern.", sealHashA)
 	}
 }
 

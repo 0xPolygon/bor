@@ -679,6 +679,10 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		interrupt   *atomic.Int32
 		minRecommit = recommit // minimal resubmit interval specified by user.
 		timestamp   int64      // timestamp for each round of sealing.
+		// Stall-detection state for veblopTimer: tracks the last time we
+		// emitted a stall warning so the log isn't flooded while the
+		// producer is stuck.
+		lastStallWarnAt time.Time
 	)
 
 	timer := time.NewTimer(0)
@@ -743,7 +747,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				veblopTimeout = w.blockTime
 			}
 
-			if w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsRio(currentBlock.Number) {
+			if w.chainConfig.Bor == nil {
 				veblopTimer.Reset(veblopTimeout)
 				continue
 			}
@@ -753,6 +757,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			w.pendingMu.RUnlock()
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
+			lastStallWarnAt = w.warnIfStalled(currentBlock, time.Now().Unix()-int64(currentBlock.Time), veblopTimeout, pendingWorkBlock, hasPendingTasks, lastStallWarnAt)
 			if pendingWorkBlock == currentBlock.Number.Uint64()+1 {
 				// Next block is already being worked on, reset the timer.
 				veblopTimer.Reset(veblopTimeout)
@@ -840,14 +845,15 @@ func (w *worker) mainLoop() {
 				continue
 			}
 
-			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
-				if w.eth.PeerCount() > 0 || devFakeAuthor {
-					//nolint:contextcheck
-					w.commitWork(req.interrupt, req.noempty, req.timestamp)
-				}
-			} else {
+			if w.eth.PeerCount() > 0 || devFakeAuthor {
 				//nolint:contextcheck
 				w.commitWork(req.interrupt, req.noempty, req.timestamp)
+			} else {
+				// Drop the request and unblock the veblop fallback retry.
+				// In steady state peers > 0, so this firing means we tried
+				// to commit during a peer outage — worth surfacing.
+				w.pendingWorkBlock.Store(0)
+				log.Warn("Dropped newWorkReq: no peers", "head", w.chain.CurrentBlock().Number.Uint64())
 			}
 
 		case req := <-w.getWorkCh:
@@ -948,11 +954,15 @@ func (w *worker) taskLoop() {
 		prev   common.Hash
 	)
 
-	// interrupt aborts the in-flight sealing task.
+	// interrupt aborts the in-flight sealing task and clears its leaked
+	// pendingTasks entry (see deletePendingTask).
 	interrupt := func() {
 		if stopCh != nil {
 			close(stopCh)
 			stopCh = nil
+		}
+		if w.deletePendingTask(prev) {
+			log.Warn("Cleaned leaked pendingTasks entry on interrupt", "sealhash", prev)
 		}
 	}
 
@@ -1933,15 +1943,16 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 // commitWork generates several new sealing tasks based on the parent block
 // and submit them to the sealer.
 func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int64) {
+	// Must be declared before any early return so pendingWorkBlock is
+	// always cleared — otherwise the veblop fallback would short-circuit.
+	defer func() {
+		w.pendingWorkBlock.Store(0)
+	}()
+
 	// Abort committing if node is still syncing
 	if w.syncing.Load() {
 		return
 	}
-
-	// Clear the pending work block number when commitWork completes (success or failure).
-	defer func() {
-		w.pendingWorkBlock.Store(0)
-	}()
 
 	// Set the coinbase if the worker is running or it's required
 	var coinbase common.Address
@@ -2375,6 +2386,45 @@ func (w *worker) clearPending(number uint64) {
 		}
 	}
 	w.pendingMu.Unlock()
+}
+
+// warnIfStalled emits a single WARN per 30s when the chain has been stale
+// for >3x the block time AND the veblop fallback can't make progress
+// (either pendingWorkBlock thinks work is in flight, or pendingTasks is
+// non-empty). Returns the new last-warn timestamp.
+func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, veblopTimeout time.Duration, pendingWorkBlock uint64, hasPendingTasks bool, lastWarnAt time.Time) time.Time {
+	if chainAgeSec <= 3*int64(veblopTimeout.Seconds()) {
+		return lastWarnAt
+	}
+	if pendingWorkBlock != currentBlock.Number.Uint64()+1 && !hasPendingTasks {
+		return lastWarnAt
+	}
+	if time.Since(lastWarnAt) <= 30*time.Second {
+		return lastWarnAt
+	}
+	log.Warn("Possible producer stall: veblop fallback skipping while chain is stale",
+		"currentBlock", currentBlock.Number.Uint64(),
+		"chainAgeSec", chainAgeSec,
+		"veblopTimeoutSec", int64(veblopTimeout.Seconds()),
+		"pendingWorkBlock", pendingWorkBlock,
+		"pendingTasksCount", len(w.pendingTasks),
+		"peerCount", w.eth.PeerCount())
+	return time.Now()
+}
+
+// deletePendingTask removes a single pendingTasks entry by sealhash and
+// returns true if the entry existed. The zero hash is a no-op. Used by
+// taskLoop.interrupt to clean entries that resultLoop wouldn't reach
+// because Bor.Seal's stop-branch returns silently.
+func (w *worker) deletePendingTask(sealHash common.Hash) bool {
+	if sealHash == (common.Hash{}) {
+		return false
+	}
+	w.pendingMu.Lock()
+	defer w.pendingMu.Unlock()
+	_, existed := w.pendingTasks[sealHash]
+	delete(w.pendingTasks, sealHash)
+	return existed
 }
 
 // vmConfig returns the VM config.

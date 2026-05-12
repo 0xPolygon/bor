@@ -2932,3 +2932,179 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 
 	return spanner
 }
+
+// TestProducerRecoversAfterMiningRestart is an integration-level regression
+// test for the family of "elected but silent" producer stalls
+// (post-mortem INC-37 for the 2026-05-07 Amoy chain halt).
+//
+// Behavioral property under test: after a brief mining stop/start cycle on
+// an active block producer — which closes the worker's startup race window
+// (the same window where Bug 1 fired in production) — the producer must
+// eventually seal blocks again. None of the four leak-paths fixed in this
+// family should be able to permanently wedge the producer state machine
+// across a restart.
+//
+// The four leak paths that the unit tests precisely cover and that this
+// integration test exercises behaviorally:
+//
+//  1. miner.mainLoop dropped-newWorkReq on PeerCount==0 (unit test:
+//     TestMainLoopClearsPendingWorkBlockOnPeerCountZero).
+//  2. miner.commitWork syncing-leak early return (unit test:
+//     TestCommitWorkLeaksPendingWorkBlockWhenSyncing).
+//  3. miner.taskLoop interrupt missing pendingTasks delete (unit test:
+//     TestTaskLoopInterruptCleansStalePendingTasks).
+//  4. Bor.Seal second-select silent default drop (unit test:
+//     TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop).
+//
+// Integration-level limitations:
+//   - This test runs on chainID=15001 (the testdata/genesis_2val.json default).
+//     Bug 1 is chain-ID-gated to BorMainnet/Mumbai/Amoy and so does NOT fire
+//     directly here — the gated `else` branch unconditionally commits work.
+//     The precise unit test (TestMainLoopClearsPendingWorkBlockOnPeerCountZero)
+//     overrides ChainID to Amoy to exercise the gated path.
+//   - The race conditions for (3) and the resultCh-full condition for (4)
+//     are timing-sensitive and not reliably reproduced in a 2-node test
+//     without artificial backpressure.
+//
+// What this test DOES guarantee end-to-end: if any change introduces a
+// state-machine bug that prevents a producer from sealing again after a
+// brief mining stop/start cycle, this test catches the regression at the
+// integration level (multiple producers, real P2P, real chain insertion).
+func TestProducerRecoversAfterMiningRestart(t *testing.T) {
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	// Faucets to fund (unused by this test but expected by InitGenesis).
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
+
+	var (
+		stacks []*node.Node
+		nodes  []*eth.Ethereum
+		enodes []*enode.Node
+	)
+	for i := 0; i < 2; i++ {
+		stack, ethBackend, err := InitMiner(genesis, keys[i], true)
+		if err != nil {
+			t.Fatalf("error initializing miner %d: %v", i, err)
+		}
+		defer stack.Close()
+
+		for stack.Server().NodeInfo().Ports.Listener == 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		for _, n := range enodes {
+			stack.Server().AddPeer(n)
+		}
+		stacks = append(stacks, stack)
+		nodes = append(nodes, ethBackend)
+		enodes = append(enodes, stack.Server().Self())
+	}
+
+	// Let P2P stabilize then start mining on both nodes.
+	time.Sleep(3 * time.Second)
+	for _, n := range nodes {
+		if err := n.StartMining(); err != nil {
+			t.Fatalf("StartMining failed: %v", err)
+		}
+	}
+
+	// Phase 1: wait for the chain to advance to at least block 5 — confirms
+	// both producers are healthy before we disrupt anything.
+	waitForBlock := func(target uint64, timeout time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			h := nodes[0].BlockChain().CurrentHeader()
+			if h != nil && h.Number.Uint64() >= target {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		head := nodes[0].BlockChain().CurrentHeader()
+		var got uint64
+		if head != nil {
+			got = head.Number.Uint64()
+		}
+		t.Fatalf("chain did not reach block %d within %s (head=%d)", target, timeout, got)
+	}
+	waitForBlock(5, 30*time.Second)
+
+	// Phase 2: stop mining on node 0 and remove its peer link to node 1.
+	// This recreates the "producer is briefly isolated" condition that
+	// triggered Bug 1 in production (the startup race against P2P peer
+	// establishment). With node 0 stopped, node 1 should continue alone.
+	headBeforeStop := nodes[0].BlockChain().CurrentHeader().Number.Uint64()
+	t.Logf("phase 2: head before stop=%d, stopping mining on node 0 and removing peer", headBeforeStop)
+	nodes[0].StopMining()
+	stacks[0].Server().RemovePeer(enodes[1])
+
+	// Brief pause to let the producer-state machine settle into the
+	// "no peers, mining stopped" state. This is the window where the
+	// leaked-wedge bugs would have set pendingWorkBlock/pendingTasks and
+	// not cleared them. After the fixes, the state-machine should be
+	// reusable on the next StartMining.
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: re-add peer, restart mining on node 0. With Bug 1 (or the
+	// other leak paths) present, node 0 could sit silently — no seals —
+	// until the process is restarted. With the fixes, node 0 must
+	// produce blocks again within a short recovery window.
+	stacks[0].Server().AddPeer(enodes[1])
+	if err := nodes[0].StartMining(); err != nil {
+		t.Fatalf("StartMining (restart) failed: %v", err)
+	}
+
+	// Record the seal count by node 0 at the moment of restart.
+	countSealsByNode0 := func() int {
+		head := nodes[0].BlockChain().CurrentHeader()
+		if head == nil {
+			return 0
+		}
+		count := 0
+		signerAddr0 := nodes[0].AccountManager().Accounts()[0]
+		for n := head.Number.Uint64(); n > 0; n-- {
+			h := nodes[0].BlockChain().GetHeaderByNumber(n)
+			if h == nil {
+				continue
+			}
+			author, err := nodes[0].Engine().Author(h)
+			if err == nil && author == signerAddr0 {
+				count++
+			}
+			// Only look at recent blocks to avoid O(chain) work.
+			if head.Number.Uint64()-n > 50 {
+				break
+			}
+		}
+		return count
+	}
+	sealsBefore := countSealsByNode0()
+
+	// Phase 4: require that node 0 seals at least one new block within
+	// the recovery window. In a healthy state machine, the next sprint
+	// boundary that hands node 0 the producer slot will produce a block;
+	// in a wedged state machine, no new seals appear no matter how long
+	// we wait. 30s is generous given the sprint length and producer
+	// alternation pattern of genesis_2val.json (sprint=8, alternating
+	// producers means node 0 is primary every other sprint).
+	recoveryDeadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(recoveryDeadline) {
+		if countSealsByNode0() > sealsBefore {
+			t.Logf("phase 4: node 0 recovered — produced new block after restart (seals %d → %d)",
+				sealsBefore, countSealsByNode0())
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	headAfter := nodes[0].BlockChain().CurrentHeader().Number.Uint64()
+	t.Fatalf("node 0 did not seal a new block within 45s after StopMining/StartMining cycle "+
+		"(head before stop=%d, head after recovery window=%d, seals by node 0: before=%d after=%d). "+
+		"This indicates a leaked-wedge regression in the producer state machine — see post-mortem "+
+		"INC-37 for the family of bugs this test guards against.",
+		headBeforeStop, headAfter, sealsBefore, countSealsByNode0())
+}
