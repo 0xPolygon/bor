@@ -675,6 +675,8 @@ func recalcRecommit(minRecommit, prev time.Duration, target float64, inc bool) t
 func (w *worker) newWorkLoop(recommit time.Duration) {
 	defer w.wg.Done()
 
+	_, isBor := w.engine.(*bor.Bor)
+
 	var (
 		interrupt   *atomic.Int32
 		minRecommit = recommit // minimal resubmit interval specified by user.
@@ -747,7 +749,10 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 				veblopTimeout = w.blockTime
 			}
 
-			if w.chainConfig.Bor == nil {
+			// Veblop fallback fires for any Bor chain — pre-Rio needs the
+			// retry to recover after a transient peer outage on real
+			// network nodes, since startCh fires only once on startup.
+			if !isBor || w.chainConfig.Bor == nil {
 				veblopTimer.Reset(veblopTimeout)
 				continue
 			}
@@ -834,6 +839,11 @@ func (w *worker) mainLoop() {
 
 	bor, isBor := w.engine.(*bor.Bor)
 	devFakeAuthor := isBor && bor != nil && bor.DevFakeAuthor
+	// "real-network node" = Bor engine wired to a live heimdall. Test /
+	// dev setups (--bor.withoutheimdall, Clique, Ethash) leave the
+	// HeimdallClient nil and bypass the PeerCount gate so single-node
+	// and intentional-disconnection tests keep producing.
+	realNetworkNode := isBor && bor != nil && bor.HeimdallClient != nil
 	for {
 		select {
 		case req := <-w.newWorkCh:
@@ -845,15 +855,20 @@ func (w *worker) mainLoop() {
 				continue
 			}
 
-			if w.eth.PeerCount() > 0 || devFakeAuthor {
-				//nolint:contextcheck
-				w.commitWork(req.interrupt, req.noempty, req.timestamp)
-			} else {
+			// PeerCount gate applies only to real-network Bor nodes
+			// (heimdall configured). Test / dev setups
+			// (--bor.withoutheimdall, Clique, Ethash, etc.) commit
+			// unconditionally — single-node and intentional-disconnection
+			// tests rely on producing without peers.
+			if realNetworkNode && w.eth.PeerCount() == 0 && !devFakeAuthor {
 				// Drop the request and unblock the veblop fallback retry.
-				// In steady state peers > 0, so this firing means we tried
-				// to commit during a peer outage — worth surfacing.
+				// In steady state peers > 0, so this firing means we
+				// tried to commit during a peer outage — worth surfacing.
 				w.pendingWorkBlock.Store(0)
 				log.Warn("Dropped newWorkReq: no peers", "head", w.chain.CurrentBlock().Number.Uint64())
+			} else {
+				//nolint:contextcheck
+				w.commitWork(req.interrupt, req.noempty, req.timestamp)
 			}
 
 		case req := <-w.getWorkCh:
