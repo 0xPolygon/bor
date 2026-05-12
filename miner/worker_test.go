@@ -1540,25 +1540,28 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 }
 
-// TestMainLoopClearsPendingWorkBlockOnPeerCountZero is a regression test for
-// the 2026-05-07 Amoy chain halt (post-mortem INC-37).
+// TestMainLoopClearsPendingWorkBlockOnPeerCountZero is a regression test
+// for the wedge that caused the 2026-05-07 Amoy chain halt.
 //
-// Bug: When `mainLoop` receives a `newWorkReq` while `PeerCount() == 0` on a
-// BorMainnet/Mumbai/Amoy chain, it silently drops the request. `newWorkLoop`
-// had already written `pendingWorkBlock = head+1` before sending, so without
-// the corresponding clear here, that value stays wedged at `head+1` forever.
-// The veblop fallback timer in newWorkLoop then short-circuits on every
-// tick (`if pendingWorkBlock == currentBlock+1 { reset; continue }`),
-// silently disabling the only recovery mechanism that exists when no
-// chainHeadCh events arrive.
+// Bug: when mainLoop receives a newWorkReq while PeerCount()==0 on a
+// real-network Bor node (heimdall configured), it silently drops the
+// request. newWorkLoop had already written pendingWorkBlock = head+1
+// before sending, so without the corresponding clear here, that value
+// stays wedged at head+1 forever. The veblop fallback timer then
+// short-circuits on every tick (`if pendingWorkBlock == currentBlock+1
+// { reset; continue }`), silently disabling the only recovery mechanism
+// that exists when no chainHeadCh events arrive.
 //
 // This test:
-//  1. Builds a worker on a production chain ID (Amoy) with Rio active.
-//  2. Holds PeerCount at 0.
+//  1. Builds a worker on a Bor engine with a non-nil mock heimdall client
+//     (so the production gate `realNetworkNode := bor.HeimdallClient != nil`
+//     trips). Rio is active so the veblop fallback runs.
+//  2. Holds PeerCount at 0 and leaves DevFakeAuthor=false (the constructor
+//     default — see test setup notes below).
 //  3. Triggers the worker startup path (`init=true` → startCh → newWorkLoop
 //     writes pendingWorkBlock and sends to newWorkCh → mainLoop receives).
-//  4. Asserts that after mainLoop processes the request, pendingWorkBlock is
-//     back to 0 (not wedged at 1).
+//  4. Asserts that after mainLoop processes the request, pendingWorkBlock
+//     is back to 0 (not wedged at 1).
 //
 // Pre-fix: pendingWorkBlock stays at 1 → test fails.
 // Post-fix: pendingWorkBlock cleared to 0 → test passes.

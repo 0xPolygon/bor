@@ -2957,11 +2957,12 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 //     TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop).
 //
 // Integration-level limitations:
-//   - This test runs on chainID=15001 (the testdata/genesis_2val.json default).
-//     Bug 1 is chain-ID-gated to BorMainnet/Mumbai/Amoy and so does NOT fire
-//     directly here — the gated `else` branch unconditionally commits work.
-//     The precise unit test (TestMainLoopClearsPendingWorkBlockOnPeerCountZero)
-//     overrides ChainID to Amoy to exercise the gated path.
+//   - This test calls InitMiner with withoutHeimdall=true (no real heimdall
+//     wired up), so the production PeerCount==0 gate
+//     (`realNetworkNode := bor.HeimdallClient != nil`) doesn't trip and
+//     Bug 1's specific drop branch is NOT exercised. The precise unit test
+//     (TestMainLoopClearsPendingWorkBlockOnPeerCountZero) uses a mock
+//     heimdall client to enable the gate.
 //   - The race conditions for (3) and the resultCh-full condition for (4)
 //     are timing-sensitive and not reliably reproduced in a 2-node test
 //     without artificial backpressure.
