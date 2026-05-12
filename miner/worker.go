@@ -758,11 +758,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			}
 
 			w.pendingMu.RLock()
-			hasPendingTasks := len(w.pendingTasks) > 0
+			pendingTasksCount := len(w.pendingTasks)
 			w.pendingMu.RUnlock()
+			hasPendingTasks := pendingTasksCount > 0
 
 			pendingWorkBlock := w.pendingWorkBlock.Load()
-			lastStallWarnAt = w.warnIfStalled(currentBlock, time.Now().Unix()-int64(currentBlock.Time), veblopTimeout, pendingWorkBlock, hasPendingTasks, lastStallWarnAt)
+			lastStallWarnAt = w.warnIfStalled(currentBlock, time.Now().Unix()-int64(currentBlock.Time), veblopTimeout, pendingWorkBlock, pendingTasksCount, lastStallWarnAt)
 			if pendingWorkBlock == currentBlock.Number.Uint64()+1 {
 				// Next block is already being worked on, reset the timer.
 				veblopTimer.Reset(veblopTimeout)
@@ -2406,12 +2407,14 @@ func (w *worker) clearPending(number uint64) {
 // warnIfStalled emits a single WARN per 30s when the chain has been stale
 // for >3x the block time AND the veblop fallback can't make progress
 // (either pendingWorkBlock thinks work is in flight, or pendingTasks is
-// non-empty). Returns the new last-warn timestamp.
-func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, veblopTimeout time.Duration, pendingWorkBlock uint64, hasPendingTasks bool, lastWarnAt time.Time) time.Time {
+// non-empty). Returns the new last-warn timestamp. pendingTasksCount must
+// be captured under pendingMu by the caller — reading it here unguarded
+// would race with taskLoop / resultLoop.
+func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, veblopTimeout time.Duration, pendingWorkBlock uint64, pendingTasksCount int, lastWarnAt time.Time) time.Time {
 	if chainAgeSec <= 3*int64(veblopTimeout.Seconds()) {
 		return lastWarnAt
 	}
-	if pendingWorkBlock != currentBlock.Number.Uint64()+1 && !hasPendingTasks {
+	if pendingWorkBlock != currentBlock.Number.Uint64()+1 && pendingTasksCount == 0 {
 		return lastWarnAt
 	}
 	if time.Since(lastWarnAt) <= 30*time.Second {
@@ -2422,7 +2425,7 @@ func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, ve
 		"chainAgeSec", chainAgeSec,
 		"veblopTimeoutSec", int64(veblopTimeout.Seconds()),
 		"pendingWorkBlock", pendingWorkBlock,
-		"pendingTasksCount", len(w.pendingTasks),
+		"pendingTasksCount", pendingTasksCount,
 		"peerCount", w.eth.PeerCount())
 	return time.Now()
 }

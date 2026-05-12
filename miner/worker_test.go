@@ -1587,14 +1587,14 @@ func TestMainLoopClearsPendingWorkBlockOnPeerCountZero(t *testing.T) {
 	w, backend, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// Bug-trigger conditions: PeerCount==0 AND DevFakeAuthor=false. The
-	// gate in mainLoop's newWorkCh case reads:
-	//     if w.eth.PeerCount() > 0 || devFakeAuthor { commitWork(...) }
-	//     else { w.pendingWorkBlock.Store(0) }
+	// Bug-trigger conditions: PeerCount==0 AND DevFakeAuthor=false.
+	// DevFakeAuthor=false is the default constructed in NewFakeBor; we
+	// don't reassign it here because mainLoop has already captured the
+	// value at startup and a post-construction write would data-race.
+	// The gate in mainLoop's newWorkCh case reads:
+	//     if realNetworkNode && peers==0 && !devFakeAuthor { drop }
+	//     else { commitWork(...) }
 	backend.peerCount.Store(0)
-	if bor, ok := engine.(*bor.Bor); ok {
-		bor.DevFakeAuthor = false
-	}
 
 	// newWorker(init=true) pushes to startCh during construction; newWorkLoop
 	// then sets pendingWorkBlock = head+1 and sends to newWorkCh. Wait
