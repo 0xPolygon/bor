@@ -84,7 +84,7 @@ jobs:
 
       # This step will free disk space and thus remove any docker images previously built
       - name: Pre kurtosis run
-        uses: ./.github/actions/setup
+        uses: ./.github/actions/kurtosis/setup
         with:
           main_branch: develop
           docker_username: ${{ secrets.DOCKERHUB }}
@@ -155,7 +155,7 @@ jobs:
       # Clean up
       - name: Post kurtosis run
         if: always()
-        uses: ./.github/actions/cleanup
+        uses: ./.github/actions/kurtosis/cleanup
         with:
           main_branch: develop
           enclave_name: ${{ env.ENCLAVE_NAME }}
