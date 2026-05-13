@@ -42,6 +42,17 @@ func (s *fsWitnessStore) ReadWitness(hash common.Hash) []byte {
 	return ReadWitness(s.db, hash)
 }
 
+// readWitnessSizeFromFile returns the on-disk witness size for the given hash.
+// It is used as a recovery fallback when DB size metadata is missing.
+func (s *fsWitnessStore) readWitnessSizeFromFile(hash common.Hash) *uint64 {
+	info, err := os.Stat(witnessFilePath(s.dir, hash))
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	size := uint64(info.Size())
+	return &size
+}
+
 func (s *fsWitnessStore) WriteWitness(hash common.Hash, witness []byte) {
 	dir := witnessDir(s.dir, hash)
 	if err := os.MkdirAll(dir, 0755); err != nil {
