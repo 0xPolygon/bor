@@ -970,15 +970,13 @@ func (w *worker) taskLoop() {
 		prev   common.Hash
 	)
 
-	// interrupt aborts the in-flight sealing task and clears its leaked
-	// pendingTasks entry (see deletePendingTask).
+	// pendingTasks cleanup for stop-branch exits is handled by the
+	// SealWithStopHook onStopExit callback below — doing it here would
+	// race with the success branch and drop validly-sealed blocks.
 	interrupt := func() {
 		if stopCh != nil {
 			close(stopCh)
 			stopCh = nil
-		}
-		if w.deletePendingTask(prev) {
-			log.Warn("Cleaned leaked pendingTasks entry on interrupt", "sealhash", prev)
 		}
 	}
 
@@ -1006,7 +1004,21 @@ func (w *worker) taskLoop() {
 			w.pendingTasks[sealHash] = task
 			w.pendingMu.Unlock()
 
-			if err := w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh); err != nil {
+			// Cleanup runs only on stop-branch exits; success deliveries
+			// remain available for resultLoop.
+			sealHashCapture := sealHash
+			onStopExit := func() {
+				if w.deletePendingTask(sealHashCapture) {
+					log.Warn("Cleaned leaked pendingTasks entry on Seal stop-exit", "sealhash", sealHashCapture)
+				}
+			}
+			var sealErr error
+			if borEngine, ok := w.engine.(*bor.Bor); ok {
+				sealErr = borEngine.SealWithStopHook(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh, onStopExit)
+			} else {
+				sealErr = w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh)
+			}
+			if err := sealErr; err != nil {
 				log.Warn("Block sealing failed", "err", err)
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)

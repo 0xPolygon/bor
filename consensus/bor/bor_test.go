@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2731,6 +2732,141 @@ func TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop(t *testing.T) {
 			"expected the goroutine to remain blocked on send (or exit on <-stop) instead. " +
 			"This was the leak path for val4-style \"elected but silent\" stalls under load.")
 	}
+}
+
+// TestSealWithStopHook_FirstSelectStopBranch verifies onStopExit is invoked
+// when stop fires before the delay timer.
+func TestSealWithStopHook_FirstSelectStopBranch(t *testing.T) {
+	t.Parallel()
+	setup := newSignedChainSetup(t)
+	b := setup.bor
+	b.fakeDiff = true
+
+	b.Authorize(setup.signerAddr, func(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), setup.privKey)
+	})
+
+	h := setup.makeSignedHeader(t, 1, setup.genesis)
+	h.Time = uint64(time.Now().Unix()) + 30
+
+	body := &types.Body{Transactions: types.Transactions{types.NewTx(&types.LegacyTx{})}}
+	block := types.NewBlock(h, body, nil, trie.NewStackTrie(nil))
+
+	results := make(chan *consensus.NewSealedBlockEvent, 1)
+	stop := make(chan struct{})
+
+	var hookCalls atomic.Int32
+	hookDone := make(chan struct{})
+	onStopExit := func() {
+		hookCalls.Add(1)
+		close(hookDone)
+	}
+
+	err := b.SealWithStopHook(setup.chain.HeaderChain(), block, nil, results, stop, onStopExit)
+	require.NoError(t, err)
+
+	// Give the goroutine a moment to enter the first select.
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+
+	select {
+	case <-hookDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onStopExit was not invoked on first-select stop-branch exit")
+	}
+	require.Equal(t, int32(1), hookCalls.Load(), "hook must be called exactly once")
+
+	select {
+	case ev := <-results:
+		t.Fatalf("unexpected result on stop-branch exit: %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestSealWithStopHook_SecondSelectStopBranch verifies onStopExit is invoked
+// when stop fires after the delay timer but before the result send completes.
+func TestSealWithStopHook_SecondSelectStopBranch(t *testing.T) {
+	t.Parallel()
+	setup := newSignedChainSetup(t)
+	b := setup.bor
+	b.fakeDiff = true
+
+	b.Authorize(setup.signerAddr, func(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), setup.privKey)
+	})
+
+	h := setup.makeSignedHeader(t, 1, setup.genesis)
+	h.Time = uint64(time.Now().Unix()) + 1
+
+	body := &types.Body{Transactions: types.Transactions{types.NewTx(&types.LegacyTx{})}}
+	block := types.NewBlock(h, body, nil, trie.NewStackTrie(nil))
+
+	// Zero-buffer + no reader: goroutine parks on send in the second select.
+	results := make(chan *consensus.NewSealedBlockEvent)
+	stop := make(chan struct{})
+
+	var hookCalls atomic.Int32
+	hookDone := make(chan struct{})
+	onStopExit := func() {
+		hookCalls.Add(1)
+		close(hookDone)
+	}
+
+	err := b.SealWithStopHook(setup.chain.HeaderChain(), block, nil, results, stop, onStopExit)
+	require.NoError(t, err)
+
+	time.Sleep(1500 * time.Millisecond)
+	close(stop)
+
+	select {
+	case <-hookDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onStopExit was not invoked on second-select stop-branch exit")
+	}
+	require.Equal(t, int32(1), hookCalls.Load(), "hook must be called exactly once")
+}
+
+// TestSealWithStopHook_NotCalledOnSuccess verifies onStopExit is NOT invoked
+// when the goroutine delivers the result successfully — otherwise the
+// success path would race with cleanup and drop valid blocks.
+func TestSealWithStopHook_NotCalledOnSuccess(t *testing.T) {
+	t.Parallel()
+	setup := newSignedChainSetup(t)
+	b := setup.bor
+	b.fakeDiff = true
+
+	b.Authorize(setup.signerAddr, func(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), setup.privKey)
+	})
+
+	h := setup.makeSignedHeader(t, 1, setup.genesis)
+	h.Time = uint64(time.Now().Unix()) + 1
+
+	body := &types.Body{Transactions: types.Transactions{types.NewTx(&types.LegacyTx{})}}
+	block := types.NewBlock(h, body, nil, trie.NewStackTrie(nil))
+
+	results := make(chan *consensus.NewSealedBlockEvent, 1)
+	stop := make(chan struct{})
+
+	var hookCalls atomic.Int32
+	onStopExit := func() {
+		hookCalls.Add(1)
+	}
+
+	err := b.SealWithStopHook(setup.chain.HeaderChain(), block, nil, results, stop, onStopExit)
+	require.NoError(t, err)
+
+	select {
+	case ev := <-results:
+		require.NotNil(t, ev)
+		require.NotNil(t, ev.Block)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for sealed block on success path")
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, int32(0), hookCalls.Load(),
+		"onStopExit must NOT be called on success-branch exit")
 }
 
 func TestSeal_UnauthorizedSigner(t *testing.T) {

@@ -1689,32 +1689,10 @@ func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
 	}
 }
 
-// TestTaskLoopInterruptCleansStalePendingTasks is a regression test for the
-// "elected but silent" stall mechanism (post-mortem INC-37 candidate 2).
-//
-// Bug context: Bor.Seal's stop-branch returns silently without posting to
-// resultCh. resultLoop is the only path that would clean a pendingTasks
-// entry — and it never runs without a posted result. So when taskLoop
-// fires interrupt() on a new task (closing the previous sealing's stopCh
-// and triggering its silent return), the previous entry leaks. The
-// veblop fallback in newWorkLoop sees hasPendingTasks > 0 every tick and
-// short-circuits commit() forever.
-//
-// Test scheme:
-//  1. Build two blocks with different sealhashes.
-//  2. Wire a skipSealHook so taskLoop does NOT call engine.Seal — keeps
-//     this test isolated from Bor.Seal signer/timing requirements.
-//  3. Send task A through taskCh. taskLoop sets its local prev=H_A but
-//     does not add to pendingTasks (skipSealHook returned true).
-//  4. Manually inject pendingTasks[H_A] — simulates the leak from a real
-//     Bor.Seal that returned silently on stop.
-//  5. Send task B through taskCh (different sealhash). taskLoop fires
-//     interrupt() with prev=H_A.
-//  6. Assert pendingTasks no longer contains H_A.
-//
-// Pre-fix: interrupt() only closes stopCh; pendingTasks[H_A] persists. Test fails.
-// Post-fix: interrupt() also deletes pendingTasks[prev]. Test passes.
-func TestTaskLoopInterruptCleansStalePendingTasks(t *testing.T) {
+// TestTaskLoopInterruptPreservesPendingTasks verifies taskLoop's interrupt()
+// does NOT touch pendingTasks. Cleanup belongs to Bor.Seal's onStopExit
+// hook so success-branch results aren't dropped when resultLoop is slow.
+func TestTaskLoopInterruptPreservesPendingTasks(t *testing.T) {
 	chainConfig := &params.ChainConfig{}
 	*chainConfig = *params.BorUnittestChainConfig
 	borCfg := *chainConfig.Bor
@@ -1729,25 +1707,13 @@ func TestTaskLoopInterruptCleansStalePendingTasks(t *testing.T) {
 	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
 	defer w.close()
 
-	// skipSealHook returns true so taskLoop skips engine.Seal but still
-	// reaches interrupt() and updates its local `prev`. We control
-	// pendingTasks manually instead — this isolates the test from Bor.Seal's
-	// signer/authorization/timing requirements.
 	w.skipSealHook = func(task *task) bool { return true }
 
-	// Synchronization: newTaskHook fires inside taskLoop *before*
-	// interrupt() runs. We close per-task channels after taskLoop has
-	// finished processing each task (after the continue from skipSealHook
-	// returns control to the for-select).
-	//
-	// Simpler: use newTaskHook to signal when a task has been received.
-	// Then sleep briefly for taskLoop's processing.
 	received := make(chan common.Hash, 2)
 	w.newTaskHook = func(task *task) {
 		received <- w.engine.SealHash(task.block.Header())
 	}
 
-	// Build two distinct headers (different Time → different SealHash).
 	parent := w.chain.CurrentBlock()
 	headerA := &types.Header{
 		ParentHash: parent.Hash(),
@@ -1760,7 +1726,7 @@ func TestTaskLoopInterruptCleansStalePendingTasks(t *testing.T) {
 	headerB := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     new(big.Int).Add(parent.Number, common.Big1),
-		Time:       parent.Time + 2, // different Time → different sealhash
+		Time:       parent.Time + 2,
 		GasLimit:   parent.GasLimit,
 		Difficulty: big.NewInt(1),
 		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
@@ -1774,65 +1740,44 @@ func TestTaskLoopInterruptCleansStalePendingTasks(t *testing.T) {
 		t.Fatalf("test setup: sealhashes must differ (A=%s B=%s)", sealHashA, sealHashB)
 	}
 
-	// Send task A. taskLoop will: interrupt(no-op), prev=H_A, skipSealHook=true → continue.
+	// Task A sets prev=H_A inside taskLoop, then continues (skipSealHook).
 	select {
 	case w.taskCh <- &task{block: blockA, createdAt: time.Now()}:
 	case <-time.After(2 * time.Second):
 		t.Fatal("taskCh send timed out for task A")
 	}
 	select {
-	case got := <-received:
-		if got != sealHashA {
-			t.Fatalf("expected newTaskHook for A=%s got %s", sealHashA, got)
-		}
+	case <-received:
 	case <-time.After(2 * time.Second):
 		t.Fatal("newTaskHook did not fire for task A")
 	}
-	// Give taskLoop a moment to finish processing past skipSealHook.
 	time.Sleep(50 * time.Millisecond)
 
-	// Simulate the leak: a real Bor.Seal would have stored this entry
-	// before its goroutine got <-stop and returned silently. We inject
-	// it manually here to match that state without driving Bor.Seal.
+	// Inject the entry a real Bor.Seal success-branch would have left,
+	// waiting for resultLoop.
 	w.pendingMu.Lock()
 	w.pendingTasks[sealHashA] = &task{block: blockA, createdAt: time.Now()}
 	w.pendingMu.Unlock()
 
-	// Sanity check: the stale entry is present before task B arrives.
-	w.pendingMu.RLock()
-	_, presentBefore := w.pendingTasks[sealHashA]
-	w.pendingMu.RUnlock()
-	if !presentBefore {
-		t.Fatal("test setup: pendingTasks[H_A] was not injected")
-	}
-
-	// Send task B (different sealhash). taskLoop calls interrupt() with
-	// prev=H_A. With the fix, interrupt() deletes pendingTasks[H_A].
+	// Task B triggers interrupt() with prev=H_A.
 	select {
 	case w.taskCh <- &task{block: blockB, createdAt: time.Now()}:
 	case <-time.After(2 * time.Second):
 		t.Fatal("taskCh send timed out for task B")
 	}
 	select {
-	case got := <-received:
-		if got != sealHashB {
-			t.Fatalf("expected newTaskHook for B=%s got %s", sealHashB, got)
-		}
+	case <-received:
 	case <-time.After(2 * time.Second):
 		t.Fatal("newTaskHook did not fire for task B")
 	}
-	// Give taskLoop time to run interrupt().
 	time.Sleep(50 * time.Millisecond)
 
-	// Assert: the stale entry for H_A is gone (deleted by interrupt()).
 	w.pendingMu.RLock()
-	_, presentAfter := w.pendingTasks[sealHashA]
+	_, present := w.pendingTasks[sealHashA]
 	w.pendingMu.RUnlock()
-	if presentAfter {
-		t.Fatalf("pendingTasks[H_A=%s] leaked: expected interrupt() to delete it on new task arrival, "+
-			"but it is still present. Without this cleanup, Bor.Seal's silent stop-branch return would "+
-			"leave the entry forever, and newWorkLoop's veblop fallback would short-circuit on "+
-			"hasPendingTasks > 0 every tick — the \"elected but silent\" stall pattern.", sealHashA)
+	if !present {
+		t.Fatalf("pendingTasks[H_A=%s] was deleted by interrupt(); cleanup must "+
+			"happen only via Bor.Seal's SealWithStopHook callback", sealHashA)
 	}
 }
 

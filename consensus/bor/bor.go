@@ -1409,6 +1409,13 @@ func (c *Bor) Authorize(currentSigner common.Address, signFn SignerFn) {
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
 func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witness *stateless.Witness, results chan<- *consensus.NewSealedBlockEvent, stop <-chan struct{}) error {
+	return c.SealWithStopHook(chain, block, witness, results, stop, nil)
+}
+
+// SealWithStopHook is identical to Seal but invokes onStopExit (if non-nil)
+// from the sealing goroutine on stop-branch exits only. The hook is NOT
+// called on the successful-delivery path.
+func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.Block, witness *stateless.Witness, results chan<- *consensus.NewSealedBlockEvent, stop <-chan struct{}, onStopExit func()) error {
 	header := block.Header()
 	// Sealing the genesis block is not supported
 	number := header.Number.Uint64()
@@ -1469,6 +1476,9 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		select {
 		case <-stop:
 			log.Debug("Discarding sealing operation for block", "number", number)
+			if onStopExit != nil {
+				onStopExit()
+			}
 			return
 		case <-time.After(delay):
 			if wiggle > 0 {
@@ -1496,6 +1506,9 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		case results <- &consensus.NewSealedBlockEvent{Block: block.WithSeal(header), Witness: witness}:
 		case <-stop:
 			log.Info("Seal interrupted before result delivery", "number", number, "sealhash", SealHash(header, c.config))
+			if onStopExit != nil {
+				onStopExit()
+			}
 		}
 	}()
 
