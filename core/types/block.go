@@ -506,7 +506,6 @@ func (b *Block) GetTxDependency() [][]uint64 {
 // to avoid redundant RLP decodes.
 func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
 	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
-		log.Error("length of extra less is than vanity and seal")
 		return nil
 	}
 
