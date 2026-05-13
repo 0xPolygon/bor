@@ -1217,7 +1217,11 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	// Check if any hardfork needs change in genesis contract code. Note that we use
 	// the wrapped state here as it may have a hooked state db instance which can help
-	// in tracing if it's enabled.
+	// in tracing if it's enabled. Note: when live tracing of state-sync is active,
+	// OnCodeChange events from these block-alloc upgrades are emitted *inside* the
+	// state-sync tx's OnTxStart/OnTxEnd window in the caller's trace stream. This
+	// is a known minor attribution quirk; events are emitted correctly, only their
+	// containing tx-scope is the state-sync tx rather than a block-level system context.
 	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
 		return nil, fmt.Errorf("error changing contract code: %w", err)
 	}

@@ -153,11 +153,25 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 
-	// Trace state-sync transaction (if present and if tracer is enabled)
-	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
-		if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
+	// State-sync transactions (post-Madhugiri) are the last tx in body. In order to produce
+	// accurate traces for state-sync transactions, we fire the OnTxStart and OnTxEnd hooks
+	// here before calling Finalize. The hooks are already wrapped to support state-sync tx
+	// tracing. Because state-sync events are applied to state as independent EVM calls, the
+	// wrapped hooks inserts a synthetic root frame to wrap all those calls.
+	var (
+		hasStateSyncTx   = len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType
+		stateSyncReceipt *types.Receipt
+		stateSyncEndErr  error
+	)
+	if hooks := cfg.Tracer; hooks != nil && hasStateSyncTx {
+		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
 		}
+		defer func() {
+			if hooks.OnTxEnd != nil {
+				hooks.OnTxEnd(stateSyncReceipt, stateSyncEndErr)
+			}
+		}()
 	}
 
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
@@ -165,6 +179,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	receiptsCountBeforeFinalize := len(receipts)
 	receipts, err = p.chain.Engine().Finalize(p.chain, header, tracingStateDB, block.Body(), receipts)
 	if err != nil {
+		stateSyncEndErr = err
 		return nil, err
 	}
 
@@ -173,15 +188,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		// Defense-in-depth: if insertStateSyncTransactionAndCalculateReceipt silently failed
 		// to add the receipt, the count will be off.
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
+			stateSyncEndErr = fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
+			return nil, stateSyncEndErr
 		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
-			if hooks := evm.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
-				hooks.OnTxEnd(receipts[len(receipts)-1], nil)
-			}
+			stateSyncReceipt = receipts[len(receipts)-1]
 		}
 	}
 

@@ -310,6 +310,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
 		}
+		// For tracing state-sync transactions, we need a modified tracer. We wrap the hooks
+		// of the live tracer above with a state-sync aware tracer which is used across multiple
+		// modules.
+		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
+			if config.ParallelEVM.Enable {
+				log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results")
+			}
+			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
+			t = tracers.WrapStateSyncHooks(t, stateReceiver)
+		}
 		options.VmConfig.Tracer = t
 		if borEngine, ok := eth.engine.(*bor.Bor); ok {
 			borEngine.SetVMConfig(options.VmConfig)

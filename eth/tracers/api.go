@@ -928,37 +928,38 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		dumps = append(dumps, dump.Name())
 		// Set up the tracer and EVM for the transaction.
 		var (
-			writer   = bufio.NewWriter(dump)
-			hooks    = logger.NewJSONLogger(&logConfig, writer)
-			evmHooks = hooks
+			writer = bufio.NewWriter(dump)
+			hooks  = logger.NewJSONLogger(&logConfig, writer)
 		)
 		// Wrap the tracer for state-sync transactions (post Madhugiri) to handle
 		// multiple independent EVM calls within a single transaction.
-		var wrappedTracer *Tracer
+		var (
+			isStateSync          bool
+			stateReceiverAddress common.Address
+		)
 		if tx.Type() == types.StateSyncTxType && chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(block.Number()) {
-			stateReceiverAddress := common.HexToAddress(chainConfig.Bor.StateReceiverContract)
-			wrappedTracer = NewStateSyncTxnTracer(&Tracer{Hooks: hooks}, stateReceiverAddress)
-			evmHooks = wrappedTracer.Hooks
+			isStateSync = true
+			stateReceiverAddress = common.HexToAddress(chainConfig.Bor.StateReceiverContract)
+			hooks = WrapStateSyncHooks(hooks, stateReceiverAddress)
 		}
 		evm := vm.NewEVM(vmctx, statedb, chainConfig, vm.Config{
-			Tracer:    evmHooks,
+			Tracer:    hooks,
 			NoBaseFee: true,
 		})
 		// Execute the transaction and flush any traces to disk
 		statedb.SetTxContext(tx.Hash(), i)
 		var vmResult *core.ExecutionResult
-		if wrappedTracer != nil {
-			stateReceiverAddress := common.HexToAddress(chainConfig.Bor.StateReceiverContract)
-			if wrappedTracer.OnTxStart != nil {
-				wrappedTracer.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
+		if isStateSync {
+			if hooks.OnTxStart != nil {
+				hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 			}
 			vmResult, err = statefull.ApplyStateSyncEvents(evm, tx, msg, stateReceiverAddress)
-			if wrappedTracer.OnTxEnd != nil {
+			if hooks.OnTxEnd != nil {
 				var receipt *types.Receipt
 				if vmResult != nil {
 					receipt = &types.Receipt{GasUsed: vmResult.UsedGas}
 				}
-				wrappedTracer.OnTxEnd(receipt, err)
+				hooks.OnTxEnd(receipt, err)
 			}
 		} else {
 			if hooks.OnTxStart != nil {
@@ -1192,6 +1193,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	// Wrap the tracer for state-sync transactions (post Madhugiri) to handle multiple
 	// independent EVM calls within a single transaction. This injects a synthetic root
 	// call frame so tracers like callTracer (which expect a single root) work correctly.
+	// The inner tracer keeps ownership of GetResult/Stop; only the EVM/state hooks are wrapped.
 	var (
 		isStateSyncTx        bool
 		stateReceiverAddress common.Address
@@ -1199,11 +1201,12 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(txctx.BlockNumber) {
 		isStateSyncTx = true
 		stateReceiverAddress = common.HexToAddress(api.backend.ChainConfig().Bor.StateReceiverContract)
-		tracer = NewStateSyncTxnTracer(tracer, stateReceiverAddress)
+		tracer.Hooks = WrapStateSyncHooks(tracer.Hooks, stateReceiverAddress)
 	}
 
-	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
-	evm := vm.NewEVM(vmctx, tracingStateDB, api.backend.ChainConfig(), vm.Config{Tracer: tracer.Hooks, NoBaseFee: true})
+	hooks := tracer.Hooks
+	tracingStateDB := state.NewHookedState(statedb, hooks)
+	evm := vm.NewEVM(vmctx, tracingStateDB, api.backend.ChainConfig(), vm.Config{Tracer: hooks, NoBaseFee: true})
 	if precompiles != nil {
 		evm.SetPrecompiles(precompiles)
 	}
@@ -1231,17 +1234,17 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 	// Handle state-sync transactions separately. They're part of block body post Madhugiri
 	// so we can replay them and gather traces.
 	if isStateSyncTx {
-		if tracer.OnTxStart != nil {
-			tracer.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
+		if hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 		}
 		res, err := statefull.ApplyStateSyncEvents(evm, tx, message, stateReceiverAddress)
 		if err != nil {
-			if tracer.OnTxEnd != nil {
-				tracer.OnTxEnd(nil, err)
+			if hooks.OnTxEnd != nil {
+				hooks.OnTxEnd(nil, err)
 			}
 			return nil, 0, fmt.Errorf("tracing failed: %w", err)
 		}
-		if tracer.OnTxEnd != nil {
+		if hooks.OnTxEnd != nil {
 			// Generate a receipt on the fly for tracing. Use LogIndex and CumulativeGasUsed
 			// from txctx which are populated by the caller based on prior transactions.
 			allLogs := tracingStateDB.Logs()
@@ -1266,7 +1269,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 				BlockHash:         txctx.BlockHash,
 				TransactionIndex:  uint(txctx.TxIndex),
 			}
-			tracer.OnTxEnd(receipt, nil)
+			hooks.OnTxEnd(receipt, nil)
 		}
 
 		result, err := tracer.GetResult()

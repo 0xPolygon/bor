@@ -422,12 +422,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 		return nil, err
 	}
 
-	if len(txs) > 0 && txs[len(txs)-1].Type() == types.StateSyncTxType {
-		if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxStart != nil {
-			hooks.OnTxStart(vmenv.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
-		}
-	}
-
 	// Polygon/bor: EIP-6110, EIP-7002, and EIP-7251 are not supported
 	var requests [][]byte
 
@@ -450,9 +444,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 		if appliedNewStateSyncReceipt {
 			allLogs = append(allLogs, receipts[len(receipts)-1].Logs...)
-			if hooks := vmenv.Config.Tracer; hooks != nil && hooks.OnTxEnd != nil {
-				hooks.OnTxEnd(receipts[len(receipts)-1], nil)
-			}
 		}
 	}
 
