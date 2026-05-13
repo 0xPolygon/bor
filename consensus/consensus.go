@@ -83,8 +83,10 @@ type Engine interface {
 	VerifyUncles(chain ChainReader, block *types.Block) error
 
 	// Prepare initializes the consensus fields of a block header according to the
-	// rules of a particular engine. The changes are executed inline.
-	Prepare(chain ChainHeaderReader, header *types.Header) error
+	// rules of a particular engine. The changes are executed inline. Bor uses
+	// waitOnPrepare to let normal producers wait for the parent slot boundary
+	// before building, preserving early block announcement semantics.
+	Prepare(chain ChainHeaderReader, header *types.Header, waitOnPrepare bool) error
 
 	// Finalize runs any post-transaction state modifications (e.g. block rewards
 	// or process withdrawals) but does not assemble the block.

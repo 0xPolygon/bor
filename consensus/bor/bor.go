@@ -1016,9 +1016,40 @@ func (c *Bor) setGiuglianoExtraFields(header *types.Header, parent *types.Header
 	}
 }
 
+func (c *Bor) parentActualTime(parent *types.Header, parentHash common.Hash) time.Time {
+	parentBlockTime := time.Unix(int64(parent.Time), 0)
+	parentActualBlockTime := parentBlockTime
+	if c.parentActualTimeCache != nil {
+		if v, ok := c.parentActualTimeCache.Get(parentHash); ok {
+			if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
+				parentActualBlockTime = at
+			}
+		}
+	}
+	return parentActualBlockTime
+}
+
+// EarliestAnnounceTime returns the earliest local time at which a prepared
+// block can be announced without violating Bor's post-Giugliano future-block
+// checks. Primary producers may announce before the block's own timestamp, but
+// not before the parent slot boundary.
+func (c *Bor) EarliestAnnounceTime(chain consensus.ChainHeaderReader, header *types.Header) time.Time {
+	if header == nil || header.Number == nil || header.Number.Sign() == 0 {
+		return time.Now()
+	}
+	if !c.config.IsGiugliano(header.Number) {
+		return header.GetActualTime()
+	}
+	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+	if parent == nil {
+		return header.GetActualTime()
+	}
+	return c.parentActualTime(parent, header.ParentHash)
+}
+
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, waitOnPrepare bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
@@ -1121,25 +1152,19 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		return fmt.Errorf("the floor of custom mining block time (%v) is less than the consensus block time: %v < %v", c.blockTime, c.blockTime.Seconds(), c.config.CalculatePeriod(number))
 	}
 
+	var delay time.Duration
+
 	if c.blockTime > 0 && c.config.IsRio(header.Number) {
 		// Only enable custom block time for Rio and later
 
-		parentBlockTime := time.Unix(int64(parent.Time), 0)
-		// Default to parent block timestamp
-		parentActualBlockTime := parentBlockTime
-		// If we have the parent's ActualTime locally (by parent hash), prefer it
-		if c.parentActualTimeCache != nil {
-			if v, ok := c.parentActualTimeCache.Get(header.ParentHash); ok {
-				if at, ok := v.(time.Time); ok && at.After(parentBlockTime) {
-					parentActualBlockTime = at
-				}
-			}
-		}
+		parentActualBlockTime := c.parentActualTime(parent, header.ParentHash)
 		actualNewBlockTime := parentActualBlockTime.Add(c.blockTime)
 		header.Time = uint64(actualNewBlockTime.Unix())
 		header.ActualTime = actualNewBlockTime
+		delay = time.Until(parentActualBlockTime)
 	} else {
 		header.Time = parent.Time + CalcProducerDelay(number, succession, c.config)
+		delay = time.Until(time.Unix(int64(parent.Time), 0))
 	}
 
 	now := time.Now()
@@ -1158,6 +1183,28 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header) e
 		header.Time = uint64(now.Add(blockTime).Unix())
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(blockTime)
+		}
+	}
+
+	// Giugliano introduced early block announcements: primary producers wait
+	// until the parent slot boundary before building, then Seal can return
+	// immediately and announce the block before its own timestamp. Speculative
+	// and prefetch callers pass waitOnPrepare=false because they intentionally
+	// build ahead and perform their own parent-boundary wait before sealing.
+	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
+		var successionNumber int
+		if currentSigner.signer != (common.Address{}) {
+			var err error
+			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
+			if err != nil {
+				return err
+			}
+			// Avoid allocating a timer when the parent boundary has already
+			// passed. This is equivalent to develop's immediate time.After path
+			// for non-positive delays, just cheaper and more explicit.
+			if successionNumber == 0 && delay > 0 {
+				<-time.After(delay)
+			}
 		}
 	}
 
@@ -1502,10 +1549,15 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 	var delay time.Duration
 
 	// Sweet, the protocol permits us to sign the block, wait for our time.
-	// Sequential mining paths build the block body before the slot and rely on
-	// Seal to hold propagation until the target time. The pipeline paths may
-	// already have waited explicitly, in which case this is effectively zero.
-	delay = time.Until(header.GetActualTime())
+	// On Giugliano+ primary producers, the wait is performed before building
+	// in Prepare (or explicitly by the pipeline at the parent boundary), so Seal
+	// returns immediately and preserves early block announcement. Backups still
+	// wait until the block timestamp.
+	if c.config.IsGiugliano(header.Number) && successionNumber == 0 {
+		delay = 0
+	} else {
+		delay = time.Until(header.GetActualTime())
+	}
 
 	// wiggle was already accounted for in header.Time, this is just for logging
 	wiggle := time.Duration(successionNumber) * time.Duration(c.config.CalculateBackupMultiplier(number)) * time.Second

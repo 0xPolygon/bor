@@ -1769,7 +1769,7 @@ type generateParams struct {
 }
 
 // makeHeader creates a new block header for sealing.
-func (w *worker) makeHeader(genParams *generateParams) (*types.Header, common.Address, error) {
+func (w *worker) makeHeader(genParams *generateParams, waitOnPrepare bool) (*types.Header, common.Address, error) {
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
 
@@ -1829,7 +1829,7 @@ func (w *worker) makeHeader(genParams *generateParams) (*types.Header, common.Ad
 	header.ParentBeaconRoot = nil
 
 	// Run the consensus preparation with the default or customized consensus engine.
-	if err := w.engine.Prepare(w.chain, header); err != nil {
+	if err := w.engine.Prepare(w.chain, header, waitOnPrepare); err != nil {
 		switch err.(type) {
 		case *bor.UnauthorizedSignerError:
 			log.Debug("Failed to prepare header for sealing", "err", err)
@@ -1850,9 +1850,7 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	// Build the header without sleeping so tx selection gets the full slot.
-	// Bor's Seal path (or the pipeline's explicit wait) handles the final delay.
-	header, coinbase, err := w.makeHeader(genParams)
+	header, coinbase, err := w.makeHeader(genParams, true)
 	if err != nil {
 		return nil, err
 	}
@@ -2231,7 +2229,7 @@ func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB
 
 	// Acquire read lock to safely access w.extra in makeHeader
 	w.mu.RLock()
-	header, _, err := w.makeHeader(genParams)
+	header, _, err := w.makeHeader(genParams, false)
 	w.mu.RUnlock()
 
 	if err != nil {

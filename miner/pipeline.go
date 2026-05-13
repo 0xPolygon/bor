@@ -416,7 +416,7 @@ func (s *specSession) setupInitial() bool {
 	s.borEngine = borEngine
 
 	specReader, specContext, specHeader, coinbase := s.buildInitialSpecHeader()
-	if err := s.w.engine.Prepare(specReader, specHeader); err != nil {
+	if err := s.w.engine.Prepare(specReader, specHeader, false); err != nil {
 		log.Warn("Pipelined SRC: speculative Prepare failed, falling back", "err", err)
 		s.w.fallbackToSequential(s.req)
 		return false
@@ -762,7 +762,7 @@ func (s *specSession) buildAndPrepareNextHeader(finalSpecHeader *types.Header, f
 	if s.w.chainConfig.IsLondon(specHeaderNext.Number) {
 		specHeaderNext.BaseFee = eip1559.CalcBaseFee(s.w.chainConfig, finalSpecHeader)
 	}
-	if err := s.w.engine.Prepare(specReaderNext, specHeaderNext); err != nil {
+	if err := s.w.engine.Prepare(specReaderNext, specHeaderNext, false); err != nil {
 		log.Warn("Pipelined SRC: Prepare failed for next block, sealing current", "block", nextNextBlockNumber, "err", err)
 		s.w.sealBlockViaTaskCh(s.borEngine, finalSpecHeader, s.specState, s.specEnv.txs, s.specEnv.receipts, stateSyncData, s.rootN, flatDiff, true, s.curBuildStart)
 		return nil, nil, common.Address{}, false
@@ -926,7 +926,7 @@ func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, state
 	// the ChainHeadEvent for this block. pendingWorkBlock = nextBlockNumber+1
 	// means "working on nextBlockNumber+1, so skip ChainHeadEvent for nextBlockNumber".
 	s.w.pendingWorkBlock.Store(s.nextBlockNumber + 1)
-	if exit := s.waitForBlockTime(finalSpecHeader, next.fillDone); exit {
+	if exit := s.waitForParentAnnounceTime(finalSpecHeader, next.fillDone); exit {
 		return nil, true, false
 	}
 	sealedBlock, dbWriteDone, err := s.w.inlineSealAndBroadcast(blockSpec, receiptsSpec, s.specState, witnessSpec, s.curBuildStart)
@@ -945,11 +945,12 @@ func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, state
 	return sealedBlock, false, true
 }
 
-// waitForBlockTime blocks until the speculative block's target announce time
-// is reached, draining the fill and previous-DB-write channels on shutdown
-// so goroutines aren't left hanging. Returns exit=true on w.exitCh.
-func (s *specSession) waitForBlockTime(finalSpecHeader *types.Header, fillDone chan struct{}) bool {
-	delay := time.Until(finalSpecHeader.GetActualTime())
+// waitForParentAnnounceTime blocks until the parent slot boundary is reached,
+// draining the fill and previous-DB-write channels on shutdown so goroutines
+// aren't left hanging. Giugliano+ primary producers may announce before the
+// child block timestamp, but not before the parent timestamp.
+func (s *specSession) waitForParentAnnounceTime(finalSpecHeader *types.Header, fillDone chan struct{}) bool {
+	delay := time.Until(s.w.earlyAnnounceTime(finalSpecHeader))
 	if delay <= 0 {
 		return false
 	}
@@ -1049,9 +1050,9 @@ func (w *worker) sealBlockViaTaskCh(
 		return
 	}
 
-	// Wait for the block's target timestamp before sending to taskCh.
-	// Since Prepare() was called without sleeping, we wait here instead.
-	if delay := time.Until(finalHeader.GetActualTime()); delay > 0 {
+	// Speculative Prepare() was called without sleeping. Wait only until the
+	// parent slot boundary, preserving early announcement for primary producers.
+	if delay := time.Until(w.earlyAnnounceTime(finalHeader)); delay > 0 {
 		select {
 		case <-time.After(delay):
 		case <-w.exitCh:
@@ -1067,6 +1068,22 @@ func (w *worker) sealBlockViaTaskCh(
 		}
 	case <-w.exitCh:
 	}
+}
+
+// earlyAnnounceTime returns the earliest safe local announcement time for a
+// prepared block. Post-Giugliano verification allows primary-producer blocks to
+// arrive before their own timestamp, but not before the parent timestamp.
+func (w *worker) earlyAnnounceTime(header *types.Header) time.Time {
+	if header == nil || header.Number == nil || header.Number.Sign() == 0 {
+		return time.Now()
+	}
+	if borEngine, ok := w.engine.(*bor.Bor); ok {
+		return borEngine.EarliestAnnounceTime(w.chain, header)
+	}
+	if parent := w.chain.GetHeader(header.ParentHash, header.Number.Uint64()-1); parent != nil {
+		return parent.GetActualTime()
+	}
+	return header.GetActualTime()
 }
 
 // inlineSealAndBroadcast seals a pipelined block using a private channel

@@ -740,7 +740,7 @@ func TestCustomBlockTimeValidation(t *testing.T) {
 				ParentHash: genesis.Hash(),
 			}
 
-			err := b.Prepare(chain.HeaderChain(), header)
+			err := b.Prepare(chain.HeaderChain(), header, false)
 
 			if tc.expectError {
 				require.Error(t, err, tc.description)
@@ -775,7 +775,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			Number:     big.NewInt(1),
 			ParentHash: genesis.Hash(),
 		}
-		err := b.Prepare(chain.HeaderChain(), header1)
+		err := b.Prepare(chain.HeaderChain(), header1, false)
 		require.NoError(t, err)
 
 		require.False(t, header1.ActualTime.IsZero(), "ActualTime should be set")
@@ -802,7 +802,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(3 * time.Second)
@@ -835,7 +835,7 @@ func TestCustomBlockTimeCalculation(t *testing.T) {
 			ParentHash: parentHash,
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedTime := time.Unix(int64(baseTime), 0).Add(4 * time.Second)
@@ -868,7 +868,7 @@ func TestCustomBlockTimeBackwardCompatibility(t *testing.T) {
 			ParentHash: genesis.Hash(),
 		}
 
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		require.True(t, header.ActualTime.IsZero(), "ActualTime should not be set when blockTime is 0")
@@ -903,7 +903,7 @@ func TestCustomBlockTimeClampsToNowAlsoUpdatesActualTime(t *testing.T) {
 	}
 
 	before := time.Now()
-	err := b.Prepare(chain.HeaderChain(), header)
+	err := b.Prepare(chain.HeaderChain(), header, false)
 	after := time.Now()
 
 	require.NoError(t, err)
@@ -1035,7 +1035,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should give full 2s build time from now, not from parent
 		expectedMin := before.Add(2 * time.Second).Unix()
@@ -1052,7 +1052,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Should use parent.Time + period
 		genesis := chain.HeaderChain().GetHeaderByNumber(0)
@@ -1074,7 +1074,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		header := &types.Header{Number: big.NewInt(1), ParentHash: chain.HeaderChain().GetHeaderByNumber(0).Hash()}
 
 		before := time.Now()
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		expectedMin := before.Add(3 * time.Second).Unix()
 		require.GreaterOrEqual(t, int64(header.Time), expectedMin)
@@ -1119,7 +1119,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 		require.Greater(t, remaining, 500*time.Millisecond, "test setup: remaining should be > 500ms")
 		require.Less(t, remaining, minBlockBuildTime, "test setup: remaining should be < minBlockBuildTime")
 
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 
 		// Prepare should have extended the deadline since remaining < minBlockBuildTime.
 		// The new ActualTime should be at least blockTime from before Prepare ran.
@@ -1162,7 +1162,7 @@ func TestLateBlockTimestampFix(t *testing.T) {
 			AbortRecovery: true,
 		}
 
-		require.NoError(t, b.Prepare(chain.HeaderChain(), header))
+		require.NoError(t, b.Prepare(chain.HeaderChain(), header, false))
 		require.False(t, header.ActualTime.IsZero())
 		require.WithinDuration(t, expectedTargetWithoutExtension, header.ActualTime, 5*time.Millisecond)
 		require.Equal(t, uint64(expectedTargetWithoutExtension.Unix()), header.Time)
@@ -3055,7 +3055,7 @@ func TestPrepare_NonSprintBlock(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(setup.chain.HeaderChain(), h)
+	err := b.Prepare(setup.chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 	require.NotNil(t, h.Difficulty)
 	require.True(t, h.Difficulty.Uint64() > 0)
@@ -3080,7 +3080,7 @@ func TestPrepare_SprintStartBlock(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 	// Extra should contain vanity + validator bytes + seal
 	require.True(t, len(h.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
@@ -3624,7 +3624,7 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 	// Extra should contain vanity + RLP-encoded BlockExtraData + seal
 	require.True(t, len(h.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
@@ -3636,7 +3636,7 @@ func TestPrepare_CancunEncoding(t *testing.T) {
 		GasLimit:   genesis.GasLimit,
 		UncleHash:  uncleHash,
 	}
-	err = b.Prepare(chain.HeaderChain(), h2)
+	err = b.Prepare(chain.HeaderChain(), h2, false)
 	require.NoError(t, err)
 	require.True(t, len(h2.Extra) > types.ExtraVanityLength+types.ExtraSealLength)
 }
@@ -3994,7 +3994,7 @@ func TestPrepare_UnknownParent(t *testing.T) {
 		GasLimit:   8_000_000,
 	}
 
-	err := b.Prepare(setup.chain.HeaderChain(), h)
+	err := b.Prepare(setup.chain.HeaderChain(), h, false)
 	require.Error(t, err)
 }
 func TestSeal_SignError(t *testing.T) {
@@ -4123,7 +4123,7 @@ func TestPrepare_ValidatorsByHashError(t *testing.T) {
 	// When GetCurrentValidatorsByHash returns nil values (fakeSpanner with empty vals)
 	sp.vals = nil
 
-	err := b.Prepare(chain, h)
+	err := b.Prepare(chain, h, false)
 	// Should get errUnknownValidators since GetCurrentValidatorsByHash returns empty/nil
 	require.Error(t, err)
 }
@@ -4417,42 +4417,63 @@ func TestFinalize_CheckAndCommitSpanError(t *testing.T) {
 	require.Nil(t, result)
 }
 
-// TestPrepare_PrimaryProducerBuildsWithoutWaiting verifies that Prepare no
-// longer sleeps at the Giugliano boundary, preserving the full tx-building
-// window. The final slot wait now happens in Seal.
-func TestPrepare_PrimaryProducerBuildsWithoutWaiting(t *testing.T) {
+// TestPrepare_PrimaryProducerWaitOnPrepareControlsEarlyAnnouncementDelay
+// verifies the Giugliano timing split used for early block announcements.
+// Normal production waits until the parent slot boundary before building, but
+// speculative/prefetch callers can opt out and do their own wait later.
+func TestPrepare_PrimaryProducerWaitOnPrepareControlsEarlyAnnouncementDelay(t *testing.T) {
 	t.Parallel()
 
 	addr := common.HexToAddress("0x1")
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr, VotingPower: 1}}}
+	blockTime := 2 * time.Second
 	borCfg := &params.BorConfig{
 		Sprint:         map[string]uint64{"0": 64},
 		Period:         map[string]uint64{"0": 2},
 		GiuglianoBlock: big.NewInt(0),
+		RioBlock:       big.NewInt(0),
 	}
-	genesisTime := uint64(time.Now().Add(3 * time.Second).Unix())
+	genesisTime := uint64(time.Now().Unix())
 	chain, b := newChainAndBorForTest(t, sp, borCfg, true, addr, genesisTime)
 	defer chain.Stop()
+	b.blockTime = blockTime
 
 	genesis := chain.HeaderChain().GetHeaderByNumber(0)
 	require.NotNil(t, genesis)
 
-	header := createTestHeader(genesis, 1, borCfg.Period["0"])
+	t.Run("opt out stays fast", func(t *testing.T) {
+		parentActual := time.Now().Add(150 * time.Millisecond)
+		b.parentActualTimeCache.Add(genesis.Hash(), parentActual)
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
 
-	start := time.Now()
-	err := b.Prepare(chain, header)
-	elapsed := time.Since(start)
+		start := time.Now()
+		err := b.Prepare(chain, header, false)
+		elapsed := time.Since(start)
 
-	require.NoError(t, err)
-	require.Less(t, elapsed, 200*time.Millisecond,
-		"Prepare should stay fast so tx selection gets the full slot")
-	require.NotZero(t, header.Time, "Prepare should still populate header time")
+		require.NoError(t, err)
+		require.Less(t, elapsed, 100*time.Millisecond)
+		require.NotZero(t, header.Time, "Prepare should still populate header time")
+	})
+
+	t.Run("normal production waits for parent boundary", func(t *testing.T) {
+		parentActual := time.Now().Add(150 * time.Millisecond)
+		b.parentActualTimeCache.Add(genesis.Hash(), parentActual)
+		header := createTestHeader(genesis, 1, borCfg.Period["0"])
+
+		start := time.Now()
+		err := b.Prepare(chain, header, true)
+		elapsed := time.Since(start)
+
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+		require.NotZero(t, header.Time, "Prepare should still populate header time")
+	})
 }
 
 // TestSeal_PrimaryProducerDelay_GiuglianoBoundary verifies that primary
-// producers wait until the block target time in Seal on both sides of the
-// Giugliano boundary. This preserves the tx-building window for sequential
-// paths while keeping propagation aligned with the slot.
+// producers wait in Seal before Giugliano, but return immediately after
+// Giugliano because the parent-boundary wait has moved to Prepare. This is the
+// mechanism that preserves early block announcement.
 func TestSeal_PrimaryProducerDelay_GiuglianoBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -4479,7 +4500,7 @@ func TestSeal_PrimaryProducerDelay_GiuglianoBoundary(t *testing.T) {
 		return types.NewBlock(h, body, nil, trie.NewStackTrie(nil)), b, chain, target
 	}
 
-	assertWaitsUntilTarget := func(t *testing.T, borCfg *params.BorConfig) {
+	assertSealTiming := func(t *testing.T, borCfg *params.BorConfig, expectWait bool) {
 		block, b, chain, target := makeBlock(borCfg)
 		defer chain.Stop()
 
@@ -4497,8 +4518,13 @@ func TestSeal_PrimaryProducerDelay_GiuglianoBoundary(t *testing.T) {
 		case result := <-results:
 			require.NotNil(t, result)
 			require.NotNil(t, result.Block)
-			require.False(t, time.Now().Before(target.Add(-50*time.Millisecond)),
-				"seal result arrived before target time %v", target)
+			if expectWait {
+				require.False(t, time.Now().Before(target.Add(-50*time.Millisecond)),
+					"seal result arrived before target time %v", target)
+			} else {
+				require.True(t, time.Now().Before(target.Add(-100*time.Millisecond)),
+					"seal result did not preserve early announcement before target time %v", target)
+			}
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for sealed block")
 		}
@@ -4506,13 +4532,13 @@ func TestSeal_PrimaryProducerDelay_GiuglianoBoundary(t *testing.T) {
 
 	t.Run("before Giugliano", func(t *testing.T) {
 		borCfg := borConfigWithDelays(64)
-		assertWaitsUntilTarget(t, borCfg)
+		assertSealTiming(t, borCfg, true)
 	})
 
 	t.Run("at Giugliano", func(t *testing.T) {
 		borCfg := borConfigWithDelays(64)
 		borCfg.GiuglianoBlock = big.NewInt(0)
-		assertWaitsUntilTarget(t, borCfg)
+		assertSealTiming(t, borCfg, false)
 	})
 }
 
@@ -4695,7 +4721,7 @@ func TestSubSecondLateBlockTriggersTimeAdjustment(t *testing.T) {
 		}
 
 		before := time.Now()
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		expectedMin := uint64(before.Add(1 * time.Second).Unix())
@@ -4738,7 +4764,7 @@ func TestSubSecondLateBlockTriggersTimeAdjustment(t *testing.T) {
 		}
 
 		before := time.Now()
-		err := b.Prepare(chain.HeaderChain(), header)
+		err := b.Prepare(chain.HeaderChain(), header, false)
 		require.NoError(t, err)
 
 		require.False(t, header.ActualTime.IsZero(),
@@ -5024,7 +5050,7 @@ func TestPrepare_GiuglianoExtraFields_SprintEnd(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 
 	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
@@ -5046,7 +5072,7 @@ func TestPrepare_GiuglianoExtraFields_NonSprint(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 
 	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
@@ -5068,7 +5094,7 @@ func TestPrepare_PreGiugliano_NoExtraFields(t *testing.T) {
 		UncleHash:  uncleHash,
 	}
 
-	err := b.Prepare(chain.HeaderChain(), h)
+	err := b.Prepare(chain.HeaderChain(), h, false)
 	require.NoError(t, err)
 
 	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
