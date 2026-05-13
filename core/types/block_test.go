@@ -934,7 +934,7 @@ func TestDecodeBlockExtraData(t *testing.T) {
 
 // TestGetValidatorBytesShortExtra is a regression test for the pre-Cancun
 // branch of (*Header).GetValidatorBytes panicking with
-// `runtime error: slice bounds out of range` when len(Extra) < 97.
+// `runtime error: slice bounds out of range` when len(Extra) < ExtraVanityLength+ExtraSealLength.
 //
 // Prior to the fix the pre-Cancun branch performed
 //
