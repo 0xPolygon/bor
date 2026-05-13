@@ -2443,9 +2443,10 @@ func (w *worker) warnIfStalled(currentBlock *types.Header, chainAgeSec int64, ve
 }
 
 // deletePendingTask removes a single pendingTasks entry by sealhash and
-// returns true if the entry existed. The zero hash is a no-op. Used by
-// taskLoop.interrupt to clean entries that resultLoop wouldn't reach
-// because Bor.Seal's stop-branch returns silently.
+// returns true if the entry existed. The zero hash is a no-op. Called
+// from the per-task onStopExit closure passed to Bor.SealWithStopHook,
+// which fires on stop-branch exits where resultLoop would never reach
+// the entry.
 func (w *worker) deletePendingTask(sealHash common.Hash) bool {
 	if sealHash == (common.Hash{}) {
 		return false

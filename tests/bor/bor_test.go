@@ -2951,8 +2951,9 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 //     TestMainLoopClearsPendingWorkBlockOnPeerCountZero).
 //  2. miner.commitWork syncing-leak early return (unit test:
 //     TestCommitWorkLeaksPendingWorkBlockWhenSyncing).
-//  3. miner.taskLoop interrupt missing pendingTasks delete (unit test:
-//     TestTaskLoopInterruptCleansStalePendingTasks).
+//  3. miner.taskLoop missing pendingTasks cleanup on Bor.Seal stop-branch
+//     exits (cleanup wired via SealWithStopHook onStopExit callback;
+//     unit test: TestTaskLoopInterruptPreservesPendingTasks).
 //  4. Bor.Seal second-select silent default drop (unit test:
 //     TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop).
 //
