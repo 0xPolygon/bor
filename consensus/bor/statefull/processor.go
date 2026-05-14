@@ -68,7 +68,6 @@ func (m Callmsg) Gas() uint64          { return m.CallMsg.Gas }
 func (m Callmsg) Value() *big.Int      { return m.CallMsg.Value }
 func (m Callmsg) Data() []byte         { return m.CallMsg.Data }
 
-// get system message
 func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	return Callmsg{
 		ethereum.CallMsg{
@@ -82,7 +81,6 @@ func GetSystemMessage(toAddress common.Address, data []byte) Callmsg {
 	}
 }
 
-// apply message
 func ApplyMessage(
 	_ context.Context,
 	msg Callmsg,
