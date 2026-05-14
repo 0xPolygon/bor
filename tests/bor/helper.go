@@ -125,6 +125,13 @@ func setupMiner(t *testing.T, n int, genesis *core.Genesis) ([]*node.Node, []*et
 }
 
 func buildEthereumInstance(t *testing.T, db ethdb.Database, updateGenesis ...func(gen *core.Genesis)) *initializeData {
+	return buildEthereumInstanceWithVMTrace(t, db, "", updateGenesis...)
+}
+
+// buildEthereumInstanceWithVMTrace is like buildEthereumInstance but also wires
+// up a live tracer registered under vmTraceName. Pass an empty string to skip.
+// The named tracer must already be registered with tracers.LiveDirectory.
+func buildEthereumInstanceWithVMTrace(t *testing.T, db ethdb.Database, vmTraceName string, updateGenesis ...func(gen *core.Genesis)) *initializeData {
 	genesisData, err := ioutil.ReadFile("./testdata/genesis.json")
 	if err != nil {
 		t.Fatalf("%s", err)
@@ -142,6 +149,7 @@ func buildEthereumInstance(t *testing.T, db ethdb.Database, updateGenesis ...fun
 		Genesis:     gen,
 		BorLogs:     true,
 		StateScheme: "hash",
+		VMTrace:     vmTraceName,
 	}
 	ethConf.Genesis.MustCommit(db, triedb.NewDatabase(db, triedb.HashDefaults))
 
