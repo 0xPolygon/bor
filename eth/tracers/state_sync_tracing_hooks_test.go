@@ -391,14 +391,14 @@ func TestWrapStateSyncHooks_NilInnerHooks(t *testing.T) {
 // tracers like supply that rely on OnBlockStart/OnGenesisBlock/etc.).
 func TestWrapStateSyncHooks_PassthroughForwardsAllInnerHooks(t *testing.T) {
 	var (
-		blockStartCalled       bool
-		blockEndCalled         bool
-		genesisCalled          bool
-		systemCallStartCalled  bool
-		systemCallEndCalled    bool
-		blockHashReadCalled    bool
-		blockchainInitCalled   bool
-		closeCalled            bool
+		blockStartCalled      bool
+		blockEndCalled        bool
+		genesisCalled         bool
+		systemCallStartCalled bool
+		systemCallEndCalled   bool
+		blockHashReadCalled   bool
+		blockchainInitCalled  bool
+		closeCalled           bool
 	)
 	inner := &tracing.Hooks{
 		OnBlockStart:      func(tracing.BlockEvent) { blockStartCalled = true },
