@@ -364,7 +364,7 @@ func (s eip2930Signer) Equal(s2 Signer) bool {
 
 func (s eip2930Signer) Sender(tx *Transaction) (common.Address, error) {
 	if tx.Type() == StateSyncTxType {
-		return params.BorSystemAddress, nil
+		return common.Address{}, nil
 	}
 
 	V, R, S := tx.RawSignatureValues()
