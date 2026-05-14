@@ -753,40 +753,6 @@ func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, with
 	return stack, ethBackend, err
 }
 
-// InitMinerWithPipelinedSRC creates a miner node with pipelined SRC enabled.
-func InitMinerWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
-	stack, err := newPipelineTestNode("InitMiner-")
-	if err != nil {
-		return nil, nil, err
-	}
-	ethBackend, err := eth.New(stack, &ethconfig.Config{
-		Genesis:         genesis,
-		NetworkId:       genesis.Config.ChainID.Uint64(),
-		SyncMode:        downloader.FullSync,
-		DatabaseCache:   256,
-		DatabaseHandles: 256,
-		TxPool:          legacypool.DefaultConfig,
-		GPO:             ethconfig.Defaults.GPO,
-		Miner: miner.Config{
-			Etherbase:           crypto.PubkeyToAddress(privKey.PublicKey),
-			GasCeil:             genesis.GasLimit * 11 / 10,
-			GasPrice:            big.NewInt(1),
-			Recommit:            time.Second,
-			CommitInterruptFlag: true,
-			EnablePipelinedSRC:  true,
-			PipelinedSRCLogs:    true,
-		},
-		WithoutHeimdall: withoutHeimdall,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := importValidatorKey(stack, ethBackend, privKey); err != nil {
-		return nil, nil, err
-	}
-	return stack, ethBackend, stack.Start()
-}
-
 // InitImporterWithPipelinedSRC creates a non-mining node with pipelined import
 // SRC enabled. The node will import blocks from peers using the pipelined state
 // root computation path. A validator key is still needed for the keystore (used

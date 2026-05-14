@@ -2953,9 +2953,9 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 	}
 }
 
-// TestPipelineBuildEnabledGauge verifies that worker/pipeline/enabled reflects
-// the EnablePipelinedSRC flag on the miner config at worker-init time.
-func TestPipelineBuildEnabledGauge(t *testing.T) {
+// TestPipelineBuildGaugeAlwaysDisabled verifies that production-side pipelined
+// SRC is not exposed as a miner config option and stays disabled.
+func TestPipelineBuildGaugeAlwaysDisabled(t *testing.T) {
 	metrics.Enable()
 
 	var (
@@ -2969,37 +2969,11 @@ func TestPipelineBuildEnabledGauge(t *testing.T) {
 	defer ctrl.Finish()
 
 	cfg := DefaultTestConfig()
-	cfg.EnablePipelinedSRC = true
-
-	w, _, _ := newTestWorker(t, cfg, chainConfig, engine, db, false, 0)
-	defer w.close()
-
-	if got := pipelineBuildEnabledGauge.Snapshot().Value(); got != 1 {
-		t.Errorf("pipelineBuildEnabledGauge = %d, want 1 when EnablePipelinedSRC=true", got)
-	}
-}
-
-// TestPipelineBuildDisabledGauge verifies that worker/pipeline/enabled reads
-// 0 when the miner config has EnablePipelinedSRC=false.
-func TestPipelineBuildDisabledGauge(t *testing.T) {
-	metrics.Enable()
-
-	var (
-		engine      consensus.Engine
-		chainConfig = params.BorUnittestChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
-	defer engine.Close()
-	defer ctrl.Finish()
-
-	cfg := DefaultTestConfig() // EnablePipelinedSRC defaults to false
 	w, _, _ := newTestWorker(t, cfg, chainConfig, engine, db, false, 0)
 	defer w.close()
 
 	if got := pipelineBuildEnabledGauge.Snapshot().Value(); got != 0 {
-		t.Errorf("pipelineBuildEnabledGauge = %d, want 0 when EnablePipelinedSRC=false", got)
+		t.Errorf("pipelineBuildEnabledGauge = %d, want 0 when production pipelining is disabled", got)
 	}
 }
 

@@ -38,11 +38,16 @@ var (
 	pipelineAbortFallbackCounter  = metrics.NewRegisteredCounter("worker/pipelineSpeculativeAborts/fallback", nil)   // fallbackToSequential entered
 	// Announce earliness histogram (ms). Positive = announced before header.Time (PIP-66 working). Negative = announced late.
 	pipelineAnnounceEarlinessMs = metrics.NewRegisteredHistogram("worker/pipelineAnnounceEarlinessMs", nil, metrics.NewExpDecaySample(1028, 0.015))
-	// Mode gauge — 1 when pipelined SRC block-building is enabled on this node, 0 otherwise.
-	// Pair with chain/imports/pipelined/enabled on dashboards to distinguish "metric is
-	// zero because pipelining is off" from "metric is zero because the code path bypassed it".
+	// Mode gauge — currently always 0 because production-side pipelined SRC is
+	// disabled. Keep the metric so existing dashboards can distinguish miner-side
+	// production pipelining from import-side pipelining.
 	pipelineBuildEnabledGauge = metrics.NewRegisteredGauge("worker/pipeline/enabled", nil)
 )
+
+// Production-side pipelined SRC is disabled and no longer exposed as a config
+// option. Keep this local constant so the old production-pipeline logging sites
+// remain easy to re-enable if this path is revisited.
+const productionPipelineLogs = false
 
 const speculativeEmptyRefillLead = 300 * time.Millisecond
 
@@ -69,32 +74,36 @@ func placeholderParentHash(blockNumber uint64) common.Hash {
 	return sha256.Sum256(data)
 }
 
-// isPipelineEligible checks whether we can use pipelined SRC for the next
-// block. Returns false at sprint boundaries in pre-Rio mode (where
-// GetCurrentValidatorsByHash needs a real parent hash).
-func (w *worker) isPipelineEligible(currentBlockNumber uint64) bool {
-	if !w.config.EnablePipelinedSRC {
-		return false
-	}
-	if w.chainConfig.Bor == nil {
-		return false
-	}
-	if len(w.chainConfig.Bor.Sprint) == 0 {
-		return false
-	}
-	if !w.IsRunning() || w.syncing.Load() {
-		return false
-	}
-	// Pre-Rio: the speculative chain reader provides block N's unsigned header.
-	// When snapshot() walks back and calls ecrecover() on this header, it fails
-	// because the Extra seal bytes are all zeros (Seal() hasn't run yet).
-	// This causes speculative Prepare to always fail with "recovery failed",
-	// making the pipeline useless pre-Rio. Skip it entirely.
-	nextBlockNumber := currentBlockNumber + 1
-	if !w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(nextBlockNumber)) {
-		return false
-	}
-	return true
+// isPipelineEligible checks whether we can use pipelined SRC for block
+// production. Production-side pipelining is intentionally disabled; the
+// import-side pipelined SRC path remains controlled by the chain pipeline
+// config.
+func (w *worker) isPipelineEligible(_ uint64) bool {
+	// Re-enable reference:
+	//
+	// if !w.config.EnablePipelinedSRC {
+	// 	return false
+	// }
+	// if w.chainConfig.Bor == nil {
+	// 	return false
+	// }
+	// if len(w.chainConfig.Bor.Sprint) == 0 {
+	// 	return false
+	// }
+	// if !w.IsRunning() || w.syncing.Load() {
+	// 	return false
+	// }
+	// // Pre-Rio: the speculative chain reader provides block N's unsigned header.
+	// // When snapshot() walks back and calls ecrecover() on this header, it fails
+	// // because the Extra seal bytes are all zeros (Seal() hasn't run yet).
+	// // This causes speculative Prepare to always fail with "recovery failed",
+	// // making the pipeline useless pre-Rio. Skip it entirely.
+	// nextBlockNumber := currentBlockNumber + 1
+	// if !w.chainConfig.Bor.IsRio(new(big.Int).SetUint64(nextBlockNumber)) {
+	// 	return false
+	// }
+	// return true
+	return false
 }
 
 // commitPipelined is the pipelined version of commit(). Instead of calling
@@ -619,7 +628,7 @@ func (s *specSession) waitForSRCAndSealBlockN() bool {
 	// from the SRC goroutine and writeBlockWithState. Witness from SRC is complete.
 	select {
 	case s.w.taskCh <- &task{receipts: receiptsN, state: s.req.blockNEnv.state, block: blockN, createdAt: time.Now(), pipelined: true, witnessBytes: witnessN}:
-		if s.w.config.PipelinedSRCLogs {
+		if productionPipelineLogs {
 			log.Info("Pipelined SRC: block N sent for sealing", "number", blockN.Number(), "txs", len(blockN.Transactions()), "root", root)
 		}
 	case <-s.w.exitCh:
@@ -783,7 +792,7 @@ func (s *specSession) spawnSRCForCurrent(finalSpecHeader *types.Header, flatDiff
 	// SRC, so SRC falls back to the plain pathdb reader chain.
 	s.w.chain.SpawnSRCGoroutine(tmpBlockCur, s.rootN, flatDiff, true, nil, true, nil, false)
 	s.w.chain.SetLastFlatDiff(flatDiff, finalSpecHeader.Number.Uint64(), s.rootN, common.Hash{})
-	if s.w.config.PipelinedSRCLogs {
+	if productionPipelineLogs {
 		log.Info("Pipelined SRC: spawned SRC, starting speculative exec", "srcBlock", s.nextBlockNumber, "specExecBlock", s.nextBlockNumber+1)
 	}
 	return srcSpawnTime
@@ -911,7 +920,7 @@ func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, state
 		<-next.fillDone
 		return nil, false, false
 	}
-	if s.w.config.PipelinedSRCLogs {
+	if productionPipelineLogs {
 		log.Info("Pipelined SRC: SRC completed", "block", s.nextBlockNumber, "srcWait", srcWaitElapsed)
 	}
 	blockSpec, receiptsSpec, err := s.borEngine.AssembleBlock(s.w.chain, finalSpecHeader, s.specState, &types.Body{
@@ -938,7 +947,7 @@ func (s *specSession) sealCurrentAndAdvance(finalSpecHeader *types.Header, state
 	<-next.fillDone
 	s.prevDBWriteDone = dbWriteDone
 	pipelineSpeculativeBlocksCounter.Inc(1)
-	if s.w.config.PipelinedSRCLogs {
+	if productionPipelineLogs {
 		log.Info("Pipelined SRC: block sealed (inline)", "number", sealedBlock.Number(),
 			"txs", len(sealedBlock.Transactions()), "root", rootSpec, "fillBlock", s.nextBlockNumber+1, "fillElapsed", *next.fillElapsed)
 	}
@@ -987,7 +996,7 @@ func (s *specSession) shiftToNext(sealed *types.Block, next *specNextIteration) 
 // without a background SRC goroutine. This avoids trie DB races between
 // background and inline commits.
 func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
-	if w.config.PipelinedSRCLogs {
+	if productionPipelineLogs {
 		log.Info("Pipelined SRC: falling back to sequential execution")
 	}
 	pipelineSpeculativeAbortsCounter.Inc(1)
@@ -1010,7 +1019,7 @@ func (w *worker) fallbackToSequential(req *speculativeWorkReq) {
 
 	select {
 	case w.taskCh <- &task{receipts: receipts, state: req.blockNEnv.state, block: block, createdAt: time.Now()}:
-		if w.config.PipelinedSRCLogs {
+		if productionPipelineLogs {
 			log.Info("Pipelined SRC: fallback block sealed", "number", block.Number(), "root", root)
 		}
 	case <-w.exitCh:
@@ -1062,7 +1071,7 @@ func (w *worker) sealBlockViaTaskCh(
 
 	select {
 	case w.taskCh <- &task{receipts: blockReceipts, state: statedb, block: block, createdAt: time.Now(), productionStart: buildStart, pipelined: true, witnessBytes: witnessSpec}:
-		if w.config.PipelinedSRCLogs {
+		if productionPipelineLogs {
 			log.Info("Pipelined SRC: block sealed", "number", block.Number(),
 				"txs", len(block.Transactions()), "root", rootSpec)
 		}

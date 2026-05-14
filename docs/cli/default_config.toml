@@ -105,8 +105,6 @@ devfakeauthor = false
   base-fee-change-denominator = 0
   prefetch = false
   prefetch-gaslimit-percent = 100
-  pipelined-src = true
-  pipelined-src-logs = true
 
 [jsonrpc]
   ipcdisable = false
@@ -267,5 +265,6 @@ devfakeauthor = false
   bp-rpc-endpoints = []
 
 [pipeline]
-  enable-import-src = true
-  import-src-logs = true
+  enable-import-src = false
+  import-src-logs = false
+  warm-snapshot = true

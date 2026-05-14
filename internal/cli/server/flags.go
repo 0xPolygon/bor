@@ -439,20 +439,6 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "miner.pipelined-src",
-		Usage:   "Enable pipelined state root computation: overlap SRC(N) with block N+1 tx execution",
-		Value:   &c.cliConfig.Sealer.EnablePipelinedSRC,
-		Default: c.cliConfig.Sealer.EnablePipelinedSRC,
-		Group:   "Sealer",
-	})
-	f.BoolFlag(&flagset.BoolFlag{
-		Name:    "miner.pipelined-src-logs",
-		Usage:   "Enable verbose logging for pipelined SRC (spawned SRC, SRC completed, block sealed, etc.)",
-		Value:   &c.cliConfig.Sealer.PipelinedSRCLogs,
-		Default: c.cliConfig.Sealer.PipelinedSRCLogs,
-		Group:   "Sealer",
-	})
-	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
 		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,
@@ -670,7 +656,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "pipeline.warm-snapshot",
-		Usage:   "Enable warm-cache handoff from execution prefetcher to pipelined SRC (default false)",
+		Usage:   "Enable warm-cache handoff from execution prefetcher to pipelined SRC; no effect when import SRC is disabled",
 		Value:   &c.cliConfig.Pipeline.WarmSnapshot,
 		Default: c.cliConfig.Pipeline.WarmSnapshot,
 		Group:   "Pipeline",

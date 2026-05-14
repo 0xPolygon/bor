@@ -2933,11 +2933,9 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 	return spanner
 }
 
-// TestPipelinedSRC_BasicBlockProduction verifies that a single miner with
-// pipelined SRC enabled can produce multiple consecutive blocks correctly.
-// This exercises the full pipeline: commitPipelined → FlatDiff extraction →
-// background SRC goroutine → speculative N+1 execution → block assembly → seal.
-func TestPipelinedSRC_BasicBlockProduction(t *testing.T) {
+// TestBlockProduction_Basic verifies that a single miner can produce multiple
+// consecutive blocks correctly.
+func TestBlockProduction_Basic(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
@@ -2952,8 +2950,8 @@ func TestPipelinedSRC_BasicBlockProduction(t *testing.T) {
 	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
 	genesis.Config.Bor.RioBlock = big.NewInt(0) // Enable Rio so snapshot uses spanByBlockNumber (no ecrecover needed)
 
-	// Start a single miner with pipelined SRC enabled
-	stack, ethBackend, err := InitMinerWithPipelinedSRC(genesis, keys[0], true)
+	// Start a single miner.
+	stack, ethBackend, err := InitMiner(genesis, keys[0], true)
 	require.NoError(t, err)
 	defer stack.Close()
 
@@ -2984,7 +2982,7 @@ done:
 
 	chain := ethBackend.BlockChain()
 	currentNum := chain.CurrentBlock().Number.Uint64()
-	t.Logf("Miner produced %d blocks with pipelined SRC", currentNum)
+	t.Logf("Miner produced %d blocks", currentNum)
 
 	// Verify chain integrity: each block's parent hash matches the previous block's hash
 	for i := uint64(1); i <= currentNum; i++ {
@@ -3004,9 +3002,9 @@ done:
 	}
 }
 
-// TestPipelinedSRC_WithTransactions verifies that the pipelined SRC miner
-// correctly includes transactions in blocks.
-func TestPipelinedSRC_WithTransactions(t *testing.T) {
+// TestBlockProduction_WithTransactions verifies that the miner correctly
+// includes transactions in blocks.
+func TestBlockProduction_WithTransactions(t *testing.T) {
 	t.Parallel()
 	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
 	fdlimit.Raise(2048)
@@ -3019,9 +3017,9 @@ func TestPipelinedSRC_WithTransactions(t *testing.T) {
 	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 16)
 	genesis.Config.Bor.Period = map[string]uint64{"0": 2}
 	genesis.Config.Bor.Sprint = map[string]uint64{"0": 16}
-	genesis.Config.Bor.RioBlock = big.NewInt(0) // Enable Rio for pipelined SRC
+	genesis.Config.Bor.RioBlock = big.NewInt(0)
 
-	stack, ethBackend, err := InitMinerWithPipelinedSRC(genesis, keys[0], true)
+	stack, ethBackend, err := InitMiner(genesis, keys[0], true)
 	require.NoError(t, err)
 	defer stack.Close()
 
@@ -3082,10 +3080,7 @@ txsDone:
 	currentNum := chain.CurrentBlock().Number.Uint64()
 	t.Logf("All %d transactions included by block %d", txCount, currentNum)
 
-	// Wait for async DB writes to complete — pipelined SRC writes blocks
-	// asynchronously, so GetBlockByNumber may not find them immediately.
-	// Also, the speculative fill may have advanced the nonce before the block
-	// containing the txs is sealed, so re-read currentNum after waiting.
+	// Give block insertion time to settle before scanning the chain.
 	time.Sleep(2 * time.Second)
 	currentNum = chain.CurrentBlock().Number.Uint64()
 

@@ -326,9 +326,11 @@ The ```bor server``` command runs the Bor client.
 
 ### Pipeline Options
 
-- ```pipeline.enable-import-src```: Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution (default: true)
+- ```pipeline.enable-import-src```: Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution (default: false)
 
-- ```pipeline.import-src-logs```: Enable verbose logging for pipelined import SRC (default: true)
+- ```pipeline.import-src-logs```: Enable verbose logging for pipelined import SRC (default: false)
+
+- ```pipeline.warm-snapshot```: Enable warm-cache handoff from execution prefetcher to pipelined SRC; no effect when import SRC is disabled (default: true)
 
 ### Sealer Options
 
@@ -359,10 +361,6 @@ The ```bor server``` command runs the Bor client.
 - ```miner.gasprice```: Minimum gas price for mining a transaction (default: 25000000000)
 
 - ```miner.interruptcommit```: Interrupt block commit when block creation time is passed (default: true)
-
-- ```miner.pipelined-src```: Enable pipelined state root computation: overlap SRC(N) with block N+1 tx execution (default: true)
-
-- ```miner.pipelined-src-logs```: Enable verbose logging for pipelined SRC (spawned SRC, SRC completed, block sealed, etc.) (default: true)
 
 - ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: false)
 

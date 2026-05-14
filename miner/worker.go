@@ -500,11 +500,10 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		speculativeWorkCh:   make(chan *speculativeWorkReq, 1),
 	}
 	worker.noempty.Store(true)
-	if config.EnablePipelinedSRC {
-		pipelineBuildEnabledGauge.Update(1)
-	} else {
-		pipelineBuildEnabledGauge.Update(0)
-	}
+	// Production-side pipelined SRC is intentionally disabled and no longer has
+	// a miner config knob. Keep the gauge at 0; import-side pipelining has its
+	// own chain/imports/pipelined/enabled gauge.
+	pipelineBuildEnabledGauge.Update(0)
 	// Subscribe for transaction insertion events (whether from network or resurrects)
 	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
 	// Subscribe events for blockchain
@@ -993,11 +992,15 @@ func (w *worker) mainLoop() {
 
 				stopFn := func() {}
 				if w.interruptCommitFlag {
+					// Production-side pipelining is disabled, so the interrupt
+					// timer should use the regular block-time boundary. If the
+					// production pipeline is re-enabled, this was previously
+					// wired to the miner pipeline enable flag.
 					stopFn = createInterruptTimer(
 						w.current.header.Number.Uint64(),
 						w.current.header.GetActualTime(),
 						w.current.buildInterrupt,
-						w.config.EnablePipelinedSRC,
+						false,
 					)
 				}
 
@@ -2153,11 +2156,14 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
+		// Production-side pipelining is disabled, so the interrupt timer should
+		// use the regular block-time boundary. If the production pipeline is
+		// re-enabled, this was previously wired to the miner pipeline enable flag.
 		stopFn = createInterruptTimer(
 			work.header.Number.Uint64(),
 			work.header.GetActualTime(),
 			work.buildInterrupt,
-			w.config.EnablePipelinedSRC,
+			false,
 		)
 	}
 
