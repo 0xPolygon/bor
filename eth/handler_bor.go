@@ -128,6 +128,11 @@ func (h *ethHandler) handleMilestone(ctx context.Context, eth *Ethereum, milesto
 
 	h.downloader.ProcessMilestone(num, hash)
 
+	// set milestone block as finalized (used by tracer)
+	if header := eth.blockchain.GetHeaderByHash(hash); header != nil {
+		eth.blockchain.SetFinalized(header)
+	}
+
 	return nil
 }
 
