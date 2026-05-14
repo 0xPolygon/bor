@@ -165,8 +165,6 @@ type TraceConfig struct {
 	Tracer  *string
 	Timeout *string
 	Reexec  *uint64
-	Path    *string
-	IOFlag  *bool
 	// Config specific to given tracer. Note struct logger
 	// config are historically embedded in main object.
 	TracerConfig json.RawMessage
@@ -600,7 +598,7 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
 		var err error
-		if tx.Type() == types.StateSyncTxType {
+		if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil {
 			// State sync transactions are processed differently than normal transactions
 			stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
 			_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
@@ -900,8 +898,8 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		if txHash != (common.Hash{}) && tx.Hash() != txHash {
 			// Process the tx to update state, but don't trace it.
 			var err error
-			if tx.Type() == types.StateSyncTxType {
-				stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
+			if tx.Type() == types.StateSyncTxType && chainConfig.Bor != nil {
+				stateReceiverAddress := chainConfig.Bor.StateReceiverContract
 				_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 			} else {
 				_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
@@ -1269,6 +1267,8 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 				BlockHash:         txctx.BlockHash,
 				TransactionIndex:  uint(txctx.TxIndex),
 			}
+			// Bloom is intentionally skipped, add if required
+			// receipt.Bloom = types.CreateBloom(receipt)
 			hooks.OnTxEnd(receipt, nil)
 		}
 

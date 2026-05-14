@@ -38,21 +38,18 @@ import (
 // multiple goroutines. Callers using the live tracer should ensure that transactions
 // are processed serially.
 func WrapStateSyncHooks(inner *tracing.Hooks, stateReceiverAddress common.Address) *tracing.Hooks {
+	// Create a wrapper around the inner tracer
 	w := &stateSyncHooks{inner: inner, stateReceiverAddress: stateReceiverAddress}
-	return &tracing.Hooks{
-		OnTxStart:       w.OnTxStart,
-		OnTxEnd:         w.OnTxEnd,
-		OnEnter:         w.OnEnter,
-		OnExit:          w.OnExit,
-		OnOpcode:        w.OnOpcode,
-		OnFault:         w.OnFault,
-		OnGasChange:     w.OnGasChange,
-		OnBalanceChange: w.OnBalanceChange,
-		OnNonceChange:   w.OnNonceChange,
-		OnCodeChange:    w.OnCodeChange,
-		OnStorageChange: w.OnStorageChange,
-		OnLog:           w.OnLog,
-	}
+
+	// Copy the inner tracer's hooks and override hooks relevant to state-sync transactions.
+	wrapped := *inner
+	wrapped.OnTxStart = w.OnTxStart
+	wrapped.OnTxEnd = w.OnTxEnd
+	wrapped.OnEnter = w.OnEnter
+	wrapped.OnExit = w.OnExit
+	wrapped.OnOpcode = w.OnOpcode
+	wrapped.OnFault = w.OnFault
+	return &wrapped
 }
 
 type stateSyncHooks struct {
@@ -130,40 +127,4 @@ func (t *stateSyncHooks) OnFault(pc uint64, op byte, gas, cost uint64, scope tra
 		depth++
 	}
 	t.inner.OnFault(pc, op, gas, cost, scope, depth, err)
-}
-
-func (t *stateSyncHooks) OnGasChange(old, new uint64, reason tracing.GasChangeReason) {
-	if t.inner.OnGasChange != nil {
-		t.inner.OnGasChange(old, new, reason)
-	}
-}
-
-func (t *stateSyncHooks) OnBalanceChange(addr common.Address, prev, new *big.Int, reason tracing.BalanceChangeReason) {
-	if t.inner.OnBalanceChange != nil {
-		t.inner.OnBalanceChange(addr, prev, new, reason)
-	}
-}
-
-func (t *stateSyncHooks) OnNonceChange(addr common.Address, prev, new uint64) {
-	if t.inner.OnNonceChange != nil {
-		t.inner.OnNonceChange(addr, prev, new)
-	}
-}
-
-func (t *stateSyncHooks) OnCodeChange(addr common.Address, prevCodeHash common.Hash, prevCode []byte, codeHash common.Hash, code []byte) {
-	if t.inner.OnCodeChange != nil {
-		t.inner.OnCodeChange(addr, prevCodeHash, prevCode, codeHash, code)
-	}
-}
-
-func (t *stateSyncHooks) OnStorageChange(addr common.Address, slot common.Hash, prev, new common.Hash) {
-	if t.inner.OnStorageChange != nil {
-		t.inner.OnStorageChange(addr, slot, prev, new)
-	}
-}
-
-func (t *stateSyncHooks) OnLog(log *types.Log) {
-	if t.inner.OnLog != nil {
-		t.inner.OnLog(log)
-	}
 }

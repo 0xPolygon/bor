@@ -210,10 +210,13 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 		// Build system message with proper gas and target contract
 		msg := GetSystemMessage(stateReceiverContract, data)
 
-		// Execute
-		result, err := ApplyBorMessage(vmenv, msg)
-		if err != nil {
-			return nil, fmt.Errorf("state-sync event %d execution failed: %w", event.ID, err)
+		// Execute the message. The state-sync event may revert but that shouldn't
+		// fail the surrounding state-sync transaction execution. We proceed without
+		// returning any errors. The revert error will be recorded in the trace. Just
+		// log the error for visibility.
+		result, _ := ApplyBorMessage(vmenv, msg)
+		if result.Err != nil {
+			log.Warn("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
 		}
 
 		totalGasUsed += result.UsedGas

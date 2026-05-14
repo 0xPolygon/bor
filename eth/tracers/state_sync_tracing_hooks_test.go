@@ -22,6 +22,8 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -341,27 +343,94 @@ func TestWrapStateSyncHooks_StateChangeHooksPassthrough(t *testing.T) {
 	assertEvents(t, expected, rec.events)
 }
 
-// TestWrapStateSyncHooks_NilInnerHooks verifies the wrapper does not panic
-// when the inner *tracing.Hooks has nil fields. Each method nil-guards its
-// inner hook, and the synthetic root injection requires inner.OnEnter to
-// emit anything — without it, OnTxStart still sets `active` but emits no
-// synthetic frame, and OnTxEnd correspondingly skips the close.
+// TestWrapStateSyncHooks_NilInnerHooks verifies the wrapper's contract for an
+// inner *tracing.Hooks with nil fields.
+//
+// For hooks the wrapper overrides (OnTxStart, OnTxEnd, OnEnter, OnExit,
+// OnOpcode, OnFault), the wrapper's methods nil-guard the inner hook so
+// invoking them does not panic. For hooks the wrapper does NOT override
+// (state-change hooks, block-lifecycle hooks, etc.), the wrapper's returned
+// *tracing.Hooks has those fields exactly mirroring inner — nil if inner is
+// nil. Callers (EVM, HookedState) follow the standard tracing.Hooks contract
+// of checking `if hooks.OnX != nil` before invocation, so the nil values are
+// safe.
 func TestWrapStateSyncHooks_NilInnerHooks(t *testing.T) {
 	wrapped := WrapStateSyncHooks(&tracing.Hooks{}, common.HexToAddress("0x1001"))
 
-	// Should not panic.
+	// Overridden hooks: must not panic even when every inner hook is nil.
 	wrapped.OnTxStart(nil, makeStateSyncTx(), params.BorSystemAddress)
 	wrapped.OnEnter(0, byte(vm.CALL), common.Address{}, common.Address{}, nil, 0, big.NewInt(0))
 	wrapped.OnExit(0, nil, 0, nil, false)
 	wrapped.OnOpcode(0, byte(vm.STOP), 0, 0, nil, nil, 0, nil)
 	wrapped.OnFault(0, byte(vm.STOP), 0, 0, nil, 0, nil)
-	wrapped.OnLog(&types.Log{})
-	wrapped.OnBalanceChange(common.Address{}, big.NewInt(0), big.NewInt(0), tracing.BalanceChangeUnspecified)
-	wrapped.OnStorageChange(common.Address{}, common.Hash{}, common.Hash{}, common.Hash{})
-	wrapped.OnNonceChange(common.Address{}, 0, 0)
-	wrapped.OnCodeChange(common.Address{}, common.Hash{}, nil, common.Hash{}, nil)
-	wrapped.OnGasChange(0, 0, tracing.GasChangeUnspecified)
 	wrapped.OnTxEnd(&types.Receipt{}, nil)
+
+	// Pass-through hooks: must mirror inner's nil-ness. The wrapper does not
+	// add a nil-guard for these; callers are expected to nil-check.
+	require.Nil(t, wrapped.OnLog, "OnLog should pass through inner's nil")
+	require.Nil(t, wrapped.OnBalanceChange, "OnBalanceChange should pass through inner's nil")
+	require.Nil(t, wrapped.OnNonceChange, "OnNonceChange should pass through inner's nil")
+	require.Nil(t, wrapped.OnCodeChange, "OnCodeChange should pass through inner's nil")
+	require.Nil(t, wrapped.OnStorageChange, "OnStorageChange should pass through inner's nil")
+	require.Nil(t, wrapped.OnGasChange, "OnGasChange should pass through inner's nil")
+	require.Nil(t, wrapped.OnBlockStart, "OnBlockStart should pass through inner's nil")
+	require.Nil(t, wrapped.OnBlockEnd, "OnBlockEnd should pass through inner's nil")
+	require.Nil(t, wrapped.OnGenesisBlock, "OnGenesisBlock should pass through inner's nil")
+	require.Nil(t, wrapped.OnBlockchainInit, "OnBlockchainInit should pass through inner's nil")
+	require.Nil(t, wrapped.OnClose, "OnClose should pass through inner's nil")
+	require.Nil(t, wrapped.OnSystemCallStart, "OnSystemCallStart should pass through inner's nil")
+	require.Nil(t, wrapped.OnSystemCallEnd, "OnSystemCallEnd should pass through inner's nil")
+	require.Nil(t, wrapped.OnBlockHashRead, "OnBlockHashRead should pass through inner's nil")
+}
+
+// TestWrapStateSyncHooks_PassthroughForwardsAllInnerHooks verifies that the
+// wrapper does NOT drop any hooks the inner tracer sets — including block
+// lifecycle, system call, and v2 variant hooks. This regression test guards
+// against the wrapper accidentally returning a *tracing.Hooks with only a
+// subset of inner's fields wired through (which would silently break
+// tracers like supply that rely on OnBlockStart/OnGenesisBlock/etc.).
+func TestWrapStateSyncHooks_PassthroughForwardsAllInnerHooks(t *testing.T) {
+	var (
+		blockStartCalled       bool
+		blockEndCalled         bool
+		genesisCalled          bool
+		systemCallStartCalled  bool
+		systemCallEndCalled    bool
+		blockHashReadCalled    bool
+		blockchainInitCalled   bool
+		closeCalled            bool
+	)
+	inner := &tracing.Hooks{
+		OnBlockStart:      func(tracing.BlockEvent) { blockStartCalled = true },
+		OnBlockEnd:        func(error) { blockEndCalled = true },
+		OnGenesisBlock:    func(*types.Block, types.GenesisAlloc) { genesisCalled = true },
+		OnSystemCallStart: func() { systemCallStartCalled = true },
+		OnSystemCallEnd:   func() { systemCallEndCalled = true },
+		OnBlockHashRead:   func(uint64, common.Hash) { blockHashReadCalled = true },
+		OnBlockchainInit:  func(*params.ChainConfig) { blockchainInitCalled = true },
+		OnClose:           func() { closeCalled = true },
+	}
+
+	wrapped := WrapStateSyncHooks(inner, common.HexToAddress("0x1001"))
+
+	require.NotNil(t, wrapped.OnBlockStart)
+	wrapped.OnBlockStart(tracing.BlockEvent{})
+	wrapped.OnBlockEnd(nil)
+	wrapped.OnGenesisBlock(nil, nil)
+	wrapped.OnSystemCallStart()
+	wrapped.OnSystemCallEnd()
+	wrapped.OnBlockHashRead(0, common.Hash{})
+	wrapped.OnBlockchainInit(nil)
+	wrapped.OnClose()
+
+	require.True(t, blockStartCalled, "OnBlockStart was not forwarded")
+	require.True(t, blockEndCalled, "OnBlockEnd was not forwarded")
+	require.True(t, genesisCalled, "OnGenesisBlock was not forwarded")
+	require.True(t, systemCallStartCalled, "OnSystemCallStart was not forwarded")
+	require.True(t, systemCallEndCalled, "OnSystemCallEnd was not forwarded")
+	require.True(t, blockHashReadCalled, "OnBlockHashRead was not forwarded")
+	require.True(t, blockchainInitCalled, "OnBlockchainInit was not forwarded")
+	require.True(t, closeCalled, "OnClose was not forwarded")
 }
 
 // assertEvents fails the test with a diff-style message if got and want don't match.
