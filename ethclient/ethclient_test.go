@@ -760,7 +760,6 @@ func ExampleRevertErrorData() {
 }
 
 func TestSimulateV1(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	backend, _, err := newTestBackend(nil)
 	if err != nil {
 		t.Fatalf("Failed to create test backend: %v", err)
@@ -826,7 +825,6 @@ func TestSimulateV1(t *testing.T) {
 }
 
 func TestSimulateV1WithBlockOverrides(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	backend, _, err := newTestBackend(nil)
 	if err != nil {
 		t.Fatalf("Failed to create test backend: %v", err)
@@ -889,7 +887,6 @@ func TestSimulateV1WithBlockOverrides(t *testing.T) {
 }
 
 func TestSimulateV1WithStateOverrides(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	backend, _, err := newTestBackend(nil)
 	if err != nil {
 		t.Fatalf("Failed to create test backend: %v", err)
@@ -957,7 +954,6 @@ func TestSimulateV1WithStateOverrides(t *testing.T) {
 }
 
 func TestSimulateV1WithBlockNumberOrHash(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	backend, _, err := newTestBackend(nil)
 	if err != nil {
 		t.Fatalf("Failed to create test backend: %v", err)

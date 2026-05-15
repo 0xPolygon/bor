@@ -125,7 +125,7 @@ func (gc *GenesisContractsClient) LastStateId(state *state.StateDB, number uint6
 
 	// BOR: Do a 'CallWithState' so that we can fetch the last state ID from a given (incoming)
 	// state instead of local(canonical) chain's state.
-	result, err := gc.ethAPI.CallWithState(context.Background(), ethapi.TransactionArgs{
+	result, err := gc.ethAPI.CallWithState(ethapi.WithBorInternalCall(context.Background()), ethapi.TransactionArgs{
 		Gas:  &SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,

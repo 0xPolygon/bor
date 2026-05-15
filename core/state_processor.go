@@ -72,6 +72,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
+		err         error
 	)
 
 	// Set an empty context if nil
@@ -154,14 +155,17 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
 	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), receipts)
+	receipts, err = p.chain.Engine().Finalize(p.chain, header, statedb, block.Body(), receipts)
+	if err != nil {
+		return nil, err
+	}
 
 	// apply state sync logs
 	if p.chainConfig().Bor != nil && p.chainConfig().Bor.IsMadhugiri(block.Number()) {
-		// In case of any errors in state-sync tx processing, the number of receipts won't match
-		// the number of transactions in the block body.
+		// Defense-in-depth: if insertStateSyncTransactionAndCalculateReceipt silently failed
+		// to add the receipt, the count will be off.
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 
