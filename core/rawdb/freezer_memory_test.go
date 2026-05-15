@@ -113,6 +113,15 @@ func TestMemoryFreezerOffset(t *testing.T) {
 		t.Fatalf("AncientRange(9, 1, 0) error = %v, want %v", err, errOutOfBounds)
 	}
 
+	if blob, err := freezer.AncientBytes("test", 12, 0, uint64(len("twelve"))); err != nil {
+		t.Fatalf("AncientBytes(12) returned error: %v", err)
+	} else if !bytes.Equal(blob, []byte("twelve")) {
+		t.Fatalf("AncientBytes(12) = %q, want %q", blob, []byte("twelve"))
+	}
+	if _, err := freezer.AncientBytes("test", 2, 0, 1); !errors.Is(err, errOutOfBounds) {
+		t.Fatalf("AncientBytes(2) error = %v, want %v", err, errOutOfBounds)
+	}
+
 	if _, err := freezer.TruncateHead(9); !errors.Is(err, errTruncateBelowOffset) {
 		t.Fatalf("TruncateHead(9) error = %v, want %v", err, errTruncateBelowOffset)
 	}
@@ -165,6 +174,11 @@ func TestMemoryFreezerResetKeepsOffset(t *testing.T) {
 		t.Fatalf("ItemAmountInAncient() returned error: %v", err)
 	} else if got != 0 {
 		t.Fatalf("ItemAmountInAncient() = %d, want 0", got)
+	}
+	if got, err := freezer.Tail(); err != nil {
+		t.Fatalf("Tail() returned error: %v", err)
+	} else if got != 7 {
+		t.Fatalf("Tail() = %d, want 7", got)
 	}
 	if _, err := freezer.ModifyAncients(func(op ethdb.AncientWriteOp) error {
 		return op.AppendRaw("test", 7, []byte("seven"))

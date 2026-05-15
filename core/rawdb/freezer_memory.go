@@ -449,12 +449,13 @@ func (f *MemoryFreezer) Reset() error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
+	offset := f.offset.Load()
 	tables := make(map[string]*memoryTable)
 	for name, table := range f.tables {
 		tables[name] = newMemoryTable(name, table.config)
 	}
 	f.tables = tables
-	f.items, f.tail = f.offset.Load(), 0
+	f.items, f.tail = offset, offset
 	return nil
 }
 
@@ -474,7 +475,11 @@ func (f *MemoryFreezer) AncientBytes(kind string, id, offset, length uint64) ([]
 	if table == nil {
 		return nil, errUnknownTable
 	}
-	entries, err := table.retrieve(id, 1, 0)
+	tableOffset := f.offset.Load()
+	if id < tableOffset {
+		return nil, errOutOfBounds
+	}
+	entries, err := table.retrieve(id-tableOffset, 1, 0)
 	if err != nil {
 		return nil, err
 	}
