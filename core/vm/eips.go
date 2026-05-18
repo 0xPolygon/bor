@@ -174,6 +174,15 @@ func enable3529(jt *JumpTable) {
 	jt[SELFDESTRUCT].dynamicGas = gasSelfdestructEIP3529
 }
 
+// enablePIP88 applies PIP-88:
+// - Increases the cost of cold SLOAD to params.ColdSloadCostPIP88 (2.6x)
+// - Increases the cost of cold SSTORE to params.ColdSstoreCostPIP88 (1.4x)
+// - Recomputes the slot-clear refund to params.SstoreClearsScheduleRefundPIP88
+func enablePIP88(jt *JumpTable) {
+	jt[SLOAD].dynamicGas = gasSLoadPIP88
+	jt[SSTORE].dynamicGas = gasSStorePIP88
+}
+
 // enable3198 applies EIP-3198 (BASEFEE Opcode)
 // - Adds an opcode that returns the current block's base fee.
 func enable3198(jt *JumpTable) {

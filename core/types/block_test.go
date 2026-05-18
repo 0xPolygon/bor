@@ -931,3 +931,75 @@ func TestDecodeBlockExtraData(t *testing.T) {
 		t.Errorf("TxDependency mismatch: got %v, want %v", result.TxDependency, txDep)
 	}
 }
+
+// TestGetValidatorBytesShortExtra is a regression test for the pre-Cancun
+// branch of (*Header).GetValidatorBytes panicking with
+// `runtime error: slice bounds out of range` when len(Extra) < ExtraVanityLength+ExtraSealLength.
+//
+// Prior to the fix the pre-Cancun branch performed
+//
+//	return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
+//
+// without any length guard. The post-Cancun branch already guarded this
+// path; this test exercises both branches across a range of short Extra
+// lengths plus a happy-path case.
+func TestGetValidatorBytesShortExtra(t *testing.T) {
+	t.Parallel()
+
+	preCancunCfg := &params.ChainConfig{
+		ChainID: big.NewInt(137),
+	}
+	postCancunCfg := &params.ChainConfig{
+		ChainID:     big.NewInt(137),
+		CancunBlock: big.NewInt(100),
+	}
+
+	cases := []struct {
+		name        string
+		cfg         *params.ChainConfig
+		blockNumber *big.Int
+	}{
+		{"pre-cancun", preCancunCfg, big.NewInt(50)},
+		{"post-cancun", postCancunCfg, big.NewInt(200)},
+	}
+
+	shortLens := []int{0, 1, 32, 64, 65, 80, 96}
+
+	for _, c := range cases {
+		for _, n := range shortLens {
+			h := &Header{
+				Number: c.blockNumber,
+				Extra:  make([]byte, n),
+			}
+			var got []byte
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("%s len(Extra)=%d: unexpected panic: %v", c.name, n, r)
+					}
+				}()
+				got = h.GetValidatorBytes(c.cfg)
+			}()
+			if got != nil {
+				t.Errorf("%s len(Extra)=%d: expected nil, got %x (len %d)",
+					c.name, n, got, len(got))
+			}
+		}
+	}
+
+	// Happy path (pre-Cancun): vanity + 40-byte validator entry + seal.
+	// Confirms the existing slice operation is preserved for valid input.
+	extra := make([]byte, ExtraVanityLength+40+ExtraSealLength)
+	for i := 0; i < 40; i++ {
+		extra[ExtraVanityLength+i] = byte(i + 1)
+	}
+	h := &Header{Number: big.NewInt(50), Extra: extra}
+	got := h.GetValidatorBytes(preCancunCfg)
+	if len(got) != 40 {
+		t.Fatalf("happy path: expected 40 bytes, got %d", len(got))
+	}
+	if !bytes.Equal(got, extra[ExtraVanityLength:ExtraVanityLength+40]) {
+		t.Errorf("happy path: validator bytes mismatch: got %x, want %x",
+			got, extra[ExtraVanityLength:ExtraVanityLength+40])
+	}
+}
