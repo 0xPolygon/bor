@@ -1034,7 +1034,12 @@ func (w *worker) taskLoop() {
 				sealErr = w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh)
 			}
 			if err := sealErr; err != nil {
-				log.Warn("Block sealing failed", "err", err)
+				switch err.(type) {
+				case *bor.UnauthorizedSignerError:
+					log.Debug("Block sealing skipped (not in validator set)", "err", err)
+				default:
+					log.Warn("Block sealing failed", "err", err)
+				}
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
 				w.pendingMu.Unlock()
