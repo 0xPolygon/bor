@@ -404,6 +404,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
 		// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
 		eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
+
+		// Allow private tx store to check if txs are still in the pool for cleanup
+		relayService.SetTxPoolChecker(eth.txPool.Has)
 	}
 
 	if !config.TxPool.NoLocals {

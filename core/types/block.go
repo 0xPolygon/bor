@@ -501,16 +501,16 @@ func (b *Block) GetTxDependency() [][]uint64 {
 }
 
 // GetValidatorBytes extracts validator bytes from the header's Extra field.
+// Returns nil if len(h.Extra) is shorter than ExtraVanityLength+ExtraSealLength.
 // If you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData
 // to avoid redundant RLP decodes.
 func (h *Header) GetValidatorBytes(chainConfig *params.ChainConfig) []byte {
-	if !chainConfig.IsCancun(h.Number) {
-		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil
 	}
 
-	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
-		log.Error("length of extra less is than vanity and seal")
-		return nil
+	if !chainConfig.IsCancun(h.Number) {
+		return h.Extra[ExtraVanityLength : len(h.Extra)-ExtraSealLength]
 	}
 
 	var blockExtraData BlockExtraData
