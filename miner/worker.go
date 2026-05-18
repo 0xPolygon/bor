@@ -101,6 +101,12 @@ var (
 
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
+	// prepareWorkTimer measures time taken to prepare environment for block building which
+	// includes the `bor.Prepare` call as well.
+	prepareWorkTimer = metrics.NewRegisteredTimer("worker/prepareWork", nil)
+	// pendingTimer measures time taken to fetch transactions from pool in the actual block
+	// building cycle (excluding the calls made by prefetcher).
+	pendingTimer = metrics.NewRegisteredTimer("worker/pending", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
@@ -218,20 +224,29 @@ type environment struct {
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
+
+	// Observability for pre block building phase
+	makeEnvDuration    time.Duration
+	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
+	// Track time taken to fetch pending transactions during block building
+	pendingDuration time.Duration
 }
 
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
-		signer:         env.signer,
-		state:          env.state.Copy(),
-		tcount:         env.tcount,
-		coinbase:       env.coinbase,
-		header:         types.CopyHeader(env.header),
-		receipts:       copyReceipts(env.receipts),
-		mvReadMapList:  env.mvReadMapList,
-		prefetchReader: env.prefetchReader,
-		processReader:  env.processReader,
+		signer:             env.signer,
+		state:              env.state.Copy(),
+		tcount:             env.tcount,
+		coinbase:           env.coinbase,
+		header:             types.CopyHeader(env.header),
+		receipts:           copyReceipts(env.receipts),
+		mvReadMapList:      env.mvReadMapList,
+		prefetchReader:     env.prefetchReader,
+		processReader:      env.processReader,
+		makeEnvDuration:    env.makeEnvDuration,
+		makeHeaderDuration: env.makeHeaderDuration,
+		pendingDuration:    env.pendingDuration,
 	}
 
 	if env.gasPool != nil {
@@ -1657,6 +1672,7 @@ type generateParams struct {
 	processReader      state.ReaderWithStats // The process reader to use for statistics
 	prefetchedTxHashes *sync.Map             // Map of successfully prefetched transaction hashes
 	productionStart    time.Time             // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	preBuildDuration   time.Duration         // Duration of pre block build phase
 }
 
 // makeHeader creates a new block header for sealing.
@@ -1750,19 +1766,24 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	makeHeaderStart := time.Now()
 	header, coinbase, err := w.makeHeader(genParams, true)
 	if err != nil {
 		return nil, err
 	}
+	makeHeaderDuration := time.Since(makeHeaderStart)
 
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
+	makeEnvStart := time.Now()
 	env, err := w.makeEnv(header, coinbase, witness, genParams)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+	env.makeEnvDuration = time.Since(makeEnvStart)
+	env.makeHeaderDuration = makeHeaderDuration
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
@@ -1814,6 +1835,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	prio := w.prio
 	w.mu.RUnlock()
 
+	pendingStart := time.Now()
+
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 
 	filter.BlobTxs = false
@@ -1826,6 +1849,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		filter.BlobVersion = types.BlobSidecarVersion0
 	}
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+
+	env.pendingDuration = time.Since(pendingStart)
+	pendingTimer.Update(env.pendingDuration)
 
 	// Split the pending transactions into locals and remotes.
 	prioPlainTxs, normalPlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
@@ -1938,6 +1964,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 
+	buildStart := time.Now()
+
 	// Clear the pending work block number when commitWork completes (success or failure).
 	defer func() {
 		w.pendingWorkBlock.Store(0)
@@ -1970,6 +1998,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		preBuildDuration:   time.Since(buildStart),
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -1994,10 +2023,13 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 
 // buildAndCommitBlock prepares work, fills transactions, and commits the block for sealing.
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	prepareWorkStart := time.Now()
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
 		return
 	}
+	prepareWorkDuration := time.Since(prepareWorkStart)
+	prepareWorkTimer.Update(prepareWorkDuration)
 
 	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
 	start := time.Now()
@@ -2007,6 +2039,24 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	defer func() {
 		stopFn()
 	}()
+
+	timeUntilInterrupt := time.Until(work.header.GetActualTime())
+	if timeUntilInterrupt > time.Second {
+		timeUntilInterrupt -= interruptBuffer
+	}
+	parent := w.chain.CurrentBlock()
+	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+		"buildStart(ms)", prepareWorkStart.UnixMilli(),
+		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+		"parentTime", parent.Time,
+		"parentActualTime(ms)", parent.GetActualTime().UnixMilli(),
+		"headerTime", work.header.Time,
+		"headerActualTime(ms)", work.header.GetActualTime().UnixMilli(),
+		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+	)
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
@@ -2322,9 +2372,13 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
-			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
+			log.Info("Commit new sealing work",
+				"number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"txs", env.tcount, "gas", block.GasUsed(), "fees", feesInEther,
-				"elapsed", common.PrettyDuration(time.Since(start)), "finalize", common.PrettyDuration(finalizeDuration))
+				"elapsed", common.PrettyDuration(time.Since(start)),
+				"pending", common.PrettyDuration(env.pendingDuration),
+				"finalize", common.PrettyDuration(finalizeDuration),
+			)
 
 		case <-w.exitCh:
 			log.Info("Worker has exited")
