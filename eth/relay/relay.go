@@ -83,6 +83,12 @@ func (s *RelayService) SetchainEventSubFn(fn func(ch chan<- core.ChainEvent) eve
 	}
 }
 
+func (s *RelayService) SetTxPoolChecker(checker TxPoolChecker) {
+	if s.privateTxStore != nil {
+		s.privateTxStore.SetTxPoolChecker(checker)
+	}
+}
+
 func (s *RelayService) SetTxGetter(getter TxGetter) {
 	if s.txRelay != nil {
 		s.txRelay.SetTxGetter(getter)
@@ -117,7 +123,21 @@ func (s *RelayService) SubmitPreconfTransaction(tx *types.Transaction) error {
 	return nil
 }
 
-// SubmitPrivateTransaction submits a private transaction to block producers
+// SubmitPrivateTransaction submits a private transaction to block producers.
+// Note: We deliberately do NOT purge the private-tx hash from the store on BP
+// rejection. Various types of tx rejections are possible.
+// - Permanent rejection (i.e. tx which will always be rejected). As the tx has
+// already passed the relay's local txpool validation, invalid txs are already
+// filtered out.
+// - Permanent rejection due to BP config (e.g. tx fee cap set by BP) which will
+// lead to relay accepting the tx but BPs rejecting it. Such instances should be
+// logged but as they can't be fixed immediately by the relay, they'll be pruned
+// after the default private tx store timeout.
+// - Transient rejection due to reorg or nonce race. The relay's local pool will
+// evict the tx eventually once it catches up with the txpool-aware sweep.
+// - Transient rejection due to BPs current mempool state (e.g. pool full). This
+// will be handled by local re-submissions in BPs. If the tx still remains invalid
+// it will be evicted after the default private tx store timeout.
 func (s *RelayService) SubmitPrivateTransaction(tx *types.Transaction) error {
 	if s.txRelay == nil {
 		return fmt.Errorf("request dropped: %w", errRelayNotConfigured)

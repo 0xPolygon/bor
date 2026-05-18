@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -1404,5 +1405,239 @@ func TestPrivateTxSubmissionRetry(t *testing.T) {
 		require.Equal(t, int32(6), callCounts[0].Load(), "expected server 0 to be called 6 times")
 		// TxGetter should be called 5 times (once per retry attempt)
 		require.Equal(t, int32(5), txGetterCallCount.Load(), "expected txGetter to be called 5 times during retries")
+	})
+}
+
+// TestRejectionTracker covers the in-memory aggregation used by the BP rejection
+// reporter. The production reporter goroutine pulls from this same tracker, so
+// verifying record/flush here covers the data path end-to-end.
+func TestRejectionTracker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("record groups identical errors and counts total", func(t *testing.T) {
+		var tr rejectionTracker
+		errA := fmt.Errorf("nonce too low")
+		errB := fmt.Errorf("transaction underpriced")
+
+		tr.record(errA)
+		tr.record(errA)
+		tr.record(errB)
+		tr.record(errA)
+
+		total, counts := tr.flush()
+		require.Equal(t, uint64(4), total)
+		require.Equal(t, uint64(3), counts["nonce too low"])
+		require.Equal(t, uint64(1), counts["transaction underpriced"])
+	})
+
+	t.Run("record collapses errors with varying dynamic context", func(t *testing.T) {
+		var tr rejectionTracker
+		// Real BP rejections carry per-tx context (nonces, gas prices) after the
+		// sentinel prefix. They should all bucket under the prefix only.
+		tr.record(fmt.Errorf("nonce too low: next nonce 67693, tx nonce 67692"))
+		tr.record(fmt.Errorf("nonce too low: next nonce 80001, tx nonce 80000"))
+		tr.record(fmt.Errorf("nonce too low"))
+		tr.record(fmt.Errorf("transaction gas price below minimum: gas tip cap 0, minimum needed 24000000000"))
+		tr.record(fmt.Errorf("transaction gas price below minimum: gas tip cap 1, minimum needed 30000000000"))
+
+		total, counts := tr.flush()
+		require.Equal(t, uint64(5), total)
+		require.Len(t, counts, 2, "all variants must collapse into two buckets")
+		require.Equal(t, uint64(3), counts["nonce too low"])
+		require.Equal(t, uint64(2), counts["transaction gas price below minimum"])
+	})
+
+	t.Run("flush resets state", func(t *testing.T) {
+		var tr rejectionTracker
+		tr.record(fmt.Errorf("boom"))
+
+		total1, counts1 := tr.flush()
+		require.Equal(t, uint64(1), total1)
+		require.NotNil(t, counts1)
+
+		total2, counts2 := tr.flush()
+		require.Equal(t, uint64(0), total2)
+		require.Nil(t, counts2, "flush should leave the tracker empty")
+	})
+
+	t.Run("nil error is ignored", func(t *testing.T) {
+		var tr rejectionTracker
+		tr.record(nil)
+		total, counts := tr.flush()
+		require.Equal(t, uint64(0), total)
+		require.Nil(t, counts)
+	})
+
+	t.Run("cardinality cap diverts overflow into the <other> bucket", func(t *testing.T) {
+		var tr rejectionTracker
+		// Fill the map to the cap with unique errors.
+		for i := 0; i < maxRejectionCategories; i++ {
+			tr.record(fmt.Errorf("unique error %d", i))
+		}
+		// Extra unique errors should land in the overflow bucket, not expand the map.
+		tr.record(fmt.Errorf("brand new error 1"))
+		tr.record(fmt.Errorf("brand new error 2"))
+		// But an error already in the map should still increment its own bucket.
+		tr.record(fmt.Errorf("unique error 0"))
+
+		total, counts := tr.flush()
+		require.Equal(t, uint64(maxRejectionCategories+3), total)
+		require.Equal(t, maxRejectionCategories+1, len(counts), "exactly one overflow bucket should be added")
+		require.Equal(t, uint64(2), counts[rejectionOtherCategoryLabel])
+		require.Equal(t, uint64(2), counts["unique error 0"])
+	})
+
+	t.Run("concurrent records do not lose count", func(t *testing.T) {
+		var tr rejectionTracker
+		var wg sync.WaitGroup
+		const (
+			goroutines  = 20
+			perRoutine  = 500
+			expectTotal = goroutines * perRoutine
+		)
+		for g := 0; g < goroutines; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < perRoutine; i++ {
+					tr.record(fmt.Errorf("e%d", i%3))
+				}
+			}()
+		}
+		wg.Wait()
+		total, _ := tr.flush()
+		require.Equal(t, uint64(expectTotal), total)
+	})
+}
+
+func TestNormalizeRejectionMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"nonce too low with context", "nonce too low: next nonce 67693, tx nonce 67692", "nonce too low"},
+		{"gas price below minimum with context", "transaction gas price below minimum: gas tip cap 0, minimum needed 24000000000", "transaction gas price below minimum"},
+		{"multiple colons keeps only first prefix", "kzg verification failed: invalid blob proof: detail", "kzg verification failed"},
+		{"sentinel without colon is unchanged", "nonce too low", "nonce too low"},
+		{"transport error without colon is unchanged", "EOF", "EOF"},
+		{"empty string is unchanged", "", ""},
+		{"leading colon is treated as no useful prefix", ":foo", ":foo"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, normalizeRejectionMessage(tc.in))
+		})
+	}
+}
+
+func TestFormatRejectionCounts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sorted desc, zero-count entries skipped", func(t *testing.T) {
+		counts := map[string]uint64{
+			"nonce too low":           10,
+			"transaction underpriced": 3,
+			"invalid sender":          3,
+			"pool full":               25,
+			"<other>":                 0, // must be skipped
+		}
+		got := formatRejectionCounts(counts)
+		require.Equal(t,
+			`pool full: 25, nonce too low: 10, invalid sender: 3, transaction underpriced: 3`,
+			got,
+		)
+	})
+
+	t.Run("empty input yields empty string", func(t *testing.T) {
+		require.Equal(t, "", formatRejectionCounts(nil))
+		require.Equal(t, "", formatRejectionCounts(map[string]uint64{"skip": 0}))
+	})
+}
+
+// TestRejectionTrackerWiredToSubmit verifies the full production path: BP
+// rejections from both submitPrivateTx and submitPreconfTx flow into the same
+// tracker on the multiClient, including "already known" responses.
+func TestRejectionTrackerWiredToSubmit(t *testing.T) {
+	t.Parallel()
+
+	tx := types.NewTransaction(1, common.Address{}, nil, 0, nil, nil)
+	rawTx, err := tx.MarshalBinary()
+	require.NoError(t, err)
+
+	t.Run("private tx rejections including already-known are tracked", func(t *testing.T) {
+		s1 := newMockRpcServer()
+		s2 := newMockRpcServer()
+		defer s1.close()
+		defer s2.close()
+
+		s1.setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "tx fee (1.00 ether) exceeds the configured cap (0.50 ether)")
+		})
+		s2.setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		})
+
+		mc := newMultiClient([]string{s1.server.URL, s2.server.URL})
+		defer mc.close()
+
+		_, _ = mc.submitPrivateTx(rawTx, tx.Hash(), false, nil)
+
+		total, counts := mc.rejectionTracker.flush()
+		require.Equal(t, uint64(2), total, "both the rejection and already-known should be tracked")
+		require.Equal(t, uint64(1), counts["tx fee (1.00 ether) exceeds the configured cap (0.50 ether)"])
+		require.Equal(t, uint64(1), counts["already known"], "already-known should be tracked as its own bucket")
+	})
+
+	t.Run("preconf rejections including already-known are tracked", func(t *testing.T) {
+		s1 := newMockRpcServer()
+		s2 := newMockRpcServer()
+		defer s1.close()
+		defer s2.close()
+
+		s1.setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "tx fee (1.00 ether) exceeds the configured cap (0.50 ether)")
+		})
+		s2.setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, "already known")
+		})
+
+		mc := newMultiClient([]string{s1.server.URL, s2.server.URL})
+		defer mc.close()
+
+		_, _ = mc.submitPreconfTx(rawTx)
+
+		total, counts := mc.rejectionTracker.flush()
+		require.Equal(t, uint64(2), total, "both the rejection and already-known should be tracked")
+		require.Equal(t, uint64(1), counts["tx fee (1.00 ether) exceeds the configured cap (0.50 ether)"])
+		require.Equal(t, uint64(1), counts["already known"], "already-known should be tracked as its own bucket")
+	})
+
+	t.Run("preconf and private rejections aggregate into the same tracker", func(t *testing.T) {
+		// Same BP rejects both preconf and private with the same config-mismatch
+		// error. The tracker should accumulate the count across both submission
+		// types, while the two separate meters distinguish the source.
+		s := newMockRpcServer()
+		defer s.close()
+
+		errMsg := "tx fee exceeds the configured cap"
+		s.setHandleSendPreconfTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, errMsg)
+		})
+		s.setHandleSendPrivateTx(func(w http.ResponseWriter, id int, params json.RawMessage) {
+			defaultSendError(w, id, -32000, errMsg)
+		})
+
+		mc := newMultiClient([]string{s.server.URL})
+		defer mc.close()
+
+		_, _ = mc.submitPreconfTx(rawTx)
+		_, _ = mc.submitPrivateTx(rawTx, tx.Hash(), false, nil)
+
+		total, counts := mc.rejectionTracker.flush()
+		require.Equal(t, uint64(2), total, "both rejections should be tracked together")
+		require.Equal(t, uint64(2), counts[errMsg], "same error message should aggregate across submission types")
 	})
 }
