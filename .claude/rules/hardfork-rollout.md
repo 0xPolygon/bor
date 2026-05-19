@@ -5,6 +5,7 @@ paths:
   - "core/forkid/forkid.go"
   - "internal/cli/server/chains/*.go"
   - "builder/files/genesis-*.json"
+  - "core/vm/**/*.go"
   - "core/vm/*.go"
   - "consensus/bor/bor.go"
   - "miner/worker.go"
