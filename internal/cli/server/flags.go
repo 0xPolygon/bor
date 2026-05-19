@@ -1227,9 +1227,15 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// grpc
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "grpc.addr",
-		Usage:   "Address and port to bind the GRPC server",
+		Usage:   "Address and port to bind the GRPC server. Empty disables the server. Non-loopback binds without --grpc.token log a startup warning.",
 		Value:   &c.cliConfig.GRPC.Addr,
 		Default: c.cliConfig.GRPC.Addr,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "grpc.token",
+		Usage:   "Raw token expected in the `authorization: Bearer <token>` header of incoming gRPC calls (empty disables auth; the `Bearer ` prefix is stripped before comparison). Prefer the BOR_GRPC_TOKEN environment variable over this flag.",
+		Value:   &c.cliConfig.GRPC.Token,
+		Default: c.cliConfig.GRPC.Token,
 	})
 
 	// developer

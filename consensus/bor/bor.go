@@ -283,6 +283,10 @@ type Bor struct {
 	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+
+	// api is the bor engine API instance reused across all callers (JSON-RPC and gRPC).
+	api     *API
+	apiOnce sync.Once
 }
 
 type signer struct {
@@ -1548,11 +1552,29 @@ func (c *Bor) SealHash(header *types.Header) common.Hash {
 
 // APIs implements consensus.Engine, returning the user facing RPC API to allow
 // controlling the signer voting.
+//
+// The returned *API is cached on the first call so that per-API state (e.g.,
+// rootHashCache) persists across calls. JSON-RPC only invokes APIs() once at
+// node startup, but the gRPC backend fetches it on every handler call — without
+// the cache those calls would each start from an empty state.
+//
+// rootHashCache is initialized here (inside the sync.Once) rather than lazily
+// in GetRootHash so that concurrent gRPC handlers sharing the cached *API
+// cannot race in initializeRootHashCache.
 func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
+	c.apiOnce.Do(func() {
+		a := &API{chain: chain, bor: c}
+		if err := a.initializeRootHashCache(); err != nil {
+			// log.Crit logs at the highest severity and then exits the process;
+			// This is currently unreachable (size is a constant in initializeRootHashCache),
+			log.Crit("bor: failed to initialize rootHashCache", "err", err)
+		}
+		c.api = a
+	})
 	return []rpc.API{{
 		Namespace: "bor",
 		Version:   "1.0",
-		Service:   &API{chain: chain, bor: c},
+		Service:   c.api,
 		Public:    false,
 	}}
 }

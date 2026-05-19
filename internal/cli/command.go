@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -222,7 +223,8 @@ func Commands() map[string]MarkDownCommandFactory {
 type Meta2 struct {
 	UI cli.Ui
 
-	addr string
+	addr  string
+	token string
 }
 
 func (m *Meta2) NewFlagSet(n string) *flagset.Flagset {
@@ -234,12 +236,55 @@ func (m *Meta2) NewFlagSet(n string) *flagset.Flagset {
 		Usage:   "Address of the grpc endpoint",
 		Default: "127.0.0.1:3131",
 	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "token",
+		Value:   &m.token,
+		Usage:   "Bearer token to authenticate with the bor gRPC server (matches --grpc.token on the server). Falls back to the BOR_GRPC_TOKEN environment variable when unset.",
+		Default: "",
+	})
 
 	return f
 }
 
+// bearerCreds implements grpc/credentials.PerRPCCredentials for the
+// "Authorization: Bearer <token>" header the bor gRPC server expects.
+// Local-only: not exported.
+type bearerCreds struct{ token string }
+
+func (b bearerCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + b.token}, nil
+}
+
+// RequireTransportSecurity returns false so the credentials still attach
+// when the CLI dials a plaintext loopback server (the common case for
+// `bor status` etc. against same-host bor). Cross-host TLS plumbing for
+// the CLI is a separate concern not addressed here.
+func (b bearerCreds) RequireTransportSecurity() bool { return false }
+
 func (m *Meta2) Conn() (*grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(m.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Token resolution: --token flag > BOR_GRPC_TOKEN env var > unauthenticated.
+	// Mirrors the server-side precedence so an operator who exports
+	// BOR_GRPC_TOKEN once gets both `bor server` AND `bor <subcmd>` to use it.
+	token := m.token
+	if token == "" {
+		token = os.Getenv("BOR_GRPC_TOKEN")
+	}
+
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if token != "" {
+		// Symmetric with heimdall's client-side guarantee: refuse to send the
+		// bearer token in cleartext to a non-loopback peer.
+		if !server.IsLoopbackHostPort(m.addr) {
+			return nil, fmt.Errorf(
+				"refusing to send bearer token to non-loopback address %q over plaintext; "+
+					"use --address with a loopback host (e.g. 127.0.0.1:3131) or extend the CLI with TLS support",
+				m.addr,
+			)
+		}
+		opts = append(opts, grpc.WithPerRPCCredentials(bearerCreds{token: token}))
+	}
+
+	conn, err := grpc.NewClient(m.addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to server: %v", err)
 	}
