@@ -1562,7 +1562,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		if trieJournalDirectory == "" {
 			trieJournalDirectory = "triedb"
 		}
-		n.TrieJournalDirectory = stack.ResolvePath(trieJournalDirectory)
+		if stack != nil {
+			trieJournalDirectory = stack.ResolvePath(trieJournalDirectory)
+		}
+		n.TrieJournalDirectory = trieJournalDirectory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
 
 		// Parse address-specific cache sizes
