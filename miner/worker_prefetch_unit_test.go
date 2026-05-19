@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -468,3 +469,52 @@ func TestCollectPlanBatch_ClosedGasChPassesThrough(t *testing.T) {
 	require.False(t, done)
 	require.Nil(t, newGasCh, "closed gasCh must be nilled out so the next iteration ignores it")
 }
+
+// TestStreamIdleBatch_LocalBudgetEnforced verifies that streamIdleBatch's
+// per-loop gas accounting (gaspool.SubGas) actually caps forwarded txs at the
+// per-loop budget, independent of the global totalGasPool. Each tx individually
+// fits in the budget; only the cumulative subtraction stops the loop. Without
+// the SubGas call the heap drains entirely, so this test distinguishes the
+// correctly-accounted path from a mutation that drops the subtraction.
+func TestStreamIdleBatch_LocalBudgetEnforced(t *testing.T) {
+	t.Parallel()
+
+	// 3 txs, each 60k gas; per-loop budget will be 100k. Only the first
+	// should fit once the local gaspool tracks subtractions.
+	const perTxGas uint64 = 60_000
+	_, txsByAcct, signer, rawTxs := scanOverflowFixture(t,
+		[]uint64{perTxGas, perTxGas, perTxGas},
+		[]int64{30, 20, 10},
+	)
+	heap := newScanHeap(signer, txsByAcct)
+
+	w := &worker{}
+	_ = w // streamIdleBatch is a method but only uses parameters; cast through receiver.
+
+	// Cap headerGasLimit at 100k so loopGasLimit = min(totalGasPool, header) = 100k.
+	const headerGasLimit uint64 = 100_000
+	totalGasPool := new(core.GasPool).AddGas(10_000_000)
+	localPrefetched := map[common.Hash]struct{}{}
+
+	// Buffer wide enough that the "channel full" early-return never triggers.
+	txsCh := make(chan *types.Transaction, 16)
+
+	w.streamIdleBatch(txsCh, heap, totalGasPool, localPrefetched, headerGasLimit)
+	close(txsCh)
+
+	var forwarded []*types.Transaction
+	for tx := range txsCh {
+		forwarded = append(forwarded, tx)
+	}
+
+	require.Len(t, forwarded, 1,
+		"local gas budget (100k) must cap forwards at 1 tx of 60k — "+
+			"forwarding more proves gaspool.SubGas was skipped")
+	require.Equal(t, rawTxs[0].Hash(), forwarded[0].Hash(),
+		"highest-gas-price tx must be forwarded first")
+	require.Contains(t, localPrefetched, rawTxs[0].Hash(),
+		"forwarded tx must be recorded in localPrefetched")
+	require.Equal(t, uint64(10_000_000-perTxGas), totalGasPool.Gas(),
+		"totalGasPool must decrement by exactly the forwarded tx's gas")
+}
+
