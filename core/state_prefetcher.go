@@ -98,11 +98,7 @@ func (p *StatePrefetcher) PrefetchStream(
 	txsCh <-chan *types.Transaction,
 	onSuccess func(hash common.Hash, gasUsed uint64),
 ) *PrefetchResult {
-	// Prefer evmAbort as the EVM interrupt (soft, per-phase); fall back to hardKill.
-	evmInterrupt := evmAbort
-	if evmInterrupt == nil {
-		evmInterrupt = hardKill
-	}
+	evmInterrupt := resolveEvmInterrupt(evmAbort, hardKill)
 
 	ctx := &streamCtx{
 		p:                        p,
@@ -262,6 +258,16 @@ func (p *StatePrefetcher) prefetchOneTx(
 		stateCpy.IntermediateRoot(true)
 	}
 	return result.UsedGas, true
+}
+
+// resolveEvmInterrupt picks the atomic flag wired into the EVM interrupt for the
+// duration of a prefetch stream. evmAbort (soft, per-phase) takes precedence;
+// hardKill is the fallback for callers that don't supply one.
+func resolveEvmInterrupt(evmAbort, hardKill *atomic.Bool) *atomic.Bool {
+	if evmAbort != nil {
+		return evmAbort
+	}
+	return hardKill
 }
 
 // preloadReaderForTx issues non-blocking reads against the state reader for the
