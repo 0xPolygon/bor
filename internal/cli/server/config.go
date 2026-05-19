@@ -1003,7 +1003,7 @@ func DefaultConfig() *Config {
 			TriesInMemory:        128,
 			FilterLogCacheSize:   ethconfig.Defaults.FilterLogCacheSize,
 			TrieTimeout:          60 * time.Minute,
-			TrieJournalDirectory: "", // Will be resolved to DATADIR/triedb in buildEth
+			TrieJournalDirectory: "", // When empty, backend resolves this to DATADIR/triedb
 			FDLimit:              0,
 			GoMemLimit:           "",  // Empty means no limit
 			GoGC:                 100, // Go default is 100%
@@ -1558,14 +1558,10 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.TransactionHistory = c.Cache.TxLookupLimit
 		n.TrieTimeout = c.Cache.TrieTimeout
 		n.TriesInMemory = c.Cache.TriesInMemory
-		trieJournalDirectory := c.Cache.TrieJournalDirectory
-		if trieJournalDirectory == "" {
-			trieJournalDirectory = "triedb"
+		n.TrieJournalDirectory = c.Cache.TrieJournalDirectory
+		if stack != nil && n.TrieJournalDirectory != "" {
+			n.TrieJournalDirectory = stack.ResolvePath(n.TrieJournalDirectory)
 		}
-		if stack != nil {
-			trieJournalDirectory = stack.ResolvePath(trieJournalDirectory)
-		}
-		n.TrieJournalDirectory = trieJournalDirectory
 		n.FilterLogCacheSize = c.Cache.FilterLogCacheSize
 
 		// Parse address-specific cache sizes
