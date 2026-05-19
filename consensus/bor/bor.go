@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/metrics"
 
 	ttlcache "github.com/jellydator/ttlcache/v3"
 
@@ -71,6 +72,10 @@ var (
 
 	validatorHeaderBytesLength = common.AddressLength + 20 // address + power
 )
+
+// belowMinBuildTimeCounter increments when a block's remaining build budget fell below minBlockBuildTime
+// and we pushed the header time forward to avoid empty blocks.
+var belowMinBuildTimeCounter = metrics.NewRegisteredCounter("bor/prepare/header_time_pushed", nil)
 
 // Various error messages to mark blocks invalid. These should be private to
 // prevent engine specific errors from being referenced in the remainder of the
@@ -1108,7 +1113,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	if currentSigner.signer != (common.Address{}) {
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
-			return err
+			// If the signer is not in the active validator set, use succession 0
+			// so that the pending block header is still valid for RPC queries.
+			// Seal() will independently reject the block if unauthorized.
+			succession = 0
 		}
 	}
 
@@ -1151,6 +1159,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	// sufficient remaining time the block would end up empty.
 	if time.Until(header.GetActualTime()) < minBlockBuildTime {
 		header.Time = uint64(now.Add(blockTime).Unix())
+		belowMinBuildTimeCounter.Inc(1)
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(blockTime)
 		}
@@ -1158,15 +1167,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	// Wait before start the block production if needed (previously this wait was on Seal)
 	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		var successionNumber int
 		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
-			var err error
-			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
-			if err != nil {
-				return err
-			}
-			if successionNumber == 0 {
+			if succession == 0 {
 				<-time.After(delay)
 			}
 		}
