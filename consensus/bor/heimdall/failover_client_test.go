@@ -197,10 +197,13 @@ func TestFailover_SwitchOnPrimaryDown(t *testing.T) {
 	switchesBefore := failoverSwitchCounter.Snapshot().Count()
 	activeBefore := failoverActiveGauge.Snapshot().Value()
 
+	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	// Primary must fail both GetSpan and FetchStatus so the background probe
+	// cannot promote it back to healthy and flip the active gauge back to 0
+	// before this test's final assertion.
 	primary := &mockHeimdallClient{
-		getSpanFn: func(ctx context.Context, _ uint64) (*types.Span, error) {
-			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-		},
+		getSpanFn:     func(ctx context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
 	}
 	secondary := &mockHeimdallClient{}
 
@@ -1148,8 +1151,12 @@ func TestRegistry_CascadeFallsBackToUnhealthy(t *testing.T) {
 func TestRegistry_MarkUnhealthyOnRealFailure(t *testing.T) {
 	connErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 
+	// Primary must fail BOTH GetSpan and the FetchStatus health probe — otherwise
+	// the registry's immediate probe cycle (launched by ensureHealthRegistry) can
+	// race with this test's GetSpan and mark primary healthy after MarkUnhealthy.
 	primary := &mockHeimdallClient{
-		getSpanFn: func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		getSpanFn:     func(_ context.Context, _ uint64) (*types.Span, error) { return nil, connErr },
+		fetchStatusFn: func(_ context.Context) (*ctypes.SyncInfo, error) { return nil, connErr },
 	}
 	secondary := &mockHeimdallClient{}
 

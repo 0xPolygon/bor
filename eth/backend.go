@@ -404,6 +404,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		// The `config.TxPool.PriceLimit` used above doesn't reflect the sanitized/enforced changes
 		// made in the txpool. Update the `gasTip` explicitly to reflect the enforced value.
 		eth.txPool.SetGasTip(new(big.Int).SetUint64(params.BorDefaultTxPoolPriceLimit))
+
+		// Allow private tx store to check if txs are still in the pool for cleanup
+		relayService.SetTxPoolChecker(eth.txPool.Has)
 	}
 
 	if !config.TxPool.NoLocals {
@@ -754,8 +757,9 @@ func (s *Ethereum) startCheckpointWhitelistService() {
 	s.retryHeimdallHandler(s.fetchAndHandleWhitelistCheckpoint, tickerDuration, whitelistTimeout)
 }
 
-// startMilestoneWhitelistService starts the goroutine to fetch milestiones and update the
-// milestone whitelist map.
+// startMilestoneWhitelistService starts the goroutine that updates the milestone whitelist map.
+// It subscribes to milestone events from heimdall via websocket when available, and falls back
+// to polling otherwise.
 func (s *Ethereum) startMilestoneWhitelistService() {
 	ethHandler, bor, _ := s.getHandler()
 
@@ -763,10 +767,17 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 		tickerDuration = 2 * time.Second
 	)
 
-	// If heimdall ws is available use WS subscription to new milestone events instead of polling
+	// If heimdall WS is available, use WS subscription for new milestone events instead of polling
 	if bor != nil && bor.HeimdallWSClient != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			<-s.closeCh
+			cancel()
+		}()
+
 		for {
-			if err := s.subscribeAndHandleMilestone(context.Background(), ethHandler, bor); err != nil {
+			if err := s.subscribeAndHandleMilestone(ctx, ethHandler, bor); err != nil {
 				log.Error("Error subscribing to milestone events", "err", err)
 			}
 
@@ -775,7 +786,7 @@ func (s *Ethereum) startMilestoneWhitelistService() {
 			case <-s.closeCh:
 				return
 			case <-time.After(tickerDuration):
-				// Continue to retry subscribing to milestone event
+				// Continue to retry subscribing to milestone events
 			}
 		}
 	}

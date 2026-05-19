@@ -60,6 +60,57 @@ import (
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 )
 
+// TestPendingStateNotStaleForNonValidator verifies that a Bor node whose signer
+// is NOT in the active validator set still keeps its pending snapshot fresh.
+// Regression test: previously, Prepare() returned UnauthorizedSignerError for
+// non-validators, which caused prepareWork to fail and the snapshot to never
+// update, leading to stale trie errors on "pending" RPC queries.
+func TestPendingStateNotStaleForNonValidator(t *testing.T) {
+	chainConfig := *params.BorUnittestChainConfig
+
+	engine, ctrl := getFakeBorFromConfig(t, &chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// Set up the worker normally, then re-authorize with a key NOT in the
+	// validator set. newTestWorkerBackend authorizes with testBankAddress
+	// (which IS the validator), so we must override AFTER backend creation.
+	nonValidatorKey, _ := crypto.GenerateKey()
+	nonValidatorAddr := crypto.PubkeyToAddress(nonValidatorKey.PublicKey)
+
+	db := rawdb.NewMemoryDatabase()
+	backend := newTestWorkerBackend(t, &chainConfig, engine, db)
+	w := newWorker(DefaultTestConfig(), &chainConfig, engine, backend, new(event.TypeMux), nil, false, false)
+	defer w.close()
+
+	// Override the signer to one NOT in the validator set.
+	engine.(*bor.Bor).Authorize(nonValidatorAddr, func(account accounts.Account, s string, data []byte) ([]byte, error) {
+		return crypto.Sign(crypto.Keccak256(data), nonValidatorKey)
+	})
+	w.setEtherbase(nonValidatorAddr)
+
+	// Start the worker. It will call commitWork which calls Prepare.
+	// Before the fix: Prepare fails with UnauthorizedSignerError, snapshot
+	// is never set, pending() returns nil.
+	// After the fix: Prepare succeeds (defaults succession to 0), snapshot
+	// is updated, pending() returns valid state.
+	w.start()
+
+	// Give the worker time to process the start event and run commitWork.
+	time.Sleep(1 * time.Second)
+
+	pendingBlock, _, pendingState := w.pending()
+	require.NotNil(t, pendingBlock, "pending block should not be nil for non-validator node")
+	require.NotNil(t, pendingState, "pending state should not be nil for non-validator node")
+
+	// The pending state must be readable without errors (not a stale trie).
+	balance := pendingState.GetBalance(testBankAddress)
+	require.False(t, balance.IsZero(),
+		"pending state balance for funded account should not be zero (would indicate stale trie)")
+	require.NoError(t, pendingState.Error(),
+		"pending state should have no database errors")
+}
+
 // nolint : paralleltest
 func TestGenerateBlockAndImportClique(t *testing.T) {
 	testGenerateBlockAndImport(t, true, false)
@@ -3536,4 +3587,46 @@ func TestPrefetchStream_BlockEquivalence(t *testing.T) {
 
 	t.Logf("block-equivalence: %d txs, TotalGasUsed=%d (matched across both paths)",
 		len(resultA.SuccessfulTxs), resultA.TotalGasUsed)
+}
+
+// TestDisablePendingBlock validates if setting `DisablePendingBlock` affects the
+// creation of pending block or not.
+func TestDisablePendingBlock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pending block is nil when flag is enabled", func(t *testing.T) {
+		t.Parallel()
+
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = true
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+
+		require.Never(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil || receipts != nil || stateDB != nil
+		}, 500*time.Millisecond, 100*time.Millisecond, "pending block, receipts and state should be nil when DisablePendingBlock is true")
+	})
+
+	t.Run("pending block is created when flag is disabled", func(t *testing.T) {
+		t.Parallel()
+
+		config := DefaultTestConfig()
+		config.DisablePendingBlock = false
+
+		w, _, cleanup := newTestWorker(t, config, ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+		defer cleanup()
+
+		// Trigger the pending block build (non-validator path: worker is not started/running).
+		w.startCh <- struct{}{}
+
+		require.Eventually(t, func() bool {
+			block, receipts, stateDB := w.pending()
+			return block != nil && receipts != nil && stateDB != nil
+		}, 2*time.Second, 100*time.Millisecond, "pending block, receipts and state should not be nil when DisablePendingBlock is false")
+	})
 }

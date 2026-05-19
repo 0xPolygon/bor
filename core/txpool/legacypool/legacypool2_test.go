@@ -287,7 +287,10 @@ func TestLockOrdering_PricedHeapNoDeadlock(t *testing.T) {
 	select {
 	case <-done:
 		// success: no deadlock
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
+		// Timeout must tolerate -race overhead on CI — the work itself is
+		// ~1000 heap operations on a 6k-entry pool, so 60s is safely past
+		// legitimate completion but still catches a real hang.
 		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle exists")
 	}
 }
@@ -337,7 +340,7 @@ func TestLockOrdering_ReplacePendingNoDeadlock(t *testing.T) {
 	select {
 	case <-reheapDone:
 		// success: no deadlock
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("deadlock detected in replacesPending code path")
 	}
 }
@@ -381,7 +384,7 @@ func TestLockOrdering_RemovedNoDeadlock(t *testing.T) {
 	select {
 	case <-done:
 		// success: no deadlock
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("deadlock detected: reheapMu→pool.mu ordering cycle in Removed path")
 	}
 }

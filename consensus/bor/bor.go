@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/metrics"
 
 	ttlcache "github.com/jellydator/ttlcache/v3"
 
@@ -71,6 +72,10 @@ var (
 
 	validatorHeaderBytesLength = common.AddressLength + 20 // address + power
 )
+
+// belowMinBuildTimeCounter increments when a block's remaining build budget fell below minBlockBuildTime
+// and we pushed the header time forward to avoid empty blocks.
+var belowMinBuildTimeCounter = metrics.NewRegisteredCounter("bor/prepare/header_time_pushed", nil)
 
 // Various error messages to mark blocks invalid. These should be private to
 // prevent engine specific errors from being referenced in the remainder of the
@@ -278,6 +283,10 @@ type Bor struct {
 	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+
+	// api is the bor engine API instance reused across all callers (JSON-RPC and gRPC).
+	api     *API
+	apiOnce sync.Once
 }
 
 type signer struct {
@@ -1104,7 +1113,10 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	if currentSigner.signer != (common.Address{}) {
 		succession, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
 		if err != nil {
-			return err
+			// If the signer is not in the active validator set, use succession 0
+			// so that the pending block header is still valid for RPC queries.
+			// Seal() will independently reject the block if unauthorized.
+			succession = 0
 		}
 	}
 
@@ -1147,6 +1159,7 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 	// sufficient remaining time the block would end up empty.
 	if time.Until(header.GetActualTime()) < minBlockBuildTime {
 		header.Time = uint64(now.Add(blockTime).Unix())
+		belowMinBuildTimeCounter.Inc(1)
 		if c.blockTime > 0 && c.config.IsRio(header.Number) {
 			header.ActualTime = now.Add(blockTime)
 		}
@@ -1154,15 +1167,9 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 	// Wait before start the block production if needed (previously this wait was on Seal)
 	if c.config.IsGiugliano(header.Number) && waitOnPrepare {
-		var successionNumber int
 		// if signer is not empty (RPC nodes have empty signer)
 		if currentSigner.signer != (common.Address{}) {
-			var err error
-			successionNumber, err = snap.GetSignerSuccessionNumber(currentSigner.signer)
-			if err != nil {
-				return err
-			}
-			if successionNumber == 0 {
+			if succession == 0 {
 				<-time.After(delay)
 			}
 		}
@@ -1173,28 +1180,27 @@ func (c *Bor) Prepare(chain consensus.ChainHeaderReader, header *types.Header, w
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
-func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) []*types.Receipt {
-	headerNumber := header.Number.Uint64()
+func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, wrappedState vm.StateDB, body *types.Body, receipts []*types.Receipt) ([]*types.Receipt, error) {
+	// Reject the block if it has withdrawals or requests
 	if body.Withdrawals != nil || header.WithdrawalsHash != nil {
-		return nil
+		return nil, consensus.ErrUnexpectedWithdrawals
 	}
 	if header.RequestsHash != nil {
-		return nil
+		return nil, consensus.ErrUnexpectedRequests
 	}
 
 	var (
+		headerNumber  = header.Number.Uint64()
 		stateSyncData []*types.StateSyncData
 		err           error
 	)
-
 	if IsSprintStart(headerNumber, c.config.CalculateSprint(headerNumber)) {
 		start := time.Now()
 		cx := statefull.ChainContext{Chain: chain, Bor: c}
 		// check and commit span
 		if !c.config.IsRio(header.Number) {
 			if err := c.checkAndCommitSpan(wrappedState, header, cx); err != nil {
-				log.Error("Error while committing span", "error", err)
-				return nil
+				return nil, fmt.Errorf("error while committing span: %w", err)
 			}
 		}
 
@@ -1202,8 +1208,7 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 			// commit states
 			stateSyncData, err = c.CommitStates(wrappedState, header, cx)
 			if err != nil {
-				log.Error("Error while committing states", "error", err)
-				return nil
+				return nil, fmt.Errorf("%w: error while committing states: %w", core.ErrStateSyncProcessing, err)
 			}
 		}
 		// Get the underlying state for updating consensus time
@@ -1215,31 +1220,42 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 	// the wrapped state here as it may have a hooked state db instance which can help
 	// in tracing if it's enabled.
 	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
-		log.Error("Error changing contract code", "error", err)
-		return nil
+		return nil, fmt.Errorf("error changing contract code: %w", err)
 	}
 
-	if len(stateSyncData) > 0 && c.config != nil && c.config.IsMadhugiri(header.Number) {
-		if len(body.Transactions) > 0 {
-			// Craft a state-sync tx to validate it against the tx in block body
-			stateSyncTx := types.NewTx(&types.StateSyncTx{
-				StateSyncData: stateSyncData,
-			})
-			lastTx := body.Transactions[len(body.Transactions)-1]
-			if stateSyncTx.Hash() != lastTx.Hash() {
-				log.Error("Invalid state-sync tx in block body", "got", lastTx.Hash(), "want", stateSyncTx.Hash())
-				return receipts
-			}
-			if lastTx.Type() == types.StateSyncTxType {
-				receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
-			}
-		}
-	} else {
-		// set state sync
-		hc := chain.(*core.HeaderChain)
+	// Set state-sync in any case
+	if hc, ok := chain.(*core.HeaderChain); ok {
 		hc.SetStateSync(stateSyncData)
 	}
-	return receipts
+
+	if len(stateSyncData) == 0 {
+		return receipts, nil
+	}
+
+	txs := body.Transactions
+	isMadhugiri := c.config != nil && c.config.IsMadhugiri(header.Number)
+
+	// Pre-Madhugiri, state-sync transactions were not included in block body so we can safely return
+	if !isMadhugiri {
+		return receipts, nil
+	}
+
+	// Reject the block as heimdall suggests presence of state-sync event(s) but state-sync
+	// transaction is missing from block body.
+	if len(txs) == 0 || txs[len(txs)-1].Type() != types.StateSyncTxType {
+		return nil, fmt.Errorf("%w: block body missing state-sync transaction, heimdall reported %d event(s)", core.ErrStateSyncMismatch, len(stateSyncData))
+	}
+
+	// Craft a state-sync tx to validate it against the tx in block body
+	stateSyncTx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: stateSyncData,
+	})
+	lastTx := txs[len(txs)-1]
+	if stateSyncTx.Hash() != lastTx.Hash() {
+		return nil, fmt.Errorf("%w: hash mismatch, got %s want %s", core.ErrStateSyncMismatch, lastTx.Hash(), stateSyncTx.Hash())
+	}
+	receipts = insertStateSyncTransactionAndCalculateReceipt(lastTx, header, body, wrappedState, receipts)
+	return receipts, nil
 }
 
 func insertStateSyncTransactionAndCalculateReceipt(stateSyncTx *types.Transaction, header *types.Header, body *types.Body, state vm.StateDB, receipts []*types.Receipt) []*types.Receipt {
@@ -1520,11 +1536,29 @@ func (c *Bor) SealHash(header *types.Header) common.Hash {
 
 // APIs implements consensus.Engine, returning the user facing RPC API to allow
 // controlling the signer voting.
+//
+// The returned *API is cached on the first call so that per-API state (e.g.,
+// rootHashCache) persists across calls. JSON-RPC only invokes APIs() once at
+// node startup, but the gRPC backend fetches it on every handler call — without
+// the cache those calls would each start from an empty state.
+//
+// rootHashCache is initialized here (inside the sync.Once) rather than lazily
+// in GetRootHash so that concurrent gRPC handlers sharing the cached *API
+// cannot race in initializeRootHashCache.
 func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
+	c.apiOnce.Do(func() {
+		a := &API{chain: chain, bor: c}
+		if err := a.initializeRootHashCache(); err != nil {
+			// log.Crit logs at the highest severity and then exits the process;
+			// This is currently unreachable (size is a constant in initializeRootHashCache),
+			log.Crit("bor: failed to initialize rootHashCache", "err", err)
+		}
+		c.api = a
+	})
 	return []rpc.API{{
 		Namespace: "bor",
 		Version:   "1.0",
-		Service:   &API{chain: chain, bor: c},
+		Service:   c.api,
 		Public:    false,
 	}}
 }

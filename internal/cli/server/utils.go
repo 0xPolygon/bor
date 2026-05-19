@@ -7,6 +7,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/cli/server/proto"
 	"github.com/ethereum/go-ethereum/p2p"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	protobor "github.com/0xPolygon/polyproto/bor"
 	protocommon "github.com/0xPolygon/polyproto/common"
@@ -60,7 +62,24 @@ func ConvertTopicsToProtoTopics(topics []common.Hash) []*protocommon.H256 {
 	return protoTopics
 }
 
-func ConvertReceiptToProtoReceipt(receipt *types.Receipt) *protobor.Receipt {
+func ConvertReceiptToProtoReceipt(receipt *types.Receipt) (*protobor.Receipt, error) {
+	// EffectiveGasPrice and BlockNumber are *big.Int; the proto schema is int64.
+	// Reject values outside int64 with OutOfRange instead of silently truncating
+	// to a negative or rolled-over value.
+	var egp int64
+	if receipt.EffectiveGasPrice != nil {
+		if !receipt.EffectiveGasPrice.IsInt64() {
+			return nil, status.Error(codes.OutOfRange, "effective gas price exceeds int64 range")
+		}
+		egp = receipt.EffectiveGasPrice.Int64()
+	}
+	var blockNum int64
+	if receipt.BlockNumber != nil {
+		if !receipt.BlockNumber.IsInt64() {
+			return nil, status.Error(codes.OutOfRange, "block number exceeds int64 range")
+		}
+		blockNum = receipt.BlockNumber.Int64()
+	}
 	return &protobor.Receipt{
 		Type:              uint64(receipt.Type),
 		PostState:         receipt.PostState,
@@ -71,12 +90,12 @@ func ConvertReceiptToProtoReceipt(receipt *types.Receipt) *protobor.Receipt {
 		TxHash:            protoutil.ConvertHashToH256(receipt.TxHash),
 		ContractAddress:   protoutil.ConvertAddressToH160(receipt.ContractAddress),
 		GasUsed:           receipt.GasUsed,
-		EffectiveGasPrice: receipt.EffectiveGasPrice.Int64(),
+		EffectiveGasPrice: egp,
 		BlobGasUsed:       receipt.BlobGasUsed,
 		BlockHash:         protoutil.ConvertHashToH256(receipt.BlockHash),
-		BlockNumber:       receipt.BlockNumber.Int64(),
+		BlockNumber:       blockNum,
 		TransactionIndex:  uint64(receipt.TransactionIndex),
-	}
+	}, nil
 }
 
 // HealthStatus represents the health status with level, code, and message

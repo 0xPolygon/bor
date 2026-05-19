@@ -214,6 +214,12 @@ func TestConcurrentUsedParallelism(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping parallelism test in short mode")
 	}
+	if raceEnabled {
+		// Race instrumentation serializes atomic/mutex ops, so measured
+		// parallel speedup is not meaningful. The test guards against a
+		// global-lock regression; -race coverage isn't the right tool.
+		t.Skip("skipping parallelism test under -race: instrumentation distorts wall-clock speedup")
+	}
 
 	const N = 50          // number of subfetchers / goroutines
 	const M = 5000        // iterations per goroutine

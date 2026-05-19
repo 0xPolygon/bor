@@ -120,6 +120,12 @@ var (
 
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
+	// prepareWorkTimer measures time taken to prepare environment for block building which
+	// includes the `bor.Prepare` call as well.
+	prepareWorkTimer = metrics.NewRegisteredTimer("worker/prepareWork", nil)
+	// pendingTimer measures time taken to fetch transactions from pool in the actual block
+	// building cycle (excluding the calls made by prefetcher).
+	pendingTimer = metrics.NewRegisteredTimer("worker/pending", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
@@ -256,6 +262,12 @@ type environment struct {
 	// onSuccess callback. Read at tx-commit time to annotate slow-tx logs and
 	// split the apply-duration histogram by prefetch status. May be nil.
 	prefetchedTxHashes *sync.Map
+
+	// Observability for pre block building phase
+	makeEnvDuration    time.Duration
+	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
+	// Track time taken to fetch pending transactions during block building
+	pendingDuration time.Duration
 }
 
 // copy creates a deep copy of environment.
@@ -271,6 +283,9 @@ func (env *environment) copy() *environment {
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
+		makeEnvDuration:    env.makeEnvDuration,
+		makeHeaderDuration: env.makeHeaderDuration,
+		pendingDuration:    env.pendingDuration,
 	}
 
 	if env.gasPool != nil {
@@ -871,6 +886,14 @@ func (w *worker) mainLoop() {
 	for {
 		select {
 		case req := <-w.newWorkCh:
+			// When DisablePendingBlock is set and the worker is not actively producing
+			// blocks (non-validator), skip commitWork entirely — its only purpose in
+			// that case is to maintain the pending block snapshot for RPC.
+			if w.config.DisablePendingBlock && !w.IsRunning() {
+				w.pendingWorkBlock.Store(0)
+				continue
+			}
+
 			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
 				if w.eth.PeerCount() > 0 || devFakeAuthor {
 					//nolint:contextcheck
@@ -891,7 +914,7 @@ func (w *worker) mainLoop() {
 			// already included in the current sealing block. These transactions will
 			// be automatically eliminated.
 			// nolint : nestif
-			if !w.IsRunning() && w.current != nil {
+			if !w.IsRunning() && !w.config.DisablePendingBlock && w.current != nil {
 				// If block is already full, abort
 				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
 					continue
@@ -1012,7 +1035,12 @@ func (w *worker) taskLoop() {
 			w.pendingMu.Unlock()
 
 			if err := w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh); err != nil {
-				log.Warn("Block sealing failed", "err", err)
+				switch err.(type) {
+				case *bor.UnauthorizedSignerError:
+					log.Debug("Block sealing skipped (not in validator set)", "err", err)
+				default:
+					log.Warn("Block sealing failed", "err", err)
+				}
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
 				w.pendingMu.Unlock()
@@ -1723,6 +1751,7 @@ type generateParams struct {
 	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
 	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
 	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	preBuildDuration          time.Duration           // Duration of pre block build phase
 	builderStarted            *atomic.Bool            // Set when block building begins; immediately interrupts the idle Prefetch() call and triggers builder-mode prefetching
 	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
 	builderGasFreedCh         chan uint64             // Builder sends (declared−actual) gas after each successful tx; prefetcher uses it to predict overflow txs
@@ -1820,19 +1849,24 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	makeHeaderStart := time.Now()
 	header, coinbase, err := w.makeHeader(genParams, true)
 	if err != nil {
 		return nil, err
 	}
+	makeHeaderDuration := time.Since(makeHeaderStart)
 
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
+	makeEnvStart := time.Now()
 	env, err := w.makeEnv(header, coinbase, witness, genParams)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+	env.makeEnvDuration = time.Since(makeEnvStart)
+	env.makeHeaderDuration = makeHeaderDuration
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
@@ -2018,6 +2052,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	prio := w.prio
 	w.mu.RUnlock()
 
+	pendingStart := time.Now()
+
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 
 	filter.BlobTxs = false
@@ -2030,6 +2066,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 		filter.BlobVersion = types.BlobSidecarVersion0
 	}
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, &w.interruptBlockBuilding)
+
+	env.pendingDuration = time.Since(pendingStart)
+	pendingTimer.Update(env.pendingDuration)
 
 	// Split the pending transactions into locals and remotes.
 	prioPlainTxs, normalPlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
@@ -2163,6 +2202,8 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 
+	buildStart := time.Now()
+
 	// Clear the pending work block number when commitWork completes (success or failure).
 	defer func() {
 		w.pendingWorkBlock.Store(0)
@@ -2195,6 +2236,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		preBuildDuration:   time.Since(buildStart),
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -2231,10 +2273,13 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// CPU on throwaway EVM work while the block build is already aborted.
 	defer interruptPrefetch.Store(true)
 
+	prepareWorkStart := time.Now()
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
 		return
 	}
+	prepareWorkDuration := time.Since(prepareWorkStart)
+	prepareWorkTimer.Update(prepareWorkDuration)
 
 	// Starts accounting time after prepareWork, since it includes the wait we have on Prepare phase of Bor
 	start := time.Now()
@@ -2253,6 +2298,24 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	defer func() {
 		stopFn()
 	}()
+
+	timeUntilInterrupt := time.Until(work.header.GetActualTime())
+	if timeUntilInterrupt > time.Second {
+		timeUntilInterrupt -= interruptBuffer
+	}
+	parent := w.chain.CurrentBlock()
+	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+		"buildStart(ms)", prepareWorkStart.UnixMilli(),
+		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+		"parentTime", parent.Time,
+		"parentActualTime(ms)", parent.GetActualTime().UnixMilli(),
+		"headerTime", work.header.Time,
+		"headerActualTime(ms)", work.header.GetActualTime().UnixMilli(),
+		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+	)
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
@@ -2844,9 +2907,13 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
-			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
+			log.Info("Commit new sealing work",
+				"number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"txs", env.tcount, "gas", block.GasUsed(), "fees", feesInEther,
-				"elapsed", common.PrettyDuration(time.Since(start)), "finalize", common.PrettyDuration(finalizeDuration))
+				"elapsed", common.PrettyDuration(time.Since(start)),
+				"pending", common.PrettyDuration(env.pendingDuration),
+				"finalize", common.PrettyDuration(finalizeDuration),
+			)
 
 		case <-w.exitCh:
 			log.Info("Worker has exited")

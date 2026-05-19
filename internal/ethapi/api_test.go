@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -1562,22 +1561,7 @@ func TestCall(t *testing.T) {
 	}
 }
 
-func TestSimulateV1Disabled(t *testing.T) {
-	t.Parallel()
-
-	genesis := &core.Genesis{
-		Config: params.TestChainConfig,
-		Alloc:  types.GenesisAlloc{},
-	}
-	b := newTestBackend(t, 1, genesis, ethash.NewFaker(), nil)
-	api := NewBlockChainAPI(b)
-	result, err := api.SimulateV1(context.Background(), simOpts{}, nil)
-	require.Nil(t, result)
-	require.EqualError(t, err, "eth_simulateV1 is not supported on Bor")
-}
-
 func TestSimulateV1(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	t.Parallel()
 	// Initialize test accounts
 	var (
@@ -2970,7 +2954,7 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 		state:          stateDB,
 		base:           baseHeader,
 		chainConfig:    backend.ChainConfig(),
-		gp:             new(core.GasPool).AddGas(math.MaxUint64),
+		budget:         newGasBudget(0),
 		traceTransfers: false,
 		validate:       false,
 		fullTx:         false,
@@ -3029,7 +3013,6 @@ func TestSimulateV1ChainLinkage(t *testing.T) {
 }
 
 func TestSimulateV1TxSender(t *testing.T) {
-	t.Skip("eth_simulateV1 is disabled on Bor — unskip when re-enabling")
 	var (
 		sender    = common.Address{0xaa, 0xaa}
 		sender2   = common.Address{0xaa, 0xab}
@@ -3056,7 +3039,7 @@ func TestSimulateV1TxSender(t *testing.T) {
 		state:          stateDB,
 		base:           baseHeader,
 		chainConfig:    backend.ChainConfig(),
-		gp:             new(core.GasPool).AddGas(math.MaxUint64),
+		budget:         newGasBudget(0),
 		traceTransfers: false,
 		validate:       false,
 		fullTx:         true,
@@ -5403,6 +5386,20 @@ func TestSubmitHashrate(t *testing.T) {
 	}
 }
 
+type testBackendCancelAccountAtReplay struct {
+	*testBackend
+	cancel   context.CancelFunc
+	canceled bool
+}
+
+func (b *testBackendCancelAccountAtReplay) GetEVM(ctx context.Context, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockContext *vm.BlockContext) *vm.EVM {
+	if !b.canceled {
+		b.canceled = true
+		b.cancel()
+	}
+	return b.testBackend.GetEVM(ctx, state, header, vmConfig, blockContext)
+}
+
 func TestAccountAt(t *testing.T) {
 	t.Parallel()
 
@@ -5528,5 +5525,17 @@ func TestAccountAt(t *testing.T) {
 		if result.Nonce != 0 {
 			t.Errorf("Expected zero nonce for non-existent account, got %d", result.Nonce)
 		}
+	})
+
+	t.Run("context cancellation during replay", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		wrapped := &testBackendCancelAccountAtReplay{
+			testBackend: backend,
+			cancel:      cancel,
+		}
+		api := NewDebugAPI(wrapped)
+
+		_, err := api.AccountAt(ctx, blockHash, 0, addr)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }

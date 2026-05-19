@@ -427,14 +427,17 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards), apply
 	// state sync event (if any), and append the receipt.
 	receiptsCountBeforeFinalize := len(receipts)
-	receipts = p.chain.Engine().Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
+	receipts, err = p.chain.Engine().Finalize(p.bc.hc, header, statedb, block.Body(), receipts)
+	if err != nil {
+		return nil, err
+	}
 
 	// apply state sync logs
 	if config.Bor != nil && config.Bor.IsMadhugiri(block.Number()) {
-		// In case of any errors in state-sync tx processing, the number of receipts won't match
-		// the number of transactions in the block body.
+		// Defense-in-depth: if insertStateSyncTransactionAndCalculateReceipt silently failed
+		// to add the receipt, the count will be off.
 		if len(block.Transactions()) != len(receipts) {
-			return nil, fmt.Errorf("err in bor.Finalize: %w", ErrStateSyncProcessing)
+			return nil, fmt.Errorf("%w: receipt count mismatch, txs=%d receipts=%d", ErrStateSyncMismatch, len(block.Transactions()), len(receipts))
 		}
 		appliedNewStateSyncReceipt := receiptsCountBeforeFinalize+1 == len(receipts)
 

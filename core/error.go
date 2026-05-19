@@ -172,10 +172,20 @@ var (
 
 // Bor related errors
 var (
-	// ErrStateSyncProcessing should be used when state-sync isn't applied correctly
-	// in bor consensus. It can be either due to
-	// - Error in fetching event from heimdall
-	// - Error in processing state-sync event in EVM
-	// - Invalid state-sync tx data in block body post Madhugiri HF
-	ErrStateSyncProcessing = errors.New("unable to process state-sync tx")
+	// ErrStateSyncProcessing is returned when the node fails to fetch or apply
+	// state-sync events from Heimdall during block finalization. This is an
+	// operational error — Heimdall may be temporarily unavailable or returning
+	// errors, and the operation may succeed on retry.
+	ErrStateSyncProcessing = errors.New("unable to process state-sync")
+
+	// ErrStateSyncMismatch is returned when the locally computed state-sync result
+	// does not match the block body or receipts. This includes:
+	// - missing state-sync transaction in block body (post-Madhugiri)
+	// - state-sync transaction hash mismatch between block body and locally constructed one
+	// - receipt count mismatch after state-sync receipt insertion
+	//
+	// Unlike ErrStateSyncProcessing, this indicates a disagreement between the block
+	// producer and the local node's view of Heimdall state — the block was produced
+	// with different state-sync data than what this node computed.
+	ErrStateSyncMismatch = errors.New("state-sync mismatch")
 )
