@@ -1961,15 +1961,12 @@ func buildTxPlan(h *transactionsByPriceAndNonce, gasLimit uint64, prefetchedHash
 // budget so the estimate stays accurate. Bonus txs that fit due to freed gas are
 // covered by the prefetcher's own overflow heap driven by builderGasFreedCh.
 func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams, plainTxs *transactionsByPriceAndNonce, gasLimit uint64) {
-	if builderPlanCh == nil || plainTxs == nil {
+	if builderPlanCh == nil || genParams == nil || plainTxs == nil {
 		return
 	}
 	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
 	clone := plainTxs.clone()
-	var prefetchedHashes *sync.Map
-	if genParams != nil {
-		prefetchedHashes = genParams.prefetchedTxHashes
-	}
+	prefetchedHashes := genParams.prefetchedTxHashes
 	genParams.planWg.Add(1)
 	go func() {
 		defer genParams.planWg.Done()
