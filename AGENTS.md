@@ -143,11 +143,15 @@ Detailed, path-scoped security rules are in `.claude/rules/`:
 | `evm-security.md`                  | `core/vm/`                                                             | Gas accounting, opcode correctness, precompile safety, EIP gating          |
 | `txpool-security.md`               | `core/txpool/`                                                         | Pool limits, validation ordering, eviction gaming, blob handling           |
 | `state-security.md`                | `core/state/`, `blockstm/`, `trie/`                                    | Parallel execution safety, state root determinism, journal correctness     |
-| `hardfork-rollout.md`              | `params/config.go`, `internal/cli/server/chains/*.go`, genesis JSON, `core/forkid/forkid.go`, `core/vm/*.go`, `consensus/bor/bor.go`, `miner/worker.go` | Hardfork activation wiring, runtime/genesis parity, fork ID, EVM and miner gates |
+| `hardfork-rollout.md`              | `params/{config,protocol_params}.go`, `internal/cli/server/chains/*.go`, genesis JSON, `core/forkid/forkid.go`, `core/vm/*.go`, `consensus/bor/bor.go`, `miner/worker.go` | Hardfork activation wiring, runtime/genesis parity, fork ID, EVM and miner gates |
 
 These rules load automatically when Claude works on files matching their path patterns. Some files match multiple rules (e.g., `consensus/bor/contract/` matches both `consensus-security.md` and `contract-interaction-security.md`) — all matching rules apply simultaneously.
 
 #### Standalone Hardfork Rollout Review
+
+This section intentionally summarizes `.claude/rules/hardfork-rollout.md` for
+agents launched directly in this repo. Keep both surfaces in sync when changing
+hardfork rollout guidance.
 
 Even outside the PoS team workspace, treat every new or modified hardfork as
 consensus-critical. A diff is hardfork-shaped if it adds or changes fork names,
