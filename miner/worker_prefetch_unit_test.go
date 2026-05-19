@@ -514,7 +514,6 @@ func TestStreamIdleBatch_LocalBudgetEnforced(t *testing.T) {
 		"highest-gas-price tx must be forwarded first")
 	require.Contains(t, localPrefetched, rawTxs[0].Hash(),
 		"forwarded tx must be recorded in localPrefetched")
-	require.Equal(t, uint64(10_000_000-perTxGas), totalGasPool.Gas(),
+	require.Equal(t, 10_000_000-perTxGas, totalGasPool.Gas(),
 		"totalGasPool must decrement by exactly the forwarded tx's gas")
 }
-
