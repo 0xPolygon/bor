@@ -1541,12 +1541,15 @@ func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
 	defer spanStore.Close()
 	ctx := t.Context()
 
-	// Prime caches.
+	// Prime caches and let the poll loop populate heimdallStatus.
 	span, err := spanStore.spanById(ctx, 2)
 	require.NoError(t, err)
 	spanStore.lastUsedSpan.Store(span)
 	spanStore.latestKnownSpanId.Store(4)
 	spanStore.latestSpanCache.Store(span)
+	require.Eventually(t, func() bool { return spanStore.heimdallStatus.Load() != nil },
+		500*time.Millisecond, 20*time.Millisecond,
+		"heimdallStatus must be populated by the poll loop before purge")
 
 	spanStore.PurgeCache()
 
@@ -1561,6 +1564,9 @@ func TestSpanStore_PurgeCache_RaceWithPollLoop(t *testing.T) {
 		"lastUsedSpan must stay nil after PurgeCache")
 	require.Equal(t, uint64(0), spanStore.latestKnownSpanId.Load(),
 		"latestKnownSpanId must stay 0 after PurgeCache")
+	require.Nil(t, spanStore.heimdallStatus.Load(),
+		"heimdallStatus must be cleared by PurgeCache — otherwise stale CatchingUp:false "+
+			"lets waitUntilHeimdallIsSynced skip refreshing against a swapped heimdall client")
 }
 
 func TestSpanStore_PurgeCache(t *testing.T) {

@@ -400,6 +400,10 @@ func (s *SpanStore) PurgeCache() {
 	s.lastUsedSpan.Store(nil)
 	// Reset the latest known span ID
 	s.latestKnownSpanId.Store(0)
+	// Clear cached heimdall status. With the poll loop stopped, a stale
+	// CatchingUp:false would otherwise let waitUntilHeimdallIsSynced skip
+	// refreshing status against a newly-swapped heimdall client.
+	s.heimdallStatus.Store(nil)
 }
 
 // getMockSpan0 constructs a mock span 0 by fetching validator set from genesis state. This should
