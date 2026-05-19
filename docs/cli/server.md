@@ -64,7 +64,9 @@ The ```bor server``` command runs the Bor client.
 
 - ```gpo.percentile```: Suggested gas price is the given percentile of a set of recent transaction gas prices (default: 60)
 
-- ```grpc.addr```: Address and port to bind the GRPC server (default: 127.0.0.1:3131)
+- ```grpc.addr```: Address and port to bind the GRPC server. Empty disables the server. Non-loopback binds without --grpc.token log a startup warning. (default: 127.0.0.1:3131)
+
+- ```grpc.token```: Raw token expected in the `authorization: Bearer <token>` header of incoming gRPC calls (empty disables auth; the `Bearer ` prefix is stripped before comparison). Prefer the BOR_GRPC_TOKEN environment variable over this flag.
 
 - ```history.logs```: Number of recent blocks to maintain log search index for (default = about 2 months, 0 = entire chain) (default: 2350000)
 

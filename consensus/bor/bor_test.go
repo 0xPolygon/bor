@@ -2040,6 +2040,20 @@ func TestAPIs_ReturnsBorNamespace(t *testing.T) {
 	require.Equal(t, "1.0", apis[0].Version)
 }
 
+// TestAPIs_ReturnsSameInstanceAcrossCalls verifies that repeated calls to APIs() must return the same *API
+// so per-API state such as rootHashCache persists across calls. This matters for the gRPC backend
+// which fetches APIs() on every handler invocation; returning a fresh *API each call defeats caching.
+func TestAPIs_ReturnsSameInstanceAcrossCalls(t *testing.T) {
+	t.Parallel()
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
+	borCfg := defaultBorConfig()
+	chain, b := newChainAndBorForTest(t, sp, borCfg, false, common.Address{}, uint64(time.Now().Unix()))
+
+	first := b.APIs(chain.HeaderChain())
+	second := b.APIs(chain.HeaderChain())
+	require.Same(t, first[0].Service, second[0].Service, "APIs must return the cached *API on repeated calls")
+}
+
 func TestClose_Idempotent(t *testing.T) {
 	t.Parallel()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}

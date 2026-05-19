@@ -277,7 +277,9 @@ func (api *API) GetCurrentValidators() ([]*valset.Validator, error) {
 	return snap.ValidatorSet.Validators, nil
 }
 
-// GetRootHash returns the merkle root of the start-to-end blocks' headers
+// GetRootHash returns the merkle root of the start-to-end blocks' headers.
+// rootHashCache is normally initialized eagerly inside Bor.APIs (sync.Once);
+// the lazy init below is kept as fallback for direct-API paths (e.g., tests) that don't go through Bor.APIs.
 func (api *API) GetRootHash(start uint64, end uint64) (string, error) {
 	if err := api.initializeRootHashCache(); err != nil {
 		return "", err

@@ -143,8 +143,43 @@ Detailed, path-scoped security rules are in `.claude/rules/`:
 | `evm-security.md`                  | `core/vm/`                                                             | Gas accounting, opcode correctness, precompile safety, EIP gating          |
 | `txpool-security.md`               | `core/txpool/`                                                         | Pool limits, validation ordering, eviction gaming, blob handling           |
 | `state-security.md`                | `core/state/`, `blockstm/`, `trie/`                                    | Parallel execution safety, state root determinism, journal correctness     |
+| `hardfork-rollout.md`              | `params/config.go`, `params/protocol_params.go`, `internal/cli/server/chains/*.go`, `builder/files/genesis-*.json`, `core/forkid/forkid.go`, `core/vm/`, `consensus/bor/bor.go`, `miner/worker.go` | Hardfork activation wiring, runtime/genesis parity, fork ID, EVM and miner gates |
 
 These rules load automatically when Claude works on files matching their path patterns. Some files match multiple rules (e.g., `consensus/bor/contract/` matches both `consensus-security.md` and `contract-interaction-security.md`) — all matching rules apply simultaneously.
+
+#### Standalone Hardfork Rollout Review
+
+This section intentionally summarizes `.claude/rules/hardfork-rollout.md` for
+agents launched directly in this repo. Keep both surfaces in sync when changing
+hardfork rollout guidance.
+
+Even outside the PoS team workspace, treat every new or modified hardfork as
+consensus-critical. A diff is hardfork-shaped if it adds or changes fork names,
+fork block values, `BorConfig` fields, `Is<Fork>()`, `params.Rules`, fork ID
+inputs, startup banners, chain config compatibility, EVM gas/opcode/precompile
+behavior, header extra fields, producer timing, early block announcement, or
+fork-gated miner behavior.
+
+For every hardfork-shaped diff, explicitly compare the fork name and activation
+block across all runtime and packaged config surfaces:
+
+- `params.BorMainnetChainConfig` and `params.AmoyChainConfig` in
+  `params/config.go`
+- `internal/cli/server/chains/mainnet.go` and `internal/cli/server/chains/amoy.go`
+- `builder/files/genesis-mainnet-v1.json` and `builder/files/genesis-amoy.json`
+- `core/forkid/forkid.go`, `ChainConfig.Rules`, startup banner output, and
+  config compatibility / fork ordering checks
+
+The specific failure class to prevent is a fork block present only in packaged
+genesis JSON while normal `bor server --config ...` startup still loads a Go
+runtime preset with `Bor.<Fork>Block == nil`. In that case
+`c.Bor.Is<Fork>(num)` never activates on the normal startup path even though the
+genesis file looks correct.
+
+Fork-gated EVM, precompile, consensus, and miner behavior must be tested at
+`N-1`, `N`, and `N+1` for each network activation block. If the fork changes
+consensus output, track Polygon Erigon parity before treating the rollout as
+complete.
 
 ### Before Making Changes
 

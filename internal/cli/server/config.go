@@ -531,6 +531,8 @@ type AUTHConfig struct {
 type GRPCConfig struct {
 	// Addr is the bind address for the grpc rpc server
 	Addr string `hcl:"addr,optional" toml:"addr,optional"`
+	// Token is the bearer token required for incoming gRPC calls; empty disables auth
+	Token string `hcl:"token,optional" toml:"token,optional"`
 }
 
 type APIConfig struct {
