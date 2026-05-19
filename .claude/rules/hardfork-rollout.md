@@ -5,11 +5,7 @@ paths:
   - "core/forkid/forkid.go"
   - "internal/cli/server/chains/*.go"
   - "builder/files/genesis-*.json"
-  - "core/vm/contracts.go"
-  - "core/vm/eips.go"
-  - "core/vm/gas_table.go"
-  - "core/vm/jump_table.go"
-  - "core/vm/operations_acl.go"
+  - "core/vm/*.go"
   - "consensus/bor/bor.go"
   - "miner/worker.go"
 ---

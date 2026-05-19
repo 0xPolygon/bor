@@ -143,7 +143,7 @@ Detailed, path-scoped security rules are in `.claude/rules/`:
 | `evm-security.md`                  | `core/vm/`                                                             | Gas accounting, opcode correctness, precompile safety, EIP gating          |
 | `txpool-security.md`               | `core/txpool/`                                                         | Pool limits, validation ordering, eviction gaming, blob handling           |
 | `state-security.md`                | `core/state/`, `blockstm/`, `trie/`                                    | Parallel execution safety, state root determinism, journal correctness     |
-| `hardfork-rollout.md`              | `params/config.go`, `internal/cli/server/chains/*.go`, genesis JSON, `core/forkid/forkid.go`, `core/vm/{contracts,eips,gas_table,jump_table,operations_acl}.go`, `consensus/bor/bor.go`, `miner/worker.go` | Hardfork activation wiring, runtime/genesis parity, fork ID, EVM and miner gates |
+| `hardfork-rollout.md`              | `params/config.go`, `internal/cli/server/chains/*.go`, genesis JSON, `core/forkid/forkid.go`, `core/vm/*.go`, `consensus/bor/bor.go`, `miner/worker.go` | Hardfork activation wiring, runtime/genesis parity, fork ID, EVM and miner gates |
 
 These rules load automatically when Claude works on files matching their path patterns. Some files match multiple rules (e.g., `consensus/bor/contract/` matches both `consensus-security.md` and `contract-interaction-security.md`) — all matching rules apply simultaneously.
 
