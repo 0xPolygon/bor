@@ -66,6 +66,20 @@ func (mr *MockBackendMockRecorder) AccountManager() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AccountManager", reflect.TypeOf((*MockBackend)(nil).AccountManager))
 }
 
+// BaseFee mocks base method.
+func (m *MockBackend) BaseFee(arg0 context.Context) *big.Int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BaseFee", arg0)
+	ret0, _ := ret[0].(*big.Int)
+	return ret0
+}
+
+// BaseFee indicates an expected call of BaseFee.
+func (mr *MockBackendMockRecorder) BaseFee(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BaseFee", reflect.TypeOf((*MockBackend)(nil).BaseFee), arg0)
+}
+
 // BlobBaseFee mocks base method.
 func (m *MockBackend) BlobBaseFee(arg0 context.Context) *big.Int {
 	m.ctrl.T.Helper()
