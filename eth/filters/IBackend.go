@@ -10,8 +10,6 @@ import (
 	reflect "reflect"
 	time "time"
 
-	gomock "go.uber.org/mock/gomock"
-
 	ethereum "github.com/ethereum/go-ethereum"
 	accounts "github.com/ethereum/go-ethereum/accounts"
 	common "github.com/ethereum/go-ethereum/common"
@@ -21,12 +19,14 @@ import (
 	filtermaps "github.com/ethereum/go-ethereum/core/filtermaps"
 	state "github.com/ethereum/go-ethereum/core/state"
 	stateless "github.com/ethereum/go-ethereum/core/stateless"
+	txpool "github.com/ethereum/go-ethereum/core/txpool"
 	types "github.com/ethereum/go-ethereum/core/types"
 	vm "github.com/ethereum/go-ethereum/core/vm"
 	ethdb "github.com/ethereum/go-ethereum/ethdb"
 	event "github.com/ethereum/go-ethereum/event"
 	params "github.com/ethereum/go-ethereum/params"
 	rpc "github.com/ethereum/go-ethereum/rpc"
+	gomock "github.com/golang/mock/gomock"
 )
 
 // MockBackend is a mock of Backend interface.
@@ -50,6 +50,34 @@ func NewMockBackend(ctrl *gomock.Controller) *MockBackend {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockBackend) EXPECT() *MockBackendMockRecorder {
 	return m.recorder
+}
+
+// AcceptPreconfTxs mocks base method.
+func (m *MockBackend) AcceptPreconfTxs() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AcceptPreconfTxs")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// AcceptPreconfTxs indicates an expected call of AcceptPreconfTxs.
+func (mr *MockBackendMockRecorder) AcceptPreconfTxs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AcceptPreconfTxs", reflect.TypeOf((*MockBackend)(nil).AcceptPreconfTxs))
+}
+
+// AcceptPrivateTxs mocks base method.
+func (m *MockBackend) AcceptPrivateTxs() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AcceptPrivateTxs")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// AcceptPrivateTxs indicates an expected call of AcceptPrivateTxs.
+func (mr *MockBackendMockRecorder) AcceptPrivateTxs() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AcceptPrivateTxs", reflect.TypeOf((*MockBackend)(nil).AcceptPrivateTxs))
 }
 
 // AccountManager mocks base method.
@@ -165,6 +193,21 @@ func (m *MockBackend) ChainDb() ethdb.Database {
 func (mr *MockBackendMockRecorder) ChainDb() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ChainDb", reflect.TypeOf((*MockBackend)(nil).ChainDb))
+}
+
+// CheckPreconfStatus mocks base method.
+func (m *MockBackend) CheckPreconfStatus(arg0 common.Hash) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CheckPreconfStatus", arg0)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CheckPreconfStatus indicates an expected call of CheckPreconfStatus.
+func (mr *MockBackendMockRecorder) CheckPreconfStatus(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckPreconfStatus", reflect.TypeOf((*MockBackend)(nil).CheckPreconfStatus), arg0)
 }
 
 // CurrentBlock mocks base method.
@@ -770,6 +813,34 @@ func (mr *MockBackendMockRecorder) Pending() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pending", reflect.TypeOf((*MockBackend)(nil).Pending))
 }
 
+// PreconfEnabled mocks base method.
+func (m *MockBackend) PreconfEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PreconfEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// PreconfEnabled indicates an expected call of PreconfEnabled.
+func (mr *MockBackendMockRecorder) PreconfEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PreconfEnabled", reflect.TypeOf((*MockBackend)(nil).PreconfEnabled))
+}
+
+// PrivateTxEnabled mocks base method.
+func (m *MockBackend) PrivateTxEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PrivateTxEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// PrivateTxEnabled indicates an expected call of PrivateTxEnabled.
+func (mr *MockBackendMockRecorder) PrivateTxEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrivateTxEnabled", reflect.TypeOf((*MockBackend)(nil).PrivateTxEnabled))
+}
+
 // ProtocolVersion mocks base method.
 func (m *MockBackend) ProtocolVersion() uint {
 	m.ctrl.T.Helper()
@@ -782,6 +853,18 @@ func (m *MockBackend) ProtocolVersion() uint {
 func (mr *MockBackendMockRecorder) ProtocolVersion() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ProtocolVersion", reflect.TypeOf((*MockBackend)(nil).ProtocolVersion))
+}
+
+// PurgePrivateTx mocks base method.
+func (m *MockBackend) PurgePrivateTx(arg0 common.Hash) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "PurgePrivateTx", arg0)
+}
+
+// PurgePrivateTx indicates an expected call of PurgePrivateTx.
+func (mr *MockBackendMockRecorder) PurgePrivateTx(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PurgePrivateTx", reflect.TypeOf((*MockBackend)(nil).PurgePrivateTx), arg0)
 }
 
 // PurgeWhitelistedCheckpoint mocks base method.
@@ -892,6 +975,18 @@ func (mr *MockBackendMockRecorder) RPCTxSyncMaxTimeout() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCTxSyncMaxTimeout", reflect.TypeOf((*MockBackend)(nil).RPCTxSyncMaxTimeout))
 }
 
+// RecordPrivateTx mocks base method.
+func (m *MockBackend) RecordPrivateTx(arg0 common.Hash) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RecordPrivateTx", arg0)
+}
+
+// RecordPrivateTx indicates an expected call of RecordPrivateTx.
+func (mr *MockBackendMockRecorder) RecordPrivateTx(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordPrivateTx", reflect.TypeOf((*MockBackend)(nil).RecordPrivateTx), arg0)
+}
+
 // SendTx mocks base method.
 func (m *MockBackend) SendTx(arg0 context.Context, arg1 *types.Transaction) error {
 	m.ctrl.T.Helper()
@@ -992,6 +1087,34 @@ func (m *MockBackend) SubmitHashrate(arg0 hexutil.Uint64, arg1 common.Hash) (boo
 func (mr *MockBackendMockRecorder) SubmitHashrate(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitHashrate", reflect.TypeOf((*MockBackend)(nil).SubmitHashrate), arg0, arg1)
+}
+
+// SubmitPrivateTx mocks base method.
+func (m *MockBackend) SubmitPrivateTx(arg0 *types.Transaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitPrivateTx", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SubmitPrivateTx indicates an expected call of SubmitPrivateTx.
+func (mr *MockBackendMockRecorder) SubmitPrivateTx(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitPrivateTx", reflect.TypeOf((*MockBackend)(nil).SubmitPrivateTx), arg0)
+}
+
+// SubmitTxForPreconf mocks base method.
+func (m *MockBackend) SubmitTxForPreconf(arg0 *types.Transaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubmitTxForPreconf", arg0)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SubmitTxForPreconf indicates an expected call of SubmitTxForPreconf.
+func (mr *MockBackendMockRecorder) SubmitTxForPreconf(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubmitTxForPreconf", reflect.TypeOf((*MockBackend)(nil).SubmitTxForPreconf), arg0)
 }
 
 // SubmitWork mocks base method.
@@ -1192,6 +1315,20 @@ func (m *MockBackend) TxPoolContentFrom(arg0 common.Address) ([]*types.Transacti
 func (mr *MockBackendMockRecorder) TxPoolContentFrom(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxPoolContentFrom", reflect.TypeOf((*MockBackend)(nil).TxPoolContentFrom), arg0)
+}
+
+// TxStatus mocks base method.
+func (m *MockBackend) TxStatus(arg0 common.Hash) txpool.TxStatus {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TxStatus", arg0)
+	ret0, _ := ret[0].(txpool.TxStatus)
+	return ret0
+}
+
+// TxStatus indicates an expected call of TxStatus.
+func (mr *MockBackendMockRecorder) TxStatus(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxStatus", reflect.TypeOf((*MockBackend)(nil).TxStatus), arg0)
 }
 
 // UnprotectedAllowed mocks base method.
