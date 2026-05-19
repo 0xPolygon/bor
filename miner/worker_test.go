@@ -2183,14 +2183,13 @@ func TestPrefetchRaceWithSetExtra(t *testing.T) {
 			select {
 			case <-stopSignal:
 				return
-			default:
-				w.newWorkCh <- &newWorkReq{
-					interrupt: new(atomic.Int32),
-					noempty:   false,
-					timestamp: time.Now().Unix(),
-				}
-				time.Sleep(100 * time.Millisecond)
+			case w.newWorkCh <- &newWorkReq{
+				interrupt: new(atomic.Int32),
+				noempty:   false,
+				timestamp: time.Now().Unix(),
+			}:
 			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
