@@ -2341,8 +2341,9 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	}
 	buildStart := time.Now()
 	clearPendingWorkOnPipelineExit := w.clearPendingWorkOnExit()
+	pipelineEligibleForBuild := w.isPipelineEligible(w.chain.CurrentBlock().Number.Uint64() + 1)
 	defer func() {
-		if w.isPipelineEligible(w.chain.CurrentBlock().Number.Uint64() + 1) {
+		if pipelineEligibleForBuild {
 			clearPendingWorkOnPipelineExit()
 			return
 		}
