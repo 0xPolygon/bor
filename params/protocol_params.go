@@ -70,11 +70,21 @@ const (
 	ColdSloadCostEIP2929         = uint64(2100) // COLD_SLOAD_COST
 	WarmStorageReadCostEIP2929   = uint64(100)  // WARM_STORAGE_READ_COST
 
+	// PIP-88: cold-storage repricing for the Chicago hard fork.
+	// EIP-2929 uses a single COLD_SLOAD_COST for both SLOAD and SSTORE.
+	// PIP-88 splits it into two so SLOAD and SSTORE can scale independently.
+	ColdSloadCostPIP88  uint64 = 5460 // 2100 * 2.6 - COLD_SLOAD_COST surcharge
+	ColdSstoreCostPIP88 uint64 = 2940 // 2100 * 1.4 - COLD_SSTORE_COST surcharge
+
 	// In EIP-2200: SstoreResetGas was 5000.
 	// In EIP-2929: SstoreResetGas was changed to '5000 - COLD_SLOAD_COST'.
 	// In EIP-3529: SSTORE_CLEARS_SCHEDULE is defined as SSTORE_RESET_GAS + ACCESS_LIST_STORAGE_KEY_COST
 	// Which becomes: 5000 - 2100 + 1900 = 4800
 	SstoreClearsScheduleRefundEIP3529 uint64 = SstoreResetGasEIP2200 - ColdSloadCostEIP2929 + TxAccessListStorageKeyGas
+
+	// PIP-88: SSTORE_CLEARS_SCHEDULE recomputed against the PIP-88 COLD_SSTORE_COST.
+	// Which becomes: 5000 - 2940 + 1900 = 3960.
+	SstoreClearsScheduleRefundPIP88 uint64 = SstoreResetGasEIP2200 - ColdSstoreCostPIP88 + TxAccessListStorageKeyGas
 
 	JumpdestGas   uint64 = 1     // Once per JUMPDEST operation.
 	EpochDuration uint64 = 30000 // Duration between proof-of-work epochs.
@@ -178,6 +188,24 @@ const (
 	// PIP-27: secp256r1 elliptic curve signature verifier gas price
 	P256VerifyGas        uint64 = 3450
 	P256VerifyGasEIP7951 uint64 = 6900
+
+	// PIP-88: precompile gas repricing activated by the Chicago hard fork.
+
+	GFROUNDPIP88 uint64 = 22 // PIP-88 GFROUND for blake2F operation
+
+	Bn256AddGasIstanbulPIP88             uint64 = 540   // 150 * 3.6
+	Bn256ScalarMulGasIstanbulPIP88       uint64 = 12600 // 6000 * 2.1
+	Bn256PairingBaseGasIstanbulPIP88     uint64 = 67500 // 45000 * 1.5
+	Bn256PairingPerPointGasIstanbulPIP88 uint64 = 51000 // 34000 * 1.5
+
+	Bls12381G1AddGasPIP88          uint64 = 1050   // 375 * 2.8
+	Bls12381G1MulGasPIP88          uint64 = 73200  // 12000 * 6.1 (k=1)
+	Bls12381G2AddGasPIP88          uint64 = 1620   // 600 * 2.7
+	Bls12381G2MulGasPIP88          uint64 = 144000 // 22500 * 6.4 (k=1)
+	Bls12381PairingBaseGasPIP88    uint64 = 109330 // 37700 * 2.9
+	Bls12381PairingPerPairGasPIP88 uint64 = 94540  // 32600 * 2.9
+	Bls12381MapG1GasPIP88          uint64 = 15400  // 5500 * 2.8
+	Bls12381MapG2GasPIP88          uint64 = 66640  // 23800 * 2.8
 
 	// The Refund Quotient is the cap on how much of the used gas can be refunded. Before EIP-3529,
 	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
