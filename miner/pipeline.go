@@ -584,7 +584,13 @@ func (s *specSession) startInitialFillGoroutine() {
 	s.initialFillDone = make(chan struct{})
 	go func() {
 		defer close(s.initialFillDone)
-		stop := createInterruptTimer(s.specHeader.Number.Uint64(), s.specHeader.GetActualTime(), s.specEnv.buildInterrupt, true)
+		stop := createInterruptTimer(
+			s.specHeader.Number.Uint64(),
+			s.specHeader.GetActualTime(),
+			s.specEnv.buildInterrupt.timeoutFlag(),
+			s.specEnv.buildInterrupt.flagSetAtPtr(),
+			true,
+		)
 		var interrupt atomic.Int32
 		s.w.fillSpeculativeTransactions(s.specEnv, &interrupt)
 		stop()
@@ -888,7 +894,13 @@ func (s *specSession) startNextFillGoroutine(headerNext *types.Header, envNext *
 	)
 	go func() {
 		defer close(fillDone)
-		stop := createInterruptTimer(headerNext.Number.Uint64(), headerNext.GetActualTime(), envNext.buildInterrupt, true)
+		stop := createInterruptTimer(
+			headerNext.Number.Uint64(),
+			headerNext.GetActualTime(),
+			envNext.buildInterrupt.timeoutFlag(),
+			envNext.buildInterrupt.flagSetAtPtr(),
+			true,
+		)
 		var interrupt atomic.Int32
 		fillElapsed = s.w.fillSpeculativeTransactions(envNext, &interrupt)
 		stop()

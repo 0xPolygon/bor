@@ -314,6 +314,20 @@ func (s *buildInterruptState) timeoutFlag() *atomic.Bool {
 	return &s.timedOut
 }
 
+func (s *buildInterruptState) flagSetAtPtr() *atomic.Int64 {
+	if s == nil {
+		return nil
+	}
+	return &s.flagSetAt
+}
+
+func (w *worker) interruptStateForEnv(env *environment) (*atomic.Bool, *atomic.Int64) {
+	if env != nil && env.header != nil && w.isPipelineEligible(env.header.Number.Uint64()) {
+		return env.buildInterrupt.timeoutFlag(), env.buildInterrupt.flagSetAtPtr()
+	}
+	return &w.interruptBlockBuilding, &w.interruptFlagSetAt
+}
+
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
@@ -503,11 +517,12 @@ type worker struct {
 	fullTaskHook func()                             // Method to call before pushing the full sealing task.
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 
-	// Interrupt commit to stop block building on time.
-	// interruptBlockBuilding is kept only as a manual/test override. Real timeout
-	// state now lives on each environment/build attempt.
+	// Interrupt commit to stop block building on time. Develop-compatible
+	// sequential builds use the worker-global flag; pipelined builds switch to
+	// per-environment timeout state so overlapping builds cannot interrupt each other.
 	interruptCommitFlag    bool
 	interruptBlockBuilding atomic.Bool
+	interruptFlagSetAt     atomic.Int64
 	mockTxDelay            uint // A mock delay for transaction execution, only used in tests
 
 	blockTime     time.Duration     // The block time defined by the miner. Needs to be larger or equal to the consensus block time. If not set (default = 0), the miner will use the consensus block time.
@@ -1061,16 +1076,19 @@ func (w *worker) mainLoop() {
 					// timer should use the regular block-time boundary. If the
 					// production pipeline is re-enabled, this was previously
 					// wired to the miner pipeline enable flag.
+					timeoutInterrupt, timeoutFlagSetAt := w.interruptStateForEnv(w.current)
 					stopFn = createInterruptTimer(
 						w.current.header.Number.Uint64(),
 						w.current.header.GetActualTime(),
-						w.current.buildInterrupt,
-						false,
+						timeoutInterrupt,
+						timeoutFlagSetAt,
+						w.isPipelineEligible(w.current.header.Number.Uint64()),
 					)
 				}
 
-				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, w.current.buildInterrupt.timeoutFlag()) // Mixed bag of everrything, yolo
-				blobTxs := newTransactionsByPriceAndNonce(w.current.signer, nil, w.current.header.BaseFee, w.current.buildInterrupt.timeoutFlag())  // Empty bag, don't bother optimising
+				timeoutInterrupt, _ := w.interruptStateForEnv(w.current)
+				plainTxs := newTransactionsByPriceAndNonce(w.current.signer, txs, w.current.header.BaseFee, timeoutInterrupt) // Mixed bag of everrything, yolo
+				blobTxs := newTransactionsByPriceAndNonce(w.current.signer, nil, w.current.header.BaseFee, timeoutInterrupt)  // Empty bag, don't bother optimising
 
 				tcount := w.current.tcount
 
@@ -1426,7 +1444,8 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		processReader:      genParams.processReader,
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
-	env.evm.SetInterrupt(env.buildInterrupt.timeoutFlag())
+	timeoutInterrupt, _ := w.interruptStateForEnv(env)
+	env.evm.SetInterrupt(timeoutInterrupt)
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -1527,12 +1546,14 @@ mainloop:
 				"number", env.header.Number.Uint64(),
 				"headerTime", common.PrettyTime(time.Unix(int64(env.header.Time), 0)),
 			}
-			if env.buildInterrupt != nil {
-				if flagSetAt := env.buildInterrupt.flagSetAt.Load(); flagSetAt > 0 {
-					flagSetTime := time.Unix(0, flagSetAt)
-					logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
-					logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
-				}
+			flagSetAt := w.interruptFlagSetAt.Load()
+			if flagSetAt == 0 && env.buildInterrupt != nil {
+				flagSetAt = env.buildInterrupt.flagSetAt.Load()
+			}
+			if flagSetAt > 0 {
+				flagSetTime := time.Unix(0, flagSetAt)
+				logCtx = append(logCtx, "flagSetAt", common.PrettyTime(flagSetTime))
+				logCtx = append(logCtx, "flagToAbortDelay", common.PrettyDuration(time.Since(flagSetTime)))
 			}
 			if hasTxInterruptDelay {
 				logCtx = append(logCtx, "flagToTxInterruptDelay", common.PrettyDuration(flagToTxInterruptDelay))
@@ -1747,11 +1768,13 @@ mainloop:
 		case errors.Is(err, vm.ErrInterrupt):
 			// Timeout interrupt surfaced from EVM execution for this tx.
 			if !hasTxInterruptDelay {
-				if env.buildInterrupt != nil {
-					if flagSetAt := env.buildInterrupt.flagSetAt.Load(); flagSetAt > 0 {
-						flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
-						hasTxInterruptDelay = true
-					}
+				flagSetAt := w.interruptFlagSetAt.Load()
+				if flagSetAt == 0 && env.buildInterrupt != nil {
+					flagSetAt = env.buildInterrupt.flagSetAt.Load()
+				}
+				if flagSetAt > 0 {
+					flagToTxInterruptDelay = time.Since(time.Unix(0, flagSetAt))
+					hasTxInterruptDelay = true
 				}
 			}
 			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
@@ -2170,7 +2193,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, gen
 	pendingStart := time.Now()
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
-	timeoutInterrupt := env.buildInterrupt.timeoutFlag()
+	timeoutInterrupt, _ := w.interruptStateForEnv(env)
 
 	filter.BlobTxs = false
 	pendingPlainTxs := w.eth.TxPool().Pending(filter, timeoutInterrupt)
@@ -2317,7 +2340,14 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		return
 	}
 	buildStart := time.Now()
-	defer w.clearPendingWorkOnExit()()
+	clearPendingWorkOnPipelineExit := w.clearPendingWorkOnExit()
+	defer func() {
+		if w.isPipelineEligible(w.chain.CurrentBlock().Number.Uint64() + 1) {
+			clearPendingWorkOnPipelineExit()
+			return
+		}
+		w.pendingWorkBlock.Store(0)
+	}()
 
 	var coinbase common.Address
 	if w.IsRunning() {
@@ -2463,11 +2493,13 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// Production-side pipelining is disabled, so the interrupt timer should
 		// use the regular block-time boundary. If the production pipeline is
 		// re-enabled, this was previously wired to the miner pipeline enable flag.
+		timeoutInterrupt, timeoutFlagSetAt := w.interruptStateForEnv(work)
 		stopFn = createInterruptTimer(
 			work.header.Number.Uint64(),
 			work.header.GetActualTime(),
-			work.buildInterrupt,
-			false,
+			timeoutInterrupt,
+			timeoutFlagSetAt,
+			w.isPipelineEligible(work.header.Number.Uint64()),
 		)
 	}
 
@@ -2920,11 +2952,9 @@ func collectPlanBatch(
 	}
 }
 
-// createInterruptTimer creates and starts a timer based on the header's timestamp for
-// one specific block-building attempt. The timeout state must be build-local so
-// overlapping sequential/speculative work cannot interrupt each other.
-func createInterruptTimer(number uint64, actualTimestamp time.Time, buildInterrupt *buildInterruptState, pipelinedSRC bool) func() {
-	if buildInterrupt == nil {
+// createInterruptTimer creates and starts a timer based on the header's timestamp.
+func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlockBuilding *atomic.Bool, interruptFlagSetAt *atomic.Int64, pipelinedSRC bool) func() {
+	if interruptBlockBuilding == nil {
 		return func() {}
 	}
 
@@ -2939,8 +2969,10 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, buildInterru
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
 
 	// Reset the flag when timer starts for building a new block.
-	buildInterrupt.timedOut.Store(false)
-	buildInterrupt.flagSetAt.Store(0)
+	interruptBlockBuilding.Store(false)
+	if interruptFlagSetAt != nil {
+		interruptFlagSetAt.Store(0)
+	}
 
 	go func() {
 		// Wait for timeout
@@ -2949,8 +2981,10 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, buildInterru
 		// Toggle the flag to indicate commit transactions loop and EVM interpreter loop
 		// to stop block building.
 		if interruptCtx.Err() != context.Canceled {
-			buildInterrupt.flagSetAt.Store(time.Now().UnixNano())
-			buildInterrupt.timedOut.Store(true)
+			if interruptFlagSetAt != nil {
+				interruptFlagSetAt.Store(time.Now().UnixNano())
+			}
+			interruptBlockBuilding.Store(true)
 			cancel()
 		}
 	}()

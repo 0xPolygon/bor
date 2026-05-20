@@ -1132,9 +1132,9 @@ func TestCreateInterruptTimer_IsolatedPerBuild(t *testing.T) {
 	first := newBuildInterruptState()
 	second := newBuildInterruptState()
 
-	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first, true)
+	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first.timeoutFlag(), first.flagSetAtPtr(), true)
 	defer stopFirst()
-	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second, true)
+	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second.timeoutFlag(), second.flagSetAtPtr(), true)
 	defer stopSecond()
 
 	require.Eventually(t, func() bool {
@@ -1149,7 +1149,7 @@ func TestCreateInterruptTimer_CancelDoesNotTripInterrupt(t *testing.T) {
 	t.Parallel()
 
 	state := newBuildInterruptState()
-	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state, true)
+	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state.timeoutFlag(), state.flagSetAtPtr(), true)
 	stop()
 
 	time.Sleep(50 * time.Millisecond)
