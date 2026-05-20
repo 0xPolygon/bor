@@ -26,8 +26,10 @@ A second Bor-specific failure mode to prevent: a new VM hardfork copies the
 wrong active precompile set, accidentally dropping a Polygon-specific
 precompile or retroactively changing precompile availability for historical
 blocks. The MadhugiriPro/LisovoPro class is: P256 needed to be carried forward
-after Madhugiri, while KZG needed to remain available only for the historical
-Madhugiri through Lisovo window and be absent from LisovoPro onward.
+from MadhugiriPro onward, while KZG needed to remain available only for the
+historical Madhugiri through Lisovo window and be absent from LisovoPro onward.
+On mainnet, Madhugiri and MadhugiriPro activated at the same block, so only the
+MadhugiriPro boundary is externally observable there.
 For a new VM fork, copying the previous fork's precompile map is not sufficient
 evidence. The PR must state the intended precompile delta versus the previous
 fork, and the tests must assert that delta at the activation boundary.
