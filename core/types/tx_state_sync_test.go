@@ -304,3 +304,77 @@ func TestGetStateSyncData_EmptyEvents(t *testing.T) {
 		t.Fatalf("expected zero events on empty StateSyncTx, got %d", len(got))
 	}
 }
+
+// TestStateSyncTx_PublicRPCView_ReturnsZeroValues validates that the public RPC view
+// of a state-sync transaction returns zero / empty values for every getter.
+func TestStateSyncTx_PublicRPCView_ReturnsZeroValues(t *testing.T) {
+	tx := NewTx(&StateSyncTx{
+		StateSyncData: []*StateSyncData{
+			{ID: 1, Contract: common.HexToAddress("0xdead"), Data: []byte("x"), TxHash: common.HexToHash("0x01")},
+		},
+	})
+
+	// `to` is a pointer to the zero address — NOT nil, which signals contract creation.
+	to := tx.To()
+	if to == nil {
+		t.Fatalf("To() returned nil pointer")
+	}
+	if *to != (common.Address{}) {
+		t.Errorf("To() = %s, want zero address", to.Hex())
+	}
+
+	// `from` resolved via the modern signer chain must also be the zero address.
+	from, err := Sender(NewPragueSigner(big.NewInt(137)), tx)
+	if err != nil {
+		t.Fatalf("Sender() error: %v", err)
+	}
+	if from != (common.Address{}) {
+		t.Errorf("Sender() = %s, want zero address", from.Hex())
+	}
+
+	if g := tx.Gas(); g != 0 {
+		t.Errorf("Gas() = %d, want 0", g)
+	}
+	if n := tx.Nonce(); n != 0 {
+		t.Errorf("Nonce() = %d, want 0", n)
+	}
+	if v := tx.Value(); v.Sign() != 0 {
+		t.Errorf("Value() = %s, want 0", v.String())
+	}
+	if p := tx.GasPrice(); p.Sign() != 0 {
+		t.Errorf("GasPrice() = %s, want 0", p.String())
+	}
+	if p := tx.GasTipCap(); p.Sign() != 0 {
+		t.Errorf("GasTipCap() = %s, want 0", p.String())
+	}
+	if p := tx.GasFeeCap(); p.Sign() != 0 {
+		t.Errorf("GasFeeCap() = %s, want 0", p.String())
+	}
+	if d := tx.Data(); len(d) != 0 {
+		t.Errorf("Data() len = %d, want 0", len(d))
+	}
+	if a := tx.AccessList(); len(a) != 0 {
+		t.Errorf("AccessList() len = %d, want 0", len(a))
+	}
+	if c := tx.ChainId(); c != nil {
+		t.Errorf("ChainId() = %v, want nil", c)
+	}
+
+	v, r, s := tx.RawSignatureValues()
+	if v.Sign() != 0 || r.Sign() != 0 || s.Sign() != 0 {
+		t.Errorf("RawSignatureValues() = (%s, %s, %s), want (0, 0, 0)", v, r, s)
+	}
+
+	if g := tx.BlobGas(); g != 0 {
+		t.Errorf("BlobGas() = %d, want 0", g)
+	}
+	if f := tx.BlobGasFeeCap(); f != nil {
+		t.Errorf("BlobGasFeeCap() = %v, want nil", f)
+	}
+	if h := tx.BlobHashes(); len(h) != 0 {
+		t.Errorf("BlobHashes() len = %d, want 0", len(h))
+	}
+	if a := tx.SetCodeAuthorizations(); len(a) != 0 {
+		t.Errorf("SetCodeAuthorizations() len = %d, want 0", len(a))
+	}
+}
