@@ -712,3 +712,116 @@ func TestTraceBlockByNumber_Genesis_Rejected(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "genesis is not traceable")
 }
+
+// TestTraceTransaction_StateSync_PrestateTracer runs the prestate tracer for a state-sync
+// transaction. Because the hooks are wrapped to handle state-sync transactions, the tracer
+// should work without any issues (errors or panic). It's a regression tests for a panic
+// observed while tracing a state-sync transaction where the actual sender and receiver
+// addresses were not populated in the lookup leading to error while looking up storage.
+func TestTraceTransaction_StateSync_PrestateTracer(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+	txs := block.Transactions()
+	require.Equal(t, 2, len(txs))
+	stateSyncTxHash := txs[1].Hash()
+
+	// Run both modes (default and diffMode) — both share the lookupStorage path.
+	cases := []struct {
+		name   string
+		config *TraceConfig
+	}{
+		{"default", prestateTracerConfig(nil)},
+		{"diffMode", prestateTracerConfig(json.RawMessage(`{"diffMode": true}`))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := api.TraceTransaction(context.Background(), stateSyncTxHash, tc.config)
+			require.NoError(t, err, "prestateTracer should not panic or error on state-sync tx")
+
+			raw, ok := result.(json.RawMessage)
+			require.True(t, ok, "expected json.RawMessage, got %T", result)
+			require.NotEmpty(t, raw, "prestate output must not be empty")
+
+			// The state receiver contract must appear in the prestate — verifying that
+			// OnEnter populated it correctly via the synthetic root frame.
+			var anyJSON map[string]any
+			require.NoError(t, json.Unmarshal(raw, &anyJSON))
+
+			var stateMap map[string]any
+			if tc.config != nil && tc.config.TracerConfig != nil {
+				// diffMode response shape: {"pre": {...}, "post": {...}}
+				pre, ok := anyJSON["pre"].(map[string]any)
+				require.True(t, ok, "diffMode response should contain a 'pre' object")
+				stateMap = pre
+			} else {
+				stateMap = anyJSON
+			}
+			// stateReceiverAddr is rendered with the EIP-55 mixed-case checksum in JSON.
+			require.Contains(t, stateMap, stateReceiverAddr.Hex(),
+				"prestate must contain the state receiver contract address")
+		})
+	}
+}
+
+// prestateTracerConfig builds a TraceConfig for the prestateTracer with the given
+// JSON config blob (or nil for the default config).
+func prestateTracerConfig(cfg json.RawMessage) *TraceConfig {
+	name := "prestateTracer"
+	return &TraceConfig{Tracer: &name, TracerConfig: cfg}
+}
+
+// TestTraceBlockByNumber_StateSync_AllRegisteredTracers is a multi-tracer matrix test
+// which runs all registered tracers against a block with state-sync transaction. The main
+// goal is to catch issues or regressions in tracers that were not previously tested with
+// state-sync transactions and the new wrapped hooks which wraps all existing tracers
+// and introduces some additional logic affecting the tracing lifecycle.
+//
+// This test enumerates registered tracer names and runs TraceBlockByNumber for each.
+// It does NOT validate output structure — that's tracer-specific. It only confirms
+// the absence of panics, non-nil errors, and per-tx error strings, which is enough
+// to catch a particular class of bugs.
+func TestTraceBlockByNumber_StateSync_AllRegisteredTracers(t *testing.T) {
+	t.Parallel()
+
+	// Per-tracer configs. nil means "no TracerConfig field needed".
+	// muxTracer requires a config map of inner tracer names → their configs.
+	tracerConfigs := map[string]json.RawMessage{
+		"4byteTracer":             nil,
+		"callTracer":              nil,
+		"flatCallTracer":          nil,
+		"erc7562Tracer":           nil,
+		"keccak256PreimageTracer": nil,
+		"noopTracer":              nil,
+		"prestateTracer":          nil,
+		"muxTracer":               json.RawMessage(`{"callTracer": {}, "prestateTracer": {}, "noopTracer": {}}`),
+	}
+
+	for name, cfg := range tracerConfigs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+			defer backend.chain.Stop()
+
+			tracerName := name
+			results, err := api.TraceBlockByNumber(context.Background(),
+				rpc.BlockNumber(stateSyncBlock),
+				&TraceConfig{Tracer: &tracerName, TracerConfig: cfg})
+			require.NoError(t, err, "%s: TraceBlockByNumber returned an error", name)
+			require.Equal(t, 2, len(results), "%s: expected 2 traces (regular + state-sync)", name)
+
+			for i, r := range results {
+				require.Empty(t, r.Error, "%s: trace[%d] returned per-tx error %q", name, i, r.Error)
+				// Tracers that always produce JSON output (everything except noop) should
+				// return a non-nil result. noopTracer returns an empty JSON object — also
+				// acceptable.
+				require.NotNil(t, r.Result, "%s: trace[%d] result is nil", name, i)
+			}
+		})
+	}
+}
