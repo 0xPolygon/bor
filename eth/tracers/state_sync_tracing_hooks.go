@@ -73,8 +73,11 @@ func (t *stateSyncHooks) OnTxStart(env *tracing.VMContext, tx *types.Transaction
 	}
 
 	if t.active && t.inner.OnEnter != nil {
-		// Synthetic root: from = BorSystemAddress, to = StateReceiverContract.
-		// gas / value are zero — the synthetic frame carries no real cost.
+		// Add a synthetic root frame at depth 0 wrapping the state-sync transaction. It uses
+		// from = params.BorSystemAddress and to = StateReceiverContract and the gas / value
+		// are zero as it carries no real cost. The sender and receiver address are the same
+		// address the EVM sees during actual execution and not zero address as it doesn't
+		// actually represent what actually was executed.
 		t.inner.OnEnter(0, byte(vm.CALL), params.BorSystemAddress, t.stateReceiverAddress, nil, 0, big.NewInt(0))
 	}
 }
