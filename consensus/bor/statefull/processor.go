@@ -171,57 +171,56 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 	// Set tx context so that opcodes like GASPRICE don't panic.
 	vmenv.SetTxContext(core.NewEVMTxContext(message))
 
+	// The actual state-sync transaction uses event time but because we don't have
+	// it here, we use the block time. The calldata will be different than what
+	// was constructed while executing the transaction but it'll be deterministic
+	// in every run.
 	stateReceiverABI := abi.StateReceiver()
-	const method = "commitState"
-	var (
-		totalGasUsed uint64
-		// The actual state-sync transaction uses event time but because we don't have
-		// it here, we use the block time. The calldata will be different than what
-		// was constructed while executing the transaction but it'll be deterministic
-		// in every run.
-		now = vmenv.Context.Time
-	)
+	syncTime := vmenv.Context.Time
 
+	var totalGasUsed uint64
 	for _, event := range events {
-		// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord)
-		record := &clerk.EventRecord{
-			ID:       event.ID,
-			Contract: event.Contract,
-			Data:     event.Data,
-			TxHash:   event.TxHash,
-			// Dummy fields, not really needed for execution but required for encoding
-			LogIndex: 0,
-			ChainID:  "",
-		}
-
-		recordBytes, err := rlp.EncodeToBytes(record)
+		gasUsed, err := commitStateSyncEvent(vmenv, event, stateReceiverABI, stateReceiverContract, syncTime)
 		if err != nil {
-			return nil, fmt.Errorf("failed to RLP encode state-sync event %d: %w", event.ID, err)
+			return nil, err
 		}
-
-		// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
-		data, err := stateReceiverABI.Pack(method, new(big.Int).SetUint64(now), recordBytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
-		}
-
-		// Build system message with proper gas and target contract
-		msg := GetSystemMessage(stateReceiverContract, data)
-
-		// Execute the message. The state-sync event may revert but that shouldn't
-		// fail the surrounding state-sync transaction execution. We proceed without
-		// returning any errors. The revert error will be recorded in the trace. Just
-		// log the error for visibility.
-		result, _ := ApplyBorMessage(vmenv, msg)
-		if result.Err != nil {
-			log.Warn("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
-		}
-
-		totalGasUsed += result.UsedGas
+		totalGasUsed += gasUsed
 	}
 
 	return &core.ExecutionResult{
 		UsedGas: totalGasUsed,
 		Err:     nil,
 	}, nil
+}
+
+// commitStateSyncEvent encodes a single bridge event, packs the commitState calldata, and
+// applies the system call. A reverted EVM call does not surface as an error — production
+// semantics allow individual events to fail silently; the trace records the revert. Only
+// encoding / ABI failures (which indicate a programming bug, not a runtime condition)
+// return an error.
+func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiverABI abi.ABI, stateReceiverContract common.Address, syncTime uint64) (uint64, error) {
+	// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord).
+	// LogIndex and ChainID are not used by commitState but are required for RLP encoding.
+	record := &clerk.EventRecord{
+		ID:       event.ID,
+		Contract: event.Contract,
+		Data:     event.Data,
+		TxHash:   event.TxHash,
+	}
+	recordBytes, err := rlp.EncodeToBytes(record)
+	if err != nil {
+		return 0, fmt.Errorf("failed to RLP encode state-sync event %d: %w", event.ID, err)
+	}
+
+	// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
+	data, err := stateReceiverABI.Pack("commitState", new(big.Int).SetUint64(syncTime), recordBytes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
+	}
+
+	result, _ := ApplyBorMessage(vmenv, GetSystemMessage(stateReceiverContract, data))
+	if result.Err != nil {
+		log.Warn("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
+	}
+	return result.UsedGas, nil
 }
