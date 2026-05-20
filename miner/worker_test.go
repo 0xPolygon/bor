@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -1123,6 +1124,37 @@ func TestCommitInterruptPending(t *testing.T) {
 	// Wait for the goroutine to complete or timeout
 	<-testDone
 	w.stop()
+}
+
+func TestCreateInterruptTimer_IsolatedPerBuild(t *testing.T) {
+	t.Parallel()
+
+	first := newBuildInterruptState()
+	second := newBuildInterruptState()
+
+	stopFirst := createInterruptTimer(1, time.Now().Add(25*time.Millisecond), first.timeoutFlag(), first.flagSetAtPtr(), true)
+	defer stopFirst()
+	stopSecond := createInterruptTimer(2, time.Now().Add(500*time.Millisecond), second.timeoutFlag(), second.flagSetAtPtr(), true)
+	defer stopSecond()
+
+	require.Eventually(t, func() bool {
+		return first.timedOut.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.NotZero(t, first.flagSetAt.Load())
+	require.False(t, second.timedOut.Load(), "one build's timeout must not trip another build")
+	require.Zero(t, second.flagSetAt.Load())
+}
+
+func TestCreateInterruptTimer_CancelDoesNotTripInterrupt(t *testing.T) {
+	t.Parallel()
+
+	state := newBuildInterruptState()
+	stop := createInterruptTimer(1, time.Now().Add(500*time.Millisecond), state.timeoutFlag(), state.flagSetAtPtr(), true)
+	stop()
+
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, state.timedOut.Load(), "canceling a build timer must not look like a timeout")
+	require.Zero(t, state.flagSetAt.Load())
 }
 
 // TestBenchmarkPending is a simple benchmark test to measure the performance of transaction pool. It inserts
@@ -2479,7 +2511,12 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	w.start()
-	defer w.stop()
+	workerClosed := false
+	defer func() {
+		if !workerClosed {
+			w.close()
+		}
+	}()
 
 	goroutinesBefore := runtime.NumGoroutine()
 	t.Logf("Goroutines before test: %d", goroutinesBefore)
@@ -2507,6 +2544,8 @@ func TestRapidBlockProduction_WithoutWait(t *testing.T) {
 	wg.Wait()
 	t.Log("All block production requests sent, waiting for prefetch to complete...")
 	time.Sleep(5 * time.Second) // Let all prefetch complete
+	w.close()
+	workerClosed = true
 
 	// Check for panics
 	panicCount := prefetchPanicMeter.Snapshot().Count()
@@ -2980,6 +3019,30 @@ func TestWriteBlockAndSetHeadTimer(t *testing.T) {
 	}
 }
 
+// TestPipelineBuildGaugeAlwaysDisabled verifies that production-side pipelined
+// SRC is not exposed as a miner config option and stays disabled.
+func TestPipelineBuildGaugeAlwaysDisabled(t *testing.T) {
+	metrics.Enable()
+
+	var (
+		engine      consensus.Engine
+		chainConfig = params.BorUnittestChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	cfg := DefaultTestConfig()
+	w, _, _ := newTestWorker(t, cfg, chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	if got := pipelineBuildEnabledGauge.Snapshot().Value(); got != 0 {
+		t.Errorf("pipelineBuildEnabledGauge = %d, want 0 when production pipelining is disabled", got)
+	}
+}
+
 // TestDelayFlagOffByOne verifies that the delayFlag check inspects each transaction's
 // own read set rather than its predecessor's.
 func TestDelayFlagOffByOne(t *testing.T) {
@@ -3025,6 +3088,54 @@ func TestDelayFlagOffByOne(t *testing.T) {
 
 	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
+}
+
+func TestTxDependencyMetadataPersistsAcrossSpeculativeRefillPasses(t *testing.T) {
+	t.Parallel()
+
+	chainConfig := params.BorUnittestChainConfig
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, rawdb.NewMemoryDatabase(), false, 0)
+	defer w.close()
+	w.running.Store(true)
+
+	extraDataBytes, err := rlp.EncodeToBytes(types.BlockExtraData{})
+	require.NoError(t, err)
+
+	headerExtra := append(make([]byte, types.ExtraVanityLength), extraDataBytes...)
+	headerExtra = append(headerExtra, make([]byte, types.ExtraSealLength)...)
+
+	env := &environment{
+		header: &types.Header{
+			Number: big.NewInt(1),
+			Extra:  headerExtra,
+		},
+		coinbase:    testBankAddress,
+		depsBuilder: blockstm.NewDepsBuilder(),
+	}
+
+	key := blockstm.NewSubpathKey(testUserAddress, state.BalancePath)
+
+	env.mvReadMapList = append(env.mvReadMapList, map[blockstm.Key]blockstm.ReadDescriptor{})
+	require.NoError(t, env.depsBuilder.AddTransaction(0, nil, []blockstm.WriteDescriptor{{Path: key}}))
+	require.NoError(t, w.updateTxDependencyMetadata(env))
+
+	var blockExtraData types.BlockExtraData
+	require.NoError(t, rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData))
+	require.Len(t, blockExtraData.TxDependency, 1)
+	require.Empty(t, blockExtraData.TxDependency[0])
+
+	env.mvReadMapList = append(env.mvReadMapList, map[blockstm.Key]blockstm.ReadDescriptor{
+		key: {Path: key},
+	})
+	require.NoError(t, env.depsBuilder.AddTransaction(1, []blockstm.ReadDescriptor{{Path: key}}, nil))
+	require.NoError(t, w.updateTxDependencyMetadata(env))
+
+	require.NoError(t, rlp.DecodeBytes(env.header.Extra[types.ExtraVanityLength:len(env.header.Extra)-types.ExtraSealLength], &blockExtraData))
+	require.Equal(t, [][]uint64{{}, {0}}, blockExtraData.TxDependency)
 }
 
 // TestPrefetchFromPool_BuilderModeSwitch verifies that when builderStarted is signaled

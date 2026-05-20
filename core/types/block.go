@@ -102,6 +102,10 @@ type Header struct {
 	// ActualTime is the actual time of the block. It is internally used by the miner.
 	ActualTime time.Time `json:"-" rlp:"-"`
 
+	// AbortRecovery marks a miner-local rebuild after speculative execution was
+	// discarded. It is not encoded and is only used for build-time heuristics.
+	AbortRecovery bool `json:"-" rlp:"-"`
+
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 

@@ -66,7 +66,18 @@ type reader struct {
 func (r *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
 	blob, got, loc, err := r.layer.node(owner, path, 0)
 	if err != nil {
-		return nil, err
+		// If the diff layer chain walks into a stale disk layer (marked stale
+		// by concurrent cap()/persist() during pipelined SRC), fall back to
+		// the current base disk layer — same strategy as accountFallback and
+		// storageFallback.
+		if errors.Is(err, errSnapshotStale) {
+			blob, got, loc, err = r.nodeFallback(owner, path)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 	if r.noHashCheck || got == hash {
 		return blob, nil
@@ -123,6 +134,26 @@ func evictCachedNode(l layer, owner common.Hash, path []byte) {
 	}
 }
 
+// nodeFallback retrieves a trie node when the normal diff layer walk fails
+// due to concurrent layer flattening (cap). This mirrors the fallback strategy
+// used by accountFallback and storageFallback.
+//
+// During pipelined SRC, the background SRC goroutine's CommitWithUpdate can
+// trigger cap() which flattens bottom diff layers into a new disk layer,
+// marking the old disk layer as stale. Concurrently, the prefetcher's trie
+// walk may reach this stale disk layer and get errSnapshotStale.
+//
+// The fallback tries the entry-point layer first (which is still valid in
+// memory), then falls back to tree.bottom() — the current base disk layer,
+// which is guaranteed non-stale.
+func (r *reader) nodeFallback(owner common.Hash, path []byte) ([]byte, common.Hash, *nodeLoc, error) {
+	blob, got, loc, err := r.layer.node(owner, path, 0)
+	if errors.Is(err, errSnapshotStale) {
+		return r.db.tree.bottom().node(owner, path, 0)
+	}
+	return blob, got, loc, err
+}
+
 // AccountRLP directly retrieves the account associated with a particular hash.
 // An error will be returned if the read operation exits abnormally. Specifically,
 // if the layer is already stale.
@@ -133,6 +164,9 @@ func evictCachedNode(l layer, owner common.Hash, path []byte) {
 func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupAccount(hash, r.state)
 	if err != nil {
+		if errors.Is(err, errSnapshotStale) {
+			return r.accountFallback(hash)
+		}
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -145,7 +179,21 @@ func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 	// not affect the result unless the entry point layer is also stale.
 	blob, err := l.account(hash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.layer.account(hash, 0)
+		return r.accountFallback(hash)
+	}
+	return blob, err
+}
+
+// accountFallback retrieves account data when the normal lookup path fails
+// due to concurrent layer flattening (cap). It tries the reader's entry-point
+// layer first (which is still in memory), then falls back to the current base
+// disk layer. The base fallback is needed because persist() creates intermediate
+// disk layers that are marked stale during recursive flattening — only the
+// final base layer is guaranteed non-stale.
+func (r *reader) accountFallback(hash common.Hash) ([]byte, error) {
+	blob, err := r.layer.account(hash, 0)
+	if errors.Is(err, errSnapshotStale) {
+		return r.db.tree.bottom().account(hash, 0)
 	}
 	return blob, err
 }
@@ -182,6 +230,9 @@ func (r *reader) Account(hash common.Hash) (*types.SlimAccount, error) {
 func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	l, err := r.db.tree.lookupStorage(accountHash, storageHash, r.state)
 	if err != nil {
+		if errors.Is(err, errSnapshotStale) {
+			return r.storageFallback(accountHash, storageHash)
+		}
 		return nil, err
 	}
 	// If the located layer is stale, fall back to the slow path to retrieve
@@ -194,7 +245,16 @@ func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
 	// not affect the result unless the entry point layer is also stale.
 	blob, err := l.storage(accountHash, storageHash, 0)
 	if errors.Is(err, errSnapshotStale) {
-		return r.layer.storage(accountHash, storageHash, 0)
+		return r.storageFallback(accountHash, storageHash)
+	}
+	return blob, err
+}
+
+// storageFallback is the storage counterpart of accountFallback.
+func (r *reader) storageFallback(accountHash, storageHash common.Hash) ([]byte, error) {
+	blob, err := r.layer.storage(accountHash, storageHash, 0)
+	if errors.Is(err, errSnapshotStale) {
+		return r.db.tree.bottom().storage(accountHash, storageHash, 0)
 	}
 	return blob, err
 }

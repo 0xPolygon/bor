@@ -752,3 +752,75 @@ func InitMinerWithOptions(genesis *core.Genesis, privKey *ecdsa.PrivateKey, with
 
 	return stack, ethBackend, err
 }
+
+// InitImporterWithPipelinedSRC creates a non-mining node with pipelined import
+// SRC enabled. The node will import blocks from peers using the pipelined state
+// root computation path. A validator key is still needed for the keystore (used
+// for P2P identity / account manager) but the node does NOT start mining.
+func InitImporterWithPipelinedSRC(genesis *core.Genesis, privKey *ecdsa.PrivateKey, withoutHeimdall bool) (*node.Node, *eth.Ethereum, error) {
+	stack, err := newPipelineTestNode("InitImporter-")
+	if err != nil {
+		return nil, nil, err
+	}
+	ethBackend, err := eth.New(stack, &ethconfig.Config{
+		Genesis:         genesis,
+		NetworkId:       genesis.Config.ChainID.Uint64(),
+		SyncMode:        downloader.FullSync,
+		DatabaseCache:   256,
+		DatabaseHandles: 256,
+		TxPool:          legacypool.DefaultConfig,
+		GPO:             ethconfig.Defaults.GPO,
+		Miner: miner.Config{
+			Etherbase: crypto.PubkeyToAddress(privKey.PublicKey),
+			GasCeil:   genesis.GasLimit * 11 / 10,
+			GasPrice:  big.NewInt(1),
+			Recommit:  time.Second,
+		},
+		WithoutHeimdall:          withoutHeimdall,
+		EnablePipelinedImportSRC: true,
+		PipelinedImportSRCLogs:   true,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := importValidatorKey(stack, ethBackend, privKey); err != nil {
+		return nil, nil, err
+	}
+	return stack, ethBackend, stack.Start()
+}
+
+// newPipelineTestNode creates a headless node.Node in a fresh temp datadir
+// with P2P discovery disabled. Shared between the miner and importer test
+// setups since their node-level configuration is identical.
+func newPipelineTestNode(dirPrefix string) (*node.Node, error) {
+	datadir, err := os.MkdirTemp("", dirPrefix+uuid.New().String())
+	if err != nil {
+		return nil, err
+	}
+	return node.New(&node.Config{
+		Name:    "geth",
+		Version: params.Version,
+		DataDir: datadir,
+		P2P: p2p.Config{
+			ListenAddr:  "0.0.0.0:0",
+			NoDiscovery: true,
+			MaxPeers:    25,
+		},
+		UseLightweightKDF: true,
+	})
+}
+
+// importValidatorKey imports the validator's ECDSA key into the node's
+// keystore, unlocks the imported account, and registers the keystore with
+// the eth account manager so mining / signing paths can use it.
+func importValidatorKey(stack *node.Node, ethBackend *eth.Ethereum, privKey *ecdsa.PrivateKey) error {
+	kStore := keystore.NewKeyStore(stack.KeyStoreDir(), keystore.StandardScryptN, keystore.StandardScryptP)
+	if _, err := kStore.ImportECDSA(privKey, ""); err != nil {
+		return err
+	}
+	if err := kStore.Unlock(kStore.Accounts()[0], ""); err != nil {
+		return err
+	}
+	ethBackend.AccountManager().AddBackend(kStore)
+	return nil
+}

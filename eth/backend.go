@@ -291,7 +291,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				EnableWitnessStats:      config.EnableWitnessStats,
 				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
 			},
-			Stateless: config.SyncMode == downloader.StatelessSync,
+			EnablePipelinedImportSRC: config.EnablePipelinedImportSRC,
+			PipelinedImportSRCLogs:   config.PipelinedImportSRCLogs,
+			PipelinedSRCWarmSnapshot: config.PipelinedSRCWarmSnapshot,
+			Stateless:                config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
 			// within the data directory. The corresponding paths will be either:
 			// - DATADIR/triedb/merkle.journal

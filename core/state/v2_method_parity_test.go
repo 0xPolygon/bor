@@ -40,6 +40,7 @@ const (
 	catLifecycle      pdbExemptCategory = "block lifecycle (commit / prefetcher / copy)"
 	catLowLevel       pdbExemptCategory = "low-level / utility"
 	catDebug          pdbExemptCategory = "debug / introspection"
+	catPipelinedSRC   pdbExemptCategory = "pipelined SRC import"
 )
 
 var pdbExemptMethods = map[string]pdbExemptCategory{
@@ -98,6 +99,18 @@ var pdbExemptMethods = map[string]pdbExemptCategory{
 	"StopPrefetcher":   catLifecycle,
 	"ResetPrefetcher":  catLifecycle,
 	"Copy":             catLifecycle,
+
+	// Pipelined SRC import — FlatDiff capture/replay, read propagation,
+	// and detached prefetcher handoff are block-level StateDB operations.
+	// ParallelStateDB instances are per-transaction workers; V2 settles
+	// into the underlying StateDB before these methods run.
+	"ApplyFlatDiff":          catPipelinedSRC,
+	"ApplyFlatDiffForCommit": catPipelinedSRC,
+	"CommitSnapshot":         catPipelinedSRC,
+	"DetachPrefetcher":       catPipelinedSRC,
+	"PropagateReadsTo":       catPipelinedSRC,
+	"SetFlatDiffRef":         catPipelinedSRC,
+	"WasStorageSlotRead":     catPipelinedSRC,
 
 	// Low-level / utility — not part of the EVM-facing surface.
 	"Database":              catLowLevel,

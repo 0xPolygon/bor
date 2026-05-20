@@ -326,6 +326,14 @@ The ```bor server``` command runs the Bor client.
 
 - ```v5disc```: Enables the V5 discovery mechanism (default: true)
 
+### Pipeline Options
+
+- ```pipeline.enable-import-src```: Enable pipelined state root computation during block import: overlap SRC(N) with block N+1 tx execution (default: false)
+
+- ```pipeline.import-src-logs```: Enable verbose logging for pipelined import SRC (default: false)
+
+- ```pipeline.warm-snapshot```: Enable warm-cache handoff from execution prefetcher to pipelined SRC; no effect when import SRC is disabled (default: true)
+
 ### Sealer Options
 
 - ```allow-gas-tip-override```: Allows block producers to override the mining gas tip (default: false)
