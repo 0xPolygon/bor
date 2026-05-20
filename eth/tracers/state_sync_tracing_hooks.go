@@ -38,10 +38,10 @@ import (
 // multiple goroutines. Callers using the live tracer should ensure that transactions
 // are processed serially.
 func WrapStateSyncHooks(inner *tracing.Hooks, stateReceiverAddress common.Address) *tracing.Hooks {
-	// Create a wrapper around the inner tracer
 	w := &stateSyncHooks{inner: inner, stateReceiverAddress: stateReceiverAddress}
 
-	// Copy the inner tracer's hooks and override hooks relevant to state-sync transactions.
+	// Copy the inner tracer's hooks and override only the depth-bearing ones; this
+	// preserves passthrough hooks (OnLog, OnBalanceChange, ...) we don't wrap.
 	wrapped := *inner
 	wrapped.OnTxStart = w.OnTxStart
 	wrapped.OnTxEnd = w.OnTxEnd

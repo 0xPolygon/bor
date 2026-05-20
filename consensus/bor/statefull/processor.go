@@ -200,7 +200,7 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 		}
 
 		// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
-		data, err := stateReceiverABI.Pack(method, big.NewInt(0).SetUint64(now), recordBytes)
+		data, err := stateReceiverABI.Pack(method, new(big.Int).SetUint64(now), recordBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
 		}

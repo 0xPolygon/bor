@@ -946,31 +946,25 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		})
 		// Execute the transaction and flush any traces to disk
 		statedb.SetTxContext(tx.Hash(), i)
+		from := msg.From
+		if isStateSync {
+			from = params.BorSystemAddress
+		}
+		if hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), tx, from)
+		}
 		var vmResult *core.ExecutionResult
 		if isStateSync {
-			if hooks.OnTxStart != nil {
-				hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
-			}
 			vmResult, err = statefull.ApplyStateSyncEvents(evm, tx, msg, stateReceiverAddress)
-			if hooks.OnTxEnd != nil {
-				var receipt *types.Receipt
-				if vmResult != nil {
-					receipt = &types.Receipt{GasUsed: vmResult.UsedGas}
-				}
-				hooks.OnTxEnd(receipt, err)
-			}
 		} else {
-			if hooks.OnTxStart != nil {
-				hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
-			}
 			vmResult, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
-			if hooks.OnTxEnd != nil {
-				var receipt *types.Receipt
-				if vmResult != nil {
-					receipt = &types.Receipt{GasUsed: vmResult.UsedGas}
-				}
-				hooks.OnTxEnd(receipt, err)
+		}
+		if hooks.OnTxEnd != nil {
+			var receipt *types.Receipt
+			if vmResult != nil {
+				receipt = &types.Receipt{GasUsed: vmResult.UsedGas}
 			}
+			hooks.OnTxEnd(receipt, err)
 		}
 		if writer != nil {
 			_ = writer.Flush()
