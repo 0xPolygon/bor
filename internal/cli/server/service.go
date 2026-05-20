@@ -22,7 +22,12 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
-const chunkSize = 1024 * 1024 * 1024
+// chunkSize must stay below server.go:maxGRPCMessageSize so ChunkedEncoder
+// actually splits payloads into messages small enough to pass the
+// MaxSendMsgSize cap. DebugPprof and DebugBlock can produce multi-MB outputs
+// (CPU/heap profiles, block-state dumps); each chunk becomes one stream
+// SendMsg, and the Conn.Write loop already iterates over chunks.
+const chunkSize = 16 * 1024 * 1024
 
 var ErrUnavailable = errors.New("bor service is currently unavailable, try again later")
 var ErrUnavailable2 = errors.New("bor service unavailable even after waiting for 10 seconds, make sure bor is running")

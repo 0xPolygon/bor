@@ -1076,7 +1076,7 @@ func TestTransactionFetcherRateLimiting(t *testing.T) {
 					"A": announces,
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashes[1643 : 1643+maxTxRetrievals],
+					"A": hashes[13931 : 13931+maxTxRetrievals],
 				},
 			},
 		},
@@ -1215,8 +1215,8 @@ func TestTransactionFetcherDoSProtection(t *testing.T) {
 					"B": announceB[:maxTxAnnounces/2-1],
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashesA[1643 : 1643+maxTxRetrievals],
-					"B": append(append([]common.Hash{}, hashesB[maxTxAnnounces/2-3:maxTxAnnounces/2-1]...), hashesB[:maxTxRetrievals-2]...),
+					"A": hashesA[5739 : 5739+maxTxRetrievals],
+					"B": hashesB[5540 : 5540+maxTxRetrievals],
 				},
 			},
 			// Ensure that adding even one more hash results in dropping the hash
@@ -1233,10 +1233,260 @@ func TestTransactionFetcherDoSProtection(t *testing.T) {
 					"B": announceB[:maxTxAnnounces/2-1],
 				},
 				fetching: map[string][]common.Hash{
-					"A": hashesA[1643 : 1643+maxTxRetrievals],
-					"B": append(append([]common.Hash{}, hashesB[maxTxAnnounces/2-3:maxTxAnnounces/2-1]...), hashesB[:maxTxRetrievals-2]...),
+					"A": hashesA[5739 : 5739+maxTxRetrievals],
+					"B": hashesB[5540 : 5540+maxTxRetrievals],
 				},
 			},
+		},
+	})
+}
+
+// Tests that the per-peer announcement cap (maxTxAnnounces) is aligned with the
+// sender-side queue cap (maxQueuedTxAnns = 16384). A batch of 16384 announcements
+// from a single peer must all be accepted without any being dropped.
+func TestTransactionFetcherAnnouncementCapMatchesSenderQueue(t *testing.T) {
+	var (
+		hashes    []common.Hash
+		ts        []byte
+		sizes     []uint32
+		announces []announce
+	)
+	// Generate exactly maxTxAnnounces (16384) unique hashes
+	for i := 0; i < maxTxAnnounces; i++ {
+		hash := common.Hash{byte(i / 256), byte(i % 256)}
+		hashes = append(hashes, hash)
+		ts = append(ts, types.LegacyTxType)
+		sizes = append(sizes, 111)
+		announces = append(announces, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Announce all maxTxAnnounces hashes at once — none should be dropped
+			doTxNotify{peer: "A", hashes: hashes, types: ts, sizes: sizes},
+			isWaiting(map[string][]announce{
+				"A": announces,
+			}),
+		},
+	})
+}
+
+// Tests that when a peer's announce queue is exactly at the cap, a new batch
+// is entirely dropped (the "break" path in the fetcher loop).
+func TestTransactionFetcherFullCapDropsBatch(t *testing.T) {
+	var (
+		hashes    []common.Hash
+		ts        []byte
+		sizes     []uint32
+		announces []announce
+	)
+	for i := 0; i < maxTxAnnounces; i++ {
+		hash := common.Hash{byte(i / 256), byte(i % 256)}
+		hashes = append(hashes, hash)
+		ts = append(ts, types.LegacyTxType)
+		sizes = append(sizes, 111)
+		announces = append(announces, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Fill the peer to exactly maxTxAnnounces
+			doTxNotify{peer: "A", hashes: hashes, types: ts, sizes: sizes},
+			isWaiting(map[string][]announce{
+				"A": announces,
+			}),
+			// Announce one more — the entire batch should be dropped
+			doTxNotify{peer: "A", hashes: []common.Hash{{0xff, 0x01}}, types: []byte{types.LegacyTxType}, sizes: []uint32{111}},
+			// Waitlist should remain unchanged — no new hash accepted
+			isWaiting(map[string][]announce{
+				"A": announces,
+			}),
+		},
+	})
+}
+
+// Tests that when a new batch would exceed the cap, it is trimmed to fit rather
+// than being entirely dropped (the partial truncation path).
+func TestTransactionFetcherPartialBatchTrimming(t *testing.T) {
+	var (
+		hashes    []common.Hash
+		ts        []byte
+		sizes     []uint32
+		announces []announce
+	)
+	// Fill to cap minus 2
+	for i := 0; i < maxTxAnnounces-2; i++ {
+		hash := common.Hash{byte(i / 256), byte(i % 256)}
+		hashes = append(hashes, hash)
+		ts = append(ts, types.LegacyTxType)
+		sizes = append(sizes, 111)
+		announces = append(announces, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	// Batch of 5 new hashes — only the first 2 should be accepted
+	extraHashes := []common.Hash{{0xaa, 0x01}, {0xaa, 0x02}, {0xaa, 0x03}, {0xaa, 0x04}, {0xaa, 0x05}}
+	extraTypes := []byte{types.LegacyTxType, types.LegacyTxType, types.LegacyTxType, types.LegacyTxType, types.LegacyTxType}
+	extraSizes := []uint32{111, 222, 333, 444, 555}
+
+	expectedAnnounces := make([]announce, len(announces))
+	copy(expectedAnnounces, announces)
+	expectedAnnounces = append(expectedAnnounces,
+		announce{hash: extraHashes[0], kind: types.LegacyTxType, size: 111},
+		announce{hash: extraHashes[1], kind: types.LegacyTxType, size: 222},
+	)
+
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			doTxNotify{peer: "A", hashes: hashes, types: ts, sizes: sizes},
+			isWaiting(map[string][]announce{
+				"A": announces,
+			}),
+			// Announce 5 more — only first 2 should be accepted (room for 2)
+			doTxNotify{peer: "A", hashes: extraHashes, types: extraTypes, sizes: extraSizes},
+			isWaiting(map[string][]announce{
+				"A": expectedAnnounces,
+			}),
+		},
+	})
+}
+
+// Tests that the per-peer cap is tracked independently — one peer at the cap
+// should not prevent another peer from announcing transactions.
+func TestTransactionFetcherPerPeerCapIndependence(t *testing.T) {
+	var (
+		hashesA    []common.Hash
+		typesA     []byte
+		sizesA     []uint32
+		announcesA []announce
+
+		hashesB    []common.Hash
+		typesB     []byte
+		sizesB     []uint32
+		announcesB []announce
+	)
+	// Fill peer A to the cap
+	for i := 0; i < maxTxAnnounces; i++ {
+		hash := common.Hash{0x01, byte(i / 256), byte(i % 256)}
+		hashesA = append(hashesA, hash)
+		typesA = append(typesA, types.LegacyTxType)
+		sizesA = append(sizesA, 111)
+		announcesA = append(announcesA, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	// Peer B sends a small batch — should be fully accepted
+	for i := 0; i < 10; i++ {
+		hash := common.Hash{0x02, byte(i)}
+		hashesB = append(hashesB, hash)
+		typesB = append(typesB, types.LegacyTxType)
+		sizesB = append(sizesB, 222)
+		announcesB = append(announcesB, announce{hash: hash, kind: types.LegacyTxType, size: 222})
+	}
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Fill peer A to the cap
+			doTxNotify{peer: "A", hashes: hashesA, types: typesA, sizes: sizesA},
+			isWaiting(map[string][]announce{
+				"A": announcesA,
+			}),
+			// Peer A's additional announce should be dropped
+			doTxNotify{peer: "A", hashes: []common.Hash{{0xff}}, types: []byte{types.LegacyTxType}, sizes: []uint32{111}},
+			isWaiting(map[string][]announce{
+				"A": announcesA,
+			}),
+			// Peer B should still be able to announce freely
+			doTxNotify{peer: "B", hashes: hashesB, types: typesB, sizes: sizesB},
+			isWaiting(map[string][]announce{
+				"A": announcesA,
+				"B": announcesB,
+			}),
+		},
+	})
+}
+
+// Tests that the per-peer cap accounts for transactions in both the waitlist
+// (stage 1) and the scheduled set (stage 2). A peer at the cap across both
+// stages cannot announce more.
+func TestTransactionFetcherCapSpansWaitAndScheduled(t *testing.T) {
+	var (
+		hashesFirst    []common.Hash
+		typesFirst     []byte
+		sizesFirst     []uint32
+		announcesFirst []announce
+
+		hashesSecond    []common.Hash
+		typesSecond     []byte
+		sizesSecond     []uint32
+		announcesSecond []announce
+	)
+	half := maxTxAnnounces / 2
+	// First half will be moved to scheduled (stage 2) after the wait timeout
+	for i := 0; i < half; i++ {
+		hash := common.Hash{byte(i / 256), byte(i % 256)}
+		hashesFirst = append(hashesFirst, hash)
+		typesFirst = append(typesFirst, types.LegacyTxType)
+		sizesFirst = append(sizesFirst, 111)
+		announcesFirst = append(announcesFirst, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	// Second half will stay in waitlist (stage 1)
+	for i := half; i < maxTxAnnounces; i++ {
+		hash := common.Hash{byte(i / 256), byte(i % 256)}
+		hashesSecond = append(hashesSecond, hash)
+		typesSecond = append(typesSecond, types.LegacyTxType)
+		sizesSecond = append(sizesSecond, 111)
+		announcesSecond = append(announcesSecond, announce{hash: hash, kind: types.LegacyTxType, size: 111})
+	}
+	testTransactionFetcherParallel(t, txFetcherTest{
+		init: func() *TxFetcher {
+			return NewTxFetcher(
+				func(common.Hash) bool { return false },
+				nil,
+				func(string, []common.Hash) error { return nil },
+				nil,
+			)
+		},
+		steps: []interface{}{
+			// Announce first half, let them move to scheduled
+			doTxNotify{peer: "A", hashes: hashesFirst, types: typesFirst, sizes: sizesFirst},
+			doWait{time: txArriveTimeout, step: true},
+			isWaiting(nil),
+			// Announce second half — should fill the remaining cap in waitlist
+			doTxNotify{peer: "A", hashes: hashesSecond, types: typesSecond, sizes: sizesSecond},
+			isWaiting(map[string][]announce{
+				"A": announcesSecond,
+			}),
+			// Try one more — should be dropped because waitslots + announces = maxTxAnnounces
+			doTxNotify{peer: "A", hashes: []common.Hash{{0xff, 0xff}}, types: []byte{types.LegacyTxType}, sizes: []uint32{111}},
+			isWaiting(map[string][]announce{
+				"A": announcesSecond,
+			}),
 		},
 	})
 }

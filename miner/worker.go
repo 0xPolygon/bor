@@ -84,6 +84,28 @@ const (
 	// so there are no competing miners and no uncle block concept. Any non-canonical block
 	// is immediately stale and can be discarded, hence staleThreshold is set to 0.
 	staleThreshold = 0
+
+	// interruptBuffer is the buffer time to give some buffer for state root computation
+	interruptBuffer = 100 * time.Millisecond
+
+	// prefetchChanBufSize is the default buffer for the unified prefetcher's tx
+	// stream channel. ≈ one full block's worth of 21k-gas txs at the 100M-gas
+	// block limit. Sized to absorb the idle provider's per-loop burst (bounded
+	// by gas budget) without ever blocking a sender; workers drain far faster
+	// than the idle heap can fill in practice. Channel memory is ~33 KB.
+	prefetchChanBufSize = 4096
+
+	// prefetchIdleLoopInterval is the minimum cadence between idle-phase pool
+	// snapshots in runIdleTxProvider.
+	prefetchIdleLoopInterval = 100 * time.Millisecond
+
+	// prefetchDefaultGasLimitPercent is the default percentage of header
+	// gas limit used as the idle-phase prefetch budget when unconfigured.
+	prefetchDefaultGasLimitPercent = 100
+
+	// prefetchMaxGasLimitPercent caps the idle-phase prefetch gas budget to
+	// guard against misconfiguration DoS.
+	prefetchMaxGasLimitPercent = 150
 )
 
 var (
@@ -98,11 +120,21 @@ var (
 
 	// txHeapInitTimer measures time taken to initialise a heap of pending transactions from pool
 	txHeapInitTimer = metrics.NewRegisteredTimer("worker/txheapinit", nil)
+	// prepareWorkTimer measures time taken to prepare environment for block building which
+	// includes the `bor.Prepare` call as well.
+	prepareWorkTimer = metrics.NewRegisteredTimer("worker/prepareWork", nil)
+	// pendingTimer measures time taken to fetch transactions from pool in the actual block
+	// building cycle (excluding the calls made by prefetcher).
+	pendingTimer = metrics.NewRegisteredTimer("worker/pending", nil)
 	// commitTransactionsTimer measures time taken to execute transactions
 	commitTransactionsTimer = metrics.NewRegisteredTimer("worker/commitTransactions", nil)
 	// txApplyDurationTimer captures per-transaction apply latency during block building.
 	// Uses a larger reservoir to preserve tail visibility on high-throughput blocks.
 	txApplyDurationTimer = newRegisteredCustomTimer("worker/txApplyDuration", 8192)
+	// Split variants of txApplyDuration by prefetch status. The aggregate timer
+	// above stays to preserve existing Grafana dashboards.
+	txApplyDurationPrefetchedTimer    = newRegisteredCustomTimer("worker/txApplyDuration/prefetched", 8192)
+	txApplyDurationNotPrefetchedTimer = newRegisteredCustomTimer("worker/txApplyDuration/notPrefetched", 8192)
 	// finalizeAndAssembleTimer measures time taken to finalize and assemble the block (state root calculation).
 	// NOT emitted when pipelined SRC is enabled: the pipelined path uses
 	// FinalizeForPipeline, which deliberately skips the inline IntermediateRoot
@@ -151,6 +183,16 @@ var (
 	// Values range 0-100. High percentiles indicate prefetch degradation.
 	prefetchMissRateHistogram = metrics.NewRegisteredHistogram(
 		"worker/prefetch/miss_rate_percent",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
+
+	// prefetchBuilderAddedHistogram tracks the percentage of block transactions that were
+	// prefetched exclusively during the builder phase (i.e. would have been a miss if the
+	// idle phase had been the only prefetch source). Directly measures the payoff of the
+	// builder-phase prefetch over the aggregate miss rate above.
+	prefetchBuilderAddedHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/builder_added_percent",
 		nil,
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
@@ -243,6 +285,17 @@ type environment struct {
 	// Readers with stats tracking for metrics reporting
 	prefetchReader state.ReaderWithStats
 	processReader  state.ReaderWithStats
+
+	// prefetchedTxHashes is the live set written by the prefetch stream's
+	// onSuccess callback. Read at tx-commit time to annotate slow-tx logs and
+	// split the apply-duration histogram by prefetch status. May be nil.
+	prefetchedTxHashes *sync.Map
+
+	// Observability for pre block building phase
+	makeEnvDuration    time.Duration
+	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
+	// Track time taken to fetch pending transactions during block building
+	pendingDuration time.Duration
 }
 
 type buildInterruptState struct {
@@ -264,16 +317,20 @@ func (s *buildInterruptState) timeoutFlag() *atomic.Bool {
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
-		signer:         env.signer,
-		state:          env.state.Copy(),
-		tcount:         env.tcount,
-		coinbase:       env.coinbase,
-		buildInterrupt: newBuildInterruptState(),
-		header:         types.CopyHeader(env.header),
-		receipts:       copyReceipts(env.receipts),
-		mvReadMapList:  env.mvReadMapList,
-		prefetchReader: env.prefetchReader,
-		processReader:  env.processReader,
+		signer:             env.signer,
+		state:              env.state.Copy(),
+		tcount:             env.tcount,
+		coinbase:           env.coinbase,
+		buildInterrupt:     newBuildInterruptState(),
+		header:             types.CopyHeader(env.header),
+		receipts:           copyReceipts(env.receipts),
+		mvReadMapList:      env.mvReadMapList,
+		prefetchReader:     env.prefetchReader,
+		processReader:      env.processReader,
+		prefetchedTxHashes: env.prefetchedTxHashes,
+		makeEnvDuration:    env.makeEnvDuration,
+		makeHeaderDuration: env.makeHeaderDuration,
+		pendingDuration:    env.pendingDuration,
 	}
 
 	if env.gasPool != nil {
@@ -941,6 +998,14 @@ func (w *worker) mainLoop() {
 	for {
 		select {
 		case req := <-w.newWorkCh:
+			// When DisablePendingBlock is set and the worker is not actively producing
+			// blocks (non-validator), skip commitWork entirely — its only purpose in
+			// that case is to maintain the pending block snapshot for RPC.
+			if w.config.DisablePendingBlock && !w.IsRunning() {
+				w.pendingWorkBlock.Store(0)
+				continue
+			}
+
 			abortRecovery := w.nextCommitAbortRecovery.Swap(false)
 			if w.chainConfig.ChainID.Cmp(params.BorMainnetChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.MumbaiChainConfig.ChainID) == 0 || w.chainConfig.ChainID.Cmp(params.AmoyChainConfig.ChainID) == 0 {
 				if w.eth.PeerCount() > 0 || devFakeAuthor {
@@ -965,7 +1030,7 @@ func (w *worker) mainLoop() {
 			// already included in the current sealing block. These transactions will
 			// be automatically eliminated.
 			// nolint : nestif
-			if !w.IsRunning() && w.current != nil {
+			if !w.IsRunning() && !w.config.DisablePendingBlock && w.current != nil {
 				// If block is already full, abort
 				if gp := w.current.gasPool; gp != nil && gp.Gas() < params.TxGas {
 					continue
@@ -1009,7 +1074,7 @@ func (w *worker) mainLoop() {
 
 				tcount := w.current.tcount
 
-				w.commitTransactions(w.current, plainTxs, blobTxs, nil)
+				w.commitTransactions(w.current, plainTxs, blobTxs, nil, nil)
 				stopFn()
 
 				// Only update the snapshot if any new transactons were added
@@ -1090,7 +1155,12 @@ func (w *worker) taskLoop() {
 			w.pendingMu.Unlock()
 
 			if err := w.engine.Seal(w.chain, task.block, task.state.Witness(), w.resultCh, stopCh); err != nil {
-				log.Warn("Block sealing failed", "err", err)
+				switch err.(type) {
+				case *bor.UnauthorizedSignerError:
+					log.Debug("Block sealing skipped (not in validator set)", "err", err)
+				default:
+					log.Warn("Block sealing failed", "err", err)
+				}
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
 				w.pendingMu.Unlock()
@@ -1344,16 +1414,17 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:         types.MakeSigner(w.chainConfig, header.Number, header.Time),
-		state:          state,
-		size:           uint64(header.Size()),
-		coinbase:       coinbase,
-		buildInterrupt: newBuildInterruptState(),
-		header:         header,
-		witness:        state.Witness(),
-		evm:            vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
-		prefetchReader: genParams.prefetchReader,
-		processReader:  genParams.processReader,
+		signer:             types.MakeSigner(w.chainConfig, header.Number, header.Time),
+		state:              state,
+		size:               uint64(header.Size()),
+		coinbase:           coinbase,
+		buildInterrupt:     newBuildInterruptState(),
+		header:             header,
+		witness:            state.Witness(),
+		evm:                vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, w.vmConfig()),
+		prefetchReader:     genParams.prefetchReader,
+		processReader:      genParams.processReader,
+		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
 	env.evm.SetInterrupt(env.buildInterrupt.timeoutFlag())
 
@@ -1402,7 +1473,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	return receipt.Logs, nil
 }
 
-func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
+func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32, builderGasFreedCh chan<- uint64) error {
 	defer func(t0 time.Time) {
 		commitTransactionsTimer.Update(time.Since(t0))
 	}(time.Now())
@@ -1597,6 +1668,8 @@ mainloop:
 		lastTxSender = from
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
+		// Capture gas pool before execution so we can compute freed gas afterwards.
+		gasPoolBefore := env.gasPool.Gas()
 		logs, err := w.commitTransaction(env, tx)
 		txDuration := time.Since(lastCommitStart)
 
@@ -1612,11 +1685,29 @@ mainloop:
 		case errors.Is(err, nil):
 			// Everything ok, collect the logs and shift in the next transaction from the same account
 			coalescedLogs = append(coalescedLogs, logs...)
+			prefetched := false
+			if env.prefetchedTxHashes != nil {
+				_, prefetched = env.prefetchedTxHashes.Load(tx.Hash())
+			}
 			if metrics.Enabled() {
 				txApplyDurationTimer.Update(txDuration)
+				if prefetched {
+					txApplyDurationPrefetchedTimer.Update(txDuration)
+				} else {
+					txApplyDurationNotPrefetchedTimer.Update(txDuration)
+				}
 			}
 			if w.IsRunning() {
-				w.slowTxTracker.Add(txTimingEntry{hash: tx.Hash(), duration: txDuration})
+				var gasUsed uint64
+				if n := len(env.receipts); n > 0 {
+					gasUsed = env.receipts[n-1].GasUsed
+				}
+				w.slowTxTracker.Add(txTimingEntry{
+					hash:       tx.Hash(),
+					duration:   txDuration,
+					gasUsed:    gasUsed,
+					prefetched: prefetched,
+				})
 			}
 
 			if EnableMVHashMap && w.IsRunning() {
@@ -1639,6 +1730,19 @@ mainloop:
 			}
 
 			txs.Shift()
+
+			// Report freed gas to the prefetcher so it can predict overflow txs.
+			// freed = declared gas limit − actual gas used; non-zero means the block
+			// has more capacity than the plan assumed, enabling extra txs to fit.
+			if builderGasFreedCh != nil && ltx.Gas > 0 {
+				actualUsed := gasPoolBefore - env.gasPool.Gas()
+				if freed := ltx.Gas - actualUsed; freed > 0 {
+					select {
+					case builderGasFreedCh <- freed:
+					default:
+					}
+				}
+			}
 
 		case errors.Is(err, vm.ErrInterrupt):
 			// Timeout interrupt surfaced from EVM execution for this tx.
@@ -1755,20 +1859,26 @@ func (w *worker) buildTxDependencyArray(env *environment, deps map[int]map[int]b
 
 // generateParams wraps various of settings for generating sealing task.
 type generateParams struct {
-	timestamp          uint64                // The timestamp for sealing task
-	forceTime          bool                  // Flag whether the given timestamp is immutable or not
-	parentHash         common.Hash           // Parent block hash, empty means the latest chain head
-	coinbase           common.Address        // The fee recipient address for including transaction
-	abortRecovery      bool                  // Flag that this build is rebuilding a discarded speculative block
-	random             common.Hash           // The randomness generated by beacon chain, empty before the merge
-	withdrawals        types.Withdrawals     // List of withdrawals to include in block.
-	beaconRoot         *common.Hash          // The beacon root (cancun field).
-	noTxs              bool                  // Flag whether an empty block without any transaction is expected
-	statedb            *state.StateDB        // The statedb to use for block generation
-	prefetchReader     state.ReaderWithStats // The prefetch reader to use for statistics
-	processReader      state.ReaderWithStats // The process reader to use for statistics
-	prefetchedTxHashes *sync.Map             // Map of successfully prefetched transaction hashes
-	productionStart    time.Time             // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	timestamp                 uint64                  // The timestamp for sealing task
+	forceTime                 bool                    // Flag whether the given timestamp is immutable or not
+	parentHash                common.Hash             // Parent block hash, empty means the latest chain head
+	coinbase                  common.Address          // The fee recipient address for including transaction
+	abortRecovery             bool                    // Flag that this build is rebuilding a discarded speculative block
+	random                    common.Hash             // The randomness generated by beacon chain, empty before the merge
+	withdrawals               types.Withdrawals       // List of withdrawals to include in block.
+	beaconRoot                *common.Hash            // The beacon root (cancun field).
+	noTxs                     bool                    // Flag whether an empty block without any transaction is expected
+	statedb                   *state.StateDB          // The statedb to use for block generation
+	prefetchReader            state.ReaderWithStats   // The prefetch reader to use for statistics
+	processReader             state.ReaderWithStats   // The process reader to use for statistics
+	prefetchedTxHashes        *sync.Map               // Map of successfully prefetched transaction hashes
+	builderPrefetchedTxHashes *sync.Map               // Subset of prefetchedTxHashes populated only during the builder phase; used to measure builder-phase contribution
+	productionStart           time.Time               // Start of full-block building (after optional empty pre-seal); used for productionElapsed
+	preBuildDuration          time.Duration           // Duration of pre block build phase
+	builderStarted            *atomic.Bool            // Set when block building begins; immediately interrupts the idle Prefetch() call and triggers builder-mode prefetching
+	builderPlanCh             chan *types.Transaction // Builder sends each validated tx here before execution; prefetcher reads and warms state concurrently
+	builderGasFreedCh         chan uint64             // Builder sends (declared−actual) gas after each successful tx; prefetcher uses it to predict overflow txs
+	planWg                    sync.WaitGroup          // Tracks sendPlan goroutines; must reach zero before builderPlanCh is closed
 }
 
 // makeHeader creates a new block header for sealing.
@@ -1853,19 +1963,24 @@ func (w *worker) prepareWork(genParams *generateParams, witness bool) (*environm
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
+	makeHeaderStart := time.Now()
 	header, coinbase, err := w.makeHeader(genParams, true)
 	if err != nil {
 		return nil, err
 	}
+	makeHeaderDuration := time.Since(makeHeaderStart)
 
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
+	makeEnvStart := time.Now()
 	env, err := w.makeEnv(header, coinbase, witness, genParams)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
+	env.makeEnvDuration = time.Since(makeEnvStart)
+	env.makeHeaderDuration = makeHeaderDuration
 	if header.ParentBeaconRoot != nil {
 		context := core.NewEVMBlockContext(header, w.chain, nil)
 		vmenv := vm.NewEVM(context, env.state, w.chainConfig, w.vmConfig())
@@ -1906,13 +2021,144 @@ func (w *worker) buildDefaultFilter(BaseFee *big.Int, Number *big.Int) txpool.Pe
 	return filter
 }
 
+// buildTxPlan greedily scans h (which is consumed) and returns the ordered list of
+// transactions the builder is predicted to include, using declared gas limits as the
+// budget. Already-prefetched transactions are excluded from the list but still counted
+// against the gas budget so the estimate stays accurate.
+//
+// Callers that need the original heap unmodified must pass a clone: h.clone().
+//
+// The plan is a conservative lower bound: freed gas (actual < declared) means some
+// bonus txs may fit that are absent from the plan; those are covered by the per-tx
+// channel sends inside commitTransactions.
+func buildTxPlan(h *transactionsByPriceAndNonce, gasLimit uint64, prefetchedHashes *sync.Map) []*types.Transaction {
+	var plan []*types.Transaction
+	remaining := gasLimit
+	for {
+		ltx, _ := h.Peek()
+		if ltx == nil {
+			break
+		}
+		if ltx.Gas > remaining {
+			h.Pop() // Too large for remaining space; abandon account (mirrors commitTransactions)
+			continue
+		}
+		// Already warmed during idle prefetch — count against gas budget but skip the send.
+		// Deliberate: the tx is still bound for the block, so its gas is consumed here.
+		if prefetchedHashes != nil {
+			if _, done := prefetchedHashes.Load(ltx.Hash); done {
+				remaining -= ltx.Gas
+				h.Shift()
+				continue
+			}
+		}
+		tx := ltx.Resolve()
+		if tx == nil {
+			// Resolve failed (tx evicted from the pool between listing and here);
+			// don't consume budget for a tx that won't make the block.
+			h.Pop()
+			continue
+		}
+		remaining -= ltx.Gas
+		plan = append(plan, tx)
+		h.Shift()
+	}
+	return plan
+}
+
+// sendPlan forwards the residual (not-yet-prefetched) transactions to the prefetcher
+// plan channel before execution begins. The heap clone is made synchronously — it
+// must happen before commitTransactions consumes the heap. The scan and channel sends
+// run in a goroutine so the builder's critical path is not blocked.
+//
+// Already-prefetched txs are excluded from the send but still counted in the gas
+// budget so the estimate stays accurate. Bonus txs that fit due to freed gas are
+// covered by the prefetcher's own overflow heap driven by builderGasFreedCh.
+func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams, plainTxs *transactionsByPriceAndNonce, gasLimit uint64) {
+	if builderPlanCh == nil || genParams == nil || plainTxs == nil {
+		return
+	}
+	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
+	clone := plainTxs.clone()
+	prefetchedHashes := genParams.prefetchedTxHashes
+	genParams.planWg.Add(1)
+	go func() {
+		defer genParams.planWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("sendPlan goroutine panicked", "err", r, "stack", string(debug.Stack()))
+				prefetchPanicMeter.Mark(1)
+			}
+		}()
+		for _, tx := range buildTxPlan(clone, gasLimit, prefetchedHashes) {
+			select {
+			case builderPlanCh <- tx:
+			default:
+			}
+		}
+	}()
+}
+
+// scanOverflow greedily pops transactions from the heap that fit within the freed-gas
+// budget, returning new txs to prefetch and the remaining budget. Already-prefetched
+// txs are skipped entirely (not counted against the budget) because the freed gas
+// represents extra block capacity beyond the existing plan — plan txs' gas is already
+// committed to the main gas pool and should not be double-counted here.
+func scanOverflow(
+	h *transactionsByPriceAndNonce,
+	budget uint64,
+	prefetchedHashes *sync.Map,
+	inFlightHashes map[common.Hash]struct{},
+) ([]*types.Transaction, uint64) {
+	var bonus []*types.Transaction
+	remaining := budget
+	for {
+		ltx, _ := h.Peek()
+		if ltx == nil {
+			break
+		}
+		// Skip already-prefetched (planned) txs without consuming freed budget:
+		// their gas is already accounted for in the main block gas pool.
+		if prefetchedHashes != nil {
+			if _, done := prefetchedHashes.Load(ltx.Hash); done {
+				h.Shift()
+				continue
+			}
+		}
+		// Skip txs still in-flight from an earlier plan-batch forward. They
+		// aren't in prefetchedHashes yet (onSuccess hasn't fired), but a worker
+		// is already executing them — emitting again just burns a second worker
+		// on the same tx.
+		if _, inflight := inFlightHashes[ltx.Hash]; inflight {
+			h.Shift()
+			continue
+		}
+		if ltx.Gas > remaining {
+			// Don't pop: extendedBudget accumulates across iterations, so an
+			// account too large for this window may fit in a later one. Popping
+			// would permanently evict price-leading accounts that the builder
+			// is most likely to include.
+			break
+		}
+		tx := ltx.Resolve()
+		if tx == nil {
+			h.Pop()
+			continue
+		}
+		remaining -= ltx.Gas
+		bonus = append(bonus, tx)
+		h.Shift()
+	}
+	return bonus, remaining
+}
+
 // fillTransactions retrieves the pending transactions from the txpool and fills them
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
 
 //
 //nolint:gocognit
-func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) error {
+func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
 	if w.interruptBlockBuilding.Load() {
 		return nil
 	}
@@ -1920,6 +2166,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	w.mu.RLock()
 	prio := w.prio
 	w.mu.RUnlock()
+
+	pendingStart := time.Now()
 
 	filter := w.buildDefaultFilter(env.header.BaseFee, env.header.Number)
 	timeoutInterrupt := env.buildInterrupt.timeoutFlag()
@@ -1934,6 +2182,9 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		filter.BlobVersion = types.BlobSidecarVersion0
 	}
 	pendingBlobTxs := w.eth.TxPool().Pending(filter, timeoutInterrupt)
+
+	env.pendingDuration = time.Since(pendingStart)
+	pendingTimer.Update(env.pendingDuration)
 
 	// Split the pending transactions into locals and remotes.
 	prioPlainTxs, normalPlainTxs := make(map[common.Address][]*txpool.LazyTransaction), pendingPlainTxs
@@ -1950,37 +2201,47 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
-	// Fill with priority (locals/first-class) txs first — no heap-init timing
-	// for the priority pool (matches prior behavior).
-	if err := w.commitTxMaps(env, prioPlainTxs, prioBlobTxs, timeoutInterrupt, interrupt, false); err != nil {
-		return err
+	// Shared channels used during builder mode. Both are nil when there is no prefetcher.
+	var builderPlanCh chan<- *types.Transaction
+	var builderGasFreedCh chan<- uint64
+	if genParams != nil && genParams.builderPlanCh != nil {
+		builderPlanCh = genParams.builderPlanCh
+		if genParams.builderGasFreedCh != nil {
+			builderGasFreedCh = genParams.builderGasFreedCh
+		}
 	}
-	// Then fill with normal pool txs; records txHeapInitTimer for the normal
-	// heap construction (the hot path for the producer under load).
-	return w.commitTxMaps(env, normalPlainTxs, normalBlobTxs, timeoutInterrupt, interrupt, true)
-}
 
-// commitTxMaps runs commitTransactions on the given plain/blob maps when at
-// least one is non-empty. measureHeapInit gates the txHeapInitTimer update so
-// only the normal-pool path records it (priority-pool heap is typically
-// smaller and not the tail-latency hot spot).
-func (w *worker) commitTxMaps(
-	env *environment,
-	plainMap, blobMap map[common.Address][]*txpool.LazyTransaction,
-	timeoutInterrupt *atomic.Bool,
-	interrupt *atomic.Int32,
-	measureHeapInit bool,
-) error {
-	if len(plainMap) == 0 && len(blobMap) == 0 {
-		return nil
+	// remainingGas returns the block gas still available for the next
+	// commitTransactions pass. Before the first pass env.gasPool is nil, so we
+	// fall back to the full header limit.
+	remainingGas := func() uint64 {
+		if env.gasPool == nil {
+			return env.header.GasLimit
+		}
+		return env.gasPool.Gas()
 	}
-	heapInitStart := time.Now()
-	plainTxs := newTransactionsByPriceAndNonce(env.signer, plainMap, env.header.BaseFee, timeoutInterrupt)
-	blobTxs := newTransactionsByPriceAndNonce(env.signer, blobMap, env.header.BaseFee, timeoutInterrupt)
-	if measureHeapInit {
-		txHeapInitTimer.Update(time.Since(heapInitStart))
+
+	// Fill the block with all available pending transactions.
+	if len(prioPlainTxs) > 0 || len(prioBlobTxs) > 0 {
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, prioPlainTxs, env.header.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, prioBlobTxs, env.header.BaseFee, timeoutInterrupt)
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
+		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
+			return err
+		}
 	}
-	return w.commitTransactions(env, plainTxs, blobTxs, interrupt)
+	if len(normalPlainTxs) > 0 || len(normalBlobTxs) > 0 {
+		heapInitTime := time.Now()
+		plainTxs := newTransactionsByPriceAndNonce(env.signer, normalPlainTxs, env.header.BaseFee, timeoutInterrupt)
+		blobTxs := newTransactionsByPriceAndNonce(env.signer, normalBlobTxs, env.header.BaseFee, timeoutInterrupt)
+		txHeapInitTimer.Update(time.Since(heapInitTime))
+		sendPlan(builderPlanCh, genParams, plainTxs, remainingGas())
+		if err := w.commitTransactions(env, plainTxs, blobTxs, interrupt, builderGasFreedCh); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // generateWork generates a sealing block based on the given parameters.
@@ -1999,7 +2260,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 		})
 		defer timer.Stop()
 
-		err := w.fillTransactions(interrupt, work)
+		err := w.fillTransactions(interrupt, work, nil)
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
@@ -2055,6 +2316,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 	if w.syncing.Load() {
 		return
 	}
+	buildStart := time.Now()
 	defer w.clearPendingWorkOnExit()()
 
 	var coinbase common.Address
@@ -2081,6 +2343,7 @@ func (w *worker) commitWork(interrupt *atomic.Int32, noempty bool, timestamp int
 		prefetchReader:     prefetchReader,
 		processReader:      processReader,
 		prefetchedTxHashes: &sync.Map{},
+		preBuildDuration:   time.Since(buildStart),
 	}
 
 	var interruptPrefetch atomic.Bool
@@ -2111,6 +2374,11 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 	if !w.config.EnablePrefetch || w.chainConfig.Bor == nil || !w.chainConfig.Bor.IsGiugliano(newBlockNumber) {
 		return
 	}
+	// Only allocate the builder-mode signal when a prefetcher will consume it.
+	// Downstream paths gate planning work on builderStarted != nil, so leaving
+	// it nil means zero overhead when prefetch is disabled.
+	genParams.builderStarted = new(atomic.Bool)
+	genParams.builderPrefetchedTxHashes = &sync.Map{}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -2120,7 +2388,7 @@ func (w *worker) maybeStartPrefetch(parent *types.Header, throwaway *state.State
 		}()
 		// Go's GC keeps throwaway alive while this goroutine references it;
 		// released when the goroutine exits after prefetch completes.
-		w.prefetchFromPool(parent, throwaway, genParams, interruptPrefetch)
+		w.runPrefetcher(parent, throwaway, genParams, interruptPrefetch)
 	}()
 }
 
@@ -2139,20 +2407,56 @@ func (w *worker) submitForSealing(work *environment, start time.Time, genParams 
 }
 
 func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genParams *generateParams, interruptPrefetch *atomic.Bool) {
+	// Must be the first defer so the prefetcher goroutine is signaled to exit
+	// on every return path — including the early return below when prepareWork
+	// fails. Otherwise runIdleTxProvider loops until gas exhaustion, burning
+	// CPU on throwaway EVM work while the block build is already aborted.
+	defer interruptPrefetch.Store(true)
+
+	prepareWorkStart := time.Now()
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
 		return
 	}
+	prepareWorkDuration := time.Since(prepareWorkStart)
+	prepareWorkTimer.Update(prepareWorkDuration)
 
 	// Starts accounting time after prepareWork. Slot timing is handled in Seal
 	// for sequential paths and explicitly in the pipeline path.
 	start := time.Now()
-	interruptPrefetch.Store(true)
+
+	// Create the builder plan channel before signalling builder mode so the prefetcher goroutine
+	// always finds a valid channel when it transitions. The buffer covers a full block's worth
+	// of transactions with room to spare; the builder never blocks on a full buffer because
+	// all sends are non-blocking.
+	if genParams.builderStarted != nil {
+		genParams.builderPlanCh = make(chan *types.Transaction, prefetchChanBufSize)
+		genParams.builderGasFreedCh = make(chan uint64, 256)
+		genParams.builderStarted.Store(true) // immediately interrupts idle Prefetch() + mode switch
+	}
 
 	stopFn := func() {}
 	defer func() {
 		stopFn()
 	}()
+
+	timeUntilInterrupt := time.Until(work.header.GetActualTime())
+	if timeUntilInterrupt > time.Second {
+		timeUntilInterrupt -= interruptBuffer
+	}
+	parent := w.chain.CurrentBlock()
+	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+		"buildStart(ms)", prepareWorkStart.UnixMilli(),
+		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+		"parentTime", parent.Time,
+		"parentActualTime(ms)", parent.GetActualTime().UnixMilli(),
+		"headerTime", work.header.Time,
+		"headerActualTime(ms)", work.header.GetActualTime().UnixMilli(),
+		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+	)
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
@@ -2183,7 +2487,21 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// productionElapsed for the full block does not include empty-block overhead.
 	genParams.productionStart = time.Now()
 	// Fill pending transactions from the txpool into the block.
-	err = w.fillTransactions(interrupt, work)
+	err = w.fillTransactions(interrupt, work, genParams)
+	// Wait for any sendPlan goroutines to finish before closing the channel.
+	// These goroutines do only non-blocking sends so they complete in microseconds.
+	// Waiting here ensures no goroutine sends to a closed channel.
+	genParams.planWg.Wait()
+	// Close gas freed channel first so the prefetcher sees it as exhausted before
+	// the plan channel closes — the prefetcher exits on plan channel close.
+	if genParams.builderGasFreedCh != nil {
+		close(genParams.builderGasFreedCh)
+	}
+	// Signal the prefetcher that no more transactions will be sent. The prefetcher drains
+	// any remaining channel entries and then exits naturally.
+	if genParams.builderPlanCh != nil {
+		close(genParams.builderPlanCh)
+	}
 
 	switch {
 	case err == nil:
@@ -2225,129 +2543,379 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	w.currentMu.Unlock()
 }
 
-func (w *worker) prefetchFromPool(parent *types.Header, throwaway *state.StateDB, genParams *generateParams, interruptPrefetch *atomic.Bool) {
-	const minLoopInterval = 100 * time.Millisecond
-
-	baseFee := eip1559.CalcBaseFee(w.chainConfig, parent)
-	number := new(big.Int).Add(parent.Number, common.Big1)
-	filter := w.buildDefaultFilter(baseFee, number)
-	filter.BlobTxs = false
-
-	// Acquire read lock to safely access w.extra in makeHeader
+// runPrefetcher owns the lifecycle of the unified prefetcher stream for one block.
+// It starts a single long-lived worker pool (via PrefetchStream), runs the idle tx
+// provider until the builder flips, executes the idle→builder handoff, and then
+// runs the builder tx provider until block building completes.
+//
+// The handoff between phases uses the prefetcher's soft-interrupt (evmAbort) to
+// abort any in-flight idle tx execution and drain buffered idle txs from the
+// stream channel, so only builder txs reach the worker pool from that point on.
+// hardKill is the permanent stream-exit signal (set by buildAndCommitBlock on exit).
+func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, genParams *generateParams, hardKill *atomic.Bool) {
 	w.mu.RLock()
 	header, _, err := w.makeHeader(genParams, false)
 	w.mu.RUnlock()
-
 	if err != nil {
 		return
 	}
-	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
+
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
+	txsCh := make(chan *types.Transaction, prefetchChanBufSize)
+	evmAbort := new(atomic.Bool)
+	// inBuilderPhase gates builder-phase attribution. Flipped to true only
+	// after the idle→builder handoff completes (evmAbort drain + reset), so
+	// any onSuccess call firing after that point is known to come from
+	// post-handoff work. Using genParams.builderStarted directly would open a
+	// small attribution race: buildAndCommitBlock sets builderStarted=true
+	// before runPrefetcher reaches the handoff, and an idle-phase tx whose
+	// EVM work finishes between those two moments would otherwise be
+	// miscounted as builder.
+	//
+	// Residual edge case: a worker that finished ApplyMessage but is still
+	// inside IntermediateRoot(true) (not interruptible by evmAbort) when the
+	// handoff completes could still reach onSuccess after inBuilderPhase=true,
+	// inflating builder attribution by at most one tx. Handoff is sub-
+	// millisecond in practice while IntermediateRoot spans microseconds to
+	// low milliseconds, so the window is tiny but not zero.
+	inBuilderPhase := new(atomic.Bool)
 
-	// Initialize total gas pool with configured percentage of header gas limit
-	gasLimitPercent := w.config.PrefetchGasLimitPercent
-	if gasLimitPercent == 0 {
-		gasLimitPercent = 100 // Default to 100% if not configured
+	onSuccess := func(hash common.Hash, _ uint64) {
+		if genParams.prefetchedTxHashes != nil {
+			genParams.prefetchedTxHashes.Store(hash, struct{}{})
+		}
+		if inBuilderPhase.Load() && genParams.builderPrefetchedTxHashes != nil {
+			genParams.builderPrefetchedTxHashes.Store(hash, struct{}{})
+		}
 	}
-	// Defensive cap at 150% to prevent misconfiguration DoS
-	if gasLimitPercent > 150 {
-		log.Warn("Prefetch gas limit percent exceeds maximum, capping at 150%", "configured", gasLimitPercent)
-		gasLimitPercent = 150
-	}
-	totalGasLimit := header.GasLimit * gasLimitPercent / 100
-	totalGasPool := new(core.GasPool).AddGas(totalGasLimit)
 
-	txsAlreadyPrefetched := make(map[common.Hash]struct{})
-	loopIteration := 0
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		// intermediateRootPrefetch=false: benchmarks (state_prefetcher_intermediate_root_test.go)
+		// show the per-tx IntermediateRoot adds ~80–130% prefetch wall time for ≤10%
+		// commit speedup (≈0.1 ms). With snapshots active, the warming target is
+		// pebble's block cache, which under realistic clean-cache sizes is already
+		// resident. Upstream go-ethereum's prefetcher does not compute intermediate
+		// roots either.
+		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), false,
+			hardKill, evmAbort, txsCh, onSuccess)
+	}()
+
+	// Defer the shutdown so a panic in either provider still releases the
+	// workers. Without this, range-over-channel blocks forever (hardKill is
+	// checked only after dequeue) and N+1 goroutines leak per panicking block.
+	// sync.Once protects against the normal-exit close() racing with this
+	// deferred close — the normal path does it explicitly below for deterministic
+	// ordering with <-streamDone.
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			evmAbort.Store(true)
+			close(txsCh)
+		})
+	}
+	defer shutdown()
+
+	// Phase 1: idle tx provider — streams pool txs until builder flips or hardKill fires.
+	w.runIdleTxProvider(txsCh, header, genParams, hardKill)
+
+	// Phase 2: builder tx provider, if we actually switched modes.
+	if genParams.builderStarted != nil && genParams.builderStarted.Load() && !hardKill.Load() {
+		// Handoff: abort in-flight idle work and drain buffered idle txs so only
+		// builder txs reach the pool from here on. Then clear abort and run builder.
+		// Any in-flight idle EVM execution aborts via evmAbort; workers finish their
+		// current tx quickly (IntermediateRoot is the only non-interruptible work)
+		// and move on. Workers that pick up a drained-but-not-gone tx see evmAbort=true
+		// and skip it.
+		evmAbort.Store(true)
+		drainTxChan(txsCh)
+		evmAbort.Store(false)
+		// Flip phase attribution only after the handoff is complete. From here
+		// on, every successful prefetch is genuinely builder-phase work.
+		inBuilderPhase.Store(true)
+
+		w.runBuilderTxProvider(txsCh, header, genParams, hardKill)
+	}
+
+	// Normal shutdown: close first, then wait for the stream to drain. The
+	// defer above is a panic safety net; on the happy path we want the wait
+	// ordered with the close rather than after the wrapping goroutine's recover.
+	shutdown()
+	<-streamDone
+}
+
+// drainTxChan removes all currently-buffered entries from the channel without blocking.
+// Safe to call while other goroutines are reading from ch (reads consume; drain stops
+// when the channel is empty from the drainer's perspective).
+func drainTxChan(ch <-chan *types.Transaction) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
+// runIdleTxProvider speculatively streams transactions from the txpool into the
+// prefetcher. It loops on a ~100ms cadence, bounded by a configurable gas budget
+// (PrefetchGasLimitPercent of header.GasLimit, defaulting to 100%). Returns when
+// the budget is exhausted, the builder flips, or hardKill fires.
+//
+// Gas accounting uses declared tx gas (not actual execution gas) — close enough
+// since the budget only bounds speculative work, not correctness.
+func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *types.Header, genParams *generateParams, interrupt *atomic.Bool) {
+	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
+	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
+	filter.BlobTxs = false
+
+	totalGasPool := new(core.GasPool).AddGas(header.GasLimit * idleGasLimitPercent(w.config) / 100)
+	localPrefetched := make(map[common.Hash]struct{})
+
+	shouldExit := func() bool {
+		return interrupt.Load() ||
+			(genParams.builderStarted != nil && genParams.builderStarted.Load()) ||
+			totalGasPool.Gas() == 0
+	}
+
+	for !shouldExit() {
+		loopStart := time.Now()
+
+		pendingTxs := w.eth.TxPool().Pending(filter, interrupt)
+		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interrupt)
+		w.streamIdleBatch(txsCh, txs, totalGasPool, localPrefetched, header.GasLimit)
+
+		waitUntilNextLoop(loopStart, prefetchIdleLoopInterval, shouldExit)
+	}
+}
+
+// idleGasLimitPercent returns the configured prefetch gas budget percent, capped
+// defensively at prefetchMaxGasLimitPercent and defaulted to
+// prefetchDefaultGasLimitPercent when unset.
+func idleGasLimitPercent(cfg *Config) uint64 {
+	pct := cfg.PrefetchGasLimitPercent
+	if pct == 0 {
+		return prefetchDefaultGasLimitPercent
+	}
+	if pct > prefetchMaxGasLimitPercent {
+		log.Warn("Prefetch gas limit percent exceeds maximum, capping",
+			"configured", pct, "max", prefetchMaxGasLimitPercent)
+		return prefetchMaxGasLimitPercent
+	}
+	return pct
+}
+
+// streamIdleBatch walks the price-nonce heap and non-blockingly forwards
+// un-prefetched transactions to txsCh until the per-loop gas cap is exhausted,
+// the heap is drained, or the channel fills. Returning on a full channel
+// avoids spinning through the rest of the heap doing Peek/Shift work that
+// would drop every tx: the outer loop will re-snapshot the pool on its next
+// iteration (~100ms later), by which time workers have drained the channel.
+func (w *worker) streamIdleBatch(
+	txsCh chan<- *types.Transaction,
+	txs *transactionsByPriceAndNonce,
+	totalGasPool *core.GasPool,
+	localPrefetched map[common.Hash]struct{},
+	headerGasLimit uint64,
+) {
+	loopGasLimit := totalGasPool.Gas()
+	if loopGasLimit > headerGasLimit {
+		loopGasLimit = headerGasLimit
+	}
+	gaspool := new(core.GasPool).AddGas(loopGasLimit)
 
 	for {
-		if interruptPrefetch.Load() {
+		ltx, tx := nextViableIdleTx(txs, gaspool, localPrefetched)
+		if ltx == nil {
 			return
 		}
-
-		// Check if we've exhausted the total gas pool
-		if totalGasPool.Gas() == 0 {
+		select {
+		case txsCh <- tx:
+			localPrefetched[ltx.Hash] = struct{}{}
+			gaspool.SubGas(ltx.Gas)
+			totalGasPool.SubGas(ltx.Gas)
+		default:
+			// Channel full — stop this batch. The tx we failed to send will
+			// reappear in the next iteration's pool snapshot.
 			return
 		}
+		txs.Shift()
+	}
+}
 
-		loopStart := time.Now()
-		loopIteration++
-
-		// Use the remaining gas from totalGasPool, but cap at header.GasLimit per loop
-		remainingGas := totalGasPool.Gas()
-		loopGasLimit := header.GasLimit
-		if remainingGas < loopGasLimit {
-			loopGasLimit = remainingGas
+// nextViableIdleTx advances the heap past txs that are too large for the loop
+// budget, already warmed, or fail to resolve, and returns the next tx worth
+// sending. Returns (nil, nil) when the heap is drained.
+func nextViableIdleTx(
+	txs *transactionsByPriceAndNonce,
+	gaspool *core.GasPool,
+	localPrefetched map[common.Hash]struct{},
+) (*txpool.LazyTransaction, *types.Transaction) {
+	for {
+		ltx, _ := txs.Peek()
+		if ltx == nil {
+			return nil, nil
 		}
-		gaspool := new(core.GasPool).AddGas(loopGasLimit)
-
-		pendingTxs := w.eth.TxPool().Pending(filter, interruptPrefetch)
-		txs := newTransactionsByPriceAndNonce(signer, pendingTxs, header.BaseFee, interruptPrefetch)
-
-		transactions := make([]*types.Transaction, 0)
-		skippedAlreadyPrefetched := 0
-		skippedInsufficientGas := 0
-		skippedNilTx := 0
-
-		for {
-			ltx, _ := txs.Peek()
-			if ltx == nil {
-				break
-			}
-			if gaspool.Gas() < ltx.Gas {
-				txs.Pop()
-				skippedInsufficientGas++
-				continue
-			}
-			if _, exists := txsAlreadyPrefetched[ltx.Hash]; exists {
-				txs.Shift()
-				skippedAlreadyPrefetched++
-				continue
-			}
-
-			tx := ltx.Resolve()
-			if tx == nil {
-				txs.Pop()
-				skippedNilTx++
-				continue
-			}
-
-			transactions = append(transactions, tx)
-			gaspool.SubGas(tx.Gas())
+		if gaspool.Gas() < ltx.Gas {
+			txs.Pop()
+			continue
+		}
+		if _, seen := localPrefetched[ltx.Hash]; seen {
 			txs.Shift()
+			continue
+		}
+		tx := ltx.Resolve()
+		if tx == nil {
+			txs.Pop()
+			continue
+		}
+		return ltx, tx
+	}
+}
+
+// waitUntilNextLoop sleeps up to (window - elapsed since loopStart) in small
+// increments so shouldExit can be re-checked for fast shutdown.
+func waitUntilNextLoop(loopStart time.Time, window time.Duration, shouldExit func() bool) {
+	const checkInterval = 10 * time.Millisecond
+	for remaining := window - time.Since(loopStart); remaining > 0; remaining = window - time.Since(loopStart) {
+		if shouldExit() {
+			return
+		}
+		sleep := checkInterval
+		if remaining < checkInterval {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+}
+
+// runBuilderTxProvider streams the builder's plan + freed-gas overflow into the
+// prefetcher. Each 2ms window it collects plan txs and freed-gas signals via
+// collectPlanBatch, scans the overflow heap for any bonus txs that fit in the
+// accumulated freed budget, and streams everything to txsCh. Exits when the plan
+// channel closes or hardKill fires.
+func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *types.Header, genParams *generateParams, interrupt *atomic.Bool) {
+	const batchWindow = 2 * time.Millisecond
+
+	planCh := genParams.builderPlanCh
+	if planCh == nil {
+		return
+	}
+
+	overflowHeap := w.buildOverflowHeap(header, interrupt)
+
+	var extendedBudget uint64
+	var gasFreedCh <-chan uint64 = genParams.builderGasFreedCh
+
+	// inFlightHashes tracks hashes already forwarded on txsCh within the builder
+	// phase. genParams.prefetchedTxHashes is only written after onSuccess fires,
+	// which trails the EVM execution window; a plan tx still in-flight could
+	// otherwise be re-emitted by scanOverflow from a fresh pool snapshot, wasting
+	// a second worker on the same tx. Local map is safe because this provider
+	// runs single-threaded.
+	inFlightHashes := make(map[common.Hash]struct{})
+
+	for {
+		batch, newGasFreedCh, delta, builderDone := collectPlanBatch(
+			planCh, gasFreedCh, batchWindow, genParams.prefetchedTxHashes, inFlightHashes,
+		)
+		gasFreedCh = newGasFreedCh
+		extendedBudget += delta
+
+		if extendedBudget > 0 {
+			// Mark the plan batch as in-flight before the overflow scan so
+			// scanOverflow won't re-emit the same tx within this iteration
+			// (collectPlanBatch returns before forwardTxs records hashes).
+			for _, tx := range batch {
+				inFlightHashes[tx.Hash()] = struct{}{}
+			}
+			var bonus []*types.Transaction
+			bonus, extendedBudget = scanOverflow(overflowHeap, extendedBudget, genParams.prefetchedTxHashes, inFlightHashes)
+			batch = append(batch, bonus...)
 		}
 
-		block := types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil))
-		result := prefetcher.Prefetch(block, throwaway, w.vmConfig(), true, interruptPrefetch)
+		forwardTxs(txsCh, batch, inFlightHashes)
 
-		// Use the actual gas used from prefetch result and mark successful transactions
-		if result != nil {
-			totalGasPool.SubGas(result.TotalGasUsed)
-			for _, txHash := range result.SuccessfulTxs {
-				txsAlreadyPrefetched[txHash] = struct{}{}
-				// Store in shared map for coverage metrics
-				if genParams.prefetchedTxHashes != nil {
-					genParams.prefetchedTxHashes.Store(txHash, struct{}{})
-				}
-			}
+		if builderDone || interrupt.Load() {
+			return
 		}
-		// Calculate elapsed time and wait if necessary to ensure minimum 100ms interval
-		// Check interrupt flag every 10ms during wait for responsive shutdown
-		elapsed := time.Since(loopStart)
-		if elapsed < minLoopInterval {
-			checkInterval := 10 * time.Millisecond
+	}
+}
 
-			for remaining := minLoopInterval - elapsed; remaining > 0; remaining = minLoopInterval - time.Since(loopStart) {
-				if interruptPrefetch.Load() {
-					return
-				}
-
-				sleepDuration := checkInterval
-				if remaining < checkInterval {
-					sleepDuration = remaining
-				}
-				time.Sleep(sleepDuration)
+// forwardTxs does a non-blocking send of each tx to ch. Drops silently if the
+// buffer is full — prefetch is best-effort. Tracks each forwarded hash in
+// inFlightHashes so follow-up overflow scans don't re-emit in-flight txs.
+func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}) {
+	for _, tx := range txs {
+		select {
+		case ch <- tx:
+			if inFlightHashes != nil {
+				inFlightHashes[tx.Hash()] = struct{}{}
 			}
+		default:
+		}
+	}
+}
+
+// buildOverflowHeap takes a snapshot of the pending plain-tx pool ordered by gas price.
+// The prefetcher uses it to warm bonus txs that fit in the block due to freed gas
+// (declared > actual usage). It reuses the same filter as fillTransactions so the
+// view is consistent with what the builder sees.
+func (w *worker) buildOverflowHeap(header *types.Header, interrupt *atomic.Bool) *transactionsByPriceAndNonce {
+	filter := w.buildDefaultFilter(header.BaseFee, header.Number)
+	filter.BlobTxs = false
+	signer := types.MakeSigner(w.chainConfig, header.Number, header.Time)
+	pending := w.eth.TxPool().Pending(filter, interrupt)
+	return newTransactionsByPriceAndNonce(signer, pending, header.BaseFee, interrupt)
+}
+
+// collectPlanBatch runs a single batch-collection window. It reads from the plan
+// channel into batch (skipping already-prefetched txs and any tx already forwarded
+// earlier in this builder phase), accumulates freed-gas signals into budgetDelta,
+// and returns when the window timer fires or the plan channel closes. When
+// gasFreedCh closes, it is disabled by returning a nil newGasFreedCh so the
+// caller can stop selecting on it in subsequent calls.
+//
+// inFlightHashes closes the scanOverflow→plan cross-iteration edge of the dedup
+// matrix: a tx emitted by scanOverflow in an earlier iteration and still
+// executing on a worker is absent from prefetchedHashes (onSuccess trails
+// multi-ms EVM) but present in inFlightHashes — without this check, a buffered
+// copy of the same tx in planCh would get forwarded a second time.
+func collectPlanBatch(
+	planCh <-chan *types.Transaction,
+	gasFreedCh <-chan uint64,
+	window time.Duration,
+	prefetchedHashes *sync.Map,
+	inFlightHashes map[common.Hash]struct{},
+) (batch []*types.Transaction, newGasFreedCh <-chan uint64, budgetDelta uint64, builderDone bool) {
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	newGasFreedCh = gasFreedCh
+	for {
+		select {
+		case tx, ok := <-planCh:
+			if !ok {
+				builderDone = true
+				return
+			}
+			if prefetchedHashes != nil {
+				if _, done := prefetchedHashes.Load(tx.Hash()); done {
+					continue
+				}
+			}
+			if _, inflight := inFlightHashes[tx.Hash()]; inflight {
+				continue
+			}
+			batch = append(batch, tx)
+		case freed, ok := <-newGasFreedCh:
+			if !ok {
+				newGasFreedCh = nil
+			} else {
+				budgetDelta += freed
+			}
+		case <-timer.C:
+			return
 		}
 	}
 }
@@ -2362,10 +2930,10 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, buildInterru
 
 	delay := time.Until(actualTimestamp)
 
-	// Reserve 500ms for state root computation — unless pipelined SRC is enabled,
+	// Reserve buffer for state root computation unless pipelined SRC is enabled,
 	// in which case SRC runs in the background and fillTransactions gets the full block time.
 	if !pipelinedSRC && delay > 1*time.Second {
-		delay -= 500 * time.Millisecond
+		delay -= interruptBuffer
 	}
 
 	interruptCtx, cancel := context.WithTimeout(context.Background(), delay)
@@ -2429,17 +2997,29 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			// Report prefetch coverage percentage
 			if len(env.txs) > 0 && genParams != nil && genParams.prefetchedTxHashes != nil {
 				prefetchedCount := 0
+				builderAddedCount := 0
 
-				// Count how many block transactions were prefetched
 				for _, tx := range env.txs {
 					if _, ok := genParams.prefetchedTxHashes.Load(tx.Hash()); ok {
 						prefetchedCount++
 					}
+					if genParams.builderPrefetchedTxHashes != nil {
+						if _, ok := genParams.builderPrefetchedTxHashes.Load(tx.Hash()); ok {
+							builderAddedCount++
+						}
+					}
 				}
 
-				// Calculate miss rate (0-100): higher = worse
+				// Miss rate (0-100, higher = worse).
 				missRate := int64((len(env.txs) - prefetchedCount) * 100 / len(env.txs))
 				prefetchMissRateHistogram.Update(missRate)
+
+				// Builder-added share (0-100): block txs the builder phase prefetched on
+				// its own. Only emitted when the builder phase actually ran.
+				if genParams.builderPrefetchedTxHashes != nil {
+					builderAdded := int64(builderAddedCount * 100 / len(env.txs))
+					prefetchBuilderAddedHistogram.Update(builderAdded)
+				}
 			}
 		}
 	}()
@@ -2473,9 +3053,13 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), productionStart: firstNonZeroTime(productionStartFrom(genParams), start), productionElapsed: time.Since(firstNonZeroTime(productionStartFrom(genParams), start)), intermediateRootTime: commitTime}:
 			fees := totalFees(block, env.receipts)
 			feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
-			log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
+			log.Info("Commit new sealing work",
+				"number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 				"txs", env.tcount, "gas", block.GasUsed(), "fees", feesInEther,
-				"elapsed", common.PrettyDuration(time.Since(start)), "finalize", common.PrettyDuration(finalizeDuration))
+				"elapsed", common.PrettyDuration(time.Since(start)),
+				"pending", common.PrettyDuration(env.pendingDuration),
+				"finalize", common.PrettyDuration(finalizeDuration),
+			)
 
 		case <-w.exitCh:
 			log.Info("Worker has exited")

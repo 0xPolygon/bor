@@ -220,7 +220,7 @@ func shouldLateRefillSpeculativeBlock(env *environment) bool {
 // simply because the initial early snapshot raced ahead of incoming load.
 func (w *worker) fillSpeculativeTransactions(env *environment, interrupt *atomic.Int32) time.Duration {
 	fillStart := time.Now()
-	err := w.fillTransactions(interrupt, env)
+	err := w.fillTransactions(interrupt, env, nil)
 	totalFill := time.Since(fillStart)
 
 	if err != nil || !shouldLateRefillSpeculativeBlock(env) {
@@ -242,7 +242,7 @@ func (w *worker) fillSpeculativeTransactions(env *environment, interrupt *atomic
 	}
 
 	refillStart := time.Now()
-	_ = w.fillTransactions(interrupt, env)
+	_ = w.fillTransactions(interrupt, env, nil)
 	totalFill += time.Since(refillStart)
 
 	return totalFill

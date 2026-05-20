@@ -878,7 +878,7 @@ running:
 			// A peer disconnected.
 			d := common.PrettyDuration(mclock.Now() - pd.created)
 			delete(peers, pd.ID())
-			srv.log.Debug("Removing p2p peer", "peercount", len(peers), "id", pd.ID(), "duration", d, "req", pd.requested, "err", pd.err)
+			srv.log.Debug("Removing p2p peer", "peercount", len(peers), "id", pd.ID(), "inbound", pd.Inbound(), "duration", d, "req", pd.requested, "err", pd.err)
 			srv.dialsched.peerRemoved(pd.rw)
 			if pd.Inbound() {
 				inboundCount--
@@ -921,8 +921,10 @@ func (srv *Server) postHandshakeChecks(peers map[enode.ID]*Peer, inboundCount in
 
 	switch {
 	case !c.is(trustedConn) && len(peers) >= srv.MaxPeers:
+		srv.log.Debug("Rejecting peer: too many peers", "id", c.node.ID(), "peercount", len(peers), "maxpeers", srv.MaxPeers)
 		return DiscTooManyPeers
 	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= srv.MaxInboundConns():
+		srv.log.Debug("Rejecting peer: too many inbound", "id", c.node.ID(), "inboundCount", inboundCount, "maxinbound", srv.MaxInboundConns())
 		return DiscTooManyPeers
 	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected

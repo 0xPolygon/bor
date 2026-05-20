@@ -27,9 +27,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/holiman/uint256"
 	"gotest.tools/assert"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -536,6 +539,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsMadhugiriPro",
 		"IsLisovo",
 		"IsLisovoPro",
+		"IsChicago",
 	}
 
 	if len(actual) != len(expected) {
@@ -590,7 +594,7 @@ func TestLisovoCLZOpcode(t *testing.T) {
 
 // TestKZGPointEvaluationPrecompileRemoval verifies that the kzgPointEvaluation precompile
 // is present from Madhugiri through Lisovo, and is not present before Madhugiri and starting
-// with LisovoPro.
+// with LisovoPro. Chicago should also not have kzgPointEvaluation precompile enabled.
 func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	t.Parallel()
 
@@ -600,6 +604,7 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 	// We verify a few things in this test:
 	//   - Madhugiri, MadhugiriPro, and Lisovo have the kzg precompile enabled
 	//   - LisovoPro removes it, so it should not be enabled
+	//   - Chicago should not have kzgPointEvaluation precompile enabled
 	//   - Hard forks before Madhugiri (for example, Prague) should not have kzg enabled
 	type testCase struct {
 		name          string
@@ -613,6 +618,7 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		{name: "MadhugiriPro", rules: params.Rules{IsMadhugiriPro: true}, shouldHaveKzg: true},
 		{name: "Lisovo", rules: params.Rules{IsLisovo: true}, shouldHaveKzg: true},
 		{name: "LisovoPro", rules: params.Rules{IsLisovoPro: true}, shouldHaveKzg: false},
+		{name: "Chicago", rules: params.Rules{IsChicago: true}, shouldHaveKzg: false},
 	}
 	for _, tc := range cases {
 		precompiles := ActivePrecompiledContracts(tc.rules)
@@ -626,5 +632,254 @@ func TestKZGPointEvaluationPrecompileRemoval(t *testing.T) {
 		if exists && pc.Name() != kzgPointEvaluationPrecompile.Name() {
 			t.Errorf("invalid precompile loaded instead of kzgPointEvaluation (0x0a). expected name: %s, got name: %s, test case: %s", kzgPointEvaluationPrecompile.Name(), pc.Name(), tc.name)
 		}
+	}
+}
+
+// TestPIP88PrecompileGasCosts verifies pre- and post-PIP-88 gas for every
+// precompile repriced by the Chicago fork.
+func TestPIP88PrecompileGasCosts(t *testing.T) {
+	t.Parallel()
+
+	// blake2F input: 213 bytes, rounds=12 in big-endian uint32 at [0:4].
+	blake2FInput := make([]byte, 213)
+	blake2FInput[3] = 12
+
+	cases := []struct {
+		addr    byte
+		input   []byte
+		preGas  uint64
+		postGas uint64
+		name    string
+	}{
+		{0x06, nil, params.Bn256AddGasIstanbul, params.Bn256AddGasIstanbulPIP88, "bn256Add (3.6x)"},
+		{0x07, nil, params.Bn256ScalarMulGasIstanbul, params.Bn256ScalarMulGasIstanbulPIP88, "bn256ScalarMul (2.1x)"},
+		{0x0b, nil, params.Bls12381G1AddGas, params.Bls12381G1AddGasPIP88, "bls12381G1Add (2.8x)"},
+		{0x0d, nil, params.Bls12381G2AddGas, params.Bls12381G2AddGasPIP88, "bls12381G2Add (2.7x)"},
+		{0x10, nil, params.Bls12381MapG1Gas, params.Bls12381MapG1GasPIP88, "bls12381MapG1 (2.8x)"},
+		{0x11, nil, params.Bls12381MapG2Gas, params.Bls12381MapG2GasPIP88, "bls12381MapG2 (2.8x)"},
+		{
+			addr:    0x08,
+			input:   make([]byte, 192),
+			preGas:  params.Bn256PairingBaseGasIstanbul + params.Bn256PairingPerPointGasIstanbul,
+			postGas: params.Bn256PairingBaseGasIstanbulPIP88 + params.Bn256PairingPerPointGasIstanbulPIP88,
+			name:    "bn256Pairing k=1 (1.5x)",
+		},
+		{
+			addr:    0x0f,
+			input:   make([]byte, 384),
+			preGas:  params.Bls12381PairingBaseGas + params.Bls12381PairingPerPairGas,
+			postGas: params.Bls12381PairingBaseGasPIP88 + params.Bls12381PairingPerPairGasPIP88,
+			name:    "bls12381Pairing k=1 (2.9x)",
+		},
+		// MSM at k=1: discount table[0]=1000, so gas = mulGas.
+		{0x0c, make([]byte, 160), params.Bls12381G1MulGas, params.Bls12381G1MulGasPIP88, "bls12381G1MultiExp k=1 (6.1x)"},
+		{0x0e, make([]byte, 288), params.Bls12381G2MulGas, params.Bls12381G2MulGasPIP88, "bls12381G2MultiExp k=1 (6.4x)"},
+		{0x09, blake2FInput, 12, 12 * params.GFROUNDPIP88, "blake2F rounds=12 (22x)"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := common.BytesToAddress([]byte{tc.addr})
+
+			pre, ok := PrecompiledContractsLisovoPro[addr]
+			if !ok {
+				t.Fatalf("0x%02x missing from PrecompiledContractsLisovoPro", tc.addr)
+			}
+			post, ok := PrecompiledContractsChicago[addr]
+			if !ok {
+				t.Fatalf("0x%02x missing from PrecompiledContractsChicago", tc.addr)
+			}
+
+			if got := pre.RequiredGas(tc.input); got != tc.preGas {
+				t.Errorf("pre-PIP-88 gas: got %d, want %d", got, tc.preGas)
+			}
+			if got := post.RequiredGas(tc.input); got != tc.postGas {
+				t.Errorf("post-PIP-88 gas: got %d, want %d", got, tc.postGas)
+			}
+		})
+	}
+}
+
+// TestPIP88SStoreGas walks every branch of makeGasSStoreFuncPIP88 and verifies
+// the gas charged and refund-pool delta match closed-form values.
+func TestPIP88SStoreGas(t *testing.T) {
+	t.Parallel()
+
+	addr := common.Address{0xaa}
+	slot := common.BigToHash(big.NewInt(1))
+	val42 := common.BigToHash(big.NewInt(0x42))
+	val99 := common.BigToHash(big.NewInt(0x99))
+
+	cases := []struct {
+		name            string
+		original        common.Hash // committed value before this tx
+		current         common.Hash // dirty value (only applied if != original)
+		value           common.Hash // value being written by SSTORE
+		warm            bool
+		wantGas         uint64
+		wantRefundDelta int64
+	}{
+		{
+			name:     "cold reset existing slot (EIP-2929 invariant: total = 5000)",
+			original: val42, current: val42, value: val99, warm: false,
+			wantGas: params.SstoreResetGasEIP2200, wantRefundDelta: 0,
+		},
+		{
+			name:     "warm reset existing slot",
+			original: val42, current: val42, value: val99, warm: true,
+			wantGas: params.SstoreResetGasEIP2200 - params.ColdSstoreCostPIP88, wantRefundDelta: 0,
+		},
+		{
+			name:     "cold create slot",
+			original: common.Hash{}, current: common.Hash{}, value: val99, warm: false,
+			wantGas: params.ColdSstoreCostPIP88 + params.SstoreSetGasEIP2200, wantRefundDelta: 0,
+		},
+		{
+			name:     "cold delete clean slot (clearingRefund = SstoreClearsScheduleRefundPIP88)",
+			original: val42, current: val42, value: common.Hash{}, warm: false,
+			wantGas:         params.SstoreResetGasEIP2200,
+			wantRefundDelta: int64(params.SstoreClearsScheduleRefundPIP88),
+		},
+		{
+			name:     "cold noop (current == value)",
+			original: val42, current: val42, value: val42, warm: false,
+			wantGas: params.ColdSstoreCostPIP88 + params.WarmStorageReadCostEIP2929, wantRefundDelta: 0,
+		},
+		{
+			name:     "reset to original existing slot (refund = (RESET - cold) - warm)",
+			original: val42, current: val99, value: val42, warm: true,
+			wantGas:         params.WarmStorageReadCostEIP2929,
+			wantRefundDelta: int64((params.SstoreResetGasEIP2200 - params.ColdSstoreCostPIP88) - params.WarmStorageReadCostEIP2929),
+		},
+		{
+			name:     "reset to clean zero (refund = SstoreSet - warm, unchanged from EIP-3529)",
+			original: common.Hash{}, current: val99, value: common.Hash{}, warm: true,
+			wantGas:         params.WarmStorageReadCostEIP2929,
+			wantRefundDelta: int64(params.SstoreSetGasEIP2200 - params.WarmStorageReadCostEIP2929),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			statedb.CreateAccount(addr)
+
+			// Move dirty storage to pending so it appears as the "original"
+			// (committed) value. Finalise(false) skips empty-object deletion;
+			// using `true` would drop our account since it has no balance/code.
+			if tc.original != (common.Hash{}) {
+				statedb.SetState(addr, slot, tc.original)
+				statedb.Finalise(false)
+			}
+			if tc.current != tc.original {
+				statedb.SetState(addr, slot, tc.current)
+			}
+			if tc.warm {
+				statedb.AddSlotToAccessList(addr, slot)
+			}
+
+			evm := NewEVM(
+				BlockContext{BlockNumber: big.NewInt(1), Time: 1, Random: &common.Hash{}},
+				statedb, params.MergedTestChainConfig, Config{},
+			)
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), 1_000_000, nil)
+
+			stack := newstack()
+			stack.push(new(uint256.Int).SetBytes(tc.value.Bytes())) // Back(1) = value
+			stack.push(new(uint256.Int).SetBytes(slot.Bytes()))     // peek = slot
+
+			refundBefore := statedb.GetRefund()
+			gas, err := gasSStorePIP88(evm, contract, stack, NewMemory(), 0)
+			if err != nil {
+				t.Fatalf("gasSStorePIP88 returned error: %v", err)
+			}
+			refundDelta := int64(statedb.GetRefund()) - int64(refundBefore)
+
+			if gas != tc.wantGas {
+				t.Errorf("gas: got %d, want %d", gas, tc.wantGas)
+			}
+			if refundDelta != tc.wantRefundDelta {
+				t.Errorf("refund delta: got %d, want %d", refundDelta, tc.wantRefundDelta)
+			}
+		})
+	}
+}
+
+// TestPIP88ForkBoundary verifies that the Chicago fork dispatch flips at the
+// configured block: precompile set and SLOAD instruction-set gas function both
+// switch from EIP-3529/LisovoPro to PIP-88 at block N (with N-1 still old).
+func TestPIP88ForkBoundary(t *testing.T) {
+	t.Parallel()
+
+	const chicagoBlock = 100
+
+	// Clone MergedTestChainConfig and push Chicago to a specific block so we
+	// have a real boundary to test against.
+	cfg := *params.MergedTestChainConfig
+	borCfg := *cfg.Bor
+	borCfg.ChicagoBlock = big.NewInt(chicagoBlock)
+	cfg.Bor = &borCfg
+
+	addr := common.Address{0xaa}
+	slot := common.BigToHash(big.NewInt(1))
+
+	cases := []struct {
+		name             string
+		block            int64
+		wantIsChicago    bool
+		wantBn256AddGas  uint64 // probe for ActivePrecompiledContracts dispatch
+		wantColdSloadGas uint64 // probe for LookupInstructionSet dispatch
+	}{
+		{
+			name:             "block N-1 (pre-Chicago)",
+			block:            chicagoBlock - 1,
+			wantIsChicago:    false,
+			wantBn256AddGas:  params.Bn256AddGasIstanbul,
+			wantColdSloadGas: params.ColdSloadCostEIP2929,
+		},
+		{
+			name:             "block N (Chicago active)",
+			block:            chicagoBlock,
+			wantIsChicago:    true,
+			wantBn256AddGas:  params.Bn256AddGasIstanbulPIP88,
+			wantColdSloadGas: params.ColdSloadCostPIP88,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rules := cfg.Rules(big.NewInt(tc.block), false, 0)
+			if rules.IsChicago != tc.wantIsChicago {
+				t.Fatalf("rules.IsChicago: got %v, want %v", rules.IsChicago, tc.wantIsChicago)
+			}
+
+			// Precompile dispatch probe.
+			bn256Add := ActivePrecompiledContracts(rules)[common.BytesToAddress([]byte{0x06})]
+			if got := bn256Add.RequiredGas(nil); got != tc.wantBn256AddGas {
+				t.Errorf("bn256Add gas via ActivePrecompiledContracts: got %d, want %d", got, tc.wantBn256AddGas)
+			}
+
+			// Instruction-set dispatch probe via SLOAD's dynamicGas on a cold slot.
+			jt, err := LookupInstructionSet(rules)
+			if err != nil {
+				t.Fatalf("LookupInstructionSet: %v", err)
+			}
+			statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+			evm := NewEVM(
+				BlockContext{BlockNumber: big.NewInt(tc.block), Time: 1, Random: &common.Hash{}},
+				statedb, &cfg, Config{},
+			)
+			contract := NewContract(common.Address{}, addr, uint256.NewInt(0), 1_000_000, nil)
+			stack := newstack()
+			stack.push(new(uint256.Int).SetBytes(slot.Bytes()))
+
+			gas, err := jt[SLOAD].dynamicGas(evm, contract, stack, NewMemory(), 0)
+			if err != nil {
+				t.Fatalf("SLOAD dynamicGas: %v", err)
+			}
+			if gas != tc.wantColdSloadGas {
+				t.Errorf("cold SLOAD gas via LookupInstructionSet: got %d, want %d", gas, tc.wantColdSloadGas)
+			}
+		})
 	}
 }

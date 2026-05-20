@@ -813,7 +813,7 @@ func (s *skeleton) executeTask(peer *peerConnection, req *headerRequest) {
 
 	case <-timeoutTimer.C:
 		// Header retrieval timed out, update the metrics
-		peer.log.Warn("Header request timed out, dropping peer", "elapsed", ttl)
+		peer.log.Warn("Skeleton: header request timed out, dropping peer", "elapsed", ttl)
 		headerTimeoutMeter.Mark(1)
 		s.peers.rates.Update(peer.id, eth.BlockHeadersMsg, 0, 0)
 		s.scheduleRevertRequest(req)

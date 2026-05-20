@@ -17,7 +17,6 @@ syncmode = "full"
 # snapshot = true
 # "bor.logs" = false
 # ethstats = ""
-# witnessprotocol = false
 # devfakeauthor = false
 # ["eth.requiredblocks"]
 
@@ -197,6 +196,9 @@ syncmode = "full"
   # enable = true
   # procs = 8
   # enforce = false
+
+# [witness]
+#   enable = false
 
 # [pprof]
 #   pprof = false
