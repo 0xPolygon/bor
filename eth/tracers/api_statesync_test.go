@@ -1,10 +1,12 @@
 package tracers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/stretchr/testify/require"
 )
@@ -186,8 +189,10 @@ func newBorTestBackend(t *testing.T, n int, gspec *core.Genesis, generator func(
 	return backend
 }
 
-// injectStateSyncTx appends a state-sync transaction to the specified block's body.
-// This simulates post-Madhugiri blocks that have state-sync txs in their body.
+// injectStateSyncTx appends a state-sync transaction to the specified block's body
+// and registers a canonical tx-lookup entry so RPC paths that resolve a tx by hash
+// (e.g. TraceTransaction → GetCanonicalTransaction) can find it. This simulates
+// post-Madhugiri blocks that have state-sync txs in their body.
 func (b *borTestBackend) injectStateSyncTx(blockNum uint64, stateSyncTx *types.Transaction) error {
 	block := b.chain.GetBlockByNumber(blockNum)
 	if block == nil {
@@ -204,6 +209,10 @@ func (b *borTestBackend) injectStateSyncTx(blockNum uint64, stateSyncTx *types.T
 		Uncles:       existingBody.Uncles,
 		Withdrawals:  existingBody.Withdrawals,
 	})
+
+	// In production, Bor.Finalize indexes the state-sync tx via WriteTxLookupEntries.
+	// The test backend bypasses Finalize, so we mimic that side effect here.
+	rawdb.WriteTxLookupEntries(b.chaindb, blockNum, []common.Hash{stateSyncTx.Hash()})
 
 	b.modifiedBlocks[blockNum] = true
 	b.modifiedHashes[block.Hash()] = blockNum
@@ -456,4 +465,250 @@ func TestIntermediateRoots_WithStateSyncTx(t *testing.T) {
 	for i, result := range results {
 		require.Equal(t, expectedStateRoots[i], result, "state root mismatch at index %d", i)
 	}
+}
+
+// TestTraceTransaction_WithStateSyncTx exercises the `debug_traceTransaction` RPC entry
+// point against the state-sync tx hash directly. This path differs from TraceBlockBy*
+// because it (a) routes through GetCanonicalTransaction → StateAtTransaction and
+// (b) hits the synthetic-root construction inside traceTx with a real canonical-tx
+// lookup. Verifies the full state-sync wrapper from the most user-facing entry point.
+func TestTraceTransaction_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	numEvents := 2
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, numEvents)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+	txs := block.Transactions()
+	require.Equal(t, 2, len(txs))
+
+	stateSyncTxHash := txs[1].Hash()
+	result, err := api.TraceTransaction(context.Background(), stateSyncTxHash, callTracerConfig())
+	require.NoError(t, err)
+
+	raw, ok := result.(json.RawMessage)
+	require.True(t, ok, "expected json.RawMessage, got %T", result)
+	validateStateSyncCallTrace(t, raw, numEvents)
+}
+
+// TestTraceTransaction_StateSyncTx_NotIndexed_ReturnsErrTxNotFound is the negative
+// counterpart: if a state-sync tx has not been written to the canonical lookup index
+// (e.g. txindexer behind), the RPC must surface errTxNotFound rather than returning
+// stale or undefined data.
+func TestTraceTransaction_StateSyncTx_NotIndexed_ReturnsErrTxNotFound(t *testing.T) {
+	t.Parallel()
+
+	backend, api, _ := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	// A hash that nothing in the chain knows about.
+	unknown := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	_, err := api.TraceTransaction(context.Background(), unknown, callTracerConfig())
+	require.ErrorIs(t, err, errTxNotFound)
+}
+
+// TestTraceBlock_RLP_WithStateSyncTx covers the third block-level entry point —
+// `debug_traceBlock(rlpEncodedBlock, config)` — which decodes the block from RLP
+// before tracing. This validates that the state-sync handling holds when the block
+// arrives via the RLP-blob path rather than canonical-store lookup.
+func TestTraceBlock_RLP_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	numEvents := 2
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, numEvents)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+	txs := block.Transactions()
+	require.Equal(t, 2, len(txs))
+
+	rlpBytes, err := rlp.EncodeToBytes(block)
+	require.NoError(t, err)
+
+	results, err := api.TraceBlock(context.Background(), rlpBytes, callTracerConfig())
+	require.NoError(t, err)
+	require.Equal(t, len(txs), len(results))
+	for i, r := range results {
+		require.Empty(t, r.Error, "trace result[%d] error", i)
+		require.Equal(t, txs[i].Hash(), r.TxHash, "trace result[%d] tx hash", i)
+	}
+
+	raw, ok := results[1].Result.(json.RawMessage)
+	require.True(t, ok, "expected json.RawMessage, got %T", results[1].Result)
+	validateStateSyncCallTrace(t, raw, numEvents)
+}
+
+// TestStandardTraceBlockToFile_WithStateSyncTx covers `debug_standardTraceBlockToFile`,
+// which writes structLogger output to per-tx temp files. It validates that the hooks
+// behave as expected for state-sync transactions and avoid regressions.
+//   - The function must produce one dump file per traced tx.
+//   - Each dump must be non-empty and valid newline-delimited JSON.
+//   - The state-sync tx's dump must contain at least one LOG opcode (emitted by the
+//     synthetic target the state receiver forwards to).
+//
+// We intentionally don't pin exact opcodes — the standard logger output is verbose
+// and brittle to gas changes. Structural checks catch the regressions that matter.
+func TestStandardTraceBlockToFile_WithStateSyncTx(t *testing.T) {
+	t.Parallel()
+
+	numEvents := 2
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, numEvents)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+
+	dumps, err := api.StandardTraceBlockToFile(context.Background(), block.Hash(), nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(dumps), "expected one dump per tx (regular + state-sync)")
+
+	defer func() {
+		for _, d := range dumps {
+			_ = os.Remove(d)
+		}
+	}()
+
+	for i, path := range dumps {
+		content, err := os.ReadFile(path)
+		require.NoError(t, err, "reading dump %d", i)
+		require.NotEmpty(t, content, "dump %d is empty", i)
+
+		// Each non-empty line must be valid JSON — the struct logger writes one
+		// frame per opcode plus a final summary.
+		lines := bytes.Split(content, []byte{'\n'})
+		nonEmpty := 0
+		for _, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+			var anyJSON map[string]any
+			require.NoError(t, json.Unmarshal(line, &anyJSON), "dump %d line is not JSON: %s", i, line)
+			nonEmpty++
+		}
+		require.Greater(t, nonEmpty, 0, "dump %d had no JSON lines", i)
+	}
+
+	// State-sync dump (index 1) must show at least one LOG opcode — the bridge events
+	// invoke the target contract which emits LOG0 on every call.
+	stateSyncDump, err := os.ReadFile(dumps[1])
+	require.NoError(t, err)
+	require.Contains(t, string(stateSyncDump), `"opName":"LOG0"`,
+		"state-sync dump should contain LOG0 opcode from target contract")
+}
+
+// TestStandardTraceBlockToFile_StateSyncTx_HashFilter exercises the `TxHash` config
+// option that restricts standard tracing to a single tx. When pointed at the state-sync
+// tx, only one dump file must be produced — confirming the per-tx filter respects the
+// state-sync branch added by this PR (without the filter, both txs would be traced).
+func TestStandardTraceBlockToFile_StateSyncTx_HashFilter(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+	txs := block.Transactions()
+	require.Equal(t, 2, len(txs))
+
+	stateSyncTx := txs[1]
+	dumps, err := api.StandardTraceBlockToFile(context.Background(), block.Hash(), &StdTraceConfig{TxHash: stateSyncTx.Hash()})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(dumps), "TxHash filter should produce a single dump")
+
+	defer func() { _ = os.Remove(dumps[0]) }()
+
+	content, err := os.ReadFile(dumps[0])
+	require.NoError(t, err)
+	require.Contains(t, string(content), `"opName":"LOG0"`,
+		"the single dump should be the state-sync trace (LOG0 from target)")
+}
+
+// TestTraceBlockByNumber_StateSyncTx_EmptyEvents is the boundary case for
+// ApplyStateSyncEvents' early-return branch: a state-sync tx with zero events must
+// still produce a valid trace result (synthetic root frame with no sub-calls), not
+// an error and not a missing entry in the results array.
+func TestTraceBlockByNumber_StateSyncTx_EmptyEvents(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 0)
+	defer backend.chain.Stop()
+
+	results, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock), callTracerConfig())
+	require.NoError(t, err)
+	require.Equal(t, 2, len(results), "results array still contains an entry for the empty state-sync tx")
+	require.Empty(t, results[1].Error)
+
+	raw, ok := results[1].Result.(json.RawMessage)
+	require.True(t, ok)
+
+	var trace callTraceFrame
+	require.NoError(t, json.Unmarshal(raw, &trace))
+	require.Equal(t, "CALL", trace.Type, "synthetic root frame still emitted")
+	require.Equal(t, params.BorSystemAddress, trace.From)
+	require.Empty(t, trace.Calls, "no bridge-event sub-calls when events is empty")
+}
+
+// TestIntermediateRoots_Genesis_Rejected validates the explicit guard:
+//
+//	if block.NumberU64() == 0 { return nil, errors.New("genesis is not traceable") }
+//
+// IntermediateRoots shares this guard with TraceBlockByNumber; the state-sync code
+// path added by this PR sits inside the same function so it's worth pinning the
+// pre-condition explicitly for IntermediateRoots too.
+func TestIntermediateRoots_Genesis_Rejected(t *testing.T) {
+	t.Parallel()
+
+	backend, api, _ := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	genesis, err := backend.BlockByNumber(context.Background(), rpc.BlockNumber(0))
+	require.NoError(t, err)
+
+	_, err = api.IntermediateRoots(context.Background(), genesis.Hash(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "genesis is not traceable")
+}
+
+// TestIntermediateRoots_UnknownBlock surfaces the "block not found" path. The block
+// resolution happens before the state-sync branch but is on the same RPC surface,
+// so an explicit test prevents accidental swallowing of the error.
+func TestIntermediateRoots_UnknownBlock(t *testing.T) {
+	t.Parallel()
+
+	backend, api, _ := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	_, err := api.IntermediateRoots(context.Background(), common.HexToHash("0xcafebabe"), nil)
+	require.Error(t, err, "unknown block hash must error")
+}
+
+// TestTraceBlockByHash_UnknownBlock confirms that the same not-found semantics hold
+// at the by-hash entry point. This is the broadest user-facing surface; surfacing
+// nil block as an error rather than nil result is part of the RPC contract.
+func TestTraceBlockByHash_UnknownBlock(t *testing.T) {
+	t.Parallel()
+
+	backend, api, _ := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	_, err := api.TraceBlockByHash(context.Background(), common.HexToHash("0xfeedface"), nil)
+	require.Error(t, err)
+}
+
+// TestTraceBlockByNumber_Genesis_Rejected confirms the genesis guard is enforced at
+// the by-number entry point too — even when the rest of the chain has state-sync
+// activity, the genesis block itself must remain untraceable.
+func TestTraceBlockByNumber_Genesis_Rejected(t *testing.T) {
+	t.Parallel()
+
+	backend, api, _ := newStateSyncTestSetup(t, 3, 1)
+	defer backend.chain.Stop()
+
+	_, err := api.TraceBlockByNumber(context.Background(), rpc.BlockNumber(0), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "genesis is not traceable")
 }

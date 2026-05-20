@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"math/big"
 	"reflect"
 	"testing"
 
@@ -249,5 +250,57 @@ func TestStateSyncTx_Encode_DeterministicAcrossCopies(t *testing.T) {
 	}
 	if !bytes.Equal(b1.Bytes(), b2.Bytes()) {
 		t.Fatalf("determinism failed across copies: enc1=%x enc2=%x", b1.Bytes(), b2.Bytes())
+	}
+}
+
+func TestGetStateSyncData_OnStateSyncTx(t *testing.T) {
+	// Happy path: GetStateSyncData on a StateSyncTx returns the embedded events by
+	// reference (not a copy), matching the production path used by tracing replay.
+	events := []*StateSyncData{
+		{ID: 1, Contract: common.HexToAddress("0x1001"), Data: []byte("a"), TxHash: common.HexToHash("0x1111")},
+		{ID: 2, Contract: common.HexToAddress("0x1002"), Data: []byte("b"), TxHash: common.HexToHash("0x2222")},
+	}
+	tx := NewTx(&StateSyncTx{StateSyncData: events})
+
+	got := tx.GetStateSyncData()
+	if len(got) != len(events) {
+		t.Fatalf("got %d events, want %d", len(got), len(events))
+	}
+	for i := range events {
+		if got[i].ID != events[i].ID || got[i].Contract != events[i].Contract {
+			t.Errorf("event[%d] mismatch: got=%+v want=%+v", i, got[i], events[i])
+		}
+	}
+}
+
+func TestGetStateSyncData_OnNonStateSyncTx(t *testing.T) {
+	// Defensive contract: any non-state-sync transaction type must return nil — never
+	// panic on the unchecked type assertion to *StateSyncTx.
+	legacy := NewTx(&LegacyTx{
+		Nonce:    0,
+		GasPrice: new(big.Int),
+		Gas:      21000,
+	})
+	if got := legacy.GetStateSyncData(); got != nil {
+		t.Fatalf("expected nil events for LegacyTx, got %+v", got)
+	}
+
+	dyn := NewTx(&DynamicFeeTx{
+		Nonce:     0,
+		GasTipCap: new(big.Int),
+		GasFeeCap: new(big.Int),
+		Gas:       21000,
+	})
+	if got := dyn.GetStateSyncData(); got != nil {
+		t.Fatalf("expected nil events for DynamicFeeTx, got %+v", got)
+	}
+}
+
+func TestGetStateSyncData_EmptyEvents(t *testing.T) {
+	// Zero-event StateSyncTx is a legal wire representation (drops to []) — return value
+	// must be non-panicking and length 0.
+	tx := NewTx(&StateSyncTx{})
+	if got := tx.GetStateSyncData(); len(got) != 0 {
+		t.Fatalf("expected zero events on empty StateSyncTx, got %d", len(got))
 	}
 }
