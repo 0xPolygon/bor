@@ -163,14 +163,10 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		stateSyncReceipt *types.Receipt
 		stateSyncEndErr  error
 	)
-	if hooks := cfg.Tracer; hooks != nil && hasStateSyncTx {
-		if hooks.OnTxStart != nil {
-			hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
-		}
+	if hooks := cfg.Tracer; hooks != nil && hasStateSyncTx && hooks.OnTxStart != nil && hooks.OnTxEnd != nil {
+		hooks.OnTxStart(evm.GetVMContext(), txs[len(txs)-1], params.BorSystemAddress)
 		defer func() {
-			if hooks.OnTxEnd != nil {
-				hooks.OnTxEnd(stateSyncReceipt, stateSyncEndErr)
-			}
+			hooks.OnTxEnd(stateSyncReceipt, stateSyncEndErr)
 		}()
 	}
 
