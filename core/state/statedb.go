@@ -2825,7 +2825,7 @@ func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
 			if obj == nil {
 				continue
 			}
-			_ = s.prefetcher.prefetch(obj.addrHash, obj.data.Root, as.addr, nil, as.slots, false)
+			_ = s.prefetcher.prefetch(obj.addrHash, as.root, as.addr, nil, as.slots, false)
 		}
 	}
 	s.FinaliseFast(deleteEmptyObjects)
@@ -2833,6 +2833,7 @@ func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
 
 type addrDirtySlots struct {
 	addr  common.Address
+	root  common.Hash
 	slots []common.Hash
 }
 
@@ -2843,14 +2844,18 @@ func (s *StateDB) snapshotDirtyStorageSlots() []addrDirtySlots {
 	var out []addrDirtySlots
 	for addr := range s.journal.dirties {
 		obj, exist := s.stateObjects[addr]
-		if !exist || obj.data.Root == types.EmptyRootHash || len(obj.dirtyStorage) == 0 {
+		if !exist || len(obj.dirtyStorage) == 0 {
+			continue
+		}
+		root := obj.getPrefetchRoot()
+		if root == types.EmptyRootHash && !s.db.TrieDB().IsVerkle() {
 			continue
 		}
 		slots := make([]common.Hash, 0, len(obj.dirtyStorage))
 		for key := range obj.dirtyStorage {
 			slots = append(slots, key)
 		}
-		out = append(out, addrDirtySlots{addr: addr, slots: slots})
+		out = append(out, addrDirtySlots{addr: addr, root: root, slots: slots})
 	}
 	return out
 }

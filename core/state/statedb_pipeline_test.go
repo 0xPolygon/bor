@@ -483,6 +483,89 @@ func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	require.Equal(t, types.EmptyRootHash, obj.getPrefetchRoot(), "getPrefetchRoot should return empty root for new accounts")
 }
 
+func TestSnapshotDirtyStorageSlots_UsesCommittedPrefetchRootForFlatDiff(t *testing.T) {
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+
+	addr := common.HexToAddress("0xflat")
+	slot := common.HexToHash("0x01")
+
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+	sdb.CreateAccount(addr)
+	sdb.SetNonce(addr, 1, 0)
+	sdb.SetState(addr, slot, common.HexToHash("0xaa"))
+	sdb.Finalise(false)
+
+	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	committedDB, err := New(committedRoot, db)
+	require.NoError(t, err)
+	committedObj := committedDB.getStateObject(addr)
+	require.NotNil(t, committedObj)
+	committedStorageRoot := committedObj.data.Root
+	require.NotEqual(t, types.EmptyRootHash, committedStorageRoot)
+
+	postStorageRoot := crypto.Keccak256Hash([]byte("block-n-post-storage-root"))
+	require.NotEqual(t, committedStorageRoot, postStorageRoot)
+
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    1,
+				Balance:  uint256.NewInt(0),
+				Root:     postStorageRoot,
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:     make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs:   make(map[common.Address]struct{}),
+		Code:        make(map[common.Hash][]byte),
+		ReadStorage: make(map[common.Address][]common.Hash),
+	}
+
+	overlayDB, err := NewWithFlatBase(committedRoot, db, diff)
+	require.NoError(t, err)
+	overlayDB.SetState(addr, common.HexToHash("0x02"), common.HexToHash("0xbb"))
+
+	slots := overlayDB.snapshotDirtyStorageSlots()
+	require.Len(t, slots, 1)
+	require.Equal(t, addr, slots[0].addr)
+	require.Equal(t, committedStorageRoot, slots[0].root)
+	require.NotEqual(t, postStorageRoot, slots[0].root)
+}
+
+func TestSnapshotDirtyStorageSlots_SkipsNewFlatDiffAccount(t *testing.T) {
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
+
+	sdb, err := New(types.EmptyRootHash, db)
+	require.NoError(t, err)
+	committedRoot, _, err := sdb.CommitWithUpdate(0, false, false)
+	require.NoError(t, err)
+
+	addr := common.HexToAddress("0xnew")
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    1,
+				Balance:  uint256.NewInt(100),
+				Root:     crypto.Keccak256Hash([]byte("block-n-post-storage-root")),
+				CodeHash: types.EmptyCodeHash.Bytes(),
+			},
+		},
+		Storage:     make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs:   make(map[common.Address]struct{}),
+		Code:        make(map[common.Hash][]byte),
+		ReadStorage: make(map[common.Address][]common.Hash),
+	}
+
+	overlayDB, err := NewWithFlatBase(committedRoot, db, diff)
+	require.NoError(t, err)
+	overlayDB.SetState(addr, common.HexToHash("0x01"), common.HexToHash("0xbb"))
+
+	require.Empty(t, overlayDB.snapshotDirtyStorageSlots())
+}
+
 // TestPrefetchRoot_DeepCopyPreserves verifies that stateObject.deepCopy
 // preserves the prefetchRoot field, which is important for StateDB.Copy()
 // used by the block-level prefetcher.
