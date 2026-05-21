@@ -437,8 +437,9 @@ func TestPrefetchRoot_NormalAccountFallsBackToDataRoot(t *testing.T) {
 }
 
 // TestPrefetchRoot_NewAccountInFlatDiff verifies that an account created in
-// block N (exists in FlatDiff but not in committed state) gets prefetchRoot=zero
-// since there's nothing to prefetch at the committed parent root.
+// block N (exists in FlatDiff but not in committed state) gets the empty
+// storage root as its prefetch root since there's nothing to prefetch at the
+// committed parent root.
 func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), nil), nil)
 
@@ -472,11 +473,14 @@ func TestPrefetchRoot_NewAccountInFlatDiff(t *testing.T) {
 	obj := overlayDB.getStateObject(newAddr)
 	require.NotNil(t, obj)
 
-	// Account is new (not in committed state), so prefetchRoot should be zero
-	require.Equal(t, common.Hash{}, obj.prefetchRoot, "prefetchRoot should be zero for new accounts not in committed state")
+	// Account is new (not in committed state), so storage prefetching must not
+	// use the FlatDiff account's post-state root with the committed-parent
+	// reader. The empty storage root makes those prefetches a no-op.
+	require.Equal(t, types.EmptyRootHash, obj.prefetchRoot, "prefetchRoot should be empty root for new accounts not in committed state")
 
-	// getPrefetchRoot falls back to data.Root
-	require.Equal(t, obj.data.Root, obj.getPrefetchRoot(), "getPrefetchRoot should fall back to data.Root for new accounts")
+	// getPrefetchRoot returns the committed-parent-compatible root, not the
+	// FlatDiff post-state storage root.
+	require.Equal(t, types.EmptyRootHash, obj.getPrefetchRoot(), "getPrefetchRoot should return empty root for new accounts")
 }
 
 // TestPrefetchRoot_DeepCopyPreserves verifies that stateObject.deepCopy

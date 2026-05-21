@@ -1316,11 +1316,14 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 				if acctCopy.Root != types.EmptyRootHash {
 					if committedAcct, err := s.reader.Account(addr); err == nil && committedAcct != nil {
 						obj.prefetchRoot = committedAcct.Root
+					} else {
+						obj.prefetchRoot = types.EmptyRootHash
 					}
 					// If the account doesn't exist in the committed state (new in
-					// block N), prefetchRoot stays zero and getPrefetchRoot() falls
-					// back to data.Root. The prefetcher will skip it since the trie
-					// didn't exist at committedParentRoot.
+					// block N), prefetchRoot is set to the empty storage root so the
+					// storage prefetcher skips it; the trie didn't exist at
+					// committedParentRoot and block N's post-state root would be
+					// inconsistent with this reader.
 				}
 				s.setStateObject(obj)
 				return obj
