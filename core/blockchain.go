@@ -179,15 +179,21 @@ var (
 	pipelineImportCheapExecTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_exec", nil)
 	pipelineImportCheapValidationTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/cheap_validation", nil)
 	pipelineImportPostExecTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec", nil)
+	pipelineImportPostExecResidualTimer    = metrics.NewRegisteredTimer("chain/imports/pipelined/post_exec/residual", nil)
+	pipelineImportWitnessCaptureTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/witness_capture", nil)
 	pipelineImportPrefetchDetachTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_detach", nil)
+	pipelineImportPrefetchCleanupTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/prefetch_cleanup", nil)
 	pipelineImportSRCPrefetchWaitTimer     = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_wait", nil)
 	pipelineImportSRCPrefetchReportTimer   = metrics.NewRegisteredTimer("chain/imports/pipelined/src/prefetch_report", nil)
 	pipelineImportCommitSnapshotTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/commit_snapshot", nil)
+	pipelineImportCollectTotalTimer        = metrics.NewRegisteredTimer("chain/imports/pipelined/collect_total", nil)
 	pipelineImportStateSyncFeedTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/state_sync_feed", nil)
 	pipelineImportReorgCheckTimer          = metrics.NewRegisteredTimer("chain/imports/pipelined/reorg_check", nil)
 	pipelineImportSetFlatDiffTimer         = metrics.NewRegisteredTimer("chain/imports/pipelined/set_flatdiff", nil)
 	pipelineImportWriteHeadTimer           = metrics.NewRegisteredTimer("chain/imports/pipelined/write_head", nil)
+	pipelineImportBuildSRCBlockTimer       = metrics.NewRegisteredTimer("chain/imports/pipelined/build_src_block", nil)
 	pipelineImportSpawnSRCTimer            = metrics.NewRegisteredTimer("chain/imports/pipelined/spawn_src", nil)
+	pipelineImportPendingPublishTimer      = metrics.NewRegisteredTimer("chain/imports/pipelined/pending_publish", nil)
 	pipelineImportWarmSnapshotCollect      = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/collect", nil)
 	pipelineImportWarmSnapshotBuild        = metrics.NewRegisteredTimer("chain/imports/pipelined/warm_snapshot/build", nil)
 	pipelineImportWarmSnapshotFetchers     = metrics.NewRegisteredHistogram("chain/imports/pipelined/warm_snapshot/fetchers", nil, metrics.NewExpDecaySample(1028, 0.015))
@@ -263,6 +269,7 @@ const (
 	slowImportPostExecThreshold = 500 * time.Millisecond
 	slowImportCollectThreshold  = 100 * time.Millisecond
 	slowImportSnapshotThreshold = 100 * time.Millisecond
+	slowImportResidualThreshold = 100 * time.Millisecond
 
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
@@ -5086,15 +5093,36 @@ func validateStateForPipeline(validator Validator, block *types.Block, statedb *
 // that are included in the "Imported new chain segment" elapsed time but are
 // not part of ProcessBlock itself.
 type pipelinedImportPersistTimings struct {
-	prefetchDetach time.Duration
-	commitSnapshot time.Duration
-	collect        time.Duration
-	stateSyncFeed  time.Duration
-	reorgCheck     time.Duration
-	setFlatDiff    time.Duration
-	writeHead      time.Duration
-	spawnSRC       time.Duration
-	total          time.Duration
+	witnessCapture  time.Duration
+	prefetchDetach  time.Duration
+	prefetchCleanup time.Duration
+	commitSnapshot  time.Duration
+	collect         time.Duration
+	collectTotal    time.Duration
+	stateSyncFeed   time.Duration
+	reorgCheck      time.Duration
+	setFlatDiff     time.Duration
+	writeHead       time.Duration
+	buildSRCBlock   time.Duration
+	spawnSRC        time.Duration
+	pendingPublish  time.Duration
+	residual        time.Duration
+	total           time.Duration
+}
+
+func (t pipelinedImportPersistTimings) accounted() time.Duration {
+	return t.witnessCapture +
+		t.commitSnapshot +
+		t.prefetchDetach +
+		t.prefetchCleanup +
+		t.collectTotal +
+		t.stateSyncFeed +
+		t.reorgCheck +
+		t.setFlatDiff +
+		t.writeHead +
+		t.buildSRCBlock +
+		t.spawnSRC +
+		t.pendingPublish
 }
 
 // persistPipelinedImport handles the post-ProcessBlock work for a pipelined
@@ -5109,7 +5137,11 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	timings := pipelinedImportPersistTimings{}
 	defer func() {
 		timings.total = time.Since(persistStart)
+		if accounted := timings.accounted(); timings.total > accounted {
+			timings.residual = timings.total - accounted
+		}
 		pipelineImportPostExecTimer.Update(timings.total)
+		pipelineImportPostExecResidualTimer.Update(timings.residual)
 		bc.logSlowPipelinedImport(block, time.Since(start), cheapExec, validation, timings, statedb)
 	}()
 	// Capture the execution witness so SRC can complete it. The trie
@@ -5118,10 +5150,14 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// to SRC independently of the detached prefetcher. See LINEAR OWNERSHIP
 	// INVARIANT at runSRCCompute.
 	var execWitness *stateless.Witness
+	phaseStart := time.Now()
 	if makeWitness {
 		execWitness = statedb.Witness()
 	}
-	phaseStart := time.Now()
+	timings.witnessCapture = time.Since(phaseStart)
+	pipelineImportWitnessCaptureTimer.Update(timings.witnessCapture)
+
+	phaseStart = time.Now()
 	flatDiff := statedb.CommitSnapshot(bc.chainConfig.IsEIP158(block.Number()))
 	timings.commitSnapshot = time.Since(phaseStart)
 	pipelineImportCommitSnapshotTimer.Update(timings.commitSnapshot)
@@ -5140,11 +5176,17 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	pipelineImportPrefetchDetachTimer.Update(timings.prefetchDetach)
 	defer func() {
 		if detachedPrefetcher != nil {
+			cleanupStart := time.Now()
 			finishDetachedPrefetcher(detachedPrefetcher, false)
+			timings.prefetchCleanup = time.Since(cleanupStart)
+			pipelineImportPrefetchCleanupTimer.Update(timings.prefetchCleanup)
 		}
 	}()
 
+	phaseStart = time.Now()
 	committedRoot, collectElapsed, err := bc.collectPrevImportSRCIfAny(block, parent)
+	timings.collectTotal = time.Since(phaseStart)
+	pipelineImportCollectTotalTimer.Update(timings.collectTotal)
 	timings.collect = collectElapsed
 	if err != nil {
 		return true, err
@@ -5188,7 +5230,10 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	timings.writeHead = time.Since(phaseStart)
 	pipelineImportWriteHeadTimer.Update(timings.writeHead)
 
+	phaseStart = time.Now()
 	tmpBlock := types.NewBlockWithHeader(block.Header()).WithBody(*block.Body())
+	timings.buildSRCBlock = time.Since(phaseStart)
+	pipelineImportBuildSRCBlockTimer.Update(timings.buildSRCBlock)
 	// Import passes execWitness from execution and requires SRC to publish
 	// that same witness object. runSRCCompute hard-fails on a nil witness
 	// when allowOwnWitness=false. The detached prefetcher is always passed in
@@ -5201,6 +5246,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	detachedPrefetcher = nil
 	timings.spawnSRC = time.Since(phaseStart)
 	pipelineImportSpawnSRCTimer.Update(timings.spawnSRC)
+	phaseStart = time.Now()
 	newPending := &pendingImportSRCState{
 		block:         block,
 		flatDiff:      flatDiff,
@@ -5220,6 +5266,8 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 			"block", block.NumberU64(), "committedRoot", committedRoot,
 			"txs", len(block.Transactions()))
 	}
+	timings.pendingPublish = time.Since(phaseStart)
+	pipelineImportPendingPublishTimer.Update(timings.pendingPublish)
 	return false, nil
 }
 
@@ -5227,7 +5275,8 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 	if total < slowImportBlockThreshold &&
 		timings.total < slowImportPostExecThreshold &&
 		timings.collect < slowImportCollectThreshold &&
-		timings.prefetchDetach < slowImportSnapshotThreshold {
+		timings.prefetchDetach < slowImportSnapshotThreshold &&
+		timings.residual < slowImportResidualThreshold {
 		return
 	}
 	log.Warn("Slow pipelined import phase",
@@ -5238,14 +5287,21 @@ func (bc *BlockChain) logSlowPipelinedImport(block *types.Block, total, cheapExe
 		"cheapExec", common.PrettyDuration(cheapExec),
 		"validation", common.PrettyDuration(validation),
 		"postExec", common.PrettyDuration(timings.total),
+		"postExecAccounted", common.PrettyDuration(timings.accounted()),
+		"postExecResidual", common.PrettyDuration(timings.residual),
+		"witnessCapture", common.PrettyDuration(timings.witnessCapture),
 		"prefetchDetach", common.PrettyDuration(timings.prefetchDetach),
+		"prefetchCleanup", common.PrettyDuration(timings.prefetchCleanup),
 		"commitSnapshot", common.PrettyDuration(timings.commitSnapshot),
 		"collect", common.PrettyDuration(timings.collect),
+		"collectTotal", common.PrettyDuration(timings.collectTotal),
 		"stateSyncFeed", common.PrettyDuration(timings.stateSyncFeed),
 		"reorgCheck", common.PrettyDuration(timings.reorgCheck),
 		"setFlatDiff", common.PrettyDuration(timings.setFlatDiff),
 		"writeHead", common.PrettyDuration(timings.writeHead),
+		"buildSRCBlock", common.PrettyDuration(timings.buildSRCBlock),
 		"spawnSRC", common.PrettyDuration(timings.spawnSRC),
+		"pendingPublish", common.PrettyDuration(timings.pendingPublish),
 		"accountReads", common.PrettyDuration(statedb.AccountReads),
 		"storageReads", common.PrettyDuration(statedb.StorageReads),
 		"snapshotAccountReads", common.PrettyDuration(statedb.SnapshotAccountReads),
