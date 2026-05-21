@@ -84,7 +84,14 @@ func (t *stateSyncHooks) OnTxStart(env *tracing.VMContext, tx *types.Transaction
 
 func (t *stateSyncHooks) OnTxEnd(receipt *types.Receipt, err error) {
 	if t.active && t.inner.OnExit != nil {
-		t.inner.OnExit(0, nil, 0, err, err != nil)
+		// Report the total gas used by the state-sync tx on the synthetic root frame.
+		// Receipt is nil on error paths (e.g., ApplyStateSyncEvents failed in traceTx);
+		// fall back to 0 in that case.
+		var gasUsed uint64
+		if receipt != nil {
+			gasUsed = receipt.GasUsed
+		}
+		t.inner.OnExit(0, nil, gasUsed, err, err != nil)
 	}
 	if t.inner.OnTxEnd != nil {
 		t.inner.OnTxEnd(receipt, err)

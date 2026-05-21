@@ -203,6 +203,53 @@ func TestWrapStateSyncHooks_RegularTx_Passthrough(t *testing.T) {
 	assertEvents(t, expected, rec.events)
 }
 
+// TestWrapStateSyncHooks_SyntheticRootGasUsedFromReceipt verifies that the
+// synthetic root frame's OnExit reports gasUsed taken from receipt.GasUsed, not
+// hard-coded zero. On the error path receipt is nil and gasUsed falls back to 0.
+func TestWrapStateSyncHooks_SyntheticRootGasUsedFromReceipt(t *testing.T) {
+	type exitCall struct {
+		depth   int
+		gasUsed uint64
+	}
+
+	cases := []struct {
+		name    string
+		receipt *types.Receipt
+		err     error
+		// We assert only the depth-0 (synthetic root) OnExit. Children at depth
+		// 1+ pass through whatever the caller supplied (50000 below).
+		wantRootGasUsed uint64
+	}{
+		{"happy path — gasUsed flows from receipt", &types.Receipt{GasUsed: 123456}, nil, 123456},
+		{"zero gas — receipt with zero is honoured", &types.Receipt{GasUsed: 0}, nil, 0},
+		{"error path — nil receipt falls back to 0", nil, errors.New("commitState failed"), 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var exits []exitCall
+			inner := &tracing.Hooks{
+				OnEnter: func(int, byte, common.Address, common.Address, []byte, uint64, *big.Int) {},
+				OnExit: func(depth int, _ []byte, gasUsed uint64, _ error, _ bool) {
+					exits = append(exits, exitCall{depth: depth, gasUsed: gasUsed})
+				},
+			}
+			receiverAddr := common.HexToAddress("0x0000000000000000000000000000000000001001")
+			wrapped := WrapStateSyncHooks(inner, receiverAddr)
+
+			wrapped.OnTxStart(nil, makeStateSyncTx(), params.BorSystemAddress)
+			fireRealEvent(wrapped, params.BorSystemAddress, receiverAddr)
+			wrapped.OnTxEnd(tc.receipt, tc.err)
+
+			// Last recorded OnExit is the synthetic root closure at depth 0.
+			require.NotEmpty(t, exits)
+			root := exits[len(exits)-1]
+			require.Equal(t, 0, root.depth, "synthetic root must close at depth 0")
+			require.Equal(t, tc.wantRootGasUsed, root.gasUsed)
+		})
+	}
+}
+
 // TestWrapStateSyncHooks_ErrorPath verifies that OnTxEnd called with a non-nil
 // error still closes the synthetic root frame with reverted=true.
 func TestWrapStateSyncHooks_ErrorPath(t *testing.T) {
