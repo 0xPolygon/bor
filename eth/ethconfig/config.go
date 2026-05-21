@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -332,7 +333,7 @@ type Config struct {
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
-func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, db ethdb.Database, blockchainAPI *ethapi.BlockChainAPI) (consensus.Engine, error) {
+func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, db ethdb.Database, blockchainAPI *ethapi.BlockChainAPI, vmConfig vm.Config) (consensus.Engine, error) {
 	// nolint:nestif
 	if chainConfig.Clique != nil {
 		return beacon.New(clique.New(chainConfig.Clique, db)), nil
@@ -347,7 +348,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		log.Info("Using custom miner block time", "blockTime", ethConfig.Miner.BlockTime)
 
 		if ethConfig.WithoutHeimdall {
-			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor, ethConfig.Miner.BlockTime), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor, ethConfig.Miner.BlockTime, vmConfig), nil
 		} else {
 			if ethConfig.DevFakeAuthor {
 				log.Warn("Sanitizing DevFakeAuthor", "Use DevFakeAuthor with", "--bor.withoutheimdall")
@@ -427,7 +428,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				}
 			}
 
-			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false, ethConfig.Miner.BlockTime), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false, ethConfig.Miner.BlockTime, vmConfig), nil
 		}
 	}
 	return beacon.New(ethash.NewFaker()), nil

@@ -297,6 +297,7 @@ func New(
 	genesisContracts GenesisContract,
 	devFakeAuthor bool,
 	blockTime time.Duration,
+	vmConfig vm.Config,
 ) *Bor {
 	// get bor config
 	borConfig := chainConfig.Bor
@@ -328,7 +329,7 @@ func New(
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
-		vmConfig:               vm.Config{},
+		vmConfig:               vmConfig,
 		db:                     db,
 		ethAPI:                 ethAPI,
 		recents:                recents,
@@ -366,10 +367,6 @@ func New(
 	go c.runMilestoneFetcher()
 
 	return c
-}
-
-func (c *Bor) SetVMConfig(vmCfg vm.Config) {
-	c.vmConfig = vmCfg
 }
 
 // Author implements consensus.Engine, returning the Ethereum address recovered

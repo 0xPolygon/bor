@@ -244,7 +244,38 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	relayService.SetTxGetter(eth.APIBackend.GetCanonicalTransaction)
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
+
+	// Prepare the vm config for tracing
+	vmCfg := vm.Config{
+		EnablePreimageRecording: config.EnablePreimageRecording,
+		StatelessSelfValidation: config.StatelessSelfValidation,
+		EnableWitnessStats:      config.EnableWitnessStats,
+		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+	}
+
+	// Setup live tracer if requested
+	if config.VMTrace != "" && config.ParallelEVM.Enable {
+		log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results. Consider disabling it via `--parallelevm.enable=false` for using live tracing.")
+	} else if config.VMTrace != "" {
+		traceConfig := json.RawMessage("{}")
+		if config.VMTraceJsonConfig != "" {
+			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
+		}
+		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
+		}
+		// For tracing state-sync transactions, we need a modified tracer. We wrap the hooks
+		// of the live tracer above with a state-sync aware tracer which is used across multiple
+		// modules.
+		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
+			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
+			t = tracers.WrapStateSyncHooks(t, stateReceiver)
+		}
+		vmCfg.Tracer = t
+	}
+
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI, vmCfg)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -285,13 +316,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
 			AddressCacheSizes: config.AddressCacheSizes,
 			PreloadRateLimit:  config.PreloadRateLimit,
-			VmConfig: vm.Config{
-				EnablePreimageRecording: config.EnablePreimageRecording,
-				StatelessSelfValidation: config.StatelessSelfValidation,
-				EnableWitnessStats:      config.EnableWitnessStats,
-				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
-			},
-			Stateless: config.SyncMode == downloader.StatelessSync,
+			VmConfig:          vmCfg,
+			Stateless:         config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
 			// within the data directory. The corresponding paths will be either:
 			// - DATADIR/triedb/merkle.journal
@@ -300,30 +326,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
-
-	if config.VMTrace != "" && config.ParallelEVM.Enable {
-		log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results. Consider disabling it via `--parallelevm.enable=false` for using live tracing.")
-	} else if config.VMTrace != "" {
-		traceConfig := json.RawMessage("{}")
-		if config.VMTraceJsonConfig != "" {
-			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
-		}
-		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
-		}
-		// For tracing state-sync transactions, we need a modified tracer. We wrap the hooks
-		// of the live tracer above with a state-sync aware tracer which is used across multiple
-		// modules.
-		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
-			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
-			t = tracers.WrapStateSyncHooks(t, stateReceiver)
-		}
-		options.VmConfig.Tracer = t
-		if borEngine, ok := eth.engine.(*bor.Bor); ok {
-			borEngine.SetVMConfig(options.VmConfig)
-		}
-	}
 
 	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 

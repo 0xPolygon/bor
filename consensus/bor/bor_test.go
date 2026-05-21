@@ -2351,7 +2351,7 @@ func TestNew(t *testing.T) {
 
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
 
-	engine := New(chainCfg, db, nil, sp, nil, nil, nil, false, 0)
+	engine := New(chainCfg, db, nil, sp, nil, nil, nil, false, 0, vm.Config{})
 	require.NotNil(t, engine)
 	require.NotNil(t, engine.recents)
 	require.NotNil(t, engine.signatures)
@@ -2371,7 +2371,7 @@ func TestNew_DefaultSprintFallback(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	sp := &fakeSpanner{vals: []*valset.Validator{{Address: common.HexToAddress("0x1"), VotingPower: 1}}}
 
-	engine := New(chainCfg, db, nil, sp, nil, nil, nil, false, 0)
+	engine := New(chainCfg, db, nil, sp, nil, nil, nil, false, 0, vm.Config{})
 	require.NotNil(t, engine)
 	require.Equal(t, uint64(64), engine.config.CalculateSprint(0))
 	require.Equal(t, uint64(64), engine.chainConfig.Bor.CalculateSprint(0))
@@ -2386,7 +2386,7 @@ func TestNew_DefaultAuthorizedSignerReturnsUnauthorizedError(t *testing.T) {
 		Period: map[string]uint64{"0": 2},
 	}
 	chainCfg := &params.ChainConfig{ChainID: big.NewInt(1), Bor: borCfg}
-	engine := New(chainCfg, rawdb.NewMemoryDatabase(), nil, &fakeSpanner{}, nil, nil, nil, false, 0)
+	engine := New(chainCfg, rawdb.NewMemoryDatabase(), nil, &fakeSpanner{}, nil, nil, nil, false, 0, vm.Config{})
 	defer func() {
 		require.NoError(t, engine.Close())
 	}()
@@ -3976,7 +3976,7 @@ func TestNew_WithHeimdallClient(t *testing.T) {
 	gc := &mockGenesisContractForCommitStatesIndore{lastStateID: 0}
 	hc := &mockHeimdallClient{span: nil}
 
-	bor := New(cfg, db, nil, sp, hc, nil, gc, false, 0)
+	bor := New(cfg, db, nil, sp, hc, nil, gc, false, 0, vm.Config{})
 	require.NotNil(t, bor)
 	require.NotNil(t, bor.HeimdallClient)
 	require.NoError(t, bor.Close())
