@@ -467,6 +467,105 @@ func TestIntermediateRoots_WithStateSyncTx(t *testing.T) {
 	}
 }
 
+// TestIntermediateRoots_WithReexecOverride exercises the `config.Reexec` override branch
+// Passing a non-nil config with Reexec set must not change the result vs the default
+// (no config). Covers the trivial-but-untouched config-handling path.
+func TestIntermediateRoots_WithReexecOverride(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+
+	reexec := uint64(8)
+	withConfig, err := api.IntermediateRoots(context.Background(), block.Hash(), &TraceConfig{Reexec: &reexec})
+	require.NoError(t, err)
+
+	withoutConfig, err := api.IntermediateRoots(context.Background(), block.Hash(), nil)
+	require.NoError(t, err)
+
+	require.Equal(t, withoutConfig, withConfig, "reexec override should not change roots for an already-archived chain")
+}
+
+// TestIntermediateRoots_ContextCancelled exercises the in-loop `ctx.Err()` check at
+// A pre-cancelled context must abort before any tx is processed and surface the
+// cancellation as an error.
+func TestIntermediateRoots_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	block, _ := backend.BlockByNumber(context.Background(), rpc.BlockNumber(stateSyncBlock))
+	require.NotNil(t, block)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := api.IntermediateRoots(ctx, block.Hash(), nil)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestIntermediateRoots_FailingTx_ReturnsPartialRoots exercises the documented bad-block
+// behaviour: if a tx in the block fails to execute, IntermediateRoots MUST return the
+// partial root list collected so far with err=nil (rather than failing the whole RPC call).
+// This is intentional because the function is also called on bad blocks where the caller
+// wants the roots that led up to the failure.
+//
+// Body layout: [normal_tx, bad_tx]
+//   - normal_tx is the standard funded transfer set up by newStateSyncTestSetup. It
+//     succeeds and contributes one intermediate root.
+//   - bad_tx is a signed tx with a nonce far above the sender's actual nonce, triggering
+//     ErrNonceTooHigh in core.ApplyMessage.
+//
+// Expected: roots == [root_after_normal_tx], err == nil. The first root is hardcoded
+// against the canonical post-normal-tx state root pinned by TestIntermediateRoots_WithStateSyncTx
+// — identical setup, so the first root must match byte-for-byte (regression guard).
+func TestIntermediateRoots_FailingTx_ReturnsPartialRoots(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	block := backend.chain.GetBlockByNumber(stateSyncBlock)
+	require.NotNil(t, block)
+
+	// Construct a tx that fails at ApplyMessage time: nonce way above the sender's
+	// actual one → ErrNonceTooHigh.
+	signer := types.MakeSigner(backend.chainConfig, block.Number(), block.Time())
+	badTx, err := types.SignTx(types.NewTx(&types.LegacyTx{
+		Nonce:    999, // sender's real nonce is small
+		To:       &address,
+		Value:    big.NewInt(1),
+		Gas:      params.TxGas,
+		GasPrice: new(big.Int).Mul(block.BaseFee(), big.NewInt(2)),
+	}), signer, key)
+	require.NoError(t, err)
+
+	// Append the failing tx AFTER the normal tx so the loop processes normal_tx
+	// successfully (appending one root) before hitting bad_tx and bailing.
+	existing := block.Body()
+	newTxs := append(existing.Transactions, badTx)
+	rawdb.WriteBody(backend.chaindb, block.Hash(), stateSyncBlock, &types.Body{
+		Transactions: newTxs,
+		Uncles:       existing.Uncles,
+		Withdrawals:  existing.Withdrawals,
+	})
+	rawdb.WriteTxLookupEntries(backend.chaindb, stateSyncBlock, []common.Hash{badTx.Hash()})
+	backend.modifiedBlocks[stateSyncBlock] = true
+	backend.modifiedHashes[block.Hash()] = stateSyncBlock
+
+	roots, err := api.IntermediateRoots(context.Background(), block.Hash(), nil)
+	require.NoError(t, err, "IntermediateRoots must not error on a failing tx — it returns partial roots")
+	require.Equal(t, 1, len(roots), "exactly one root expected: normal_tx succeeded, bad_tx aborted the loop")
+	require.Equal(t,
+		common.HexToHash("0x23eda0b1dbe747a8daedaf94b811a393de400047812394476dac190a5e9a8fd4"),
+		roots[0],
+		"partial root regression check — must match the canonical post-normal-tx state root")
+}
+
 // TestTraceTransaction_WithStateSyncTx exercises the `debug_traceTransaction` RPC entry
 // point against the state-sync tx hash directly. This path differs from TraceBlockBy*
 // because it (a) routes through GetCanonicalTransaction → StateAtTransaction and
@@ -773,6 +872,42 @@ func TestTraceTransaction_StateSync_PrestateTracer(t *testing.T) {
 func prestateTracerConfig(cfg json.RawMessage) *TraceConfig {
 	name := "prestateTracer"
 	return &TraceConfig{Tracer: &name, TracerConfig: cfg}
+}
+
+// TestTraceBlockByNumber_StateSync_JSTracer exercises the `traceBlockParallel` code
+// path at. That path only fires when the configured tracer is JS (gated by
+// `DefaultDirectory.IsJS`). The native-tracer matrix test above does NOT reach
+// this path because every native tracer routes through the sequential `traceBlock`.
+//
+// The JS source below is a minimal valid tracer object: it provides the three required
+// methods (step / fault / result) but does no real work. The point is structural — we
+// want to drive the parallel-trace orchestration AND its post-loop state-sync sequential
+// replay block end-to-end, and assert no panic / no per-tx error.
+func TestTraceBlockByNumber_StateSync_JSTracer(t *testing.T) {
+	t.Parallel()
+
+	backend, api, stateSyncBlock := newStateSyncTestSetup(t, 3, 2)
+	defer backend.chain.Stop()
+
+	// Minimal JS tracer literal: returns the constant "ok" for every tx so the test
+	// doesn't assert on tracer output structure (which is tracer-author concern), only
+	// on the orchestration path firing without panic / error.
+	jsTracer := `{
+		step: function(log, db) {},
+		fault: function(log, db) {},
+		result: function(ctx, db) { return "ok"; }
+	}`
+
+	results, err := api.TraceBlockByNumber(context.Background(),
+		rpc.BlockNumber(stateSyncBlock),
+		&TraceConfig{Tracer: &jsTracer})
+	require.NoError(t, err, "TraceBlockByNumber with JS tracer must not error")
+	require.Equal(t, 2, len(results), "expected 2 trace results (regular tx + state-sync tx)")
+
+	for i, r := range results {
+		require.Empty(t, r.Error, "trace[%d] returned per-tx error %q", i, r.Error)
+		require.NotNil(t, r.Result, "trace[%d] result is nil", i)
+	}
 }
 
 // TestTraceBlockByNumber_StateSync_AllRegisteredTracers is a multi-tracer matrix test
