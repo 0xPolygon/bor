@@ -598,10 +598,10 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
 		statedb.SetTxContext(tx.Hash(), i)
 		var err error
-		if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil {
+		if tx.Type() == types.StateSyncTxType && api.backend.ChainConfig().Bor != nil && api.backend.ChainConfig().Bor.IsMadhugiri(block.Number()) {
 			// State sync transactions are processed differently than normal transactions
 			stateReceiverAddress := api.backend.ChainConfig().Bor.StateReceiverContract
-			_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
+			_, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 		} else {
 			_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		}
@@ -898,9 +898,9 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		if txHash != (common.Hash{}) && tx.Hash() != txHash {
 			// Process the tx to update state, but don't trace it.
 			var err error
-			if tx.Type() == types.StateSyncTxType && chainConfig.Bor != nil {
+			if tx.Type() == types.StateSyncTxType && chainConfig.Bor != nil && chainConfig.Bor.IsMadhugiri(block.Number()) {
 				stateReceiverAddress := chainConfig.Bor.StateReceiverContract
-				_, err = statefull.ApplyStateSyncEvents(evm, tx, msg, common.HexToAddress(stateReceiverAddress))
+				_, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, common.HexToAddress(stateReceiverAddress))
 			} else {
 				_, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 			}
@@ -955,7 +955,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		}
 		var vmResult *core.ExecutionResult
 		if isStateSync {
-			vmResult, err = statefull.ApplyStateSyncEvents(evm, tx, msg, stateReceiverAddress)
+			vmResult, err = statefull.ApplyStateSyncEvents(ctx, evm, tx, msg, stateReceiverAddress)
 		} else {
 			vmResult, err = core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		}
@@ -1229,7 +1229,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 		}
-		res, err := statefull.ApplyStateSyncEvents(evm, tx, message, stateReceiverAddress)
+		res, err := statefull.ApplyStateSyncEvents(ctx, evm, tx, message, stateReceiverAddress)
 		if err != nil {
 			if hooks.OnTxEnd != nil {
 				hooks.OnTxEnd(nil, err)
@@ -1265,8 +1265,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 				BlockHash:         txctx.BlockHash,
 				TransactionIndex:  uint(txctx.TxIndex),
 			}
-			// Bloom is intentionally skipped, add if required
-			// receipt.Bloom = types.CreateBloom(receipt)
+			receipt.Bloom = types.CreateBloom(receipt)
 			hooks.OnTxEnd(receipt, nil)
 		}
 

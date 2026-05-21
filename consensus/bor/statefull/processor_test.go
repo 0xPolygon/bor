@@ -57,7 +57,7 @@ func TestApplyStateSyncEvents_NonStateSyncTx_NoOp(t *testing.T) {
 	evm := newTestEVM(t, nil)
 	legacy := types.NewTx(&types.LegacyTx{Nonce: 0, GasPrice: new(big.Int), Gas: 21000})
 
-	res, err := ApplyStateSyncEvents(evm, legacy, &core.Message{}, stateReceiverAddr)
+	res, err := ApplyStateSyncEvents(t.Context(), evm, legacy, &core.Message{}, stateReceiverAddr)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Equal(t, uint64(0), res.UsedGas)
@@ -72,7 +72,7 @@ func TestApplyStateSyncEvents_EmptyEvents_NoOp(t *testing.T) {
 	evm := newTestEVM(t, nil)
 	tx := types.NewTx(&types.StateSyncTx{StateSyncData: nil})
 
-	res, err := ApplyStateSyncEvents(evm, tx, &core.Message{}, stateReceiverAddr)
+	res, err := ApplyStateSyncEvents(t.Context(), evm, tx, &core.Message{}, stateReceiverAddr)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), res.UsedGas)
 }
@@ -92,7 +92,7 @@ func TestApplyStateSyncEvents_HappyPath(t *testing.T) {
 	}
 	tx := types.NewTx(&types.StateSyncTx{StateSyncData: events})
 
-	res, err := ApplyStateSyncEvents(evm, tx, newSystemMessage(), stateReceiverAddr)
+	res, err := ApplyStateSyncEvents(t.Context(), evm, tx, newSystemMessage(), stateReceiverAddr)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.NoError(t, res.Err)
@@ -111,10 +111,28 @@ func TestApplyStateSyncEvents_RevertDoesNotPropagate(t *testing.T) {
 		},
 	})
 
-	res, err := ApplyStateSyncEvents(evm, tx, newSystemMessage(), stateReceiverAddr)
+	res, err := ApplyStateSyncEvents(t.Context(), evm, tx, newSystemMessage(), stateReceiverAddr)
 	require.NoError(t, err, "revert must not bubble up to ApplyStateSyncEvents")
 	require.NoError(t, res.Err)
 	require.Greater(t, res.UsedGas, uint64(0), "reverted call still consumes gas")
+}
+
+// TestApplyStateSyncEvents_ContextCancelled verifies that the loop aborts when ctx is
+// already cancelled, before processing any event.
+func TestApplyStateSyncEvents_ContextCancelled(t *testing.T) {
+	evm := newTestEVM(t, map[common.Address][]byte{stateReceiverAddr: successStub})
+	tx := types.NewTx(&types.StateSyncTx{
+		StateSyncData: []*types.StateSyncData{
+			{ID: 1, Contract: common.HexToAddress("0x2001")},
+			{ID: 2, Contract: common.HexToAddress("0x2002")},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := ApplyStateSyncEvents(ctx, evm, tx, newSystemMessage(), stateReceiverAddr)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestApplyBorMessage_PropagatesRevertInResult validates that `ApplyBorMessage` populates

@@ -162,7 +162,9 @@ func ApplyBorMessage(vmenv *vm.EVM, msg Callmsg) (*core.ExecutionResult, error) 
 // ApplyStateSyncEvents replays all state-sync events from a StateSyncTx against the EVM. This
 // method is generally used for tracing. It tries to mimic the exact things which happen when
 // a state-sync is processed in a live network (via CommitState).
-func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Message, stateReceiverContract common.Address) (*core.ExecutionResult, error) {
+//
+// ctx is checked between events so callers can abort the loop on deadline / client disconnect.
+func ApplyStateSyncEvents(ctx context.Context, vmenv *vm.EVM, tx *types.Transaction, message *core.Message, stateReceiverContract common.Address) (*core.ExecutionResult, error) {
 	events := tx.GetStateSyncData()
 	if len(events) == 0 {
 		return &core.ExecutionResult{UsedGas: 0, ReturnData: nil}, nil
@@ -181,6 +183,9 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 
 	var totalGasUsed uint64
 	for _, event := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		gasUsed, err := commitStateSyncEvent(vmenv, event, stateReceiverABI, stateReceiverContract, syncTime)
 		if err != nil {
 			return nil, err
