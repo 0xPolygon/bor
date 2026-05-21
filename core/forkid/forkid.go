@@ -78,7 +78,7 @@ func NewID(config *params.ChainConfig, genesis *types.Block, head, time uint64) 
 	hash := crc32.ChecksumIEEE(genesis.Hash().Bytes())
 
 	// Calculate the current fork checksum and the next fork block
-	forksByBlock, forksByTime := gatherForks(config, genesis.Time())
+	forksByBlock, forksByTime := GatherForks(config, genesis.Time())
 	for _, fork := range forksByBlock {
 		if fork <= head {
 			// Fork already passed, checksum the previous hash and the fork number
