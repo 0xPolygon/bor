@@ -301,7 +301,9 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		}
 	)
 
-	if config.VMTrace != "" {
+	if config.VMTrace != "" && config.ParallelEVM.Enable {
+		log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results. Consider disabling it via `--parallelevm.enable=false` for using live tracing.")
+	} else if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
 		if config.VMTraceJsonConfig != "" {
 			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
@@ -314,9 +316,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		// of the live tracer above with a state-sync aware tracer which is used across multiple
 		// modules.
 		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
-			if config.ParallelEVM.Enable {
-				log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results")
-			}
 			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
 			t = tracers.WrapStateSyncHooks(t, stateReceiver)
 		}
