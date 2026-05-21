@@ -176,7 +176,8 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 	// was constructed while executing the transaction but it'll be deterministic
 	// in every run.
 	stateReceiverABI := abi.StateReceiver()
-	syncTime := vmenv.Context.Time
+	// syncTime can be reused across calls as ABI Pack does not retain a reference
+	syncTime := new(big.Int).SetUint64(vmenv.Context.Time)
 
 	var totalGasUsed uint64
 	for _, event := range events {
@@ -198,7 +199,7 @@ func ApplyStateSyncEvents(vmenv *vm.EVM, tx *types.Transaction, message *core.Me
 // semantics allow individual events to fail silently; the trace records the revert. Only
 // encoding / ABI failures (which indicate a programming bug, not a runtime condition)
 // return an error.
-func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiverABI abi.ABI, stateReceiverContract common.Address, syncTime uint64) (uint64, error) {
+func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiverABI abi.ABI, stateReceiverContract common.Address, syncTime *big.Int) (uint64, error) {
 	// Convert StateSyncData to EventRecord (matching CommitState's BuildEventRecord).
 	// LogIndex and ChainID are not used by commitState but are required for RLP encoding.
 	record := &clerk.EventRecord{
@@ -213,7 +214,7 @@ func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiv
 	}
 
 	// ABI-pack commitState(uint256 syncTime, bytes recordBytes)
-	data, err := stateReceiverABI.Pack("commitState", new(big.Int).SetUint64(syncTime), recordBytes)
+	data, err := stateReceiverABI.Pack("commitState", syncTime, recordBytes)
 	if err != nil {
 		return 0, fmt.Errorf("failed to ABI pack commitState for event %d: %w", event.ID, err)
 	}
