@@ -1229,7 +1229,7 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), tx, params.BorSystemAddress)
 		}
-		res, err := statefull.ApplyStateSyncEvents(ctx, evm, tx, message, stateReceiverAddress)
+		res, err := statefull.ApplyStateSyncEvents(deadlineCtx, evm, tx, message, stateReceiverAddress)
 		if err != nil {
 			if hooks.OnTxEnd != nil {
 				hooks.OnTxEnd(nil, err)
