@@ -569,7 +569,20 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 	_ = result
 }
 
-// TestNewV2StateProcessor_ClampsNumWorkers verifies Fix #5: zero or negative
+// TestV2StateProcessor_RefusesTracer pins that a non-nil vm.Config.Tracer
+// makes V2.Process return errV2TracerUnsupported so ProcessBlock falls
+// back to the serial path. Tracer hooks aren't goroutine-safe and would
+// race across concurrent V2 workers.
+func TestV2StateProcessor_RefusesTracer(t *testing.T) {
+	p := NewV2StateProcessor(nil, nil, 2)
+	cfg := vm.Config{Tracer: &tracing.Hooks{}}
+	_, err := p.Process(nil, nil, cfg, nil, nil)
+	if !errors.Is(err, errV2TracerUnsupported) {
+		t.Fatalf("V2.Process with tracer: got %v, want errV2TracerUnsupported", err)
+	}
+}
+
+// TestV2StateProcessor_ClampsNumWorkers verifies Fix #5: zero or negative
 // numWorkers must be clamped to a sensible default. With numWorkers=0 the
 // executor would deadlock because the dispatcher window collapses to zero
 // (see core/blockstm/v2_executor.go:355).

@@ -130,7 +130,8 @@ func ExecuteV2BlockSTM(
 	<-valDone        // validation finished — no more re-executions
 	<-dispatcherDone // wait for dispatcher to stop sending before closing taskCh
 	close(taskCh)
-	wg.Wait() // wait for workers to exit
+	wg.Wait()         // wait for workers to exit
+	x.reexecWg.Wait() // detached re-exec goroutines may outlive validation on cancellation
 	settleWg.Wait()
 
 	return x.buildResult(startTime, settleStart, settleEnd)
@@ -159,6 +160,7 @@ type v2ExecCtx struct {
 	finalized    []atomic.Bool
 	execDone     []chan struct{}
 	chSettle     chan int
+	reexecWg     sync.WaitGroup // re-exec goroutines launched by dispatchReexec
 
 	taskSenderNonces []map[common.Address]uint64
 
@@ -564,6 +566,7 @@ func (x *v2ExecCtx) dispatchReexec(i int) chan struct{} {
 	x.incarnations[i]++
 
 	ch := make(chan struct{})
+	x.reexecWg.Add(1)
 	// Re-exec runs in its own goroutine; multiple re-execs for different
 	// txs can be in flight concurrently. Cross-goroutine state isolation:
 	//   - x.execute writes only x.states[idx] (per-idx slot) — distinct idx
@@ -574,6 +577,7 @@ func (x *v2ExecCtx) dispatchReexec(i int) chan struct{} {
 	// Order: CleanupEstimate completes before close(ch) (and therefore
 	// before finishReexec returns), so finalize/settle observes a clean store.
 	go func(idx int, owk []Key, oba []common.Address, old V2TxState) {
+		defer x.reexecWg.Done()
 		x.execute(idx, x.numWorkers)
 		if x.states[idx] != nil {
 			x.states[idx].CleanupEstimate(owk, oba)

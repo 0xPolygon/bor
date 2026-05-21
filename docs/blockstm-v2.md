@@ -484,19 +484,10 @@ Build-tag invariants (`-tags invariants`) add runtime assertions:
 
 ### Architecture
 
-1. **Witness production in V2.** Currently V2 returns nil from
-   `ParallelStateDB.Witness()`, and `BlockChain.ProcessBlock` force-
-   routes to serial when witness production is requested. Wiring V2
-   through SafeBase + finalDB would require: preserving witness across
-   the settle-prefetcher restart, plumbing `AddCode` from SafeBase code
-   reads, tracking read-only addresses for trie inclusion, and locking
-   `Witness.AddCode`. See the dedicated docstring at
-   `BlockChain.ProcessBlock:855-860`.
-
-2. **Verkle-mode access events.** `ParallelStateDB.AccessEvents()`
+1. **Verkle-mode access events.** `ParallelStateDB.AccessEvents()`
    returns nil. Needs a fork gate before Verkle activates on Polygon.
 
-3. **V1 BlockSTM removal.** `ParallelStateProcessor` (V1 MVHashMap-based)
+2. **V1 BlockSTM removal.** `ParallelStateProcessor` (V1 MVHashMap-based)
    and the entire `CompletionTracker` module are still in tree but
    unreachable in production — `bc.opcodeLevel` is never set true and
    `mvh.CT` is never assigned. Removing them would eliminate ~1500

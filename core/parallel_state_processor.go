@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -39,6 +40,11 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// errV2TracerUnsupported is returned when V2 receives a vm.Config with a
+// non-nil Tracer. Tracer hooks aren't safe across concurrent V2 workers;
+// ProcessBlock's fallback runs the serial processor instead.
+var errV2TracerUnsupported = errors.New("v2: tracer not supported on parallel path")
 
 type ParallelEVMConfig struct {
 	Enable               bool
@@ -1083,6 +1089,11 @@ func (p *V2StateProcessor) chainConfig() *params.ChainConfig {
 // The caller should provide a statedb that is NOT shared with any read-only base.
 // In production, ProcessBlock creates an independent parallelStatedb for this.
 func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
+	// Tracer hooks are not goroutine-safe; concurrent V2 workers sharing
+	// one Tracer would race. Refuse so ProcessBlock's fallback runs V1.
+	if cfg.Tracer != nil {
+		return nil, errV2TracerUnsupported
+	}
 	tProcess := time.Now()
 	config := p.chainConfig()
 	header := block.Header()
