@@ -139,7 +139,7 @@ func NewStaticFilter(config *params.ChainConfig, genesis *types.Block) Filter {
 func newFilter(config *params.ChainConfig, genesis *types.Block, headfn func() (uint64, uint64)) Filter {
 	// Calculate the all the valid fork hash and fork next combos
 	var (
-		forksByBlock, forksByTime = gatherForks(config, genesis.Time())
+		forksByBlock, forksByTime = GatherForks(config, genesis.Time())
 		forks                     = append(append([]uint64{}, forksByBlock...), forksByTime...)
 		sums                      = make([][4]byte, len(forks)+1) // 0th is the genesis
 	)
