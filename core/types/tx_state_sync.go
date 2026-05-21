@@ -34,7 +34,7 @@ import (
 //
 //   - The public facing methods (e.g. tx.To()) return zero address for both sender and
 //     receiver, as lot of downstream tooling like block explorers relies on this info.
-//   - The address used durign actual EVM execution is different and is defined in the
+//   - The address used during actual EVM execution is different and is defined in the
 //     execution path. The sender is set to system address (defined in params.BorSystemAddress)
 //     and the receiver is set to the state-receiver contract address (defined in genesis
 //     config).
