@@ -1240,6 +1240,10 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message *cor
 			// Generate a receipt on the fly for tracing. Use LogIndex and CumulativeGasUsed
 			// from txctx which are populated by the caller based on prior transactions.
 			allLogs := tracingStateDB.Logs()
+			// StateDB.Logs() iterates a map keyed by tx hash, so the cross-tx group
+			// order is non-deterministic. Sort by log.Index (monotonic per emission)
+			// to reproduce emission order, so the slice below picks up exactly the
+			// state-sync logs.
 			sort.SliceStable(allLogs, func(i, j int) bool {
 				return allLogs[i].Index < allLogs[j].Index
 			})
