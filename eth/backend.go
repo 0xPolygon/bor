@@ -255,7 +255,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Setup live tracer if requested
 	if config.VMTrace != "" && config.ParallelEVM.Enable {
-		log.Warn("Live tracing not supported with ParallelEVM and may lead to unexpected results. Consider disabling it via `--parallelevm.enable=false` for using live tracing.")
+		log.Warn("Live tracing requested but not supported with ParallelEVM enabled. Disable ParallelEVM via `--parallelevm.enable=false` to use live tracing.")
 	} else if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
 		if config.VMTraceJsonConfig != "" {

@@ -226,7 +226,7 @@ func commitStateSyncEvent(vmenv *vm.EVM, event *types.StateSyncData, stateReceiv
 
 	result, _ := ApplyBorMessage(vmenv, GetSystemMessage(stateReceiverContract, data))
 	if result.Err != nil {
-		log.Warn("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
+		log.Debug("state-sync event reverted during trace replay", "eventID", event.ID, "err", result.Err)
 	}
 	return result.UsedGas, nil
 }
