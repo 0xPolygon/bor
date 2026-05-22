@@ -2944,27 +2944,23 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 // family should be able to permanently wedge the producer state machine
 // across a restart.
 //
-// The four leak paths that the unit tests precisely cover and that this
+// The leak paths that the unit tests precisely cover and that this
 // integration test exercises behaviorally:
 //
-//  1. miner.mainLoop dropped-newWorkReq on PeerCount==0 (unit test:
-//     TestMainLoopClearsPendingWorkBlockOnPeerCountZero).
-//  2. miner.commitWork syncing-leak early return (unit test:
+//  1. miner.commitWork syncing-leak early return (unit test:
 //     TestCommitWorkLeaksPendingWorkBlockWhenSyncing).
-//  3. miner.taskLoop missing pendingTasks cleanup on Bor.Seal stop-branch
+//  2. miner.taskLoop missing pendingTasks cleanup on Bor.Seal stop-branch
 //     exits (cleanup wired via SealWithStopHook onStopExit callback;
 //     unit test: TestTaskLoopInterruptPreservesPendingTasks).
-//  4. Bor.Seal second-select silent default drop (unit test:
+//  3. Bor.Seal second-select silent default drop (unit test:
 //     TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop).
 //
+// A fourth leak path — the mainLoop PeerCount==0 dropped-newWorkReq — was
+// closed in the same family by removing the gate entirely; the path no
+// longer exists, so there's no unit test pair for it.
+//
 // Integration-level limitations:
-//   - This test calls InitMiner with withoutHeimdall=true (no real heimdall
-//     wired up), so the production PeerCount==0 gate
-//     (`realNetworkNode := bor.HeimdallClient != nil`) doesn't trip and
-//     Bug 1's specific drop branch is NOT exercised. The precise unit test
-//     (TestMainLoopClearsPendingWorkBlockOnPeerCountZero) uses a mock
-//     heimdall client to enable the gate.
-//   - The race conditions for (3) and the resultCh-full condition for (4)
+//   - The race condition for (2) and the resultCh-full condition for (3)
 //     are timing-sensitive and not reliably reproduced in a 2-node test
 //     without artificial backpressure.
 //
