@@ -1587,13 +1587,13 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 }
 
-// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a distinct leak
-// path for `pendingWorkBlock` (separate from the PeerCount==0 race fixed for
-// the 2026-05-07 incident). It does NOT cleanly explain val4's stall because
-// `miner.update()` unsubscribes from downloader events after the first
-// DoneEvent, so for a node that's been running past initial sync, `w.syncing`
-// is permanently false. The bug is still real for fresh-startup paths and
-// worth fixing as a code-hygiene issue.
+// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a leak path for
+// `pendingWorkBlock`: when `commitWork` early-returns because the node is
+// still syncing, the value reserved by `newWorkLoop` is never cleared.
+// In production `miner.update()` unsubscribes from downloader events after
+// the first DoneEvent, so for a node past initial sync `w.syncing` is
+// permanently false — this bug only surfaces on fresh-startup paths, but
+// the leak is still worth fixing as a code-hygiene issue.
 //
 // Bug: commitWork's pre-fix layout read:
 //
@@ -1657,8 +1657,7 @@ func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
 	got := w.pendingWorkBlock.Load()
 	if got != 0 {
 		t.Fatalf("pendingWorkBlock leaked while syncing: expected 0, got %d. "+
-			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag — "+
-			"the same class of leak (different trigger) as the 2026-05-07 incident.", got)
+			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag.", got)
 	}
 }
 
