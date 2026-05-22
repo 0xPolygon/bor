@@ -2939,8 +2939,8 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 //
 // Behavioral property under test: after a brief mining stop/start cycle on
 // an active block producer — which closes the worker's startup race window
-// (the same window where Bug 1 fired in production) — the producer must
-// eventually seal blocks again. None of the four leak-paths fixed in this
+// (the same window the leak family exercised in production) — the producer
+// must eventually seal blocks again. None of the leak paths fixed in this
 // family should be able to permanently wedge the producer state machine
 // across a restart.
 //
@@ -3032,8 +3032,8 @@ func TestProducerRecoversAfterMiningRestart(t *testing.T) {
 	waitForBlock(5, 30*time.Second)
 
 	// Phase 2: stop mining on node 0 and remove its peer link to node 1.
-	// This recreates the "producer is briefly isolated" condition that
-	// triggered Bug 1 in production (the startup race against P2P peer
+	// This recreates the "producer is briefly isolated" condition the
+	// leak family hit in production (the startup race against P2P peer
 	// establishment). With node 0 stopped, node 1 should continue alone.
 	headBeforeStop := nodes[0].BlockChain().CurrentHeader().Number.Uint64()
 	t.Logf("phase 2: head before stop=%d, stopping mining on node 0 and removing peer", headBeforeStop)
@@ -3047,10 +3047,10 @@ func TestProducerRecoversAfterMiningRestart(t *testing.T) {
 	// reusable on the next StartMining.
 	time.Sleep(2 * time.Second)
 
-	// Phase 3: re-add peer, restart mining on node 0. With Bug 1 (or the
-	// other leak paths) present, node 0 could sit silently — no seals —
-	// until the process is restarted. With the fixes, node 0 must
-	// produce blocks again within a short recovery window.
+	// Phase 3: re-add peer, restart mining on node 0. With any of the
+	// leak paths present, node 0 could sit silently — no seals — until
+	// the process is restarted. With the fixes, node 0 must produce
+	// blocks again within a short recovery window.
 	stacks[0].Server().AddPeer(enodes[1])
 	if err := nodes[0].StartMining(); err != nil {
 		t.Fatalf("StartMining (restart) failed: %v", err)
