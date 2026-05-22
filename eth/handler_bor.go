@@ -133,7 +133,6 @@ func (h *ethHandler) handleMilestone(ctx context.Context, eth *Ethereum, milesto
 	// write can't promote a stale or non-canonical header.
 	if block := eth.blockchain.GetBlockByNumber(num); block != nil && block.Hash() == hash {
 		eth.blockchain.SetFinalized(block.Header())
-		eth.blockchain.SetSafe(block.Header())
 	}
 
 	return nil
