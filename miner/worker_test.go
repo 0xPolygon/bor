@@ -278,11 +278,10 @@ func DefaultTestConfig() *Config {
 
 // testWorkerBackend implements worker.Backend interfaces and wraps all information needed during the testing.
 type testWorkerBackend struct {
-	db        ethdb.Database
-	txPool    *txpool.TxPool
-	chain     *core.BlockChain
-	genesis   *core.Genesis
-	peerCount atomic.Int32 // settable by tests; PeerCount() returns int(peerCount.Load())
+	db      ethdb.Database
+	txPool  *txpool.TxPool
+	chain   *core.BlockChain
+	genesis *core.Genesis
 }
 
 func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database) *testWorkerBackend {
@@ -321,14 +320,13 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 		txPool:  txpool,
 		genesis: gspec,
 	}
-	b.peerCount.Store(1)
 	return b
 }
 
 func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
 func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func (b *testWorkerBackend) PeerCount() int {
-	return int(b.peerCount.Load())
+	return 1
 }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {

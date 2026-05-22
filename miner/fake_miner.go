@@ -221,9 +221,8 @@ func (m *mockBackendBor) BlockChain() *core.BlockChain {
 	return m.bc
 }
 
-// PeerCount implements Backend. Returns 1 so the worker's mainLoop sees the
-// node as peered — tests using mockBackendBor are not exercising the
-// PeerCount==0 gate.
+// PeerCount implements Backend. Returns a constant; tests using
+// mockBackendBor don't drive the peer count.
 func (*mockBackendBor) PeerCount() int {
 	return 1
 }
