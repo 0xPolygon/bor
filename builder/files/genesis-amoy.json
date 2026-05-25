@@ -29,6 +29,7 @@
       "lisovoBlock": 33634700,
       "lisovoProBlock": 34062000,
       "giuglianoBlock": 35573500,
+      "chicagoBlock": 38358000,
       "skipValidatorByteCheck": [26160367, 26161087, 26171567, 26173743, 26175647],
       "stateSyncConfirmationDelay": {
         "0": 128
