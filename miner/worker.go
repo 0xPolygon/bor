@@ -892,13 +892,6 @@ func (w *worker) mainLoop() {
 		w.currentMu.Unlock()
 	}()
 
-	bor, isBor := w.engine.(*bor.Bor)
-	devFakeAuthor := isBor && bor != nil && bor.DevFakeAuthor
-	// "real-network node" = Bor engine wired to a live heimdall. Test /
-	// dev setups (--bor.withoutheimdall, Clique, Ethash) leave the
-	// HeimdallClient nil and bypass the PeerCount gate so single-node
-	// and intentional-disconnection tests keep producing.
-	realNetworkNode := isBor && bor != nil && bor.HeimdallClient != nil
 	for {
 		select {
 		case req := <-w.newWorkCh:
@@ -910,21 +903,8 @@ func (w *worker) mainLoop() {
 				continue
 			}
 
-			// PeerCount gate applies only to real-network Bor nodes
-			// (heimdall configured). Test / dev setups
-			// (--bor.withoutheimdall, Clique, Ethash, etc.) commit
-			// unconditionally — single-node and intentional-disconnection
-			// tests rely on producing without peers.
-			if realNetworkNode && w.eth.PeerCount() == 0 && !devFakeAuthor {
-				// Drop the request and unblock the veblop fallback retry.
-				// In steady state peers > 0, so this firing means we
-				// tried to commit during a peer outage — worth surfacing.
-				w.pendingWorkBlock.Store(0)
-				log.Warn("Dropped newWorkReq: no peers", "head", w.chain.CurrentBlock().Number.Uint64())
-			} else {
-				//nolint:contextcheck
-				w.commitWork(req.interrupt, req.noempty, req.timestamp)
-			}
+			//nolint:contextcheck
+			w.commitWork(req.interrupt, req.noempty, req.timestamp)
 
 		case req := <-w.getWorkCh:
 			req.result <- w.generateWork(req.params, false)
@@ -2335,23 +2315,25 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		stopFn()
 	}()
 
-	timeUntilInterrupt := time.Until(work.header.GetActualTime())
-	if timeUntilInterrupt > time.Second {
-		timeUntilInterrupt -= interruptBuffer
+	if w.IsRunning() {
+		timeUntilInterrupt := time.Until(work.header.GetActualTime())
+		if timeUntilInterrupt > time.Second {
+			timeUntilInterrupt -= interruptBuffer
+		}
+		parent := w.chain.CurrentBlock()
+		log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+			"buildStart", prepareWorkStart.UTC().Format(time.RFC3339Nano),
+			"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+			"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+			"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+			"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+			"parentTime", time.Unix(int64(parent.Time), 0).UTC().Format(time.RFC3339Nano),
+			"parentActualTime", parent.GetActualTime().UTC().Format(time.RFC3339Nano),
+			"headerTime", time.Unix(int64(work.header.Time), 0).UTC().Format(time.RFC3339Nano),
+			"headerActualTime", work.header.GetActualTime().UTC().Format(time.RFC3339Nano),
+			"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+		)
 	}
-	parent := w.chain.CurrentBlock()
-	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
-		"buildStart(ms)", prepareWorkStart.UnixMilli(),
-		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
-		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
-		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
-		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
-		"parentTime", parent.Time,
-		"parentActualTime(ms)", parent.GetActualTime().UnixMilli(),
-		"headerTime", work.header.Time,
-		"headerActualTime(ms)", work.header.GetActualTime().UnixMilli(),
-		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
-	)
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building

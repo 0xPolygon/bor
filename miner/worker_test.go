@@ -278,11 +278,10 @@ func DefaultTestConfig() *Config {
 
 // testWorkerBackend implements worker.Backend interfaces and wraps all information needed during the testing.
 type testWorkerBackend struct {
-	db        ethdb.Database
-	txPool    *txpool.TxPool
-	chain     *core.BlockChain
-	genesis   *core.Genesis
-	peerCount atomic.Int32 // settable by tests; PeerCount() returns int(peerCount.Load())
+	db      ethdb.Database
+	txPool  *txpool.TxPool
+	chain   *core.BlockChain
+	genesis *core.Genesis
 }
 
 func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engine consensus.Engine, db ethdb.Database) *testWorkerBackend {
@@ -321,17 +320,13 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 		txPool:  txpool,
 		genesis: gspec,
 	}
-	// Default to "peered" so tests that don't care about the PeerCount gate
-	// in mainLoop don't accidentally hit the dropped-newWorkReq branch.
-	// Tests targeting the PeerCount==0 race must call b.peerCount.Store(0).
-	b.peerCount.Store(1)
 	return b
 }
 
 func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
 func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func (b *testWorkerBackend) PeerCount() int {
-	return int(b.peerCount.Load())
+	return 1
 }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
@@ -1592,85 +1587,13 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 }
 
-// TestMainLoopClearsPendingWorkBlockOnPeerCountZero is a regression test
-// for the wedge that caused the 2026-05-07 Amoy chain halt.
-//
-// Bug: when mainLoop receives a newWorkReq while PeerCount()==0 on a
-// real-network Bor node (heimdall configured), it silently drops the
-// request. newWorkLoop had already written pendingWorkBlock = head+1
-// before sending, so without the corresponding clear here, that value
-// stays wedged at head+1 forever. The veblop fallback timer then
-// short-circuits on every tick (`if pendingWorkBlock == currentBlock+1
-// { reset; continue }`), silently disabling the only recovery mechanism
-// that exists when no chainHeadCh events arrive.
-//
-// This test:
-//  1. Builds a worker on a Bor engine with a non-nil mock heimdall client
-//     (so the production gate `realNetworkNode := bor.HeimdallClient != nil`
-//     trips). Rio is active so the veblop fallback runs.
-//  2. Holds PeerCount at 0 and leaves DevFakeAuthor=false (the constructor
-//     default — see test setup notes below).
-//  3. Triggers the worker startup path (`init=true` → startCh → newWorkLoop
-//     writes pendingWorkBlock and sends to newWorkCh → mainLoop receives).
-//  4. Asserts that after mainLoop processes the request, pendingWorkBlock
-//     is back to 0 (not wedged at 1).
-//
-// Pre-fix: pendingWorkBlock stays at 1 → test fails.
-// Post-fix: pendingWorkBlock cleared to 0 → test passes.
-func TestMainLoopClearsPendingWorkBlockOnPeerCountZero(t *testing.T) {
-	var (
-		engine      consensus.Engine
-		chainConfig *params.ChainConfig
-		db          = rawdb.NewMemoryDatabase()
-		ctrl        *gomock.Controller
-	)
-
-	// Rio active from genesis so the veblop fallback retries after the drop.
-	chainConfig = &params.ChainConfig{}
-	*chainConfig = *params.BorUnittestChainConfig
-	borCfg := *chainConfig.Bor
-	chainConfig.Bor = &borCfg
-	chainConfig.Bor.RioBlock = big.NewInt(0)
-
-	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
-	defer engine.Close()
-	defer ctrl.Finish()
-
-	config := DefaultTestConfig()
-	config.Recommit = 10 * time.Second
-
-	w, backend, _ := newTestWorker(t, config, chainConfig, engine, db, false, 0)
-	defer w.close()
-
-	// Bug-trigger conditions: PeerCount==0 AND DevFakeAuthor=false.
-	// DevFakeAuthor=false is the default constructed in NewFakeBor; we
-	// don't reassign it here because mainLoop has already captured the
-	// value at startup and a post-construction write would data-race.
-	// The gate in mainLoop's newWorkCh case reads:
-	//     if realNetworkNode && peers==0 && !devFakeAuthor { drop }
-	//     else { commitWork(...) }
-	backend.peerCount.Store(0)
-
-	// newWorker(init=true) pushes to startCh during construction; newWorkLoop
-	// then sets pendingWorkBlock = head+1 and sends to newWorkCh. Wait
-	// briefly so mainLoop can drain the request.
-	w.start()
-	time.Sleep(500 * time.Millisecond)
-
-	got := w.pendingWorkBlock.Load()
-	if got != 0 {
-		t.Fatalf("pendingWorkBlock leaked: expected 0 after mainLoop drops a newWorkReq on PeerCount==0, got %d. "+
-			"This means the worker's veblop fallback timer in newWorkLoop will permanently short-circuit — the wedge that halted Amoy on 2026-05-07.", got)
-	}
-}
-
-// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a distinct leak
-// path for `pendingWorkBlock` (separate from the PeerCount==0 race fixed for
-// the 2026-05-07 incident). It does NOT cleanly explain val4's stall because
-// `miner.update()` unsubscribes from downloader events after the first
-// DoneEvent, so for a node that's been running past initial sync, `w.syncing`
-// is permanently false. The bug is still real for fresh-startup paths and
-// worth fixing as a code-hygiene issue.
+// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a leak path for
+// `pendingWorkBlock`: when `commitWork` early-returns because the node is
+// still syncing, the value reserved by `newWorkLoop` is never cleared.
+// In production `miner.update()` unsubscribes from downloader events after
+// the first DoneEvent, so for a node past initial sync `w.syncing` is
+// permanently false — this bug only surfaces on fresh-startup paths, but
+// the leak is still worth fixing as a code-hygiene issue.
 //
 // Bug: commitWork's pre-fix layout read:
 //
@@ -1728,16 +1651,13 @@ func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
 	// reserved the next block number.
 	w.pendingWorkBlock.Store(42)
 
-	// Call commitWork directly. mainLoop reaches this with PeerCount>0
-	// during sync (the node has peers — that's where it's pulling blocks
-	// from), so the PeerCount gate is not what's at play here.
+	// Call commitWork directly to drive the in-sync early-return path.
 	w.commitWork(nil, false, time.Now().Unix())
 
 	got := w.pendingWorkBlock.Load()
 	if got != 0 {
 		t.Fatalf("pendingWorkBlock leaked while syncing: expected 0, got %d. "+
-			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag — "+
-			"the same class of leak (different trigger) as the 2026-05-07 incident.", got)
+			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag.", got)
 	}
 }
 
