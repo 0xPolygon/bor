@@ -701,7 +701,12 @@ func (s *Ethereum) SetAuthorized(authorized bool) {
 // network protocols to start.
 func (s *Ethereum) Protocols() []p2p.Protocol {
 	protos := eth.MakeProtocols((*ethHandler)(s.handler), s.networkID, s.discmix)
-	if s.config.SnapshotCache > 0 {
+	// snap/1 is only registered when the snapshot cache is enabled and NoSnapServing is false.
+	// Setting NoSnapServing=true disables snap/1 entirely: the node will neither serve snap sync
+	// requests nor be able to sync state via snap/1 itself. The in-memory snapshot tree (used for
+	// fast local state reads) remains active regardless. Nodes that need to snap sync from peers
+	// must leave NoSnapServing=false (the default).
+	if s.config.SnapshotCache > 0 && !s.config.NoSnapServing {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler))...)
 	}
 	if s.config.WitnessProtocol {

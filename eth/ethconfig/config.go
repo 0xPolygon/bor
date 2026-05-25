@@ -269,6 +269,11 @@ type Config struct {
 	// WitnessProtocol enabless the wit protocol
 	WitnessProtocol bool
 
+	// NoSnapServing disables the snap/1 sub-protocol, preventing this node from
+	// serving snap sync state to peers. Useful for block producers that should
+	// not spend resources on snap sync serving.
+	NoSnapServing bool
+
 	// SyncWithWitnesses enables syncing blocks with witnesses
 	SyncWithWitnesses bool
 

@@ -287,6 +287,9 @@ type P2PConfig struct {
 
 	// DisableTxPropagation disables transaction broadcast and announcement completely to its peers
 	DisableTxPropagation bool `hcl:"disable-tx-propagation,optional" toml:"disable-tx-propagation,optional"`
+
+	// NoSnapServing disables serving snap sync requests to peers (snap/1 protocol is not advertised)
+	NoSnapServing bool `hcl:"nosnap,optional" toml:"nosnap,optional"`
 }
 
 type P2PDiscovery struct {
@@ -531,6 +534,8 @@ type AUTHConfig struct {
 type GRPCConfig struct {
 	// Addr is the bind address for the grpc rpc server
 	Addr string `hcl:"addr,optional" toml:"addr,optional"`
+	// Token is the bearer token required for incoming gRPC calls; empty disables auth
+	Token string `hcl:"token,optional" toml:"token,optional"`
 }
 
 type APIConfig struct {
@@ -848,6 +853,7 @@ func DefaultConfig() *Config {
 			TxArrivalWait:        500 * time.Millisecond,
 			TxAnnouncementOnly:   false,
 			DisableTxPropagation: false,
+			NoSnapServing:        false,
 			Discovery: &P2PDiscovery{
 				DiscoveryV4:  true,
 				DiscoveryV5:  true,
@@ -1671,6 +1677,7 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 	n.ParallelEVM.SpeculativeProcesses = c.ParallelEVM.SpeculativeProcesses
 	n.ParallelEVM.Enforce = c.ParallelEVM.Enforce
 
+	n.NoSnapServing = c.P2P.NoSnapServing
 	n.WitnessProtocol = c.Witness.Enable
 	if c.SyncMode == "stateless" {
 		if !c.Witness.Enable {

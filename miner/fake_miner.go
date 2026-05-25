@@ -221,9 +221,10 @@ func (m *mockBackendBor) BlockChain() *core.BlockChain {
 	return m.bc
 }
 
-// PeerCount implements Backend.
+// PeerCount implements Backend. Returns a constant; tests using
+// mockBackendBor don't drive the peer count.
 func (*mockBackendBor) PeerCount() int {
-	panic("unimplemented")
+	return 1
 }
 
 func (m *mockBackendBor) TxPool() *txpool.TxPool {

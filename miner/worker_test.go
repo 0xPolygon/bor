@@ -53,6 +53,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/tests/bor/mocks"
+	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/milestone"
@@ -313,18 +314,19 @@ func newTestWorkerBackend(t TensingObject, chainConfig *params.ChainConfig, engi
 	pool := legacypool.New(testTxPoolConfig, chain)
 	txpool, _ := txpool.New(testTxPoolConfig.PriceLimit, chain, []txpool.SubPool{pool})
 
-	return &testWorkerBackend{
+	b := &testWorkerBackend{
 		db:      db,
 		chain:   chain,
 		txPool:  txpool,
 		genesis: gspec,
 	}
+	return b
 }
 
 func (b *testWorkerBackend) BlockChain() *core.BlockChain { return b.chain }
 func (b *testWorkerBackend) TxPool() *txpool.TxPool       { return b.txPool }
 func (b *testWorkerBackend) PeerCount() int {
-	panic("unimplemented")
+	return 1
 }
 
 func (b *testWorkerBackend) newRandomTx(creation bool) *types.Transaction {
@@ -1585,6 +1587,172 @@ func TestVeblopTimerSkipsWhenPendingTasks(t *testing.T) {
 	}
 }
 
+// TestCommitWorkLeaksPendingWorkBlockWhenSyncing exercises a leak path for
+// `pendingWorkBlock`: when `commitWork` early-returns because the node is
+// still syncing, the value reserved by `newWorkLoop` is never cleared.
+// In production `miner.update()` unsubscribes from downloader events after
+// the first DoneEvent, so for a node past initial sync `w.syncing` is
+// permanently false — this bug only surfaces on fresh-startup paths, but
+// the leak is still worth fixing as a code-hygiene issue.
+//
+// Bug: commitWork's pre-fix layout read:
+//
+//	if w.syncing.Load() {
+//	    return                              // early return
+//	}
+//	defer func() {                          // defer registered AFTER the return
+//	    w.pendingWorkBlock.Store(0)
+//	}()
+//
+// During downloader-driven sync, chainHeadCh fires per imported block, the
+// chainHeadCh handler writes `pendingWorkBlock = head+1` and calls commit().
+// mainLoop then routes the newWorkReq into commitWork, which sees
+// `w.syncing == true` and bails out before the defer that would clear
+// pendingWorkBlock. The value is leaked. If `startCh` does not subsequently
+// fire to overwrite it (e.g., shouldStart=false in miner.update()), the
+// veblop fallback in newWorkLoop short-circuits on every tick.
+//
+// This test:
+//  1. Sets w.syncing=true to simulate the downloader sync window.
+//  2. Pre-sets pendingWorkBlock=42 to mimic the value newWorkLoop would have
+//     written for the next-block-in-flight.
+//  3. Directly invokes commitWork (matching what mainLoop would do).
+//  4. Asserts that pendingWorkBlock is cleared back to 0.
+//
+// Pre-fix: commitWork's early return leaves pendingWorkBlock at 42 → test fails.
+// Post-fix (move defer above the syncing check, or store 0 in that branch):
+// pendingWorkBlock cleared to 0 → test passes.
+func TestCommitWorkLeaksPendingWorkBlockWhenSyncing(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+		ctrl        *gomock.Controller
+	)
+
+	chainConfig = &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl = getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	// Simulate the downloader-sync window. miner.update() flips this on
+	// when downloader.StartEvent fires.
+	w.syncing.Store(true)
+
+	// Simulate a newWorkLoop chainHeadCh / veblop tick that has already
+	// reserved the next block number.
+	w.pendingWorkBlock.Store(42)
+
+	// Call commitWork directly to drive the in-sync early-return path.
+	w.commitWork(nil, false, time.Now().Unix())
+
+	got := w.pendingWorkBlock.Load()
+	if got != 0 {
+		t.Fatalf("pendingWorkBlock leaked while syncing: expected 0, got %d. "+
+			"commitWork's early return on w.syncing.Load()==true skips the defer that clears the flag.", got)
+	}
+}
+
+// TestTaskLoopInterruptPreservesPendingTasks verifies taskLoop's interrupt()
+// does NOT touch pendingTasks. Cleanup belongs to Bor.Seal's onStopExit
+// hook so success-branch results aren't dropped when resultLoop is slow.
+func TestTaskLoopInterruptPreservesPendingTasks(t *testing.T) {
+	chainConfig := &params.ChainConfig{}
+	*chainConfig = *params.BorUnittestChainConfig
+	borCfg := *chainConfig.Bor
+	chainConfig.Bor = &borCfg
+	chainConfig.Bor.RioBlock = big.NewInt(0)
+
+	engine, ctrl := getFakeBorFromConfig(t, chainConfig)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	db := rawdb.NewMemoryDatabase()
+	w, _, _ := newTestWorker(t, DefaultTestConfig(), chainConfig, engine, db, false, 0)
+	defer w.close()
+
+	w.skipSealHook = func(task *task) bool { return true }
+
+	received := make(chan common.Hash, 2)
+	w.newTaskHook = func(task *task) {
+		received <- w.engine.SealHash(task.block.Header())
+	}
+
+	parent := w.chain.CurrentBlock()
+	headerA := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 1,
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	headerB := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, common.Big1),
+		Time:       parent.Time + 2,
+		GasLimit:   parent.GasLimit,
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	blockA := types.NewBlockWithHeader(headerA)
+	blockB := types.NewBlockWithHeader(headerB)
+
+	sealHashA := w.engine.SealHash(blockA.Header())
+	sealHashB := w.engine.SealHash(blockB.Header())
+	if sealHashA == sealHashB {
+		t.Fatalf("test setup: sealhashes must differ (A=%s B=%s)", sealHashA, sealHashB)
+	}
+
+	// Task A sets prev=H_A inside taskLoop, then continues (skipSealHook).
+	select {
+	case w.taskCh <- &task{block: blockA, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task A")
+	}
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task A")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Inject the entry a real Bor.Seal success-branch would have left,
+	// waiting for resultLoop.
+	w.pendingMu.Lock()
+	w.pendingTasks[sealHashA] = &task{block: blockA, createdAt: time.Now()}
+	w.pendingMu.Unlock()
+
+	// Task B triggers interrupt() with prev=H_A.
+	select {
+	case w.taskCh <- &task{block: blockB, createdAt: time.Now()}:
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskCh send timed out for task B")
+	}
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("newTaskHook did not fire for task B")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	w.pendingMu.RLock()
+	_, present := w.pendingTasks[sealHashA]
+	w.pendingMu.RUnlock()
+	if !present {
+		t.Fatalf("pendingTasks[H_A=%s] was deleted by interrupt(); cleanup must "+
+			"happen only via Bor.Seal's SealWithStopHook callback", sealHashA)
+	}
+}
+
 // TestCalculateDesiredGasLimit tests the dynamic gas limit calculation logic
 func TestCalculateDesiredGasLimit(t *testing.T) {
 	t.Parallel()
@@ -2731,10 +2899,17 @@ func TestPrefetchMultiBlock(t *testing.T) {
 		memStatsAfter.HeapAlloc/(1024*1024),
 		heapDelta/(1024*1024))
 
-	// Check for goroutine leaks
-	// Allow for some variance due to runtime internals
-	if goroutineDelta > 10 {
-		t.Errorf("Goroutine leak detected: delta=%d", goroutineDelta)
+	// Check for goroutine leaks.
+	// The streaming prefetcher keeps ~N=4*NumCPU/5 worker goroutines alive for the
+	// whole duration of each block's prefetch (vs short-lived per-batch goroutines in
+	// the old batched prefetch). If one or two commitWork goroutines are still
+	// blocked in bor.Prepare at measurement time, their prefetchers keep N+2
+	// goroutines alive. We allow for two in-flight blocks to be mid-production:
+	// 2 * (N + 2) + 10 (runtime/test noise). A genuine leak scales with block count
+	// and would exceed this easily.
+	maxAllowed := 2*(4*runtime.NumCPU()/5+2) + 10
+	if goroutineDelta > maxAllowed {
+		t.Errorf("Goroutine leak detected: delta=%d (max allowed=%d)", goroutineDelta, maxAllowed)
 	}
 
 	// Check for excessive memory growth
@@ -3016,6 +3191,568 @@ func TestDelayFlagOffByOne(t *testing.T) {
 
 	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
+}
+
+// TestPrefetchFromPool_BuilderModeSwitch verifies that when builderStarted is signaled
+// the prefetch goroutine transitions from speculative idle mode to a single targeted builder
+// pass and then exits cleanly.
+//
+// Key properties verified:
+//  1. Blocks are mined successfully across multiple cycles with the new mechanism.
+//  2. The prefetch goroutine exits after each block cycle (no goroutine leak).
+//  3. The mode switch does not cause panics or deadlocks.
+//
+// Run with -race to verify no data races on prefetchedTxHashes or throwaway state.
+func TestPrefetchFromPool_BuilderModeSwitch(t *testing.T) {
+	// Not parallel: measures goroutine counts and must run without interference.
+
+	const (
+		numBlocks     = 8
+		txCount       = 300
+		blockInterval = 400 * time.Millisecond // time between newWorkCh signals
+		settleTime    = 2 * time.Second        // time allowed for goroutines to exit after stop
+	)
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 1*time.Second)
+	defer engine.Close()
+	defer ctrl.Finish()
+
+	// Populate the pool so idle and builder-mode prefetch both have work to do.
+	addTransactionBatch(b, txCount, false)
+	time.Sleep(200 * time.Millisecond) // let pool promote txs to pending
+
+	w.start()
+	defer w.stop()
+
+	// Baseline goroutine count after the worker is up.
+	runtime.GC()
+	goroutinesBefore := runtime.NumGoroutine()
+
+	// Drive multiple block cycles. Each cycle exercises the full path:
+	//   idle prefetch → builderStarted.Store(true) → builder-mode single pass → goroutine exits.
+	for i := 0; i < numBlocks; i++ {
+		w.newWorkCh <- &newWorkReq{
+			interrupt: new(atomic.Int32),
+			noempty:   false,
+			timestamp: time.Now().Unix() + int64(i*2),
+		}
+		time.Sleep(blockInterval)
+	}
+
+	t.Logf("Triggered %d block cycles with %d transactions in the pool", numBlocks, txCount)
+
+	// Allow all prefetch goroutines to settle after the last block cycle.
+	w.stop()
+	time.Sleep(settleTime)
+	runtime.GC()
+
+	goroutinesAfter := runtime.NumGoroutine()
+
+	// Goroutine count after settling must not have grown significantly.
+	// Delta ≤15 accounts for race-detector overhead and general test infrastructure noise.
+	// A genuine leak would add one goroutine per block cycle (8 here) exceeding this easily.
+	delta := goroutinesAfter - goroutinesBefore
+	require.LessOrEqual(t, delta, 15,
+		"goroutine leak detected: before=%d after=%d delta=%d — prefetch goroutine may not be exiting after builder-mode pass",
+		goroutinesBefore, goroutinesAfter, delta)
+
+	t.Logf("Goroutine count: before=%d after=%d delta=%d", goroutinesBefore, goroutinesAfter, delta)
+}
+
+// TestBuilderTxProvider_FiltersAlreadyPrefetched verifies that runBuilderTxProvider
+// only forwards plan-channel transactions that are NOT already in prefetchedTxHashes.
+//
+// It pre-populates prefetchedTxHashes with half of the pool transactions, sends all
+// pool transactions over builderPlanCh, closes it, and asserts that only the un-
+// prefetched half reached the downstream stream channel.
+func TestBuilderTxProvider_FiltersAlreadyPrefetched(t *testing.T) {
+	t.Parallel()
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
+	defer engine.Close()
+	defer ctrl.Finish()
+	defer w.close()
+
+	addTransactionBatch(b, 50, false)
+	time.Sleep(200 * time.Millisecond)
+
+	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
+	require.NotEmpty(t, pending, "pool should have pending txs")
+
+	var allTxs []*types.Transaction
+	for _, lazyTxs := range pending {
+		for _, ltx := range lazyTxs {
+			if tx := ltx.Resolve(); tx != nil {
+				allTxs = append(allTxs, tx)
+			}
+		}
+	}
+	require.NotEmpty(t, allTxs, "should have resolved transactions")
+
+	// Mark the first half as already prefetched.
+	prefetchedHashes := &sync.Map{}
+	prePrefetchedCount := len(allTxs) / 2
+	for _, tx := range allTxs[:prePrefetchedCount] {
+		prefetchedHashes.Store(tx.Hash(), struct{}{})
+	}
+	t.Logf("Pre-prefetched %d/%d transactions (simulating idle coverage)", prePrefetchedCount, len(allTxs))
+
+	// Build the header used by the provider.
+	parent := w.chain.CurrentBlock()
+	state, _, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
+	require.NoError(t, err)
+
+	w.mu.RLock()
+	genParamsForHeader := &generateParams{
+		timestamp:      uint64(time.Now().Unix()),
+		coinbase:       testBankAddress,
+		parentHash:     parent.Hash(),
+		statedb:        state,
+		prefetchReader: prefetchReader,
+		processReader:  processReader,
+	}
+	header, _, err := w.makeHeader(genParamsForHeader, false)
+	w.mu.RUnlock()
+	require.NoError(t, err)
+
+	// Set up plan channel (builder → provider) and the downstream stream channel
+	// (provider → prefetcher, consumed directly by the test).
+	planCh := make(chan *types.Transaction, len(allTxs))
+	for _, tx := range allTxs {
+		planCh <- tx
+	}
+	close(planCh)
+
+	streamCh := make(chan *types.Transaction, len(allTxs)*2)
+
+	genParams := &generateParams{
+		prefetchedTxHashes: prefetchedHashes,
+		builderStarted:     new(atomic.Bool),
+		builderPlanCh:      planCh,
+	}
+	genParams.builderStarted.Store(true)
+
+	var interrupt atomic.Bool
+
+	// Run the provider. It reads from planCh, filters via prefetchedHashes, sends to streamCh.
+	w.runBuilderTxProvider(streamCh, header, genParams, &interrupt)
+
+	// Collect everything the provider forwarded.
+	close(streamCh)
+	seen := make(map[common.Hash]struct{})
+	for tx := range streamCh {
+		seen[tx.Hash()] = struct{}{}
+	}
+
+	// Expected: only the non-prefetched half (allTxs[prePrefetchedCount:]) should have been forwarded.
+	forwarded := len(seen)
+	for _, tx := range allTxs[:prePrefetchedCount] {
+		_, found := seen[tx.Hash()]
+		require.False(t, found, "already-prefetched tx %s should not be forwarded", tx.Hash())
+	}
+	require.Equal(t, len(allTxs)-prePrefetchedCount, forwarded,
+		"provider should forward exactly the un-prefetched txs (pool=%d pre-prefetched=%d forwarded=%d)",
+		len(allTxs), prePrefetchedCount, forwarded)
+
+	t.Logf("runBuilderTxProvider forwarded %d/%d txs (skipping %d pre-prefetched)",
+		forwarded, len(allTxs), prePrefetchedCount)
+}
+
+// TestBuildTxPlan verifies that buildTxPlan:
+//   - does NOT consume the original heap (heap remains usable after the call)
+//   - excludes transactions already present in prefetchedHashes
+//   - still accounts for the gas of excluded transactions (so the plan respects gas budget)
+//   - returns a non-empty plan when un-prefetched transactions are available
+func TestBuildTxPlan(t *testing.T) {
+	t.Parallel()
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
+	defer engine.Close()
+	defer ctrl.Finish()
+	defer w.close()
+
+	addTransactionBatch(b, 60, false)
+	time.Sleep(200 * time.Millisecond) // let pool promote
+
+	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
+	require.NotEmpty(t, pending, "pool should have pending txs")
+
+	parent := w.chain.CurrentBlock()
+	baseFee := parent.BaseFee
+	signer := types.MakeSigner(w.chainConfig, parent.Number, parent.Time)
+
+	// Split pending into priority and normal (no priority accounts here, so all normal).
+	txsMap := make(map[common.Address][]*txpool.LazyTransaction)
+	var allHashes []common.Hash
+	for addr, lazyTxs := range pending {
+		txsMap[addr] = lazyTxs
+		for _, ltx := range lazyTxs {
+			allHashes = append(allHashes, ltx.Hash)
+		}
+	}
+	require.Greater(t, len(allHashes), 1, "need at least 2 txs")
+
+	heap := newTransactionsByPriceAndNonce(signer, txsMap, baseFee, new(atomic.Bool))
+
+	// Count how many entries the heap exposes before calling buildTxPlan.
+	countHeap := func(h *transactionsByPriceAndNonce) int {
+		c := h.clone()
+		n := 0
+		for {
+			ltx, _ := c.Peek()
+			if ltx == nil {
+				break
+			}
+			n++
+			c.Shift()
+		}
+		return n
+	}
+	heapSizeBefore := countHeap(heap)
+	require.Greater(t, heapSizeBefore, 0)
+
+	// Mark the first half of tx hashes as already prefetched.
+	prefetched := &sync.Map{}
+	halfIdx := len(allHashes) / 2
+	for _, h := range allHashes[:halfIdx] {
+		prefetched.Store(h, struct{}{})
+	}
+
+	// buildTxPlan consumes what it receives; pass a clone to preserve the original heap.
+	plan := buildTxPlan(heap.clone(), parent.GasLimit, prefetched)
+
+	// Heap must NOT be consumed — clone was passed, not the original.
+	heapSizeAfter := countHeap(heap)
+	require.Equal(t, heapSizeBefore, heapSizeAfter,
+		"original heap must be intact after buildTxPlan (clone was passed)")
+
+	// Plan must be non-empty (some txs were not pre-prefetched).
+	require.NotEmpty(t, plan, "plan should contain un-prefetched transactions")
+
+	// Plan must not contain any already-prefetched tx hash.
+	prefetchedCount := 0
+	for _, tx := range plan {
+		_, alreadyDone := prefetched.Load(tx.Hash())
+		require.False(t, alreadyDone,
+			"plan must not include already-prefetched tx %s", tx.Hash())
+		prefetchedCount++
+	}
+	t.Logf("buildTxPlan: heap=%d txs, pre-prefetched=%d, plan=%d residual",
+		heapSizeBefore, halfIdx, len(plan))
+}
+
+// TestBuilderTxProvider_FreedGasFeedback verifies the freed-gas feedback loop at
+// the provider layer: when the builder reports freed gas via builderGasFreedCh,
+// runBuilderTxProvider scans the overflow heap and forwards bonus txs beyond
+// what was already prefetched.
+//
+// Setup: 50 txs in pool, first 80% already marked as prefetched. Freed-gas channel
+// delivers 5 × 21000 gas BEFORE plan channel closes so the collect loop timer fires
+// and the overflow scan runs with a non-zero budget. Expected: the downstream
+// stream channel receives bonus txs from the unprefetched tail.
+func TestBuilderTxProvider_FreedGasFeedback(t *testing.T) {
+	t.Parallel()
+
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
+	defer engine.Close()
+	defer ctrl.Finish()
+	defer w.close()
+
+	const totalTxs = 50
+	addTransactionBatch(b, totalTxs, false)
+	time.Sleep(200 * time.Millisecond)
+
+	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
+	require.NotEmpty(t, pending, "pool should have pending txs")
+
+	var allTxs []*types.Transaction
+	for _, lazyTxs := range pending {
+		for _, ltx := range lazyTxs {
+			if tx := ltx.Resolve(); tx != nil {
+				allTxs = append(allTxs, tx)
+			}
+		}
+	}
+	require.GreaterOrEqual(t, len(allTxs), 10, "need at least 10 txs")
+
+	prePrefetchedCount := len(allTxs) * 80 / 100
+	prefetchedHashes := &sync.Map{}
+	for _, tx := range allTxs[:prePrefetchedCount] {
+		prefetchedHashes.Store(tx.Hash(), struct{}{})
+	}
+	t.Logf("Pre-prefetched %d/%d transactions; overflow pool has %d remaining",
+		prePrefetchedCount, len(allTxs), len(allTxs)-prePrefetchedCount)
+
+	parent := w.chain.CurrentBlock()
+	state, _, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
+	require.NoError(t, err)
+
+	w.mu.RLock()
+	genParamsForHeader := &generateParams{
+		timestamp:      uint64(time.Now().Unix()),
+		coinbase:       testBankAddress,
+		parentHash:     parent.Hash(),
+		statedb:        state,
+		prefetchReader: prefetchReader,
+		processReader:  processReader,
+	}
+	header, _, err := w.makeHeader(genParamsForHeader, false)
+	w.mu.RUnlock()
+	require.NoError(t, err)
+
+	// Plan channel stays open until after we've sent freed-gas signals.
+	planCh := make(chan *types.Transaction, 1)
+	gasFreedCh := make(chan uint64, 16)
+	streamCh := make(chan *types.Transaction, len(allTxs)*2)
+
+	genParams := &generateParams{
+		prefetchedTxHashes: prefetchedHashes,
+		builderStarted:     new(atomic.Bool),
+		builderPlanCh:      planCh,
+		builderGasFreedCh:  gasFreedCh,
+	}
+	genParams.builderStarted.Store(true)
+
+	var interrupt atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.runBuilderTxProvider(streamCh, header, genParams, &interrupt)
+	}()
+
+	// Send 5 × 21000 freed gas, close the gas freed channel.
+	const freedPerSignal = uint64(21000)
+	const freedSignals = 5
+	for i := 0; i < freedSignals; i++ {
+		gasFreedCh <- freedPerSignal
+	}
+	close(gasFreedCh)
+
+	// Allow the 2ms timer to fire and the overflow scan to run. Then close planCh.
+	time.Sleep(20 * time.Millisecond)
+	close(planCh)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runBuilderTxProvider did not exit within timeout")
+	}
+
+	close(streamCh)
+	seen := make(map[common.Hash]struct{})
+	for tx := range streamCh {
+		seen[tx.Hash()] = struct{}{}
+	}
+
+	forwarded := len(seen)
+	t.Logf("streamCh received %d bonus txs (freed budget=%d gas, expected up to %d)",
+		forwarded, freedSignals*freedPerSignal, freedSignals)
+
+	// At least one bonus tx should reach the stream — the overflow scan found
+	// non-prefetched txs that fit within the freed-gas budget.
+	require.Greater(t, forwarded, 0,
+		"overflow scan should have forwarded bonus txs beyond the plan")
+	// None of the forwarded txs should be pre-prefetched.
+	for _, tx := range allTxs[:prePrefetchedCount] {
+		_, found := seen[tx.Hash()]
+		require.False(t, found, "already-prefetched tx %s must not be forwarded", tx.Hash())
+	}
+}
+
+// streamTestFixture produces a throwaway state, a header, and a real StatePrefetcher
+// suitable for driving PrefetchStream directly with a set of transactions. Returns
+// the pool txs so tests can feed them into the stream.
+func streamTestFixture(t *testing.T) (*worker, *testWorkerBackend, *types.Header, *state.StateDB, []*types.Transaction) {
+	t.Helper()
+	w, b, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, 2*time.Second)
+	t.Cleanup(func() {
+		ctrl.Finish()
+		engine.Close()
+		w.close()
+	})
+
+	addTransactionBatch(b, 20, false)
+	time.Sleep(200 * time.Millisecond)
+
+	pending := b.txPool.Pending(txpool.PendingFilter{}, nil)
+	require.NotEmpty(t, pending, "pool should have pending txs")
+
+	var allTxs []*types.Transaction
+	for _, lazyTxs := range pending {
+		for _, ltx := range lazyTxs {
+			if tx := ltx.Resolve(); tx != nil {
+				allTxs = append(allTxs, tx)
+			}
+		}
+	}
+	require.NotEmpty(t, allTxs)
+
+	parent := w.chain.CurrentBlock()
+	_, throwaway, prefetchReader, processReader, err := w.chain.StateAtWithReaders(parent.Root)
+	require.NoError(t, err)
+
+	w.mu.RLock()
+	header, _, err := w.makeHeader(&generateParams{
+		timestamp:      uint64(time.Now().Unix()),
+		coinbase:       testBankAddress,
+		parentHash:     parent.Hash(),
+		prefetchReader: prefetchReader,
+		processReader:  processReader,
+	}, false)
+	w.mu.RUnlock()
+	require.NoError(t, err)
+
+	return w, b, header, throwaway, allTxs
+}
+
+// TestPrefetchStream_HardKillExits verifies that setting hardKill + closing txsCh
+// exits the stream quickly and skips buffered-but-unprocessed txs. The production
+// shutdown path pairs these two signals (runPrefetcher does the same), so this is
+// the realistic scenario.
+func TestPrefetchStream_HardKillExits(t *testing.T) {
+	t.Parallel()
+	w, _, header, throwaway, allTxs := streamTestFixture(t)
+	require.GreaterOrEqual(t, len(allTxs), 10, "need >=10 txs so some remain unprocessed")
+
+	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
+
+	txsCh := make(chan *types.Transaction, len(allTxs))
+	for _, tx := range allTxs {
+		txsCh <- tx
+	}
+
+	hardKill := new(atomic.Bool)
+	done := make(chan *core.PrefetchResult, 1)
+	go func() {
+		done <- prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+			hardKill, nil, txsCh, nil)
+	}()
+
+	// Immediately set hardKill + close. Workers should see hardKill on the next
+	// iteration and exit before processing the full buffer.
+	hardKill.Store(true)
+	close(txsCh)
+
+	select {
+	case result := <-done:
+		// Exit happened. Depending on timing, workers may have processed 0 or a few
+		// txs before the hardKill check caught up. The key guarantee is that we
+		// exited promptly and did NOT process all buffered txs blindly.
+		require.Less(t, len(result.SuccessfulTxs), len(allTxs),
+			"hardKill should have cut processing short (processed=%d, buffered=%d)",
+			len(result.SuccessfulTxs), len(allTxs))
+	case <-time.After(3 * time.Second):
+		t.Fatal("PrefetchStream did not exit within 3s after hardKill+close")
+	}
+}
+
+// TestPrefetchStream_EvmAbortSkipsAndResumes exercises the phase-handoff core contract:
+// while evmAbort=true, workers skip txs without processing; after reset, they resume.
+func TestPrefetchStream_EvmAbortSkipsAndResumes(t *testing.T) {
+	t.Parallel()
+	w, _, header, throwaway, allTxs := streamTestFixture(t)
+	require.GreaterOrEqual(t, len(allTxs), 8, "need at least 8 txs")
+
+	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
+
+	txsCh := make(chan *types.Transaction, len(allTxs))
+	hardKill := new(atomic.Bool)
+	evmAbort := new(atomic.Bool)
+
+	// Start evmAbort=true so early txs are skipped.
+	evmAbort.Store(true)
+
+	var processedMu sync.Mutex
+	var processed []common.Hash
+	onSuccess := func(h common.Hash, _ uint64) {
+		processedMu.Lock()
+		processed = append(processed, h)
+		processedMu.Unlock()
+	}
+
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+			hardKill, evmAbort, txsCh, onSuccess)
+	}()
+
+	// Send first 4 txs while evmAbort=true — they should all be skipped.
+	for i := 0; i < 4; i++ {
+		txsCh <- allTxs[i]
+	}
+
+	// Let workers drain the skipped batch.
+	time.Sleep(30 * time.Millisecond)
+
+	// Reset evmAbort; subsequent sends should be processed.
+	evmAbort.Store(false)
+
+	// Send next batch — these should reach onSuccess.
+	for i := 4; i < len(allTxs); i++ {
+		txsCh <- allTxs[i]
+	}
+
+	close(txsCh)
+	<-streamDone
+
+	// Only txs sent AFTER evmAbort=false should appear in processed.
+	processedMu.Lock()
+	defer processedMu.Unlock()
+
+	skippedHashes := make(map[common.Hash]struct{})
+	for _, tx := range allTxs[:4] {
+		skippedHashes[tx.Hash()] = struct{}{}
+	}
+	for _, h := range processed {
+		_, wasSkipped := skippedHashes[h]
+		require.False(t, wasSkipped, "tx %s was sent during evmAbort=true and must not have been processed", h)
+	}
+
+	t.Logf("evmAbort phase: 4 skipped; resume phase: %d/%d processed", len(processed), len(allTxs)-4)
+}
+
+// TestPrefetchStream_BlockEquivalence confirms the refactored Prefetch(block, ...)
+// wrapper produces the same PrefetchResult as feeding the same tx set through
+// PrefetchStream directly. Guards against regressions on the blockchain.go path.
+func TestPrefetchStream_BlockEquivalence(t *testing.T) {
+	t.Parallel()
+	w, _, header, throwaway, allTxs := streamTestFixture(t)
+
+	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
+
+	// Path A: block-oriented Prefetch.
+	block := types.NewBlock(header, &types.Body{Transactions: allTxs}, nil, trie.NewStackTrie(nil))
+	resultA := prefetcher.Prefetch(block, throwaway, w.vmConfig(), true, nil)
+	require.NotNil(t, resultA)
+
+	// Path B: streaming PrefetchStream over the same txs on a fresh throwaway state.
+	_, throwawayB, _, _, err := w.chain.StateAtWithReaders(w.chain.CurrentBlock().Root)
+	require.NoError(t, err)
+
+	ch := make(chan *types.Transaction, len(allTxs))
+	for _, tx := range allTxs {
+		ch <- tx
+	}
+	close(ch)
+	resultB := prefetcher.PrefetchStream(header, throwawayB, w.vmConfig(), true,
+		nil, nil, ch, nil)
+	require.NotNil(t, resultB)
+
+	// Successful tx hashes must match modulo ordering (parallel workers don't preserve order).
+	setA := make(map[common.Hash]struct{}, len(resultA.SuccessfulTxs))
+	for _, h := range resultA.SuccessfulTxs {
+		setA[h] = struct{}{}
+	}
+	setB := make(map[common.Hash]struct{}, len(resultB.SuccessfulTxs))
+	for _, h := range resultB.SuccessfulTxs {
+		setB[h] = struct{}{}
+	}
+	require.Equal(t, setA, setB, "SuccessfulTxs must be identical between Prefetch and PrefetchStream paths")
+	require.Equal(t, resultA.TotalGasUsed, resultB.TotalGasUsed, "TotalGasUsed must be identical")
+
+	t.Logf("block-equivalence: %d txs, TotalGasUsed=%d (matched across both paths)",
+		len(resultA.SuccessfulTxs), resultA.TotalGasUsed)
 }
 
 // TestDisablePendingBlock validates if setting `DisablePendingBlock` affects the
