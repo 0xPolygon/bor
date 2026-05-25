@@ -2315,23 +2315,25 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		stopFn()
 	}()
 
-	timeUntilInterrupt := time.Until(work.header.GetActualTime())
-	if timeUntilInterrupt > time.Second {
-		timeUntilInterrupt -= interruptBuffer
+	if w.IsRunning() {
+		timeUntilInterrupt := time.Until(work.header.GetActualTime())
+		if timeUntilInterrupt > time.Second {
+			timeUntilInterrupt -= interruptBuffer
+		}
+		parent := w.chain.CurrentBlock()
+		log.Info("Starting to build block", "number", work.header.Number.Uint64(),
+			"buildStart", prepareWorkStart.Format(time.RFC3339Nano),
+			"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
+			"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
+			"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
+			"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
+			"parentTime", time.Unix(int64(parent.Time), 0).Format(time.RFC3339Nano),
+			"parentActualTime", parent.GetActualTime().Format(time.RFC3339Nano),
+			"headerTime", time.Unix(int64(work.header.Time), 0).Format(time.RFC3339Nano),
+			"headerActualTime", work.header.GetActualTime().Format(time.RFC3339Nano),
+			"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
+		)
 	}
-	parent := w.chain.CurrentBlock()
-	log.Info("Starting to build block", "number", work.header.Number.Uint64(),
-		"buildStart(ms)", prepareWorkStart.UnixMilli(),
-		"preBuild", common.PrettyDuration(genParams.preBuildDuration), // time spent before `buildAndCommitBlock` is called
-		"prepareWork", common.PrettyDuration(prepareWorkDuration), // total time spent in prepare work
-		"makeEnv", common.PrettyDuration(work.makeEnvDuration), // total time spent in `makeEnv` inside prepare work
-		"makeHeader", common.PrettyDuration(work.makeHeaderDuration), // total time spent in `makeHeader` inside prepare work includes bor.Prepare call
-		"parentTime", parent.Time,
-		"parentActualTime(ms)", parent.GetActualTime().UnixMilli(),
-		"headerTime", work.header.Time,
-		"headerActualTime(ms)", work.header.GetActualTime().UnixMilli(),
-		"timeUntilInterrupt", common.PrettyDuration(timeUntilInterrupt), // time left before block building will be interrupted
-	)
 
 	if !noempty && w.interruptCommitFlag {
 		// Start the timer for block building
