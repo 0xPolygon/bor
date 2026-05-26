@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -16,12 +17,13 @@ import (
 
 var errReservedRegistryNotConfigured = errors.New("reserved blockspace registry contract is not configured")
 
-type ReservedClientLookup struct {
-	ClientID *big.Int
-	GasQuota uint64
-	Admin    common.Address
-	Active   bool
-}
+// ReservedClientLookup is the slim "client for address" view returned by the
+// registry contract. Aliased to registryreader.ClientLookup so the type lives
+// in a leaf package that core/, miner/, and core/txpool/ can import without
+// triggering an import cycle through consensus/bor/statefull.
+type ReservedClientLookup = registryreader.ClientLookup
+
+var _ registryreader.Reader = (*GenesisContractsClient)(nil)
 
 type ReservedClient struct {
 	ClientID  *big.Int

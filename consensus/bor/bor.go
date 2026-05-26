@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/bor/api"
 	"github.com/ethereum/go-ethereum/consensus/bor/clerk"
+	"github.com/ethereum/go-ethereum/consensus/bor/registryreader"
 	borSpan "github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/consensus/bor/valset"
@@ -391,6 +392,17 @@ func (c *Bor) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Head
 
 func (c *Bor) GetSpanner() Spanner {
 	return c.spanner
+}
+
+// ReservedRegistry returns the read-only handle to the reserved blockspace
+// registry, or nil when the GenesisContractsClient does not implement the
+// reader (e.g. test mocks). Callers must tolerate a nil return.
+func (c *Bor) ReservedRegistry() registryreader.Reader {
+	if c == nil {
+		return nil
+	}
+	reader, _ := c.GenesisContractsClient.(registryreader.Reader)
+	return reader
 }
 
 func (c *Bor) SetSpanner(spanner Spanner) {
