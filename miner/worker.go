@@ -283,7 +283,7 @@ const (
 // Block size is capped by the protocol at params.MaxBlockSize. When producing blocks, we
 // try to say below the size including a buffer zone, this is to avoid going over the
 // maximum size with auxiliary data added into the block.
-const maxBlockSizeBufferZone = 0
+const maxBlockSizeBufferZone = 1_000_000
 
 // newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
 type newWorkReq struct {

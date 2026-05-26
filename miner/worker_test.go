@@ -3059,11 +3059,11 @@ func TestCommitTransactionDoesNotUpdateEnvSizeOnError(t *testing.T) {
 	require.Len(t, env.txs, 0, "env.txs must stay empty on error")
 }
 
-// TestTxFitsSize exercises the txFitsSize cap against env.size near
-// params.MaxBlockSize. Combined with TestCommitTransactionUpdatesEnvSize
-// (which proves env.size is actually advanced), this confirms the cap is
-// reachable in practice rather than always passing because env.size never
-// grows.
+// TestTxFitsSize exercises the txFitsSize cap against env.size near the
+// effective threshold (params.MaxBlockSize - maxBlockSizeBufferZone).
+// Combined with TestCommitTransactionUpdatesEnvSize (which proves
+// env.size is actually advanced), this confirms the cap is reachable in
+// practice rather than always passing because env.size never grows.
 func TestTxFitsSize(t *testing.T) {
 	signer := types.LatestSigner(params.TestChainConfig)
 	tx := types.MustSignNewTx(testBankKey, signer, &types.LegacyTx{
@@ -3077,16 +3077,21 @@ func TestTxFitsSize(t *testing.T) {
 	require.Greater(t, txSize, uint64(0))
 	require.Less(t, txSize, uint64(params.MaxBlockSize))
 
+	// Derive the threshold from the constant so the table stays correct
+	// if the buffer-zone value is retuned in the future.
+	threshold := uint64(params.MaxBlockSize - maxBlockSizeBufferZone)
+	require.Greater(t, threshold, txSize, "buffer-zone leaves no room for a single tx in this test")
+
 	cases := []struct {
 		name string
 		size uint64
 		want bool
 	}{
-		{"empty block accepts tx", 0, true},
-		{"half full accepts tx", params.MaxBlockSize / 2, true},
-		{"one byte under cap accepts tx", params.MaxBlockSize - txSize - 1, true},
-		{"exact cap rejects tx", params.MaxBlockSize - txSize, false},
-		{"over cap rejects tx", params.MaxBlockSize, false},
+		{"empty env accepts tx", 0, true},
+		{"plenty of room accepts tx", threshold / 2, true},
+		{"one byte under threshold accepts tx", threshold - txSize - 1, true},
+		{"exactly at threshold rejects tx", threshold - txSize, false},
+		{"over threshold rejects tx", threshold, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
