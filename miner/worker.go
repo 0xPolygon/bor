@@ -1245,6 +1245,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
+	env.size += tx.Size()
 
 	return receipt.Logs, nil
 }

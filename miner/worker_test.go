@@ -2967,3 +2967,131 @@ func TestDelayFlagOffByOne(t *testing.T) {
 	require.True(t, buggyDelayFlag(), "bug: last tx skipped, DAG hint incorrectly embedded")
 	require.False(t, fixedDelayFlag(), "fix: last tx detected, DAG hint suppressed")
 }
+
+// newCliqueWorkerForSizeTest spins up a clique-backed worker suitable for
+// driving commitTransaction directly. Clique is used (rather than the Bor
+// fake) because the size-tracking logic in commitTransaction is
+// consensus-agnostic and clique avoids the heimdall/span mocking surface.
+func newCliqueWorkerForSizeTest(t *testing.T) (*worker, *testWorkerBackend) {
+	t.Helper()
+
+	chainConfig := *params.AllCliqueProtocolChanges
+	chainConfig.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
+	db := rawdb.NewMemoryDatabase()
+	engine := clique.New(chainConfig.Clique, db)
+	t.Cleanup(func() { engine.Close() })
+
+	w, b, _ := newTestWorker(t, DefaultTestConfig(), &chainConfig, engine, db, false, 0)
+	t.Cleanup(w.close)
+	return w, b
+}
+
+// newSizeTestEnv builds a fresh sealing environment and pre-loads its gas
+// pool so commitTransaction can run against it without the wider
+// commitTransactions wrapper. The caller owns env.discard().
+func newSizeTestEnv(t *testing.T, w *worker) *environment {
+	t.Helper()
+
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()),
+		coinbase:  testBankAddress,
+	}, false)
+	require.NoError(t, err)
+
+	env.gasPool = new(core.GasPool).AddGas(env.header.GasLimit)
+	return env
+}
+
+// TestCommitTransactionUpdatesEnvSize verifies that commitTransaction grows
+// env.size by exactly tx.Size() for each successfully applied transaction.
+// This is the regression guard for the block size cap enforced by
+// txFitsSize: if env.size is not updated after each commit, the producer
+// would keep packing past params.MaxBlockSize.
+func TestCommitTransactionUpdatesEnvSize(t *testing.T) {
+	w, b := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+	require.Greater(t, initialSize, uint64(0), "env.size should be seeded with header size")
+
+	tx1 := b.newRandomTxWithNonce(false, 0)
+	_, err := w.commitTransaction(env, tx1)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size(), env.size, "env.size should grow by tx1.Size()")
+	require.Equal(t, 1, env.tcount)
+	require.Len(t, env.txs, 1)
+
+	tx2 := b.newRandomTxWithNonce(false, 1)
+	_, err = w.commitTransaction(env, tx2)
+	require.NoError(t, err)
+	require.Equal(t, initialSize+tx1.Size()+tx2.Size(), env.size, "env.size should accumulate across commits")
+	require.Equal(t, 2, env.tcount)
+	require.Len(t, env.txs, 2)
+}
+
+// TestCommitTransactionDoesNotUpdateEnvSizeOnError verifies that env.size is
+// only credited for transactions that successfully apply. A reverted
+// transaction must not consume budget against the block size cap, which is
+// why the increment lives after the ApplyTransaction error check.
+func TestCommitTransactionDoesNotUpdateEnvSizeOnError(t *testing.T) {
+	w, _ := newCliqueWorkerForSizeTest(t)
+
+	env := newSizeTestEnv(t, w)
+	defer env.discard()
+
+	initialSize := env.size
+
+	// Nonce far above the sender's account nonce makes ApplyTransaction
+	// fail with ErrNonceTooHigh, hitting commitTransaction's error path.
+	badTx, err := types.SignTx(
+		types.NewTransaction(999, testUserAddress, big.NewInt(1), params.TxGas, big.NewInt(int64(params.InitialBaseFee)), nil),
+		types.HomesteadSigner{},
+		testBankKey,
+	)
+	require.NoError(t, err)
+
+	_, err = w.commitTransaction(env, badTx)
+	require.Error(t, err)
+	require.Equal(t, initialSize, env.size, "env.size must be unchanged when commitTransaction returns an error")
+	require.Equal(t, 0, env.tcount, "env.tcount must stay zero on error")
+	require.Len(t, env.txs, 0, "env.txs must stay empty on error")
+}
+
+// TestTxFitsSize exercises the txFitsSize cap against env.size near
+// params.MaxBlockSize. Combined with TestCommitTransactionUpdatesEnvSize
+// (which proves env.size is actually advanced), this confirms the cap is
+// reachable in practice rather than always passing because env.size never
+// grows.
+func TestTxFitsSize(t *testing.T) {
+	signer := types.LatestSigner(params.TestChainConfig)
+	tx := types.MustSignNewTx(testBankKey, signer, &types.LegacyTx{
+		Nonce:    0,
+		To:       &testUserAddress,
+		Value:    big.NewInt(1000),
+		Gas:      params.TxGas,
+		GasPrice: big.NewInt(int64(params.InitialBaseFee)),
+	})
+	txSize := tx.Size()
+	require.Greater(t, txSize, uint64(0))
+	require.Less(t, txSize, uint64(params.MaxBlockSize))
+
+	cases := []struct {
+		name string
+		size uint64
+		want bool
+	}{
+		{"empty block accepts tx", 0, true},
+		{"half full accepts tx", params.MaxBlockSize / 2, true},
+		{"one byte under cap accepts tx", params.MaxBlockSize - txSize - 1, true},
+		{"exact cap rejects tx", params.MaxBlockSize - txSize, false},
+		{"over cap rejects tx", params.MaxBlockSize, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &environment{size: tc.size}
+			require.Equal(t, tc.want, env.txFitsSize(tx))
+		})
+	}
+}
