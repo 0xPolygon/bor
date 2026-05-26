@@ -35,13 +35,11 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_API_KEY }}
           show_full_output: false
           claude_args: |
-            --model claude-opus-4-6
+            --model 'claude-opus-4-7[1m]'
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review --comment'
           additional_permissions: |
             actions: read
-
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-
