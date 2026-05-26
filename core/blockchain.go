@@ -527,6 +527,12 @@ type pendingImportSRCState struct {
 	collectedErr  error       // non-nil if SRC failed or root mismatch
 }
 
+// pipelinedImportStateAvailabilityGrace bounds how long sync-mode checks may
+// treat a missing head state as "currently being committed by pipelined SRC".
+// It only suppresses transient false positives in the write-head -> SRC-commit
+// handoff; once the window expires, missing state is reported normally.
+const pipelinedImportStateAvailabilityGrace = 2 * time.Minute
+
 // BlockChain represents the canonical chain given a database with a genesis
 // block. The Blockchain manages chain imports, reverts, chain reorganisations.
 //
@@ -621,8 +627,13 @@ type BlockChain struct {
 
 	// pendingImportSRC tracks a block whose SRC goroutine is in-flight during
 	// pipelined import. Persists across insertChain calls.
-	pendingImportSRC   *pendingImportSRCState
-	pendingImportSRCMu sync.Mutex
+	pendingImportSRC *pendingImportSRCState
+	// pendingImportHead* covers the short gap after block metadata/head are
+	// written and before pendingImportSRC is published for the same block.
+	pendingImportHeadHash  common.Hash
+	pendingImportHeadRoot  common.Hash
+	pendingImportHeadStart time.Time
+	pendingImportSRCMu     sync.Mutex
 
 	// lastFlatDiff holds the FlatDiff from the most recently committed block.
 	// The miner uses it together with the grandparent's committed root to open
@@ -5204,6 +5215,33 @@ func (bc *BlockChain) collectPendingImportSRC() (common.Hash, error) {
 	return pending.collectedRoot, nil
 }
 
+func (bc *BlockChain) markPendingImportHeadState(block *types.Block) {
+	bc.pendingImportSRCMu.Lock()
+	defer bc.pendingImportSRCMu.Unlock()
+
+	// writeBlockAndSetHeadPipelined exposes the new head before the SRC
+	// goroutine is registered below. Mark it so runtime sync-mode probes don't
+	// misclassify the handoff as a real missing-state condition.
+	bc.pendingImportHeadHash = block.Hash()
+	bc.pendingImportHeadRoot = block.Root()
+	bc.pendingImportHeadStart = time.Now()
+}
+
+func (bc *BlockChain) clearPendingImportHeadState(block *types.Block) {
+	bc.pendingImportSRCMu.Lock()
+	defer bc.pendingImportSRCMu.Unlock()
+
+	if bc.pendingImportHeadHash != block.Hash() || bc.pendingImportHeadRoot != block.Root() {
+		return
+	}
+	// Once pendingImportSRC is visible, the normal pending-SRC check owns the
+	// handoff state. Clear this temporary marker so stale heads don't mask
+	// unrelated missing-state failures.
+	bc.pendingImportHeadHash = common.Hash{}
+	bc.pendingImportHeadRoot = common.Hash{}
+	bc.pendingImportHeadStart = time.Time{}
+}
+
 // handleImportTrieGC performs trie garbage collection after a pipelined import
 // SRC has committed the state. Replicates writeBlockWithState's GC logic.
 func (bc *BlockChain) handleImportTrieGC(root common.Hash, blockNum uint64, procTime time.Duration) {
@@ -5445,7 +5483,9 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	// State commit is deferred to the SRC goroutine. emitHeadEvent=false
 	// because the deferred ChainHeadEvent at end of insertChain handles it.
 	phaseStart = time.Now()
+	bc.markPendingImportHeadState(block)
 	if _, err := bc.writeBlockAndSetHeadPipelined(block, receipts, logs, statedb, false, nil); err != nil {
+		bc.clearPendingImportHeadState(block)
 		timings.writeHead = time.Since(phaseStart)
 		pipelineImportWriteHeadTimer.Update(timings.writeHead)
 		return false, err
@@ -5482,6 +5522,7 @@ func (bc *BlockChain) persistPipelinedImport(block *types.Block, parent *types.H
 	bc.pendingImportSRCMu.Lock()
 	bc.pendingImportSRC = newPending
 	bc.pendingImportSRCMu.Unlock()
+	bc.clearPendingImportHeadState(block)
 	bc.wg.Add(1)
 	go bc.runImportAutoCollection(newPending)
 	if bc.cfg.PipelinedImportSRCLogs {

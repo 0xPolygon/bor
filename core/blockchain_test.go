@@ -4237,6 +4237,73 @@ func TestCreateThenDeletePreByzantium(t *testing.T) {
 		},
 	})
 }
+
+func TestHasRecentPipelinedHeadState(t *testing.T) {
+	block := types.NewBlockWithHeader(&types.Header{
+		Number: big.NewInt(1),
+		Root:   common.HexToHash("0x01"),
+	})
+	chain := &BlockChain{}
+
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+
+	chain.pendingImportHeadHash = block.Hash()
+	chain.pendingImportHeadRoot = block.Root()
+	chain.pendingImportHeadStart = time.Now()
+
+	require.True(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+	require.False(t, chain.HasRecentPipelinedHeadState(common.HexToHash("0x02"), block.Root()))
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), common.HexToHash("0x03")))
+
+	chain.pendingImportHeadStart = time.Now().Add(-pipelinedImportStateAvailabilityGrace - time.Second)
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+}
+
+func TestHasRecentPipelinedHeadStatePendingSRC(t *testing.T) {
+	block := types.NewBlockWithHeader(&types.Header{
+		Number: big.NewInt(1),
+		Root:   common.HexToHash("0x04"),
+	})
+	chain := &BlockChain{
+		pendingImportSRC: &pendingImportSRCState{
+			block:       block,
+			blockStart:  time.Now(),
+			collectedCh: make(chan struct{}),
+		},
+	}
+
+	require.True(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+
+	close(chain.pendingImportSRC.collectedCh)
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+
+	chain.pendingImportSRC = &pendingImportSRCState{
+		block:       block,
+		blockStart:  time.Now().Add(-pipelinedImportStateAvailabilityGrace - time.Second),
+		collectedCh: make(chan struct{}),
+	}
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+}
+
+func TestHasStateTreatsRecentPipelinedRootAsAvailable(t *testing.T) {
+	_, _, chain, err := newCanonical(ethash.NewFaker(), 0, true, rawdb.HashScheme)
+	require.NoError(t, err)
+	t.Cleanup(chain.Stop)
+
+	block := types.NewBlockWithHeader(&types.Header{
+		Number: big.NewInt(1),
+		Root:   common.HexToHash("0x05"),
+	})
+	require.False(t, chain.HasCommittedState(block.Root()))
+
+	chain.pendingImportHeadHash = common.HexToHash("0x06")
+	chain.pendingImportHeadRoot = block.Root()
+	chain.pendingImportHeadStart = time.Now()
+
+	require.True(t, chain.HasState(block.Root()))
+	require.False(t, chain.HasRecentPipelinedHeadState(block.Hash(), block.Root()))
+}
+
 func TestCreateThenDeletePostByzantium(t *testing.T) {
 	t.Parallel()
 	testCreateThenDelete(t, params.TestChainConfig)

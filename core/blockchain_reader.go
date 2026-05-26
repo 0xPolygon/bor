@@ -547,23 +547,66 @@ func (bc *BlockChain) GetTd(hash common.Hash, number uint64) *big.Int {
 	return bc.hc.GetTd(hash, number)
 }
 
-// HasState checks if state trie is fully present in the database or not.
-// For pipelined import, also returns true if the hash matches a pending
-// import SRC block whose state will be committed momentarily.
-func (bc *BlockChain) HasState(hash common.Hash) bool {
-	_, err := bc.statedb.OpenTrie(hash)
-	if err == nil {
-		return true
-	}
-	// Check if the state is being committed by a pipelined import SRC goroutine.
-	// The block metadata is already in DB; the state commit is in-flight.
+// HasState checks if state trie is fully present in the database or being
+// committed by a recent pipelined import SRC handoff.
+func (bc *BlockChain) HasState(root common.Hash) bool {
+	return bc.HasCommittedState(root) || bc.hasRecentPipelinedState(common.Hash{}, root, time.Now(), false)
+}
+
+// HasCommittedState checks if a state trie is fully present in the database.
+func (bc *BlockChain) HasCommittedState(root common.Hash) bool {
+	_, err := bc.statedb.OpenTrie(root)
+	return err == nil
+}
+
+// HasRecentPipelinedHeadState reports whether hash/root matches the block whose
+// state is currently being handed off to the pipelined SRC commit path.
+func (bc *BlockChain) HasRecentPipelinedHeadState(hash, root common.Hash) bool {
+	return bc.hasRecentPipelinedState(hash, root, time.Now(), true)
+}
+
+func (bc *BlockChain) hasRecentPipelinedState(hash, root common.Hash, now time.Time, requireHash bool) bool {
 	bc.pendingImportSRCMu.Lock()
-	pending := bc.pendingImportSRC
-	bc.pendingImportSRCMu.Unlock()
-	if pending != nil && pending.block.Root() == hash {
+	defer bc.pendingImportSRCMu.Unlock()
+
+	// Covers the write-head -> pending-SRC publication gap. This marker is
+	// hash-bound when callers are checking the canonical head, so it can't
+	// hide a different block with the same expected state timing.
+	if !bc.pendingImportHeadStart.IsZero() &&
+		bc.pendingImportHeadRoot == root &&
+		(!requireHash || bc.pendingImportHeadHash == hash) &&
+		withinPipelinedImportStateGrace(bc.pendingImportHeadStart, now) {
 		return true
 	}
-	return false
+	// Covers the normal in-flight SRC commit window. Collected or stale SRCs
+	// are deliberately not treated as available, so a real missing state still
+	// falls through to the snap-sync recovery path.
+	pending := bc.pendingImportSRC
+	if pending == nil || pending.block == nil || pending.block.Root() != root {
+		return false
+	}
+	if requireHash && pending.block.Hash() != hash {
+		return false
+	}
+	if !withinPipelinedImportStateGrace(pending.blockStart, now) {
+		return false
+	}
+	select {
+	case <-pending.collectedCh:
+		return false
+	default:
+		return true
+	}
+}
+
+func withinPipelinedImportStateGrace(start, now time.Time) bool {
+	if start.IsZero() {
+		return false
+	}
+	// Reject negative ages too; they would indicate a bad clock/test setup, not
+	// a valid in-flight import handoff.
+	age := now.Sub(start)
+	return age >= 0 && age <= pipelinedImportStateAvailabilityGrace
 }
 
 // HasBlockAndState checks if a block and associated state trie is fully present
