@@ -722,7 +722,15 @@ func (e *v2Env) preparePDB(t *v2Task, incarnation int, senderNonces map[common.A
 func (e *v2Env) applyMessage(t *v2Task, evm *vm.EVM, pdb *state.ParallelStateDB) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("V2 tx execution panic", "tx", t.index, "err", r)
+			// Incarnation 0 is speculative; SSTORE-refund / similar gas
+			// accounting can underflow when a prior tx's writes aren't
+			// settled yet. V2 re-executes and the re-exec sees the real
+			// committed state.
+			if pdb.Incarnation == 0 {
+				log.Debug("V2 tx execution panic (speculative, will re-exec)", "tx", t.index, "err", r)
+			} else {
+				log.Error("V2 tx execution panic", "tx", t.index, "incarnation", pdb.Incarnation, "err", r)
+			}
 			pdb.Panicked = true
 		}
 	}()

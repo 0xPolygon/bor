@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,9 +21,26 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
+
+// recordingLogHandler captures slog records into an in-memory slice for tests.
+type recordingLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, r.Clone())
+	h.mu.Unlock()
+	return nil
+}
+func (h *recordingLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingLogHandler) WithGroup(string) slog.Handler      { return h }
 
 // newV2SettleTestEnv builds an in-memory state, a v2Env wired to it, and the
 // closure-captured accumulators that newV2SettleFn writes through.
@@ -329,6 +348,84 @@ func TestV2StateProcessor_PanickedTxFailsBlock(t *testing.T) {
 		t.Fatalf("error string %q does not contain %q", gotErr, wantErrSnippet)
 	}
 	_ = context.Background()
+}
+
+// TestV2ApplyMessage_FirstIncarnationPanicLogsDebug pins the log-level
+// contract for V2's tx-execution panic recover: incarnation 0 is a
+// speculative attempt that may legitimately panic (SSTORE-refund
+// underflow on a stale GetCommittedState read, etc.) and gets re-
+// executed; logging it at ERROR trains operators to ignore the signal.
+// Incarnation ≥ 1 panicking means the re-exec also failed, which is a
+// real bug indicator and keeps ERROR. Inject a tracer panic that fires
+// on every call so both incarnations panic and produce exactly one
+// Debug + one Error V2-panic record.
+func TestV2ApplyMessage_FirstIncarnationPanicLogsDebug(t *testing.T) {
+	h := &recordingLogHandler{}
+	prev := log.Root()
+	log.SetDefault(log.NewLogger(h))
+	defer log.SetDefault(prev)
+
+	chainConfig := params.TestChainConfig
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	sdb, _ := state.New(common.Hash{}, state.NewDatabase(tdb, nil))
+	key, _ := crypto.GenerateKey()
+	sender := crypto.PubkeyToAddress(key.PublicKey)
+	sdb.AddBalance(sender, uint256.NewInt(1e18), 0)
+	sdb.SetNonce(sender, 0, 0)
+	root, _ := sdb.Commit(0, false, false)
+	tdb.Commit(root, false)
+	base, _ := state.New(root, state.NewDatabase(tdb, nil))
+
+	signer := types.NewLondonSigner(chainConfig.ChainID)
+	to := common.HexToAddress("0x1111")
+	tx, _ := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+		ChainID: chainConfig.ChainID, Nonce: 0,
+		GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(1e9),
+		Gas: 21000, To: &to, Value: big.NewInt(1),
+	}), signer, key)
+	msg, _ := TransactionToMessage(tx, signer, big.NewInt(1))
+	tasks := []V2Task{{Index: 0, Tx: tx, Msg: msg}}
+
+	blockCtx := vm.BlockContext{
+		CanTransfer: CanTransfer,
+		Transfer:    Transfer,
+		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
+		Coinbase:    common.HexToAddress("0xCB"),
+		GasLimit:    30000000,
+		BlockNumber: big.NewInt(1),
+		Time:        1,
+		BaseFee:     big.NewInt(1),
+	}
+	cfg := vm.Config{Tracer: &tracing.Hooks{
+		OnEnter: func(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
+			panic("intentional panic from OnEnter")
+		},
+	}}
+
+	finalDB := base.Copy()
+	finalDB.StartPrefetcher("test", nil, nil)
+	defer finalDB.StopPrefetcher()
+
+	_ = ExecuteV2BlockSTM(context.Background(), tasks, base,
+		blockstm.NewMVStore(), blockstm.NewMVBalanceStore(),
+		blockCtx, common.Hash{}, cfg, chainConfig, blockCtx.GasLimit, 1, finalDB, nil)
+
+	var debug, errs int
+	for _, r := range h.records {
+		if !strings.Contains(r.Message, "V2 tx execution panic") {
+			continue
+		}
+		switch r.Level {
+		case slog.LevelDebug:
+			debug++
+		case slog.LevelError:
+			errs++
+		}
+	}
+	if debug != 1 || errs != 1 {
+		t.Fatalf("V2-panic log levels: got %d Debug + %d Error; want 1 + 1", debug, errs)
+	}
 }
 
 // TestV2StateProcessor_ProducesWitness verifies that V2 BlockSTM populates
