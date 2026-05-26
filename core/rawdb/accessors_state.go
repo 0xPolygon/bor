@@ -311,12 +311,21 @@ func HasWitness(db ethdb.Reader, blockHash common.Hash) bool {
 func ReadWitnessSize(db ethdb.KeyValueReader, blockHash common.Hash) *uint64 {
 	log.Debug("ReadWitnessSize", "blockHash", blockHash)
 	data, err := db.Get(witnessSizeKey(blockHash))
-	if err != nil || len(data) == 0 {
-		return nil
+	if err == nil && len(data) != 0 {
+		number := binary.BigEndian.Uint64(data)
+		return &number
 	}
 
-	number := binary.BigEndian.Uint64(data)
-	return &number
+	// In filesystem witness mode, recover missing DB metadata by checking the
+	// persisted witness file size.
+	if wsdb, ok := db.(witnessStoreDB); ok {
+		if fsws, ok := wsdb.WitnessStore().(*fsWitnessStore); ok {
+			if size := fsws.readWitnessSizeFromFile(blockHash); size != nil {
+				return size
+			}
+		}
+	}
+	return nil
 }
 
 func WriteWitness(db ethdb.KeyValueWriter, blockHash common.Hash, witness []byte) {

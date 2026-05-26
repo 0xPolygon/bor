@@ -129,10 +129,11 @@ var (
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
 	blockReorgDropMeter = metrics.NewRegisteredMeter("chain/reorg/drop", nil)
 
-	blockPrefetchExecuteTimer    = metrics.NewRegisteredResettingTimer("chain/prefetch/executes", nil)
-	blockPrefetchInterruptMeter  = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
-	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
-	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
+	blockPrefetchExecuteTimer     = metrics.NewRegisteredResettingTimer("chain/prefetch/executes", nil)
+	blockPrefetchInterruptMeter   = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
+	blockPrefetchTxsInvalidMeter  = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
+	blockPrefetchTxsValidMeter    = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
+	blockPrefetchWorkerPanicMeter = metrics.NewRegisteredMeter("chain/prefetch/worker/panic", nil)
 
 	// Witness and write-path metrics for block production observability.
 	// These track the time spent in each phase of writeBlockWithState, which runs

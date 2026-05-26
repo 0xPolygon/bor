@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
 )
 
 func TestReservedRegistryABIUnpacksBorFacingViews(t *testing.T) {
-	registryABI := ReservedBlockspaceRegistry()
+	registryABI := borabi.ReservedBlockspaceRegistry()
 
 	clientOutput, err := registryABI.Methods["getClient"].Outputs.Pack(
 		common.HexToAddress("0x1"),

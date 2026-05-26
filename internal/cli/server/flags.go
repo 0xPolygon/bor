@@ -53,7 +53,7 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "vmtrace",
-		Usage:   "Name of tracer which should observe internal VM operations (e.g. 'json')",
+		Usage:   "Name of a tracer to record internal VM operations during blockchain synchronization (costly) (e.g. 'json')",
 		Value:   &c.cliConfig.VMTrace,
 		Default: c.cliConfig.VMTrace,
 	})
@@ -1079,6 +1079,13 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Default: c.cliConfig.P2P.DisableTxPropagation,
 		Group:   "P2P",
 	})
+	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "p2p.nosnap",
+		Usage:   "Disable serving snap sync requests to peers (snap/1 protocol is not advertised)",
+		Value:   &c.cliConfig.P2P.NoSnapServing,
+		Default: c.cliConfig.P2P.NoSnapServing,
+		Group:   "P2P",
+	})
 	f.SliceStringFlag(&flagset.SliceStringFlag{
 		Name:    "discovery.dns",
 		Usage:   "Comma separated list of enrtree:// URLs which will be queried for nodes to connect to",
@@ -1227,9 +1234,15 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	// grpc
 	f.StringFlag(&flagset.StringFlag{
 		Name:    "grpc.addr",
-		Usage:   "Address and port to bind the GRPC server",
+		Usage:   "Address and port to bind the GRPC server. Empty disables the server. Non-loopback binds without --grpc.token log a startup warning.",
 		Value:   &c.cliConfig.GRPC.Addr,
 		Default: c.cliConfig.GRPC.Addr,
+	})
+	f.StringFlag(&flagset.StringFlag{
+		Name:    "grpc.token",
+		Usage:   "Raw token expected in the `authorization: Bearer <token>` header of incoming gRPC calls (empty disables auth; the `Bearer ` prefix is stripped before comparison). Prefer the BOR_GRPC_TOKEN environment variable over this flag.",
+		Value:   &c.cliConfig.GRPC.Token,
+		Default: c.cliConfig.GRPC.Token,
 	})
 
 	// developer

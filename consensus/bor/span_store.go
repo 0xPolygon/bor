@@ -3,6 +3,7 @@ package bor
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,11 +42,14 @@ type SpanStore struct {
 
 	// cancel function to stop the background routine
 	cancel context.CancelFunc
+	// pollWg tracks the background polling goroutine so PurgeCache and Close
+	// can wait for it to exit before touching shared state.
+	pollWg sync.WaitGroup
 }
 
 func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId string) *SpanStore {
 	cache, _ := lru.NewARC(10)
-	store := SpanStore{
+	store := &SpanStore{
 		store:           cache,
 		heimdallClient:  heimdallClient,
 		spanner:         spanner,
@@ -53,42 +57,59 @@ func NewSpanStore(heimdallClient IHeimdallClient, spanner Spanner, chainId strin
 		latestSpanCache: atomic.Pointer[borTypes.Span]{},
 		lastUsedSpan:    atomic.Pointer[borTypes.Span]{},
 	}
+	store.startPollLoop()
+	return store
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	store.cancel = cancel
-
-	if heimdallClient != nil {
-		go func() {
-			errorLogInterval := 10 * time.Second
-			var lastSpanErrorLogTime time.Time
-			var lastHeimdallErrorLogTime time.Time
-
-			for {
-				err := store.updateLatestSpan(ctx)
-				if err != nil {
-					if time.Since(lastSpanErrorLogTime) >= errorLogInterval {
-						log.Error("Failed to update latest span", "err", err)
-						lastSpanErrorLogTime = time.Now()
-					}
-				}
-				err = store.updateHeimdallStatus(ctx)
-				if err != nil {
-					if time.Since(lastHeimdallErrorLogTime) >= errorLogInterval {
-						log.Error("Failed to update heimdall status", "err", err)
-						lastHeimdallErrorLogTime = time.Now()
-					}
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(200 * time.Millisecond):
-				}
-			}
-		}()
+// startPollLoop spawns the background goroutine that periodically refreshes
+// latestSpanCache and heimdallStatus. No-op when heimdallClient is nil.
+func (s *SpanStore) startPollLoop() {
+	if s.heimdallClient == nil {
+		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.pollWg.Add(1)
+	go s.runPollLoop(ctx)
+}
 
-	return &store
+func (s *SpanStore) runPollLoop(ctx context.Context) {
+	defer s.pollWg.Done()
+	const errorLogInterval = 10 * time.Second
+	var lastSpanErr, lastHeimdallErr time.Time
+
+	for {
+		if err := s.updateLatestSpan(ctx); err != nil {
+			logErrRateLimited(&lastSpanErr, errorLogInterval, "Failed to update latest span", err)
+		}
+		if err := s.updateHeimdallStatus(ctx); err != nil {
+			logErrRateLimited(&lastHeimdallErr, errorLogInterval, "Failed to update heimdall status", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// logErrRateLimited logs err at most once per interval, updating lastLog when it does.
+func logErrRateLimited(lastLog *time.Time, interval time.Duration, msg string, err error) {
+	if time.Since(*lastLog) >= interval {
+		log.Error(msg, "err", err)
+		*lastLog = time.Now()
+	}
+}
+
+// stopPollLoop cancels the background goroutine and blocks until it exits.
+// Safe to call when the loop is not running.
+func (s *SpanStore) stopPollLoop() {
+	if s.cancel == nil {
+		return
+	}
+	s.cancel()
+	s.pollWg.Wait()
+	s.cancel = nil
 }
 
 func (s *SpanStore) getLatestSpan(ctx context.Context) (*borTypes.Span, error) {
@@ -362,7 +383,14 @@ func (s *SpanStore) setHeimdallClient(client IHeimdallClient) {
 
 // PurgeCache clears all cached spans and resets state. This is useful in tests
 // when the mock heimdall client is changed and old cached data needs to be invalidated.
+//
+// The background poll loop is stopped before the reset so it can't race in and
+// re-populate latestSpanCache after the clear. PurgeCache leaves the poll loop
+// stopped — on-demand reads via getLatestSpan/spanById still work because they
+// fall back to updateLatestSpan inline when the cache is empty.
 func (s *SpanStore) PurgeCache() {
+	s.stopPollLoop()
+
 	// Create a new cache to replace the old one
 	newCache, _ := lru.NewARC(10)
 	s.store = newCache
@@ -372,6 +400,10 @@ func (s *SpanStore) PurgeCache() {
 	s.lastUsedSpan.Store(nil)
 	// Reset the latest known span ID
 	s.latestKnownSpanId.Store(0)
+	// Clear cached heimdall status. With the poll loop stopped, a stale
+	// CatchingUp:false would otherwise let waitUntilHeimdallIsSynced skip
+	// refreshing status against a newly-swapped heimdall client.
+	s.heimdallStatus.Store(nil)
 }
 
 // getMockSpan0 constructs a mock span 0 by fetching validator set from genesis state. This should
@@ -406,9 +438,7 @@ func getMockSpan0(ctx context.Context, spanner Spanner, chainId string) (*borTyp
 
 // Close cancels the background routine and cleans up resources
 func (s *SpanStore) Close() {
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.stopPollLoop()
 }
 
 // Wait for a new span whose selected producers are different from the current header author

@@ -15,12 +15,7 @@ import (
 // Sorted using ( blockNumber * (10 ** 5) + logIndex )
 const TenToTheFive uint64 = 100000
 
-var (
-	borReceiptPrefix = []byte("matic-bor-receipt-") // borReceiptPrefix + number + block hash -> bor block receipt
-
-	// SystemAddress address for system sender
-	SystemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
-)
+var borReceiptPrefix = []byte("matic-bor-receipt-") // borReceiptPrefix + number + block hash -> bor block receipt
 
 // BorReceiptKey = borReceiptPrefix + num (uint64 big endian) + hash
 func BorReceiptKey(number uint64, hash common.Hash) []byte {

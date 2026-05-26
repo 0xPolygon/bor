@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -308,7 +309,7 @@ func (gc *GenesisContractsClient) callReservedRegistry(
 	toAddress := common.HexToAddress(gc.ReservedRegistryContract)
 	blockNr := rpc.BlockNumber(number)
 	result, err := gc.ethAPI.CallWithState(ethapi.WithBorInternalCall(context.Background()), ethapi.TransactionArgs{
-		Gas:  &SystemTxGas,
+		Gas:  &borabi.SystemTxGas,
 		To:   &toAddress,
 		Data: &msgData,
 	}, &rpc.BlockNumberOrHash{BlockNumber: &blockNr, BlockHash: &hash}, state, nil, nil)
