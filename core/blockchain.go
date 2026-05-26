@@ -400,7 +400,16 @@ type BlockChainConfig struct {
 type PipelineImportOpts struct {
 	CommittedParentRoot common.Hash     // Last committed trie root (grandparent when FlatDiff is set)
 	FlatDiff            *state.FlatDiff // Previous block's state overlay (nil for first block in pipeline)
+	Mode                string          // "flatdiff" when overlaying pending SRC state, "direct" otherwise
+	PendingBlock        uint64          // Pending SRC block that supplied FlatDiff, if any
+	PendingHash         common.Hash     // Hash of PendingBlock, if any
+	PendingCollected    bool            // Whether PendingBlock's SRC collection had already completed at selection time
 }
+
+const (
+	pipelineImportModeDirect   = "direct"
+	pipelineImportModeFlatDiff = "flatdiff"
+)
 
 // DefaultConfig returns the default config.
 // Note the returned object is safe to modify!
@@ -951,6 +960,105 @@ func (bc *BlockChain) setupBlockReaders(parent *types.Header, pipeOpts *Pipeline
 	return throwaway, statedb, parallelStatedb, prefetch, process, parallel, nil
 }
 
+func pipelineImportMode(pipeOpts *PipelineImportOpts) string {
+	if pipeOpts == nil {
+		return "disabled"
+	}
+	if pipeOpts.Mode != "" {
+		return pipeOpts.Mode
+	}
+	if pipeOpts.FlatDiff != nil {
+		return pipelineImportModeFlatDiff
+	}
+	return pipelineImportModeDirect
+}
+
+func pendingImportSRCCollected(pending *pendingImportSRCState) bool {
+	if pending == nil {
+		return false
+	}
+	select {
+	case <-pending.collectedCh:
+		return true
+	default:
+		return false
+	}
+}
+
+func flatDiffLogAttrs(diff *state.FlatDiff) []interface{} {
+	attrs := []interface{}{"hasFlatDiff", diff != nil}
+	if diff == nil {
+		return append(attrs,
+			"flatdiffAccounts", 0,
+			"flatdiffStorageAccounts", 0,
+			"flatdiffStorageSlots", 0,
+			"flatdiffReadSet", 0,
+			"flatdiffReadStorageAccounts", 0,
+			"flatdiffReadStorageSlots", 0,
+			"flatdiffDestructs", 0,
+			"flatdiffNonExistentReads", 0,
+			"flatdiffCode", 0,
+		)
+	}
+	storageSlots := 0
+	for _, slots := range diff.Storage {
+		storageSlots += len(slots)
+	}
+	readStorageSlots := 0
+	for _, slots := range diff.ReadStorage {
+		readStorageSlots += len(slots)
+	}
+	return append(attrs,
+		"flatdiffAccounts", len(diff.Accounts),
+		"flatdiffStorageAccounts", len(diff.Storage),
+		"flatdiffStorageSlots", storageSlots,
+		"flatdiffReadSet", len(diff.ReadSet),
+		"flatdiffReadStorageAccounts", len(diff.ReadStorage),
+		"flatdiffReadStorageSlots", readStorageSlots,
+		"flatdiffDestructs", len(diff.Destructs),
+		"flatdiffNonExistentReads", len(diff.NonExistentReads),
+		"flatdiffCode", len(diff.Code),
+	)
+}
+
+func pipelineImportLogAttrs(parent *types.Header, pipeOpts *PipelineImportOpts) []interface{} {
+	parentNumber := uint64(0)
+	parentHash := common.Hash{}
+	parentRoot := common.Hash{}
+	if parent != nil && parent.Number != nil {
+		parentNumber = parent.Number.Uint64()
+	}
+	if parent != nil {
+		parentHash = parent.Hash()
+		parentRoot = parent.Root
+	}
+	attrs := []interface{}{
+		"pipelineMode", pipelineImportMode(pipeOpts),
+		"parent", parentNumber,
+		"parentHash", parentHash,
+		"parentRoot", parentRoot,
+	}
+	if pipeOpts == nil {
+		return attrs
+	}
+	readerRoot := pipeOpts.CommittedParentRoot
+	if parent != nil {
+		readerRoot = pipelineReaderRoot(parent, pipeOpts)
+	}
+	attrs = append(attrs,
+		"readerRoot", readerRoot,
+		"committedParentRoot", pipeOpts.CommittedParentRoot,
+	)
+	if pipeOpts.PendingBlock != 0 {
+		attrs = append(attrs,
+			"pendingBlock", pipeOpts.PendingBlock,
+			"pendingHash", pipeOpts.PendingHash,
+			"pendingCollected", pipeOpts.PendingCollected,
+		)
+	}
+	return append(attrs, flatDiffLogAttrs(pipeOpts.FlatDiff)...)
+}
+
 // reportReaderStats marks per-block cache hit/miss meters from prefetch,
 // process, and parallel readers. Intended to be called via defer at the
 // end of ProcessBlock.
@@ -1136,7 +1244,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	// fallback would receive context.Canceled instead of a usable
 	// recovery. The fallback IS the recovery; it must run to completion.
 	if result.parallel && result.err != nil {
-		log.Warn("Parallel state processor failed", "number", block.NumberU64(), "hash", block.Hash(), "err", result.err)
+		attrs := []interface{}{"number", block.NumberU64(), "hash", block.Hash(), "err", result.err}
+		attrs = append(attrs, pipelineImportLogAttrs(parent, pipeOpts)...)
+		log.Warn("Parallel state processor failed", attrs...)
 		blockExecutionParallelErrorCounter.Inc(1)
 		// Stop the failed V2 statedb's prefetcher before discarding the
 		// result. The V2 goroutine only stops it on ctx cancellation, so a
@@ -3476,8 +3586,9 @@ func (bc *BlockChain) insertChainWithWitnesses(chain types.Blocks, setHead bool,
 			// would mask real corruption from the prior pipelined block.
 			if pipelineActive {
 				if flushErr := bc.flushPendingImportSRC(); flushErr != nil {
-					log.Error("Pipelined import: flush failed after ProcessBlock error",
-						"block", block.NumberU64(), "flushErr", flushErr, "processErr", err)
+					attrs := []interface{}{"block", block.NumberU64(), "flushErr", flushErr, "processErr", err}
+					attrs = append(attrs, pipelineImportLogAttrs(parent, pipeOpts)...)
+					log.Error("Pipelined import: flush failed after ProcessBlock error", attrs...)
 				}
 			}
 			return nil, it.index, err
@@ -5492,20 +5603,27 @@ func (bc *BlockChain) emitStateSyncFeed() {
 // cross-call overlap). Otherwise the pending state is flushed (reorg/gap)
 // and the block enters the pipeline fresh against parent.Root.
 func (bc *BlockChain) buildPipelineImportOpts(block *types.Block, parent *types.Header) *PipelineImportOpts {
-	if bc.cfg.PipelinedImportSRCLogs {
-		log.Info("Pipelined import: started processing block",
-			"block", block.NumberU64(), "txs", len(block.Transactions()))
-	}
 	bc.pendingImportSRCMu.Lock()
 	pending := bc.pendingImportSRC
 	bc.pendingImportSRCMu.Unlock()
+	var opts *PipelineImportOpts
 	if pending != nil {
 		if block.ParentHash() == pending.block.Hash() {
 			pipelineImportHitCounter.Inc(1)
-			return &PipelineImportOpts{
+			opts = &PipelineImportOpts{
 				CommittedParentRoot: pending.committedRoot,
 				FlatDiff:            pending.flatDiff,
+				Mode:                pipelineImportModeFlatDiff,
+				PendingBlock:        pending.block.NumberU64(),
+				PendingHash:         pending.block.Hash(),
+				PendingCollected:    pendingImportSRCCollected(pending),
 			}
+			if bc.cfg.PipelinedImportSRCLogs {
+				attrs := []interface{}{"block", block.NumberU64(), "txs", len(block.Transactions())}
+				attrs = append(attrs, pipelineImportLogAttrs(parent, opts)...)
+				log.Info("Pipelined import: started processing block", attrs...)
+			}
+			return opts
 		}
 		pipelineImportMissCounter.Inc(1)
 		if err := bc.flushPendingImportSRC(); err != nil {
@@ -5514,7 +5632,16 @@ func (bc *BlockChain) buildPipelineImportOpts(block *types.Block, parent *types.
 	}
 	// First block in pipeline — still enter it so the SRC goroutine persists
 	// for the next insertChain call, enabling cross-call overlap.
-	return &PipelineImportOpts{CommittedParentRoot: parent.Root}
+	opts = &PipelineImportOpts{
+		CommittedParentRoot: parent.Root,
+		Mode:                pipelineImportModeDirect,
+	}
+	if bc.cfg.PipelinedImportSRCLogs {
+		attrs := []interface{}{"block", block.NumberU64(), "txs", len(block.Transactions())}
+		attrs = append(attrs, pipelineImportLogAttrs(parent, opts)...)
+		log.Info("Pipelined import: started processing block", attrs...)
+	}
+	return opts
 }
 
 // runImportAutoCollection waits for a pending import SRC to finish, verifies
