@@ -353,9 +353,10 @@ func (m *milestone) PurgeAfter(block uint64) {
 	memStale := m.doExist && m.Number > block
 	if diskStale || memStale {
 		if err := rawdb.DeleteLastFinality[*rawdb.Milestone](m.db); err != nil {
-			log.Error("PurgeAfter: failed to delete stale whitelisted milestone from db", "err", err)
+			log.Error("PurgeAfter: failed to delete stale whitelisted milestone from db; clearing memory anyway", "err", err)
 			PurgeAfterDBErrorMeter.Mark(1)
-		} else if memStale {
+		}
+		if memStale {
 			m.doExist = false
 			m.Number = 0
 			m.Hash = common.Hash{}
