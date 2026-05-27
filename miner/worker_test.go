@@ -3644,7 +3644,7 @@ func TestPrefetchStream_HardKillExits(t *testing.T) {
 	hardKill := new(atomic.Bool)
 	done := make(chan *core.PrefetchResult, 1)
 	go func() {
-		done <- prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+		done <- prefetcher.PrefetchStream(header, throwaway, nil, w.vmConfig(), true,
 			hardKill, nil, txsCh, nil)
 	}()
 
@@ -3693,7 +3693,7 @@ func TestPrefetchStream_EvmAbortSkipsAndResumes(t *testing.T) {
 	streamDone := make(chan struct{})
 	go func() {
 		defer close(streamDone)
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), true,
+		prefetcher.PrefetchStream(header, throwaway, nil, w.vmConfig(), true,
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 
@@ -3743,7 +3743,7 @@ func TestPrefetchStream_BlockEquivalence(t *testing.T) {
 
 	// Path A: block-oriented Prefetch.
 	block := types.NewBlock(header, &types.Body{Transactions: allTxs}, nil, trie.NewStackTrie(nil))
-	resultA := prefetcher.Prefetch(block, throwaway, w.vmConfig(), true, nil)
+	resultA := prefetcher.Prefetch(block, throwaway, nil, w.vmConfig(), true, nil)
 	require.NotNil(t, resultA)
 
 	// Path B: streaming PrefetchStream over the same txs on a fresh throwaway state.
@@ -3755,7 +3755,7 @@ func TestPrefetchStream_BlockEquivalence(t *testing.T) {
 		ch <- tx
 	}
 	close(ch)
-	resultB := prefetcher.PrefetchStream(header, throwawayB, w.vmConfig(), true,
+	resultB := prefetcher.PrefetchStream(header, throwawayB, nil, w.vmConfig(), true,
 		nil, nil, ch, nil)
 	require.NotNil(t, resultB)
 

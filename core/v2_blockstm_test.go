@@ -261,7 +261,7 @@ func TestV2GasDeterminism(t *testing.T) {
 		bc := &BlockChain{hc: &HeaderChain{config: config, chainDb: memdb,
 			headerCache: lru.NewCache[common.Hash, *types.Header](256), engine: engine}}
 
-		res, err := NewV2StateProcessor(hc, bc, 16).Process(bd.block, sdb, vm.Config{}, &author, context.Background())
+		res, err := NewV2StateProcessor(hc, bc, 16).Process(bd.block, sdb, nil, vm.Config{}, &author, context.Background())
 		if err != nil {
 			t.Fatalf("run %d: %v", run, err)
 		}

@@ -372,6 +372,7 @@ type BlockChain struct {
 	triedb        *triedb.Database                 // The database handler for maintaining trie nodes.
 	statedb       *state.CachingDB                 // State database to reuse between imports (contains state cache)
 	txIndexer     *txIndexer                       // Transaction indexer, might be nil if not enabled
+	jumpDestCache vm.JumpDestCache                 // Shared JUMPDEST analysis cache for block processing
 
 	hc               *HeaderChain
 	rmLogsFeed       event.Feed
@@ -471,6 +472,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		cfg:                 cfg,
 		db:                  db,
 		triedb:              triedb,
+		jumpDestCache:       NewJumpDestCache(),
 		triegc:              prque.New[int64, common.Hash](nil),
 		quit:                make(chan struct{}),
 		chainmu:             syncx.NewClosableMutex(),
@@ -793,9 +795,9 @@ type sharedBlockCaches struct {
 	ecrecover *sync.Map
 }
 
-func newSharedBlockCaches() *sharedBlockCaches {
+func newSharedBlockCaches(jumpDests vm.JumpDestCache) *sharedBlockCaches {
 	return &sharedBlockCaches{
-		jumpDests: vm.NewSyncJumpDestCache(),
+		jumpDests: jumpDests,
 		keccak:    &sync.Map{},
 		ecrecover: &sync.Map{},
 	}
@@ -817,7 +819,7 @@ func (bc *BlockChain) startPrefetchGoroutine(block *types.Block, throwaway *stat
 		vmCfg := bc.cfg.VmConfig
 		vmCfg.Tracer = nil
 		caches.applyTo(&vmCfg)
-		bc.prefetcher.Prefetch(block, throwaway, vmCfg, false, followupInterrupt)
+		bc.prefetcher.Prefetch(block, throwaway, bc.jumpDestCache, vmCfg, false, followupInterrupt)
 		blockPrefetchExecuteTimer.Update(time.Since(start))
 		if followupInterrupt.Load() {
 			blockPrefetchInterruptMeter.Mark(1)
@@ -845,7 +847,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	defer reportReaderStats(prefetch, process, parallel)
 
 	// Shared caches for this block — used by both prefetcher and V2 workers.
-	sharedCaches := newSharedBlockCaches()
+	sharedCaches := newSharedBlockCaches(bc.jumpDestCache)
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	type Result struct {
@@ -877,7 +879,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			parallelStatedb.StartPrefetcher("chain", witness, nil)
 			v2VmCfg := bc.cfg.VmConfig
 			sharedCaches.applyTo(&v2VmCfg)
-			res, err := bc.parallelProcessor.Process(block, parallelStatedb, v2VmCfg, nil, ctx)
+			res, err := bc.parallelProcessor.Process(block, parallelStatedb, bc.jumpDestCache, v2VmCfg, nil, ctx)
 			blockExecutionParallelTimer.UpdateSince(pstart)
 			var localVtime time.Duration
 			if err == nil {
@@ -907,7 +909,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 		go func() {
 			pstart := time.Now()
 			statedb.StartPrefetcher("chain", witness, nil)
-			res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, ctx)
+			res, err := bc.processor.Process(block, statedb, bc.jumpDestCache, bc.cfg.VmConfig, nil, ctx)
 			blockExecutionSerialTimer.UpdateSince(pstart)
 			var localVtime time.Duration
 			if err == nil {
@@ -3529,7 +3531,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 
 	// Process block using the parent state as reference point
 	pstart := time.Now()
-	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig, nil, context.Background())
+	res, err := bc.processor.Process(block, statedb, bc.jumpDestCache, bc.cfg.VmConfig, nil, context.Background())
 	if err != nil {
 		bc.reportBlock(block, res, err)
 		return nil, err
@@ -3567,8 +3569,12 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		task := types.NewBlockWithHeader(context).WithBody(*block.Body())
 		author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
+		sharedCaches := newSharedBlockCaches(bc.jumpDestCache)
+		vmConfig := bc.cfg.VmConfig
+		sharedCaches.applyTo(&vmConfig)
+
 		// Run the stateless self-cross-validation
-		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, diskdb)
+		crossStateRoot, crossReceiptRoot, _, _, err := ExecuteStateless(bc.chainConfig, vmConfig, task, witness, &author, bc.engine, diskdb)
 		if err != nil {
 			return nil, fmt.Errorf("stateless self-validation failed: %v", err)
 		}
@@ -4366,7 +4372,11 @@ func (bc *BlockChain) ProcessBlockWithWitnesses(block *types.Block, witness *sta
 	// Bor: Calculate EvmBlockContext with Root and ReceiptHash to properly get the author
 	author := NewEVMBlockContext(block.Header(), bc.hc, nil).Coinbase
 
-	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, bc.cfg.VmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
+	sharedCaches := newSharedBlockCaches(bc.jumpDestCache)
+	vmConfig := bc.cfg.VmConfig
+	sharedCaches.applyTo(&vmConfig)
+
+	crossStateRoot, crossReceiptRoot, statedb, res, err := ExecuteStateless(bc.chainConfig, vmConfig, task, witness, &author, bc.engine, bc.statedb.TrieDB().Disk())
 	// Currently, we don't return the error, because we don't have a way to handle Span update statelessly
 	// TODO: Return the error once we have a way to handle Span update
 	if err != nil {
@@ -4498,4 +4508,8 @@ func (bc *BlockChain) verifyPendingHeaders() {
 // StateSizer returns the state size tracker, or nil if it's not initialized
 func (bc *BlockChain) StateSizer() *state.SizeTracker {
 	return bc.stateSizer
+}
+
+func (bc *BlockChain) JumpDestCache() vm.JumpDestCache {
+	return bc.jumpDestCache
 }

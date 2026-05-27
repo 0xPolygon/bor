@@ -673,7 +673,7 @@ func TestExecuteV2BlockSTM_HonoursCancellation(t *testing.T) {
 func TestV2StateProcessor_RefusesTracer(t *testing.T) {
 	p := NewV2StateProcessor(nil, nil, 2)
 	cfg := vm.Config{Tracer: &tracing.Hooks{}}
-	_, err := p.Process(nil, nil, cfg, nil, nil)
+	_, err := p.Process(nil, nil, nil, cfg, nil, nil)
 	if !errors.Is(err, errV2TracerUnsupported) {
 		t.Fatalf("V2.Process with tracer: got %v, want errV2TracerUnsupported", err)
 	}

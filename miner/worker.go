@@ -1291,6 +1291,7 @@ func (w *worker) makeEnv(header *types.Header, coinbase common.Address, witness 
 		prefetchedTxHashes: genParams.prefetchedTxHashes,
 	}
 	env.evm.SetInterrupt(&w.interruptBlockBuilding)
+	env.evm.SetJumpDestCache(w.chain.JumpDestCache())
 
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -2478,7 +2479,7 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		// pebble's block cache, which under realistic clean-cache sizes is already
 		// resident. Upstream go-ethereum's prefetcher does not compute intermediate
 		// roots either.
-		prefetcher.PrefetchStream(header, throwaway, w.vmConfig(), false,
+		prefetcher.PrefetchStream(header, throwaway, w.chain.JumpDestCache(), w.vmConfig(), false,
 			hardKill, evmAbort, txsCh, onSuccess)
 	}()
 

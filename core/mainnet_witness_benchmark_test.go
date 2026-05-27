@@ -533,7 +533,7 @@ var benchVMConfig = vm.Config{
 	EnableEVMSwitchDispatch: true,
 }
 
-func processSerial(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine) (*ProcessResult, error) {
+func processSerial(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, jumpDestCache vm.JumpDestCache) (*ProcessResult, error) {
 	db := pb.baseState.Copy()
 	hc := &HeaderChain{
 		config:      config,
@@ -541,7 +541,7 @@ func processSerial(pb *preparedBlock, config *params.ChainConfig, engine consens
 		headerCache: pb.headerCache,
 		engine:      engine,
 	}
-	return NewStateProcessor(hc).Process(pb.block, db, benchVMConfig, &pb.author, context.Background())
+	return NewStateProcessor(hc).Process(pb.block, db, jumpDestCache, benchVMConfig, &pb.author, context.Background())
 }
 
 func processParallel(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numProcs int) (*ProcessResult, error) {
@@ -557,10 +557,10 @@ func processParallel(pb *preparedBlock, config *params.ChainConfig, engine conse
 		headerCache: pb.headerCache,
 		engine:      engine,
 	}
-	return NewParallelStateProcessor(hc, bc).Process(pb.block, db, vm.Config{}, &pb.author, context.Background())
+	return NewParallelStateProcessor(hc, bc).Process(pb.block, db, nil, vm.Config{}, &pb.author, context.Background())
 }
 
-func processV2(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numWorkers int) (*ProcessResult, *state.StateDB, error) {
+func processV2(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numWorkers int, jumpDestCache vm.JumpDestCache) (*ProcessResult, *state.StateDB, error) {
 	db := pb.baseState.Copy()
 	bc := &BlockChain{
 		chainConfig: config,
@@ -572,7 +572,12 @@ func processV2(pb *preparedBlock, config *params.ChainConfig, engine consensus.E
 		headerCache: pb.headerCache,
 		engine:      engine,
 	}
-	res, err := NewV2StateProcessor(hc, bc, numWorkers).Process(pb.block, db, benchVMConfig, &pb.author, context.Background())
+	// V2 workers read the shared cache via vm.Config.SharedJumpDestCache; the
+	// explicit param mirrors production wiring so this stays correct if that
+	// config field is retired in favor of the parameter.
+	cfg := benchVMConfig
+	cfg.SharedJumpDestCache = jumpDestCache
+	res, err := NewV2StateProcessor(hc, bc, numWorkers).Process(pb.block, db, jumpDestCache, cfg, &pb.author, context.Background())
 	return res, db, err
 }
 
@@ -595,7 +600,7 @@ func executeStatelessSerial(config *params.ChainConfig, block *types.Block, witn
 	}
 	processor := NewStateProcessor(headerChain)
 
-	res, err := processor.Process(block, db, vm.Config{}, author, context.Background())
+	res, err := processor.Process(block, db, nil, vm.Config{}, author, context.Background())
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, err
 	}
@@ -657,7 +662,7 @@ func executeStatelessParallel(config *params.ChainConfig, block *types.Block, wi
 
 	processor := NewParallelStateProcessor(hc, bc)
 
-	res, err := processor.Process(block, db, vm.Config{}, author, context.Background())
+	res, err := processor.Process(block, db, nil, vm.Config{}, author, context.Background())
 	if err != nil {
 		return common.Hash{}, common.Hash{}, nil, err
 	}
@@ -1138,9 +1143,10 @@ func BenchmarkMainnetStatelessSerial(b *testing.B) {
 
 	b.Run("AllBlocks", func(b *testing.B) {
 		b.ReportAllocs()
+		jdc := NewJumpDestCache()
 		for i := 0; i < b.N; i++ {
 			for j := range prepared {
-				if _, err := processSerial(&prepared[j], config, engine); err != nil {
+				if _, err := processSerial(&prepared[j], config, engine, jdc); err != nil {
 					b.Fatalf("block %s: %v", testBlockHexes[j], err)
 				}
 			}
@@ -1155,8 +1161,9 @@ func BenchmarkMainnetStatelessSerial(b *testing.B) {
 		name := fmt.Sprintf("Block_%s_%dtx_%dMgas", testBlockHexes[i], len(pb.block.Transactions()), pb.block.GasUsed()/1e6)
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
+			jdc := NewJumpDestCache()
 			for n := 0; n < b.N; n++ {
-				if _, err := processSerial(pb, config, engine); err != nil {
+				if _, err := processSerial(pb, config, engine, jdc); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -1214,8 +1221,8 @@ func BenchmarkMainnetStatelessParallel(b *testing.B) {
 }
 
 // processV2Serial is the legacy serial-V2 path (one tx at a time through ParallelStateDB).
-func processV2Serial(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine) error {
-	_, _, err := processV2(pb, config, engine, 1)
+func processV2Serial(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, jumpDestCache vm.JumpDestCache) error {
+	_, _, err := processV2(pb, config, engine, 1, jumpDestCache)
 	return err
 }
 
@@ -1321,9 +1328,10 @@ func BenchmarkParallelStateDBV2(b *testing.B) {
 
 	b.Run("AllBlocks", func(b *testing.B) {
 		b.ReportAllocs()
+		jdc := NewJumpDestCache()
 		for i := 0; i < b.N; i++ {
 			for j := range prepared {
-				if err := processV2Serial(&prepared[j], config, engine); err != nil {
+				if err := processV2Serial(&prepared[j], config, engine, jdc); err != nil {
 					b.Fatalf("block %s: %v", testBlockHexes[j], err)
 				}
 			}
@@ -1338,8 +1346,9 @@ func BenchmarkParallelStateDBV2(b *testing.B) {
 		name := fmt.Sprintf("Block_%s_%dtx_%dMgas", testBlockHexes[i], len(pb.block.Transactions()), pb.block.GasUsed()/1e6)
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
+			jdc := NewJumpDestCache()
 			for n := 0; n < b.N; n++ {
-				if err := processV2Serial(pb, config, engine); err != nil {
+				if err := processV2Serial(pb, config, engine, jdc); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -1417,8 +1426,8 @@ func TestV2BlockSTMWorkerScaling(t *testing.T) {
 	}
 }
 
-func processV2BlockSTM(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numWorkers int) error {
-	_, _, err := processV2(pb, config, engine, numWorkers)
+func processV2BlockSTM(pb *preparedBlock, config *params.ChainConfig, engine consensus.Engine, numWorkers int, jdc vm.JumpDestCache) error {
+	_, _, err := processV2(pb, config, engine, numWorkers, jdc)
 	return err
 }
 
@@ -1578,9 +1587,10 @@ func BenchmarkV2Embedded(b *testing.B) {
 
 	b.Run("Serial", func(b *testing.B) {
 		b.ReportAllocs()
+		jdc := NewJumpDestCache()
 		for i := 0; i < b.N; i++ {
 			for j := range prepared {
-				processSerial(&prepared[j], config, engine)
+				processSerial(&prepared[j], config, engine, jdc)
 			}
 		}
 		b.StopTimer()
@@ -1590,9 +1600,10 @@ func BenchmarkV2Embedded(b *testing.B) {
 	for _, numWorkers := range []int{4, 8, 16} {
 		b.Run(fmt.Sprintf("V2/%dw", numWorkers), func(b *testing.B) {
 			b.ReportAllocs()
+			jdc := NewJumpDestCache()
 			for i := 0; i < b.N; i++ {
 				for j := range prepared {
-					processV2BlockSTM(&prepared[j], config, engine, numWorkers)
+					processV2BlockSTM(&prepared[j], config, engine, numWorkers, jdc)
 				}
 			}
 			b.StopTimer()
@@ -1622,9 +1633,10 @@ func BenchmarkV2AllBlocks(b *testing.B) {
 
 	b.Run("Serial", func(b *testing.B) {
 		b.ReportAllocs()
+		jdc := NewJumpDestCache()
 		for i := 0; i < b.N; i++ {
 			for j := range prepared {
-				processSerial(&prepared[j], config, engine)
+				processSerial(&prepared[j], config, engine, jdc)
 			}
 		}
 		b.StopTimer()
@@ -1634,9 +1646,10 @@ func BenchmarkV2AllBlocks(b *testing.B) {
 	for _, numWorkers := range []int{4, 8, 16} {
 		b.Run(fmt.Sprintf("V2/%dw", numWorkers), func(b *testing.B) {
 			b.ReportAllocs()
+			jdc := NewJumpDestCache()
 			for i := 0; i < b.N; i++ {
 				for j := range prepared {
-					processV2BlockSTM(&prepared[j], config, engine, numWorkers)
+					processV2BlockSTM(&prepared[j], config, engine, numWorkers, jdc)
 				}
 			}
 			b.StopTimer()
@@ -1684,7 +1697,7 @@ func processV2BlockSTMWithWitness(pb *preparedBlock, config *params.ChainConfig,
 		headerCache: pb.headerCache,
 		engine:      engine,
 	}
-	_, err = NewV2StateProcessor(hc, bc, numWorkers).Process(pb.block, db, benchVMConfig, &pb.author, context.Background())
+	_, err = NewV2StateProcessor(hc, bc, numWorkers).Process(pb.block, db, nil, benchVMConfig, &pb.author, context.Background())
 	return err
 }
 

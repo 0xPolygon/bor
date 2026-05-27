@@ -60,14 +60,14 @@ type PrefetchResult struct {
 // This is a thin wrapper over PrefetchStream: it feeds the block's transactions
 // into a channel, closes it, and runs the stream to completion. Behavior is
 // identical to the pre-stream implementation.
-func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, cfg vm.Config, intermediateRootPrefetch bool, interrupt *atomic.Bool) *PrefetchResult {
+func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, jumpDestCache vm.JumpDestCache, cfg vm.Config, intermediateRootPrefetch bool, interrupt *atomic.Bool) *PrefetchResult {
 	txs := block.Transactions()
 	ch := make(chan *types.Transaction, len(txs))
 	for _, tx := range txs {
 		ch <- tx
 	}
 	close(ch)
-	return p.PrefetchStream(block.Header(), statedb, cfg, intermediateRootPrefetch, interrupt, nil, ch, nil)
+	return p.PrefetchStream(block.Header(), statedb, jumpDestCache, cfg, intermediateRootPrefetch, interrupt, nil, ch, nil)
 }
 
 // PrefetchStream warms state caches by executing transactions read from txsCh
@@ -91,6 +91,7 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 func (p *StatePrefetcher) PrefetchStream(
 	header *types.Header,
 	statedb *state.StateDB,
+	jumpDestCache vm.JumpDestCache,
 	cfg vm.Config,
 	intermediateRootPrefetch bool,
 	hardKill *atomic.Bool,
@@ -106,6 +107,7 @@ func (p *StatePrefetcher) PrefetchStream(
 		statedb:                  statedb,
 		reader:                   statedb.Reader(),
 		signer:                   types.MakeSigner(p.config, header.Number, header.Time),
+		jumpDestCache:            jumpDestCache,
 		cfg:                      cfg,
 		intermediateRootPrefetch: intermediateRootPrefetch,
 		hardKill:                 hardKill,
@@ -158,6 +160,7 @@ type streamCtx struct {
 	statedb                  *state.StateDB
 	reader                   state.Reader
 	signer                   types.Signer
+	jumpDestCache            vm.JumpDestCache
 	cfg                      vm.Config
 	intermediateRootPrefetch bool
 	hardKill                 *atomic.Bool
@@ -191,7 +194,7 @@ func (s *streamCtx) runWorker() {
 func (s *streamCtx) processTx(tx *types.Transaction) {
 	idx := int(s.txIndex.Add(1) - 1)
 	gasUsed, ok := s.p.prefetchOneTx(
-		tx, idx, s.header, s.statedb, s.reader, s.signer, s.cfg,
+		tx, idx, s.header, s.statedb, s.reader, s.signer, s.jumpDestCache, s.cfg,
 		s.intermediateRootPrefetch, s.evmInterrupt, &s.fails,
 	)
 	if !ok {
@@ -217,6 +220,7 @@ func (p *StatePrefetcher) prefetchOneTx(
 	statedb *state.StateDB,
 	reader state.Reader,
 	signer types.Signer,
+	jumpDestCache vm.JumpDestCache,
 	cfg vm.Config,
 	intermediateRootPrefetch bool,
 	interrupt *atomic.Bool,
@@ -247,6 +251,9 @@ func (p *StatePrefetcher) prefetchOneTx(
 	stateCpy.SetTxContext(tx.Hash(), txIdx)
 
 	evm := vm.NewEVM(NewEVMBlockContext(header, p.chain, nil), stateCpy, p.config, cfg)
+	if jumpDestCache != nil {
+		evm.SetJumpDestCache(jumpDestCache)
+	}
 	evm.SetInterrupt(interrupt)
 
 	result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(header.GasLimit))

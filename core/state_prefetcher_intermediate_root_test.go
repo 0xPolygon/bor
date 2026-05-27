@@ -200,7 +200,7 @@ func runIRTrial(t testing.TB, chain *BlockChain, txs []*types.Transaction, flag 
 	for i, tx := range txs {
 		_, _ = prefetcher.prefetchOneTx(
 			tx, i, header, throwaway, throwaway.Reader(),
-			signer, cfg, flag, &interrupt, &fails,
+			signer, chain.JumpDestCache(), cfg, flag, &interrupt, &fails,
 		)
 	}
 	prefetchDur := time.Since(prefetchStart)
@@ -548,7 +548,7 @@ func runIRPebbleTrial(
 	for i, tx := range txs {
 		_, _ = prefetcher.prefetchOneTx(
 			tx, i, header, throwaway, throwaway.Reader(),
-			signer, cfg, flag, &interrupt, &fails,
+			signer, chain.JumpDestCache(), cfg, flag, &interrupt, &fails,
 		)
 	}
 	prefetchDur := time.Since(prefetchStart)

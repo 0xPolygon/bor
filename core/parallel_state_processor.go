@@ -389,7 +389,7 @@ func warmOnce(reader state.Reader, addr common.Address, seen map[common.Address]
 	reader.Account(addr) //nolint:errcheck
 }
 
-func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (processResult *ProcessResult, err error) {
+func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.StateDB, jumpDestCache vm.JumpDestCache, cfg vm.Config, author *common.Address, interruptCtx context.Context) (processResult *ProcessResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("recovered from panic during parallel execution", "err", r)
@@ -421,7 +421,6 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 	}
 
 	tasks := make([]blockstm.ExecTask, 0, len(block.Transactions()))
-	sharedJumpDests := vm.NewSyncJumpDestCache()
 
 	shouldDelayFeeCal := true
 
@@ -443,7 +442,14 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 
 	context := NewEVMBlockContext(header, p.bc.hc, author)
 
+	if jumpDestCache == nil {
+		jumpDestCache = vm.NewSyncJumpDestCache()
+	}
+
 	vmenv := vm.NewEVM(context, statedb, config, cfg)
+	if jumpDestCache != nil {
+		vmenv.SetJumpDestCache(jumpDestCache)
+	}
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv)
@@ -495,7 +501,7 @@ func (p *ParallelStateProcessor) Process(block *types.Block, statedb *state.Stat
 			dependencies:      deps[i],
 			coinbase:          coinbase,
 			blockContext:      blockContext,
-			jumpDests:         sharedJumpDests,
+			jumpDests:         jumpDestCache,
 		}
 
 		tasks = append(tasks, task)
@@ -1097,7 +1103,7 @@ func (p *V2StateProcessor) chainConfig() *params.ChainConfig {
 // the transaction messages using V2 BlockSTM parallel execution.
 // The caller should provide a statedb that is NOT shared with any read-only base.
 // In production, ProcessBlock creates an independent parallelStatedb for this.
-func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
+func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, jumpDestCache vm.JumpDestCache, cfg vm.Config, author *common.Address, interruptCtx context.Context) (*ProcessResult, error) {
 	// Tracer hooks are not goroutine-safe; concurrent V2 workers sharing
 	// one Tracer would race. Refuse so ProcessBlock's fallback runs V1.
 	if cfg.Tracer != nil {
