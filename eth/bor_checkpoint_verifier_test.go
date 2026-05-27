@@ -224,8 +224,7 @@ func findCommonAncestorWithFutureMilestones_CalculateTargetBlock_NoMatch(start u
 			continue // Skip milestones after current one
 		}
 
-		// Update target block based on milestone found (when no hash match)
-		if milestoneNum < targetBlock {
+		if milestoneNum > 0 && milestoneNum < targetBlock {
 			targetBlock = milestoneNum - 1
 		}
 	}

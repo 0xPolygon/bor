@@ -316,7 +316,7 @@ func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uin
 				return milestoneNum, true
 			}
 
-			if milestoneNum < targetBlock {
+			if milestoneNum > 0 && milestoneNum < targetBlock {
 				targetBlock = milestoneNum - 1
 			}
 		}

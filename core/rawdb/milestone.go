@@ -186,7 +186,7 @@ func ReadLockField(db ethdb.KeyValueReader) (bool, uint64, common.Hash, map[stri
 	}
 
 	if err = json.Unmarshal(data, &lockField); err != nil {
-		log.Error(fmt.Sprintf("Unable to unmarshal the lock field in database"), "err", err)
+		log.Error("Unable to unmarshal the lock field in database", "err", err)
 
 		return false, 0, common.Hash{}, nil, fmt.Errorf("%w(%v) for lock field , data %v(%q)",
 			ErrIncorrectLockField, err, data, string(data))
@@ -232,11 +232,11 @@ func ReadFutureMilestoneList(db ethdb.KeyValueReader) ([]uint64, map[uint64]comm
 	}
 
 	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("%w for %s", ErrIncorrectLockField, string(key))
+		return nil, nil, fmt.Errorf("%w for %s", ErrIncorrectFutureMilestoneField, string(key))
 	}
 
 	if err = json.Unmarshal(data, &futureMilestoneField); err != nil {
-		log.Error(fmt.Sprintf("Unable to unmarshal the future milestone field in database"), "err", err)
+		log.Error("Unable to unmarshal the future milestone field in database", "err", err)
 
 		return nil, nil, fmt.Errorf("%w(%v) for future milestone field, data %v(%q)",
 			ErrIncorrectFutureMilestoneField, err, data, string(data))
