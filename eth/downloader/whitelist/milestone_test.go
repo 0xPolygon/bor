@@ -71,6 +71,36 @@ func TestPurgeAfter(t *testing.T) {
 	}
 }
 
+func TestPurgeAfter_MemoryFalseDiskStale(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	svc := NewService(db, false, 0)
+
+	m, ok := svc.milestoneService.(*milestone)
+	if !ok {
+		t.Fatalf("expected milestoneService to be *milestone, got %T", svc.milestoneService)
+	}
+
+	hashAt := func(n uint64) common.Hash { return common.Hash{byte(n)} }
+
+	if err := rawdb.WriteLastFinality[*rawdb.Milestone](db, 100, hashAt(100)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	m.finality.Lock()
+	m.doExist = false
+	m.Number = 0
+	m.Hash = common.Hash{}
+	m.finality.Unlock()
+
+	m.PurgeAfter(50)
+
+	if _, _, err := rawdb.ReadFinality[*rawdb.Milestone](db); err == nil {
+		t.Fatalf("stale on-disk row must be deleted")
+	}
+	if exists, _, _ := m.Get(); exists {
+		t.Fatalf("Get() must not resurrect")
+	}
+}
+
 func TestUnlockSprintThreshold(t *testing.T) {
 	db := rawdb.NewMemoryDatabase()
 	svc := NewService(db, false, 0)

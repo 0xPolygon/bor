@@ -106,13 +106,9 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		ethHandler := (*ethHandler)(eth.handler)
 
 		var (
-			rewindTo uint64
-			// Gates the blind-rewind path: must drop the mismatching block AND
-			// local canonical hash at rewindTo must match a stored milestone hash.
+			rewindTo       uint64
+			rewindToSet    bool
 			rewindAttested bool
-			// rewindTo==0 is a valid attested anchor (genesis), so track set-ness
-			// separately or the fallback would overwrite an attested target.
-			rewindToSet bool
 		)
 
 		attestRewindAt := func(num uint64, expectedHash common.Hash) bool {

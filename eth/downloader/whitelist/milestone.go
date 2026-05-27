@@ -58,6 +58,9 @@ var (
 
 	// MilestonePeerMeter is a metric for collecting the number of valid peers received
 	MilestonePeerMeter = metrics.NewRegisteredMeter("chain/milestone/isvalidpeer", nil)
+
+	// PurgeAfterDBErrorMeter is a metric for tracking the purge after database errors when deleting stale milestones after a mismatch rewind
+	PurgeAfterDBErrorMeter = metrics.NewRegisteredMeter("chain/milestone/purgeafter/dberror", nil)
 )
 
 // IsValidChain checks the validity of chain by comparing it
@@ -345,12 +348,14 @@ func (m *milestone) PurgeAfter(block uint64) {
 	m.finality.Lock()
 	defer m.finality.Unlock()
 
-	if m.doExist && m.Number > block {
-		// DB delete first: on memory-cleared/disk-stale, finality.Get's DB
-		// fallback would resurrect the row. Keep memory intact if delete fails.
+	persistedNum, _, persistedErr := rawdb.ReadFinality[*rawdb.Milestone](m.db)
+	diskStale := persistedErr == nil && persistedNum > block
+	memStale := m.doExist && m.Number > block
+	if diskStale || memStale {
 		if err := rawdb.DeleteLastFinality[*rawdb.Milestone](m.db); err != nil {
-			log.Error("Error deleting stale whitelisted milestone from db; keeping in-memory state", "err", err)
-		} else {
+			log.Error("PurgeAfter: failed to delete stale whitelisted milestone from db", "err", err)
+			PurgeAfterDBErrorMeter.Mark(1)
+		} else if memStale {
 			m.doExist = false
 			m.Number = 0
 			m.Hash = common.Hash{}
