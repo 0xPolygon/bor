@@ -169,6 +169,13 @@ func (s *Service) PurgeWhitelistedMilestone() {
 	s.milestoneService.Purge()
 }
 
+// PurgeMilestonesAfter drops milestone state above block and clears the fork
+// validation cache, whose entries may have been keyed off purged state.
+func (s *Service) PurgeMilestonesAfter(block uint64) {
+	s.milestoneService.PurgeAfter(block)
+	s.resetForkValidationCache()
+}
+
 func (s *Service) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {
 	return s.checkpointService.Get()
 }

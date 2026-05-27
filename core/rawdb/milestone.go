@@ -118,6 +118,12 @@ func WriteLastFinality[T BlockFinality[T]](db ethdb.KeyValueWriter, block uint64
 	return nil
 }
 
+// DeleteLastFinality removes the persisted whitelist entry for T.
+func DeleteLastFinality[T BlockFinality[T]](db ethdb.KeyValueWriter) error {
+	_, key := getKey[T]()
+	return db.Delete(key)
+}
+
 type BlockFinality[T any] interface {
 	set(block uint64, hash common.Hash)
 	clone() T
