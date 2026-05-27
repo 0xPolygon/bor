@@ -169,11 +169,18 @@ func (s *Service) PurgeWhitelistedMilestone() {
 	s.milestoneService.Purge()
 }
 
-// PurgeMilestonesAfter drops milestone state above block and clears the fork
-// validation cache, whose entries may have been keyed off purged state.
+// PurgeMilestonesAfter drops milestone state above block, clears the fork
+// validation cache, and caps lastValidForkBlock at block. checkForkCorrectness
+// uses max(milestoneNumber, lastValidForkBlock) as its canonical bound, so a
+// stale lastValidForkBlock would blind-accept peer chains past the rewind anchor.
 func (s *Service) PurgeMilestonesAfter(block uint64) {
 	s.milestoneService.PurgeAfter(block)
-	s.resetForkValidationCache()
+	s.forkValidationCacheMu.Lock()
+	clear(s.forkValidationCache)
+	if s.lastValidForkBlock > block {
+		s.lastValidForkBlock = block
+	}
+	s.forkValidationCacheMu.Unlock()
 }
 
 func (s *Service) GetWhitelistedCheckpoint() (bool, uint64, common.Hash) {

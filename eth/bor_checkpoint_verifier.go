@@ -185,7 +185,9 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 		}
 
 		if len(canonicalChain) > 0 {
-			reorgToFinalized(eth, head, rewindTo, canonicalChain)
+			if reorgToFinalized(eth, head, rewindTo, canonicalChain) {
+				ethHandler.downloader.PurgeMilestonesAfter(rewindTo)
+			}
 			return hash, errHashMismatch
 		}
 
@@ -231,22 +233,23 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	return hash, nil
 }
 
-// reorgToFinalized stops the miner if the mining process is running and rewinds back the chain
-// and inserts the chain finalized by checkpoint/milestone.
-func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) {
-	// do nothing if there is no canonical chain to insert.
+// reorgToFinalized rewinds head to rewindTo and inserts canonicalChain. Returns
+// true if head actually moved (the insert is best-effort and a partial insert
+// still counts).
+func reorgToFinalized(eth *Ethereum, head uint64, rewindTo uint64, canonicalChain []*types.Block) bool {
 	if len(canonicalChain) == 0 {
 		log.Warn("Refusing to reorg finalized without canonical chain",
 			"head", head, "rewindTo", rewindTo)
-		return
+		return false
 	}
 
 	defer pauseMiner(eth)()
 
 	if err := rewind(eth, head, rewindTo); err != nil {
-		return // insert needs head to have moved
+		return false
 	}
 	insertFinalized(eth, canonicalChain)
+	return true
 }
 
 // pauseMiner stops the miner and returns a restart function for the caller to
@@ -321,10 +324,6 @@ func findCommonAncestorWithFutureMilestones(eth *Ethereum, start uint64, end uin
 				targetBlock = milestoneNum - 1
 			}
 		}
-	}
-
-	if targetBlock < 0 {
-		return 0, false
 	}
 
 	return targetBlock, false

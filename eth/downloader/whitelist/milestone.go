@@ -346,12 +346,15 @@ func (m *milestone) PurgeAfter(block uint64) {
 	defer m.finality.Unlock()
 
 	if m.doExist && m.Number > block {
-		m.doExist = false
-		m.Number = 0
-		m.Hash = common.Hash{}
-		// Hard-delete: finality.Get's DB fallback would resurrect a stale row.
+		// DB delete first: on memory-cleared/disk-stale, finality.Get's DB
+		// fallback would resurrect the row. Keep memory intact if delete fails.
 		if err := rawdb.DeleteLastFinality[*rawdb.Milestone](m.db); err != nil {
-			log.Error("Error deleting stale whitelisted milestone from db", "err", err)
+			log.Error("Error deleting stale whitelisted milestone from db; keeping in-memory state", "err", err)
+		} else {
+			m.doExist = false
+			m.Number = 0
+			m.Hash = common.Hash{}
+			whitelistedMilestoneMeter.Update(0)
 		}
 	}
 
@@ -360,6 +363,7 @@ func (m *milestone) PurgeAfter(block uint64) {
 		m.LockedMilestoneNumber = 0
 		m.LockedMilestoneHash = common.Hash{}
 		m.purgeMilestoneIDsList()
+		MilestoneIdsLengthMeter.Update(0)
 		if err := rawdb.WriteLockField(m.db, m.Locked, m.LockedMilestoneNumber, m.LockedMilestoneHash, m.LockedMilestoneIDs); err != nil {
 			log.Error("Error clearing stale milestone lock from db", "err", err)
 		}
@@ -379,6 +383,11 @@ func (m *milestone) PurgeAfter(block uint64) {
 			if err := rawdb.WriteFutureMilestoneList(m.db, m.FutureMilestoneOrder, m.FutureMilestoneList); err != nil {
 				log.Error("Error persisting trimmed future milestone list to db", "err", err)
 			}
+			var newMax int64
+			if n := len(filteredOrder); n > 0 {
+				newMax = int64(filteredOrder[n-1])
+			}
+			FutureMilestoneMeter.Update(newMax)
 		}
 	}
 }

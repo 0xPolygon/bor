@@ -230,10 +230,6 @@ func findCommonAncestorWithFutureMilestones_CalculateTargetBlock_NoMatch(start u
 		}
 	}
 
-	if targetBlock < 0 {
-		return 0
-	}
-
 	return targetBlock
 }
 
