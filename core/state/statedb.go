@@ -2315,6 +2315,21 @@ func (diff *FlatDiff) storageOverlay(addr common.Address, key common.Hash) (comm
 	return common.Hash{}, false, false
 }
 
+// accountOverlay returns FlatDiff-covered account data. Accounts wins over
+// Destructs to represent destruct-and-resurrect in the same parent block.
+func (diff *FlatDiff) accountOverlay(addr common.Address) (types.StateAccount, bool, bool) {
+	if diff == nil {
+		return types.StateAccount{}, false, false
+	}
+	if acct, ok := diff.Accounts[addr]; ok {
+		return acct, true, true
+	}
+	if _, destructed := diff.Destructs[addr]; destructed {
+		return types.StateAccount{}, false, true
+	}
+	return types.StateAccount{}, false, false
+}
+
 // TouchAllAddresses performs read-only accesses on dst for every address and
 // storage slot recorded in the FlatDiff. This ensures dst tracks these
 // addresses in its stateObjects so they later appear in dst's own FlatDiff

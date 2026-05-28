@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -306,5 +307,122 @@ func TestSafeBase_FlatDiffDestructMasksSharedCache(t *testing.T) {
 	if got := sb.GetState(addr, slot); got != (common.Hash{}) {
 		t.Fatalf("GetState: got %s, want zero (FlatDiff destruct must mask shared trie cache)",
 			got.Hex())
+	}
+}
+
+func TestSafeBase_FlatDiffAccountScalarsMaskStaleStateObject(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	baseCode := []byte{0x60, 0x00}
+	flatCode := []byte{0x60, 0x01}
+	flatCodeHash := crypto.Keccak256Hash(flatCode)
+	flatRoot := common.HexToHash("0x1234")
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	db := NewDatabase(tdb, nil)
+	sdb, err := New(types.EmptyRootHash, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
+	sdb.SetNonce(addr, 1, tracing.NonceChangeUnspecified)
+	sdb.SetCode(addr, baseCode, tracing.CodeChangeUnspecified)
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overlayDB, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Emulate a base object loaded before the FlatDiff reference is attached.
+	if got := overlayDB.GetNonce(addr); got != 1 {
+		t.Fatalf("preload nonce: got %d, want 1", got)
+	}
+	diff := &FlatDiff{
+		Accounts: map[common.Address]types.StateAccount{
+			addr: {
+				Nonce:    42,
+				Balance:  uint256.NewInt(99),
+				Root:     flatRoot,
+				CodeHash: flatCodeHash.Bytes(),
+			},
+		},
+		Storage:   make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs: make(map[common.Address]struct{}),
+		Code:      map[common.Hash][]byte{flatCodeHash: flatCode},
+	}
+	overlayDB.SetFlatDiffRef(diff)
+	sb := NewSafeBase(overlayDB, 2)
+
+	if got := sb.GetBalance(addr).Uint64(); got != 99 {
+		t.Fatalf("GetBalance: got %d, want FlatDiff balance 99", got)
+	}
+	if got := sb.GetNonce(addr); got != 42 {
+		t.Fatalf("GetNonce: got %d, want FlatDiff nonce 42", got)
+	}
+	if got := sb.GetCode(addr); string(got) != string(flatCode) {
+		t.Fatalf("GetCode: got %x, want FlatDiff code %x", got, flatCode)
+	}
+	if got := sb.GetCodeHash(addr); got != flatCodeHash {
+		t.Fatalf("GetCodeHash: got %s, want %s", got.Hex(), flatCodeHash.Hex())
+	}
+	if !sb.Exist(addr) {
+		t.Fatal("Exist: got false, want true from FlatDiff account")
+	}
+	if got := sb.GetStorageRoot(addr); got != flatRoot {
+		t.Fatalf("GetStorageRoot: got %s, want %s", got.Hex(), flatRoot.Hex())
+	}
+}
+
+func TestSafeBase_FlatDiffDestructMasksStaleStateObject(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	db := NewDatabase(tdb, nil)
+	sdb, err := New(types.EmptyRootHash, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetBalance(addr, uint256.NewInt(1), tracing.BalanceChangeUnspecified)
+	sdb.SetNonce(addr, 1, tracing.NonceChangeUnspecified)
+	sdb.SetCode(addr, []byte{0x60, 0x00}, tracing.CodeChangeUnspecified)
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overlayDB, err := New(root, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := overlayDB.GetNonce(addr); got != 1 {
+		t.Fatalf("preload nonce: got %d, want 1", got)
+	}
+	overlayDB.SetFlatDiffRef(&FlatDiff{
+		Storage:   make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs: map[common.Address]struct{}{addr: {}},
+	})
+	sb := NewSafeBase(overlayDB, 2)
+
+	if got := sb.GetBalance(addr).Uint64(); got != 0 {
+		t.Fatalf("GetBalance: got %d, want zero for FlatDiff destruct", got)
+	}
+	if got := sb.GetNonce(addr); got != 0 {
+		t.Fatalf("GetNonce: got %d, want zero for FlatDiff destruct", got)
+	}
+	if got := sb.GetCode(addr); len(got) != 0 {
+		t.Fatalf("GetCode: got %x, want empty for FlatDiff destruct", got)
+	}
+	if got := sb.GetCodeHash(addr); got != (common.Hash{}) {
+		t.Fatalf("GetCodeHash: got %s, want zero for FlatDiff destruct", got.Hex())
+	}
+	if sb.Exist(addr) {
+		t.Fatal("Exist: got true, want false for FlatDiff destruct")
+	}
+	if got := sb.GetStorageRoot(addr); got != (common.Hash{}) {
+		t.Fatalf("GetStorageRoot: got %s, want zero for FlatDiff destruct", got.Hex())
 	}
 }

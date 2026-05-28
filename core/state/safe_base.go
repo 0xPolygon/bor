@@ -8,6 +8,7 @@ import (
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // SafeBase provides thread-safe access to StateDB base reads with a
@@ -91,10 +92,29 @@ func (s *SafeBase) release(db *StateDB) {
 	s.pool <- db
 }
 
+// flatAccount returns account-level FlatDiff coverage for pipelined import.
+// In flatdiff mode SafeBase reads root N-1 while the FlatDiff represents N,
+// so scalar account reads must check this overlay before pooled StateDB copies
+// that may already hold stale stateObjects.
+func (s *SafeBase) flatAccount(addr common.Address) (types.StateAccount, bool, bool) {
+	if s.DB == nil {
+		return types.StateAccount{}, false, false
+	}
+	return s.DB.flatDiffRef.accountOverlay(addr)
+}
+
 func (s *SafeBase) GetBalance(addr common.Address) *uint256.Int {
 	if v, ok := s.balCache.Load(addr); ok {
 		bal := v.(uint256.Int)
 		return &bal
+	}
+	if acct, exists, covered := s.flatAccount(addr); covered {
+		result := new(uint256.Int)
+		if exists && acct.Balance != nil {
+			result.Set(acct.Balance)
+		}
+		s.balCache.Store(addr, *result)
+		return result
 	}
 	s.simulateReadLatency()
 	db := s.acquire()
@@ -107,6 +127,14 @@ func (s *SafeBase) GetBalance(addr common.Address) *uint256.Int {
 func (s *SafeBase) GetNonce(addr common.Address) uint64 {
 	if v, ok := s.nonceCache.Load(addr); ok {
 		return v.(uint64)
+	}
+	if acct, exists, covered := s.flatAccount(addr); covered {
+		var result uint64
+		if exists {
+			result = acct.Nonce
+		}
+		s.nonceCache.Store(addr, result)
+		return result
 	}
 	s.simulateReadLatency()
 	db := s.acquire()
@@ -165,6 +193,19 @@ func (s *SafeBase) GetCode(addr common.Address) []byte {
 	if v, ok := s.codeCache.Load(addr); ok {
 		return v.([]byte)
 	}
+	if acct, exists, covered := s.flatAccount(addr); covered {
+		if !exists || len(acct.CodeHash) == 0 || common.BytesToHash(acct.CodeHash) == types.EmptyCodeHash {
+			s.codeCache.Store(addr, []byte(nil))
+			return nil
+		}
+		if code, ok := s.DB.flatDiffRef.Code[common.BytesToHash(acct.CodeHash)]; ok {
+			s.codeCache.Store(addr, code)
+			return code
+		}
+		// Account metadata can be covered even when code bytes are unchanged
+		// and therefore absent from the FlatDiff code map. In that case the
+		// committed trie still has the correct code for this code hash.
+	}
 	s.simulateReadLatency()
 	db := s.acquire()
 	defer s.release(db)
@@ -176,6 +217,18 @@ func (s *SafeBase) GetCode(addr common.Address) []byte {
 func (s *SafeBase) GetCodeHash(addr common.Address) common.Hash {
 	if v, ok := s.hashCache.Load(addr); ok {
 		return v.(common.Hash)
+	}
+	if acct, exists, covered := s.flatAccount(addr); covered {
+		var result common.Hash
+		if exists {
+			if len(acct.CodeHash) == 0 {
+				result = types.EmptyCodeHash
+			} else {
+				result = common.BytesToHash(acct.CodeHash)
+			}
+		}
+		s.hashCache.Store(addr, result)
+		return result
 	}
 	s.simulateReadLatency()
 	db := s.acquire()
@@ -192,6 +245,10 @@ func (s *SafeBase) GetCodeSize(addr common.Address) int {
 func (s *SafeBase) Exist(addr common.Address) bool {
 	if v, ok := s.existCache.Load(addr); ok {
 		return v.(bool)
+	}
+	if _, exists, covered := s.flatAccount(addr); covered {
+		s.existCache.Store(addr, exists)
+		return exists
 	}
 	s.simulateReadLatency()
 	db := s.acquire()
@@ -220,6 +277,14 @@ func (s *SafeBase) CollectCodeWitness(addCode func([]byte)) {
 func (s *SafeBase) GetStorageRoot(addr common.Address) common.Hash {
 	if v, ok := s.rootCache.Load(addr); ok {
 		return v.(common.Hash)
+	}
+	if acct, exists, covered := s.flatAccount(addr); covered {
+		var result common.Hash
+		if exists {
+			result = acct.Root
+		}
+		s.rootCache.Store(addr, result)
+		return result
 	}
 	db := s.acquire()
 	defer s.release(db)
