@@ -164,8 +164,10 @@ func TestFlatDiffOverlay_DestructAndResurrect(t *testing.T) {
 	require.NoError(t, err)
 
 	addr := common.HexToAddress("0xdead02")
+	slot := common.HexToHash("0x01")
 	sdb.CreateAccount(addr)
 	sdb.SetNonce(addr, 5, 0)
+	sdb.SetState(addr, slot, common.HexToHash("0xbeef"))
 	root, _, err := sdb.CommitWithUpdate(0, false, false)
 	require.NoError(t, err)
 
@@ -189,6 +191,8 @@ func TestFlatDiffOverlay_DestructAndResurrect(t *testing.T) {
 
 	// The account should be resurrected with the new nonce from FlatDiff.Accounts.
 	require.Equal(t, uint64(10), overlayDB.GetNonce(addr))
+	require.Equal(t, common.Hash{}, overlayDB.GetState(addr, slot),
+		"destruct+resurrect FlatDiff must not expose pre-destruction storage")
 }
 
 func TestTrieOnlyReader_SkipsFlatReaders(t *testing.T) {

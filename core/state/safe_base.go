@@ -131,6 +131,13 @@ func (s *SafeBase) GetState(addr common.Address, key common.Hash) common.Hash {
 			return result
 		}
 	}
+	// FlatDiff is part of the logical base when pipelined import executes
+	// block N+1 on top of committed root N-1. It must beat shared trie caches,
+	// which are keyed by the committed root and can contain pre-FlatDiff values.
+	if value, ok, _ := s.DB.flatDiffRef.storageOverlay(addr, key); ok {
+		s.stateCache.Store(sk, value)
+		return value
+	}
 	// Check the shared readerWithCache storageCache — populated by the
 	// prefetcher running concurrently. This gives V2 workers instant hits
 	// for slots the prefetcher has already warmed, bypassing the pool entirely.

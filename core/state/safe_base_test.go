@@ -229,3 +229,82 @@ func TestSafeBase_SharedCacheStillUsedWithoutOverlay(t *testing.T) {
 			got.Hex(), want.Hex())
 	}
 }
+
+func TestSafeBase_FlatDiffStorageWinsOverSharedCache(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	slot := common.HexToHash("0x01")
+	baseValue := common.HexToHash("0xdead")
+	flatValue := common.HexToHash("0xbeef")
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	db := NewDatabase(tdb, nil)
+	sdb, err := New(types.EmptyRootHash, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetState(addr, slot, baseValue)
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := &FlatDiff{
+		Storage: map[common.Address]map[common.Hash]common.Hash{
+			addr: {slot: flatValue},
+		},
+		Destructs: make(map[common.Address]struct{}),
+	}
+	overlayDB, err := NewWithFlatBase(root, db, diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := NewSafeBase(overlayDB, 2)
+
+	shared := new(sync.Map)
+	shared.Store(stateKey{addr: addr, slot: slot}, baseValue)
+	sb.SharedStorageCache = shared
+
+	if got := sb.GetState(addr, slot); got != flatValue {
+		t.Fatalf("GetState: got %s, want %s (FlatDiff must beat shared trie cache)",
+			got.Hex(), flatValue.Hex())
+	}
+}
+
+func TestSafeBase_FlatDiffDestructMasksSharedCache(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	slot := common.HexToHash("0x01")
+	baseValue := common.HexToHash("0xdead")
+
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	db := NewDatabase(tdb, nil)
+	sdb, err := New(types.EmptyRootHash, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.SetState(addr, slot, baseValue)
+	root, _, err := sdb.CommitWithUpdate(0, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := &FlatDiff{
+		Storage:   make(map[common.Address]map[common.Hash]common.Hash),
+		Destructs: map[common.Address]struct{}{addr: {}},
+	}
+	overlayDB, err := NewWithFlatBase(root, db, diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := NewSafeBase(overlayDB, 2)
+
+	shared := new(sync.Map)
+	shared.Store(stateKey{addr: addr, slot: slot}, baseValue)
+	sb.SharedStorageCache = shared
+
+	if got := sb.GetState(addr, slot); got != (common.Hash{}) {
+		t.Fatalf("GetState: got %s, want zero (FlatDiff destruct must mask shared trie cache)",
+			got.Hex())
+	}
+}

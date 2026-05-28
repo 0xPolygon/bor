@@ -2296,6 +2296,25 @@ type FlatDiff struct {
 	NonExistentReads []common.Address
 }
 
+// storageOverlay returns a FlatDiff-covered storage value. A destructed
+// account covers every slot: rewritten slots come from Storage, all other
+// pre-destruction slots read as zero. The third return value is true when
+// the value came from an explicit Storage entry rather than the destruct mask.
+func (diff *FlatDiff) storageOverlay(addr common.Address, key common.Hash) (common.Hash, bool, bool) {
+	if diff == nil {
+		return common.Hash{}, false, false
+	}
+	if slots, ok := diff.Storage[addr]; ok {
+		if value, ok := slots[key]; ok {
+			return value, true, true
+		}
+	}
+	if _, destructed := diff.Destructs[addr]; destructed {
+		return common.Hash{}, true, false
+	}
+	return common.Hash{}, false, false
+}
+
 // TouchAllAddresses performs read-only accesses on dst for every address and
 // storage slot recorded in the FlatDiff. This ensures dst tracks these
 // addresses in its stateObjects so they later appear in dst's own FlatDiff
