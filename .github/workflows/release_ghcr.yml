@@ -83,6 +83,9 @@ jobs:
           service_account: ${{ secrets.GCP_OIDC_SERVICE_ACCOUNT }}
           project_id: ${{ secrets.GCP_OIDC_PROJECT_ID }}
 
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+
       - name: Upload Docker images to GCP buckets
         env:
           BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
