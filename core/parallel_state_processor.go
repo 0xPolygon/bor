@@ -777,6 +777,10 @@ type V2ExecutionResult struct {
 	// behaviour at core/state_processor.go:222.
 	ExecErrIdx int
 	ExecErr    error
+	// ReadErr is the first database read failure observed by the read-only
+	// base used for V2 execution. The caller must discard the result because
+	// StateDB getters return zero-ish values after recording read errors.
+	ReadErr error
 	*blockstm.V2ExecutionResult
 }
 
@@ -837,6 +841,10 @@ func ExecuteV2BlockSTM(
 	}
 
 	raw := blockstm.ExecuteV2BlockSTM(ctx, itasks, env, blockCtx.Coinbase, numWorkers, conflictAddrs, settleFn)
+	readErr := env.safeBase.Error()
+	if err := base.Error(); readErr == nil && err != nil {
+		readErr = err
+	}
 
 	// V2 worker code reads land in env.safeBase.codeCache (each blob loaded
 	// once, deduplicated by sync.Map). When witness collection is on, dump
@@ -881,6 +889,7 @@ func ExecuteV2BlockSTM(
 		PanickedIdx:       panickedIdx,
 		ExecErrIdx:        execErrIdx,
 		ExecErr:           execErr,
+		ReadErr:           readErr,
 		V2ExecutionResult: raw,
 	}
 }
@@ -1157,6 +1166,9 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	}
 	if result.ValidationPanic != nil {
 		return nil, fmt.Errorf("v2: validation panic: %v", result.ValidationPanic)
+	}
+	if result.ReadErr != nil {
+		return nil, fmt.Errorf("v2: base read: %w", result.ReadErr)
 	}
 	// Same logic for ApplyMessage consensus-level errors (bad nonce,
 	// insufficient upfront gas, intrinsic gas underflow, etc.). Serial returns

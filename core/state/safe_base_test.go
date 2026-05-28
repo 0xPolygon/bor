@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -426,3 +427,171 @@ func TestSafeBase_FlatDiffDestructMasksStaleStateObject(t *testing.T) {
 		t.Fatalf("GetStorageRoot: got %s, want zero for FlatDiff destruct", got.Hex())
 	}
 }
+
+func TestSafeBase_DoesNotCacheStateAfterReadError(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	slot := common.HexToHash("0x01")
+	want := common.HexToHash("0xbeef")
+	reader := newFlakySafeBaseReader()
+	reader.storage = want
+	reader.storageErrs = 1
+	sb := newSafeBaseWithReader(t, reader)
+
+	if got := sb.GetState(addr, slot); got != (common.Hash{}) {
+		t.Fatalf("first GetState: got %s, want zero from failing reader", got.Hex())
+	}
+	if sb.Error() == nil {
+		t.Fatal("SafeBase did not record read error")
+	}
+	if got := sb.GetState(addr, slot); got != want {
+		t.Fatalf("second GetState: got %s, want %s; failed read must not poison cache",
+			got.Hex(), want.Hex())
+	}
+}
+
+func TestSafeBase_DoesNotCacheAccountScalarsAfterReadError(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	for _, tt := range []struct {
+		name string
+		read func(*SafeBase) any
+		want any
+	}{
+		{
+			name: "balance",
+			read: func(sb *SafeBase) any { return sb.GetBalance(addr).Uint64() },
+			want: uint64(1000),
+		},
+		{
+			name: "nonce",
+			read: func(sb *SafeBase) any { return sb.GetNonce(addr) },
+			want: uint64(7),
+		},
+		{
+			name: "code hash",
+			read: func(sb *SafeBase) any { return sb.GetCodeHash(addr) },
+			want: common.BytesToHash(crypto.Keccak256([]byte{0x60, 0x00})),
+		},
+		{
+			name: "exist",
+			read: func(sb *SafeBase) any { return sb.Exist(addr) },
+			want: true,
+		},
+		{
+			name: "storage root",
+			read: func(sb *SafeBase) any { return sb.GetStorageRoot(addr) },
+			want: common.HexToHash("0x1234"),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := newFlakySafeBaseReader()
+			reader.accountErrs = 1
+			sb := newSafeBaseWithReader(t, reader)
+
+			_ = tt.read(sb)
+			if sb.Error() == nil {
+				t.Fatal("SafeBase did not record read error")
+			}
+			if got := tt.read(sb); got != tt.want {
+				t.Fatalf("second read: got %v, want %v; failed read must not poison cache",
+					got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSafeBase_DoesNotCacheCodeAfterReadError(t *testing.T) {
+	addr := common.HexToAddress("0xabcd")
+	reader := newFlakySafeBaseReader()
+	reader.codeErrs = 1
+	sb := newSafeBaseWithReader(t, reader)
+
+	if got := sb.GetCode(addr); got != nil {
+		t.Fatalf("first GetCode: got %x, want nil from failing reader", got)
+	}
+	if sb.Error() == nil {
+		t.Fatal("SafeBase did not record read error")
+	}
+	if got := sb.GetCode(addr); string(got) != string(reader.code) {
+		t.Fatalf("second GetCode: got %x, want %x; failed read must not poison cache",
+			got, reader.code)
+	}
+}
+
+type flakySafeBaseReader struct {
+	mu sync.Mutex
+
+	accountErrs int
+	storageErrs int
+	codeErrs    int
+
+	acct    *types.StateAccount
+	storage common.Hash
+	code    []byte
+}
+
+func newFlakySafeBaseReader() *flakySafeBaseReader {
+	code := []byte{0x60, 0x00}
+	return &flakySafeBaseReader{
+		acct: &types.StateAccount{
+			Nonce:    7,
+			Balance:  uint256.NewInt(1000),
+			Root:     common.HexToHash("0x1234"),
+			CodeHash: crypto.Keccak256(code),
+		},
+		code: code,
+	}
+}
+
+func newSafeBaseWithReader(t *testing.T, reader Reader) *SafeBase {
+	t.Helper()
+	memdb := rawdb.NewMemoryDatabase()
+	tdb := triedb.NewDatabase(memdb, triedb.HashDefaults)
+	sdb, err := New(types.EmptyRootHash, NewDatabase(tdb, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb.reader = reader
+	return NewSafeBase(sdb, 1)
+}
+
+func (r *flakySafeBaseReader) Account(common.Address) (*types.StateAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.accountErrs > 0 {
+		r.accountErrs--
+		return nil, errSafeBaseRead
+	}
+	return r.acct.Copy(), nil
+}
+
+func (r *flakySafeBaseReader) Storage(common.Address, common.Hash) (common.Hash, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.storageErrs > 0 {
+		r.storageErrs--
+		return common.Hash{}, errSafeBaseRead
+	}
+	return r.storage, nil
+}
+
+func (r *flakySafeBaseReader) Code(common.Address, common.Hash) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.codeErrs > 0 {
+		r.codeErrs--
+		return nil, errSafeBaseRead
+	}
+	return append([]byte(nil), r.code...), nil
+}
+
+func (r *flakySafeBaseReader) CodeSize(common.Address, common.Hash) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.codeErrs > 0 {
+		r.codeErrs--
+		return 0, errSafeBaseRead
+	}
+	return len(r.code), nil
+}
+
+var errSafeBaseRead = errors.New("safe base read failed")

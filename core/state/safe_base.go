@@ -45,6 +45,9 @@ type SafeBase struct {
 
 	// readDelay is set from TestReadDelay at creation time.
 	readDelay time.Duration
+
+	errMu sync.Mutex
+	err   error
 }
 
 type stateKey struct {
@@ -86,10 +89,49 @@ func (s *SafeBase) acquire() *StateDB {
 }
 
 func (s *SafeBase) release(db *StateDB) {
+	if err := db.Error(); err != nil {
+		s.setError(err)
+		if s.pool != nil {
+			// StateDB keeps read errors internally and would keep returning
+			// zero-ish values, so never return a poisoned copy to the pool.
+			replacement := s.DB.Copy()
+			replacement.SkipTimers()
+			s.pool <- replacement
+		}
+		return
+	}
 	if s.pool == nil {
 		return
 	}
 	s.pool <- db
+}
+
+func (s *SafeBase) setError(err error) {
+	if err == nil {
+		return
+	}
+	s.errMu.Lock()
+	if s.err == nil {
+		s.err = err
+	}
+	s.errMu.Unlock()
+}
+
+// Error returns the first database read failure captured by any pooled base
+// reader. StateDB getters return zero-ish values after recording read errors,
+// so V2 must discard the block execution result when this is non-nil.
+func (s *SafeBase) Error() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.err
+}
+
+func (s *SafeBase) cleanRead(db *StateDB) bool {
+	if err := db.Error(); err != nil {
+		s.setError(err)
+		return false
+	}
+	return true
 }
 
 // flatAccount returns account-level FlatDiff coverage for pipelined import.
@@ -120,7 +162,9 @@ func (s *SafeBase) GetBalance(addr common.Address) *uint256.Int {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetBalance(addr)
-	s.balCache.Store(addr, *result) // store by value
+	if s.cleanRead(db) {
+		s.balCache.Store(addr, *result) // store by value
+	}
 	return result
 }
 
@@ -140,7 +184,9 @@ func (s *SafeBase) GetNonce(addr common.Address) uint64 {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetNonce(addr)
-	s.nonceCache.Store(addr, result)
+	if s.cleanRead(db) {
+		s.nonceCache.Store(addr, result)
+	}
 	return result
 }
 
@@ -180,7 +226,9 @@ func (s *SafeBase) GetState(addr common.Address, key common.Hash) common.Hash {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetState(addr, key)
-	s.stateCache.Store(sk, result)
+	if s.cleanRead(db) {
+		s.stateCache.Store(sk, result)
+	}
 	return result
 }
 
@@ -210,7 +258,9 @@ func (s *SafeBase) GetCode(addr common.Address) []byte {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetCode(addr)
-	s.codeCache.Store(addr, result)
+	if s.cleanRead(db) {
+		s.codeCache.Store(addr, result)
+	}
 	return result
 }
 
@@ -234,7 +284,9 @@ func (s *SafeBase) GetCodeHash(addr common.Address) common.Hash {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetCodeHash(addr)
-	s.hashCache.Store(addr, result)
+	if s.cleanRead(db) {
+		s.hashCache.Store(addr, result)
+	}
 	return result
 }
 
@@ -254,7 +306,9 @@ func (s *SafeBase) Exist(addr common.Address) bool {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.Exist(addr)
-	s.existCache.Store(addr, result)
+	if s.cleanRead(db) {
+		s.existCache.Store(addr, result)
+	}
 	return result
 }
 
@@ -289,6 +343,8 @@ func (s *SafeBase) GetStorageRoot(addr common.Address) common.Hash {
 	db := s.acquire()
 	defer s.release(db)
 	result := db.GetStorageRoot(addr)
-	s.rootCache.Store(addr, result)
+	if s.cleanRead(db) {
+		s.rootCache.Store(addr, result)
+	}
 	return result
 }
