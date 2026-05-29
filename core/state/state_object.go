@@ -74,6 +74,10 @@ type stateObject struct {
 	// snapshot), so the cost is effectively zero.
 	prefetchRoot common.Hash
 
+	// fromFlatDiff marks objects materialized from StateDB.flatDiffRef rather
+	// than from the committed trie reader.
+	fromFlatDiff bool
+
 	// Write caches.
 	trie Trie   // storage trie, which becomes non-nil on first access
 	code []byte // contract bytecode, which gets set when code is loaded
@@ -229,15 +233,18 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return value
 	}
 
-	if value, cached := s.originStorage[key]; cached {
-		return value
-	}
 	// Check the FlatDiff reference for storage slots from the parent block.
+	// It must beat originStorage because this object may have been cached from
+	// committedParentRoot before the FlatDiff reference was attached.
 	if value, ok, explicit := s.db.flatDiffRef.storageOverlay(s.address, key); ok {
 		if explicit {
 			flatDiffStorageHitsMeter.Mark(1)
 		}
 		s.originStorage[key] = value
+		return value
+	}
+
+	if value, cached := s.originStorage[key]; cached {
 		return value
 	}
 
@@ -575,6 +582,7 @@ func (s *stateObject) deepCopy(db *StateDB) *stateObject {
 		origin:             s.origin,
 		data:               s.data,
 		prefetchRoot:       s.prefetchRoot,
+		fromFlatDiff:       s.fromFlatDiff,
 		code:               s.code,
 		originStorage:      s.originStorage.Copy(),
 		pendingStorage:     s.pendingStorage.Copy(),

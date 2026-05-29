@@ -391,18 +391,15 @@ func (s *StateDB) EnableConcurrentReads() {
 
 // StorageCache returns the shared trieReader storage cache (sync.Map) if available.
 // This cache is populated by all readers (prefetcher, serial, V2).
-// SafeBase can use it for instant storage lookups.
 func (s *StateDB) StorageCache() *sync.Map {
 	return findStorageCache(s.reader)
 }
 
 // OverlayPendingStorageInto walks every live stateObject and writes its
 // in-memory pending+dirty storage values into target, keyed by stateKey{addr,
-// slot}. Use it to repair a SharedStorageCache that was populated from raw
-// trie reads BEFORE pre-block writes (EIP-4788/EIP-2935 system contracts,
-// DAO fork, etc.) landed in dirty/pending storage. Without this overlay,
-// SafeBase serves the stale trie value (zero, for previously-unwritten
-// system-contract slots) and downstream V2 workers see no system-call effect.
+// slot}. This is useful for external storage caches that were populated from
+// raw trie reads before pre-block writes (EIP-4788/EIP-2935 system contracts,
+// DAO fork, etc.) landed in dirty/pending storage.
 func (s *StateDB) OverlayPendingStorageInto(target *sync.Map) {
 	if target == nil {
 		return
@@ -1284,6 +1281,20 @@ func (s *StateDB) deleteStateObject(addr common.Address) {
 
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	return MVRead(s, blockstm.NewAddressKey(addr), nil, func(s *StateDB) *stateObject {
+		// FlatDiff is part of this StateDB's logical base. Let it mask stale
+		// cached objects loaded from committedParentRoot, unless the current
+		// execution has already dirtied the account.
+		if s.flatDiffRef != nil && !s.hasAccountMutation(addr) {
+			if acct, exists, covered := s.flatDiffRef.accountOverlay(addr); covered {
+				if !exists {
+					return nil
+				}
+				if obj := s.stateObjects[addr]; obj != nil && obj.fromFlatDiff {
+					return obj
+				}
+				return s.flatDiffStateObject(addr, acct)
+			}
+		}
 		// Prefer live objects if any is available
 		if obj := s.stateObjects[addr]; obj != nil {
 			return obj
@@ -1291,47 +1302,6 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		// Short circuit if the account is already destructed in this block.
 		if _, ok := s.stateObjectsDestruct[addr]; ok {
 			return nil
-		}
-		// Check the FlatDiff reference for accounts mutated in the parent block.
-		if s.flatDiffRef != nil {
-			if acct, ok := s.flatDiffRef.Accounts[addr]; ok {
-				flatDiffAccountHitsMeter.Mark(1)
-				acctCopy := acct
-				obj := newObject(s, addr, &acctCopy)
-				if code, ok := s.flatDiffRef.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {
-					obj.code = code
-				}
-				// Resolve the committed storage root for prefetcher consistency.
-				//
-				// The FlatDiff account's Root is block N's post-state storage root,
-				// but the prefetcher's NodeReader is opened at committedParentRoot
-				// (the grandparent). These are inconsistent — the reader can only
-				// resolve trie nodes for the grandparent's storage root. Without
-				// this, the prefetcher hits "Unexpected trie node" hash mismatches
-				// on every storage trie root resolution for FlatDiff accounts.
-				//
-				// We read the account from the committed state (flat reader, in-
-				// memory snapshot) to get the grandparent's storage root. This is
-				// the root that the prefetcher's reader can actually resolve.
-				if acctCopy.Root != types.EmptyRootHash {
-					if committedAcct, err := s.reader.Account(addr); err == nil && committedAcct != nil {
-						obj.prefetchRoot = committedAcct.Root
-					} else {
-						obj.prefetchRoot = types.EmptyRootHash
-					}
-					// If the account doesn't exist in the committed state (new in
-					// block N), prefetchRoot is set to the empty storage root so the
-					// storage prefetcher skips it; the trie didn't exist at
-					// committedParentRoot and block N's post-state root would be
-					// inconsistent with this reader.
-				}
-				s.setStateObject(obj)
-				return obj
-			}
-			// Account not in FlatDiff — check if it was destructed in FlatDiff.
-			if _, ok := s.flatDiffRef.Destructs[addr]; ok {
-				return nil
-			}
 		}
 		s.AccountLoaded++
 
@@ -1377,6 +1347,55 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 func (s *StateDB) setStateObject(object *stateObject) {
 	s.stateObjects[object.Address()] = object
+}
+
+// hasAccountMutation reports whether current execution already owns the
+// account value. FlatDiff still defines the parent base, but it must not
+// replace a live object that this block has dirtied.
+func (s *StateDB) hasAccountMutation(addr common.Address) bool {
+	if _, ok := s.journal.dirties[addr]; ok {
+		return true
+	}
+	if _, ok := s.mutations[addr]; ok {
+		return true
+	}
+	return false
+}
+
+func (s *StateDB) flatDiffStateObject(addr common.Address, acct types.StateAccount) *stateObject {
+	flatDiffAccountHitsMeter.Mark(1)
+	acctCopy := acct
+	obj := newObject(s, addr, &acctCopy)
+	obj.fromFlatDiff = true
+	if code, ok := s.flatDiffRef.Code[common.BytesToHash(acctCopy.CodeHash)]; ok {
+		obj.code = code
+	}
+	// Resolve the committed storage root for prefetcher consistency.
+	//
+	// The FlatDiff account's Root is block N's post-state storage root,
+	// but the prefetcher's NodeReader is opened at committedParentRoot
+	// (the grandparent). These are inconsistent — the reader can only
+	// resolve trie nodes for the grandparent's storage root. Without
+	// this, the prefetcher hits "Unexpected trie node" hash mismatches
+	// on every storage trie root resolution for FlatDiff accounts.
+	//
+	// We read the account from the committed state (flat reader, in-
+	// memory snapshot) to get the grandparent's storage root. This is
+	// the root that the prefetcher's reader can actually resolve.
+	if acctCopy.Root != types.EmptyRootHash {
+		if committedAcct, err := s.reader.Account(addr); err == nil && committedAcct != nil {
+			obj.prefetchRoot = committedAcct.Root
+		} else {
+			obj.prefetchRoot = types.EmptyRootHash
+		}
+		// If the account doesn't exist in the committed state (new in
+		// block N), prefetchRoot is set to the empty storage root so the
+		// storage prefetcher skips it; the trie didn't exist at
+		// committedParentRoot and block N's post-state root would be
+		// inconsistent with this reader.
+	}
+	s.setStateObject(obj)
+	return obj
 }
 
 // Exporting so that it can be used by simulated backend for test cases

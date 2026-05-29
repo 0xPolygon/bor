@@ -940,19 +940,6 @@ func recoverTaskMessages(tasks []V2Task, chainConfig *params.ChainConfig, blockC
 	return firstIdx, firstErr
 }
 
-// wireStorageCaches gives SafeBase the prefetcher's trie cache (fast path)
-// and a separate V2-owned overlay for pre-block system-call writes. The
-// overlay can't live in the trie cache: trieReader.Storage's non-atomic
-// Load→read→Store can land after the overlay and clobber it with a zero.
-func wireStorageCaches(base *state.StateDB, sb *state.SafeBase) {
-	if sc := base.StorageCache(); sc != nil {
-		sb.SharedStorageCache = sc
-	}
-	overlay := new(sync.Map)
-	base.OverlayPendingStorageInto(overlay)
-	sb.OverlayStorageCache = overlay
-}
-
 // newV2Env builds a v2Env wired up with the shared SafeBase, jumpDest cache,
 // and PDB recycle pool.
 func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBalanceStore,
@@ -963,7 +950,6 @@ func newV2Env(base *state.StateDB, store *blockstm.MVStore, bals *blockstm.MVBal
 		poolSize = 2
 	}
 	sharedSafeBase := state.NewSafeBase(base, poolSize)
-	wireStorageCaches(base, sharedSafeBase)
 	// Allocate the per-v2Env fallback only when the caller didn't supply a
 	// shared cache. Production (blockchain.go) sets vmConfig.SharedJumpDestCache
 	// on the prefetcher-warmed cache, so allocating here would just be dead
