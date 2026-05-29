@@ -75,6 +75,29 @@ jobs:
           docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} bor:${{ github.ref_name }}
           docker save bor:${{ github.ref_name }} | gzip > bor-${{ github.ref_name }}-arm64.tar.gz
 
+      - name: Checksum exported Docker images
+        run: |
+          for file in bor-${{ github.ref_name }}-*.tar.gz; do
+            sha256sum "$file" > "$file.checksum"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.7.0
+
+      - name: Sign Docker image tarballs with cosign
+        run: |
+          shopt -s nullglob
+          artifacts=(bor-${{ github.ref_name }}-*.tar.gz)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "No artifacts found to sign"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            cosign sign-blob --yes --oidc-provider=github-actions "$artifact" \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem"
+          done
+
       - name: Authenticate with GCP via OIDC
         uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.5
         with:
@@ -91,7 +114,11 @@ jobs:
           BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
           BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
         run: |
-          for file in bor-${{ github.ref_name }}-*.tar.gz; do
-            gcloud storage cp "$file" "$BUCKET_PRIMARY"
-            gcloud storage cp "$file" "$BUCKET_SECONDARY"
+          for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
+            for file in bor-${{ github.ref_name }}-*.tar.gz; do
+              gcloud storage cp "$file" "$bucket"
+              gcloud storage cp "$file.checksum" "$bucket"
+              gcloud storage cp "$file.sig" "$bucket"
+              gcloud storage cp "$file.pem" "$bucket"
+            done
           done

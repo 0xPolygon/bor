@@ -160,7 +160,9 @@ jobs:
           BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
           BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
         run: |
-          gcloud storage cp packaging/deb/bor-**.deb "$BUCKET_PRIMARY"
-          gcloud storage cp packaging/deb/bor-**.deb.checksum "$BUCKET_PRIMARY"
-          gcloud storage cp packaging/deb/bor-**.deb "$BUCKET_SECONDARY"
-          gcloud storage cp packaging/deb/bor-**.deb.checksum "$BUCKET_SECONDARY"
+          for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
+            gcloud storage cp packaging/deb/bor-**.deb "$bucket"
+            gcloud storage cp packaging/deb/bor-**.deb.checksum "$bucket"
+            gcloud storage cp packaging/deb/bor-**.deb.sig "$bucket"
+            gcloud storage cp packaging/deb/bor-**.deb.pem "$bucket"
+          done
