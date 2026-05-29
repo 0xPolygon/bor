@@ -67,7 +67,7 @@ jobs:
     needs:
       - build-bor
       - build-heimdall-v2
-    runs-on: ubuntu24.04-16core-64GB-600SSD-bor
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # These permissions are required to log in to GCR
     permissions:
