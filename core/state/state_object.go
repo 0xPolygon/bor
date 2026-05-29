@@ -237,6 +237,12 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	// It must beat originStorage because this object may have been cached from
 	// committedParentRoot before the FlatDiff reference was attached.
 	if value, ok, explicit := s.db.flatDiffRef.storageOverlay(s.address, key); ok {
+		cached, stale := false, false
+		if origin, ok := s.originStorage[key]; ok {
+			cached = true
+			stale = origin != value
+		}
+		s.db.recordFlatDiffStorageOverlay(explicit, cached, stale)
 		if explicit {
 			flatDiffStorageHitsMeter.Mark(1)
 		}

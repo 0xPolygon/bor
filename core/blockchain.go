@@ -1170,14 +1170,15 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	bc.startPrefetchGoroutine(block, throwaway, sharedCaches, followupInterrupt)
 
 	type Result struct {
-		receipts types.Receipts
-		logs     []*types.Log
-		usedGas  uint64
-		err      error
-		statedb  *state.StateDB
-		counter  *metrics.Counter
-		parallel bool
-		vtime    time.Duration
+		receipts           types.Receipts
+		logs               []*types.Log
+		usedGas            uint64
+		err                error
+		statedb            *state.StateDB
+		counter            *metrics.Counter
+		parallel           bool
+		vtime              time.Duration
+		diagnosticLogAttrs func() []interface{}
 	}
 
 	var resultChanLen int = 2
@@ -1218,7 +1219,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, localVtime}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, parallelStatedb, blockExecutionParallelCounter, true, localVtime, res.DiagnosticLogAttrs}
 		}()
 	}
 
@@ -1242,7 +1243,7 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 			if res == nil {
 				res = &ProcessResult{}
 			}
-			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, localVtime}
+			resultChan <- Result{res.Receipts, res.Logs, res.GasUsed, err, statedb, blockExecutionSerialCounter, false, localVtime, res.DiagnosticLogAttrs}
 		}()
 	}
 
@@ -1257,6 +1258,9 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, wit
 	if result.parallel && result.err != nil {
 		attrs := []interface{}{"number", block.NumberU64(), "hash", block.Hash(), "err", result.err}
 		attrs = append(attrs, pipelineImportLogAttrs(parent, pipeOpts)...)
+		if result.diagnosticLogAttrs != nil {
+			attrs = append(attrs, result.diagnosticLogAttrs()...)
+		}
 		log.Warn("Parallel state processor failed", attrs...)
 		blockExecutionParallelErrorCounter.Inc(1)
 		// Stop the failed V2 statedb's prefetcher before discarding the

@@ -780,7 +780,8 @@ type V2ExecutionResult struct {
 	// ReadErr is the first database read failure observed by the read-only
 	// base used for V2 execution. The caller must discard the result because
 	// StateDB getters return zero-ish values after recording read errors.
-	ReadErr error
+	ReadErr  error
+	safeBase *state.SafeBase
 	*blockstm.V2ExecutionResult
 }
 
@@ -890,7 +891,47 @@ func ExecuteV2BlockSTM(
 		ExecErrIdx:        execErrIdx,
 		ExecErr:           execErr,
 		ReadErr:           readErr,
+		safeBase:          env.safeBase,
 		V2ExecutionResult: raw,
+	}
+}
+
+func v2DiagnosticLogAttrs(result *V2ExecutionResult, db *state.StateDB) func() []interface{} {
+	return func() []interface{} {
+		if result == nil {
+			return nil
+		}
+		var safe state.SafeBaseDiagnostics
+		if result.safeBase != nil {
+			safe = result.safeBase.Diagnostics()
+		}
+		var flatDiff state.FlatDiffReadDiagnostics
+		if db != nil {
+			flatDiff = db.FlatDiffReadDiagnostics()
+		}
+		attrs := []interface{}{
+			"v2SafeBaseStateEntries", safe.StateEntries,
+			"v2SafeBaseCodeEntries", safe.CodeEntries,
+			"v2SafeBaseNonceEntries", safe.NonceEntries,
+			"v2SafeBaseBalanceEntries", safe.BalanceEntries,
+			"v2SafeBaseExistEntries", safe.ExistEntries,
+			"v2SafeBaseCodeHashEntries", safe.CodeHashEntries,
+			"v2SafeBaseStorageRootEntries", safe.StorageRootEntries,
+			"v2SafeBasePoolAvailable", safe.PoolAvailable,
+			"v2SafeBasePoolCapacity", safe.PoolCapacity,
+			"v2FlatDiffAccountOverlays", flatDiff.AccountOverlays,
+			"v2FlatDiffAccountStaleObjectMasks", flatDiff.AccountStaleObjectMasks,
+			"v2FlatDiffAccountDestructMasks", flatDiff.AccountDestructMasks,
+			"v2FlatDiffStorageOverlays", flatDiff.StorageOverlays,
+			"v2FlatDiffStorageExplicitOverlays", flatDiff.StorageExplicitOverlays,
+			"v2FlatDiffStorageDestructMasks", flatDiff.StorageDestructMasks,
+			"v2FlatDiffStorageCachedMasks", flatDiff.StorageCachedMasks,
+			"v2FlatDiffStorageStaleOriginMasks", flatDiff.StorageStaleOriginMasks,
+		}
+		if safe.ReadErr != nil {
+			attrs = append(attrs, "v2SafeBaseReadErr", safe.ReadErr)
+		}
+		return attrs
 	}
 }
 
@@ -1139,6 +1180,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 
 	result := ExecuteV2BlockSTM(interruptCtx, tasks, readBase, store, bals, blockCtx, block.Hash(), cfg, config,
 		block.GasLimit(), p.numWorkers, finalDB, p.conflictAddrs)
+	diagnosticLogAttrs := v2DiagnosticLogAttrs(result, statedb)
 
 	tExec := time.Now()
 	p.conflictAddrs = collectVFailToAddrs(tasks, result.VFailIdxs)
@@ -1148,13 +1190,13 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	// error lets BlockChain.ProcessBlock fall back to the serial processor
 	// (which will surface the same panic, or succeed if it was a V2-only bug).
 	if result.PanickedIdx >= 0 {
-		return nil, fmt.Errorf("v2: tx %d panicked during execution", result.PanickedIdx)
+		return &ProcessResult{DiagnosticLogAttrs: diagnosticLogAttrs}, fmt.Errorf("v2: tx %d panicked during execution", result.PanickedIdx)
 	}
 	if result.ValidationPanic != nil {
-		return nil, fmt.Errorf("v2: validation panic: %v", result.ValidationPanic)
+		return &ProcessResult{DiagnosticLogAttrs: diagnosticLogAttrs}, fmt.Errorf("v2: validation panic: %v", result.ValidationPanic)
 	}
 	if result.ReadErr != nil {
-		return nil, fmt.Errorf("v2: base read: %w", result.ReadErr)
+		return &ProcessResult{DiagnosticLogAttrs: diagnosticLogAttrs}, fmt.Errorf("v2: base read: %w", result.ReadErr)
 	}
 	// Same logic for ApplyMessage consensus-level errors (bad nonce,
 	// insufficient upfront gas, intrinsic gas underflow, etc.). Serial returns
@@ -1162,7 +1204,7 @@ func (p *V2StateProcessor) Process(block *types.Block, statedb *state.StateDB, c
 	// V2 must do the same so a malformed tx never settles as a zero-gas
 	// no-op success.
 	if result.ExecErrIdx >= 0 {
-		return nil, fmt.Errorf("v2: tx %d apply message: %w", result.ExecErrIdx, result.ExecErr)
+		return &ProcessResult{DiagnosticLogAttrs: diagnosticLogAttrs}, fmt.Errorf("v2: tx %d apply message: %w", result.ExecErrIdx, result.ExecErr)
 	}
 
 	// V2 worker reads went through pool copies that share `statedb`'s reader
@@ -1232,10 +1274,11 @@ func (p *V2StateProcessor) finalizeV2Block(block *types.Block, statedb *state.St
 	}
 
 	return &ProcessResult{
-		Receipts: receipts,
-		Requests: requests,
-		Logs:     allLogs,
-		GasUsed:  result.GasUsed,
+		Receipts:           receipts,
+		Requests:           requests,
+		Logs:               allLogs,
+		GasUsed:            result.GasUsed,
+		DiagnosticLogAttrs: v2DiagnosticLogAttrs(result, statedb),
 	}, nil
 }
 

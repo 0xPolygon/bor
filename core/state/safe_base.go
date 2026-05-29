@@ -45,6 +45,22 @@ type stateKey struct {
 	slot common.Hash
 }
 
+// SafeBaseDiagnostics is collected only on V2 failure paths. It reports cache
+// cardinality rather than per-read counters so normal execution avoids extra
+// atomic operations on every base read.
+type SafeBaseDiagnostics struct {
+	StateEntries       int
+	CodeEntries        int
+	NonceEntries       int
+	BalanceEntries     int
+	ExistEntries       int
+	CodeHashEntries    int
+	StorageRootEntries int
+	PoolCapacity       int
+	PoolAvailable      int
+	ReadErr            error
+}
+
 // TestReadDelay is set by benchmarks to simulate production disk I/O.
 // SafeBase reads this at creation time. Zero means no delay (default).
 var TestReadDelay time.Duration
@@ -114,6 +130,32 @@ func (s *SafeBase) Error() error {
 	s.errMu.Lock()
 	defer s.errMu.Unlock()
 	return s.err
+}
+
+func (s *SafeBase) Diagnostics() SafeBaseDiagnostics {
+	var diag SafeBaseDiagnostics
+	diag.StateEntries = syncMapLen(&s.stateCache)
+	diag.CodeEntries = syncMapLen(&s.codeCache)
+	diag.NonceEntries = syncMapLen(&s.nonceCache)
+	diag.BalanceEntries = syncMapLen(&s.balCache)
+	diag.ExistEntries = syncMapLen(&s.existCache)
+	diag.CodeHashEntries = syncMapLen(&s.hashCache)
+	diag.StorageRootEntries = syncMapLen(&s.rootCache)
+	if s.pool != nil {
+		diag.PoolCapacity = cap(s.pool)
+		diag.PoolAvailable = len(s.pool)
+	}
+	diag.ReadErr = s.Error()
+	return diag
+}
+
+func syncMapLen(m *sync.Map) int {
+	count := 0
+	m.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
 }
 
 func (s *SafeBase) cleanRead(db *StateDB) bool {

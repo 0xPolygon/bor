@@ -162,7 +162,8 @@ type StateDB struct {
 	// flatDiffRef is a read-only reference to the parent block's FlatDiff,
 	// consulted lazily by getStateObject and GetCommittedState before falling
 	// through to the trie reader. Set by NewWithFlatBase; nil otherwise.
-	flatDiffRef *FlatDiff
+	flatDiffRef   *FlatDiff
+	flatDiffStats *flatDiffReadStats
 
 	// Measurements gathered during execution for debugging purposes
 
@@ -1286,6 +1287,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		// execution has already dirtied the account.
 		if s.flatDiffRef != nil && !s.hasAccountMutation(addr) {
 			if acct, exists, covered := s.flatDiffRef.accountOverlay(addr); covered {
+				s.recordFlatDiffAccountOverlay(exists, s.stateObjects[addr])
 				if !exists {
 					return nil
 				}
@@ -1347,6 +1349,81 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 func (s *StateDB) setStateObject(object *stateObject) {
 	s.stateObjects[object.Address()] = object
+}
+
+type flatDiffReadStats struct {
+	accountOverlays         atomic.Uint64
+	accountStaleObjectMasks atomic.Uint64
+	accountDestructMasks    atomic.Uint64
+	storageOverlays         atomic.Uint64
+	storageExplicitOverlays atomic.Uint64
+	storageDestructMasks    atomic.Uint64
+	storageCachedMasks      atomic.Uint64
+	storageStaleOriginMasks atomic.Uint64
+}
+
+// FlatDiffReadDiagnostics is logged only when V2 fails. It distinguishes
+// normal FlatDiff coverage from cases where the overlay had to mask values
+// already cached from committedParentRoot.
+type FlatDiffReadDiagnostics struct {
+	AccountOverlays         uint64
+	AccountStaleObjectMasks uint64
+	AccountDestructMasks    uint64
+	StorageOverlays         uint64
+	StorageExplicitOverlays uint64
+	StorageDestructMasks    uint64
+	StorageCachedMasks      uint64
+	StorageStaleOriginMasks uint64
+}
+
+func (s *StateDB) FlatDiffReadDiagnostics() FlatDiffReadDiagnostics {
+	stats := s.flatDiffStats
+	if stats == nil {
+		return FlatDiffReadDiagnostics{}
+	}
+	return FlatDiffReadDiagnostics{
+		AccountOverlays:         stats.accountOverlays.Load(),
+		AccountStaleObjectMasks: stats.accountStaleObjectMasks.Load(),
+		AccountDestructMasks:    stats.accountDestructMasks.Load(),
+		StorageOverlays:         stats.storageOverlays.Load(),
+		StorageExplicitOverlays: stats.storageExplicitOverlays.Load(),
+		StorageDestructMasks:    stats.storageDestructMasks.Load(),
+		StorageCachedMasks:      stats.storageCachedMasks.Load(),
+		StorageStaleOriginMasks: stats.storageStaleOriginMasks.Load(),
+	}
+}
+
+func (s *StateDB) recordFlatDiffAccountOverlay(exists bool, obj *stateObject) {
+	stats := s.flatDiffStats
+	if stats == nil {
+		return
+	}
+	stats.accountOverlays.Add(1)
+	if !exists {
+		stats.accountDestructMasks.Add(1)
+	}
+	if obj != nil && !obj.fromFlatDiff {
+		stats.accountStaleObjectMasks.Add(1)
+	}
+}
+
+func (s *StateDB) recordFlatDiffStorageOverlay(explicit, cached, stale bool) {
+	stats := s.flatDiffStats
+	if stats == nil {
+		return
+	}
+	stats.storageOverlays.Add(1)
+	if explicit {
+		stats.storageExplicitOverlays.Add(1)
+	} else {
+		stats.storageDestructMasks.Add(1)
+	}
+	if cached {
+		stats.storageCachedMasks.Add(1)
+	}
+	if stale {
+		stats.storageStaleOriginMasks.Add(1)
+	}
 }
 
 // hasAccountMutation reports whether current execution already owns the
@@ -1509,6 +1586,7 @@ func (s *StateDB) Copy() *StateDB {
 		journal:          s.journal.copy(),
 	}
 	state.flatDiffRef = s.flatDiffRef // read-only, safe to share
+	state.flatDiffStats = s.flatDiffStats
 	if s.trie != nil {
 		state.trie = mustCopyTrie(s.trie)
 	}
@@ -2631,15 +2709,18 @@ func NewWithFlatBase(parentCommittedRoot common.Hash, db Database, flatDiff *Fla
 	if err != nil {
 		return nil, err
 	}
-	if flatDiff != nil {
-		sdb.flatDiffRef = flatDiff
-	}
+	sdb.SetFlatDiffRef(flatDiff)
 	return sdb, nil
 }
 
 // SetFlatDiffRef sets the read-only FlatDiff reference for lazy lookups.
 func (s *StateDB) SetFlatDiffRef(diff *FlatDiff) {
 	s.flatDiffRef = diff
+	if diff == nil {
+		s.flatDiffStats = nil
+		return
+	}
+	s.flatDiffStats = new(flatDiffReadStats)
 }
 
 // WasStorageSlotRead returns true if the given address+slot was accessed
