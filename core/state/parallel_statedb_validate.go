@@ -157,6 +157,57 @@ func storeReadFailCategory(key blockstm.Key) string {
 	return "unknown"
 }
 
+// StaleBaseReadDiag describes a recorded base read (WriterIdx < 0 — no MVStore
+// writer seen at read time) for which a committed earlier-tx writer now exists
+// with a different value. On a finalized tx that means validation accepted a
+// stale base read: the version/value check on a base read passes purely on
+// "still no committed writer" (storeReadMatches branch 1) and never re-reads
+// the base value, so this is the escape signature for the V2 pipelined-base
+// gas-mismatch bug. Diagnostic-only.
+type StaleBaseReadDiag struct {
+	TxIndex   int
+	Category  string // nonce/code/create/storage
+	Addr      common.Address
+	Slot      common.Hash // storage slot (zero for account-scoped keys)
+	RecVal    any         // value recorded at read time (base)
+	CurWriter int         // committed earlier-tx writer now present
+	CurInc    int
+	CurVal    any // that writer's value
+}
+
+// DiagnoseStaleBaseReads scans this tx's final read set for base reads that a
+// committed earlier-tx writer now contradicts. A non-empty result on a
+// finalized PDB means validation passed a read it should have invalidated —
+// the escape the V2 base-read detector hunts. Read-only; safe to call after
+// the block has fully settled (all writers committed).
+func (s *ParallelStateDB) DiagnoseStaleBaseReads() []StaleBaseReadDiag {
+	var out []StaleBaseReadDiag
+	for i := range s.StoreReads {
+		rd := &s.StoreReads[i]
+		if rd.WriterIdx >= 0 {
+			continue // not a base read; version/value validation covers it
+		}
+		curVal, writer, inc, found, isEst := s.store.ReadVersionFull(rd.Key, s.TxIndex)
+		if !found || writer < 0 || isEst {
+			continue // still no committed earlier writer — base read is consistent
+		}
+		if valuesEqual(curVal, rd.StoreVal) {
+			continue // earlier writer wrote the same value — harmless
+		}
+		out = append(out, StaleBaseReadDiag{
+			TxIndex:   s.TxIndex,
+			Category:  storeReadFailCategory(rd.Key),
+			Addr:      rd.Key.GetAddress(),
+			Slot:      rd.Key.GetStateKey(),
+			RecVal:    rd.StoreVal,
+			CurWriter: writer,
+			CurInc:    inc,
+			CurVal:    curVal,
+		})
+	}
+	return out
+}
+
 // ValidationDiag holds diagnostic info about a validation failure.
 type ValidationDiag struct {
 	TxIdx      int

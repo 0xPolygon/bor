@@ -97,3 +97,52 @@ func TestPDB_AuthorityCodeStaleRead_LaterWriterInvalidates(t *testing.T) {
 			"the later tx read empty code (no delegation) and its execution diverges from canonical")
 	}
 }
+
+// TestPDB_DiagnoseStaleBaseReads pins the escape detector deployed for the
+// pipelined-base investigation: it must report a base read only once a
+// committed earlier-tx writer contradicts it by value, and never for a
+// same-value writer or before any writer lands.
+func TestPDB_DiagnoseStaleBaseReads(t *testing.T) {
+	authority := common.HexToAddress("0x92E2167c379664462C48F10f76a7A5ea26795cE7")
+	const baseNonce = 5931
+	const writerIdx = 31
+	const readerIdx = 32
+	const finalNonce = 5933
+
+	base := newAuthorityBase(t, authority, baseNonce, nil)
+	store := blockstm.NewMVStore()
+	bals := blockstm.NewMVBalanceStore()
+	reader := NewParallelStateDB(readerIdx, base, store, bals)
+	reader.EnableReadTracking()
+
+	// Records a base read (writer=-1) of the authority nonce.
+	reader.GetNonce(authority)
+
+	if d := reader.DiagnoseStaleBaseReads(); len(d) != 0 {
+		t.Fatalf("no writer committed yet — want 0 escapes, got %+v", d)
+	}
+
+	// Same-value earlier writer is harmless — must not be reported.
+	nonceKey := blockstm.NewSubpathKey(authority, NoncePath)
+	store.WriteInc(nonceKey, writerIdx, 0, uint64(baseNonce))
+	if d := reader.DiagnoseStaleBaseReads(); len(d) != 0 {
+		t.Fatalf("same-value writer — want 0 escapes, got %+v", d)
+	}
+
+	// Different-value earlier writer — the escape we hunt.
+	store.WriteInc(nonceKey, writerIdx, 0, uint64(finalNonce))
+	d := reader.DiagnoseStaleBaseReads()
+	if len(d) != 1 {
+		t.Fatalf("want exactly 1 escape, got %d: %+v", len(d), d)
+	}
+	got := d[0]
+	if got.TxIndex != readerIdx || got.Category != "nonce" || got.Addr != authority || got.CurWriter != writerIdx {
+		t.Fatalf("escape fields wrong: %+v", got)
+	}
+	if rv, ok := got.RecVal.(uint64); !ok || rv != baseNonce {
+		t.Fatalf("RecVal = %v, want %d", got.RecVal, baseNonce)
+	}
+	if cv, ok := got.CurVal.(uint64); !ok || cv != finalNonce {
+		t.Fatalf("CurVal = %v, want %d", got.CurVal, finalNonce)
+	}
+}

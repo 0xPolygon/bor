@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -1061,6 +1063,14 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 		*receipts = append(*receipts, receipt)
 		*allLogs = append(*allLogs, receipt.Logs...)
 
+		// Stale-base-read escape detector (opt-in via BOR_V2_BASEREAD_DIAG).
+		// Runs here — at settle time, before Recycle resets the read set — so
+		// the PDB's reads are intact and, by settle order, every earlier-tx
+		// writer is already committed to the MVStore.
+		if v2BaseReadDiag {
+			v2ReportStaleBaseReads(blockCtx.BlockNumber, pdb, tasks, txIdx)
+		}
+
 		// Return PDB to pool for reuse by subsequent txs.
 		env.Recycle(st)
 	}
@@ -1090,6 +1100,110 @@ func buildV2Receipt(tx *types.Transaction, pdb *state.ParallelStateDB, msg *Mess
 	receipt.Logs = finalDB.GetLogs(tx.Hash(), blockCtx.BlockNumber.Uint64(), blockHash, blockCtx.Time)
 	receipt.Bloom = types.CreateBloom(receipt)
 	return receipt
+}
+
+// v2BaseReadDiag enables the stale-base-read escape detector. On by default
+// for this investigation; set BOR_V2_BASEREAD_DIAG=0 (or false/off/no) to
+// disable. The scan re-reads the MVStore once per recorded base read of each
+// settled tx — a single shard-locked map lookup, microsecond-scale and
+// negligible against block execution — so it is safe to leave on.
+var v2BaseReadDiag = !v2EnvDisabled("BOR_V2_BASEREAD_DIAG")
+
+// v2EnvDisabled reports whether env var key is set to a falsey value.
+func v2EnvDisabled(key string) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "0", "false", "off", "no":
+		return true
+	}
+	return false
+}
+
+// v2ReportStaleBaseReads WARN-logs any base read in pdb's (finalized) read set
+// that a committed earlier-tx writer now contradicts. A hit is the signature
+// of the V2 pipelined-base gas-mismatch bug: the later tx read base state for
+// an account an earlier tx had already written, and validation accepted it
+// (the version/value check never re-reads base values). authPrev only patches
+// this for EIP-7702 authorities; a hit here flags a residual — possibly
+// general — escape, with full account + authority context for correlation.
+func v2ReportStaleBaseReads(blockNum *big.Int, pdb *state.ParallelStateDB, tasks []V2Task, txIdx int) {
+	escapes := pdb.DiagnoseStaleBaseReads()
+	if len(escapes) == 0 {
+		return
+	}
+	for _, e := range escapes {
+		attrs := []interface{}{
+			"block", blockNum,
+			"tx", txIdx,
+			"category", e.Category,
+			"addr", e.Addr,
+			"recordedBase", fmtMVVal(e.RecVal),
+			"committedWriter", e.CurWriter,
+			"committedInc", e.CurInc,
+			"committedVal", fmtMVVal(e.CurVal),
+		}
+		if e.Category == "storage" {
+			attrs = append(attrs, "slot", e.Slot.Hex())
+		}
+		if a := v2TaskAuthorityContext(tasks, txIdx); a != "" {
+			attrs = append(attrs, "txAuthorities", a)
+		}
+		if w := v2TaskAuthorityContext(tasks, e.CurWriter); w != "" {
+			attrs = append(attrs, "writerAuthorities", w)
+		}
+		log.Warn("V2 stale base read escaped validation", attrs...)
+	}
+}
+
+// fmtMVVal renders an MVStore value (nonce uint64, code []byte, storage Hash,
+// create bool) compactly for the escape log; delegation code is decoded to its
+// target so a 7702-shaped escape is recognizable at a glance.
+func fmtMVVal(v any) string {
+	switch t := v.(type) {
+	case uint64:
+		return fmt.Sprintf("nonce=%d", t)
+	case []byte:
+		if addr, ok := types.ParseDelegation(t); ok {
+			return fmt.Sprintf("code[%d]delegate->%s", len(t), addr.Hex())
+		}
+		n := len(t)
+		if n > 16 {
+			n = 16
+		}
+		return fmt.Sprintf("code[%d]=%x", len(t), t[:n])
+	case common.Hash:
+		return t.Hex()
+	case bool:
+		return fmt.Sprintf("%t", t)
+	case nil:
+		return "<nil>"
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+// v2TaskAuthorityContext returns a compact "authority@authNonce,..." string of
+// a task's EIP-7702 authorizations (recovered signer + nonce), or "" if the
+// index is out of range or the tx carries no authorizations.
+func v2TaskAuthorityContext(tasks []V2Task, idx int) string {
+	if idx < 0 || idx >= len(tasks) || tasks[idx].Tx == nil {
+		return ""
+	}
+	auths := tasks[idx].Tx.SetCodeAuthorizations()
+	if len(auths) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := range auths {
+		authority, err := auths[i].Authority()
+		if err != nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%s@%d", authority.Hex(), auths[i].Nonce)
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
