@@ -306,7 +306,7 @@ func TestComputeSenderNonces_ExcludesAuthorities(t *testing.T) {
 			&nonceMockTask{idx: 1, sender: addrA},
 		}
 		env := &nonceMockEnv{nonces: map[common.Address]uint64{addrA: 100}}
-		out := computeSenderNonces(tasks, env)
+		out := computeSenderNonces(tasks, env, computeTaskAuthorities(tasks))
 		if got := out[0][addrA]; got != 100 {
 			t.Errorf("tx0 SenderNonces[A] = %d, want 100", got)
 		}
@@ -326,7 +326,7 @@ func TestComputeSenderNonces_ExcludesAuthorities(t *testing.T) {
 			&nonceMockTask{idx: 2, sender: addrA},
 		}
 		env := &nonceMockEnv{nonces: map[common.Address]uint64{addrA: 0, addrB: 0}}
-		out := computeSenderNonces(tasks, env)
+		out := computeSenderNonces(tasks, env, computeTaskAuthorities(tasks))
 		// B is not an authority: still gets nil because chain length is 1.
 		if out[0] != nil {
 			t.Errorf("tx0 SenderNonces = %v, want nil (single-tx sender)", out[0])
@@ -351,7 +351,7 @@ func TestComputeSenderNonces_ExcludesAuthorities(t *testing.T) {
 			&nonceMockTask{idx: 2, sender: addrC, auths: []common.Address{addrA}},
 		}
 		env := &nonceMockEnv{nonces: map[common.Address]uint64{addrA: 50, addrC: 0}}
-		out := computeSenderNonces(tasks, env)
+		out := computeSenderNonces(tasks, env, computeTaskAuthorities(tasks))
 		if out[0] != nil || out[1] != nil {
 			t.Errorf("A is auth in tx[2]; want nil for tx[0] and tx[1], got %v / %v", out[0], out[1])
 		}
@@ -366,7 +366,7 @@ func TestComputeSenderNonces_ExcludesAuthorities(t *testing.T) {
 			&nonceMockTask{idx: 2, sender: addrA},
 		}
 		env := &nonceMockEnv{nonces: map[common.Address]uint64{addrA: 7}}
-		out := computeSenderNonces(tasks, env)
+		out := computeSenderNonces(tasks, env, computeTaskAuthorities(tasks))
 		if got := out[1][addrA]; got != 7 {
 			t.Errorf("tx1 SenderNonces[A] = %d, want 7", got)
 		}
@@ -374,4 +374,130 @@ func TestComputeSenderNonces_ExcludesAuthorities(t *testing.T) {
 			t.Errorf("tx2 SenderNonces[A] = %d, want 8", got)
 		}
 	})
+}
+
+func TestComputeAuthorityPrev(t *testing.T) {
+	addrA := common.HexToAddress("0xA")
+	addrB := common.HexToAddress("0xB")
+	addrC := common.HexToAddress("0xC")
+
+	tasks := []V2Task{
+		&nonceMockTask{idx: 0, sender: addrA, auths: []common.Address{addrA}},
+		&nonceMockTask{idx: 1, sender: addrB, auths: []common.Address{addrB}},
+		&nonceMockTask{idx: 2, sender: addrC, auths: []common.Address{addrA}},
+		&nonceMockTask{idx: 3, sender: addrC, auths: []common.Address{addrB, addrA}},
+		&nonceMockTask{idx: 4, sender: addrC},
+	}
+
+	got := computeAuthorityPrev(computeTaskAuthorities(tasks))
+	want := []int{-1, -1, 0, 2, -1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("authPrev[%d] = %d, want %d; full=%v", i, got[i], want[i], got)
+		}
+	}
+}
+
+type authorityWaitState struct {
+	validateStarted chan struct{}
+	validateRelease chan struct{}
+	validateOnce    sync.Once
+}
+
+func (s *authorityWaitState) Validate() bool {
+	if s.validateStarted != nil {
+		s.validateOnce.Do(func() { close(s.validateStarted) })
+	}
+	if s.validateRelease != nil {
+		<-s.validateRelease
+	}
+	return true
+}
+func (s *authorityWaitState) ValidateCategory() string                { return "" }
+func (s *authorityWaitState) MarkEstimate()                           {}
+func (s *authorityWaitState) CleanupEstimate([]Key, []common.Address) {}
+func (s *authorityWaitState) GetWriteKeys() []Key                     { return nil }
+func (s *authorityWaitState) GetBalAddrs() []common.Address           { return nil }
+func (s *authorityWaitState) FlushToMVStore()                         {}
+func (s *authorityWaitState) SetDeferMVWrites(bool)                   {}
+
+type authorityWaitEnv struct {
+	states      []V2TxState
+	execStarted []chan struct{}
+	startOnce   []sync.Once
+}
+
+func (e *authorityWaitEnv) BaseNonce(common.Address) uint64 { return 0 }
+func (e *authorityWaitEnv) Execute(task V2Task, workerID int, incarnation int,
+	senderNonces map[common.Address]uint64, coinbase common.Address,
+	waitForTx func(int), waitForFinal func(int), deferWrites bool) V2TxState {
+	idx := task.Index()
+	e.startOnce[idx].Do(func() { close(e.execStarted[idx]) })
+	return e.states[idx]
+}
+func (e *authorityWaitEnv) Recycle(V2TxState) {}
+
+func TestV2SharedAuthorityWaitsForFinalization(t *testing.T) {
+	authority := common.HexToAddress("0xA")
+	validateStarted := make(chan struct{})
+	validateRelease := make(chan struct{})
+	execStarted := []chan struct{}{make(chan struct{}), make(chan struct{})}
+
+	env := &authorityWaitEnv{
+		states: []V2TxState{
+			&authorityWaitState{
+				validateStarted: validateStarted,
+				validateRelease: validateRelease,
+			},
+			&authorityWaitState{},
+		},
+		execStarted: execStarted,
+		startOnce:   []sync.Once{{}, {}},
+	}
+	tasks := []V2Task{
+		&nonceMockTask{idx: 0, sender: common.HexToAddress("0x1"), auths: []common.Address{authority}},
+		&nonceMockTask{idx: 1, sender: common.HexToAddress("0x2"), auths: []common.Address{authority}},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ExecuteV2BlockSTM(context.Background(), tasks, env, common.Address{}, 2, nil, func(int, V2TxState) {})
+		close(done)
+	}()
+	defer func() {
+		select {
+		case <-validateRelease:
+		default:
+			close(validateRelease)
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("ExecuteV2BlockSTM did not return")
+		}
+	}()
+
+	select {
+	case <-execStarted[0]:
+	case <-time.After(time.Second):
+		t.Fatal("tx0 did not start")
+	}
+	select {
+	case <-validateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("tx0 validation did not start")
+	}
+
+	select {
+	case <-execStarted[1]:
+		t.Fatal("tx1 started before tx0 finalized")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(validateRelease)
+	select {
+	case <-execStarted[1]:
+	case <-time.After(time.Second):
+		t.Fatal("tx1 did not start after tx0 finalized")
+	}
 }

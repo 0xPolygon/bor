@@ -22,9 +22,10 @@ type V2Task interface {
 	To() *common.Address // nil for contract creation
 	// Authorities returns the unique EIP-7702 authorities of this tx
 	// (signers in the SetCode auth list). Empty for non-SetCodeTx.
-	// V2 uses these to maintain per-address nonce deltas across the
-	// block, since each authority's nonce is bumped at apply time even
-	// though it isn't the tx sender.
+	// V2 uses these both for nonce publication and for execution ordering:
+	// each applied authorization mutates the authority account's nonce/code
+	// even though the authority may be neither the tx sender nor the call
+	// target.
 	Authorities() []common.Address
 }
 
@@ -86,6 +87,10 @@ type V2ExecutionResult struct {
 	ValWaitDur  time.Duration // time waiting for workers
 	ValCheckDur time.Duration // time doing validation checks
 	ValReexDur  time.Duration // time blocked on re-execution
+	// Same-authority EIP-7702 serialization cost: tasks that blocked on an
+	// authPrev predecessor, and aggregate wall time spent blocked.
+	AuthStallCount int
+	AuthStallDur   time.Duration
 	// Non-nil if runValidationLoop recovered from a panic; caller should
 	// discard this result and fall back to serial.
 	ValidationPanic any
@@ -156,11 +161,18 @@ type v2ExecCtx struct {
 	vfailIdxs    []int
 	vfailed      []atomic.Bool
 	toPrev       []int
+	authPrev     []int
 	completionCh []chan struct{}
 	finalized    []atomic.Bool
 	execDone     []chan struct{}
 	chSettle     chan int
 	reexecWg     sync.WaitGroup // re-exec goroutines launched by dispatchReexec
+
+	// authPrev serialization observability: how many tasks actually blocked
+	// on a same-authority predecessor and for how long in aggregate. Written
+	// from worker goroutines, so atomic.
+	authStallCount atomic.Int64
+	authStallNanos atomic.Int64
 
 	taskSenderNonces []map[common.Address]uint64
 
@@ -194,9 +206,27 @@ func newV2ExecCtx(tasks []V2Task, env V2Env, coinbase common.Address,
 	for i := range x.execDone {
 		x.execDone[i] = make(chan struct{})
 	}
-	x.taskSenderNonces = computeSenderNonces(tasks, env)
+	// Recover each task's EIP-7702 authorities once; both nonce-precompute
+	// and authority ordering consume the result so recovery (an ecrecover
+	// per authorization) isn't paid twice per block.
+	taskAuths := computeTaskAuthorities(tasks)
+	x.taskSenderNonces = computeSenderNonces(tasks, env, taskAuths)
 	x.toPrev = computeToPrev(tasks, conflictAddrs)
+	x.authPrev = computeAuthorityPrev(taskAuths)
 	return x
+}
+
+// computeTaskAuthorities recovers each task's EIP-7702 authorities exactly
+// once. Authority recovery is an ecrecover per authorization; both
+// computeSenderNonces (exclusion set) and computeAuthorityPrev (ordering)
+// need the same set, so recover here and share the slice rather than calling
+// V2Task.Authorities() twice per task.
+func computeTaskAuthorities(tasks []V2Task) [][]common.Address {
+	out := make([][]common.Address, len(tasks))
+	for i := range tasks {
+		out[i] = tasks[i].Authorities()
+	}
+	return out
 }
 
 // computeSenderNonces returns per-task per-sender pre-computed nonces for
@@ -215,14 +245,14 @@ func newV2ExecCtx(tasks []V2Task, env V2Env, coinbase common.Address,
 // Tasks with no chain and no auth-list interaction get nil — same as
 // the original optimisation, so PDB.GetNonce reads the base nonce
 // directly.
-func computeSenderNonces(tasks []V2Task, env V2Env) []map[common.Address]uint64 {
+func computeSenderNonces(tasks []V2Task, env V2Env, taskAuths [][]common.Address) []map[common.Address]uint64 {
 	// Any address that is an authority in any tx may have its nonce
 	// dynamically bumped by the auth-list applier. Don't pre-compute
 	// nonces for those addresses — let the MVStore-aware path handle
 	// the dependency.
 	var authoritySet map[common.Address]struct{}
-	for i := range tasks {
-		for _, auth := range tasks[i].Authorities() {
+	for i := range taskAuths {
+		for _, auth := range taskAuths[i] {
 			if authoritySet == nil {
 				authoritySet = make(map[common.Address]struct{})
 			}
@@ -336,6 +366,30 @@ func (c *chainState) predecessor(to *common.Address, i int,
 	return prev
 }
 
+// computeAuthorityPrev chains transactions that share an EIP-7702 authority.
+// Applying an authorization reads and then mutates the authority account's
+// nonce and code, even though that account is not necessarily the tx sender or
+// the call target. A later tx with the same authority must therefore observe
+// the earlier tx after validation/re-execution has settled, not merely after
+// the earlier first incarnation flushed speculative writes.
+func computeAuthorityPrev(taskAuths [][]common.Address) []int {
+	out := make([]int, len(taskAuths))
+	lastAuth := make(map[common.Address]int)
+	for i := range taskAuths {
+		out[i] = -1
+		auths := taskAuths[i]
+		for _, auth := range auths {
+			if prev, ok := lastAuth[auth]; ok && prev > out[i] {
+				out[i] = prev
+			}
+		}
+		for _, auth := range auths {
+			lastAuth[auth] = i
+		}
+	}
+	return out
+}
+
 // waitForTx blocks until the writer at writerIdx has at least executed
 // (its first FlushToMVStore is visible) — used by per-key pipelining.
 //
@@ -418,6 +472,22 @@ func (x *v2ExecCtx) execute(taskIdx, workerID int) {
 		case <-x.ctx.Done():
 			return
 		}
+	}
+	if prev := x.authPrev[taskIdx]; prev >= 0 && !x.finalized[prev].Load() {
+		// Same-authority EIP-7702 txs depend on the authority's nonce/code,
+		// which the earlier tx mutates even though the authority is neither its
+		// sender nor its call target — a dependency the toPrev/sender-chain
+		// hints don't capture. Wait for the earlier tx to finalize so this tx's
+		// authorization check runs against the committed authority state rather
+		// than racing its publication.
+		tStall := time.Now()
+		select {
+		case <-x.completionCh[prev]:
+		case <-x.ctx.Done():
+			return
+		}
+		x.authStallCount.Add(1)
+		x.authStallNanos.Add(int64(time.Since(tStall)))
 	}
 	st := x.env.Execute(x.tasks[taskIdx], workerID, x.incarnations[taskIdx],
 		x.taskSenderNonces[taskIdx], x.coinbase, x.waitForTx, x.waitForFinal, true)
@@ -598,13 +668,16 @@ func (x *v2ExecCtx) dispatchReexec(i int) chan struct{} {
 // every j < i-1. The loop preserves this by induction: validateOne(j+1)
 // always finishes reexecDone[j] (via the i-1 check below) before
 // returning, so by the time we reach validateOne(i), only reexecDone[i-1]
-// can be non-nil. The toPrev check below is a hint for predicted
-// predecessors and is redundant for ordering; the i-1 check carries the
+// can be non-nil. The toPrev/authPrev checks below are hints for predicted
+// predecessors and are redundant for ordering; the i-1 check carries the
 // invariant. A future "skip-ahead" optimisation that bypasses
 // validateOne(j) for some j would break settle order — keep this in mind.
 func (x *v2ExecCtx) validateOne(reexecDone []chan struct{}, i int) bool {
 	x.assertSettleOrder(reexecDone, i)
 	if prev := x.toPrev[i]; prev >= 0 && reexecDone[prev] != nil {
+		x.finishReexec(reexecDone, prev)
+	}
+	if prev := x.authPrev[i]; prev >= 0 && reexecDone[prev] != nil {
 		x.finishReexec(reexecDone, prev)
 	}
 	if i > 0 && x.vfailed[i-1].Load() && reexecDone[i-1] != nil {
@@ -637,7 +710,8 @@ func (x *v2ExecCtx) validateOne(reexecDone []chan struct{}, i int) bool {
 // runValidationLoop is the main validation goroutine. It validates each tx
 // in order, dispatching re-executions non-blocking and only stalling for
 // re-exec completion when a later tx depends on a still-pending one (via
-// toPrev or vfailed[i-1]). After the main loop, it drains any leftovers.
+// toPrev, authPrev, or vfailed[i-1]). After the main loop, it drains any
+// leftovers.
 func (x *v2ExecCtx) runValidationLoop(valDone chan struct{}) {
 	defer close(valDone)
 
@@ -707,6 +781,8 @@ func (x *v2ExecCtx) buildResult(startTime time.Time, settleStart, settleEnd *tim
 		ValWaitDur:      x.valWaitDur,
 		ValCheckDur:     x.valCheckDur,
 		ValReexDur:      x.valReexDur,
+		AuthStallCount:  int(x.authStallCount.Load()),
+		AuthStallDur:    time.Duration(x.authStallNanos.Load()),
 		ValidationPanic: x.validationPanic,
 	}
 }
