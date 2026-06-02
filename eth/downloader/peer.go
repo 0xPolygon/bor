@@ -98,16 +98,21 @@ func (p *peerConnection) backoff(duration time.Duration) {
 }
 
 func (p *peerConnection) backedOff() bool {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	p.lock.RLock()
+	until := p.backoffUntil
+	p.lock.RUnlock()
 
-	if p.backoffUntil.IsZero() {
+	if until.IsZero() {
 		return false
 	}
-	if time.Now().Before(p.backoffUntil) {
+	if time.Now().Before(until) {
 		return true
 	}
-	p.backoffUntil = time.Time{}
+	p.lock.Lock()
+	if !p.backoffUntil.IsZero() && !time.Now().Before(p.backoffUntil) {
+		p.backoffUntil = time.Time{}
+	}
+	p.lock.Unlock()
 	return false
 }
 

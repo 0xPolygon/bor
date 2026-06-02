@@ -1113,7 +1113,7 @@ func TestSidechainGhostStateBacksOffPeerInsteadOfDropping(t *testing.T) {
 	tester.newPeer(id, eth.ETH69, chain.blocks[1:])
 
 	tester.downloader.synchroniseMock = func(string, common.Hash) error {
-		return fmt.Errorf("%w: sidechain ghost-state attack", errInvalidChain)
+		return fmt.Errorf("%w: %w", errInvalidChain, types.ErrSidechainGhostState)
 	}
 
 	err := tester.downloader.LegacySync(id, tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)

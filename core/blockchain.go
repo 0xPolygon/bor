@@ -3578,7 +3578,7 @@ func (bc *BlockChain) insertSideChain(block *types.Block, it *insertIterator, ma
 				// If someone legitimately side-mines blocks, they would still be imported as usual. However,
 				// we cannot risk writing unverified blocks to disk when they obviously target the pruning
 				// mechanism.
-				return nil, it.index, errors.New("sidechain ghost-state attack")
+				return nil, it.index, types.ErrSidechainGhostState
 			}
 		}
 		if externTd == nil {

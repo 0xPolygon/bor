@@ -20,6 +20,7 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -40,6 +41,8 @@ import (
 var (
 	ExtraVanityLength = 32 // Fixed number of extra-data prefix bytes reserved for signer vanity
 	ExtraSealLength   = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
+
+	ErrSidechainGhostState = errors.New("sidechain ghost-state attack")
 )
 
 // A BlockNonce is a 64-bit hash which proves (combined with the

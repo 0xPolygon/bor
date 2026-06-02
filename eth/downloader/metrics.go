@@ -40,6 +40,10 @@ var (
 
 	throttleCounter = metrics.NewRegisteredCounter("eth/downloader/throttle", nil)
 
+	// peerGhostStateBackoffMeter counts peers temporarily backed off due to a
+	// sidechain ghost-state attack error instead of being permanently dropped.
+	peerGhostStateBackoffMeter = metrics.NewRegisteredMeter("eth/downloader/peers/ghoststate/backoff", nil)
+
 	// Amortized per-item download durations (batch duration / item count).
 	headerItemDownloadTimer  = metrics.NewRegisteredTimer("eth/downloader/headers/item_download_duration", nil)
 	bodyItemDownloadTimer    = metrics.NewRegisteredTimer("eth/downloader/bodies/item_download_duration", nil)

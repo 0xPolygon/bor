@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -428,12 +427,13 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 }
 
 func isSidechainGhostStateError(err error) bool {
-	return errors.Is(err, errInvalidChain) && strings.Contains(err.Error(), "sidechain ghost-state attack")
+	return errors.Is(err, types.ErrSidechainGhostState)
 }
 
 func (d *Downloader) backoffPeer(id string, duration time.Duration) {
 	if peer := d.peers.Peer(id); peer != nil {
 		peer.backoff(duration)
+		peerGhostStateBackoffMeter.Mark(1)
 	}
 }
 
@@ -524,6 +524,7 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 			return errUnknownPeer
 		}
 		if p.backedOff() {
+			log.Debug("Skipping backed-off peer for sync", "peer", id)
 			return errPeerBackedOff
 		}
 	}
@@ -1923,7 +1924,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 			return fmt.Errorf("%v: %w", errInvalidChain, err)
 		}
 
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("%w: %w", errInvalidChain, err)
 	}
 
 	return nil
