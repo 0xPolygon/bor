@@ -391,7 +391,6 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 	if errors.Is(err, errInvalidChain) || errors.Is(err, errBadPeer) || errors.Is(err, errTimeout) ||
 		errors.Is(err, errStallingPeer) || errors.Is(err, errUnsyncedPeer) || errors.Is(err, errEmptyHeaderSet) ||
 		errors.Is(err, errPeersUnavailable) || errors.Is(err, errTooOld) || errors.Is(err, errInvalidAncestor) {
-
 		if isSidechainGhostStateError(err) {
 			log.Warn("Synchronisation failed, backing off peer", "peer", id, "err", err, "mode", d.getMode(), "duration", common.PrettyDuration(sidechainGhostStatePeerBackoff))
 			d.backoffPeer(id, sidechainGhostStatePeerBackoff)
