@@ -1104,6 +1104,53 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 	}
 }
 
+func TestSidechainGhostStateBacksOffPeerInsteadOfDropping(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	id := "ghost-state-peer"
+	chain := testChainBase.shorten(1)
+	tester.newPeer(id, eth.ETH69, chain.blocks[1:])
+
+	tester.downloader.synchroniseMock = func(string, common.Hash) error {
+		return fmt.Errorf("%w: sidechain ghost-state attack", errInvalidChain)
+	}
+
+	err := tester.downloader.LegacySync(id, tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)
+	if !errors.Is(err, errInvalidChain) {
+		t.Fatalf("sync error mismatch: have %v, want %v", err, errInvalidChain)
+	}
+	if _, ok := tester.peers[id]; !ok {
+		t.Fatalf("ghost-state peer was hard dropped")
+	}
+	peer := tester.downloader.peers.Peer(id)
+	if peer == nil {
+		t.Fatalf("ghost-state peer missing from downloader peer set")
+	}
+	if !peer.backedOff() {
+		t.Fatalf("ghost-state peer was not backed off")
+	}
+}
+
+func TestBackedOffPeerIsNotUsedForLegacySync(t *testing.T) {
+	tester := newTester(t)
+	defer tester.terminate()
+
+	id := "ghost-state-peer"
+	chain := testChainBase.shorten(1)
+	tester.newPeer(id, eth.ETH69, chain.blocks[1:])
+
+	tester.downloader.backoffPeer(id, sidechainGhostStatePeerBackoff)
+
+	err := tester.downloader.LegacySync(id, tester.chain.Genesis().Hash(), big.NewInt(1000), nil, FullSync)
+	if !errors.Is(err, errPeerBackedOff) {
+		t.Fatalf("sync error mismatch: have %v, want %v", err, errPeerBackedOff)
+	}
+	if _, ok := tester.peers[id]; !ok {
+		t.Fatalf("backed off peer was hard dropped")
+	}
+}
+
 // Tests that synchronisation progress (origin block number, current block number
 // and highest block number) is tracked and updated correctly.
 func TestSyncProgress68Full(t *testing.T) { testSyncProgress(t, eth.ETH68, FullSync) }

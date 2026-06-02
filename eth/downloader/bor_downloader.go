@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -87,8 +88,11 @@ var (
 	errTooOld                  = errors.New("peer's protocol version too old")
 	errNoAncestorFound         = errors.New("no common ancestor found")
 	errNoPivotHeader           = errors.New("pivot header is not found")
+	errPeerBackedOff           = errors.New("peer is temporarily backed off")
 	ErrMergeTransition         = errors.New("legacy sync reached the merge")
 )
+
+const sidechainGhostStatePeerBackoff = 5 * time.Minute
 
 // peerDropFn is a callback type for dropping a peer detected as malicious.
 type peerDropFn func(id string)
@@ -381,13 +385,20 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 	err := d.synchronise(id, head, td, ttd, mode, false, nil)
 
 	switch err {
-	case nil, errBusy, errCanceled:
+	case nil, errBusy, errCanceled, errPeerBackedOff:
 		return err
 	}
 
 	if errors.Is(err, errInvalidChain) || errors.Is(err, errBadPeer) || errors.Is(err, errTimeout) ||
 		errors.Is(err, errStallingPeer) || errors.Is(err, errUnsyncedPeer) || errors.Is(err, errEmptyHeaderSet) ||
 		errors.Is(err, errPeersUnavailable) || errors.Is(err, errTooOld) || errors.Is(err, errInvalidAncestor) {
+
+		if isSidechainGhostStateError(err) {
+			log.Warn("Synchronisation failed, backing off peer", "peer", id, "err", err, "mode", d.getMode(), "duration", common.PrettyDuration(sidechainGhostStatePeerBackoff))
+			d.backoffPeer(id, sidechainGhostStatePeerBackoff)
+			return err
+		}
+
 		log.Warn("Synchronisation failed, dropping peer", "peer", id, "err", err, "mode", d.getMode())
 
 		if d.dropPeer == nil {
@@ -414,6 +425,16 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 	log.Warn("Synchronisation failed, retrying", "peer", id, "err", err)
 
 	return err
+}
+
+func isSidechainGhostStateError(err error) bool {
+	return errors.Is(err, errInvalidChain) && strings.Contains(err.Error(), "sidechain ghost-state attack")
+}
+
+func (d *Downloader) backoffPeer(id string, duration time.Duration) {
+	if peer := d.peers.Peer(id); peer != nil {
+		peer.backoff(duration)
+	}
 }
 
 // synchronise will select the peer and use it for synchronising. If an empty string is given
@@ -501,6 +522,9 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 		p = d.peers.Peer(id)
 		if p == nil {
 			return errUnknownPeer
+		}
+		if p.backedOff() {
+			return errPeerBackedOff
 		}
 	}
 

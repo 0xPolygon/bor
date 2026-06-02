@@ -706,6 +706,9 @@ func (s *skeleton) assignTasks(success chan *headerResponse, fail chan *headerRe
 	targetTTL := s.peers.rates.TargetTimeout()
 
 	for _, peer := range s.idles {
+		if peer.backedOff() {
+			continue
+		}
 		idlers.peers = append(idlers.peers, peer)
 		idlers.caps = append(idlers.caps, s.peers.rates.Capacity(peer.id, eth.BlockHeadersMsg, targetTTL))
 	}

@@ -178,6 +178,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			isReceiptQueue := queue.kind() == receiptQueueKind
 
 			for _, peer := range d.peers.AllPeers() {
+				if peer.backedOff() {
+					continue
+				}
 				pending, stale := pending[peer.id], stales[peer.id]
 				if pending == nil && stale == nil {
 					// For witness fetching, skip peers that don't support the witness protocol

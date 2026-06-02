@@ -51,9 +51,10 @@ type peerConnection struct {
 
 	peer Peer
 
-	version uint       // Eth protocol version number to switch strategies
-	log     log.Logger // Contextual logger to add extra infos to peer logs
-	lock    sync.RWMutex
+	version      uint       // Eth protocol version number to switch strategies
+	log          log.Logger // Contextual logger to add extra infos to peer logs
+	backoffUntil time.Time
+	lock         sync.RWMutex
 }
 
 // Peer encapsulates the methods required to synchronise with a remote full peer.
@@ -87,6 +88,27 @@ func (p *peerConnection) Reset() {
 	defer p.lock.Unlock()
 
 	p.lacking = make(map[common.Hash]struct{})
+}
+
+func (p *peerConnection) backoff(duration time.Duration) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	p.backoffUntil = time.Now().Add(duration)
+}
+
+func (p *peerConnection) backedOff() bool {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	if p.backoffUntil.IsZero() {
+		return false
+	}
+	if time.Now().Before(p.backoffUntil) {
+		return true
+	}
+	p.backoffUntil = time.Time{}
+	return false
 }
 
 // UpdateHeaderRate updates the peer's estimated header retrieval throughput with
