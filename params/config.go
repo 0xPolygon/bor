@@ -1256,7 +1256,7 @@ func (c *ChainConfig) Description() string {
 			banner += fmt.Sprintf(" - Chicago:                     #%-8v\n", c.Bor.ChicagoBlock)
 		}
 		if c.Bor.PlaceholderBlock != nil {
-			banner += fmt.Sprintf(" - Placeholder:                     #%-8v\n", c.Bor.PlaceholderBlock)
+			banner += fmt.Sprintf(" - Placeholder:                 #%-8v\n", c.Bor.PlaceholderBlock)
 		}
 		return banner
 	}
