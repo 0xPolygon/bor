@@ -5705,6 +5705,237 @@ func TestVerifyHeader_PreGiugliano_NoCheck(t *testing.T) {
 	}
 }
 
+// placeholderBorConfig returns a BorConfig with Giugliano and Placeholder enabled at genesis.
+func placeholderBorConfig() *params.BorConfig {
+	return &params.BorConfig{
+		Sprint:           map[string]uint64{"0": 16},
+		Period:           map[string]uint64{"0": 2},
+		ProducerDelay:    map[string]uint64{"0": 4},
+		BackupMultiplier: map[string]uint64{"0": 2},
+		GiuglianoBlock:   big.NewInt(0),
+		PlaceholderBlock: big.NewInt(0),
+	}
+}
+
+// placeholderChainConfig returns a ChainConfig with all forks + Cancun + Giugliano + Placeholder enabled.
+func placeholderChainConfig(borCfg *params.BorConfig) *params.ChainConfig {
+	cfg := newAllForksChainConfig(borCfg)
+	cfg.ShanghaiBlock = big.NewInt(0)
+	cfg.CancunBlock = big.NewInt(0)
+	return cfg
+}
+
+// newPlaceholderBorForTest creates a chain and Bor engine with Placeholder enabled/disabled.
+func newPlaceholderBorForTest(t *testing.T, placeholder bool) (*core.BlockChain, *Bor, *params.ChainConfig) {
+	t.Helper()
+	addr1 := common.HexToAddress("0x1")
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: addr1, VotingPower: 1}}}
+
+	var cfg *params.ChainConfig
+	if placeholder {
+		cfg = placeholderChainConfig(placeholderBorConfig())
+	} else {
+		cfg = giuglianoChainConfig(giuglianoBorConfig())
+	}
+
+	chain, b := newChainAndBorForTestWithConfig(t, sp, cfg, true, addr1, uint64(time.Now().Unix())-200)
+	return chain, b, cfg
+}
+
+func TestPrepare_PlaceholderTimeNano(t *testing.T) {
+	t.Parallel()
+	chain, b, cfg := newPlaceholderBorForTest(t, true)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+
+	err := b.Prepare(chain.HeaderChain(), h, false)
+	require.NoError(t, err)
+
+	timeNano := h.GetTimeNano(cfg)
+	require.NotNil(t, timeNano, "TimeNano should be present for Placeholder blocks")
+
+	// TimeNano should match header.GetActualTime().UnixNano()
+	// In the non-Rio path, ActualTime is not set so GetActualTime falls back to Time
+	expectedTimeNano := uint64(h.GetActualTime().UnixNano())
+	require.Equal(t, expectedTimeNano, *timeNano,
+		"TimeNano should equal header.GetActualTime().UnixNano()")
+}
+
+// TestTimeNano_PreservesNanoseconds verifies that TimeNano correctly preserves
+// nanosecond precision through encode/decode roundtrip. This tests the core
+// mechanism independently of the Prepare code path.
+func TestTimeNano_PreservesNanoseconds(t *testing.T) {
+	t.Parallel()
+	s := newPlaceholderVerifySetup(t, true)
+
+	// Create a TimeNano with non-zero nanoseconds (123456789 ns after the second)
+	baseSeconds := uint64(1700000000)
+	nanoseconds := uint64(123456789)
+	timeNanoValue := baseSeconds*1_000_000_000 + nanoseconds
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNanoValue,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	// Verify TimeNano roundtrips correctly with full nanosecond precision
+	decoded := h.GetTimeNano(s.cfg)
+	require.NotNil(t, decoded, "TimeNano should decode successfully")
+	require.Equal(t, timeNanoValue, *decoded, "TimeNano should preserve exact nanosecond value")
+
+	// Verify the nanosecond component is preserved (not truncated to seconds)
+	decodedNanos := *decoded % 1_000_000_000
+	require.Equal(t, nanoseconds, decodedNanos,
+		"TimeNano should preserve the nanosecond component, got %d, want %d", decodedNanos, nanoseconds)
+}
+
+func TestPrepare_PrePlaceholder_NoTimeNano(t *testing.T) {
+	t.Parallel()
+	// Giugliano enabled but Placeholder not enabled
+	chain, b, cfg := newPlaceholderBorForTest(t, false)
+	genesis := chain.HeaderChain().GetHeaderByNumber(0)
+
+	h := &types.Header{
+		ParentHash: genesis.Hash(),
+		Number:     big.NewInt(1),
+		GasLimit:   genesis.GasLimit,
+		UncleHash:  uncleHash,
+	}
+
+	err := b.Prepare(chain.HeaderChain(), h, false)
+	require.NoError(t, err)
+
+	timeNano := h.GetTimeNano(cfg)
+	require.Nil(t, timeNano, "TimeNano should be nil for pre-Placeholder blocks")
+
+	// But Giugliano fields should still be present
+	gasTarget, bfcd := h.GetBaseFeeParams(cfg)
+	require.NotNil(t, gasTarget, "GasTarget should be present for Giugliano blocks")
+	require.NotNil(t, bfcd, "BaseFeeChangeDenominator should be present for Giugliano blocks")
+}
+
+func TestVerifyHeader_PlaceholderMissingTimeNano(t *testing.T) {
+	t.Parallel()
+	s := newPlaceholderVerifySetup(t, true)
+
+	// Build a header with Giugliano fields but no TimeNano
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		// TimeNano intentionally omitted
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	require.ErrorIs(t, err, errMissingTimeNano)
+}
+
+func TestVerifyHeader_PlaceholderTimeNanoPresent(t *testing.T) {
+	t.Parallel()
+	s := newPlaceholderVerifySetup(t, true)
+
+	gasTarget := uint64(15_000_000)
+	bfcd := uint64(64)
+	timeNano := uint64(1700000000_000_000_000) // example nanosecond timestamp
+	extra := buildBlockExtraBytes(&types.BlockExtraData{
+		GasTarget:                &gasTarget,
+		BaseFeeChangeDenominator: &bfcd,
+		TimeNano:                 &timeNano,
+	})
+	h := s.makeSignedChild(t, extra, big.NewInt(params.InitialBaseFee))
+
+	chain := newRawDBChain(s.db, s.cfg, h, nil, nil)
+	err := s.b.verifyHeader(chain, h, nil)
+	// Should not fail with errMissingTimeNano
+	if err != nil {
+		require.NotErrorIs(t, err, errMissingTimeNano)
+	}
+}
+
+// placeholderVerifySetup holds shared state for verifyHeader Placeholder tests.
+type placeholderVerifySetup struct {
+	b       *Bor
+	borCfg  *params.BorConfig
+	cfg     *params.ChainConfig
+	privKey *ecdsa.PrivateKey
+	db      ethdb.Database
+	genesis *types.Header
+}
+
+// newPlaceholderVerifySetup creates a Bor engine with Placeholder enabled for verifyHeader tests.
+func newPlaceholderVerifySetup(t *testing.T, placeholder bool) *placeholderVerifySetup {
+	t.Helper()
+	privKey, _ := crypto.GenerateKey()
+	signerAddr := crypto.PubkeyToAddress(privKey.PublicKey)
+
+	var borCfg *params.BorConfig
+	var cfg *params.ChainConfig
+	if placeholder {
+		borCfg = placeholderBorConfig()
+		cfg = placeholderChainConfig(borCfg)
+	} else {
+		borCfg = giuglianoBorConfig()
+		cfg = giuglianoChainConfig(borCfg)
+	}
+
+	sp := &fakeSpanner{vals: []*valset.Validator{{Address: signerAddr, VotingPower: 1000}}}
+	_, b := newChainAndBorForTestWithConfig(t, sp, cfg, false, signerAddr, uint64(time.Now().Unix())-200)
+
+	db := rawdb.NewMemoryDatabase()
+	genesisTime := uint64(time.Now().Unix()) - 200
+
+	genesis := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       genesisTime,
+		GasLimit:   8_000_000,
+		BaseFee:    big.NewInt(params.InitialBaseFee),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, types.ExtraVanityLength+types.ExtraSealLength),
+	}
+	sigHash := SealHash(genesis, borCfg)
+	sig, _ := crypto.Sign(sigHash.Bytes(), privKey)
+	copy(genesis.Extra[len(genesis.Extra)-types.ExtraSealLength:], sig)
+
+	rawdb.WriteHeader(db, genesis)
+	rawdb.WriteCanonicalHash(db, genesis.Hash(), 0)
+
+	return &placeholderVerifySetup{b: b, borCfg: borCfg, cfg: cfg, privKey: privKey, db: db, genesis: genesis}
+}
+
+func (s *placeholderVerifySetup) makeSignedChild(t *testing.T, extra []byte, baseFee *big.Int) *types.Header {
+	t.Helper()
+	h := &types.Header{
+		ParentHash: s.genesis.Hash(),
+		Number:     big.NewInt(1),
+		Time:       s.genesis.Time + s.borCfg.Period["0"],
+		GasLimit:   8_000_000,
+		BaseFee:    baseFee,
+		Difficulty: big.NewInt(1),
+		Extra:      extra,
+		UncleHash:  uncleHash,
+	}
+	sigHash := SealHash(h, s.borCfg)
+	sig, _ := crypto.Sign(sigHash.Bytes(), s.privKey)
+	copy(h.Extra[len(h.Extra)-types.ExtraSealLength:], sig)
+
+	rawdb.WriteHeader(s.db, h)
+	rawdb.WriteCanonicalHash(s.db, h.Hash(), 1)
+	return h
+}
+
 // TestApplyMessage_StateSyncTxContext validates if TxContext is correctly
 // set for state-sync transactions.
 func TestApplyMessage_StateSyncTxContext(t *testing.T) {

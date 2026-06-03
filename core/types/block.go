@@ -134,6 +134,8 @@ type BlockExtraData struct {
 	GasTarget *uint64 `rlp:"optional"`
 	// BaseFeeChangeDenominator is the EIP-1559 base fee change denominator used by the block producer (post-Giugliano)
 	BaseFeeChangeDenominator *uint64 `rlp:"optional"`
+	// TimeNano is the nanosecond-precision Unix timestamp when the block was prepared (post-Chicago)
+	TimeNano *uint64 `rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -561,6 +563,28 @@ func (h *Header) DecodeBlockExtraData(chainConfig *params.ChainConfig) *BlockExt
 	}
 
 	return &blockExtraData
+}
+
+// GetTimeNano extracts the nanosecond-precision block timestamp from the
+// header's Extra field. Returns nil for pre-Cancun blocks or if TimeNano
+// is not set. TimeNano is consensus-validated starting from the Chicago fork.
+// If you need multiple fields from BlockExtraData, prefer DecodeBlockExtraData
+// to avoid redundant RLP decodes.
+func (h *Header) GetTimeNano(chainConfig *params.ChainConfig) *uint64 {
+	if !chainConfig.IsCancun(h.Number) {
+		return nil
+	}
+
+	if len(h.Extra) < ExtraVanityLength+ExtraSealLength {
+		return nil
+	}
+
+	var blockExtraData BlockExtraData
+	if err := rlp.DecodeBytes(h.Extra[ExtraVanityLength:len(h.Extra)-ExtraSealLength], &blockExtraData); err != nil {
+		return nil
+	}
+
+	return blockExtraData.TimeNano
 }
 
 func (b *Block) BaseFee() *big.Int {
