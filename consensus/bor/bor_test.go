@@ -5719,10 +5719,7 @@ func placeholderBorConfig() *params.BorConfig {
 
 // placeholderChainConfig returns a ChainConfig with all forks + Cancun + Giugliano + Placeholder enabled.
 func placeholderChainConfig(borCfg *params.BorConfig) *params.ChainConfig {
-	cfg := newAllForksChainConfig(borCfg)
-	cfg.ShanghaiBlock = big.NewInt(0)
-	cfg.CancunBlock = big.NewInt(0)
-	return cfg
+	return giuglianoChainConfig(borCfg)
 }
 
 // newPlaceholderBorForTest creates a chain and Bor engine with Placeholder enabled/disabled.
