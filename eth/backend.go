@@ -244,7 +244,38 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	relayService.SetTxGetter(eth.APIBackend.GetCanonicalTransaction)
 
 	blockChainAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
-	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI)
+
+	// Prepare the vm config for tracing
+	vmCfg := vm.Config{
+		EnablePreimageRecording: config.EnablePreimageRecording,
+		StatelessSelfValidation: config.StatelessSelfValidation,
+		EnableWitnessStats:      config.EnableWitnessStats,
+		EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
+	}
+
+	// Setup live tracer if requested
+	if config.VMTrace != "" && config.ParallelEVM.Enable {
+		log.Warn("Live tracing requested but not supported with ParallelEVM enabled. Disable ParallelEVM via `--parallelevm.enable=false` to use live tracing.")
+	} else if config.VMTrace != "" {
+		traceConfig := json.RawMessage("{}")
+		if config.VMTraceJsonConfig != "" {
+			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
+		}
+		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
+		}
+		// For tracing state-sync transactions, we need a modified tracer. We wrap the hooks
+		// of the live tracer above with a state-sync aware tracer which is used across multiple
+		// modules.
+		if borCfg := config.Genesis.Config.Bor; borCfg != nil {
+			stateReceiver := common.HexToAddress(borCfg.StateReceiverContract)
+			t = tracers.WrapStateSyncHooks(t, stateReceiver)
+		}
+		vmCfg.Tracer = t
+	}
+
+	engine, err := ethconfig.CreateConsensusEngine(config.Genesis.Config, config, chainDb, blockChainAPI, vmCfg)
 	eth.engine = engine
 	if err != nil {
 		return nil, err
@@ -269,6 +300,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			rawdb.WriteDatabaseVersion(chainDb, core.BlockChainVersion)
 		}
 	}
+	trieJournalDirectory := config.TrieJournalDirectory
+	if trieJournalDirectory == "" {
+		trieJournalDirectory = stack.ResolvePath("triedb")
+	}
+
 	var (
 		options = &core.BlockChainConfig{
 			TrieCleanLimit:    config.TrieCleanCache,
@@ -285,33 +321,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			TxLookupLimit:     int64(min(config.TransactionHistory, math.MaxInt64)),
 			AddressCacheSizes: config.AddressCacheSizes,
 			PreloadRateLimit:  config.PreloadRateLimit,
-			VmConfig: vm.Config{
-				EnablePreimageRecording: config.EnablePreimageRecording,
-				StatelessSelfValidation: config.StatelessSelfValidation,
-				EnableWitnessStats:      config.EnableWitnessStats,
-				EnableEVMSwitchDispatch: config.EnableEVMSwitchDispatch,
-			},
-			Stateless: config.SyncMode == downloader.StatelessSync,
+			VmConfig:          vmCfg,
+			Stateless:         config.SyncMode == downloader.StatelessSync,
 			// Enables file journaling for the trie database. The journal files will be stored
 			// within the data directory. The corresponding paths will be either:
 			// - DATADIR/triedb/merkle.journal
 			// - DATADIR/triedb/verkle.journal
-			TrieJournalDirectory: stack.ResolvePath("triedb"),
+			TrieJournalDirectory: trieJournalDirectory,
 			StateSizeTracking:    config.EnableStateSizeTracking,
 		}
 	)
-
-	if config.VMTrace != "" {
-		traceConfig := json.RawMessage("{}")
-		if config.VMTraceJsonConfig != "" {
-			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
-		}
-		t, err := tracers.LiveDirectory.New(config.VMTrace, traceConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tracer %s: %v", config.VMTrace, err)
-		}
-		options.VmConfig.Tracer = t
-	}
 
 	checker := whitelist.NewService(chainDb, config.DisableBlindForkValidation, config.MaxBlindForkValidationLimit)
 
@@ -701,7 +720,12 @@ func (s *Ethereum) SetAuthorized(authorized bool) {
 // network protocols to start.
 func (s *Ethereum) Protocols() []p2p.Protocol {
 	protos := eth.MakeProtocols((*ethHandler)(s.handler), s.networkID, s.discmix)
-	if s.config.SnapshotCache > 0 {
+	// snap/1 is only registered when the snapshot cache is enabled and NoSnapServing is false.
+	// Setting NoSnapServing=true disables snap/1 entirely: the node will neither serve snap sync
+	// requests nor be able to sync state via snap/1 itself. The in-memory snapshot tree (used for
+	// fast local state reads) remains active regardless. Nodes that need to snap sync from peers
+	// must leave NoSnapServing=false (the default).
+	if s.config.SnapshotCache > 0 && !s.config.NoSnapServing {
 		protos = append(protos, snap.MakeProtocols((*snapHandler)(s.handler))...)
 	}
 	if s.config.WitnessProtocol {

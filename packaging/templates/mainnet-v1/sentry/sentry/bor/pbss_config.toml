@@ -2,19 +2,20 @@ chain = "mainnet"
 # identity = "node_name"
 # verbosity = 3
 # vmdebug = false
+# vmtrace = ""
+# "vmtrace.jsonconfig" = "{}"
 datadir = "/var/lib/bor/data"
 # ancient = ""
 "db.engine" = "pebble"
 "state.scheme" = "path"
 # keystore = ""
-# "rpc.batchlimit" = 100
+# "rpc.batch-request-limit" = 1000
 # "rpc.returndatalimit" = 100000
 syncmode = "full"
 # pbss does not support archive
 # gcmode = "full"
 # snapshot = true
 # ethstats = ""
-# witnessprotocol = false
 # devfakeauthor = false
 
 # ["eth.requiredblocks"]
@@ -190,6 +191,9 @@ syncmode = "full"
   # enable = true
   # procs = 8
   # enforce = false
+
+# [witness]
+#   enable = false
 
 # [pprof]
 #   pprof = false

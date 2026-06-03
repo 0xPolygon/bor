@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: 0xPolygon/bor
+  IMAGE_NAME: 0xpolygon/bor
 
 jobs:
   build-and-push-image:
@@ -62,3 +62,63 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Export amd64 Docker image as tar.gz
+        run: |
+          docker pull --platform linux/amd64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} bor:${{ github.ref_name }}
+          docker save bor:${{ github.ref_name }} | gzip > bor-${{ github.ref_name }}-amd64.tar.gz
+
+      - name: Export arm64 Docker image as tar.gz
+        run: |
+          docker pull --platform linux/arm64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }} bor:${{ github.ref_name }}
+          docker save bor:${{ github.ref_name }} | gzip > bor-${{ github.ref_name }}-arm64.tar.gz
+
+      - name: Checksum exported Docker images
+        run: |
+          for file in bor-${{ github.ref_name }}-*.tar.gz; do
+            sha256sum "$file" > "$file.checksum"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.7.0
+
+      - name: Sign Docker image tarballs with cosign
+        run: |
+          shopt -s nullglob
+          artifacts=(bor-${{ github.ref_name }}-*.tar.gz)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "No artifacts found to sign"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            cosign sign-blob --yes --oidc-provider=github-actions "$artifact" \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem"
+          done
+
+      - name: Authenticate with GCP via OIDC
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.5
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ secrets.GCP_OIDC_PROVIDER }}
+          service_account: ${{ secrets.GCP_OIDC_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_OIDC_PROJECT_ID }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2.2.1
+
+      - name: Upload Docker images to GCP buckets
+        env:
+          BUCKET_PRIMARY: ${{ secrets.GCP_BUCKET_PRIMARY }}
+          BUCKET_SECONDARY: ${{ secrets.GCP_BUCKET_SECONDARY }}
+        run: |
+          for bucket in "$BUCKET_PRIMARY" "$BUCKET_SECONDARY"; do
+            for file in bor-${{ github.ref_name }}-*.tar.gz; do
+              gcloud storage cp "$file" "$bucket"
+              gcloud storage cp "$file.checksum" "$bucket"
+              gcloud storage cp "$file.sig" "$bucket"
+              gcloud storage cp "$file.pem" "$bucket"
+            done
+          done

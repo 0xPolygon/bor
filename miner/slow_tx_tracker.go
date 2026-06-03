@@ -19,8 +19,22 @@ const (
 
 // txTimingEntry records how long a single transaction took to apply during block building.
 type txTimingEntry struct {
-	hash     common.Hash
-	duration time.Duration
+	hash       common.Hash
+	duration   time.Duration
+	gasUsed    uint64
+	prefetched bool
+}
+
+// mgasPerSecond returns the transaction's apply throughput in MGas/s, computed
+// with integer math on nanoseconds. Per-tx durations are typically tens of
+// microseconds; float seconds would lose precision on the short intervals we
+// actually care about.
+func (e txTimingEntry) mgasPerSecond() uint64 {
+	ns := uint64(e.duration.Nanoseconds())
+	if ns == 0 {
+		return 0
+	}
+	return e.gasUsed * 1_000 / ns
 }
 
 type txTimingMinHeap []txTimingEntry
@@ -93,11 +107,21 @@ func (t *slowTxTopTracker) Reset() {
 	t.data = t.data[:0]
 }
 
-// formatSlowTxs returns a compact string of slow txs in order, e.g. "0xabc...(250ms) 0xdef...(100ms)".
+// formatSlowTxs returns a compact string of slow txs in order, e.g.
+// "0xabc...(250ms, 83 MGas/s, prefetched) 0xdef...(100ms, 42 MGas/s, not-prefetched)".
 func formatSlowTxs(entries []txTimingEntry) string {
 	parts := make([]string, 0, len(entries))
 	for i := range entries {
-		parts = append(parts, fmt.Sprintf("%s(%s)", entries[i].hash.Hex(), common.PrettyDuration(entries[i].duration)))
+		flag := "not-prefetched"
+		if entries[i].prefetched {
+			flag = "prefetched"
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s, %d MGas/s, %s)",
+			entries[i].hash.Hex(),
+			common.PrettyDuration(entries[i].duration),
+			entries[i].mgasPerSecond(),
+			flag,
+		))
 	}
 	return strings.Join(parts, " ")
 }

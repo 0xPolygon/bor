@@ -111,7 +111,22 @@ type btHeaderMarshaling struct {
 	ExcessBlobGas *math.HexOrDecimal64
 }
 
+// Run executes the test against a serial state processor (the default
+// V1 path). Pair with RunV2 below for differential coverage of V2 BlockSTM.
 func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *tracing.Hooks, postCheck func(error, *core.BlockChain)) (result error) {
+	return t.run(snapshotter, scheme, witness, tracer, postCheck, false)
+}
+
+// RunV2 mirrors Run but builds the chain with NewParallelBlockChain in
+// enforce mode so every block is processed by V2 BlockSTM only — no serial
+// fallback. Used by TestExecutionSpecBlocktestsV2 to assert V2 produces the
+// same pass/fail set as the serial baseline against execution-spec-tests
+// fixtures.
+func (t *BlockTest) RunV2(snapshotter bool, scheme string, witness bool, tracer *tracing.Hooks, postCheck func(error, *core.BlockChain)) (result error) {
+	return t.run(snapshotter, scheme, witness, tracer, postCheck, true)
+}
+
+func (t *BlockTest) run(snapshotter bool, scheme string, witness bool, tracer *tracing.Hooks, postCheck func(error, *core.BlockChain), useV2 bool) (result error) {
 	config, ok := Forks[t.json.Network]
 	if !ok {
 		return UnsupportedForkError{t.json.Network}
@@ -166,7 +181,16 @@ func (t *BlockTest) Run(snapshotter bool, scheme string, witness bool, tracer *t
 		options.SnapshotLimit = 1
 		options.SnapshotWait = true
 	}
-	chain, err := core.NewBlockChain(db, gspec, engine, options)
+	var chain *core.BlockChain
+	if useV2 {
+		// enforce=true makes ProcessBlock dispatch only the V2 path; no
+		// serial sibling is launched, so any V2 divergence surfaces as a
+		// concrete test failure rather than being papered over by serial
+		// winning the race. 4 workers matches the bor test default.
+		chain, err = core.NewParallelBlockChain(db, gspec, engine, options, 4, true)
+	} else {
+		chain, err = core.NewBlockChain(db, gspec, engine, options)
+	}
 	if err != nil {
 		return err
 	}

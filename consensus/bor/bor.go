@@ -250,6 +250,7 @@ func BorRLP(header *types.Header, c *params.BorConfig) []byte {
 type Bor struct {
 	chainConfig *params.ChainConfig // Chain config
 	config      *params.BorConfig   // Consensus engine configuration parameters for bor consensus
+	vmConfig    vm.Config           // VM config (optional) for system transactions
 	db          ethdb.Database      // Database to store and retrieve snapshot checkpoints
 
 	recents               *ttlcache.Cache[common.Hash, *Snapshot]     // Snapshots for recent block to speed up reorgs
@@ -283,6 +284,10 @@ type Bor struct {
 	// ctx is cancelled when Close() is called, allowing in-flight operations to abort promptly.
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+
+	// api is the bor engine API instance reused across all callers (JSON-RPC and gRPC).
+	api     *API
+	apiOnce sync.Once
 }
 
 type signer struct {
@@ -301,6 +306,7 @@ func New(
 	genesisContracts GenesisContract,
 	devFakeAuthor bool,
 	blockTime time.Duration,
+	vmConfig vm.Config,
 ) *Bor {
 	// get bor config
 	borConfig := chainConfig.Bor
@@ -332,6 +338,7 @@ func New(
 	c := &Bor{
 		chainConfig:            chainConfig,
 		config:                 borConfig,
+		vmConfig:               vmConfig,
 		db:                     db,
 		ethAPI:                 ethAPI,
 		recents:                recents,
@@ -1214,7 +1221,11 @@ func (c *Bor) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
 
 	// Check if any hardfork needs change in genesis contract code. Note that we use
 	// the wrapped state here as it may have a hooked state db instance which can help
-	// in tracing if it's enabled.
+	// in tracing if it's enabled. Note: when live tracing of state-sync is active,
+	// OnCodeChange events from these block-alloc upgrades are emitted *inside* the
+	// state-sync tx's OnTxStart/OnTxEnd window in the caller's trace stream. This
+	// is a known minor attribution quirk; events are emitted correctly, only their
+	// containing tx-scope is the state-sync tx rather than a block-level system context.
 	if err = c.changeContractCodeIfNeeded(headerNumber, wrappedState); err != nil {
 		return nil, fmt.Errorf("error changing contract code: %w", err)
 	}
@@ -1412,6 +1423,13 @@ func (c *Bor) Authorize(currentSigner common.Address, signFn SignerFn) {
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
 func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witness *stateless.Witness, results chan<- *consensus.NewSealedBlockEvent, stop <-chan struct{}) error {
+	return c.SealWithStopHook(chain, block, witness, results, stop, nil)
+}
+
+// SealWithStopHook is identical to Seal but invokes onStopExit (if non-nil)
+// from the sealing goroutine on stop-branch exits only. The hook is NOT
+// called on the successful-delivery path.
+func (c *Bor) SealWithStopHook(chain consensus.ChainHeaderReader, block *types.Block, witness *stateless.Witness, results chan<- *consensus.NewSealedBlockEvent, stop <-chan struct{}, onStopExit func()) error {
 	header := block.Header()
 	// Sealing the genesis block is not supported
 	number := header.Number.Uint64()
@@ -1472,6 +1490,9 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 		select {
 		case <-stop:
 			log.Debug("Discarding sealing operation for block", "number", number)
+			if onStopExit != nil {
+				onStopExit()
+			}
 			return
 		case <-time.After(delay):
 			if wiggle > 0 {
@@ -1492,10 +1513,16 @@ func (c *Bor) Seal(chain consensus.ChainHeaderReader, block *types.Block, witnes
 				"headerDifficulty", header.Difficulty,
 			)
 		}
+		// Block on send (or exit on stop). A default branch here would
+		// drop the result silently when results is full, leaking the
+		// miner's pendingTasks entry.
 		select {
 		case results <- &consensus.NewSealedBlockEvent{Block: block.WithSeal(header), Witness: witness}:
-		default:
-			log.Warn("Sealing result was not read by miner", "number", number, "sealhash", SealHash(header, c.config))
+		case <-stop:
+			log.Info("Seal interrupted before result delivery", "number", number, "sealhash", SealHash(header, c.config))
+			if onStopExit != nil {
+				onStopExit()
+			}
 		}
 	}()
 
@@ -1532,11 +1559,29 @@ func (c *Bor) SealHash(header *types.Header) common.Hash {
 
 // APIs implements consensus.Engine, returning the user facing RPC API to allow
 // controlling the signer voting.
+//
+// The returned *API is cached on the first call so that per-API state (e.g.,
+// rootHashCache) persists across calls. JSON-RPC only invokes APIs() once at
+// node startup, but the gRPC backend fetches it on every handler call — without
+// the cache those calls would each start from an empty state.
+//
+// rootHashCache is initialized here (inside the sync.Once) rather than lazily
+// in GetRootHash so that concurrent gRPC handlers sharing the cached *API
+// cannot race in initializeRootHashCache.
 func (c *Bor) APIs(chain consensus.ChainHeaderReader) []rpc.API {
+	c.apiOnce.Do(func() {
+		a := &API{chain: chain, bor: c}
+		if err := a.initializeRootHashCache(); err != nil {
+			// log.Crit logs at the highest severity and then exits the process;
+			// This is currently unreachable (size is a constant in initializeRootHashCache),
+			log.Crit("bor: failed to initialize rootHashCache", "err", err)
+		}
+		c.api = a
+	})
 	return []rpc.API{{
 		Namespace: "bor",
 		Version:   "1.0",
-		Service:   &API{chain: chain, bor: c},
+		Service:   c.api,
 		Public:    false,
 	}}
 }
@@ -1706,7 +1751,7 @@ func (c *Bor) FetchAndCommitSpan(
 		)
 	}
 
-	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain)
+	return c.spanner.CommitSpan(ctx, minSpan, validators, producers, state, header, chain, c.vmConfig)
 }
 
 // CommitStates commit states
@@ -1827,7 +1872,7 @@ func (c *Bor) CommitStates(
 		// we expect that this call MUST emit an event, otherwise we wouldn't make a receipt
 		// if the receiver address is not a contract then we'll skip the most of the execution and emitting an event as well
 		// https://github.com/0xPolygon/genesis-contracts/blob/master/contracts/StateReceiver.sol#L27
-		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain)
+		gasUsed, err = c.GenesisContractsClient.CommitState(eventRecord, state, header, chain, c.vmConfig)
 		if err != nil {
 			return nil, err
 		}

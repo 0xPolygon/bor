@@ -21,6 +21,7 @@ package vm
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -44,6 +45,19 @@ type Config struct {
 	StatelessSelfValidation bool // Generate execution witnesses and self-check against them (testing purpose)
 	EnableWitnessStats      bool // Whether trie access statistics collection is enabled
 	EnableEVMSwitchDispatch bool // Use switch-based fast path interpreter
+
+	// SharedJumpDestCache is a shared JumpDest analysis cache. When set,
+	// all EVMs using this config share codeBitmap results, avoiding redundant
+	// bytecode analysis across V2 workers and the prefetcher.
+	SharedJumpDestCache JumpDestCache
+	// Keccak256Cache is a shared cache for SHA3 opcode results. When set,
+	// repeated keccak256 calls with the same 64-byte input (Solidity mapping
+	// slot lookups) return cached results instead of recomputing.
+	Keccak256Cache *sync.Map // [64]byte → common.Hash
+	// EcrecoverCache is a shared cache for ECRECOVER precompile results.
+	// The prefetcher populates it during warm-up; V2 workers hit it to
+	// avoid redundant CGo secp256k1 calls (~1µs overhead each).
+	EcrecoverCache *sync.Map // [128]byte → []byte (result or nil for invalid)
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

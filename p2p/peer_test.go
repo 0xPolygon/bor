@@ -17,6 +17,7 @@
 package p2p
 
 import (
+	"crypto/ecdsa"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -29,9 +30,26 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
+
+type pipeTransport struct {
+	*MsgPipeRW
+}
+
+func (*pipeTransport) doEncHandshake(*ecdsa.PrivateKey) (*ecdsa.PublicKey, error) {
+	return nil, nil
+}
+
+func (*pipeTransport) doProtoHandshake(*protoHandshake) (*protoHandshake, error) {
+	return nil, nil
+}
+
+func (pt *pipeTransport) close(error) {
+	pt.Close()
+}
 
 var discard = Protocol{
 	Name:   "discard",
@@ -186,6 +204,155 @@ func TestPeerPing(t *testing.T) {
 
 	if err := ExpectMsg(rw, pongMsg, nil); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestPeerPongDoesNotBlock(t *testing.T) {
+	peer := &Peer{
+		closed:   make(chan struct{}),
+		pongRecv: make(chan struct{}, 1),
+	}
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			if err := peer.handle(Msg{Code: pongMsg, Payload: strings.NewReader("")}); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("pong handling blocked")
+	}
+	if got := len(peer.pongRecv); got > 1 {
+		t.Fatalf("pongRecv buffered %d messages, want at most 1", got)
+	}
+}
+
+func TestPeerPongOnClosedPeerDoesNotQueue(t *testing.T) {
+	closed := make(chan struct{})
+	close(closed)
+	peer := &Peer{
+		closed:   closed,
+		pongRecv: make(chan struct{}),
+	}
+
+	if err := peer.handle(Msg{Code: pongMsg, Payload: strings.NewReader("")}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-peer.pongRecv:
+		t.Fatal("pong queued after peer closed")
+	default:
+	}
+}
+
+func TestPeerOutstandingPing(t *testing.T) {
+	metrics.Enable()
+
+	interval := 10 * time.Millisecond
+	peer, rw, cleanup := testPingLoopPeer(interval)
+	defer cleanup()
+
+	expectPipeMsg(t, rw, pingMsg, 3*interval)
+	expectPipeMsg(t, rw, pingMsg, 3*interval)
+
+	peer.pongRecv <- struct{}{}
+	expectPipeMsg(t, rw, pingMsg, 3*interval)
+}
+
+func TestPeerPingLoopReportsPingWriteError(t *testing.T) {
+	interval := 10 * time.Millisecond
+	peer, rw, cleanup := testPingLoopPeer(interval)
+	defer cleanup()
+
+	rw.Close()
+	err := expectProtoErr(t, peer, 500*time.Millisecond)
+	if !errors.Is(err, ErrPipeClosed) {
+		t.Fatalf("protoErr = %v, want %v", err, ErrPipeClosed)
+	}
+}
+
+func TestPeerPingLoopReportsPongWriteError(t *testing.T) {
+	interval := time.Hour
+	peer, rw, cleanup := testPingLoopPeer(interval)
+	defer cleanup()
+
+	rw.Close()
+	peer.pingRecv <- struct{}{}
+	err := expectProtoErr(t, peer, 500*time.Millisecond)
+	if !errors.Is(err, ErrPipeClosed) {
+		t.Fatalf("protoErr = %v, want %v", err, ErrPipeClosed)
+	}
+}
+
+func TestDrainStalePongs(t *testing.T) {
+	pongRecv := make(chan struct{}, 3)
+	pongRecv <- struct{}{}
+	pongRecv <- struct{}{}
+	pongRecv <- struct{}{}
+
+	drainStalePongs(pongRecv)
+	if len(pongRecv) != 0 {
+		t.Fatalf("stale pong buffer length = %d, want 0", len(pongRecv))
+	}
+}
+
+func expectProtoErr(t *testing.T, peer *Peer, timeout time.Duration) error {
+	t.Helper()
+
+	select {
+	case err := <-peer.protoErr:
+		if err == nil {
+			t.Fatal("protoErr returned nil")
+		}
+		return err
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for protoErr")
+	}
+	return nil
+}
+
+func testPingLoopPeer(interval time.Duration) (*Peer, *MsgPipeRW, func()) {
+	local, remote := MsgPipe()
+	peer := &Peer{
+		rw:       &conn{transport: &pipeTransport{MsgPipeRW: local}},
+		protoErr: make(chan error, 1),
+		closed:   make(chan struct{}),
+		pingRecv: make(chan struct{}, 16),
+		pongRecv: make(chan struct{}, 1),
+	}
+	peer.wg.Add(1)
+	go peer.pingLoopWithInterval(interval)
+
+	return peer, remote, func() {
+		close(peer.closed)
+		local.Close()
+		remote.Close()
+		peer.wg.Wait()
+	}
+}
+
+func expectPipeMsg(t *testing.T, rw *MsgPipeRW, code uint64, timeout time.Duration) {
+	t.Helper()
+
+	select {
+	case msg := <-rw.r:
+		if err := msg.Discard(); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Code != code {
+			t.Fatalf("message code = %d, want %d", msg.Code, code)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for message %d", code)
 	}
 }
 

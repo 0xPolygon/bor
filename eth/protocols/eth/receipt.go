@@ -287,7 +287,15 @@ func blockReceiptsToNetwork68(blockReceipts, blockBody rlp.RawValue) ([]byte, er
 		out bytes.Buffer
 		buf receiptListBuffers
 	)
-	blockReceiptIter, _ := rlp.NewListIterator(blockReceipts)
+	blockReceiptIter, err := rlp.NewListIterator(blockReceipts)
+	if err != nil {
+		if len(blockReceipts) == 0 {
+			blockReceiptIter, err = rlp.NewListIterator(rlp.EmptyList)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("invalid block receipts: %w", err)
+		}
+	}
 	innerReader := bytes.NewReader(nil)
 	innerStream := rlp.NewStream(innerReader, 0)
 	w := rlp.NewEncoderBuffer(&out)
@@ -448,10 +456,18 @@ func blockReceiptsToNetwork69(blockReceipts, blockBody rlp.RawValue, isStateSync
 	defer stopTxTypes()
 
 	var (
-		out   bytes.Buffer
-		enc   = rlp.NewEncoderBuffer(&out)
-		it, _ = rlp.NewListIterator(blockReceipts)
+		out bytes.Buffer
+		enc = rlp.NewEncoderBuffer(&out)
 	)
+	it, err := rlp.NewListIterator(blockReceipts)
+	if err != nil {
+		if len(blockReceipts) == 0 {
+			it, err = rlp.NewListIterator(rlp.EmptyList)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("invalid block receipts: %w", err)
+		}
+	}
 	outer := enc.List()
 	for i := 0; it.Next(); i++ {
 		content, _, _ := rlp.SplitList(it.Value())

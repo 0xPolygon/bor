@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -36,10 +37,13 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth"
+	"github.com/ethereum/go-ethereum/eth/tracers"
+	_ "github.com/ethereum/go-ethereum/eth/tracers/live" // register live tracers (noop, supply) so they're available via LiveDirectory.New
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -608,6 +612,265 @@ func validateStateSyncEvents(t *testing.T, expected []*clerk.EventRecordWithTime
 	for i := 0; i < len(expected); i++ {
 		require.Equal(t, expected[i].ID, got[i].ID, fmt.Sprintf("state sync ids should be equal - index: %d, expected: %d, got: %d", i, expected[i].ID, got[i].ID))
 	}
+}
+
+// countingTracerEvents records the depth-bearing events (OnEnter, OnExit) that
+// our counting layer observes after they have already passed through
+// WrapStateSyncHooks. Methods are mutex-guarded because the live tracer is
+// invoked from the chain processor goroutine.
+type countingTracerEvents struct {
+	mu       sync.Mutex
+	onEnters []countedEnter
+	onExits  []countedExit
+}
+
+type countedEnter struct {
+	depth int
+	from  common.Address
+	to    common.Address
+}
+
+type countedExit struct {
+	depth int
+}
+
+func (r *countingTracerEvents) recordEnter(e countedEnter) {
+	r.mu.Lock()
+	r.onEnters = append(r.onEnters, e)
+	r.mu.Unlock()
+}
+
+func (r *countingTracerEvents) recordExit(e countedExit) {
+	r.mu.Lock()
+	r.onExits = append(r.onExits, e)
+	r.mu.Unlock()
+}
+
+func (r *countingTracerEvents) snapshot() ([]countedEnter, []countedExit) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	enters := make([]countedEnter, len(r.onEnters))
+	exits := make([]countedExit, len(r.onExits))
+	copy(enters, r.onEnters)
+	copy(exits, r.onExits)
+	return enters, exits
+}
+
+// reset clears the recorded events. Used between block-build and block-import
+// in tests so the assertions only see the import-path execution.
+func (r *countingTracerEvents) reset() {
+	r.mu.Lock()
+	r.onEnters = nil
+	r.onExits = nil
+	r.mu.Unlock()
+}
+
+// registerCountingNoop registers a live tracer that takes the real `noop` live
+// tracer (registered by eth/tracers/live/noop.go's init()) and overrides only
+// OnEnter and OnExit with thin counters that record the call and then forward
+// to noop. All other hooks pass through to noop unchanged — including
+// OnTxStart and OnTxEnd.
+//
+// The full hook chain at runtime is:
+//
+//	WrapStateSyncHooks  →  counting layer  →  real noop
+//
+// Why we don't wrap OnTxStart and OnTxEnd: WrapStateSyncHooks itself emits the
+// synthetic root frame from inside its OnTxStart (a synthetic OnEnter at
+// depth 0) and closes it from inside its OnTxEnd (a synthetic OnExit at
+// depth 0). Both reach the inner via our counting OnEnter / OnExit. So:
+//
+//   - Observing an OnEnter with depth=0, from=BorSystemAddress, to=stateReceiver
+//     is *direct* evidence that WrapStateSyncHooks.OnTxStart fired and
+//     successfully forwarded its synthetic frame through every wrapping layer
+//     to reach noop.
+//   - Observing the matching OnExit at depth=0 is *direct* evidence that
+//     WrapStateSyncHooks.OnTxEnd fired the synthetic close.
+//
+// Wrapping OnTxStart / OnTxEnd directly would only restate the wrapper's
+// contract; observing the synthetic depth-0 events at OnEnter / OnExit
+// validates that contract end-to-end through the full production wiring.
+func registerCountingNoop(t *testing.T, name string) *countingTracerEvents {
+	t.Helper()
+	events := &countingTracerEvents{}
+	tracers.LiveDirectory.Register(name, func(config json.RawMessage) (*tracing.Hooks, error) {
+		inner, err := tracers.LiveDirectory.New("noop", config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to instantiate inner noop tracer: %w", err)
+		}
+		// Struct-copy so every hook noop set (OnTxStart, OnTxEnd, OnBlockStart,
+		// OnGenesisBlock, OnSystemCallStart, etc.) keeps its real noop
+		// implementation. Override only OnEnter and OnExit.
+		wrapped := *inner
+		innerOnEnter := inner.OnEnter
+		wrapped.OnEnter = func(depth int, typ byte, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
+			events.recordEnter(countedEnter{depth: depth, from: from, to: to})
+			if innerOnEnter != nil {
+				innerOnEnter(depth, typ, from, to, input, gas, value)
+			}
+		}
+		innerOnExit := inner.OnExit
+		wrapped.OnExit = func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
+			events.recordExit(countedExit{depth: depth})
+			if innerOnExit != nil {
+				innerOnExit(depth, output, gasUsed, err, reverted)
+			}
+		}
+		return &wrapped, nil
+	})
+	return events
+}
+
+// TestStateSyncTracing_LiveTracerDoesNotPanic enables a live tracer (wired via
+// eth.Config.VMTrace, which goes through the same wrapping path as production)
+// on a Madhugiri chain and processes a sprint-end block containing a state-sync
+// transaction with multiple bridge events.
+//
+// The tracer used is a thin counting layer wrapping the real `noop` live
+// tracer registered in eth/tracers/live/noop.go — same production code path,
+// not a hand-rolled mock. backend.go applies bortracing.WrapStateSyncHooks
+// around the resulting tracer just as it would in production. The counting
+// layer records observed events so the test can assert:
+//
+//  1. The full chain.InsertChain flow does not panic, even though state-sync
+//     consists of N independent top-level EVM calls that would otherwise break
+//     tracers expecting one root per tx.
+//  2. The tracer observes OnTxStart for the state-sync tx, a single synthetic
+//     OnEnter at depth 0 (the wrapper's injected root), and a matching
+//     OnExit(depth=0) before OnTxEnd. Real commitState calls appear shifted to
+//     depth>=1.
+//  3. The synthetic events reach the inner noop tracer (verified by the
+//     counter being incremented before forwarding) — proving the wrapper's
+//     passthrough wiring is correct.
+func TestStateSyncTracing_LiveTracerDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	const tracerName = "test-counted-noop"
+	recorder := registerCountingNoop(t, tracerName)
+
+	stateSyncConfirmationDelay := int64(128)
+	updateGenesis := func(gen *core.Genesis) {
+		gen.Config.Bor.StateSyncConfirmationDelay = map[string]uint64{"0": uint64(stateSyncConfirmationDelay)}
+		gen.Config.Bor.Sprint = map[string]uint64{"0": sprintSize}
+		gen.Config.Bor.MadhugiriBlock = big.NewInt(0) // Madhugiri from genesis.
+	}
+	init := buildEthereumInstanceWithVMTrace(t, rawdb.NewMemoryDatabase(), tracerName, updateGenesis)
+	chain := init.ethereum.BlockChain()
+	engine := init.ethereum.Engine()
+	_bor := engine.(*bor.Bor)
+	defer _bor.Close()
+
+	block := init.genesis.ToBlock()
+	span0 := createMockSpan(addr, chain.Config().ChainID.String())
+	borValSet := borSpan.ConvertHeimdallValSetToBorValSet(span0.ValidatorSet)
+	currentValidators := borValSet.Validators
+
+	res := loadSpanFromFile(t)
+	spanner := getMockedSpanner(t, currentValidators)
+	_bor.SetSpanner(spanner)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	h := createMockHeimdall(ctrl, &span0, res)
+
+	fromID := uint64(1)
+	to := int64(chain.GetHeaderByNumber(0).Time) + 9 - stateSyncConfirmationDelay
+	const eventCount = 5 // Multiple events so synthetic-root wrapping is meaningful.
+
+	sample := getSampleEventRecord(t)
+	sample.Time = time.Unix(to-int64(eventCount+1), 0)
+	eventRecords := generateFakeStateSyncEvents(sample, eventCount)
+
+	h.EXPECT().StateSyncEvents(gomock.Any(), fromID, to).Return(eventRecords, nil).AnyTimes()
+	h.EXPECT().GetLatestSpan(gomock.Any()).Return(nil, fmt.Errorf("span not found")).AnyTimes()
+	_bor.SetHeimdallClient(h)
+
+	// Build out the sprint up to (but not including) the sprint-end block.
+	for i := uint64(1); i < sprintSize; i++ {
+		if IsSpanEnd(i) {
+			currentValidators = borValSet.Validators
+		}
+		block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, currentValidators, false, nil, nil)
+		insertNewBlock(t, chain, block)
+	}
+
+	// Sprint-end block: this is the one that carries the state-sync tx.
+	//
+	// buildNextBlock invokes Bor.FinalizeAndAssemble, which also runs the
+	// state-sync events through the same wrapped tracer (since c.vmConfig.Tracer
+	// is the same wrapped hooks). But the miner path does NOT fire OnTxStart
+	// on the tracer (see the TODO in Bor.FinalizeAndAssemble), so the wrapper's
+	// `active` flag stays false and the miner-path commitState events fire
+	// unshifted at depth=0. The state-sync tracing fix this PR introduces is
+	// for the *import* path (state_processor.Process), so reset the counter
+	// after buildNextBlock to isolate the import-path assertions.
+	block = buildNextBlock(t, _bor, chain, block, nil, init.genesis.Config.Bor, nil, borValSet.Validators, false, nil, nil)
+	recorder.reset()
+	insertNewBlock(t, chain, block)
+
+	// Sanity: the block has a state-sync tx in body and a matching receipt.
+	lastBlock := chain.GetBlockByNumber(block.NumberU64())
+	txs := lastBlock.Transactions()
+	require.Equal(t, 1, len(txs), "state-sync tx should be in the sprint-end block body")
+	require.Equal(t, uint8(types.StateSyncTxType), txs[0].Type(), "last tx should be state-sync type")
+
+	// State-sync events are uniquely identified in the OnEnter stream by their
+	// (from, to) pair: from=BorSystemAddress, to=StateReceiverContract. This is
+	// true for both:
+	//   - the synthetic root frame WrapStateSyncHooks.OnTxStart emits at depth 0
+	//   - each real commitState call (shifted by the wrapper from depth 0 to 1)
+	// Other depth-0 OnEnter events in the block come from system calls like
+	// ProcessBeaconBlockRoot (from=params.SystemAddress, not BorSystemAddress)
+	// or from regular txs (different to-addresses), so the address filter
+	// isolates state-sync activity precisely.
+	enters, exits := recorder.snapshot()
+	stateReceiver := common.HexToAddress(init.genesis.Config.Bor.StateReceiverContract)
+
+	var (
+		stateSyncEntersAtDepth0 int
+		stateSyncEntersAtDepth1 int
+	)
+	for _, e := range enters {
+		if e.from != params.BorSystemAddress || e.to != stateReceiver {
+			continue
+		}
+		switch e.depth {
+		case 0:
+			stateSyncEntersAtDepth0++
+		case 1:
+			stateSyncEntersAtDepth1++
+		}
+	}
+
+	require.Equal(t, 1, stateSyncEntersAtDepth0,
+		"expected exactly one synthetic OnEnter at depth 0 from BorSystemAddress to StateReceiverContract — "+
+			"this is the depth-0 frame WrapStateSyncHooks.OnTxStart emits before any real commitState call, "+
+			"so seeing it once proves OnTxStart fired and its synthetic frame reached the inner tracer")
+	require.Equal(t, eventCount, stateSyncEntersAtDepth1,
+		"expected one OnEnter at depth 1 per state-sync event — the wrapper shifts each real commitState's "+
+			"top-level OnEnter from depth 0 to depth 1")
+
+	// Sanity-check OnExit pairing: every OnEnter must have a matching OnExit at
+	// the same depth. We count exits at depths 0 and 1 across the whole event
+	// stream; depth-1 exits should equal eventCount (one per commitState), and
+	// depth-0 exits must include the synthetic close from WrapStateSyncHooks.OnTxEnd.
+	// (Other depth-0 exits exist from system calls like BeaconBlockRoot, so we
+	// only assert lower bounds here; the unit tests cover exact pairing.)
+	var depth0Exits, depth1Exits int
+	for _, e := range exits {
+		switch e.depth {
+		case 0:
+			depth0Exits++
+		case 1:
+			depth1Exits++
+		}
+	}
+	require.GreaterOrEqual(t, depth0Exits, 1,
+		"expected at least one OnExit at depth 0 — WrapStateSyncHooks.OnTxEnd emits a synthetic depth-0 close")
+	require.Equal(t, eventCount, depth1Exits,
+		"expected one OnExit at depth 1 per state-sync event")
 }
 
 func TestFetchStateSyncEvents_2(t *testing.T) {
@@ -2928,7 +3191,181 @@ func getMockedSpannerWithSpanRotation(t *testing.T, validator1, validator2 commo
 	}
 	spanner.EXPECT().GetCurrentSpan(gomock.Any(), gomock.Any(), gomock.Any()).Return(span1Mock, nil).AnyTimes()
 
-	spanner.EXPECT().CommitSpan(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	spanner.EXPECT().CommitSpan(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	return spanner
+}
+
+// TestProducerRecoversAfterMiningRestart is an integration-level regression
+// test for the family of "elected but silent" producer stalls
+// (post-mortem INC-37 for the 2026-05-07 Amoy chain halt).
+//
+// Behavioral property under test: after a brief mining stop/start cycle on
+// an active block producer — which closes the worker's startup race window
+// (the same window the leak family exercised in production) — the producer
+// must eventually seal blocks again. None of the leak paths fixed in this
+// family should be able to permanently wedge the producer state machine
+// across a restart.
+//
+// The leak paths that the unit tests precisely cover and that this
+// integration test exercises behaviorally:
+//
+//  1. miner.commitWork syncing-leak early return (unit test:
+//     TestCommitWorkLeaksPendingWorkBlockWhenSyncing).
+//  2. miner.taskLoop missing pendingTasks cleanup on Bor.Seal stop-branch
+//     exits (cleanup wired via SealWithStopHook onStopExit callback;
+//     unit test: TestTaskLoopInterruptPreservesPendingTasks).
+//  3. Bor.Seal second-select silent default drop (unit test:
+//     TestSeal_BlocksOnFullResultChannelInsteadOfSilentDrop).
+//
+// A fourth leak path — the mainLoop PeerCount==0 dropped-newWorkReq — was
+// closed in the same family by removing the gate entirely; the path no
+// longer exists, so there's no unit test pair for it.
+//
+// Integration-level limitations:
+//   - The race condition for (2) and the resultCh-full condition for (3)
+//     are timing-sensitive and not reliably reproduced in a 2-node test
+//     without artificial backpressure.
+//
+// What this test DOES guarantee end-to-end: if any change introduces a
+// state-machine bug that prevents a producer from sealing again after a
+// brief mining stop/start cycle, this test catches the regression at the
+// integration level (multiple producers, real P2P, real chain insertion).
+func TestProducerRecoversAfterMiningRestart(t *testing.T) {
+	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(os.Stderr, log.LevelInfo, true)))
+	fdlimit.Raise(2048)
+
+	// Faucets to fund (unused by this test but expected by InitGenesis).
+	faucets := make([]*ecdsa.PrivateKey, 128)
+	for i := 0; i < len(faucets); i++ {
+		faucets[i], _ = crypto.GenerateKey()
+	}
+	genesis := InitGenesis(t, faucets, "./testdata/genesis_2val.json", 8)
+
+	var (
+		stacks []*node.Node
+		nodes  []*eth.Ethereum
+		enodes []*enode.Node
+	)
+	for i := 0; i < 2; i++ {
+		stack, ethBackend, err := InitMiner(genesis, keys[i], true)
+		if err != nil {
+			t.Fatalf("error initializing miner %d: %v", i, err)
+		}
+		defer stack.Close()
+
+		for stack.Server().NodeInfo().Ports.Listener == 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		for _, n := range enodes {
+			stack.Server().AddPeer(n)
+		}
+		stacks = append(stacks, stack)
+		nodes = append(nodes, ethBackend)
+		enodes = append(enodes, stack.Server().Self())
+	}
+
+	// Let P2P stabilize then start mining on both nodes.
+	time.Sleep(3 * time.Second)
+	for _, n := range nodes {
+		if err := n.StartMining(); err != nil {
+			t.Fatalf("StartMining failed: %v", err)
+		}
+	}
+
+	// Phase 1: wait for the chain to advance to at least block 5 — confirms
+	// both producers are healthy before we disrupt anything.
+	waitForBlock := func(target uint64, timeout time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			h := nodes[0].BlockChain().CurrentHeader()
+			if h != nil && h.Number.Uint64() >= target {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		head := nodes[0].BlockChain().CurrentHeader()
+		var got uint64
+		if head != nil {
+			got = head.Number.Uint64()
+		}
+		t.Fatalf("chain did not reach block %d within %s (head=%d)", target, timeout, got)
+	}
+	waitForBlock(5, 30*time.Second)
+
+	// Phase 2: stop mining on node 0 and remove its peer link to node 1.
+	// This recreates the "producer is briefly isolated" condition the
+	// leak family hit in production (the startup race against P2P peer
+	// establishment). With node 0 stopped, node 1 should continue alone.
+	headBeforeStop := nodes[0].BlockChain().CurrentHeader().Number.Uint64()
+	t.Logf("phase 2: head before stop=%d, stopping mining on node 0 and removing peer", headBeforeStop)
+	nodes[0].StopMining()
+	stacks[0].Server().RemovePeer(enodes[1])
+
+	// Brief pause to let the producer-state machine settle into the
+	// "no peers, mining stopped" state. This is the window where the
+	// leaked-wedge bugs would have set pendingWorkBlock/pendingTasks and
+	// not cleared them. After the fixes, the state-machine should be
+	// reusable on the next StartMining.
+	time.Sleep(2 * time.Second)
+
+	// Phase 3: re-add peer, restart mining on node 0. With any of the
+	// leak paths present, node 0 could sit silently — no seals — until
+	// the process is restarted. With the fixes, node 0 must produce
+	// blocks again within a short recovery window.
+	stacks[0].Server().AddPeer(enodes[1])
+	if err := nodes[0].StartMining(); err != nil {
+		t.Fatalf("StartMining (restart) failed: %v", err)
+	}
+
+	// Record the seal count by node 0 at the moment of restart.
+	countSealsByNode0 := func() int {
+		head := nodes[0].BlockChain().CurrentHeader()
+		if head == nil {
+			return 0
+		}
+		count := 0
+		signerAddr0 := nodes[0].AccountManager().Accounts()[0]
+		for n := head.Number.Uint64(); n > 0; n-- {
+			h := nodes[0].BlockChain().GetHeaderByNumber(n)
+			if h == nil {
+				continue
+			}
+			author, err := nodes[0].Engine().Author(h)
+			if err == nil && author == signerAddr0 {
+				count++
+			}
+			// Only look at recent blocks to avoid O(chain) work.
+			if head.Number.Uint64()-n > 50 {
+				break
+			}
+		}
+		return count
+	}
+	sealsBefore := countSealsByNode0()
+
+	// Phase 4: require that node 0 seals at least one new block within
+	// the recovery window. In a healthy state machine, the next sprint
+	// boundary that hands node 0 the producer slot will produce a block;
+	// in a wedged state machine, no new seals appear no matter how long
+	// we wait. 30s is generous given the sprint length and producer
+	// alternation pattern of genesis_2val.json (sprint=8, alternating
+	// producers means node 0 is primary every other sprint).
+	recoveryDeadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(recoveryDeadline) {
+		if countSealsByNode0() > sealsBefore {
+			t.Logf("phase 4: node 0 recovered — produced new block after restart (seals %d → %d)",
+				sealsBefore, countSealsByNode0())
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	headAfter := nodes[0].BlockChain().CurrentHeader().Number.Uint64()
+	t.Fatalf("node 0 did not seal a new block within 45s after StopMining/StartMining cycle "+
+		"(head before stop=%d, head after recovery window=%d, seals by node 0: before=%d after=%d). "+
+		"This indicates a leaked-wedge regression in the producer state machine — see post-mortem "+
+		"INC-37 for the family of bugs this test guards against.",
+		headBeforeStop, headAfter, sealsBefore, countSealsByNode0())
 }

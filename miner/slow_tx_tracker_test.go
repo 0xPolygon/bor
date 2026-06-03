@@ -3,6 +3,7 @@ package miner
 import (
 	"math/big"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,8 +67,8 @@ func TestSlowTxTopTrackerSnapshotAndReset(t *testing.T) {
 	t.Parallel()
 
 	tracker := newSlowTxTopTracker()
-	tracker.Add(txTimingEntry{duration: 4 * time.Millisecond})
-	tracker.Add(txTimingEntry{duration: 9 * time.Millisecond})
+	tracker.Add(txTimingEntry{duration: 4 * time.Millisecond, gasUsed: 21_000})
+	tracker.Add(txTimingEntry{duration: 9 * time.Millisecond, gasUsed: 21_000, prefetched: true})
 
 	first := tracker.SnapshotAndReset()
 	require.Len(t, first, 2)
@@ -81,4 +82,40 @@ func TestSlowTxTopTrackerSnapshotAndReset(t *testing.T) {
 	afterReset := tracker.SnapshotAndReset()
 	require.Len(t, afterReset, 1)
 	require.Equal(t, 7*time.Millisecond, afterReset[0].duration)
+}
+
+func TestFormatSlowTxsAnnotatesPrefetchedAndMGasPerSecond(t *testing.T) {
+	t.Parallel()
+
+	// 21,000 gas in 100µs = 210 MGas/s with integer math: 21000*1000/100000 = 210.
+	entries := []txTimingEntry{
+		{
+			hash:       common.BigToHash(big.NewInt(1)),
+			duration:   100 * time.Microsecond,
+			gasUsed:    21_000,
+			prefetched: true,
+		},
+		{
+			hash:       common.BigToHash(big.NewInt(2)),
+			duration:   500 * time.Microsecond,
+			gasUsed:    50_000,
+			prefetched: false,
+		},
+	}
+
+	out := formatSlowTxs(entries)
+
+	require.Contains(t, out, "210 MGas/s")
+	require.Contains(t, out, ", prefetched)")
+	require.Contains(t, out, "100 MGas/s") // 50000*1000/500000
+	require.Contains(t, out, ", not-prefetched)")
+	// Both entries should be separated by a single space.
+	require.Equal(t, 2, strings.Count(out, "MGas/s"))
+}
+
+func TestMGasPerSecondZeroDuration(t *testing.T) {
+	t.Parallel()
+
+	e := txTimingEntry{gasUsed: 21_000, duration: 0}
+	require.Equal(t, uint64(0), e.mgasPerSecond())
 }

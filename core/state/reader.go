@@ -163,7 +163,8 @@ func (r *cachingCodeReader) CodeSize(addr common.Address, codeHash common.Hash) 
 
 // flatReader wraps a database state reader and is safe for concurrent access.
 type flatReader struct {
-	reader database.StateReader
+	reader    database.StateReader
+	addrCache sync.Map // common.Address → common.Hash (keccak256 cache)
 }
 
 // newFlatReader constructs a state reader with on the given state root.
@@ -178,7 +179,14 @@ func newFlatReader(reader database.StateReader) *flatReader {
 //
 // The returned account might be nil if it's not existent.
 func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
-	account, err := r.reader.Account(crypto.Keccak256Hash(addr.Bytes()))
+	var addrHash common.Hash
+	if v, ok := r.addrCache.Load(addr); ok {
+		addrHash = v.(common.Hash)
+	} else {
+		addrHash = crypto.Keccak256Hash(addr.Bytes())
+		r.addrCache.Store(addr, addrHash)
+	}
+	account, err := r.reader.Account(addrHash)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +216,13 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 //
 // The returned storage slot might be empty if it's not existent.
 func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
-	addrHash := crypto.Keccak256Hash(addr.Bytes())
+	var addrHash common.Hash
+	if v, ok := r.addrCache.Load(addr); ok {
+		addrHash = v.(common.Hash)
+	} else {
+		addrHash = crypto.Keccak256Hash(addr.Bytes())
+		r.addrCache.Store(addr, addrHash)
+	}
 	slotHash := crypto.Keccak256Hash(key.Bytes())
 	ret, err := r.reader.Storage(addrHash, slotHash)
 	if err != nil {
@@ -240,11 +254,12 @@ type trieReader struct {
 	// or Verkle-tree is not safe for concurrent read.
 	mainTrie Trie
 
-	subRoots   map[common.Address]common.Hash // Set of storage roots, cached when the account is resolved
-	subTries   map[common.Address]Trie        // Group of storage tries, cached when it's resolved
-	muSubRoot  sync.Mutex
-	muSubTries sync.Mutex
-	lock       sync.Mutex // Lock for protecting concurrent read
+	subRoots          sync.Map   // common.Address → common.Hash (storage roots)
+	subTries          sync.Map   // common.Address → Trie (storage tries)
+	lock              sync.Mutex // Lock for protecting concurrent read
+	accountCache      sync.Map   // addr → *types.StateAccount (concurrent-safe cache)
+	storageCache      sync.Map   // addrSlot → common.Hash (concurrent-safe cache)
+	concurrentEnabled bool       // if true, skip r.lock (trie uses sync.Map resolve cache)
 }
 
 // newTrieReader constructs a trie reader of the specific state. An error will be
@@ -278,8 +293,6 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 		root:     root,
 		db:       db,
 		mainTrie: tr,
-		subRoots: make(map[common.Address]common.Hash),
-		subTries: make(map[common.Address]Trie),
 	}, nil
 }
 
@@ -289,14 +302,11 @@ func (r *trieReader) account(addr common.Address) (*types.StateAccount, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.muSubRoot.Lock()
 	if account == nil {
-		r.subRoots[addr] = types.EmptyRootHash
+		r.subRoots.Store(addr, types.EmptyRootHash)
 	} else {
-		r.subRoots[addr] = account.Root
+		r.subRoots.Store(addr, account.Root)
 	}
-	r.muSubRoot.Unlock()
-
 	return account, nil
 }
 
@@ -305,10 +315,62 @@ func (r *trieReader) account(addr common.Address) (*types.StateAccount, error) {
 // An error will be returned if the trie state is corrupted. An nil account
 // will be returned if it's not existent in the trie.
 func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
-	r.lock.Lock()
-	defer r.lock.Unlock()
+	// Fast path: check concurrent-safe cache before acquiring lock.
+	if cached, ok := r.accountCache.Load(addr); ok {
+		return cached.(*types.StateAccount), nil
+	}
 
-	return r.account(addr)
+	if r.concurrentEnabled {
+		// Trie has sync.Map resolve cache — no lock needed.
+		acct, err := r.account(addr)
+		if err == nil {
+			r.accountCache.Store(addr, acct)
+		}
+		return acct, err
+	}
+
+	r.lock.Lock()
+	acct, err := r.account(addr)
+	r.lock.Unlock()
+
+	if err == nil {
+		r.accountCache.Store(addr, acct)
+	}
+	return acct, err
+}
+
+// EnableConcurrentReads enables concurrent trie reads by switching the
+// trie to use a sync.Map resolve cache instead of in-place mutation.
+// After calling this, Account() and Storage() can be called concurrently
+// without the r.lock (using only the sync.Map caches).
+func (r *trieReader) EnableConcurrentReads() {
+	if st, ok := r.mainTrie.(*trie.StateTrie); ok {
+		st.EnableConcurrentReads()
+	}
+	r.concurrentEnabled = true
+}
+
+// CollectStateWitness adds every trie node that has been read through this
+// reader into the supplied witness. Called by V2 BlockSTM at end-of-block
+// because finalDB.IntermediateRoot's per-stateObject witness loop only
+// covers addresses present in finalDB.stateObjects — addresses that were
+// only READ (never written) by V2 workers don't reach finalDB at all.
+//
+// The reader's mainTrie and per-address sub-tries are SHARED with all
+// pool copies and finalDB (StateDB.Copy() shares reader by reference), so
+// every worker read accumulates in the same set of trie tracers. Walking
+// reader.subTries here picks up exactly the worker-only-read tries that
+// finalDB doesn't know about.
+func (r *trieReader) CollectStateWitness(addState func(map[string][]byte)) {
+	if r.mainTrie != nil {
+		addState(r.mainTrie.Witness())
+	}
+	r.subTries.Range(func(_, v any) bool {
+		if t, ok := v.(interface{ Witness() map[string][]byte }); ok {
+			addState(t.Witness())
+		}
+		return true
+	})
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the
@@ -316,47 +378,97 @@ func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
 //
 // An error will be returned if the trie state is corrupted. An empty storage
 // slot will be returned if it's not existent in the trie.
+// storageCacheKey is a composite key for the trieReader storage cache.
+// Uses the same layout as stateKey so the maps are compatible.
+type storageCacheKey = stateKey
+
 func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
-	r.lock.Lock()
-	defer r.lock.Unlock()
-
-	var (
-		tr    Trie
-		found bool
-		value common.Hash
-	)
-	if r.db.IsVerkle() {
-		tr = r.mainTrie
-	} else {
-		tr, found = r.subTries[addr]
-		if !found {
-			root, ok := r.subRoots[addr]
-
-			// The storage slot is accessed without account caching. It's unexpected
-			// behavior but try to resolve the account first anyway.
-			if !ok {
-				_, err := r.account(addr)
-				if err != nil {
-					return common.Hash{}, err
-				}
-				root = r.subRoots[addr]
-			}
-			var err error
-			tr, err = trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
-			if err != nil {
-				return common.Hash{}, err
-			}
-			r.muSubTries.Lock()
-			r.subTries[addr] = tr
-			r.muSubTries.Unlock()
-		}
+	cacheKey := storageCacheKey{addr, key}
+	if cached, ok := r.storageCache.Load(cacheKey); ok {
+		return cached.(common.Hash), nil
+	}
+	tr, err := r.subTrieFor(addr)
+	if err != nil {
+		return common.Hash{}, err
 	}
 	ret, err := tr.GetStorage(addr, key.Bytes())
 	if err != nil {
 		return common.Hash{}, err
 	}
+	var value common.Hash
 	value.SetBytes(ret)
+	r.storageCache.Store(cacheKey, value)
 	return value, nil
+}
+
+// subTrieFor returns a Trie suitable for reading storage of addr. It
+// dispatches to the concurrent or locked path based on configuration.
+func (r *trieReader) subTrieFor(addr common.Address) (Trie, error) {
+	if r.concurrentEnabled {
+		return r.subTrieConcurrent(addr)
+	}
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return r.subTrieLocked(addr)
+}
+
+// subTrieConcurrent is the V2 lock-free path: uses sync.Map for the trie
+// cache and EnableConcurrentReads() on freshly opened tries so multiple
+// goroutines can read different addresses without cross-address contention.
+func (r *trieReader) subTrieConcurrent(addr common.Address) (Trie, error) {
+	if v, ok := r.subTries.Load(addr); ok {
+		return v.(Trie), nil
+	}
+	root, err := r.resolveSubRoot(addr)
+	if err != nil {
+		return nil, err
+	}
+	newTr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
+	if err != nil {
+		return nil, err
+	}
+	newTr.EnableConcurrentReads()
+	// First-writer-wins: another goroutine may have created it.
+	if existing, loaded := r.subTries.LoadOrStore(addr, newTr); loaded {
+		return existing.(Trie), nil
+	}
+	return newTr, nil
+}
+
+// subTrieLocked is the legacy mutex-protected path. Verkle uses the
+// merged main trie; MPT uses per-address sub tries cached in subTries.
+func (r *trieReader) subTrieLocked(addr common.Address) (Trie, error) {
+	if r.db.IsVerkle() {
+		return r.mainTrie, nil
+	}
+	if v, ok := r.subTries.Load(addr); ok {
+		return v.(Trie), nil
+	}
+	root, err := r.resolveSubRoot(addr)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := trie.NewStateTrie(trie.StorageTrieID(r.root, crypto.Keccak256Hash(addr.Bytes()), root), r.db)
+	if err != nil {
+		return nil, err
+	}
+	r.subTries.Store(addr, tr)
+	return tr, nil
+}
+
+// resolveSubRoot returns the storage root for addr, resolving the account
+// first if necessary so the cache is populated.
+func (r *trieReader) resolveSubRoot(addr common.Address) (common.Hash, error) {
+	if v, ok := r.subRoots.Load(addr); ok {
+		return v.(common.Hash), nil
+	}
+	if _, err := r.account(addr); err != nil {
+		return common.Hash{}, err
+	}
+	if v, ok := r.subRoots.Load(addr); ok {
+		return v.(common.Hash), nil
+	}
+	return common.Hash{}, nil
 }
 
 // multiStateReader is the aggregation of a list of StateReader interface,
@@ -452,41 +564,33 @@ type accountCacheEntry struct {
 }
 
 // storageCacheEntry is the cached storage slot plus attribution metadata.
-// Note: stored inline (no per-slot heap alloc).
 type storageCacheEntry struct {
 	value  common.Hash
 	origin readerRole
 }
 
+// storageKey is the composite key for the readerWithCache storage sync.Map.
+// Uses the same layout as stateKey so SafeBase can share the map.
+type storageKey = stateKey
+
 // readerWithCache is a wrapper around Reader that maintains additional state caches
-// to support concurrent state access.
+// to support concurrent state access. Both caches use sync.Map for lock-free reads —
+// the dominant access pattern is many concurrent readers with infrequent first-writes.
 type readerWithCache struct {
 	Reader // safe for concurrent read
 
-	// Previously resolved state entries.
-	accounts    map[common.Address]*accountCacheEntry
-	accountLock sync.RWMutex
+	// Previously resolved account entries. Key: common.Address, Value: *accountCacheEntry.
+	accounts sync.Map
 
-	// List of storage buckets, each of which is thread-safe.
-	// This reader is typically used in scenarios requiring concurrent
-	// access to storage. Using multiple buckets helps mitigate
-	// the overhead caused by locking.
-	storageBuckets [16]struct {
-		lock     sync.RWMutex
-		storages map[common.Address]map[common.Hash]storageCacheEntry
-	}
+	// Previously resolved storage entries. Key: storageKey, Value: *storageCacheEntry.
+	storageCache sync.Map
 }
 
 // newReaderWithCache constructs the reader with local cache.
 func newReaderWithCache(reader Reader) *readerWithCache {
-	r := &readerWithCache{
-		Reader:   reader,
-		accounts: make(map[common.Address]*accountCacheEntry),
+	return &readerWithCache{
+		Reader: reader,
 	}
-	for i := range r.storageBuckets {
-		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]storageCacheEntry)
-	}
-	return r
 }
 
 // account retrieves the account specified by the address along with a flag
@@ -498,30 +602,24 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 // It also returns the cache entry (for provenance/unique-usage accounting)
 // and whether this call inserted a new entry (first-writer-wins).
 func (r *readerWithCache) account(addr common.Address, caller readerRole) (*types.StateAccount, bool, *accountCacheEntry, bool, error) {
-	// Try to resolve the requested account in the local cache
-	r.accountLock.RLock()
-	ent, ok := r.accounts[addr]
-	r.accountLock.RUnlock()
-	if ok {
+	// Try to resolve the requested account in the local cache (lock-free read).
+	if v, ok := r.accounts.Load(addr); ok {
+		ent := v.(*accountCacheEntry)
 		return ent.acct, true, ent, false, nil
 	}
-	// Try to resolve the requested account from the underlying reader
+	// Cache miss — resolve from the underlying reader (may involve pebble I/O).
 	acct, err := r.Reader.Account(addr)
 	if err != nil {
 		return nil, false, nil, false, err
 	}
-	r.accountLock.Lock()
-	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
-	if existing, ok := r.accounts[addr]; ok {
-		r.accountLock.Unlock()
-		// This was a MISS originally (we didn't find it under RLock),
-		// but another goroutine inserted it while we fetched from the backing reader.
-		// Report incache=false so miss counters reflect backing-read cost.
-		return existing.acct, false, existing, false, nil
-	}
+	// First-writer-wins: LoadOrStore inserts only if key is absent.
 	newEnt := &accountCacheEntry{acct: acct, origin: caller}
-	r.accounts[addr] = newEnt
-	r.accountLock.Unlock()
+	if existing, loaded := r.accounts.LoadOrStore(addr, newEnt); loaded {
+		ent := existing.(*accountCacheEntry)
+		// Another goroutine inserted while we fetched from the backing reader.
+		// Report incache=false so miss counters reflect backing-read cost.
+		return ent.acct, false, ent, false, nil
+	}
 	return acct, false, newEnt, true, nil
 }
 
@@ -541,49 +639,27 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 // It also returns the cache entry (for provenance/unique-usage accounting)
 // and whether this call inserted a new entry (first-writer-wins).
 func (r *readerWithCache) storage(addr common.Address, slot common.Hash, caller readerRole) (common.Hash, bool, *storageCacheEntry, bool, error) {
-	var (
-		ok     bool
-		bucket = &r.storageBuckets[addr[0]&0x0f]
-	)
-	// Try to resolve the requested storage slot in the local cache
-	bucket.lock.RLock()
-	slots, ok := bucket.storages[addr]
-	if ok {
-		ent, ok := slots[slot]
-		if ok {
-			// Map values are returned by value (copy). Returning a pointer to the local copy is
-			// OK for reading attribution fields (origin), but not for mutating fields.
-			bucket.lock.RUnlock()
-			return ent.value, true, &ent, false, nil
-		}
-	}
-	bucket.lock.RUnlock()
+	key := storageKey{addr: addr, slot: slot}
 
-	// Try to resolve the requested storage slot from the underlying reader
+	// Try to resolve the requested storage slot in the local cache (lock-free read).
+	if v, ok := r.storageCache.Load(key); ok {
+		ent := v.(*storageCacheEntry)
+		return ent.value, true, ent, false, nil
+	}
+	// Cache miss — resolve from the underlying reader (may involve pebble I/O).
 	value, err := r.Reader.Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, false, nil, false, err
 	}
-
-	bucket.lock.Lock()
-	slots, ok = bucket.storages[addr]
-	if !ok {
-		slots = make(map[common.Hash]storageCacheEntry)
-		bucket.storages[addr] = slots
-	}
-	// First-writer-wins: avoid clobbering if another goroutine inserted meanwhile.
-	if existing, ok := slots[slot]; ok {
-		bucket.lock.Unlock()
-		// This was a MISS originally (we didn't find it under RLock),
-		// but another goroutine inserted it while we fetched from the backing reader.
+	// First-writer-wins: LoadOrStore inserts only if key is absent.
+	newEnt := &storageCacheEntry{value: value, origin: caller}
+	if existing, loaded := r.storageCache.LoadOrStore(key, newEnt); loaded {
+		ent := existing.(*storageCacheEntry)
+		// Another goroutine inserted while we fetched from the backing reader.
 		// Report incache=false so miss counters reflect backing-read cost.
-		return existing.value, false, &existing, false, nil
+		return ent.value, false, ent, false, nil
 	}
-	newEnt := storageCacheEntry{value: value, origin: caller}
-	slots[slot] = newEnt
-	bucket.lock.Unlock()
-
-	return value, false, &newEnt, true, nil
+	return value, false, newEnt, true, nil
 }
 
 // Storage implements StateReader, retrieving the storage slot specified by the

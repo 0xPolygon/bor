@@ -62,7 +62,7 @@ func NewSecure(stateRoot common.Hash, owner common.Hash, root common.Hash, db da
 // New and must have an attached database. The database also stores
 // the preimage of each key if preimage recording is enabled.
 //
-// StateTrie is not safe for concurrent use.
+// StateTrie is not safe for concurrent use unless EnableConcurrentReads is called.
 type StateTrie struct {
 	trie        Trie
 	db          database.NodeDatabase
@@ -95,6 +95,11 @@ func NewStateTrie(id *ID, db database.NodeDatabase) (*StateTrie, error) {
 		tr.preimages = preimages
 	}
 	return tr, nil
+}
+
+// EnableConcurrentReads makes GetAccount, GetStorage etc. safe for concurrent use.
+func (t *StateTrie) EnableConcurrentReads() {
+	t.trie.EnableConcurrentReads()
 }
 
 // MustGet returns the value for key stored in the trie.

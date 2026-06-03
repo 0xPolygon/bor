@@ -175,6 +175,20 @@ func (t *prestateTracer) OnOpcode(pc uint64, opcode byte, gas, cost uint64, scop
 
 func (t *prestateTracer) OnTxStart(env *tracing.VMContext, tx *types.Transaction, from common.Address) {
 	t.env = env
+	t.lookupAccount(env.Coinbase)
+
+	// For bor state-sync transactions, the `from` and `to` fields of the tx object are zero address
+	// while we use the system address and state receiver contract address as `from` and `to`
+	// respectively for the top level synthetic frame (see `state_sync_tracing_hooks.go` for
+	// more context). Hence we load the actual accounts here to avoid panic in later calls.
+	if tx.Type() == types.StateSyncTxType {
+		t.lookupAccount(params.BorSystemAddress)
+		if t.chainConfig.Bor != nil {
+			t.lookupAccount(common.HexToAddress(t.chainConfig.Bor.StateReceiverContract))
+		}
+		return
+	}
+
 	if tx.To() == nil {
 		t.to = crypto.CreateAddress(from, env.StateDB.GetNonce(from))
 		t.created[t.to] = true
@@ -191,7 +205,6 @@ func (t *prestateTracer) OnTxStart(env *tracing.VMContext, tx *types.Transaction
 
 	t.lookupAccount(from)
 	t.lookupAccount(t.to)
-	t.lookupAccount(env.Coinbase)
 
 	// Add accounts with authorizations to the prestate before they get applied.
 	for _, auth := range tx.SetCodeAuthorizations() {
@@ -350,12 +363,18 @@ func (t *prestateTracer) lookupAccount(addr common.Address) {
 }
 
 // lookupStorage fetches the requested storage slot and adds
-// it to the prestate of the given contract. It assumes `lookupAccount`
-// has been performed on the contract before.
+// it to the prestate of the given contract. Earlier it assumed
+// that `lookupAccount` has been performed on the contract before
+// but as a defensive measure for state-sync transactions, we perform
+// `lookupAccount` here to ensure there is no panic. This helps in
+// cases where SLOAD/SSTORE fires for an account which wasn't introduced
+// earlier (via lookup). E.g. in state-sync top level synthetic call. If
+// an account is already loaded, it's a no-op.
 func (t *prestateTracer) lookupStorage(addr common.Address, key common.Hash) {
 	if t.config.DisableStorage {
 		return
 	}
+	t.lookupAccount(addr)
 	if _, ok := t.pre[addr].Storage[key]; ok {
 		return
 	}

@@ -1637,7 +1637,8 @@ func (w *whitelistFake) UpdateFastForwardMilestone(num uint64, hash common.Hash)
 func (w *whitelistFake) GetWhitelistedMilestone() (bool, uint64, common.Hash) {
 	return false, 0, common.Hash{}
 }
-func (w *whitelistFake) PurgeWhitelistedMilestone() {}
+func (w *whitelistFake) PurgeWhitelistedMilestone()    {}
+func (w *whitelistFake) PurgeMilestonesAfter(_ uint64) {}
 
 func (w *whitelistFake) GetCheckpoints(current, sidechainHeader *types.Header, sidechainCheckpoints []*types.Header) (map[uint64]*types.Header, error) {
 	return map[uint64]*types.Header{}, nil

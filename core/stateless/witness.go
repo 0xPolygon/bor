@@ -109,7 +109,12 @@ func NewWitness(context *types.Header, chain HeaderReader) (*Witness, error) {
 // AddBlockHash adds a "blockhash" to the witness with the designated offset from
 // chain head. Under the hood, this method actually pulls in enough headers from
 // the chain to cover the block being added.
+//
+// Safe for concurrent use — V2 BlockSTM workers call this from the EVM's
+// BLOCKHASH opcode, which runs on multiple goroutines per block.
 func (w *Witness) AddBlockHash(number uint64) {
+	w.lock.Lock()
+	defer w.lock.Unlock()
 	// Keep pulling in headers until this hash is populated
 	for int(w.context.Number.Uint64()-number) > len(w.Headers) {
 		tail := w.Headers[len(w.Headers)-1]
@@ -118,10 +123,15 @@ func (w *Witness) AddBlockHash(number uint64) {
 }
 
 // AddCode adds a bytecode blob to the witness.
+//
+// Safe for concurrent use — V2 BlockSTM workers and the V2 settle path can
+// both add code blobs simultaneously.
 func (w *Witness) AddCode(code []byte) {
 	if len(code) == 0 {
 		return
 	}
+	w.lock.Lock()
+	defer w.lock.Unlock()
 	w.Codes[string(code)] = struct{}{}
 }
 

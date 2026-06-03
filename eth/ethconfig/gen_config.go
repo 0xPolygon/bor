@@ -51,6 +51,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		SnapshotCache                        int
 		Preimages                            bool
 		TriesInMemory                        uint64
+		TrieJournalDirectory                 string
 		FilterLogCacheSize                   int
 		LogQueryLimit                        int
 		AddressCacheSizes                    map[common.Address]int
@@ -138,6 +139,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.SnapshotCache = c.SnapshotCache
 	enc.Preimages = c.Preimages
 	enc.TriesInMemory = c.TriesInMemory
+	enc.TrieJournalDirectory = c.TrieJournalDirectory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
 	enc.LogQueryLimit = c.LogQueryLimit
 	enc.AddressCacheSizes = c.AddressCacheSizes
@@ -229,6 +231,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		SnapshotCache                        *int
 		Preimages                            *bool
 		TriesInMemory                        *uint64
+		TrieJournalDirectory                 *string
 		FilterLogCacheSize                   *int
 		LogQueryLimit                        *int
 		AddressCacheSizes                    map[common.Address]int
@@ -380,6 +383,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.TriesInMemory != nil {
 		c.TriesInMemory = *dec.TriesInMemory
+	}
+	if dec.TrieJournalDirectory != nil {
+		c.TrieJournalDirectory = *dec.TrieJournalDirectory
 	}
 	if dec.FilterLogCacheSize != nil {
 		c.FilterLogCacheSize = *dec.FilterLogCacheSize

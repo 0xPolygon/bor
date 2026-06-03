@@ -114,6 +114,8 @@ type StateDB struct {
 	revertedKeys map[blockstm.Key]struct{}
 	dep          int
 
+	skipTimers bool // skip time.Now() calls in hot paths for worker stateDBs
+
 	// DB error.
 	// State objects are used by the consensus core and VM which are
 	// unable to deal with database-level errors. Any error that occurs
@@ -293,8 +295,123 @@ func (s *StateDB) DepTxIndex() int {
 	return s.dep
 }
 
+// RecordTransfer records a transfer for deferred log creation in parallel mode.
+// V2 PDB has its own RecordTransfer that captures TransferRecords; the
+// serial StateDB has nothing to capture, so this is a no-op.
+func (s *StateDB) RecordTransfer(sender, recipient common.Address, amount *uint256.Int) bool {
+	return false
+}
+
 func (s *StateDB) SetIncarnation(inc int) {
 	s.incarnation = inc
+}
+
+// CollectStateWitness adds every trie node read through this StateDB's
+// reader into the supplied witness's state set. Used by V2 BlockSTM to
+// pull in worker reads that finalDB.IntermediateRoot would otherwise miss
+// (they touch tries shared with finalDB but never appear in
+// finalDB.stateObjects). No-op when witness is nil or the reader chain
+// doesn't bottom out at a *trieReader (e.g. snapshot-only readers).
+func (s *StateDB) CollectStateWitness() {
+	if s.witness == nil {
+		return
+	}
+	collectStateWitnessFromReader(s.reader, s.witness.AddState)
+}
+
+func collectStateWitnessFromReader(r any, addState func(map[string][]byte)) {
+	switch v := r.(type) {
+	case *reader:
+		collectStateWitnessFromReader(v.StateReader, addState)
+	case *readerWithCache:
+		collectStateWitnessFromReader(v.Reader, addState)
+	case *readerWithCacheStats:
+		collectStateWitnessFromReader(v.readerWithCache, addState)
+	case *trieReader:
+		v.CollectStateWitness(addState)
+	case *multiStateReader:
+		for _, inner := range v.readers {
+			collectStateWitnessFromReader(inner, addState)
+		}
+	}
+}
+
+// EnableConcurrentReads makes the trie reader safe for concurrent access
+// by using sync.Map for node resolution instead of in-place tree mutation.
+func (s *StateDB) EnableConcurrentReads() {
+	enableConcurrentOnReader(s.reader)
+}
+
+// StorageCache returns the shared trieReader storage cache (sync.Map) if available.
+// This cache is populated by all readers (prefetcher, serial, V2).
+// SafeBase can use it for instant storage lookups.
+func (s *StateDB) StorageCache() *sync.Map {
+	return findStorageCache(s.reader)
+}
+
+// OverlayPendingStorageInto walks every live stateObject and writes its
+// in-memory pending+dirty storage values into target, keyed by stateKey{addr,
+// slot}. Use it to repair a SharedStorageCache that was populated from raw
+// trie reads BEFORE pre-block writes (EIP-4788/EIP-2935 system contracts,
+// DAO fork, etc.) landed in dirty/pending storage. Without this overlay,
+// SafeBase serves the stale trie value (zero, for previously-unwritten
+// system-contract slots) and downstream V2 workers see no system-call effect.
+func (s *StateDB) OverlayPendingStorageInto(target *sync.Map) {
+	if target == nil {
+		return
+	}
+	for addr, obj := range s.stateObjects {
+		if obj == nil {
+			continue
+		}
+		obj.storageMutex.Lock()
+		for slot, val := range obj.pendingStorage {
+			target.Store(stateKey{addr: addr, slot: slot}, val)
+		}
+		for slot, val := range obj.dirtyStorage {
+			target.Store(stateKey{addr: addr, slot: slot}, val)
+		}
+		obj.storageMutex.Unlock()
+	}
+}
+
+func findStorageCache(r any) *sync.Map {
+	switch v := r.(type) {
+	case *reader:
+		return findStorageCache(v.StateReader)
+	case *readerWithCacheStats:
+		return findStorageCache(v.readerWithCache)
+	case *readerWithCache:
+		return findStorageCache(v.Reader)
+	case *trieReader:
+		return &v.storageCache
+	case *multiStateReader:
+		for _, inner := range v.readers {
+			if c := findStorageCache(inner); c != nil {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// enableConcurrentOnReader recursively finds and enables concurrent reads on
+// all trieReaders in the reader chain, regardless of wrapper types.
+func enableConcurrentOnReader(r any) {
+	switch v := r.(type) {
+	case *reader:
+		enableConcurrentOnReader(v.StateReader)
+	case *readerWithCache:
+		enableConcurrentOnReader(v.Reader)
+	case *readerWithCacheStats:
+		enableConcurrentOnReader(v.readerWithCache)
+	case *trieReader:
+		v.EnableConcurrentReads()
+	case *multiStateReader:
+		for _, inner := range v.readers {
+			enableConcurrentOnReader(inner)
+		}
+	}
 }
 
 type StorageVal[T any] struct {
@@ -635,9 +752,20 @@ func (s *StateDB) Empty(addr common.Address) bool {
 const BalancePath = 1
 const NoncePath = 2
 const CodePath = 3
-const SuicidePath = 4
 
-// GetBalance retrieves the balance from the given address or 0 if object not found
+// SuicidePath flags an account as self-destructed. V1 uses it as an MVHashMap
+// key on the serial StateDB; V2 uses it as an MVStore subpath so later txs
+// in the same block see the account as non-existent during parallel reads.
+const SuicidePath = 4
+const CreatePath = 5
+
+// GetBalance retrieves the balance from the given address or 0 if object not found.
+// Restored to the original (origin/develop) MVRead-based form. The delta-balance
+// optimization that lived here previously had a fundamental inconsistency between
+// the MVHashmap delta view (used for cross-tx reads) and stateObject.Balance() (used
+// for self-write reads), which caused fee-transfer log divergence between V1 parallel
+// and serial when coinbase accumulated tips. V2 uses MVBalanceStore (separate path)
+// and is unaffected by this revert.
 func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
 	return MVRead(s, blockstm.NewSubpathKey(addr, BalancePath), uint256.NewInt(0), func(s *StateDB) *uint256.Int {
 		stateObject := s.getStateObject(addr)
@@ -992,7 +1120,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 // deleteStateObject removes the given object from the state trie.
 func (s *StateDB) deleteStateObject(addr common.Address) {
 	// Track the amount of time wasted on deleting the account from the trie
-	if metrics.Enabled() {
+	if metrics.Enabled() && !s.skipTimers {
 		defer func(start time.Time) { s.AccountUpdates += time.Since(start) }(time.Now())
 	}
 
@@ -1002,8 +1130,6 @@ func (s *StateDB) deleteStateObject(addr common.Address) {
 	}
 }
 
-// getStateObject retrieves a state object given by the address, returning nil if
-// the object is not found or was deleted in this execution context.
 func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	return MVRead(s, blockstm.NewAddressKey(addr), nil, func(s *StateDB) *stateObject {
 		// Prefer live objects if any is available
@@ -1016,13 +1142,18 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		}
 		s.AccountLoaded++
 
-		start := time.Now()
+		var start time.Time
+		if !s.skipTimers {
+			start = time.Now()
+		}
 		acct, err := s.reader.Account(addr)
 		if err != nil {
 			s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 			return nil
 		}
-		s.AccountReads += time.Since(start)
+		if !s.skipTimers {
+			s.AccountReads += time.Since(start)
+		}
 		// Independent of where we loaded the data from, add it to the prefetcher.
 		// Whilst this would be a bit weird if snapshots are disabled, but we still
 		// want the trie nodes to end up in the prefetcher too, so just push through.
@@ -1304,9 +1435,12 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// method will internally call a blocking trie fetch from the prefetcher,
 	// so there's no need to explicitly wait for the prefetchers to finish.
 	var (
-		start   = time.Now()
+		start   time.Time
 		workers errgroup.Group
 	)
+	if !s.skipTimers {
+		start = time.Now()
+	}
 	if s.db.TrieDB().IsVerkle() {
 		// Whilst MPT storage tries are independent, Verkle has one single trie
 		// for all the accounts and all the storage slots merged together. The
@@ -1387,7 +1521,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		s.WitnessCollection += time.Since(witStart)
 	}
 	workers.Wait()
-	s.StorageUpdates += time.Since(start)
+	if !s.skipTimers {
+		s.StorageUpdates += time.Since(start)
+	}
 
 	// Now we're about to start to write changes to the trie. The trie is so far
 	// _untouched_. We can check with the prefetcher, if it can give us a trie
@@ -1396,7 +1532,9 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Don't check prefetcher if verkle trie has been used. In the context of verkle,
 	// only a single trie is used for state hashing. Replacing a non-nil verkle tree
 	// here could result in losing uncommitted changes from storage.
-	start = time.Now()
+	if !s.skipTimers {
+		start = time.Now()
+	}
 	if s.prefetcher != nil {
 		if trie := s.prefetcher.trie(common.Hash{}, s.originalRoot); trie == nil {
 			log.Error("Failed to retrieve account pre-fetcher trie")
@@ -1436,13 +1574,17 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		s.deleteStateObject(deletedAddr)
 		s.AccountDeleted += 1
 	}
-	s.AccountUpdates += time.Since(start)
+	if !s.skipTimers {
+		s.AccountUpdates += time.Since(start)
+	}
 
 	if s.prefetcher != nil {
 		s.prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs, nil)
 	}
 	// Track the amount of time wasted on hashing the account trie
-	defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
+	if !s.skipTimers {
+		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
+	}
 
 	hash := s.trie.Hash()
 
@@ -2009,6 +2151,188 @@ func (s *StateDB) markUpdate(addr common.Address) {
 	}
 	s.mutations[addr].applied = false
 	s.mutations[addr].typ = update
+}
+
+// ---------------------------------------------------------------------------
+// Fast settlement methods — bypass journal for irrevocable operations.
+// Used by V2 BlockSTM settlement where reverts never happen.
+// ---------------------------------------------------------------------------
+
+// SetStorageDirectWithOrigins writes storage slots along with their committed
+// (origin) values without creating a journal revert entry; the caller owns
+// rollback semantics (V2 settlement never reverts). The account is still
+// marked dirty so Finalise/Commit pick up the change. Providing origins up
+// front avoids expensive trie reads during FinaliseFast.
+func (s *StateDB) SetStorageDirectWithOrigins(addr common.Address, slots map[common.Hash]common.Hash, origins map[common.Hash]common.Hash) {
+	if len(slots) == 0 {
+		return
+	}
+	obj := s.getOrNewStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journal.dirty(addr)
+	s.markUpdate(addr)
+	for key, value := range slots {
+		obj.dirtyStorage[key] = value
+		if _, cached := obj.originStorage[key]; !cached {
+			if origin, ok := origins[key]; ok {
+				obj.originStorage[key] = origin
+			}
+		}
+	}
+}
+
+// SetNonceDirect writes a nonce without creating a journal revert entry; the
+// account is still marked dirty so Finalise/Commit pick up the change. Used
+// by V2 settlement, which never reverts.
+func (s *StateDB) SetNonceDirect(addr common.Address, nonce uint64) {
+	obj := s.getOrNewStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journal.dirty(addr)
+	s.markUpdate(addr)
+	obj.data.Nonce = nonce
+}
+
+// AddBalanceDirect adds balance without journaling or reading the old balance.
+func (s *StateDB) AddBalanceDirect(addr common.Address, amount *uint256.Int) {
+	obj := s.getOrNewStateObject(addr)
+	if obj == nil {
+		return
+	}
+	// EIP-161: zero-amount add to empty account must trigger touch for cleanup.
+	if amount.IsZero() {
+		if obj.empty() {
+			obj.touch()
+		}
+		return
+	}
+	s.journal.dirty(addr)
+	s.markUpdate(addr)
+	obj.setBalance(new(uint256.Int).Add(obj.Balance(), amount))
+}
+
+// SubBalanceDirect subtracts balance without journaling.
+//
+// uint256.Int.Sub wraps on underflow — same modular-arithmetic semantics
+// as the journaled SubBalance path (statedb.go:922-940). TestDirectSetter
+// Parity_SubBalance pins byte-equality between the two, so this MUST stay
+// consistent with that behaviour. The EVM's CALL/transfer pre-checks
+// guarantee amount ≤ balance for any code path that reaches a settle.
+func (s *StateDB) SubBalanceDirect(addr common.Address, amount *uint256.Int) {
+	obj := s.getOrNewStateObject(addr)
+	if obj == nil {
+		return
+	}
+	s.journal.dirty(addr)
+	s.markUpdate(addr)
+	obj.setBalance(new(uint256.Int).Sub(obj.Balance(), amount))
+}
+
+// FinaliseFastWithPrefetch is FinaliseFast plus prefetcher triggering for
+// storage tries — matching serial Finalise's prefetch behavior.
+func (s *StateDB) FinaliseFastWithPrefetch(deleteEmptyObjects bool) {
+	// Snapshot dirty storage slots BEFORE FinaliseFast moves them to pending,
+	// then prefetch their tries so the GetCommittedState calls inside
+	// FinaliseFast hit cached data instead of going to Pebble.
+	if s.prefetcher != nil {
+		for _, as := range s.snapshotDirtyStorageSlots() {
+			obj := s.stateObjects[as.addr]
+			if obj == nil {
+				continue
+			}
+			_ = s.prefetcher.prefetch(obj.addrHash, obj.data.Root, as.addr, nil, as.slots, false)
+		}
+	}
+	s.FinaliseFast(deleteEmptyObjects)
+}
+
+type addrDirtySlots struct {
+	addr  common.Address
+	slots []common.Hash
+}
+
+// snapshotDirtyStorageSlots returns per-address dirty slot lists for every
+// dirty journal entry whose state object has a non-empty root and dirty
+// storage. Used to scope prefetching to only what FinaliseFast will touch.
+func (s *StateDB) snapshotDirtyStorageSlots() []addrDirtySlots {
+	var out []addrDirtySlots
+	for addr := range s.journal.dirties {
+		obj, exist := s.stateObjects[addr]
+		if !exist || obj.data.Root == types.EmptyRootHash || len(obj.dirtyStorage) == 0 {
+			continue
+		}
+		slots := make([]common.Hash, 0, len(obj.dirtyStorage))
+		for key := range obj.dirtyStorage {
+			slots = append(slots, key)
+		}
+		out = append(out, addrDirtySlots{addr: addr, slots: slots})
+	}
+	return out
+}
+
+// FinaliseFast is a V2-optimized Finalise that skips GetCommittedState calls
+// when origin values are cached, and triggers prefetcher in the background.
+// Used during pipelined settlement where incremental commit tracking is
+// not required — the final Finalise before IntermediateRoot handles that.
+func (s *StateDB) FinaliseFast(deleteEmptyObjects bool) {
+	var addressesToPrefetch []common.Address
+	for addr := range s.journal.dirties {
+		obj, exist := s.stateObjects[addr]
+		if !exist {
+			continue
+		}
+		if obj.selfDestructed || (deleteEmptyObjects && obj.empty()) {
+			s.finaliseDelete(addr, obj)
+		} else {
+			s.finalisePromote(addr, obj)
+		}
+		addressesToPrefetch = append(addressesToPrefetch, addr)
+	}
+	if s.prefetcher != nil && len(addressesToPrefetch) > 0 {
+		// Pre-load storage tries in the background while later txs settle;
+		// errors mean the prefetcher already terminated and are safe to drop.
+		_ = s.prefetcher.prefetch(common.Hash{}, s.originalRoot, common.Address{}, addressesToPrefetch, nil, false)
+	}
+	s.clearJournalAndRefund()
+}
+
+// finaliseDelete tears down a self-destructed or empty object during
+// FinaliseFast — moves it to the destruct map and marks it deleted.
+func (s *StateDB) finaliseDelete(addr common.Address, obj *stateObject) {
+	delete(s.stateObjects, obj.address)
+	s.markDelete(addr)
+	if _, ok := s.stateObjectsDestruct[obj.address]; !ok {
+		s.stateObjectsDestruct[obj.address] = obj
+	}
+}
+
+// finalisePromote moves dirty storage to pending, capturing origin values
+// (cached when possible) into uncommittedStorage for later commit tracking.
+func (s *StateDB) finalisePromote(addr common.Address, obj *stateObject) {
+	for key, value := range obj.dirtyStorage {
+		if _, exists := obj.uncommittedStorage[key]; !exists {
+			if origin, cached := obj.originStorage[key]; cached {
+				obj.uncommittedStorage[key] = origin
+			} else {
+				obj.uncommittedStorage[key] = obj.GetCommittedState(key)
+			}
+		}
+		obj.pendingStorage[key] = value
+	}
+	if len(obj.dirtyStorage) > 0 {
+		obj.dirtyStorage = make(Storage)
+	}
+	obj.newContract = false
+	s.markUpdate(addr)
+}
+
+// SkipTimers disables time.Now() calls in hot paths (account reads, storage reads).
+// Used by V2 parallel execution where per-operation timing is not needed.
+func (s *StateDB) SkipTimers() {
+	s.skipTimers = true
 }
 
 // PointCache returns the point cache used by verkle tree.

@@ -241,6 +241,10 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	if block.NumberU64() == 0 {
 		return nil, vm.BlockContext{}, nil, nil, errors.New("no transaction in genesis")
 	}
+	// Avoid doing any extra work if the transaction index is out of range for the block.
+	if txIndex > 0 && txIndex >= len(block.Transactions()) {
+		return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	}
 	// Create the parent state database
 	parent := eth.blockchain.GetBlock(block.ParentHash(), block.NumberU64()-1)
 	if parent == nil {
@@ -278,6 +282,7 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		statedb.SetTxContext(tx.Hash(), idx)
 		// nolint : contextcheck
 		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
+			release()
 			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
 		// Ensure any modifications are committed to the state
@@ -285,5 +290,6 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
 	}
 
+	release()
 	return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/bor"
+	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
 	"github.com/ethereum/go-ethereum/consensus/bor/contract"
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall" //nolint:typecheck
 	"github.com/ethereum/go-ethereum/consensus/bor/heimdall/span"
@@ -38,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -170,6 +172,8 @@ type Config struct {
 	SnapshotCache  int
 	Preimages      bool
 	TriesInMemory  uint64
+	// Directory path to the journal used for persisting trie data across node restarts.
+	TrieJournalDirectory string
 
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int
@@ -269,6 +273,11 @@ type Config struct {
 	// WitnessProtocol enabless the wit protocol
 	WitnessProtocol bool
 
+	// NoSnapServing disables the snap/1 sub-protocol, preventing this node from
+	// serving snap sync state to peers. Useful for block producers that should
+	// not spend resources on snap sync serving.
+	NoSnapServing bool
+
 	// SyncWithWitnesses enables syncing blocks with witnesses
 	SyncWithWitnesses bool
 
@@ -331,7 +340,7 @@ type Config struct {
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
-func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, db ethdb.Database, blockchainAPI *ethapi.BlockChainAPI) (consensus.Engine, error) {
+func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, db ethdb.Database, blockchainAPI *ethapi.BlockChainAPI, vmConfig vm.Config) (consensus.Engine, error) {
 	// nolint:nestif
 	if chainConfig.Clique != nil {
 		return beacon.New(clique.New(chainConfig.Clique, db)), nil
@@ -340,13 +349,13 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		// In order to pass the ethereum transaction tests, we need to set the burn contract which is in the bor config
 		// Then, bor != nil will also be enabled for ethash and clique. Only enable Bor for real if there is a validator contract present.
 		genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, chainConfig.Bor.ValidatorContract, chainConfig.Bor.StateReceiverContract, blockchainAPI)
-		spanner := span.NewChainSpanner(blockchainAPI, contract.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
+		spanner := span.NewChainSpanner(blockchainAPI, borabi.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
 
 		log.Info("Creating consensus engine", "withoutHeimdall", ethConfig.WithoutHeimdall)
 		log.Info("Using custom miner block time", "blockTime", ethConfig.Miner.BlockTime)
 
 		if ethConfig.WithoutHeimdall {
-			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor, ethConfig.Miner.BlockTime), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, nil, nil, genesisContractsClient, ethConfig.DevFakeAuthor, ethConfig.Miner.BlockTime, vmConfig), nil
 		} else {
 			if ethConfig.DevFakeAuthor {
 				log.Warn("Sanitizing DevFakeAuthor", "Use DevFakeAuthor with", "--bor.withoutheimdall")
@@ -426,7 +435,7 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 				}
 			}
 
-			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false, ethConfig.Miner.BlockTime), nil
+			return bor.New(chainConfig, db, blockchainAPI, spanner, heimdallClient, heimdallWSClient, genesisContractsClient, false, ethConfig.Miner.BlockTime, vmConfig), nil
 		}
 	}
 	return beacon.New(ethash.NewFaker()), nil

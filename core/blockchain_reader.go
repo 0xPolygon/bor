@@ -542,8 +542,14 @@ func (bc *BlockChain) HistoricState(root common.Hash) (*state.StateDB, error) {
 	return state.New(root, state.NewHistoricDatabase(bc.db, bc.triedb))
 }
 
-// Config retrieves the chain's fork configuration.
-func (bc *BlockChain) Config() *params.ChainConfig { return bc.chainConfig }
+// Config retrieves the chain's fork configuration. Nil-safe — callers
+// reach this via a typed-nil ChainContext interface (chain_makers).
+func (bc *BlockChain) Config() *params.ChainConfig {
+	if bc == nil {
+		return nil
+	}
+	return bc.chainConfig
+}
 
 // Engine retrieves the blockchain's consensus engine.
 func (bc *BlockChain) Engine() consensus.Engine { return bc.engine }
