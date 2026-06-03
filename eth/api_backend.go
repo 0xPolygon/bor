@@ -529,15 +529,17 @@ func (b *EthAPIBackend) FeeHistory(ctx context.Context, blockCount uint64, lastB
 }
 
 func (b *EthAPIBackend) BaseFee(ctx context.Context) *big.Int {
-	if b.ChainConfig().IsLondon(b.CurrentHeader().Number) {
-		return eip1559.CalcBaseFee(b.ChainConfig(), b.CurrentHeader())
+	header := b.CurrentHeader()
+	if b.ChainConfig().IsLondon(header.Number) {
+		return eip1559.CalcBaseFee(b.ChainConfig(), header)
 	}
 	return nil
 }
 
 func (b *EthAPIBackend) BlobBaseFee(ctx context.Context) *big.Int {
-	if excess := b.CurrentHeader().ExcessBlobGas; excess != nil && b.ChainConfig().BlobScheduleConfig != nil {
-		return eip4844.CalcBlobFee(b.ChainConfig(), b.CurrentHeader())
+	header := b.CurrentHeader()
+	if header.ExcessBlobGas != nil && b.ChainConfig().BlobScheduleConfig != nil {
+		return eip4844.CalcBlobFee(b.ChainConfig(), header)
 	}
 	return nil
 }
