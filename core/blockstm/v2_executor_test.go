@@ -261,6 +261,37 @@ func TestV2ValidationPanicIsRecovered(t *testing.T) {
 	}
 }
 
+// TestV2SharedAuthorityValidationPanicNoDeadlock: a Validate() panic on an
+// earlier tx must not wedge a later tx parked on the authPrev barrier. The
+// earlier tx never finalizes (so its completionCh never closes), so the
+// recover path must cancel ctx to release the parked worker; otherwise
+// ExecuteV2BlockSTM hangs on wg.Wait instead of surfacing ValidationPanic for
+// the serial fallback. Hangs without the cancel-on-panic fix.
+func TestV2SharedAuthorityValidationPanicNoDeadlock(t *testing.T) {
+	authority := common.HexToAddress("0xA")
+	env := &panickingV2Env{s: &panickingV2State{}}
+	// Both txs share the authority, so authPrev[1] = 0 and tx1 waits on tx0's
+	// finalization — which never comes because tx0's Validate() panics.
+	tasks := []V2Task{
+		&nonceMockTask{idx: 0, sender: common.HexToAddress("0x1"), auths: []common.Address{authority}},
+		&nonceMockTask{idx: 1, sender: common.HexToAddress("0x2"), auths: []common.Address{authority}},
+	}
+
+	done := make(chan *V2ExecutionResult, 1)
+	go func() {
+		done <- ExecuteV2BlockSTM(context.Background(), tasks, env, common.Address{}, 2, nil, func(int, V2TxState) {})
+	}()
+
+	select {
+	case result := <-done:
+		if result == nil || result.ValidationPanic == nil {
+			t.Fatalf("expected ValidationPanic to be set, got %+v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ExecuteV2BlockSTM deadlocked: Validate() panic on a shared-authority predecessor left the later tx parked on the authPrev barrier")
+	}
+}
+
 // nonceMockTask lets tests override Sender/Authorities per task.
 type nonceMockTask struct {
 	idx    int
