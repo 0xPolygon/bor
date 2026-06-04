@@ -1286,7 +1286,7 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 			// State overrides can relocate precompiles (MovePrecompileTo) or free a
 			// precompile slot, which mutates the precompile set. Apply them once on
 			// the active set and reuse that mutated set for every bundle below. Note
-			// that the `precompiles` set below will are set by request level overrides
+			// that the `precompiles` set below are set by request level overrides
 			// (`config.StateOverrides`). A bundle level override (`bundle.BlockOverride`)
 			// may change block number affecting the active precompile set, but it won't
 			// be honored given it requires re-applying the override which can affect

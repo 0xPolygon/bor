@@ -864,11 +864,11 @@ func TestTraceCallMany(t *testing.T) {
 			tooManyBundles[i] = Bundle{Transactions: []ethapi.TransactionArgs{send}}
 		}
 		tooManyPerBundle := []Bundle{{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle+1)}}
-		// Each bundle stays within the per-bundle cap; only the sum exceeds the total cap.
-		tooManyTotal := []Bundle{
-			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle)},
-			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle)},
-			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyTotalCalls-2*maxTraceCallManyCallsPerBundle+1)},
+		// Enough bundles, each at the per-bundle cap, to exceed the total cap while
+		// staying under the bundle-count cap — so the total check is what trips.
+		tooManyTotal := make([]Bundle, maxTraceCallManyTotalCalls/maxTraceCallManyCallsPerBundle+1)
+		for i := range tooManyTotal {
+			tooManyTotal[i] = Bundle{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle)}
 		}
 
 		tests := []struct {
