@@ -177,25 +177,30 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			isWitnessQueue := queue.kind() == witnessQueueKind
 			isReceiptQueue := queue.kind() == receiptQueueKind
 
+			capable := func(peer *peerConnection) bool {
+				switch {
+				case peer.backedOff():
+					return false
+				case isWitnessQueue && !peer.peer.SupportsWitness():
+					peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
+					return false
+				case isReceiptQueue && peer.version < eth.ETH69:
+					peer.log.Trace("Skipping peer for fetching receipts - version below eth/69", "peer", peer.id)
+					return false
+				default:
+					return true
+				}
+			}
+
+			var capablePeers []*peerConnection
 			for _, peer := range d.peers.AllPeers() {
-				if peer.backedOff() {
+				if !capable(peer) {
 					continue
 				}
+				capablePeers = append(capablePeers, peer)
+
 				pending, stale := pending[peer.id], stales[peer.id]
 				if pending == nil && stale == nil {
-					// For witness fetching, skip peers that don't support the witness protocol
-					if isWitnessQueue && !peer.peer.SupportsWitness() {
-						peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
-						continue
-					}
-
-					// eth/69 handlers also sends bor receipts via p2p. Skip peers
-					// below that to avoid missing bor receipts.
-					if isReceiptQueue && peer.version < eth.ETH69 {
-						peer.log.Trace("Skipping peer for fetching receipts - version below eth/69", "peer", peer.id)
-						continue
-					}
-
 					idles = append(idles, peer)
 					caps = append(caps, queue.capacity(peer, time.Second))
 				} else if stale != nil {
@@ -269,27 +274,7 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			}
 			// Make sure that we have peers available for fetching. If all peers have been tried
 			// and all failed throw an error
-			var capablePeers int
-			if isWitnessQueue {
-				// For witness fetching, only count peers that support the witness protocol
-				for _, peer := range d.peers.AllPeers() {
-					if peer.peer.SupportsWitness() {
-						capablePeers++
-					}
-				}
-			} else if isReceiptQueue {
-				// For receipt fetching, only count eth/69+ peers that include bor receipts
-				for _, peer := range d.peers.AllPeers() {
-					if peer.version >= eth.ETH69 {
-						capablePeers++
-					}
-				}
-			} else {
-				// For other queues, all peers are capable
-				capablePeers = d.peers.Len()
-			}
-
-			if !progressed && !throttled && len(pending) == 0 && len(idles) == capablePeers && queued > 0 && !beaconMode {
+			if !progressed && !throttled && len(pending) == 0 && len(idles) == len(capablePeers) && queued > 0 && !beaconMode {
 				return errPeersUnavailable
 			}
 		}
