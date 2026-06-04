@@ -99,6 +99,46 @@ func TestConcurrentFetchReceipts_OnlyEth68Peers(t *testing.T) {
 	}
 }
 
+func TestConcurrentFetchReceipts_AllPeersBackedOff(t *testing.T) {
+	d := newTestDownloader()
+	scheduleReceiptTask(d)
+
+	var mockPeers = make([]*mockPeer, 2)
+	mockPeers[0] = &mockPeer{id: "peer-a", protocol: eth.ETH69}
+	mockPeers[1] = &mockPeer{id: "peer-b", protocol: eth.ETH69}
+
+	for _, peer := range mockPeers {
+		pc := newPeerConnection(peer.id, peer.protocol, peer, log.New("peer", peer.id))
+		if err := d.peers.Register(pc); err != nil {
+			t.Fatal(err)
+		}
+		pc.backoff(time.Hour)
+	}
+
+	if d.queue.PendingReceipts() == 0 {
+		t.Fatal("expected pending receipts in queue")
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.concurrentFetch((*receiptQueue)(d), false) }()
+
+	select {
+	case err := <-errCh:
+		if err != errPeerBackedOff {
+			t.Fatalf("expected errPeerBackedOff, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(d.cancelCh)
+		t.Fatal("concurrentFetch stalled with all peers backed off")
+	}
+
+	for _, peer := range mockPeers {
+		if peer.receiptRequested.Load() {
+			t.Errorf("backed-off peer %s should NOT have received a receipt request", peer.id)
+		}
+	}
+}
+
 // TestConcurrentFetchReceipts_MixedPeers verifies that concurrentFetch
 // dispatches receipt requests only to eth/69 peers, skipping eth/68 ones.
 func TestConcurrentFetchReceipts_MixedPeers(t *testing.T) {

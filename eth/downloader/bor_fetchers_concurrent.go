@@ -177,10 +177,8 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			isWitnessQueue := queue.kind() == witnessQueueKind
 			isReceiptQueue := queue.kind() == receiptQueueKind
 
-			capable := func(peer *peerConnection) bool {
+			eligible := func(peer *peerConnection) bool {
 				switch {
-				case peer.backedOff():
-					return false
 				case isWitnessQueue && !peer.peer.SupportsWitness():
 					peer.log.Trace("Skipping peer for witness fetch - no witness support", "peer", peer.id)
 					return false
@@ -192,9 +190,17 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 				}
 			}
 
-			var capablePeers []*peerConnection
+			var (
+				eligiblePeers []*peerConnection
+				capablePeers  []*peerConnection
+			)
 			for _, peer := range d.peers.AllPeers() {
-				if !capable(peer) {
+				if !eligible(peer) {
+					continue
+				}
+				eligiblePeers = append(eligiblePeers, peer)
+
+				if peer.backedOff() {
 					continue
 				}
 				capablePeers = append(capablePeers, peer)
@@ -275,6 +281,9 @@ func (d *Downloader) concurrentFetch(queue typedQueue, beaconMode bool) error {
 			// Make sure that we have peers available for fetching. If all peers have been tried
 			// and all failed throw an error
 			if !progressed && !throttled && len(pending) == 0 && len(idles) == len(capablePeers) && queued > 0 && !beaconMode {
+				if len(capablePeers) < len(eligiblePeers) {
+					return errPeerBackedOff
+				}
 				return errPeersUnavailable
 			}
 		}
