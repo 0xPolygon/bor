@@ -1154,6 +1154,208 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 	return res, err
 }
 
+// Bundle is a group of calls traced against a shared, evolving state with a
+// common block-context override.
+type Bundle struct {
+	Transactions  []ethapi.TransactionArgs `json:"transactions"`
+	BlockOverride *override.BlockOverrides `json:"blockOverride"`
+}
+
+// StateContext selects the base state for TraceCallMany. The state used is the
+// one after replaying transactions [0, TransactionIndex) of the referenced
+// block. If TransactionIndex is nil (or points at/after the last transaction),
+// the full post-block state is used.
+type StateContext struct {
+	BlockNumber      rpc.BlockNumberOrHash `json:"blockNumber"`
+	TransactionIndex *int                  `json:"transactionIndex"`
+}
+
+// TraceCallMany traces a list of eth_call bundles over a shared, evolving state
+// and returns a per-bundle, per-call slice of tracer results. It mirrors
+// erigon's eth_callMany semantics:
+//
+//   - simulateContext selects the base state (state after the referenced block's
+//     transactions [0, transactionIndex)).
+//   - config.StateOverrides is applied once to that base state.
+//   - each bundle's BlockOverride customizes the block context for the calls
+//     within it.
+//
+// State mutations persist across calls within a bundle and across bundles (no
+// rollback), so a transfer in one call is visible to a later call. After each
+// bundle the simulated block number and time advance by one. Per-bundle
+// BlockOverride is preferred over config.BlockOverrides.
+func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateContext StateContext, config *TraceCallConfig) ([][]interface{}, error) {
+	if err := validateBundles(bundles); err != nil {
+		return nil, err
+	}
+
+	// Try to retrieve the specified block
+	var (
+		err         error
+		block       *types.Block
+		statedb     *state.StateDB
+		release     StateReleaseFunc
+		precompiles vm.PrecompiledContracts
+	)
+
+	if hash, ok := simulateContext.BlockNumber.Hash(); ok {
+		block, err = api.blockByHash(ctx, hash)
+	} else if number, ok := simulateContext.BlockNumber.Number(); ok {
+		if number == rpc.PendingBlockNumber {
+			// We don't have access to the miner here. For tracing 'future' transactions,
+			// it can be done with block- and state-overrides instead, which offers
+			// more flexibility and stability than trying to trace on 'pending', since
+			// the contents of 'pending' is unstable and probably not a true representation
+			// of what the next actual block is likely to contain.
+			return nil, errors.New("tracing on top of pending is not supported")
+		}
+
+		block, err = api.blockByNumber(ctx, number)
+	} else {
+		return nil, errors.New("invalid arguments; neither block nor hash specified")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	// try to recompute the state
+	reexec := defaultTraceReexec
+	if config != nil && config.Reexec != nil {
+		reexec = *config.Reexec
+	}
+
+	// Default tx index is "-1" which means full block
+	var txIndex = -1
+	if simulateContext.TransactionIndex != nil {
+		txIndex = *simulateContext.TransactionIndex
+	}
+	if txIndex < -1 {
+		return nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	}
+	// Avoid calling `StateAtTransaction` if `txIndex` points to the last transaction as it will
+	// return an error. Instead use `StateAtBlock` directly to fetch the post-block state. Hence
+	// we set the txIndex to the default value in such cases to fetch post-block state directly.
+	if txIndex >= len(block.Transactions()) {
+		txIndex = -1
+	}
+
+	if txIndex == -1 {
+		statedb, release, err = api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	} else {
+		_, _, statedb, release, err = api.backend.StateAtTransaction(ctx, block, txIndex, reexec)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	defer release()
+
+	h := block.Header()
+	blockContext := core.NewEVMBlockContext(h, api.chainContext(ctx), nil)
+	chainConfig := api.backend.ChainConfig()
+
+	applyBlockOverride := func(override *override.BlockOverrides, h *types.Header, blockContext *vm.BlockContext, applyPrecompiles bool) error {
+		if override != nil && override.Number != nil && override.Number.ToInt().Uint64() == h.Number.Uint64()+1 {
+			// Overriding the block number to n+1 is a common way for wallets to
+			// simulate transactions, however without the following fix, a contract
+			// can assert it is being simulated by checking if blockhash(n) == 0x0 and
+			// can behave differently during the simulation. (#32175 for more info)
+			// --
+			// Modify the parent hash and number so that downstream, blockContext's
+			// GetHash function can correctly return n.
+			h.ParentHash = h.Hash()
+			h.Number.Add(h.Number, big.NewInt(1))
+		}
+		if err := override.Apply(blockContext); err != nil {
+			return err
+		}
+		if applyPrecompiles {
+			rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
+			precompiles = vm.ActivePrecompiledContracts(rules)
+			if err := config.StateOverrides.Apply(statedb, precompiles); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	var traceConfig *TraceConfig
+	// Apply the customization rules if required.
+	if config != nil {
+		if err := applyBlockOverride(config.BlockOverrides, h, &blockContext, true); err != nil {
+			return nil, err
+		}
+		traceConfig = &config.TraceConfig
+	}
+
+	results := make([][]interface{}, 0, len(bundles))
+	for _, bundle := range bundles {
+		override := bundle.BlockOverride
+		if err := applyBlockOverride(override, h, &blockContext, false); err != nil {
+			return nil, err
+		}
+		rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
+		res, err := api.traceBundle(ctx, bundle.Transactions, blockContext, block, statedb, traceConfig, vm.ActivePrecompiledContracts(rules))
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+		blockContext.BlockNumber = new(big.Int).Add(blockContext.BlockNumber, big.NewInt(1))
+		blockContext.Time++
+	}
+	return results, nil
+}
+
+// validateBundles rejects requests with no bundles or no transactions to trace.
+func validateBundles(bundles []Bundle) error {
+	var errEmptyBundles = errors.New("empty bundles")
+	if len(bundles) == 0 {
+		return errEmptyBundles
+	}
+	for _, b := range bundles {
+		if len(b.Transactions) > 0 {
+			return nil
+		}
+	}
+	return errEmptyBundles
+}
+
+// traceBundle traces each call in a bundle sequentially against the shared
+// state, so each call observes the mutations of the calls before it.
+func (api *API) traceBundle(ctx context.Context, txs []ethapi.TransactionArgs, blockCtx vm.BlockContext, block *types.Block, statedb *state.StateDB, traceConfig *TraceConfig, precompiles vm.PrecompiledContracts) ([]interface{}, error) {
+	results := make([]interface{}, 0, len(txs))
+	for i, args := range txs {
+		if err := args.CallDefaults(api.backend.RPCGasCap(), blockCtx.BaseFee, api.backend.ChainConfig().ChainID); err != nil {
+			return nil, err
+		}
+		var (
+			msg     = args.ToMessage(blockCtx.BaseFee, true)
+			tx      = args.ToTransaction(types.LegacyTxType)
+			callCtx = blockCtx
+		)
+		// Lower the basefee to 0 to avoid breaking EVM invariants (basefee < feecap).
+		// Mutate a per-call copy so it doesn't leak to the next call.
+		if msg.GasPrice.Sign() == 0 {
+			callCtx.BaseFee = new(big.Int)
+		}
+		if msg.BlobGasFeeCap != nil && msg.BlobGasFeeCap.BitLen() == 0 {
+			callCtx.BlobBaseFee = new(big.Int)
+		}
+		txctx := &Context{
+			BlockHash:   block.Hash(),
+			BlockNumber: callCtx.BlockNumber,
+			TxIndex:     i,
+			TxHash:      tx.Hash(),
+		}
+		res, _, err := api.traceTx(ctx, tx, msg, txctx, callCtx, statedb, traceConfig, precompiles)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
 // traceTx configures a new tracer according to the provided configuration, and
 // executes the given message in the provided environment. The return value will
 // be tracer dependent. For state-sync transactions, it only supports transactions

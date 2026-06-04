@@ -26,6 +26,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -546,6 +547,299 @@ func TestTraceCall(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestTraceCallMany(t *testing.T) {
+	t.Parallel()
+
+	accounts := newAccounts(3)
+	// Tiny contracts whose top-of-stack reflects a block-context field, so the
+	// active value shows up on the struct logger's stack.
+	numberAddr := common.HexToAddress("0x000000000000000000000000000000000000aaaa")    // NUMBER; STOP
+	timeAddr := common.HexToAddress("0x000000000000000000000000000000000000bbbb")      // TIMESTAMP; STOP
+	blockhashAddr := common.HexToAddress("0x000000000000000000000000000000000000cccc") // blockhash(number-1); STOP
+	basefeeAddr := common.HexToAddress("0x000000000000000000000000000000000000eeee")   // BASEFEE; STOP
+	// An account with no genesis balance; funded only via a state override.
+	overrideAddr := common.HexToAddress("0x000000000000000000000000000000000000dddd")
+	genesis := &core.Genesis{
+		Config: params.TestChainConfig,
+		Alloc: types.GenesisAlloc{
+			accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+			accounts[1].addr: {Balance: big.NewInt(params.Ether)},
+			accounts[2].addr: {Balance: big.NewInt(params.Ether)},
+			numberAddr:       {Code: []byte{0x43, 0x00}, Balance: big.NewInt(0)},
+			timeAddr:         {Code: []byte{0x42, 0x00}, Balance: big.NewInt(0)},
+			// NUMBER, PUSH1 1, SWAP1, SUB, BLOCKHASH, STOP -> pushes blockhash(number-1).
+			blockhashAddr: {Code: []byte{0x43, 0x60, 0x01, 0x90, 0x03, 0x40, 0x00}, Balance: big.NewInt(0)},
+			basefeeAddr:   {Code: []byte{0x48, 0x00}, Balance: big.NewInt(0)}, // BASEFEE, STOP
+		},
+	}
+	genBlocks := 10
+	signer := types.HomesteadSigner{}
+	nonce := uint64(0)
+	backend := newTestBackend(t, genBlocks, genesis, func(i int, b *core.BlockGen) {
+		send := func(to common.Address) {
+			tx, _ := types.SignTx(types.NewTx(&types.LegacyTx{
+				Nonce: nonce, To: &to, Value: big.NewInt(1000), Gas: params.TxGas, GasPrice: b.BaseFee(),
+			}), signer, accounts[0].key)
+			b.AddTx(tx)
+			nonce++
+		}
+		send(accounts[1].addr)
+		if i == genBlocks-2 {
+			// A 3-tx block: accounts[2] is funded by the tx at index 1, so the
+			// state before/after that index is observably different.
+			send(accounts[2].addr)
+			send(accounts[1].addr)
+		}
+	})
+	defer backend.teardown()
+	api := NewAPI(backend)
+
+	latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	transfer := func(from, to common.Address, value *big.Int) ethapi.TransactionArgs {
+		return ethapi.TransactionArgs{From: &from, To: &to, Value: (*hexutil.Big)(value)}
+	}
+	mustResult := func(t *testing.T, v interface{}) *logger.ExecutionResult {
+		t.Helper()
+		var r *logger.ExecutionResult
+		if err := json.Unmarshal(v.(json.RawMessage), &r); err != nil {
+			t.Fatalf("failed to unmarshal result: %v", err)
+		}
+		return r
+	}
+	// topOfStack returns the top stack word recorded by the struct logger right
+	// before the final STOP — i.e. the value the tiny contract pushed.
+	topOfStack := func(t *testing.T, v interface{}) string {
+		t.Helper()
+		res := mustResult(t, v)
+		for i := len(res.StructLogs) - 1; i >= 0; i-- {
+			var entry struct {
+				Stack []string `json:"stack"`
+			}
+			if err := json.Unmarshal(res.StructLogs[i], &entry); err != nil {
+				t.Fatalf("failed to unmarshal struct log: %v", err)
+			}
+			if len(entry.Stack) > 0 {
+				return entry.Stack[len(entry.Stack)-1]
+			}
+		}
+		t.Fatalf("no stack entries in trace")
+		return ""
+	}
+
+	t.Run("single call", func(t *testing.T) {
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{
+			transfer(accounts[0].addr, accounts[1].addr, big.NewInt(1000)),
+		}}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 || len(res[0]) != 1 {
+			t.Fatalf("unexpected result shape: %v", res)
+		}
+		if got := mustResult(t, res[0][0]); got.Failed || got.Gas != params.TxGas {
+			t.Fatalf("unexpected trace: failed=%v gas=%d", got.Failed, got.Gas)
+		}
+	})
+
+	t.Run("state persists across calls", func(t *testing.T) {
+		// Call A funds accounts[0]->accounts[2]; call B then spends more than its
+		// running balance would allow without A, so B only succeeds if A persisted.
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{
+			transfer(accounts[0].addr, accounts[2].addr, big.NewInt(2000)),
+			transfer(accounts[2].addr, accounts[1].addr, new(big.Int).Add(big.NewInt(params.Ether), big.NewInt(2500))),
+		}}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for i, r := range res[0] {
+			if got := mustResult(t, r); got.Failed {
+				t.Fatalf("call %d failed; state should persist across calls in a bundle", i)
+			}
+		}
+	})
+
+	t.Run("block number override and per-bundle advance", func(t *testing.T) {
+		numberCall := ethapi.TransactionArgs{From: &accounts[0].addr, To: &numberAddr}
+		bundles := []Bundle{
+			{
+				Transactions:  []ethapi.TransactionArgs{numberCall},
+				BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(big.NewInt(0x1337))},
+			},
+			{Transactions: []ethapi.TransactionArgs{numberCall}},
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := topOfStack(t, res[0][0]); got != "0x1337" {
+			t.Fatalf("bundle 0 block number: want 0x1337, got %s", got)
+		}
+		// The second bundle inherits the prior bundle's block number, advanced by one.
+		if got := topOfStack(t, res[1][0]); got != "0x1338" {
+			t.Fatalf("bundle 1 block number: want 0x1338 (advanced), got %s", got)
+		}
+	})
+
+	t.Run("block time override and per-bundle advance", func(t *testing.T) {
+		timeCall := ethapi.TransactionArgs{From: &accounts[0].addr, To: &timeAddr}
+		ts := hexutil.Uint64(0x9999)
+		bundles := []Bundle{
+			{
+				Transactions:  []ethapi.TransactionArgs{timeCall},
+				BlockOverride: &override.BlockOverrides{Time: &ts},
+			},
+			{Transactions: []ethapi.TransactionArgs{timeCall}},
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := topOfStack(t, res[0][0]); got != "0x9999" {
+			t.Fatalf("bundle 0 timestamp: want 0x9999, got %s", got)
+		}
+		if got := topOfStack(t, res[1][0]); got != "0x999a" {
+			t.Fatalf("bundle 1 timestamp: want 0x999a (advanced), got %s", got)
+		}
+	})
+
+	t.Run("blockhash resolves when overriding to head+1", func(t *testing.T) {
+		// Overriding the block number to head+1 must rewire GetHash so that
+		// blockhash(head) returns the real head hash instead of zero.
+		head := backend.chain.CurrentBlock().Number.Uint64()
+		bundles := []Bundle{{
+			Transactions:  []ethapi.TransactionArgs{{From: &accounts[0].addr, To: &blockhashAddr}},
+			BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(new(big.Int).SetUint64(head + 1))},
+		}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := topOfStack(t, res[0][0]); got == "0x0" {
+			t.Fatalf("blockhash(head) resolved to zero; the head+1 parent-hash fixup did not apply")
+		}
+	})
+
+	t.Run("basefee is zeroed for zero-gas-price calls", func(t *testing.T) {
+		// A call with no fee fields ends up with gasPrice 0, which lowers the
+		// block context basefee to 0 so the BASEFEE opcode reads 0.
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{{From: &accounts[0].addr, To: &basefeeAddr}}}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := topOfStack(t, res[0][0]); got != "0x0" {
+			t.Fatalf("BASEFEE should read 0 for a zero-gas-price call, got %s", got)
+		}
+	})
+
+	t.Run("transaction index selects mid-block state", func(t *testing.T) {
+		// In the 3-tx block, accounts[2] is funded by the tx at index 1. A spend
+		// from accounts[2] above its genesis balance fails before that tx and
+		// succeeds after it.
+		blockNr := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(genBlocks - 1))
+		spend := transfer(accounts[2].addr, accounts[0].addr, new(big.Int).Add(big.NewInt(params.Ether), big.NewInt(100)))
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{spend}}}
+
+		beforeIdx, afterIdx := 0, 2
+		if _, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: blockNr, TransactionIndex: &beforeIdx}, nil); err == nil {
+			t.Fatalf("tracing before the funding tx should fail with insufficient funds")
+		}
+		// Index 0 is a valid (non-negative) selector: a funded sender succeeds there.
+		okAtZero := []Bundle{{Transactions: []ethapi.TransactionArgs{transfer(accounts[0].addr, accounts[1].addr, big.NewInt(1))}}}
+		if _, err := api.TraceCallMany(t.Context(), okAtZero, StateContext{BlockNumber: blockNr, TransactionIndex: &beforeIdx}, nil); err != nil {
+			t.Fatalf("tracing at index 0 with a funded sender should succeed, got: %v", err)
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: blockNr, TransactionIndex: &afterIdx}, nil)
+		if err != nil {
+			t.Fatalf("tracing after the funding tx should succeed, got: %v", err)
+		}
+		if got := mustResult(t, res[0][0]); got.Failed {
+			t.Fatalf("call after funding tx unexpectedly failed")
+		}
+		// transactionIndex -1 is the "full block" sentinel: same as omitting it.
+		fullBlock := -1
+		if _, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: blockNr, TransactionIndex: &fullBlock}, nil); err != nil {
+			t.Fatalf("tracing with index -1 (full block) should succeed, got: %v", err)
+		}
+	})
+
+	t.Run("state override is applied to base state", func(t *testing.T) {
+		// overrideAddr has no genesis balance; the override funds it so its spend succeeds.
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{
+			transfer(overrideAddr, accounts[0].addr, new(big.Int).Add(big.NewInt(params.Ether), big.NewInt(7))),
+		}}}
+		cfg := &TraceCallConfig{StateOverrides: &override.StateOverride{
+			overrideAddr: {Balance: (*hexutil.Big)(new(big.Int).Mul(big.NewInt(5), big.NewInt(params.Ether)))},
+		}}
+		if _, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil); err == nil {
+			t.Fatalf("without the override the unfunded sender should fail")
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, cfg)
+		if err != nil {
+			t.Fatalf("with the balance override the call should succeed, got: %v", err)
+		}
+		if got := mustResult(t, res[0][0]); got.Failed {
+			t.Fatalf("call unexpectedly failed despite balance override")
+		}
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		send := transfer(accounts[0].addr, accounts[1].addr, big.NewInt(1))
+		withTx := []Bundle{{Transactions: []ethapi.TransactionArgs{send}}}
+		slot := common.Hash{0x1}
+		tests := []struct {
+			name    string
+			bundles []Bundle
+			sc      StateContext
+			config  *TraceCallConfig
+			wantErr string
+		}{
+			{"empty bundles", nil, StateContext{BlockNumber: latest}, nil, "empty bundles"},
+			{"bundles without transactions", []Bundle{{}}, StateContext{BlockNumber: latest}, nil, "empty bundles"},
+			{"pending block", withTx, StateContext{BlockNumber: rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)}, nil, "tracing on top of pending is not supported"},
+			{"unknown block", withTx, StateContext{BlockNumber: rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(genBlocks + 1))}, nil, fmt.Sprintf("block #%d not found", genBlocks+1)},
+			{"no block or hash", withTx, StateContext{}, nil, "invalid arguments; neither block nor hash specified"},
+			{"transaction index below -1", withTx, StateContext{BlockNumber: latest, TransactionIndex: func() *int { i := -2; return &i }()}, nil, "transaction index -2 out of range"},
+			{
+				"conflicting fee fields",
+				[]Bundle{{Transactions: []ethapi.TransactionArgs{{
+					From: &accounts[0].addr, To: &accounts[1].addr,
+					GasPrice:     (*hexutil.Big)(big.NewInt(1)),
+					MaxFeePerGas: (*hexutil.Big)(big.NewInt(1)),
+				}}}},
+				StateContext{BlockNumber: latest}, nil,
+				"both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified",
+			},
+			{
+				"unsupported block override",
+				[]Bundle{{Transactions: []ethapi.TransactionArgs{send}, BlockOverride: &override.BlockOverrides{BeaconRoot: &slot}}},
+				StateContext{BlockNumber: latest}, nil, `block override "beaconRoot" is not supported`,
+			},
+			{
+				"conflicting state override",
+				withTx, StateContext{BlockNumber: latest},
+				&TraceCallConfig{StateOverrides: &override.StateOverride{
+					accounts[0].addr: {
+						State:     map[common.Hash]common.Hash{{}: {}},
+						StateDiff: map[common.Hash]common.Hash{{}: {}},
+					},
+				}},
+				"has both 'state' and 'stateDiff'",
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := api.TraceCallMany(t.Context(), tc.bundles, tc.sc, tc.config)
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+			})
+		}
+	})
 }
 
 func TestTraceTransaction(t *testing.T) {
