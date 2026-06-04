@@ -3,8 +3,9 @@ updates:
   - package-ecosystem: 'gomod'
     directory: '/'
     schedule:
-      interval: 'daily'
-    open-pull-requests-limit: 10
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 3
     commit-message:
       prefix: 'build'
     groups:
@@ -24,8 +25,9 @@ updates:
   - package-ecosystem: 'gomod'
     directory: '/cmd/keeper'
     schedule:
-      interval: 'daily'
-    open-pull-requests-limit: 5
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 3
     commit-message:
       prefix: 'build'
     groups:
@@ -37,14 +39,16 @@ updates:
   - package-ecosystem: 'docker'
     directory: '/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     commit-message:
       prefix: 'build'
 
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
+      day: 'monday'
     commit-message:
       prefix: 'ci'
     groups:
