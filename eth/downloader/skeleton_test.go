@@ -219,6 +219,23 @@ func (p *skeletonTestPeer) SupportsWitness() bool {
 	return false
 }
 
+func TestSkeletonAssignTasksSkipsBackedOffPeers(t *testing.T) {
+	peer := newPeerConnection("backed-off", eth.ETH69, nil, log.New("id", "backed-off"))
+	peer.backoff(time.Minute)
+
+	skeleton := &skeleton{
+		peers: newPeerSet(),
+		idles: map[string]*peerConnection{
+			peer.id: peer,
+		},
+	}
+	skeleton.assignTasks(make(chan *headerResponse), make(chan *headerRequest), make(chan struct{}))
+
+	if _, ok := skeleton.idles[peer.id]; !ok {
+		t.Fatalf("backed off peer was assigned")
+	}
+}
+
 // Tests various sync initializations based on previous leftovers in the database
 // and announced heads.
 func TestSkeletonSyncInit(t *testing.T) {

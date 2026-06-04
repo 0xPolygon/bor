@@ -109,11 +109,13 @@ func (p *peerConnection) backedOff() bool {
 		return true
 	}
 	p.lock.Lock()
-	if !p.backoffUntil.IsZero() && !time.Now().Before(p.backoffUntil) {
+	defer p.lock.Unlock()
+
+	backedOff := time.Now().Before(p.backoffUntil)
+	if !backedOff {
 		p.backoffUntil = time.Time{}
 	}
-	p.lock.Unlock()
-	return false
+	return backedOff
 }
 
 // UpdateHeaderRate updates the peer's estimated header retrieval throughput with

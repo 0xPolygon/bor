@@ -1151,6 +1151,19 @@ func TestBackedOffPeerIsNotUsedForLegacySync(t *testing.T) {
 	}
 }
 
+func TestPeerBackedOffClearsExpiredDeadline(t *testing.T) {
+	peer := &peerConnection{
+		backoffUntil: time.Now().Add(-time.Second),
+	}
+
+	if peer.backedOff() {
+		t.Fatalf("expired backoff reported peer as backed off")
+	}
+	if !peer.backoffUntil.IsZero() {
+		t.Fatalf("expired backoff deadline was not cleared: %v", peer.backoffUntil)
+	}
+}
+
 // Tests that synchronisation progress (origin block number, current block number
 // and highest block number) is tracked and updated correctly.
 func TestSyncProgress68Full(t *testing.T) { testSyncProgress(t, eth.ETH68, FullSync) }
