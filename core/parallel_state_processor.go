@@ -1310,5 +1310,7 @@ func logV2BlockStats(block *types.Block, tasks []V2Task, result *V2ExecutionResu
 		"val_wait", common.PrettyDuration(result.ValWaitDur),
 		"val_check", common.PrettyDuration(result.ValCheckDur),
 		"val_reexec", common.PrettyDuration(result.ValReexDur),
+		"auth_stalls", result.AuthStallCount,
+		"auth_stall_dur", common.PrettyDuration(result.AuthStallDur),
 		"settle", common.PrettyDuration(result.SettleDur))
 }
