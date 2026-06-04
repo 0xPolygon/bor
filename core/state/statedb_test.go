@@ -1040,9 +1040,9 @@ func TestMVHashMapOverwrite(t *testing.T) {
 	// Tx1 delete
 	for _, v := range states[1].writeMap {
 		mvhm.Delete(v.Path, 1)
-
-		states[1].writeMap = nil
 	}
+
+	states[1].writeMap = nil
 
 	// Tx3 read should get Tx0's value
 	v = states[3].GetState(addr, key)
@@ -1061,9 +1061,9 @@ func TestMVHashMapOverwrite(t *testing.T) {
 	// Tx0 delete
 	for _, v := range states[0].writeMap {
 		mvhm.Delete(v.Path, 0)
-
-		states[0].writeMap = nil
 	}
+
+	states[0].writeMap = nil
 
 	// Tx4 read again should get default vals
 	v = states[4].GetState(addr, key)
@@ -1130,9 +1130,9 @@ func TestMVHashMapWriteNoConflict(t *testing.T) {
 	// Tx2 delete
 	for _, v := range states[2].writeMap {
 		mvhm.Delete(v.Path, 2)
-
-		states[2].writeMap = nil
 	}
+
+	states[2].writeMap = nil
 
 	assert.Equal(t, val1, states[4].GetState(addr, key1))
 	assert.Equal(t, balance1, states[4].GetBalance(addr))
@@ -1149,9 +1149,9 @@ func TestMVHashMapWriteNoConflict(t *testing.T) {
 	// Tx1 delete
 	for _, v := range states[1].writeMap {
 		mvhm.Delete(v.Path, 1)
-
-		states[1].writeMap = nil
 	}
+
+	states[1].writeMap = nil
 
 	assert.Equal(t, common.Hash{}, states[6].GetState(addr, key1))
 	assert.Equal(t, common.Hash{}, states[6].GetState(addr, key2))
@@ -2158,4 +2158,243 @@ func TestWitnessCollectionTiming(t *testing.T) {
 	if state2.WitnessCollection != 0 {
 		t.Errorf("WitnessCollection should be 0 without witness, got %v", state2.WitnessCollection)
 	}
+}
+
+// BenchmarkMVReadOverhead simulates the BlockSTM hot path: multiple worker copies
+// of a StateDB reading state through MVRead with an active MVHashMap. This exercises
+// the full path including writeMap checks, nested getStateObject guards,
+// MVHashMap.Read (Floor queries), and key construction.
+func BenchmarkMVReadOverhead(b *testing.B) {
+	// Setup: create base state with accounts and storage
+	db := NewDatabase(triedb.NewDatabase(rawdb.NewMemoryDatabase(), triedb.HashDefaults), nil)
+	mvhm := blockstm.MakeMVHashMap()
+	base, _ := NewWithMVHashmap(common.Hash{}, db, nil, mvhm)
+
+	const numAccounts = 50
+	const numSlotsPerAccount = 20
+	const numTxs = 200
+
+	addrs := make([]common.Address, numAccounts)
+	slots := make([]common.Hash, numSlotsPerAccount)
+
+	for i := range addrs {
+		// Use keccak-derived addresses for realistic byte distribution (uniform
+		// entropy in all positions), matching real Ethereum addresses.
+		addrs[i] = common.BytesToAddress(crypto.Keccak256(big.NewInt(int64(i + 1)).Bytes()))
+		slots[i%numSlotsPerAccount] = common.BytesToHash(crypto.Keccak256(big.NewInt(int64(i + 1000)).Bytes()))
+	}
+
+	for i := range slots {
+		slots[i] = common.BytesToHash(crypto.Keccak256(big.NewInt(int64(i + 1000)).Bytes()))
+	}
+
+	// Populate base state: create accounts with balance and storage
+	for _, addr := range addrs {
+		base.getOrNewStateObject(addr)
+		base.SetBalance(addr, uint256.NewInt(1000), tracing.BalanceChangeUnspecified)
+
+		for _, slot := range slots {
+			base.SetState(addr, slot, common.BigToHash(big.NewInt(42)))
+		}
+	}
+
+	base.Finalise(true)
+	base.FlushMVWriteSet()
+
+	// Simulate some earlier txs having written to the MVHashMap (realistic scenario)
+	for txIdx := 0; txIdx < numTxs/2; txIdx++ {
+		writer := base.Copy()
+		writer.txIndex = txIdx
+
+		addr := addrs[txIdx%numAccounts]
+		slot := slots[txIdx%numSlotsPerAccount]
+		writer.SetState(addr, slot, common.BigToHash(big.NewInt(int64(txIdx+100))))
+		writer.SetBalance(addr, uint256.NewInt(uint64(txIdx+2000)), tracing.BalanceChangeUnspecified)
+		writer.Finalise(true)
+		writer.FlushMVWriteSet()
+	}
+
+	// Sub-benchmarks for different access patterns
+	b.Run("GetState", func(b *testing.B) {
+		// Simulate a worker tx reading storage (the most common MVRead path)
+		worker := base.Copy()
+		worker.txIndex = numTxs - 1
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			addr := addrs[i%numAccounts]
+			slot := slots[i%numSlotsPerAccount]
+			worker.GetState(addr, slot)
+		}
+	})
+
+	b.Run("GetBalance", func(b *testing.B) {
+		worker := base.Copy()
+		worker.txIndex = numTxs - 1
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			addr := addrs[i%numAccounts]
+			worker.GetBalance(addr)
+		}
+	})
+
+	b.Run("GetState_WithLocalWrites", func(b *testing.B) {
+		// Worker that has written some keys (exercises writeMap/writeAddrs check)
+		worker := base.Copy()
+		worker.txIndex = numTxs - 1
+
+		// Write to a few addresses so writeMap is non-empty
+		for j := 0; j < 10; j++ {
+			worker.SetState(addrs[j], slots[0], common.BigToHash(big.NewInt(999)))
+		}
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			addr := addrs[i%numAccounts]
+			slot := slots[i%numSlotsPerAccount]
+			worker.GetState(addr, slot)
+		}
+	})
+
+	b.Run("GetState_MultiWorker", func(b *testing.B) {
+		// Simulates multiple workers reading the same storage slots from a clean
+		// statedb (no pre-populated stateObjects), matching production where
+		// cleanStateDB is created from the trie root with empty stateObjects.
+		root, _ := base.Commit(0, true, false)
+
+		cleanDB, _ := New(root, db)
+		cleanDB.SetMVHashmap(mvhm)
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			worker := cleanDB.Copy()
+			worker.txIndex = numTxs - 1
+			worker.SetMVHashmap(mvhm)
+
+			for j := 0; j < 5; j++ {
+				addr := addrs[j]
+				for k := 0; k < numSlotsPerAccount; k++ {
+					worker.GetState(addr, slots[k])
+				}
+			}
+		}
+	})
+
+	b.Run("GetState_8Workers", func(b *testing.B) {
+		// 8 concurrent workers sharing the same MVHashMap, each reading
+		// 5 addresses × 20 slots = 100 state reads per iteration.
+		root, _ := base.Commit(0, true, false)
+
+		cleanDB, _ := New(root, db)
+		cleanDB.SetMVHashmap(mvhm)
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			var wg sync.WaitGroup
+			wg.Add(8)
+
+			for w := 0; w < 8; w++ {
+				go func(workerID int) {
+					defer wg.Done()
+					worker := cleanDB.Copy()
+					worker.txIndex = numTxs - 1 - workerID
+					worker.SetMVHashmap(mvhm)
+
+					for j := 0; j < 5; j++ {
+						addr := addrs[(workerID+j)%numAccounts]
+						for k := 0; k < numSlotsPerAccount; k++ {
+							worker.GetState(addr, slots[k])
+						}
+					}
+				}(w)
+			}
+
+			wg.Wait()
+		}
+	})
+
+	b.Run("GetState_RepeatedRead", func(b *testing.B) {
+		// Simulates the common pattern where GetState and GetCommittedState
+		// read the same key consecutively (e.g., in EVM SLOAD which calls
+		// getState→GetCommittedState, both triggering MVRead for the same key).
+		worker := base.Copy()
+		worker.txIndex = numTxs - 1
+
+		addr := addrs[0]
+		slot := slots[0]
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			worker.GetState(addr, slot)
+			worker.GetCommittedState(addr, slot)
+		}
+	})
+
+	b.Run("Settlement_ApplyMVWriteSet", func(b *testing.B) {
+		// Simulate settlement: ApplyMVWriteSet on a statedb without MVHashMap
+		// Use realistic write counts: ~5 accounts, ~10 storage slots each = ~50 writes
+		writer := base.Copy()
+		writer.txIndex = numTxs/2 + 1
+
+		for j := 0; j < numAccounts && j < 5; j++ {
+			writer.SetBalance(addrs[j], uint256.NewInt(uint64(j+3000)), tracing.BalanceChangeUnspecified)
+			writer.SetNonce(addrs[j], uint64(j+100), tracing.NonceChangeUnspecified)
+			for k := 0; k < numSlotsPerAccount && k < 10; k++ {
+				writer.SetState(addrs[j], slots[k], common.BigToHash(big.NewInt(int64(j*100+k+500))))
+			}
+		}
+
+		writer.Finalise(true)
+		writes := writer.MVWriteList()
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			target := base.Copy()
+			target.mvHashmap = nil // settlement mode: no MVHashMap
+			target.ApplyMVWriteSet(writes)
+			target.Finalise(true)
+		}
+	})
+
+	b.Run("Copy_Empty", func(b *testing.B) {
+		// Copy of a clean statedb with no stateObjects (first tx scenario)
+		root, _ := base.Commit(0, true, false)
+		cleanDB, _ := New(root, db)
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			_ = cleanDB.Copy()
+		}
+	})
+
+	b.Run("Copy_WithObjects", func(b *testing.B) {
+		// Copy of a statedb that has accumulated some stateObjects (mid-block scenario)
+		root, _ := base.Commit(0, true, false)
+		cleanDB, _ := New(root, db)
+
+		// Touch some accounts to populate stateObjects
+		for j := 0; j < 10; j++ {
+			cleanDB.GetBalance(addrs[j])
+			for k := 0; k < 5; k++ {
+				cleanDB.GetState(addrs[j], slots[k])
+			}
+		}
+
+		b.ReportMetric(float64(len(cleanDB.stateObjects)), "stateObjects")
+
+		b.ResetTimer()
+
+		for i := 0; i < b.N; i++ {
+			_ = cleanDB.Copy()
+		}
+	})
 }

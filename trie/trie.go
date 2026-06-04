@@ -59,11 +59,22 @@ type Trie struct {
 	// reader is the handler trie can retrieve nodes from.
 	reader *Reader
 
+	// Concurrent resolve cache: hashNode hex path → resolved node.
+	// When set, get() stores resolved nodes here instead of mutating the tree.
+	// This makes Get() safe for concurrent reads from multiple goroutines.
+	resolveCache *sync.Map // string(key[:pos]) → node
+
 	// Various tracers for capturing the modifications to trie
 	opTracer       *opTracer
 	prevalueTracer *PrevalueTracer
 
 	tracerMutex sync.Mutex
+}
+
+// EnableConcurrentReads makes Get() safe for concurrent use by storing
+// resolved hash nodes in a sync.Map instead of mutating the trie tree.
+func (t *Trie) EnableConcurrentReads() {
+	t.resolveCache = &sync.Map{}
 }
 
 // newFlag returns the cache flag value for a newly created node.
@@ -194,12 +205,60 @@ func (t *Trie) Get(key []byte) ([]byte, error) {
 	if t.committed {
 		return nil, ErrCommitted
 	}
+	if t.resolveCache != nil {
+		// Concurrent-safe path: don't mutate the tree, use cache.
+		return t.getConcurrent(t.root, keybytesToHex(key), 0)
+	}
 	value, newroot, didResolve, err := t.get(t.root, keybytesToHex(key), 0)
 	if err == nil && didResolve {
 		t.root = newroot
 	}
 
 	return value, err
+}
+
+// getConcurrent is like get but stores resolved nodes in resolveCache
+// instead of mutating the tree. Safe for concurrent use.
+func (t *Trie) getConcurrent(origNode node, key []byte, pos int) ([]byte, error) {
+	switch n := (origNode).(type) {
+	case nil:
+		return nil, nil
+	case valueNode:
+		return n, nil
+	case *shortNode:
+		if !bytes.HasPrefix(key[pos:], n.Key) {
+			return nil, nil
+		}
+		return t.getConcurrent(n.Val, key, pos+len(n.Key))
+	case *fullNode:
+		return t.getConcurrent(n.Children[key[pos]], key, pos+1)
+	case hashNode:
+		// Check resolve cache first.
+		cacheKey := string(key[:pos])
+		if cached, ok := t.resolveCache.Load(cacheKey); ok {
+			return t.getConcurrent(cached.(node), key, pos)
+		}
+		// Cache miss: resolve from DB.
+		blob, err := t.reader.Node(key[:pos], common.BytesToHash(n))
+		if err != nil {
+			return nil, err
+		}
+		child, err := decodeNodeUnsafe(n, blob)
+		if err != nil {
+			return nil, err
+		}
+		// Record the resolved blob in the prevalue tracer so trie.Witness()
+		// includes it. PrevalueTracer.Put has its own internal lock, so
+		// this is safe without holding tracerMutex. Subsequent reads of
+		// the same key hit resolveCache and skip this step (the blob has
+		// already been recorded by whichever goroutine first resolved it).
+		t.prevalueTracer.Put(key[:pos], blob)
+		// Store in cache for future concurrent reads.
+		t.resolveCache.Store(cacheKey, child)
+		return t.getConcurrent(child, key, pos)
+	default:
+		panic(fmt.Sprintf("%T: invalid node: %v", origNode, origNode))
+	}
 }
 
 func (t *Trie) get(origNode node, key []byte, pos int) (value []byte, newnode node, didResolve bool, err error) {

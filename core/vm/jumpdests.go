@@ -16,7 +16,11 @@
 
 package vm
 
-import "github.com/ethereum/go-ethereum/common"
+import (
+	"sync"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // JumpDestCache represents the cache of jumpdest analysis results.
 type JumpDestCache interface {
@@ -44,4 +48,31 @@ func (j mapJumpDests) Load(codeHash common.Hash) (BitVec, bool) {
 
 func (j mapJumpDests) Store(codeHash common.Hash, vec BitVec) {
 	j[codeHash] = vec
+}
+
+// syncMapJumpDests is a thread-safe JumpDestCache backed by sync.Map.
+// Use this to share JUMPDEST analysis results across concurrent EVM workers
+// (e.g. BlockSTM parallel execution) so each contract's bitmap is computed
+// only once per block.
+type syncMapJumpDests struct {
+	m sync.Map
+}
+
+// NewSyncJumpDestCache creates a thread-safe JumpDestCache for use across
+// concurrent EVM instances processing the same block.
+func NewSyncJumpDestCache() JumpDestCache {
+	return &syncMapJumpDests{}
+}
+
+func (j *syncMapJumpDests) Load(codeHash common.Hash) (BitVec, bool) {
+	v, ok := j.m.Load(codeHash)
+	if !ok {
+		return nil, false
+	}
+
+	return v.(BitVec), true
+}
+
+func (j *syncMapJumpDests) Store(codeHash common.Hash, vec BitVec) {
+	j.m.Store(codeHash, vec)
 }

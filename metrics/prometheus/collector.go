@@ -111,7 +111,7 @@ func (c *collector) addMeter(name string, m *metrics.MeterSnapshot) {
 }
 
 func (c *collector) addTimer(name string, m *metrics.TimerSnapshot) {
-	pv := []float64{0.5, 0.75, 0.95, 0.99, 0.999, 0.9999}
+	pv := []float64{0.25, 0.5, 0.75, 0.95, 0.99, 0.999, 0.9999}
 	ps := m.Percentiles(pv)
 	c.writeSummaryCounter(name, m.Count())
 	c.buff.WriteString(fmt.Sprintf(typeSummaryTpl, mutateKey(name)))
@@ -125,7 +125,7 @@ func (c *collector) addResettingTimer(name string, m *metrics.ResettingTimerSnap
 	if m.Count() <= 0 {
 		return
 	}
-	pv := []float64{0.5, 0.75, 0.95, 0.99, 0.999, 0.9999}
+	pv := []float64{0.25, 0.5, 0.75, 0.95, 0.99, 0.999, 0.9999}
 	ps := m.Percentiles(pv)
 	c.writeSummaryCounter(name, m.Count())
 	c.buff.WriteString(fmt.Sprintf(typeSummaryTpl, mutateKey(name)))
