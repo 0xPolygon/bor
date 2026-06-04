@@ -402,7 +402,7 @@ func (ps *peerSet) getAllPeers() []*ethPeer {
 
 // peerWithHighestTD retrieves the known peer with the currently highest total
 // difficulty, but below the given PoS switchover threshold.
-func (ps *peerSet) peerWithHighestTD() *eth.Peer {
+func (ps *peerSet) peerWithHighestTD(skip func(id string) bool) *eth.Peer {
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
@@ -412,6 +412,9 @@ func (ps *peerSet) peerWithHighestTD() *eth.Peer {
 	)
 
 	for _, p := range ps.peers {
+		if skip != nil && skip(p.ID()) {
+			continue
+		}
 		if _, td := p.Head(); bestPeer == nil || td.Cmp(bestTd) > 0 {
 			bestPeer, bestTd = p.Peer, td
 		}

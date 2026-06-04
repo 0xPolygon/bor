@@ -224,7 +224,10 @@ func TestSkeletonAssignTasksSkipsBackedOffPeers(t *testing.T) {
 	peer.backoff(time.Minute)
 
 	skeleton := &skeleton{
-		peers: newPeerSet(),
+		peers:         newPeerSet(),
+		requests:      make(map[uint64]*headerRequest),
+		scratchOwners: make([]string, scratchHeaders/requestHeaders),
+		scratchHead:   scratchHeaders,
 		idles: map[string]*peerConnection{
 			peer.id: peer,
 		},
@@ -233,6 +236,9 @@ func TestSkeletonAssignTasksSkipsBackedOffPeers(t *testing.T) {
 
 	if _, ok := skeleton.idles[peer.id]; !ok {
 		t.Fatalf("backed off peer was assigned")
+	}
+	if skeleton.scratchOwners[0] != "" {
+		t.Fatalf("task was assigned to backed off peer: owner=%q", skeleton.scratchOwners[0])
 	}
 }
 

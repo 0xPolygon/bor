@@ -163,7 +163,7 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	// We have enough peers, pick the one with the highest TD, but avoid going
 	// over the terminal total difficulty. Above that we expect the consensus
 	// clients to direct the chain head to sync to.
-	peer := cs.handler.peers.peerWithHighestTD()
+	peer := cs.handler.peers.peerWithHighestTD(cs.handler.downloader.IsPeerBackedOff)
 	if peer == nil {
 		return nil
 	}

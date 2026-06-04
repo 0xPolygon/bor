@@ -383,8 +383,12 @@ func (d *Downloader) UnregisterPeer(id string) error {
 func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, mode SyncMode) error {
 	err := d.synchronise(id, head, td, ttd, mode, false, nil)
 
+	if errors.Is(err, errPeerBackedOff) {
+		return err
+	}
+
 	switch err {
-	case nil, errBusy, errCanceled, errPeerBackedOff:
+	case nil, errBusy, errCanceled:
 		return err
 	}
 
@@ -436,6 +440,13 @@ func (d *Downloader) backoffPeer(id string, duration time.Duration) {
 	}
 }
 
+func (d *Downloader) IsPeerBackedOff(id string) bool {
+	if peer := d.peers.Peer(id); peer != nil {
+		return peer.backedOff()
+	}
+	return false
+}
+
 // synchronise will select the peer and use it for synchronising. If an empty string is given
 // it will use the best peer possible and synchronize if its TD is higher than our own. If any of the
 // checks fail an error will be returned. This method is synchronous
@@ -467,6 +478,14 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 	// Post a user notification of the sync (only once per session)
 	if d.notified.CompareAndSwap(false, true) {
 		log.Info("Block synchronisation started")
+	}
+	if !beaconMode {
+		if p := d.peers.Peer(id); p == nil {
+			return errUnknownPeer
+		} else if p.backedOff() {
+			log.Debug("Skipping backed-off peer for sync", "peer", id)
+			return errPeerBackedOff
+		}
 	}
 	if mode == SnapSync {
 		// Snap sync will directly modify the persistent state, making the entire
@@ -521,10 +540,6 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td, ttd *big.Int, 
 		p = d.peers.Peer(id)
 		if p == nil {
 			return errUnknownPeer
-		}
-		if p.backedOff() {
-			log.Debug("Skipping backed-off peer for sync", "peer", id)
-			return errPeerBackedOff
 		}
 	}
 
@@ -1511,7 +1526,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			filled, hashset, proced, err := d.fillHeaderSkeleton(from, headers)
 			if err != nil {
 				p.log.Debug("Skeleton chain invalid", "err", err)
-				return fmt.Errorf("%w: %v", errInvalidChain, err)
+				return fmt.Errorf("%w: %w", errInvalidChain, err)
 			}
 
 			headers = filled[proced:]
