@@ -1,5 +1,10 @@
 name: Govuln
-on: [push, pull_request]
+
+on:
+  schedule:
+    # Daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   govulncheck:
@@ -11,14 +16,5 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      - uses: actions/checkout@v5
-      - uses: technote-space/get-diff-action@v6
-        with:
-          PATTERNS: |
-            **/*.go
-            go.mod
-            go.sum
-            Makefile
       - name: govulncheck
         run: make vulncheck
-        if: env.GIT_DIFF != ''
