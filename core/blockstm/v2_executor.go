@@ -120,9 +120,15 @@ func ExecuteV2BlockSTM(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Derive a cancellable ctx so the validation goroutine can release workers
+	// parked on completionCh waits (e.g. the authPrev barrier) if it panics —
+	// the incoming ctx is typically long-lived and never cancelled on panic.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	x := newV2ExecCtx(tasks, env, coinbase, numWorkers, conflictAddrs)
 	x.ctx = ctx
+	x.cancel = cancel
 	startTime := time.Now()
 
 	taskCh, wg := x.startWorkers()
@@ -146,7 +152,8 @@ func ExecuteV2BlockSTM(
 // Pulled out of the long function so each phase reads as a focused
 // method against a stable receiver instead of a closure soup.
 type v2ExecCtx struct {
-	ctx          context.Context // for cancellation; checked at dispatch and validation boundaries
+	ctx          context.Context    // for cancellation; checked at dispatch and validation boundaries
+	cancel       context.CancelFunc // cancels ctx so workers parked on completionCh waits unblock on a validation panic
 	tasks        []V2Task
 	env          V2Env
 	coinbase     common.Address
@@ -726,6 +733,12 @@ func (x *v2ExecCtx) runValidationLoop(valDone chan struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			x.validationPanic = r
+			// Unfinalized tasks never close their completionCh, so workers
+			// parked on the authPrev/finalization waits would hang. Cancel ctx
+			// to release them and let the caller fall back to serial.
+			if x.cancel != nil {
+				x.cancel()
+			}
 			log.Error("V2 validation panic — falling back to serial",
 				"err", r, "stack", string(debug.Stack()))
 		}
