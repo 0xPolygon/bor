@@ -1232,7 +1232,7 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	if txIndex < -1 {
 		return nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
 	}
-	// Avoid calling `StateAtTransaction` if `txIndex` points to the last transaction as it will
+	// Avoid calling `StateAtTransaction` if `txIndex` points past the last transaction as it will
 	// return an error. Instead use `StateAtBlock` directly to fetch the post-block state. Hence
 	// we set the txIndex to the default value in such cases to fetch post-block state directly.
 	if txIndex >= len(block.Transactions()) {
@@ -1251,22 +1251,28 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	defer release()
 
 	h := block.Header()
-	blockContext := core.NewEVMBlockContext(h, api.chainContext(ctx), nil)
+	chainCtx := api.chainContext(ctx)
+	blockContext := core.NewEVMBlockContext(h, chainCtx, nil)
 	chainConfig := api.backend.ChainConfig()
 
-	applyBlockOverride := func(override *override.BlockOverrides, h *types.Header, blockContext *vm.BlockContext, applyPrecompiles bool) error {
-		if override != nil && override.Number != nil && override.Number.ToInt().Uint64() == h.Number.Uint64()+1 {
+	// applyBlockOverride applies o to blockContext. h is the original block header
+	// and is never mutated: the n+1 fixup operates on a throwaway copy so repeated
+	// applications across bundles can't corrupt the GetHash reference.
+	applyBlockOverride := func(o *override.BlockOverrides, blockContext *vm.BlockContext, applyPrecompiles bool) error {
+		if o != nil && o.Number != nil && o.Number.ToInt().Uint64() == h.Number.Uint64()+1 {
 			// Overriding the block number to n+1 is a common way for wallets to
 			// simulate transactions, however without the following fix, a contract
 			// can assert it is being simulated by checking if blockhash(n) == 0x0 and
 			// can behave differently during the simulation. (#32175 for more info)
 			// --
-			// Modify the parent hash and number so that downstream, blockContext's
-			// GetHash function can correctly return n.
-			h.ParentHash = h.Hash()
-			h.Number.Add(h.Number, big.NewInt(1))
+			// Rewire GetHash from a header copy whose parent hash and number are set
+			// so that downstream, blockContext's GetHash function can correctly return n.
+			hc := types.CopyHeader(h)
+			hc.ParentHash = hc.Hash()
+			hc.Number = new(big.Int).Add(hc.Number, big.NewInt(1))
+			blockContext.GetHash = core.GetHashFn(hc, chainCtx)
 		}
-		if err := override.Apply(blockContext); err != nil {
+		if err := o.Apply(blockContext); err != nil {
 			return err
 		}
 		if applyPrecompiles {
@@ -1282,7 +1288,7 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	var traceConfig *TraceConfig
 	// Apply the customization rules if required.
 	if config != nil {
-		if err := applyBlockOverride(config.BlockOverrides, h, &blockContext, true); err != nil {
+		if err := applyBlockOverride(config.BlockOverrides, &blockContext, true); err != nil {
 			return nil, err
 		}
 		traceConfig = &config.TraceConfig
@@ -1290,8 +1296,7 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 
 	results := make([][]interface{}, 0, len(bundles))
 	for _, bundle := range bundles {
-		override := bundle.BlockOverride
-		if err := applyBlockOverride(override, h, &blockContext, false); err != nil {
+		if err := applyBlockOverride(bundle.BlockOverride, &blockContext, false); err != nil {
 			return nil, err
 		}
 		rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)

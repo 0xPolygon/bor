@@ -553,12 +553,14 @@ func TestTraceCallMany(t *testing.T) {
 	t.Parallel()
 
 	accounts := newAccounts(3)
+	genBlocks := 10 // chain head ends up at block number genBlocks
 	// Tiny contracts whose top-of-stack reflects a block-context field, so the
 	// active value shows up on the struct logger's stack.
 	numberAddr := common.HexToAddress("0x000000000000000000000000000000000000aaaa")    // NUMBER; STOP
 	timeAddr := common.HexToAddress("0x000000000000000000000000000000000000bbbb")      // TIMESTAMP; STOP
 	blockhashAddr := common.HexToAddress("0x000000000000000000000000000000000000cccc") // blockhash(number-1); STOP
 	basefeeAddr := common.HexToAddress("0x000000000000000000000000000000000000eeee")   // BASEFEE; STOP
+	headHashAddr := common.HexToAddress("0x000000000000000000000000000000000000ffff")  // blockhash(genBlocks); STOP
 	// An account with no genesis balance; funded only via a state override.
 	overrideAddr := common.HexToAddress("0x000000000000000000000000000000000000dddd")
 	genesis := &core.Genesis{
@@ -572,9 +574,10 @@ func TestTraceCallMany(t *testing.T) {
 			// NUMBER, PUSH1 1, SWAP1, SUB, BLOCKHASH, STOP -> pushes blockhash(number-1).
 			blockhashAddr: {Code: []byte{0x43, 0x60, 0x01, 0x90, 0x03, 0x40, 0x00}, Balance: big.NewInt(0)},
 			basefeeAddr:   {Code: []byte{0x48, 0x00}, Balance: big.NewInt(0)}, // BASEFEE, STOP
+			// PUSH1 genBlocks, BLOCKHASH, STOP -> pushes blockhash(genBlocks), the real head.
+			headHashAddr: {Code: []byte{0x60, byte(genBlocks), 0x40, 0x00}, Balance: big.NewInt(0)},
 		},
 	}
-	genBlocks := 10
 	signer := types.HomesteadSigner{}
 	nonce := uint64(0)
 	backend := newTestBackend(t, genBlocks, genesis, func(i int, b *core.BlockGen) {
@@ -720,6 +723,31 @@ func TestTraceCallMany(t *testing.T) {
 		}
 		if got := topOfStack(t, res[0][0]); got == "0x0" {
 			t.Fatalf("blockhash(head) resolved to zero; the head+1 parent-hash fixup did not apply")
+		}
+	})
+
+	t.Run("blockhash of the real head survives sequential number overrides", func(t *testing.T) {
+		// Regression: the n+1 fixup must not mutate shared state across bundles.
+		// Bundle 0 overrides to head+1 (fires the fixup); bundle 1 overrides to head+2.
+		// blockhash(head) — a real historical block — must stay resolvable in both,
+		// not get clobbered to zero by a synthetic parent hash carried over from bundle 0.
+		head := backend.chain.CurrentBlock().Number.Uint64()
+		if head != uint64(genBlocks) {
+			t.Fatalf("test assumes head == genBlocks (%d), got %d", genBlocks, head)
+		}
+		headCall := []ethapi.TransactionArgs{{From: &accounts[0].addr, To: &headHashAddr}}
+		bundles := []Bundle{
+			{Transactions: headCall, BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(new(big.Int).SetUint64(head + 1))}},
+			{Transactions: headCall, BlockOverride: &override.BlockOverrides{Number: (*hexutil.Big)(new(big.Int).SetUint64(head + 2))}},
+		}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for i := range bundles {
+			if got := topOfStack(t, res[i][0]); got == "0x0" {
+				t.Fatalf("bundle %d: blockhash(head) resolved to zero; shared-header mutation corrupted GetHash", i)
+			}
 		}
 	})
 
