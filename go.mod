@@ -1,7 +1,7 @@
 module github.com/ethereum/go-ethereum
 
 // Note: Change the go image version in Dockerfile if you change this.
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/0xPolygon/crand v1.0.3
