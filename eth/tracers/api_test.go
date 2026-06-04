@@ -815,10 +815,62 @@ func TestTraceCallMany(t *testing.T) {
 		}
 	})
 
+	t.Run("state override relocating a precompile is honored in execution", func(t *testing.T) {
+		// Move the identity precompile (0x04) to a fresh address; the destination
+		// must behave as the precompile (echo its input). This only works if the
+		// override-mutated precompile set reaches traceTx, not a freshly recomputed one.
+		identity := common.BytesToAddress([]byte{0x04})
+		dest := common.HexToAddress("0x0000000000000000000000000000000000009999")
+		input := hexutil.Bytes{0xde, 0xad, 0xbe, 0xef}
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{{
+			From: &accounts[0].addr, To: &dest, Input: &input,
+		}}}}
+		cfg := &TraceCallConfig{StateOverrides: &override.StateOverride{
+			identity: {MovePrecompileTo: &dest},
+		}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		got := mustResult(t, res[0][0])
+		if got.Failed {
+			t.Fatalf("call to relocated precompile failed")
+		}
+		if got.ReturnValue.String() != input.String() {
+			t.Fatalf("relocated identity precompile: want return %s, got %s", input.String(), got.ReturnValue.String())
+		}
+	})
+
+	t.Run("honors context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		bundles := []Bundle{{Transactions: []ethapi.TransactionArgs{
+			transfer(accounts[0].addr, accounts[1].addr, big.NewInt(1)),
+		}}}
+		if _, err := api.TraceCallMany(ctx, bundles, StateContext{BlockNumber: latest}, nil); !errors.Is(err, context.Canceled) {
+			t.Fatalf("want context.Canceled, got %v", err)
+		}
+	})
+
 	t.Run("errors", func(t *testing.T) {
 		send := transfer(accounts[0].addr, accounts[1].addr, big.NewInt(1))
 		withTx := []Bundle{{Transactions: []ethapi.TransactionArgs{send}}}
 		slot := common.Hash{0x1}
+
+		// Over-limit requests: empty TransactionArgs are fine since validateBundles
+		// runs before any tracing, so nothing is executed.
+		tooManyBundles := make([]Bundle, maxTraceCallManyBundles+1)
+		for i := range tooManyBundles {
+			tooManyBundles[i] = Bundle{Transactions: []ethapi.TransactionArgs{send}}
+		}
+		tooManyPerBundle := []Bundle{{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle+1)}}
+		// Each bundle stays within the per-bundle cap; only the sum exceeds the total cap.
+		tooManyTotal := []Bundle{
+			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle)},
+			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyCallsPerBundle)},
+			{Transactions: make([]ethapi.TransactionArgs, maxTraceCallManyTotalCalls-2*maxTraceCallManyCallsPerBundle+1)},
+		}
+
 		tests := []struct {
 			name    string
 			bundles []Bundle
@@ -828,6 +880,9 @@ func TestTraceCallMany(t *testing.T) {
 		}{
 			{"empty bundles", nil, StateContext{BlockNumber: latest}, nil, "empty bundles"},
 			{"bundles without transactions", []Bundle{{}}, StateContext{BlockNumber: latest}, nil, "empty bundles"},
+			{"too many bundles", tooManyBundles, StateContext{BlockNumber: latest}, nil, "too many bundles"},
+			{"too many calls in a bundle", tooManyPerBundle, StateContext{BlockNumber: latest}, nil, "too many calls in a single bundle"},
+			{"too many calls in total", tooManyTotal, StateContext{BlockNumber: latest}, nil, "too many calls across all bundles"},
 			{"pending block", withTx, StateContext{BlockNumber: rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)}, nil, "tracing on top of pending is not supported"},
 			{"unknown block", withTx, StateContext{BlockNumber: rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(genBlocks + 1))}, nil, fmt.Sprintf("block #%d not found", genBlocks+1)},
 			{"no block or hash", withTx, StateContext{}, nil, "invalid arguments; neither block nor hash specified"},

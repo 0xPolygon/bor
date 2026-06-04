@@ -69,6 +69,13 @@ const (
 	// for tracing. The creation of trace state will be paused if the unused
 	// trace states exceed this limit.
 	maximumPendingTraceStates = 128
+
+	// Per-request limits for TraceCallMany, to bound the work and memory a single
+	// request can demand. Each traced call is still individually bounded by the
+	// per-trace timeout.
+	maxTraceCallManyBundles        = 256
+	maxTraceCallManyCallsPerBundle = 1000
+	maxTraceCallManyTotalCalls     = 10000
 )
 
 var errTxNotFound = errors.New("transaction not found")
@@ -1275,7 +1282,15 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 		if err := o.Apply(blockContext); err != nil {
 			return err
 		}
-		if applyPrecompiles {
+		if applyPrecompiles && config.StateOverrides != nil {
+			// State overrides can relocate precompiles (MovePrecompileTo) or free a
+			// precompile slot, which mutates the precompile set. Apply them once on
+			// the active set and reuse that mutated set for every bundle below. Note
+			// that the `precompiles` set below will are set by request level overrides
+			// (`config.StateOverrides`). A bundle level override (`bundle.BlockOverride`)
+			// may change block number affecting the active precompile set, but it won't
+			// be honored given it requires re-applying the override which can affect
+			// the state mutations carried over from previous bundles. This is a known limitation.
 			rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
 			precompiles = vm.ActivePrecompiledContracts(rules)
 			if err := config.StateOverrides.Apply(statedb, precompiles); err != nil {
@@ -1299,8 +1314,7 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 		if err := applyBlockOverride(bundle.BlockOverride, &blockContext, false); err != nil {
 			return nil, err
 		}
-		rules := chainConfig.Rules(blockContext.BlockNumber, blockContext.Random != nil, blockContext.Time)
-		res, err := api.traceBundle(ctx, bundle.Transactions, blockContext, block, statedb, traceConfig, vm.ActivePrecompiledContracts(rules))
+		res, err := api.traceBundle(ctx, bundle.Transactions, blockContext, block, statedb, traceConfig, precompiles)
 		if err != nil {
 			return nil, err
 		}
@@ -1311,18 +1325,34 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	return results, nil
 }
 
-// validateBundles rejects requests with no bundles or no transactions to trace.
+// validateBundles rejects requests with no transactions to trace and enforces
+// the per-request limits on bundle and call counts.
 func validateBundles(bundles []Bundle) error {
 	var errEmptyBundles = errors.New("empty bundles")
 	if len(bundles) == 0 {
 		return errEmptyBundles
 	}
+	if len(bundles) > maxTraceCallManyBundles {
+		return fmt.Errorf("too many bundles: %d, maximum allowed is %d", len(bundles), maxTraceCallManyBundles)
+	}
+	total := 0
+	hasTx := false
 	for _, b := range bundles {
+		if len(b.Transactions) > maxTraceCallManyCallsPerBundle {
+			return fmt.Errorf("too many calls in a single bundle: %d, maximum allowed is %d", len(b.Transactions), maxTraceCallManyCallsPerBundle)
+		}
 		if len(b.Transactions) > 0 {
-			return nil
+			hasTx = true
+			total += len(b.Transactions)
 		}
 	}
-	return errEmptyBundles
+	if !hasTx {
+		return errEmptyBundles
+	}
+	if total > maxTraceCallManyTotalCalls {
+		return fmt.Errorf("too many calls across all bundles: %d, maximum allowed is %d", total, maxTraceCallManyTotalCalls)
+	}
+	return nil
 }
 
 // traceBundle traces each call in a bundle sequentially against the shared
@@ -1330,6 +1360,9 @@ func validateBundles(bundles []Bundle) error {
 func (api *API) traceBundle(ctx context.Context, txs []ethapi.TransactionArgs, blockCtx vm.BlockContext, block *types.Block, statedb *state.StateDB, traceConfig *TraceConfig, precompiles vm.PrecompiledContracts) ([]interface{}, error) {
 	results := make([]interface{}, 0, len(txs))
 	for i, args := range txs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := args.CallDefaults(api.backend.RPCGasCap(), blockCtx.BaseFee, api.backend.ChainConfig().ChainID); err != nil {
 			return nil, err
 		}
