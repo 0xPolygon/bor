@@ -1,13 +1,18 @@
 package filters
 
 import (
+	"context"
+	"errors"
 	"math/big"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	types "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"go.uber.org/mock/gomock"
 )
@@ -151,6 +156,102 @@ func TestBorFilters(t *testing.T) {
 	logs, _ = filter.Logs(t.Context())
 	if len(logs) != 0 {
 		t.Error("expected 0 log, got", len(logs))
+	}
+}
+
+// TestBorFilterHonorsContextCancellation asserts that a range scan stops as soon
+// as the request context is cancelled (e.g. the RPC client disconnected, or a
+// deadline fired) instead of scanning the whole range and keeping an RPC worker
+// busy with work whose result nobody will read. This mirrors the cancellation
+// check upstream go-ethereum performs in eth/filters/filter.go's unindexedLogs.
+func TestBorFilterHonorsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	db := NewMockDatabase(ctrl)
+	backend := NewMockBackend(ctrl)
+
+	testBorConfig := params.TestChainConfig.Bor
+
+	// Count only the per-block reads inside the scan loop. The single pre-loop
+	// head lookup uses rpc.LatestBlockNumber (negative); loop reads use the
+	// concrete, non-negative block number.
+	var loopBlockReads int32
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, number rpc.BlockNumber) (*types.Header, error) {
+			if number >= 0 {
+				atomic.AddInt32(&loopBlockReads, 1)
+			}
+			return newTestHeader(1), nil
+		}).AnyTimes()
+	backend.EXPECT().GetBorBlockReceipt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+	// Cancel up-front: a scan that honors cancellation must bail out before
+	// doing any per-block work.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Range large enough that an unguarded loop would iterate hundreds of times.
+	filter := NewBorBlockLogsRangeFilter(backend, testBorConfig, 0, 4000, []common.Address{addr}, nil)
+
+	logs, err := filter.Logs(ctx)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got err=%v (loop ran %d block reads, ignoring cancellation)",
+			err, atomic.LoadInt32(&loopBlockReads))
+	}
+	if got := atomic.LoadInt32(&loopBlockReads); got != 0 {
+		t.Fatalf("expected 0 in-loop block reads after honoring cancellation, got %d", got)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("expected no logs on a cancelled scan, got %d", len(logs))
+	}
+}
+
+// TestBorFilterHonorsContextDeadline asserts the scan also stops once the
+// context deadline has passed. Because the loop now observes the context, any
+// deadline attached upstream (an operator-configured RPC timeout, or a deadline
+// the caller sets) bounds the scan -- previously the loop ran to completion
+// regardless of the deadline.
+func TestBorFilterHonorsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	db := NewMockDatabase(ctrl)
+	backend := NewMockBackend(ctrl)
+
+	testBorConfig := params.TestChainConfig.Bor
+
+	var loopBlockReads int32
+	backend.EXPECT().ChainDb().Return(db).AnyTimes()
+	backend.EXPECT().HeaderByNumber(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, number rpc.BlockNumber) (*types.Header, error) {
+			if number >= 0 {
+				atomic.AddInt32(&loopBlockReads, 1)
+			}
+			return newTestHeader(1), nil
+		}).AnyTimes()
+	backend.EXPECT().GetBorBlockReceipt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+	// Deadline already in the past: the scan must stop before any per-block work.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+
+	filter := NewBorBlockLogsRangeFilter(backend, testBorConfig, 0, 4000, []common.Address{addr}, nil)
+
+	_, err := filter.Logs(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got err=%v (loop ran %d block reads, ignoring the deadline)",
+			err, atomic.LoadInt32(&loopBlockReads))
+	}
+	if got := atomic.LoadInt32(&loopBlockReads); got != 0 {
+		t.Fatalf("expected 0 in-loop block reads after honoring the deadline, got %d", got)
 	}
 }
 
