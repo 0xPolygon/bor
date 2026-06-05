@@ -751,6 +751,36 @@ func TestTraceCallMany(t *testing.T) {
 		}
 	})
 
+	t.Run("blockhash of the real head resolves after the natural per-bundle advance", func(t *testing.T) {
+		// No explicit block override: bundle 0 runs at the head block, so blockhash(head)
+		// is the current block -> 0; bundles 1 and 2 advance to head+1 and head+2 via the
+		// per-bundle advance, where blockhash(head) must resolve to the real head hash in
+		// every advanced bundle, not just the first (#32175).
+		head := backend.chain.CurrentBlock().Number.Uint64()
+		if head != uint64(genBlocks) {
+			t.Fatalf("test assumes head == genBlocks (%d), got %d", genBlocks, head)
+		}
+		headCall := []ethapi.TransactionArgs{{From: &accounts[0].addr, To: &headHashAddr}}
+		bundles := []Bundle{{Transactions: headCall}, {Transactions: headCall}, {Transactions: headCall}}
+		res, err := api.TraceCallMany(t.Context(), bundles, StateContext{BlockNumber: latest}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Bundle 0 is at the head block, so blockhash(head) is the current block -> 0.
+		if got := topOfStack(t, res[0][0]); got != "0x0" {
+			t.Fatalf("bundle 0 runs at head; blockhash(head) should be 0 (current block), got %s", got)
+		}
+		// Bundle 1 (head+1) must resolve blockhash(head) to the real head hash...
+		headHash := topOfStack(t, res[1][0])
+		if headHash == "0x0" {
+			t.Fatalf("bundle 1 runs at head+1 via advance; blockhash(head) must resolve to the real head hash, got 0")
+		}
+		// ...and bundle 2 (head+2) must return the same real head hash, not drift to 0.
+		if got := topOfStack(t, res[2][0]); got != headHash {
+			t.Fatalf("bundle 2 runs at head+2 via advance; blockhash(head) should still be %s, got %s", headHash, got)
+		}
+	})
+
 	t.Run("basefee is zeroed for zero-gas-price calls", func(t *testing.T) {
 		// A call with no fee fields ends up with gasPrice 0, which lowers the
 		// block context basefee to 0 so the BASEFEE opcode reads 0.

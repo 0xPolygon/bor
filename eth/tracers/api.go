@@ -1170,7 +1170,7 @@ type Bundle struct {
 
 // StateContext selects the base state for TraceCallMany. The state used is the
 // one after replaying transactions [0, TransactionIndex) of the referenced
-// block. If TransactionIndex is nil (or points at/after the last transaction),
+// block. If TransactionIndex is nil (or points past the last transaction),
 // the full post-block state is used.
 type StateContext struct {
 	BlockNumber      rpc.BlockNumberOrHash `json:"blockNumber"`
@@ -1266,21 +1266,21 @@ func (api *API) TraceCallMany(ctx context.Context, bundles []Bundle, simulateCon
 	// and is never mutated: the n+1 fixup operates on a throwaway copy so repeated
 	// applications across bundles can't corrupt the GetHash reference.
 	applyBlockOverride := func(o *override.BlockOverrides, blockContext *vm.BlockContext, applyPrecompiles bool) error {
-		if o != nil && o.Number != nil && o.Number.ToInt().Uint64() == h.Number.Uint64()+1 {
-			// Overriding the block number to n+1 is a common way for wallets to
-			// simulate transactions, however without the following fix, a contract
-			// can assert it is being simulated by checking if blockhash(n) == 0x0 and
-			// can behave differently during the simulation. (#32175 for more info)
-			// --
-			// Rewire GetHash from a header copy whose parent hash and number are set
-			// so that downstream, blockContext's GetHash function can correctly return n.
+		if err := o.Apply(blockContext); err != nil {
+			return err
+		}
+		// Once the effective block number moves past the real head — whether via an
+		// explicit Number override or the per-bundle advance — rewire GetHash so that
+		// blockhash() of the head and earlier blocks resolves to their real hashes
+		// instead of 0. Otherwise a contract can detect simulation by checking
+		// blockhash(head) == 0x0 (#32175). The copy is pinned at head+1 with the real
+		// head as its parent regardless of how far we advanced, so real blocks resolve
+		// via the chain walk while simulated blocks above the head resolve to 0.
+		if blockContext.BlockNumber.Cmp(h.Number) > 0 {
 			hc := types.CopyHeader(h)
 			hc.ParentHash = hc.Hash()
 			hc.Number = new(big.Int).Add(hc.Number, big.NewInt(1))
 			blockContext.GetHash = core.GetHashFn(hc, chainCtx)
-		}
-		if err := o.Apply(blockContext); err != nil {
-			return err
 		}
 		if applyPrecompiles && config.StateOverrides != nil {
 			// State overrides can relocate precompiles (MovePrecompileTo) or free a
