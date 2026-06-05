@@ -90,6 +90,58 @@ func TestPDB_DiagnoseBalanceRead(t *testing.T) {
 	}
 }
 
+// TestPDB_DiagnoseStaleBalanceReads flags a balance read whose recorded prior
+// delta no longer matches the committed delta once an earlier tx's delta lands.
+func TestPDB_DiagnoseStaleBalanceReads(t *testing.T) {
+	pdb, _, bals := newTestPDB(t, 5)
+	pdb.EnableReadTracking()
+	addr := common.HexToAddress("0x1")
+	pdb.GetBalance(addr) // records prior delta (zero)
+	if d := pdb.DiagnoseStaleBalanceReads(); len(d) != 0 {
+		t.Fatalf("no earlier delta yet — want 0, got %+v", d)
+	}
+	bals.WriteDelta(addr, 2, uint256.NewInt(100), uint256.NewInt(0))
+	d := pdb.DiagnoseStaleBalanceReads()
+	if len(d) != 1 {
+		t.Fatalf("want 1 stale balance read, got %d: %+v", len(d), d)
+	}
+	if d[0].Addr != addr || d[0].CurAdd.Cmp(uint256.NewInt(100)) != 0 {
+		t.Fatalf("unexpected stale balance diag: %+v", d[0])
+	}
+}
+
+// TestPDB_DumpReadSet returns every recorded store + balance read with the
+// current MVStore state, flagging the ones the store now disagrees with.
+func TestPDB_DumpReadSet(t *testing.T) {
+	pdb, store, bals := newTestPDB(t, 5)
+	pdb.EnableReadTracking()
+	addr := common.HexToAddress("0x1")
+	pdb.GetNonce(addr)   // store base read (writer=-1)
+	pdb.GetBalance(addr) // balance read
+
+	// Make both reads stale: a committed earlier writer for the nonce, and an
+	// earlier balance delta that wasn't present at read time.
+	store.WriteInc(blockstm.NewSubpathKey(addr, NoncePath), 3, 0, uint64(7))
+	bals.WriteDelta(addr, 2, uint256.NewInt(50), uint256.NewInt(0))
+
+	d := pdb.DumpReadSet()
+	if len(d.Stores) == 0 || len(d.Bals) == 0 {
+		t.Fatalf("expected store and balance entries, got %d/%d", len(d.Stores), len(d.Bals))
+	}
+	var staleNonce bool
+	for i := range d.Stores {
+		if d.Stores[i].Category == "nonce" && d.Stores[i].Stale {
+			staleNonce = true
+		}
+	}
+	if !staleNonce {
+		t.Fatalf("expected stale nonce store read, got %+v", d.Stores)
+	}
+	if !d.Bals[0].Stale {
+		t.Fatalf("expected stale balance read, got %+v", d.Bals[0])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // MarkEstimate / CleanupEstimate / write-key accessors
 // ---------------------------------------------------------------------------

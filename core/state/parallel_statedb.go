@@ -161,6 +161,12 @@ type ParallelStateDB struct {
 	UsedGas    uint64
 	ExecFailed bool
 	Panicked   bool // true if execution panicked (always fails validation)
+	// PanicValue / PanicStack hold the recovered panic and its stack for the
+	// V2 flatdiff bad-block diagnostics — populated by the execution recover so
+	// the settle-time dump can pinpoint where a stale-read-induced panic fired.
+	// Diagnostic-only; nil on the normal path.
+	PanicValue any
+	PanicStack []byte
 	// ExecErr is set when ApplyMessage returns a consensus-level error
 	// (e.g. invalid nonce, insufficient upfront gas, intrinsic gas underflow,
 	// blob fork-gating violation). Such a tx must NOT be settled; the caller
@@ -254,6 +260,8 @@ func (s *ParallelStateDB) Reset(txIndex int, base *SafeBase, store *blockstm.MVS
 	s.UsedGas = 0
 	s.ExecFailed = false
 	s.Panicked = false
+	s.PanicValue = nil
+	s.PanicStack = nil
 	s.ExecErr = nil
 	s.TransferLogFn = nil
 	s.FeeLogFn = nil

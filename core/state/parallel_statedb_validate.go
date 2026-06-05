@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/blockstm"
+	"github.com/holiman/uint256"
 )
 
 // valuesEqual compares MVStore reads/writes. New value types MUST add
@@ -206,6 +207,107 @@ func (s *ParallelStateDB) DiagnoseStaleBaseReads() []StaleBaseReadDiag {
 		})
 	}
 	return out
+}
+
+// StaleBalReadDiag is the balance-dimension analogue of StaleBaseReadDiag:
+// a finalized tx whose recorded cumulative balance delta for an address no
+// longer matches the current MVBalanceStore delta. DiagnoseStaleBaseReads only
+// walks StoreReads (nonce/code/storage); a gas divergence driven by a stale
+// balance read (value-transfer / account-creation / balance-branch) escapes it
+// entirely, so this closes that blind spot. Diagnostic-only.
+type StaleBalReadDiag struct {
+	TxIndex int
+	Addr    common.Address
+	RecAdd  uint256.Int
+	RecSub  uint256.Int
+	CurAdd  uint256.Int
+	CurSub  uint256.Int
+}
+
+// DiagnoseStaleBalanceReads scans this tx's balance reads for any whose recorded
+// cumulative prior-tx delta no longer matches the committed MVBalanceStore delta
+// — the balance-dimension escape signature. Mirrors validateBalanceRead's check.
+func (s *ParallelStateDB) DiagnoseStaleBalanceReads() []StaleBalReadDiag {
+	var out []StaleBalReadDiag
+	for i := range s.BalReads {
+		rd := &s.BalReads[i]
+		add, sub := s.bals.ReadDelta(rd.Addr, s.TxIndex)
+		if add.Cmp(&rd.BalAdd) == 0 && sub.Cmp(&rd.BalSub) == 0 {
+			continue
+		}
+		out = append(out, StaleBalReadDiag{
+			TxIndex: s.TxIndex, Addr: rd.Addr,
+			RecAdd: rd.BalAdd, RecSub: rd.BalSub, CurAdd: add, CurSub: sub,
+		})
+	}
+	return out
+}
+
+// StoreReadDump / BalReadDump / ReadDump carry a tx's full recorded read set
+// alongside the current MVStore state, for the bad-block read-set dump. Unlike
+// the Diagnose* scans (which only surface contradictions), this dumps every
+// read — the insurance that catches a divergence even when it isn't a base-read
+// contradiction the targeted scans can flag (e.g. a read satisfied by an
+// earlier tx whose own written value was wrong).
+type StoreReadDump struct {
+	Category  string
+	Addr      common.Address
+	Slot      common.Hash
+	RecWriter int
+	RecVal    any
+	CurWriter int
+	CurInc    int
+	CurVal    any
+	Found     bool
+	IsEst     bool
+	Stale     bool // current MVStore disagrees with the recorded read
+}
+
+type BalReadDump struct {
+	Addr   common.Address
+	RecAdd uint256.Int
+	RecSub uint256.Int
+	CurAdd uint256.Int
+	CurSub uint256.Int
+	Stale  bool
+}
+
+type ReadDump struct {
+	Stores []StoreReadDump
+	Bals   []BalReadDump
+}
+
+// DumpReadSet returns this tx's full recorded read set with the current MVStore
+// state for each entry. Read-only; intended for the bad-block diagnostic path.
+func (s *ParallelStateDB) DumpReadSet() ReadDump {
+	var d ReadDump
+	for i := range s.StoreReads {
+		rd := &s.StoreReads[i]
+		curVal, writer, inc, found, isEst := s.store.ReadVersionFull(rd.Key, s.TxIndex)
+		stale := !storeReadMatches(rd, curVal, writer, inc, found, false)
+		d.Stores = append(d.Stores, StoreReadDump{
+			Category:  storeReadFailCategory(rd.Key),
+			Addr:      rd.Key.GetAddress(),
+			Slot:      rd.Key.GetStateKey(),
+			RecWriter: rd.WriterIdx,
+			RecVal:    rd.StoreVal,
+			CurWriter: writer,
+			CurInc:    inc,
+			CurVal:    curVal,
+			Found:     found,
+			IsEst:     isEst,
+			Stale:     stale,
+		})
+	}
+	for i := range s.BalReads {
+		rd := &s.BalReads[i]
+		add, sub := s.bals.ReadDelta(rd.Addr, s.TxIndex)
+		d.Bals = append(d.Bals, BalReadDump{
+			Addr: rd.Addr, RecAdd: rd.BalAdd, RecSub: rd.BalSub, CurAdd: add, CurSub: sub,
+			Stale: add.Cmp(&rd.BalAdd) != 0 || sub.Cmp(&rd.BalSub) != 0,
+		})
+	}
+	return d
 }
 
 // ValidationDiag holds diagnostic info about a validation failure.

@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -732,6 +733,12 @@ func (e *v2Env) applyMessage(t *v2Task, evm *vm.EVM, pdb *state.ParallelStateDB)
 				log.Debug("V2 tx execution panic (speculative, will re-exec)", "tx", t.index, "err", r)
 			} else {
 				log.Error("V2 tx execution panic", "tx", t.index, "incarnation", pdb.Incarnation, "err", r)
+				// Keep the stack for the settle-time bad-block dump; an
+				// incarnation>0 panic is the fatal one that aborts the block.
+				if v2BaseReadDiag {
+					pdb.PanicValue = r
+					pdb.PanicStack = debug.Stack()
+				}
 			}
 			pdb.Panicked = true
 		}
@@ -1039,6 +1046,13 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 			if *panickedIdx < 0 {
 				*panickedIdx = txIdx
 			}
+			// A panicked tx never reaches the normal scan below and is recycled
+			// here, so capture the stack + full read set now — this is the
+			// divergent tx for a panic-shaped bad block (e.g. a stale 7702
+			// delegation read producing an invalid jump).
+			if v2BaseReadDiag {
+				v2ReportPanic(blockCtx.BlockNumber, pdb, tasks, txIdx)
+			}
 			env.Recycle(st)
 			return
 		}
@@ -1063,12 +1077,25 @@ func newV2SettleFn(tasks []V2Task, env *v2Env, finalDB *state.StateDB,
 		*receipts = append(*receipts, receipt)
 		*allLogs = append(*allLogs, receipt.Logs...)
 
-		// Stale-base-read escape detector (opt-in via BOR_V2_BASEREAD_DIAG).
+		// Stale-read escape detector (opt-in via BOR_V2_BASEREAD_DIAG).
 		// Runs here — at settle time, before Recycle resets the read set — so
 		// the PDB's reads are intact and, by settle order, every earlier-tx
-		// writer is already committed to the MVStore.
+		// writer is already committed to the MVStore. Covers both store and
+		// balance dimensions and dumps the full read set on any escape.
 		if v2BaseReadDiag {
-			v2ReportStaleBaseReads(blockCtx.BlockNumber, pdb, tasks, txIdx)
+			v2ReportStaleReads(blockCtx.BlockNumber, pdb, tasks, txIdx)
+		}
+		// Fingerprint dump: a tx that failed having consumed ~all of its gas
+		// limit is the exceptional-halt signature of executing against stale
+		// state (e.g. info8's status 1→0 at ~99% gas). Dump its read set even
+		// when no base-read contradiction is flagged — the case where the
+		// offending read was satisfied by an earlier tx whose own written value
+		// was wrong, which the escape scans can't catch.
+		if v2BaseReadDiag && pdb.ExecFailed {
+			if lim := tasks[txIdx].Tx.Gas(); lim > 0 && pdb.UsedGas*100 >= lim*95 {
+				v2DumpReadSet(blockCtx.BlockNumber, pdb, tasks, txIdx,
+					fmt.Sprintf("failed near gas limit (used %d / %d)", pdb.UsedGas, lim))
+			}
 		}
 
 		// Return PDB to pool for reuse by subsequent txs.
@@ -1118,28 +1145,24 @@ func v2EnvDisabled(key string) bool {
 	return false
 }
 
-// v2ReportStaleBaseReads WARN-logs any base read in pdb's (finalized) read set
-// that a committed earlier-tx writer now contradicts. A hit is the signature
-// of the V2 pipelined-base gas-mismatch bug: the later tx read base state for
-// an account an earlier tx had already written, and validation accepted it
-// (the version/value check never re-reads base values). authPrev only patches
-// this for EIP-7702 authorities; a hit here flags a residual — possibly
-// general — escape, with full account + authority context for correlation.
-func v2ReportStaleBaseReads(blockNum *big.Int, pdb *state.ParallelStateDB, tasks []V2Task, txIdx int) {
-	escapes := pdb.DiagnoseStaleBaseReads()
-	if len(escapes) == 0 {
+// v2ReportStaleReads WARN-logs any store- or balance-dimension stale read in
+// pdb's finalized read set, then dumps the full read set on any hit. A store
+// hit is a base read a committed earlier-tx writer now contradicts (the
+// pipelined-base gas-mismatch signature); a balance hit is a recorded delta that
+// no longer matches the committed delta. authPrev only patches the EIP-7702
+// store case; a hit here flags a residual escape, with account + authority
+// context for correlation.
+func v2ReportStaleReads(blockNum *big.Int, pdb *state.ParallelStateDB, tasks []V2Task, txIdx int) {
+	storeEsc := pdb.DiagnoseStaleBaseReads()
+	balEsc := pdb.DiagnoseStaleBalanceReads()
+	if len(storeEsc) == 0 && len(balEsc) == 0 {
 		return
 	}
-	for _, e := range escapes {
+	for _, e := range storeEsc {
 		attrs := []interface{}{
-			"block", blockNum,
-			"tx", txIdx,
-			"category", e.Category,
-			"addr", e.Addr,
-			"recordedBase", fmtMVVal(e.RecVal),
-			"committedWriter", e.CurWriter,
-			"committedInc", e.CurInc,
-			"committedVal", fmtMVVal(e.CurVal),
+			"block", blockNum, "tx", txIdx, "dim", "store", "category", e.Category,
+			"addr", e.Addr, "recordedBase", fmtMVVal(e.RecVal),
+			"committedWriter", e.CurWriter, "committedInc", e.CurInc, "committedVal", fmtMVVal(e.CurVal),
 		}
 		if e.Category == "storage" {
 			attrs = append(attrs, "slot", e.Slot.Hex())
@@ -1151,6 +1174,60 @@ func v2ReportStaleBaseReads(blockNum *big.Int, pdb *state.ParallelStateDB, tasks
 			attrs = append(attrs, "writerAuthorities", w)
 		}
 		log.Warn("V2 stale base read escaped validation", attrs...)
+	}
+	for _, e := range balEsc {
+		attrs := []interface{}{
+			"block", blockNum, "tx", txIdx, "dim", "balance", "addr", e.Addr,
+			"recordedAdd", e.RecAdd.String(), "recordedSub", e.RecSub.String(),
+			"committedAdd", e.CurAdd.String(), "committedSub", e.CurSub.String(),
+		}
+		if a := v2TaskAuthorityContext(tasks, txIdx); a != "" {
+			attrs = append(attrs, "txAuthorities", a)
+		}
+		log.Warn("V2 stale balance read escaped validation", attrs...)
+	}
+	v2DumpReadSet(blockNum, pdb, tasks, txIdx, "stale read escape")
+}
+
+// v2ReportPanic logs the recovered panic + stack and the full read set of a tx
+// that panicked during (re-)execution — the divergent tx for a panic-shaped bad
+// block (e.g. a stale 7702 delegation read driving an invalid jump).
+func v2ReportPanic(blockNum *big.Int, pdb *state.ParallelStateDB, tasks []V2Task, txIdx int) {
+	attrs := []interface{}{"block", blockNum, "tx", txIdx, "panic", fmt.Sprintf("%v", pdb.PanicValue)}
+	if a := v2TaskAuthorityContext(tasks, txIdx); a != "" {
+		attrs = append(attrs, "txAuthorities", a)
+	}
+	if len(pdb.PanicStack) > 0 {
+		attrs = append(attrs, "stack", string(pdb.PanicStack))
+	}
+	log.Error("V2 tx execution panic — read-set dump follows", attrs...)
+	v2DumpReadSet(blockNum, pdb, tasks, txIdx, "execution panic")
+}
+
+// v2DumpReadSet WARN-logs a tx's full recorded read set with the current MVStore
+// state for each entry (stale ones flagged). The catch-all that surfaces a
+// divergence even when the targeted scans can't — e.g. a read satisfied by an
+// earlier tx whose own written value was itself wrong.
+func v2DumpReadSet(blockNum *big.Int, pdb *state.ParallelStateDB, tasks []V2Task, txIdx int, reason string) {
+	d := pdb.DumpReadSet()
+	log.Warn("V2 bad-block read-set dump", "block", blockNum, "tx", txIdx, "reason", reason,
+		"storeReads", len(d.Stores), "balReads", len(d.Bals), "txAuthorities", v2TaskAuthorityContext(tasks, txIdx))
+	for i := range d.Stores {
+		e := &d.Stores[i]
+		attrs := []interface{}{
+			"block", blockNum, "tx", txIdx, "stale", e.Stale, "category", e.Category, "addr", e.Addr,
+			"recWriter", e.RecWriter, "recVal", fmtMVVal(e.RecVal),
+			"curWriter", e.CurWriter, "curInc", e.CurInc, "curVal", fmtMVVal(e.CurVal), "found", e.Found, "est", e.IsEst,
+		}
+		if e.Category == "storage" {
+			attrs = append(attrs, "slot", e.Slot.Hex())
+		}
+		log.Warn("V2 readset[store]", attrs...)
+	}
+	for i := range d.Bals {
+		e := &d.Bals[i]
+		log.Warn("V2 readset[bal]", "block", blockNum, "tx", txIdx, "stale", e.Stale, "addr", e.Addr,
+			"recAdd", e.RecAdd.String(), "recSub", e.RecSub.String(), "curAdd", e.CurAdd.String(), "curSub", e.CurSub.String())
 	}
 }
 
