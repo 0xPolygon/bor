@@ -1,15 +1,11 @@
 name: Kurtosis E2E Tests
 
 on:
-  push:
-    branches:
-      - 'master'
-      - 'develop'
   pull_request:
     branches:
-      - 'master'
-      - 'develop'
-    types: [opened, synchronize]
+      - '**'
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 concurrency:
   group: kurtosis-e2e-${{ github.event.pull_request.number || github.ref }}

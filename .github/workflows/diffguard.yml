@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - '**'
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
 
 concurrency:
   group: diffguard-${{ github.event.pull_request.number || github.ref }}
@@ -43,22 +43,26 @@ jobs:
 
       - name: Run diffguard
         id: diffguard
-        # Sample 10% of generated mutants — statistically representative
-        # for tier scores while keeping CI cost bounded. Each mutant runs
-        # the full test suite of its package, hence the 5m test-timeout
-        # (eth/fetcher alone takes ~2.3m).
-        #
-        # Gating: --fail-on warn + default tier thresholds means the job
-        # FAILs when Tier-1 (logic) score drops below 90% and WARNs on
-        # Tier-2 below 70%. Tier-3 (observability) is report-only.
+        shell: bash
         run: |
+          # Keep diffguard's exit code when tee writes the step summary.
+          set -o pipefail
           diffguard \
             --base origin/${{ github.base_ref }} \
+            --complexity-threshold 10 \
+            --complexity-delta-tolerance 3 \
+            --function-size-threshold 50 \
+            --function-size-delta-tolerance 5 \
+            --file-size-threshold 500 \
+            --file-size-delta-tolerance-pct 5 \
+            --file-size-delta-tolerance-floor 10 \
+            --tier1-threshold 90 \
+            --tier2-threshold 70 \
             --mutation-sample-rate 10 \
             --test-timeout 5m \
             --output text \
             --fail-on warn \
-            . | tee $GITHUB_STEP_SUMMARY
+            . | tee "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JSON report
         # Run even on failure so the survivor list is available for

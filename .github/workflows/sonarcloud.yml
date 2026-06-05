@@ -1,0 +1,55 @@
+name: Sonar Code Analysis
+
+on:
+  pull_request:
+    branches:
+      - '**'
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonar:
+    name: SonarCloud (informational)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run SonarCloud analysis
+        id: sonar
+        if: env.SONAR_TOKEN != ''
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          args: -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+
+      - name: Report informational status
+        if: always()
+        run: |
+          {
+            echo "## Sonar Code Analysis"
+            case "${{ steps.sonar.outcome }}" in
+              success)
+                echo "SonarCloud analysis completed successfully."
+                ;;
+              skipped)
+                echo "SonarCloud analysis was skipped because SONAR_TOKEN is not available."
+                ;;
+              *)
+                echo "SonarCloud analysis failed or the quality gate did not pass. This check is informational and does not fail CI."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
