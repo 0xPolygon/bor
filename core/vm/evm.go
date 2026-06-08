@@ -364,14 +364,14 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 		ret, gas, err = evm.runPrecompile(p, addr, input, gas)
 	} else {
 		// Initialise a new contract and set the code that is to be used by the EVM.
-		code := evm.resolveCode(addr)
+		code, codeHash := evm.resolveCodeAndHash(addr)
 		if len(code) == 0 {
 			ret, err = nil, nil // gas is unchanged
 		} else {
 			// The contract is a scoped environment for this execution context only.
 			contract := NewContract(caller, addr, value, gas, evm.jumpDests)
 			contract.IsSystemCall = isSystemCall(caller)
-			contract.SetCallCode(evm.resolveCodeHash(addr), code)
+			contract.SetCallCode(codeHash, code)
 			ret, err = evm.Run(contract, input, false)
 			gas = contract.Gas
 		}
@@ -433,7 +433,8 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.
 		contract := NewContract(caller, caller, value, gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
+		code, codeHash := evm.resolveCodeAndHash(addr)
+		contract.SetCallCode(codeHash, code)
 		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
@@ -480,7 +481,8 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		//
 		// Note: The value refers to the original value from the parent call.
 		contract := NewContract(originCaller, caller, value, gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
+		code, codeHash := evm.resolveCodeAndHash(addr)
+		contract.SetCallCode(codeHash, code)
 		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
@@ -534,7 +536,8 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		// Initialise a new contract and set the code that is to be used by the EVM.
 		// The contract is a scoped environment for this execution context only.
 		contract := NewContract(caller, addr, new(uint256.Int), gas, evm.jumpDests)
-		contract.SetCallCode(evm.resolveCodeHash(addr), evm.resolveCode(addr))
+		code, codeHash := evm.resolveCodeAndHash(addr)
+		contract.SetCallCode(codeHash, code)
 
 		// When an error was returned by the EVM or when setting the creation code
 		// above we revert to the snapshot and consume any gas remaining. Additionally
@@ -720,35 +723,31 @@ func (evm *EVM) Create2(caller common.Address, code []byte, gas uint64, endowmen
 	return evm.create(caller, code, gas, endowment, contractAddr, CREATE2)
 }
 
-// resolveCode returns the code associated with the provided account. After
-// Prague, it can also resolve code pointed to by a delegation designator.
-func (evm *EVM) resolveCode(addr common.Address) []byte {
+// resolveCodeAndHash returns the code and matching code hash for the provided
+// account, following a single level of EIP-7702 delegation after Prague. The
+// delegation designator is read exactly once so the returned code and hash
+// always describe the same resolved target. The earlier split into separate
+// resolveCode and resolveCodeHash helpers read the designator twice; BlockSTM
+// gives no snapshot isolation between two reads of the same key within one
+// incarnation, so a concurrent writer landing between them could make the two
+// reads follow different delegation targets, yielding a Contract whose Code and
+// CodeHash disagree and poisoning the persistent CodeHash-keyed jumpdest cache
+// (a later caller running the longer code then indexes a too-short bitvec and
+// crashes). Serial go-ethereum reads the designator twice harmlessly, so this
+// single-read resolution lives in the EVM — the only layer that knows the two
+// reads form one logical 7702 resolution. The state layer cannot fix it: it has
+// no notion that addr's designator and the target's code/hash are one atomic
+// operation, so it cannot bind them into a single coherent read.
+func (evm *EVM) resolveCodeAndHash(addr common.Address) ([]byte, common.Hash) {
 	code := evm.StateDB.GetCode(addr)
 	// EIP-7702
-	if !evm.chainRules.IsPrague {
-		return code
-	}
-	if target, ok := types.ParseDelegation(code); ok {
-		// Note we only follow one level of delegation.
-		return evm.StateDB.GetCode(target)
-	}
-	return code
-}
-
-// resolveCodeHash returns the code hash associated with the provided address.
-// After Prague, it can also resolve code hash of the account pointed to by a
-// delegation designator. Although this is not accessible in the EVM it is used
-// internally to associate jumpdest analysis to code.
-func (evm *EVM) resolveCodeHash(addr common.Address) common.Hash {
-	// EIP-7702
 	if evm.chainRules.IsPrague {
-		code := evm.StateDB.GetCode(addr)
 		if target, ok := types.ParseDelegation(code); ok {
 			// Note we only follow one level of delegation.
-			return evm.StateDB.GetCodeHash(target)
+			return evm.StateDB.GetCode(target), evm.StateDB.GetCodeHash(target)
 		}
 	}
-	return evm.StateDB.GetCodeHash(addr)
+	return code, evm.StateDB.GetCodeHash(addr)
 }
 
 // ChainConfig returns the environment's chain configuration

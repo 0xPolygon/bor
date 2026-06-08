@@ -90,7 +90,17 @@ func (c *Contract) isCode(udest uint64) bool {
 	if c.CodeHash != (common.Hash{}) {
 		// Does parent context have the analysis?
 		analysis, exist := c.jumpDests.Load(c.CodeHash)
-		if !exist {
+		// The cache is keyed by code hash and trusts it to identify the code,
+		// then indexes the cached bitvec with no bounds check. Under BlockSTM
+		// parallel execution a (Code, CodeHash) pair can momentarily be
+		// inconsistent, leaving a cached analysis too short for the current Code;
+		// codeSegment would then index out of range and panic, which on this
+		// shared, persistent, cross-block cache is a node-crash surface.
+		// resolveCodeAndHash removes the known source of such mismatches — this
+		// guard is defense in depth: recompute from the actual Code rather than
+		// trusting a too-short cached entry. Serial go-ethereum cannot reach an
+		// inconsistent pair, so this stays a Bor-specific safeguard.
+		if !exist || len(analysis) < codeBitmapLen(len(c.Code)) {
 			// Do the analysis and save in parent context
 			// We do not need to store it in c.analysis
 			analysis = codeBitmap(c.Code)
