@@ -184,6 +184,17 @@ var (
 		metrics.NewExpDecaySample(1028, 0.015),
 	)
 
+	// prefetchWarmAtApplyHistogram tracks the percentage of block transactions that were
+	// already prefetched at the moment the builder applied them. miss_rate_percent above is
+	// measured at block end and counts a tx as covered even if the prefetcher only finished
+	// warming it after it was applied; this histogram reflects the latency benefit actually
+	// realized during the build and is therefore <= (100 - miss_rate_percent).
+	prefetchWarmAtApplyHistogram = metrics.NewRegisteredHistogram(
+		"worker/prefetch/warm_at_apply_percent",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
+
 	// Trie read/hash/execution metrics for block production (mirroring blockchain.go import path).
 	// Namespaced under worker/chain/ to distinguish from import-path chain/ metrics.
 	workerAccountReadTimer         = metrics.NewRegisteredResettingTimer("worker/chain/account/reads", nil)
@@ -264,6 +275,11 @@ type environment struct {
 	// split the apply-duration histogram by prefetch status. May be nil.
 	prefetchedTxHashes *sync.Map
 
+	// prefetchedAtApply counts transactions that were already in prefetchedTxHashes
+	// at the moment they were applied. Unlike membership measured at block end, this
+	// captures the latency benefit realized during the build (warm-at-apply).
+	prefetchedAtApply int
+
 	// Observability for pre block building phase
 	makeEnvDuration    time.Duration
 	makeHeaderDuration time.Duration // primarily includes call to bor.Prepare
@@ -285,6 +301,7 @@ func (env *environment) copy() *environment {
 		prefetchReader:     env.prefetchReader,
 		processReader:      env.processReader,
 		prefetchedTxHashes: env.prefetchedTxHashes,
+		prefetchedAtApply:  env.prefetchedAtApply,
 		makeEnvDuration:    env.makeEnvDuration,
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
@@ -1607,6 +1624,7 @@ mainloop:
 				txApplyDurationTimer.Update(txDuration)
 				if prefetched {
 					txApplyDurationPrefetchedTimer.Update(txDuration)
+					env.prefetchedAtApply++
 				} else {
 					txApplyDurationNotPrefetchedTimer.Update(txDuration)
 				}
@@ -2579,9 +2597,13 @@ func (w *worker) runIdleTxProvider(txsCh chan<- *types.Transaction, header *type
 	localPrefetched := make(map[common.Hash]struct{})
 
 	shouldExit := func() bool {
+		// Exit once the remaining budget can no longer fit even a minimal transaction
+		// (params.TxGas). A strict == 0 check leaves a sub-one-tx residual that
+		// streamIdleBatch can never spend, so the loop would keep re-snapshotting the
+		// pool every ~100ms and forward nothing until builderStarted flips — wasted CPU.
 		return interrupt.Load() ||
 			(genParams.builderStarted != nil && genParams.builderStarted.Load()) ||
-			totalGasPool.Gas() == 0
+			totalGasPool.Gas() < params.TxGas
 	}
 
 	for !shouldExit() {
@@ -2860,6 +2882,31 @@ func createInterruptTimer(number uint64, actualTimestamp time.Time, interruptBlo
 	return cancel
 }
 
+// prefetchCoverage holds the per-block prefetch attribution percentages reported at
+// commit time. record is false when the percentages must not be sampled (no prefetch
+// ran, or the block had no transactions).
+type prefetchCoverage struct {
+	record          bool
+	missRatePct     int64
+	builderAddedPct int64
+	warmAtApplyPct  int64
+}
+
+// computePrefetchCoverage derives the per-block prefetch attribution percentages.
+// Callers must only invoke it for blocks where the prefetcher actually ran; it returns
+// a zero-value (record=false) result for empty blocks so the caller skips the sample.
+func computePrefetchCoverage(txCount, prefetchedCount, builderAddedCount, warmAtApplyCount int) prefetchCoverage {
+	if txCount == 0 {
+		return prefetchCoverage{}
+	}
+	return prefetchCoverage{
+		record:          true,
+		missRatePct:     int64((txCount - prefetchedCount) * 100 / txCount),
+		builderAddedPct: int64(builderAddedCount * 100 / txCount),
+		warmAtApplyPct:  int64(warmAtApplyCount * 100 / txCount),
+	}
+}
+
 // commit runs any post-transaction state modifications, assembles the final block
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
@@ -2896,8 +2943,13 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 			storageHitFromPrefetchMeter.Mark(processAttribStats.StorageHitFromPrefetch)
 			accountHitFromPrefetchUniqueMeter.Mark(processAttribStats.AccountHitFromPrefetchUnique)
 
-			// Report prefetch coverage percentage
-			if len(env.txs) > 0 && genParams != nil && genParams.prefetchedTxHashes != nil {
+			// Report prefetch coverage percentage. builderPrefetchedTxHashes is
+			// allocated iff the prefetch goroutine actually ran for this block (see
+			// buildAndCommitBlock); prefetchedTxHashes is allocated unconditionally,
+			// so attribution must be gated on the former. Otherwise every block that
+			// never prefetched (pre-Giugliano, prefetch disabled) would record a
+			// spurious 100% miss rate and the dashboard would read pessimistically.
+			if genParams != nil && genParams.builderPrefetchedTxHashes != nil && genParams.prefetchedTxHashes != nil {
 				prefetchedCount := 0
 				builderAddedCount := 0
 
@@ -2905,22 +2957,22 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 					if _, ok := genParams.prefetchedTxHashes.Load(tx.Hash()); ok {
 						prefetchedCount++
 					}
-					if genParams.builderPrefetchedTxHashes != nil {
-						if _, ok := genParams.builderPrefetchedTxHashes.Load(tx.Hash()); ok {
-							builderAddedCount++
-						}
+					if _, ok := genParams.builderPrefetchedTxHashes.Load(tx.Hash()); ok {
+						builderAddedCount++
 					}
 				}
 
-				// Miss rate (0-100, higher = worse).
-				missRate := int64((len(env.txs) - prefetchedCount) * 100 / len(env.txs))
-				prefetchMissRateHistogram.Update(missRate)
-
-				// Builder-added share (0-100): block txs the builder phase prefetched on
-				// its own. Only emitted when the builder phase actually ran.
-				if genParams.builderPrefetchedTxHashes != nil {
-					builderAdded := int64(builderAddedCount * 100 / len(env.txs))
-					prefetchBuilderAddedHistogram.Update(builderAdded)
+				cov := computePrefetchCoverage(len(env.txs), prefetchedCount, builderAddedCount, env.prefetchedAtApply)
+				if cov.record {
+					// Miss rate (0-100, higher = worse): block txs the prefetcher never warmed.
+					prefetchMissRateHistogram.Update(cov.missRatePct)
+					// Builder-added share (0-100): block txs the builder phase prefetched on its own.
+					prefetchBuilderAddedHistogram.Update(cov.builderAddedPct)
+					// Warm-at-apply share (0-100): block txs already warmed at the moment they
+					// were applied. Unlike miss rate (measured at block end), this reflects the
+					// latency benefit actually realized — the prefetcher can finish warming a tx
+					// after the builder already applied it, which still counts toward coverage.
+					prefetchWarmAtApplyHistogram.Update(cov.warmAtApplyPct)
 				}
 			}
 		}

@@ -3998,3 +3998,74 @@ func TestStateSyncReserveFor(t *testing.T) {
 		})
 	}
 }
+
+// TestComputePrefetchCoverage verifies the per-block prefetch attribution math and
+// that empty blocks are not sampled. The caller separately gates on whether the
+// prefetcher ran; this helper only owns the arithmetic.
+func TestComputePrefetchCoverage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                                           string
+		txCount, prefetched, builderAdded, warmAtApply int
+		wantRecord                                     bool
+		wantMiss, wantBuilder, wantWarm                int64
+	}{
+		{"empty block is not sampled", 0, 0, 0, 0, false, 0, 0, 0},
+		{"full coverage, all warm at apply", 10, 10, 0, 10, true, 0, 0, 100},
+		{"full coverage but raced apply", 10, 10, 4, 6, true, 0, 40, 60},
+		{"partial coverage", 10, 7, 3, 5, true, 30, 30, 50},
+		{"nothing prefetched", 4, 0, 0, 0, true, 100, 0, 0},
+		{"single tx warm", 1, 1, 1, 1, true, 0, 100, 100},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cov := computePrefetchCoverage(tc.txCount, tc.prefetched, tc.builderAdded, tc.warmAtApply)
+			require.Equal(t, tc.wantRecord, cov.record)
+			if !tc.wantRecord {
+				return
+			}
+			require.Equal(t, tc.wantMiss, cov.missRatePct, "miss rate")
+			require.Equal(t, tc.wantBuilder, cov.builderAddedPct, "builder added")
+			require.Equal(t, tc.wantWarm, cov.warmAtApplyPct, "warm at apply")
+		})
+	}
+}
+
+// TestRunIdleTxProviderExitsBelowMinTxGas verifies the idle provider stops as soon as
+// its remaining gas budget can no longer fit a minimal transaction, rather than
+// re-snapshotting the pool indefinitely on a sub-one-tx residual until builderStarted.
+func TestRunIdleTxProviderExitsBelowMinTxGas(t *testing.T) {
+	w, _, engine, ctrl := setupBorWorkerWithPrefetch(t, 100, time.Second)
+	defer engine.Close()
+	defer ctrl.Finish()
+	defer w.close()
+
+	parent := w.chain.CurrentBlock()
+	header := &types.Header{
+		// GasLimit*100/100 = GasLimit, one wei of gas short of a single minimal tx,
+		// so the budget is non-zero but unspendable — the bug condition.
+		Number:   new(big.Int).Add(parent.Number, common.Big1),
+		Time:     parent.Time + 1,
+		GasLimit: params.TxGas - 1,
+		BaseFee:  big.NewInt(params.InitialBaseFee),
+	}
+	genParams := &generateParams{} // builderStarted nil: only the budget can trigger exit
+	interrupt := new(atomic.Bool)
+	txsCh := make(chan *types.Transaction, 8)
+
+	done := make(chan struct{})
+	go func() {
+		w.runIdleTxProvider(txsCh, header, genParams, interrupt)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Exited promptly because the budget is below params.TxGas.
+	case <-time.After(2 * time.Second):
+		interrupt.Store(true) // unblock the goroutine before failing
+		t.Fatal("runIdleTxProvider did not exit with a sub-one-tx gas budget; it is spinning")
+	}
+}
