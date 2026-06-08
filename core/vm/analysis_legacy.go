@@ -61,12 +61,16 @@ func (bits *BitVec) codeSegment(pos uint64) bool {
 	return (((*bits)[pos/8] >> (pos % 8)) & 1) == 0
 }
 
+// codeBitmapLen returns the BitVec length codeBitmap allocates for code of the
+// given byte length. The bitmap is 4 bytes longer than necessary so a trailing
+// PUSH32 can set bits past the end of the actual code without overflowing.
+func codeBitmapLen(codeLen int) int {
+	return codeLen/8 + 1 + 4
+}
+
 // codeBitmap collects data locations in code.
 func codeBitmap(code []byte) BitVec {
-	// The bitmap is 4 bytes longer than necessary, in case the code
-	// ends with a PUSH32, the algorithm will set bits on the
-	// bitvector outside the bounds of the actual code.
-	bits := make(BitVec, len(code)/8+1+4)
+	bits := make(BitVec, codeBitmapLen(len(code)))
 	return codeBitmapInternal(code, bits)
 }
 
