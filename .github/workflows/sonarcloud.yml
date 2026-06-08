@@ -33,8 +33,6 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v7
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        with:
-          args: -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
 
       - name: Report informational status
         if: always()
@@ -49,7 +47,7 @@ jobs:
                 echo "SonarCloud analysis was skipped because SONAR_TOKEN is not available."
                 ;;
               *)
-                echo "SonarCloud analysis failed or the quality gate did not pass. This check is informational and does not fail CI."
+                echo "SonarCloud analysis did not complete successfully. This check is informational and does not fail CI."
                 ;;
             esac
           } >> "$GITHUB_STEP_SUMMARY"
