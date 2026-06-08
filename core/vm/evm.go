@@ -740,14 +740,23 @@ func (evm *EVM) Create2(caller common.Address, code []byte, gas uint64, endowmen
 // operation, so it cannot bind them into a single coherent read.
 func (evm *EVM) resolveCodeAndHash(addr common.Address) ([]byte, common.Hash) {
 	code := evm.StateDB.GetCode(addr)
+	target := addr
 	// EIP-7702
 	if evm.chainRules.IsPrague {
-		if target, ok := types.ParseDelegation(code); ok {
+		if t, ok := types.ParseDelegation(code); ok {
 			// Note we only follow one level of delegation.
-			return evm.StateDB.GetCode(target), evm.StateDB.GetCodeHash(target)
+			target = t
+			code = evm.StateDB.GetCode(target)
 		}
 	}
-	return code, evm.StateDB.GetCodeHash(addr)
+	// Skip the code-hash read for empty code: the hash is unused (Call returns
+	// early, and the interpreter short-circuits empty code before any JUMPDEST
+	// lookup), so reading it would only add a redundant read of a key already
+	// read above — notably on the hot path of calling EOAs.
+	if len(code) == 0 {
+		return code, common.Hash{}
+	}
+	return code, evm.StateDB.GetCodeHash(target)
 }
 
 // ChainConfig returns the environment's chain configuration

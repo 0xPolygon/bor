@@ -92,6 +92,30 @@ func TestResolveCodeAndHashFollowsDelegation(t *testing.T) {
 	}
 }
 
+// Empty code (a plain EOA, or a delegation to an empty target) resolves to a
+// zero hash — the hash is unused for empty code, so the read is skipped.
+func TestResolveCodeAndHashEmptyCode(t *testing.T) {
+	t.Parallel()
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	evm := NewEVM(BlockContext{BlockNumber: big.NewInt(0)}, statedb, params.MergedTestChainConfig, Config{})
+
+	// EOA with no code.
+	eoa := common.Address{0xee}
+	if code, hash := evm.resolveCodeAndHash(eoa); len(code) != 0 || hash != (common.Hash{}) {
+		t.Fatalf("EOA: got code=%x hash=%x, want empty code and zero hash", code, hash)
+	}
+
+	// Delegation pointing at an empty target.
+	auth := common.Address{0xdd}
+	empty := common.Address{0x11}
+	statedb.CreateAccount(auth)
+	statedb.SetCode(auth, types.AddressToDelegation(empty), tracing.CodeChangeGenesis)
+	if code, hash := evm.resolveCodeAndHash(auth); len(code) != 0 || hash != (common.Hash{}) {
+		t.Fatalf("delegation→empty: got code=%x hash=%x, want empty code and zero hash", code, hash)
+	}
+}
+
 // A plain (non-delegated) account resolves to its own code and hash.
 func TestResolveCodeAndHashPlainAccount(t *testing.T) {
 	t.Parallel()
