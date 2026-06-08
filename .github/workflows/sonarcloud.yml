@@ -28,7 +28,7 @@ jobs:
 
       - name: Run SonarCloud analysis
         id: sonar
-        if: env.SONAR_TOKEN != ''
+        if: github.event_name == 'workflow_dispatch' && env.SONAR_TOKEN != ''
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@v7
         env:
@@ -39,6 +39,10 @@ jobs:
         run: |
           {
             echo "## Sonar Code Analysis"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "SonarCloud is informational for PRs and is not run automatically, so it cannot block or turn the PR red. Run this workflow manually for an on-demand SonarCloud scan."
+              exit 0
+            fi
             case "${{ steps.sonar.outcome }}" in
               success)
                 echo "SonarCloud analysis completed successfully."
