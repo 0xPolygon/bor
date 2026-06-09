@@ -36,6 +36,7 @@ var (
 	wit2WaiterPushMeter                 = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push", nil)
 	wit2WaiterPushOversizeMeter         = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push_oversize", nil)
 	wit2BroadcastUnknownHeaderDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unknown_header_drop", nil)
+	wit2BroadcastDeferredImportMeter    = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_deferred_import_only", nil)
 )
 
 // Per-peer rate-limit + strike tracker for wit2 announces. We size the bucket
@@ -577,6 +578,21 @@ func (c *deferredAnnounceCache) take(blockHash common.Hash) (*deferredAnnounceEn
 		return nil, false
 	}
 	return e, true
+}
+
+// peek returns the announcement for blockHash without consuming it, if a
+// fresh entry exists. Used by the broadcast path to bind a pushed body to a
+// pending (deferred, not yet producer-verified) announcement; the entry must
+// stay in place so the post-import drain still runs the real producer
+// verification, promotion, and relay.
+func (c *deferredAnnounceCache) peek(blockHash common.Hash) (wit.SignedWitnessAnnouncement, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[blockHash]
+	if !ok || time.Since(e.receivedAt) > wit2AnnounceTTL {
+		return wit.SignedWitnessAnnouncement{}, false
+	}
+	return e.announcement, true
 }
 
 // has reports whether a fresh entry exists for blockHash. Test-facing only;

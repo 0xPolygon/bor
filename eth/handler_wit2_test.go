@@ -961,3 +961,73 @@ func TestWaiterPushSkipsOversizedWitness(t *testing.T) {
 		t.Fatal("oversized witness was full-pushed via NewWitness; receiver would drop us as a protocol violator")
 	}
 }
+
+// TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred pins the consumer
+// side of the waiter-push cure. A stateless node at the tip has, by
+// definition, NOT imported the block it needs the witness for — so its
+// header is unknown and the signed announce for it sits in deferredAnnounces
+// (producer-binding needs the header). A pushed body in that state must be
+// accepted for import (else the push is dropped and the stateless-lag
+// regression returns), but only for import: no serving cache, no promotion
+// into signedWitnesses, no relay — the deferred announce's producer is
+// unverified until the post-import drain checks it against the
+// chain-validated header. The deferred entry must survive the broadcast so
+// that drain can still run.
+func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(9001)}
+	hash := header.Hash()
+	// Header deliberately NOT written: the consumer has not imported it.
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+
+	ann := wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: stateless.WitnessCommitHash(buf.Bytes()),
+		Signature:   make([]byte, wit.SignatureLength),
+	}
+	h.handler.deferredAnnounces.put(ann, "upstream-peer")
+	if _, ok := h.handler.signedWitnesses.get(hash); ok {
+		t.Fatal("setup: announce must be deferred, not in signedWitnesses")
+	}
+
+	require.NoError(t, witH.handleWitnessBroadcast(peer, witness))
+
+	if !peer.KnownWitnessContainsHash(hash) {
+		t.Fatal("waiter-pushed witness for a deferred-announce tip block was dropped; stateless-lag regression re-opened")
+	}
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); ok {
+		t.Fatal("import-only acceptance must not populate the serving cache; deferred producer is unverified")
+	}
+	if _, ok := h.handler.signedWitnesses.get(hash); ok {
+		t.Fatal("import-only acceptance must not promote an unverified deferred announce into signedWitnesses")
+	}
+	if !h.handler.deferredAnnounces.has(hash) {
+		t.Fatal("deferred entry was consumed; post-import drain can no longer verify/promote/relay")
+	}
+
+	// Bytes contradicting the deferred commitment must still drop.
+	other, err := stateless.NewWitness(&types.Header{Number: big.NewInt(9002), Extra: []byte{0x1}}, nil)
+	require.NoError(t, err)
+	otherHash := other.Header().Hash()
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   otherHash,
+		BlockNumber: other.Header().Number.Uint64(),
+		WitnessHash: common.HexToHash("0xfeed"),
+		Signature:   make([]byte, wit.SignatureLength),
+	}, "upstream-peer")
+	require.NoError(t, witH.handleWitnessBroadcast(peer, other))
+	if peer.KnownWitnessContainsHash(otherHash) {
+		t.Fatal("bytes contradicting the deferred commitment were accepted")
+	}
+}

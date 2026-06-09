@@ -125,6 +125,35 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 		// We now hold servable bytes — push to any peer that asked us
 		// for this body before we had it.
 		(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
+	} else if deferred, hasDeferred := (*handler)(h).deferredAnnounces.peek(hash); hasDeferred {
+		// A signed announcement for this block is on file but still deferred:
+		// its producer-binding needs the block header, which a stateless node
+		// at the tip does not have yet — that is exactly the consumer-side
+		// state when a waiter push delivers the body for a block pending
+		// import. Bind the pushed bytes to the deferred commitment and, on
+		// match, accept for IMPORT ONLY: the witness flows to the block
+		// fetcher so the pending block can import (import re-verifies
+		// everything via stateless execution + state-root check). We do NOT
+		// cache for serving, do NOT promote into signedWitnesses, and do NOT
+		// relay — those carry the verified-announce trust property, and a
+		// deferred entry's producer is unverified until the post-import drain
+		// checks it against the chain-validated header. Verifying against the
+		// header embedded in the pushed witness instead would let a peer
+		// self-seal a fabricated header and pass its own announce as the
+		// producer's.
+		var buf bytes.Buffer
+		if err := witness.EncodeRLP(&buf); err != nil {
+			peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
+			return nil
+		}
+		if stateless.WitnessCommitHash(buf.Bytes()) != deferred.WitnessHash {
+			wit2BroadcastByteMismatchMeter.Mark(1)
+			peer.Log().Warn("wit2: broadcast bytes do not match deferred announce witnessHash; dropping",
+				"blockHash", hash, "expected", deferred.WitnessHash)
+			return nil
+		}
+		peer.AddKnownWitness(hash)
+		wit2BroadcastDeferredImportMeter.Mark(1)
 	} else {
 		// No signed announcement on file: WIT1 fallback. The only binding we
 		// can check is that the header belongs to a block we actually know —
