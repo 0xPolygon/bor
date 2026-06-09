@@ -1,12 +1,9 @@
 name: Nightly Race Tests
 
 on:
-  push:
-    branches:
-      - mock-develop
   schedule:
-    # Run at 12:35 PM UTC every day
-    - cron: '35 12 * * *'
+    # Run at 3 AM UTC every day
+    - cron: '0 3 * * *'
   workflow_dispatch: # Allow manual trigger
 
 jobs:
@@ -18,7 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: mock-develop
+          ref: develop
 
       - name: Set up Go
         uses: actions/setup-go@v5
