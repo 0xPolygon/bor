@@ -34,6 +34,8 @@ var (
 	wit2RateLimitDropMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
 	wit2StrikeDisconnectMeter           = metrics.NewRegisteredMeter("eth/wit2/announce/strike_disconnect", nil)
 	wit2WaiterPushMeter                 = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push", nil)
+	wit2WaiterPushOversizeMeter         = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push_oversize", nil)
+	wit2BroadcastUnknownHeaderDropMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unknown_header_drop", nil)
 )
 
 // Per-peer rate-limit + strike tracker for wit2 announces. We size the bucket
@@ -358,12 +360,33 @@ func (r *witnessWaiterRegistry) gcLocked() {
 	}
 }
 
+// witnessPushMaxSize caps the encoded size of a witness we full-push to
+// waiting peers via NewWitness. The wit protocol rejects inbound messages
+// larger than 16MB (wit.maxMessageSize), so pushing a bigger body would make
+// every waiter drop us as a protocol violator — the paged GetWitness path
+// exists precisely for those witnesses. The margin covers the NewWitnessPacket
+// RLP envelope around the witness bytes. Oversized witnesses simply stay on
+// the pull path: by the time any push could fire we hold servable bytes, so
+// the waiter's next (backed-off) poll gets real pages instead of empty.
+const witnessPushMaxSize = MaximumResponseSize - 64*1024
+
 // pushWitnessToWaiters delivers the full witness body to peers that previously
 // asked us for it and got an empty answer (we did not hold the body yet). The
 // moment we obtain the bytes the waiting consumer receives them and imports,
-// instead of continuing to poll us with empty GetWitness.
-func (h *handler) pushWitnessToWaiters(hash common.Hash, witness *stateless.Witness) {
+// instead of continuing to poll us with empty GetWitness. encodedSize is the
+// canonical RLP size of the witness, used to keep the push under the wit
+// protocol message cap.
+func (h *handler) pushWitnessToWaiters(hash common.Hash, witness *stateless.Witness, encodedSize int) {
 	if h.witnessWaiters == nil || witness == nil {
+		return
+	}
+	if encodedSize > witnessPushMaxSize {
+		// Too large for a single NewWitness message — leave the waiters on
+		// the paged pull path (entries expire by TTL; the bytes are already
+		// servable, so their next poll succeeds).
+		wit2WaiterPushOversizeMeter.Mark(1)
+		log.Debug("wit2: witness too large for full push; serving via paged pull only",
+			"hash", hash, "size", encodedSize, "cap", witnessPushMaxSize)
 		return
 	}
 	for _, p := range h.witnessWaiters.take(hash) {
@@ -401,12 +424,20 @@ func (h *handler) pushWitnessBytesToWaiters(hash common.Hash, witnessBytes []byt
 	if h.witnessWaiters == nil || len(witnessBytes) == 0 || !h.witnessWaiters.has(hash) {
 		return
 	}
+	if len(witnessBytes) > witnessPushMaxSize {
+		// Skip the decode entirely — the push would be over the wit message
+		// cap anyway; waiters fall back to the paged pull path.
+		wit2WaiterPushOversizeMeter.Mark(1)
+		log.Debug("wit2: witness too large for full push; serving via paged pull only",
+			"hash", hash, "size", len(witnessBytes), "cap", witnessPushMaxSize)
+		return
+	}
 	var witness stateless.Witness
 	if err := rlp.DecodeBytes(witnessBytes, &witness); err != nil {
 		log.Warn("wit2: failed to decode witness bytes for waiter push", "hash", hash, "err", err)
 		return
 	}
-	h.pushWitnessToWaiters(hash, &witness)
+	h.pushWitnessToWaiters(hash, &witness, len(witnessBytes))
 }
 
 // deferredAnnounceCapacity bounds how many header-unknown signed announcements

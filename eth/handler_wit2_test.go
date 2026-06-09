@@ -837,3 +837,127 @@ func TestVerifyScheduledProducerRejectsBlockNumberMismatch(t *testing.T) {
 		t.Fatal("with header present, headerAvailable must be true so the caller strikes the relayer")
 	}
 }
+
+// TestHandleWitnessBroadcastByteMismatchNotInjected guards the verification
+// boundary of the broadcast path: when a BP-signed witnessHash is on file and
+// a broadcast body does NOT match it, the witness must be fully rejected — not
+// cached for serving, sender not marked as a body-holder, and not injected
+// into the fetcher. Anything less makes the full-body broadcast a bypass of
+// the byte verification the paged-fetch path enforces.
+func TestHandleWitnessBroadcastByteMismatchNotInjected(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7778)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+
+	// Signed announcement on file commits to a DIFFERENT witnessHash than the
+	// broadcast bytes will hash to.
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xdeadbeef"),
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+
+	require.NoError(t, witH.handleWitnessBroadcast(peer, witness))
+
+	if _, _, ok := h.handler.pendingWitnessBodies.get(hash); ok {
+		t.Fatal("byte-mismatched broadcast populated the pre-import serving cache")
+	}
+	if peer.KnownWitnessContainsHash(hash) {
+		t.Fatal("byte-mismatched broadcast marked the sender as a body-holder; fetcher would pull garbage from it")
+	}
+}
+
+// TestHandleWitnessBroadcastDropsUnknownHeader restores the F-3 audit fix:
+// with no BP-signed announcement on file (WIT1 fallback), an unsolicited
+// witness broadcast is only accepted for a block header we actually know.
+// Without the gate, a peer can make us RLP-decode and inject arbitrary 16MB
+// bodies keyed by hashes of its own choosing.
+func TestHandleWitnessBroadcastDropsUnknownHeader(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	// Unknown header, no signed announcement → dropped, sender not marked.
+	unknown := &types.Header{Number: big.NewInt(424242)}
+	unknownWitness, err := stateless.NewWitness(unknown, nil)
+	require.NoError(t, err)
+	require.NoError(t, witH.handleWitnessBroadcast(peer, unknownWitness))
+	if peer.KnownWitnessContainsHash(unknown.Hash()) {
+		t.Fatal("broadcast for unknown header was accepted; unsolicited bodies are cacheable on the sender's word")
+	}
+
+	// Same broadcast for a locally known header → accepted (WIT1 path).
+	known := &types.Header{Number: big.NewInt(7779)}
+	rawdb.WriteHeader(h.chain.DB(), known)
+	knownWitness, err := stateless.NewWitness(known, nil)
+	require.NoError(t, err)
+	require.NoError(t, witH.handleWitnessBroadcast(peer, knownWitness))
+	if !peer.KnownWitnessContainsHash(known.Hash()) {
+		t.Fatal("broadcast for known header was not accepted; WIT1 fallback broken")
+	}
+}
+
+// TestWaiterPushSkipsOversizedWitness bounds the waiter-push cure for the
+// stateless regression: a witness whose canonical encoding exceeds the wit
+// protocol message cap must NOT be full-pushed via NewWitness — the receiver
+// would reject the message as too large and drop us as a protocol violator.
+// Oversized witnesses stay on the paged pull path (we hold servable bytes by
+// the time a push could fire, so the waiter's backed-off poll succeeds).
+func TestWaiterPushSkipsOversizedWitness(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7780)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	FillWitnessWithDeterministicRandomState(witness, witnessPushMaxSize+1024*1024)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+	bodyBytes := buf.Bytes()
+	require.Greater(t, len(bodyBytes), witnessPushMaxSize, "fixture must exceed the push cap")
+	witnessHash := stateless.WitnessCommitHash(bodyBytes)
+
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: witnessHash,
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+
+	// Register the peer as a waiter: it asks for the body before we hold it.
+	resp, err := witH.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         1,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), resp[0].TotalPages, "precondition: body absent, must serve empty")
+
+	// Body arrives. The push must be skipped — encoded size is over the wit
+	// message cap — leaving the waiter on the paged pull path.
+	h.handler.cacheVerifiedWitnessForServing(hash, bodyBytes, witnessHash)
+
+	if peer.KnownWitnessContainsHash(hash) {
+		t.Fatal("oversized witness was full-pushed via NewWitness; receiver would drop us as a protocol violator")
+	}
+}

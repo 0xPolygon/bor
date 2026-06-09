@@ -82,42 +82,64 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 	}
 }
 
-// handleWitnessBroadcast handles a witness broadcast from a peer.
+// handleWitnessBroadcast handles a witness broadcast from a peer. A broadcast
+// witness is only accepted — sender marked as a body-holder, bytes cached,
+// witness injected for import — when we can bind it to something we already
+// trust: a BP-signed announcement whose witnessHash matches the received
+// bytes (WIT2), or a locally known block header (WIT1 fallback). Anything
+// else is dropped: bytes contradicting a BP-signed commitment are provably
+// wrong and must not bypass the verification the paged-fetch path enforces,
+// and an unsigned witness for an unknown header is unverifiable on the
+// sender's say-so alone.
 func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.Witness) error {
-	peer.AddKnownWitness(witness.Header().Hash())
 	hash := witness.Header().Hash()
 
-	// WIT2: cache the encoded body so this node can serve it pre-import. We
-	// only expose the cache for serving when bytes match a BP-signed
-	// witnessHash on file — otherwise an upstream that lied about the bytes
-	// would make us serve garbage and get dropped by downstream peers as
-	// liars, even though we just relayed what we received. If no signed
-	// announcement is on file (WIT1 path), skip the encode+hash entirely
-	// so WIT1 broadcasts don't pay the cost of work we'd just discard.
+	// WIT2: verify against the BP-signed witnessHash on file, then cache the
+	// encoded body so this node can serve it pre-import. We only expose the
+	// cache for serving when bytes match — otherwise an upstream that lied
+	// about the bytes would make us serve garbage and get dropped by
+	// downstream peers as liars, even though we just relayed what we received.
 	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
 		var buf bytes.Buffer
 		if err := witness.EncodeRLP(&buf); err != nil {
+			// Can't re-encode → can't check the signed commitment. Treat as
+			// unverifiable rather than letting unchecked bytes through.
 			peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
-		} else {
-			bodyBytes := buf.Bytes()
-			bodyHash := stateless.WitnessCommitHash(bodyBytes)
-			if signed.WitnessHash == bodyHash {
-				(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
-				// We now hold servable bytes — push to any peer that asked us
-				// for this body before we had it.
-				(*handler)(h).pushWitnessToWaiters(hash, witness)
-			} else {
-				// Upstream sent bytes that don't match the BP-signed commitment.
-				// Don't cache for serving and surface this peer as misbehaving.
-				wit2BroadcastByteMismatchMeter.Mark(1)
-				peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; not caching for serving",
-					"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
-			}
+			return nil
 		}
+		bodyBytes := buf.Bytes()
+		bodyHash := stateless.WitnessCommitHash(bodyBytes)
+		if signed.WitnessHash != bodyHash {
+			// Upstream sent bytes that don't match the BP-signed commitment.
+			// Don't cache, don't mark the sender as a body-holder, don't
+			// inject: the broadcast path must not be a bypass of the byte
+			// verification the paged-fetch path performs. No disconnect — the
+			// sender may itself have been fed bad bytes upstream.
+			wit2BroadcastByteMismatchMeter.Mark(1)
+			peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; dropping",
+				"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
+			return nil
+		}
+		peer.AddKnownWitness(hash)
+		(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
+		// We now hold servable bytes — push to any peer that asked us
+		// for this body before we had it.
+		(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
 	} else {
-		// No signed announcement on file: WIT1 fallback. Don't expose for
-		// WIT2 pre-import serving since we cannot prove byte-correctness to
-		// downstream peers. The body still flows into the import path below.
+		// No signed announcement on file: WIT1 fallback. The only binding we
+		// can check is that the header belongs to a block we actually know —
+		// without it, an unsolicited 16MB body for an arbitrary hash would be
+		// decoded and cached purely on the sender's word. Drop silently: a
+		// peer racing ahead of our import is early, not malicious.
+		if h.Chain().GetHeaderByHash(hash) == nil {
+			wit2BroadcastUnknownHeaderDropMeter.Mark(1)
+			peer.Log().Debug("dropping witness broadcast for unknown header", "blockHash", hash)
+			return nil
+		}
+		peer.AddKnownWitness(hash)
+		// Header is known, but we cannot prove byte-correctness to downstream
+		// WIT2 peers — don't expose for pre-import serving. The body still
+		// flows into the import path below.
 		wit2BroadcastUnverifiedSkippedMeter.Mark(1)
 	}
 
