@@ -264,6 +264,60 @@ func TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash(t *testing.T) {
 	}
 }
 
+// TestEmptyResponseBacksOffToAvoidHammering pins the consumer-side mitigation
+// for the WIT2 stateless regression. In an all-WIT2 fleet a stateless node
+// always fetches the body from an announce-only relayer (no peer is ever
+// marked as a body-holder), and the relayer answers "empty" until it has
+// pulled+imported the block itself. The pre-fix code reset announce.time to
+// time.Now() on every empty response, so the next tick re-fired ~gatherSlack
+// later — a tight poll loop that hammered the single relayer hundreds of times
+// (the ~15x "Empty response received" count seen on devnet) without ever
+// shortening the wait.
+//
+// The fix keeps the first couple of retries fast (so the body is picked up the
+// instant the relayer obtains it — the common case) and then backs off
+// exponentially, capping the empty-poll rate without discarding the pending
+// request (whose witness provably exists — a BP signed it).
+func TestEmptyResponseBacksOffToAvoidHammering(t *testing.T) {
+	tw := newTestWitnessManager()
+	defer tw.Close()
+
+	block := createTestBlock(606)
+	hash := block.Hash()
+
+	tw.manager.mu.Lock()
+	tw.manager.pending[hash] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: "relay-only", block: block},
+		announce: blockAnnounceForTest("relay-only", hash, block.NumberU64()),
+	}
+	tw.manager.mu.Unlock()
+
+	emptyRes := func() *eth.Response {
+		return &eth.Response{Time: time.Millisecond, Done: make(chan error, 1), Res: []*stateless.Witness{}}
+	}
+
+	// Drive several consecutive empty responses, as an announce-only relayer
+	// that does not yet hold the body would produce.
+	var lastDelay time.Duration
+	for i := 0; i < 8; i++ {
+		tw.manager.processWitnessResponse("relay-only", hash, emptyRes(), time.Now())
+		tw.manager.mu.Lock()
+		st := tw.manager.pending[hash]
+		if st == nil {
+			tw.manager.mu.Unlock()
+			t.Fatalf("pending entry dropped on empty response at attempt %d; a provably-existing witness must not be discarded", i)
+		}
+		lastDelay = time.Until(st.announce.time)
+		tw.manager.mu.Unlock()
+	}
+
+	// After repeated empties the next retry must be deferred (backoff), not
+	// scheduled immediately. Pre-fix this is ~0 (tight hammering loop).
+	if lastDelay < 200*time.Millisecond {
+		t.Fatalf("expected empty-response backoff to defer the next retry after repeated empties; got delay=%v (no backoff → relayer is hammered)", lastDelay)
+	}
+}
+
 // TestProcessWitnessResponseEmptyDoesNotDropAnnounceOnlyPeer locks the
 // fast-path safety property: a peer that only saw the signed announce (and
 // has not yet imported the body) responds with empty bytes when asked. That

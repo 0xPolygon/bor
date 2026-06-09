@@ -390,6 +390,121 @@ func TestSignedAnnounceDoesNotMarkPeerAsBodyHolder(t *testing.T) {
 	}
 }
 
+// TestEmptyGetWitnessForSignedHashPushesBodyOnArrival pins the serving-side
+// cure for the WIT2 stateless regression. In an all-WIT2 fleet no peer is ever
+// marked as a body-holder (the full-body broadcast is never sent and the WIT1
+// hash-announce that would mark it is not used between WIT2 peers), so a
+// stateless consumer always fetches from an announce-only relayer that does not
+// yet hold the body. The relayer answers GetWitness empty and the consumer is
+// left polling. WIT1 stays in lockstep precisely because its hash-announce both
+// implies the sender holds the body and marks it as a holder, so the first pull
+// lands.
+//
+// The fix records the asking peer as "waiting" when we answer empty for a hash
+// we hold a BP-signed announcement for (so we know the witness exists), and
+// pushes the full body to those waiters the moment we obtain it — restoring the
+// WIT1-style hand-off without flooding (only peers that actually asked, and at
+// most one body each, exactly what a pull would have cost).
+func TestEmptyGetWitnessForSignedHashPushesBodyOnArrival(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(7777)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+	bodyBytes := buf.Bytes()
+	witnessHash := stateless.WitnessCommitHash(bodyBytes)
+
+	// We hold a BP-signed announcement for this hash (the witness provably
+	// exists) but not the body yet — neither in-flight cache nor chain storage.
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: witnessHash,
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+
+	// Peer asks for the body before we have it → empty response. This must
+	// register the peer as waiting for the body.
+	resp, err := witH.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         1,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(resp))
+	require.Equal(t, uint64(0), resp[0].TotalPages, "precondition: body absent, must serve empty")
+	require.False(t, peer.KnownWitnessContainsHash(hash), "peer must not yet be treated as a body-holder")
+
+	// Body arrives (our own paged fetch verified it, or a broadcast delivered
+	// it). Populating the serving cache must push the full body to the waiting
+	// peer so it imports immediately rather than re-polling us with empty
+	// GetWitness — which is the stateless lag we measured on devnet.
+	h.handler.cacheVerifiedWitnessForServing(hash, bodyBytes, witnessHash)
+
+	require.True(t, peer.KnownWitnessContainsHash(hash),
+		"waiting peer was not pushed the witness body on arrival; stateless consumer keeps polling (the regression)")
+}
+
+// TestFlushWitnessWaitersForImportedPushesFromChainStorage covers the dominant
+// production path the fetch/broadcast push hooks miss: a full / producing node
+// obtains a witness by generating it during native block import (it lands in
+// chain storage, not the in-flight cache, and arrives via no gossip broadcast).
+// The chain-head flush must still deliver it to a peer that asked before the
+// node held it — this is what was missing in the first fix attempt, where
+// stateless peers of a producing node (e.g. S1↔BP1) saw no lag improvement
+// because BP1 never triggered a push.
+func TestFlushWitnessWaitersForImportedPushesFromChainStorage(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	witH := (*witHandler)(h.handler)
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	header := &types.Header{Number: big.NewInt(8888)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+	bodyBytes := buf.Bytes()
+	witnessHash := stateless.WitnessCommitHash(bodyBytes)
+
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: witnessHash,
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+
+	// Peer asks before we hold the body → empty, registers as waiter.
+	_, err = witH.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         1,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
+	})
+	require.NoError(t, err)
+	require.False(t, peer.KnownWitnessContainsHash(hash))
+
+	// Native import: witness lands in chain storage only. The chain-head flush
+	// must push it to the waiting peer.
+	rawdb.WriteWitness(h.chain.DB(), hash, bodyBytes)
+	h.handler.flushWitnessWaitersForImported(hash)
+
+	require.True(t, peer.KnownWitnessContainsHash(hash),
+		"chain-head flush did not push a natively-imported witness to the waiting peer")
+}
+
 // TestHandleGetWitnessServesFromInFlightCache is the load-bearing behavioral
 // test for the WIT2 pre-import serving claim: a node that has received the
 // witness body over gossip but has not yet imported it (chain storage empty)

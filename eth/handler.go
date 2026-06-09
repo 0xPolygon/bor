@@ -206,8 +206,15 @@ type handler struct {
 	// between block and announce gossip streams self-heals once the chain
 	// catches up.
 	deferredAnnounces *deferredAnnounceCache
-	wit2HeadCh        chan core.ChainHeadEvent
-	wit2HeadSub       event.Subscription
+
+	// WIT2: peers that asked us for a witness body we did not yet hold (we
+	// answered GetWitness empty for a hash with a BP-signed announcement on
+	// file). When we obtain the body we push it straight to them, restoring
+	// the WIT1-style hand-off the fast announce removed.
+	witnessWaiters *witnessWaiterRegistry
+
+	wit2HeadCh  chan core.ChainHeadEvent
+	wit2HeadSub event.Subscription
 
 	// channels for fetcher, syncer, txsyncLoop
 	quitSync chan struct{}
@@ -252,6 +259,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		pendingWitnessBodies:    newPendingWitnessBodyCache(witnessBodyCacheCapacity),
 		wit2PeerTracker:         newPeerWit2Tracker(),
 		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
+		witnessWaiters:          newWitnessWaiterRegistry(),
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -705,6 +713,7 @@ func (h *handler) deferredAnnouncesLoop() {
 			}
 			if ev.Header != nil {
 				h.drainDeferredAnnouncesFor(ev.Header.Hash())
+				h.flushWitnessWaitersForImported(ev.Header.Hash())
 			}
 		case <-h.wit2HeadSub.Err():
 			return

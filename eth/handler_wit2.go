@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 var errInvalidSignatureLength = errors.New("invalid wit2 announce signature length")
@@ -32,6 +33,7 @@ var (
 	wit2ConflictingWitnessHashMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
 	wit2RateLimitDropMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
 	wit2StrikeDisconnectMeter           = metrics.NewRegisteredMeter("eth/wit2/announce/strike_disconnect", nil)
+	wit2WaiterPushMeter                 = metrics.NewRegisteredMeter("eth/wit2/serve/waiter_push", nil)
 )
 
 // Per-peer rate-limit + strike tracker for wit2 announces. We size the bucket
@@ -232,6 +234,179 @@ func (c *pendingWitnessBodyCache) gcLocked() {
 			delete(c.entries, h)
 		}
 	}
+}
+
+const (
+	// witnessWaiterHashCap bounds how many block hashes we track waiters for.
+	// Entries are tiny (a peer pointer + timestamp); the cap is a backstop
+	// against a peer asking for many distinct not-yet-available hashes.
+	witnessWaiterHashCap = 256
+
+	// witnessWaiterPerHashCap bounds waiters recorded per hash so a burst of
+	// distinct peers asking for the same not-yet-available witness can't grow a
+	// single bucket without bound.
+	witnessWaiterPerHashCap = 64
+
+	// witnessWaiterTTL drops stale waiter entries (peer gave up, disconnected,
+	// or obtained the body elsewhere). Aligned with the body cache TTL.
+	witnessWaiterTTL = 30 * time.Second
+)
+
+// witnessWaiter records a peer that asked us for a witness body we did not yet
+// have. We only record a waiter when a BP-signed announcement is on file for
+// the hash, so the witness is known to exist and the registry is bounded by
+// real, signed blocks rather than arbitrary peer-chosen hashes.
+type witnessWaiter struct {
+	peer *wit.Peer
+	at   time.Time
+}
+
+// witnessWaiterRegistry tracks peers awaiting a witness body so we can push it
+// to them the moment we obtain it. This restores the WIT1-style hand-off the
+// WIT2 fast announce removed: WIT1 only ever announces a witness it already
+// holds (and the announce marks the sender a body-holder), so a stateless
+// consumer's first pull lands; WIT2 relays the signed announce ahead of the
+// body, leaving the consumer to poll an announce-only relayer with repeated
+// empty GetWitness until it catches up. Pushing on arrival closes that gap
+// without flooding — at most one body per peer that actually asked, exactly the
+// bandwidth a successful pull would have cost.
+type witnessWaiterRegistry struct {
+	mu      sync.Mutex
+	waiters map[common.Hash]map[string]*witnessWaiter
+}
+
+func newWitnessWaiterRegistry() *witnessWaiterRegistry {
+	return &witnessWaiterRegistry{waiters: make(map[common.Hash]map[string]*witnessWaiter)}
+}
+
+// record notes that peer is waiting for the body of hash. No-op for a nil peer.
+func (r *witnessWaiterRegistry) record(hash common.Hash, peer *wit.Peer) {
+	if peer == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gcLocked()
+
+	per, ok := r.waiters[hash]
+	if !ok {
+		if len(r.waiters) >= witnessWaiterHashCap {
+			// Registry full of distinct hashes; skip recording rather than
+			// evict. The peer simply keeps polling (with backoff) and lands the
+			// body on a later GetWitness — correctness is unaffected.
+			return
+		}
+		per = make(map[string]*witnessWaiter)
+		r.waiters[hash] = per
+	}
+	if _, exists := per[peer.ID()]; !exists && len(per) >= witnessWaiterPerHashCap {
+		return
+	}
+	per[peer.ID()] = &witnessWaiter{peer: peer, at: time.Now()}
+}
+
+// has reports whether any non-expired waiter is recorded for hash. Used to skip
+// the witness decode on the push path when nobody is waiting.
+func (r *witnessWaiterRegistry) has(hash common.Hash) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	per, ok := r.waiters[hash]
+	if !ok {
+		return false
+	}
+	cutoff := time.Now().Add(-witnessWaiterTTL)
+	for _, w := range per {
+		if !w.at.Before(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
+// take returns and clears the live (non-expired) waiters for hash.
+func (r *witnessWaiterRegistry) take(hash common.Hash) []*wit.Peer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	per, ok := r.waiters[hash]
+	if !ok {
+		return nil
+	}
+	delete(r.waiters, hash)
+	cutoff := time.Now().Add(-witnessWaiterTTL)
+	out := make([]*wit.Peer, 0, len(per))
+	for _, w := range per {
+		if w.at.Before(cutoff) {
+			continue
+		}
+		out = append(out, w.peer)
+	}
+	return out
+}
+
+// gcLocked drops expired waiter entries and empty buckets. Caller holds r.mu.
+func (r *witnessWaiterRegistry) gcLocked() {
+	cutoff := time.Now().Add(-witnessWaiterTTL)
+	for h, per := range r.waiters {
+		for id, w := range per {
+			if w.at.Before(cutoff) {
+				delete(per, id)
+			}
+		}
+		if len(per) == 0 {
+			delete(r.waiters, h)
+		}
+	}
+}
+
+// pushWitnessToWaiters delivers the full witness body to peers that previously
+// asked us for it and got an empty answer (we did not hold the body yet). The
+// moment we obtain the bytes the waiting consumer receives them and imports,
+// instead of continuing to poll us with empty GetWitness.
+func (h *handler) pushWitnessToWaiters(hash common.Hash, witness *stateless.Witness) {
+	if h.witnessWaiters == nil || witness == nil {
+		return
+	}
+	for _, p := range h.witnessWaiters.take(hash) {
+		if p.KnownWitnessContainsHash(hash) {
+			continue // already delivered / known to hold it
+		}
+		p.AsyncSendNewWitness(witness)
+		wit2WaiterPushMeter.Mark(1)
+	}
+}
+
+// flushWitnessWaitersForImported pushes a just-imported block's witness to any
+// peer that asked us for it before we held it. This covers the dominant case
+// the fetch/broadcast push hooks miss: a node (especially a full / producing
+// node) that obtains the witness by generating it during native block import,
+// rather than by pulling it or receiving a gossip broadcast. Called from the
+// chain-head loop on every new head; cheap no-op when no peer is waiting.
+func (h *handler) flushWitnessWaitersForImported(blockHash common.Hash) {
+	if h.witnessWaiters == nil || !h.witnessWaiters.has(blockHash) {
+		return
+	}
+	body := h.chain.GetWitness(blockHash)
+	if len(body) == 0 {
+		return
+	}
+	h.pushWitnessBytesToWaiters(blockHash, body)
+}
+
+// pushWitnessBytesToWaiters decodes verified witness bytes (already checked
+// against the BP-signed hash by the caller) and pushes them to waiting peers.
+// The decode — re-encoded canonically on send — round-trips to the same bytes,
+// so downstream byte-correctness checks still pass. Skipped entirely when no
+// peer is waiting, so the common (no-waiter) case pays nothing.
+func (h *handler) pushWitnessBytesToWaiters(hash common.Hash, witnessBytes []byte) {
+	if h.witnessWaiters == nil || len(witnessBytes) == 0 || !h.witnessWaiters.has(hash) {
+		return
+	}
+	var witness stateless.Witness
+	if err := rlp.DecodeBytes(witnessBytes, &witness); err != nil {
+		log.Warn("wit2: failed to decode witness bytes for waiter push", "hash", hash, "err", err)
+		return
+	}
+	h.pushWitnessToWaiters(hash, &witness)
 }
 
 // deferredAnnounceCapacity bounds how many header-unknown signed announcements
@@ -550,6 +725,10 @@ func (h *handler) cacheVerifiedWitnessForServing(blockHash common.Hash, witnessB
 		return
 	}
 	h.pendingWitnessBodies.put(blockHash, witnessBytes, witnessHash)
+	// We now hold servable bytes: hand them straight to any peer that asked for
+	// this body before we had it, so a stateless consumer stops polling us with
+	// empty GetWitness and imports immediately.
+	h.pushWitnessBytesToWaiters(blockHash, witnessBytes)
 }
 
 // signLocalWitnessAnnouncement looks up the witness body for blockHash, hashes

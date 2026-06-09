@@ -30,6 +30,24 @@ const (
 	// witness for a block hash before giving up and marking it unavailable.
 	maxWitnessFetchRetries = 300 // ~30s of retries
 
+	// emptyResponseFastRetries is how many consecutive "body not ready yet"
+	// (empty) responses we re-poll immediately before backing off. WIT2's fast
+	// signed announce reaches us ahead of the body, so the only candidate body
+	// source is often an announce-only relayer that has not finished pulling +
+	// importing the block. The first couple of re-polls stay immediate so we
+	// pick the body up the instant the relayer obtains it (the common case);
+	// after that, a relayer answering empty is genuinely waiting on its own
+	// upstream and re-polling it every ~gatherSlack only hammers it.
+	emptyResponseFastRetries = 2
+
+	// emptyResponseBaseBackoff / emptyResponseMaxBackoff bound the exponential
+	// backoff applied to repeated empty responses past the fast-retry window.
+	// The witness provably exists (a BP signed its hash) so we never give the
+	// request up here; we only slow the poll cadence to avoid the empty-poll
+	// storm observed on devnet (~15x the WIT1 empty-response count).
+	emptyResponseBaseBackoff = 100 * time.Millisecond
+	emptyResponseMaxBackoff  = 1 * time.Second
+
 	witnessCacheSize = 10
 	witnessCacheTTL  = 2 * time.Minute
 
@@ -46,9 +64,10 @@ const (
 
 // witnessRequestState tracks the state of a pending witness request.
 type witnessRequestState struct {
-	op       *blockOrHeaderInject // The original block/header injection operation.
-	announce *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
-	retries  int                  // Number of fetch attempts already made
+	op           *blockOrHeaderInject // The original block/header injection operation.
+	announce     *blockAnnounce       // Announcement details, non-nil if a fetch is in flight.
+	retries      int                  // Number of fetch attempts already made
+	emptyRetries int                  // Consecutive "body not ready yet" (empty) responses, for backoff
 }
 
 // cachedWitness represents a witness that arrived before its corresponding block
@@ -655,12 +674,12 @@ func (m *witnessManager) processWitnessResponse(peer string, hash common.Hash, r
 	if len(witness) == 0 {
 		// Empty/unavailable response: the peer doesn't have the body yet
 		// (e.g. WIT2 announce-only relayer that has not finished importing).
-		// This is a soft failure — back off the request so another peer can
-		// be tried, but do NOT drop the responder. Dropping on "no body" is
-		// what makes announce-only fallback peers unsafe to ask, which would
-		// erase the WIT2 multi-hop latency win at hop>=2.
+		// This is the expected steady state on the WIT2 fast path, not a
+		// failure — back off the request (keeping the responder; dropping on
+		// "no body" is what makes announce-only fallback peers unsafe to ask,
+		// which would erase the WIT2 multi-hop latency win at hop>=2).
 		log.Debug("[wm] Received empty witness response from peer", "peer", peer, "hash", hash)
-		m.handleWitnessFetchFailureExt(hash, "", errors.New("empty witness response"), false)
+		m.handleWitnessBodyNotReady(hash)
 		return
 	}
 
@@ -840,6 +859,48 @@ func (m *witnessManager) handleWitnessFetchFailureExt(hash common.Hash, peer str
 	}
 
 	m.rescheduleWitness()
+}
+
+// handleWitnessBodyNotReady backs off a pending witness request after an empty
+// ("body not ready yet") response, without dropping the responder and without
+// giving the request up. On the WIT2 fast path the signed announce reaches us
+// ahead of the body, so the only candidate source is frequently an
+// announce-only relayer still pulling+importing the block; it answers empty
+// until it has the bytes. The first emptyResponseFastRetries re-polls stay
+// immediate to catch the body the instant the relayer obtains it; beyond that
+// we back off exponentially (capped) so a relayer that is itself waiting
+// upstream is not hammered every ~gatherSlack. The witness provably exists — a
+// BP signed its hash — so we never discard the request here.
+func (m *witnessManager) handleWitnessBodyNotReady(hash common.Hash) {
+	m.mu.Lock()
+	if state := m.pending[hash]; state != nil && state.announce != nil {
+		state.emptyRetries++
+		state.announce.time = time.Now().Add(emptyResponseBackoff(state.emptyRetries))
+	}
+	m.mu.Unlock()
+
+	m.rescheduleWitness()
+}
+
+// emptyResponseBackoff returns how far into the future the next re-poll should
+// be deferred after n consecutive empty responses. The first
+// emptyResponseFastRetries attempts return 0 (re-poll on the next tick); past
+// that the delay doubles from emptyResponseBaseBackoff up to
+// emptyResponseMaxBackoff.
+func emptyResponseBackoff(n int) time.Duration {
+	if n <= emptyResponseFastRetries {
+		return 0
+	}
+	shift := uint(n - emptyResponseFastRetries - 1)
+	// Cap the shift so the left-shift can't overflow before the clamp below.
+	if shift > 16 {
+		shift = 16
+	}
+	d := emptyResponseBaseBackoff << shift
+	if d > emptyResponseMaxBackoff {
+		d = emptyResponseMaxBackoff
+	}
+	return d
 }
 
 // safeEnqueue attempts to enqueue a completed operation (block+witness) via the parent's channel.

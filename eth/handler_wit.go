@@ -103,6 +103,9 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 			bodyHash := stateless.WitnessCommitHash(bodyBytes)
 			if signed.WitnessHash == bodyHash {
 				(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
+				// We now hold servable bytes — push to any peer that asked us
+				// for this body before we had it.
+				(*handler)(h).pushWitnessToWaiters(hash, witness)
 			} else {
 				// Upstream sent bytes that don't match the BP-signed commitment.
 				// Don't cache for serving and surface this peer as misbehaving.
@@ -292,6 +295,18 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 			Page:       witnessPage.Page,
 			Hash:       witnessPage.Hash,
 			TotalPages: totalPages,
+		}
+
+		// Body absent (neither in-flight cache nor chain storage) but a BP
+		// signed its hash, so the witness exists and is in flight: remember
+		// this peer as waiting so we push the body the moment we obtain it,
+		// instead of leaving it to re-poll us with empty GetWitness. This is
+		// what keeps WIT2 stateless consumers in lockstep at hop>=2 (see
+		// witnessWaiterRegistry).
+		if totalPages == 0 {
+			if _, hasSigned := (*handler)(h).signedWitnesses.get(witnessPage.Hash); hasSigned {
+				(*handler)(h).witnessWaiters.record(witnessPage.Hash, peer)
+			}
 		}
 
 		if witnessPage.Page < totalPages {
