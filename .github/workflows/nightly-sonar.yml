@@ -1,25 +1,20 @@
-name: Sonar Code Analysis
+name: Nightly Sonar
 
 on:
-  pull_request:
-    branches:
-      - '**'
-    types: [opened, synchronize, reopened]
   schedule:
     - cron: '0 1 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  group: nightly-sonar-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   sonar:
-    name: SonarCloud (informational)
+    name: Run SonarCloud on develop
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
@@ -27,11 +22,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.ref || 'develop' }}
+          ref: develop
 
       - name: Run SonarCloud analysis
         id: sonar
-        if: github.event_name != 'pull_request' && env.SONAR_TOKEN != ''
+        if: env.SONAR_TOKEN != ''
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
         env:
@@ -41,11 +36,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Sonar Code Analysis"
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              echo "SonarCloud is informational for PRs and is not run automatically, so it cannot block or turn the PR red. Run this workflow manually for an on-demand SonarCloud scan."
-              exit 0
-            fi
+            echo "## Nightly Sonar"
             case "${{ steps.sonar.outcome }}" in
               success)
                 echo "SonarCloud analysis completed successfully."
