@@ -1,20 +1,17 @@
-name: Nightly Govulncheck
+name: Govulncheck
 
 on:
-  push:
-    branches:
-      - mock-develop
   schedule:
-    - cron: '30 12 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: nightly-govulncheck-${{ github.ref }}
+  group: govulncheck-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   govulncheck:
-    name: Run govulncheck on mock-develop
+    name: Run govulncheck on develop
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
@@ -22,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: mock-develop
+          ref: develop
 
       - uses: actions/setup-go@v6
         with:
