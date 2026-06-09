@@ -125,7 +125,7 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 		// We now hold servable bytes — push to any peer that asked us
 		// for this body before we had it.
 		(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
-	} else if deferred, hasDeferred := (*handler)(h).deferredAnnounces.peek(hash); hasDeferred {
+	} else if deferred, _, hasDeferred := (*handler)(h).deferredAnnounces.peek(hash); hasDeferred {
 		// A signed announcement for this block is on file but still deferred:
 		// its producer-binding needs the block header, which a stateless node
 		// at the tip does not have yet — that is exactly the consumer-side

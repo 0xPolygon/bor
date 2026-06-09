@@ -580,19 +580,21 @@ func (c *deferredAnnounceCache) take(blockHash common.Hash) (*deferredAnnounceEn
 	return e, true
 }
 
-// peek returns the announcement for blockHash without consuming it, if a
-// fresh entry exists. Used by the broadcast path to bind a pushed body to a
-// pending (deferred, not yet producer-verified) announcement; the entry must
-// stay in place so the post-import drain still runs the real producer
-// verification, promotion, and relay.
-func (c *deferredAnnounceCache) peek(blockHash common.Hash) (wit.SignedWitnessAnnouncement, bool) {
+// peek returns the announcement for blockHash and the peer that relayed it,
+// without consuming the entry, if a fresh one exists. Used by the broadcast
+// path to bind a pushed body to a pending (deferred, not yet
+// producer-verified) announcement, and by the fetch path to find a pull
+// target when no marked peer exists. The entry must stay in place so the
+// post-import drain still runs the real producer verification, promotion,
+// and relay.
+func (c *deferredAnnounceCache) peek(blockHash common.Hash) (wit.SignedWitnessAnnouncement, string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[blockHash]
 	if !ok || time.Since(e.receivedAt) > wit2AnnounceTTL {
-		return wit.SignedWitnessAnnouncement{}, false
+		return wit.SignedWitnessAnnouncement{}, "", false
 	}
-	return e.announcement, true
+	return e.announcement, e.peerID, true
 }
 
 // has reports whether a fresh entry exists for blockHash. Test-facing only;

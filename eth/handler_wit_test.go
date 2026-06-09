@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	ethproto "github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -590,4 +591,54 @@ func TestWitHandlerHandle(t *testing.T) {
 		err := witHandler.Handle(peer, packet)
 		require.NoError(t, err, "Handle should handle missing witness metadata gracefully")
 	})
+}
+
+// TestResolveWitnessFetchPeerFallsBackToDeferredAnnouncer covers the pull
+// path for the structural deferred state at a stateless tip: the signed
+// announce for a pending block cannot be producer-verified before import
+// (header not local), so its relayer is never marked announce-known and
+// getOnePeerWithWitness has no candidate. Witnesses above the full-push size
+// cap are never pushed either, so without a deferred-aware fallback the
+// consumer has NO body source at all and the block sits until the announce
+// TTL expires. The fetch-peer resolution must fall back to the peer recorded
+// on the deferred entry — the relayer that announced the witness.
+func TestResolveWitnessFetchPeerFallsBackToDeferredAnnouncer(t *testing.T) {
+	h := newTestHandler()
+	defer h.close()
+
+	ethH := (*ethHandler)(h.handler)
+
+	witPeer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+
+	var id enode.ID
+	rand.Read(id[:])
+	ethPeer := ethproto.NewPeer(ethproto.ETH68, p2p.NewPeer(id, "test-eth-peer", nil), nil, nil)
+	defer ethPeer.Close()
+	require.NoError(t, h.handler.peers.registerPeer(ethPeer, nil, witPeer))
+
+	header := &types.Header{Number: big.NewInt(31337)}
+	hash := header.Hash()
+
+	// No marked peer, no deferred entry → no fetch target.
+	if p := ethH.resolveWitnessFetchPeer(hash); p != nil {
+		t.Fatal("no peer should resolve without marks or deferred entries")
+	}
+
+	// A deferred (header-unknown, producer-unverified) announce recorded from
+	// that peer must make it the fallback fetch target.
+	h.handler.deferredAnnounces.put(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: common.HexToHash("0xc0ffee"),
+		Signature:   make([]byte, wit.SignatureLength),
+	}, ethPeer.ID())
+
+	p := ethH.resolveWitnessFetchPeer(hash)
+	if p == nil {
+		t.Fatal("deferred-announce relayer was not resolved as the fetch fallback; stateless tip consumer has no body source for oversized witnesses")
+	}
+	if p.ID() != ethPeer.ID() {
+		t.Fatalf("resolved wrong peer: got %s want %s", p.ID(), ethPeer.ID())
+	}
 }
