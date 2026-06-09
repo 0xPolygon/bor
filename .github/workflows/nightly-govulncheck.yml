@@ -1,8 +1,11 @@
 name: Nightly Govulncheck
 
 on:
+  push:
+    branches:
+      - mock-develop
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '30 12 * * *'
   workflow_dispatch:
 
 concurrency:

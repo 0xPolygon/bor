@@ -1,8 +1,15 @@
 name: 'CodeQL'
 
 on:
+  push:
+    branches:
+      - mock-develop
+  pull_request:
+    branches:
+      - '**'
+    types: [opened, synchronize, reopened]
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '20 12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -24,7 +31,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          ref: mock-develop
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'mock-develop' }}
 
       - name: Install Go
         uses: actions/setup-go@v6
