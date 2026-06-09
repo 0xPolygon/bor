@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   govulncheck:
-    name: Run govulncheck on develop
+    name: Run govulncheck on mock-develop
     runs-on: ubuntu24.04-16core-64GB-600SSD-bor
     permissions:
       contents: read
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: develop
+          ref: mock-develop
 
       - uses: actions/setup-go@v6
         with:

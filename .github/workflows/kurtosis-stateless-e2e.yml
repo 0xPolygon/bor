@@ -82,7 +82,7 @@ jobs:
       - name: Pre kurtosis run
         uses: ./.github/actions/kurtosis/setup
         with:
-          main_branch: develop
+          main_branch: mock-develop
           docker_username: ${{ secrets.DOCKERHUB }}
           docker_token: ${{ secrets.DOCKERHUB_KEY }}
 
@@ -153,5 +153,5 @@ jobs:
         if: always()
         uses: ./.github/actions/kurtosis/cleanup
         with:
-          main_branch: develop
+          main_branch: mock-develop
           enclave_name: ${{ env.ENCLAVE_NAME }}

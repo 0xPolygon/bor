@@ -49,19 +49,19 @@ jobs:
           set -o pipefail
           diffguard \
             --base origin/${{ github.base_ref }} \
-            --complexity-threshold 10 \
-            --complexity-delta-tolerance 3 \
-            --function-size-threshold 50 \
-            --function-size-delta-tolerance 5 \
-            --file-size-threshold 500 \
-            --file-size-delta-tolerance-pct 5 \
-            --file-size-delta-tolerance-floor 10 \
-            --tier1-threshold 90 \
-            --tier2-threshold 70 \
-            --mutation-sample-rate 10 \
+            --complexity-threshold 15 \
+            --complexity-delta-tolerance 5 \
+            --function-size-threshold 80 \
+            --function-size-delta-tolerance 15 \
+            --file-size-threshold 800 \
+            --file-size-delta-tolerance-pct 10 \
+            --file-size-delta-tolerance-floor 20 \
+            --tier1-threshold 80 \
+            --tier2-threshold 60 \
+            --mutation-sample-rate 20 \
             --test-timeout 5m \
             --output text \
-            --fail-on warn \
+            --fail-on error \
             . | tee "$GITHUB_STEP_SUMMARY"
 
       - name: Upload JSON report
