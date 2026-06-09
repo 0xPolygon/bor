@@ -22,6 +22,7 @@ const (
 	MaximumCachedWitnessOnARequest = 200 * 1024 * 1024 // 200 MB, the maximum amount of memory a request can demand while getting witness
 	MaximumResponseSize            = 16 * 1024 * 1024  // 16 MB, helps to fast fail check
 	MaxWitnessMetadataServe        = 1024              // maximum hashes a single GetWitnessMetadata request may carry
+	MaxWitnessPagesServe           = 1024              // maximum {hash,page} entries a single GetWitness request may carry
 )
 
 // witHandler implements the eth.Backend interface to handle the various network
@@ -119,10 +120,7 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 
 	// Inject the witness into the block fetcher's cache
 	if h.blockFetcher != nil {
-		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID())
-		// Verify witness header matches a known block hash
-		blockHash := witness.Header().Hash()
-		log.Debug("Witness details", "blockHash", blockHash, "header", witness.Header().Number)
+		log.Debug("Injecting witness into block fetcher", "hash", hash, "peer", peer.ID(), "number", witness.Header().Number)
 
 		if err := h.blockFetcher.InjectWitness(peer.ID(), witness); err != nil {
 			peer.Log().Warn("Failed to inject broadcast witness into fetcher", "hash", hash, "err", err)
@@ -270,6 +268,18 @@ func (h *handler) relaySignedAnnouncement(senderID string, ann wit.SignedWitness
 func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket) (wit.WitnessPacketResponse, error) {
 	log.Debug("handleGetWitness processing request", "peer", peer.ID(), "reqID", req.RequestId, "witnessPages", len(req.WitnessPages))
 
+	// Cap the page-entry count up front, mirroring the metadata handler's
+	// MaxWitnessMetadataServe guard. The in-loop byte guards below only count
+	// data bytes, and only on the needToQuery branch — a request packed with
+	// unknown hashes or out-of-range pages accumulates zero bytes and trips
+	// neither guard, while still forcing one DB size lookup per distinct hash
+	// (resolveWitnessBytes) and one response entry per page. Bounding the entry
+	// count closes that CPU/IO/alloc amplification. Legitimate requests carry a
+	// single page, so this limit is never approached in practice.
+	if len(req.WitnessPages) > MaxWitnessPagesServe {
+		return nil, fmt.Errorf("witness request exceeds %d page limit: got %d", MaxWitnessPagesServe, len(req.WitnessPages))
+	}
+
 	witnessCache, witnessSize := h.resolveWitnessBytes(req.WitnessPages)
 
 	var response wit.WitnessPacketResponse
@@ -306,7 +316,7 @@ func (h *witHandler) handleGetWitness(peer *wit.Peer, req *wit.GetWitnessPacket)
 		response = append(response, pageResponse)
 
 		if totalCached >= MaximumCachedWitnessOnARequest {
-			return nil, errors.New("requests demans huge amount of memory")
+			return nil, errors.New("request demands a huge amount of memory")
 		}
 		if totalResponsePayloadDataAmount >= MaximumResponseSize {
 			return nil, errors.New("response exceeds maximum p2p payload size")

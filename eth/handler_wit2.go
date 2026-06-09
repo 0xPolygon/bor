@@ -27,6 +27,7 @@ var (
 	wit2DuplicateMeter                  = metrics.NewRegisteredMeter("eth/wit2/announce/duplicate", nil)
 	wit2BroadcastByteMismatchMeter      = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_byte_mismatch", nil)
 	wit2BroadcastUnverifiedSkippedMeter = metrics.NewRegisteredMeter("eth/wit2/serve/broadcast_unverified_skipped", nil)
+	wit2DeferredPerPeerDropMeter        = metrics.NewRegisteredMeter("eth/wit2/announce/deferred_per_peer_drop", nil)
 	wit2HeaderUnknownMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/header_unknown", nil)
 	wit2ConflictingWitnessHashMeter     = metrics.NewRegisteredMeter("eth/wit2/announce/conflicting_witness_hash", nil)
 	wit2RateLimitDropMeter              = metrics.NewRegisteredMeter("eth/wit2/announce/rate_limit_drop", nil)
@@ -240,6 +241,18 @@ func (c *pendingWitnessBodyCache) gcLocked() {
 // arrive ahead of headers en masse.
 const deferredAnnounceCapacity = 256
 
+// deferredAnnouncePerPeerDivisor caps how large a share of the deferred queue a
+// single peer may occupy: perPeerCap = capacity / divisor. Without a per-peer
+// cap, one peer operating within the announce rate limit (64/s) can fill all
+// the slots with its own entries — each a distinct, attacker-chosen blockHash
+// at a plausible near-tip number (the cache is keyed by hash, so a fixed
+// blockNumber is no obstacle) — and evict honest header-racing announces,
+// silently downgrading those blocks to unsigned WIT1 byte-verification. The cap
+// reserves the bulk of the queue for the honest mesh. Honest peers race only
+// the current tip, so a handful of in-flight deferrals is the norm and this cap
+// is never approached in practice.
+const deferredAnnouncePerPeerDivisor = 8
+
 // deferredAnnounceEntry holds a signed announcement whose producer-binding
 // could not be checked yet because the corresponding block header wasn't
 // local. The drain path re-runs verification once the chain catches up.
@@ -256,28 +269,71 @@ type deferredAnnounceEntry struct {
 // for good and subsequent witness fetches silently fall back to unsigned
 // (WIT1) verification, leaking the WIT2 trust property for that block.
 type deferredAnnounceCache struct {
-	mu       sync.RWMutex
-	entries  map[common.Hash]*deferredAnnounceEntry
-	capacity int
+	mu         sync.RWMutex
+	entries    map[common.Hash]*deferredAnnounceEntry
+	perPeer    map[string]int // live entry count per originating peer
+	capacity   int
+	perPeerCap int
 }
 
 func newDeferredAnnounceCache(capacity int) *deferredAnnounceCache {
+	perPeerCap := capacity / deferredAnnouncePerPeerDivisor
+	if perPeerCap < 1 {
+		perPeerCap = 1
+	}
 	return &deferredAnnounceCache{
-		entries:  make(map[common.Hash]*deferredAnnounceEntry),
-		capacity: capacity,
+		entries:    make(map[common.Hash]*deferredAnnounceEntry),
+		perPeer:    make(map[string]int),
+		capacity:   capacity,
+		perPeerCap: perPeerCap,
 	}
 }
 
-// put stores the announcement keyed by block hash. If the cache is full, the
-// oldest entry is evicted (linear scan; the cap keeps it cheap). A second put
-// for the same hash refreshes receivedAt and overwrites the announcement —
-// the more recent gossip wins, which is desirable when the original sender
-// disconnected and a different peer now carries the announce forward.
+// decPeerLocked drops one live-entry credit for peerID, removing the map key
+// when it reaches zero. Caller must hold the write lock.
+func (c *deferredAnnounceCache) decPeerLocked(peerID string) {
+	c.perPeer[peerID]--
+	if c.perPeer[peerID] <= 0 {
+		delete(c.perPeer, peerID)
+	}
+}
+
+// put stores the announcement keyed by block hash. A second put for the same
+// hash refreshes receivedAt and overwrites the announcement — the more recent
+// gossip wins, which is desirable when the original sender disconnected and a
+// different peer now carries the announce forward; per-peer credit moves with
+// it. For a new hash, the per-peer cap is enforced first (a peer at its share
+// is dropped, recording a metric, so it cannot evict honest entries), then the
+// global cap (evict the oldest entry across all peers; linear scan is cheap at
+// the configured size).
 func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.gcLocked()
-	if _, exists := c.entries[ann.BlockHash]; !exists && len(c.entries) >= c.capacity {
+
+	if existing, exists := c.entries[ann.BlockHash]; exists {
+		// Overwrite for the same hash: net-zero slot change. Move per-peer
+		// credit if a different peer now carries this announce forward.
+		if existing.peerID != peerID {
+			c.decPeerLocked(existing.peerID)
+			c.perPeer[peerID]++
+		}
+		c.entries[ann.BlockHash] = &deferredAnnounceEntry{
+			announcement: ann,
+			peerID:       peerID,
+			receivedAt:   time.Now(),
+		}
+		return
+	}
+
+	// New hash for this peer: enforce its share of the queue so no single peer
+	// can monopolise the cache and evict honest header-racing announces.
+	if c.perPeer[peerID] >= c.perPeerCap {
+		wit2DeferredPerPeerDropMeter.Mark(1)
+		return
+	}
+
+	if len(c.entries) >= c.capacity {
 		var oldestHash common.Hash
 		var oldest time.Time
 		for h, e := range c.entries {
@@ -286,13 +342,18 @@ func (c *deferredAnnounceCache) put(ann wit.SignedWitnessAnnouncement, peerID st
 				oldestHash = h
 			}
 		}
-		delete(c.entries, oldestHash)
+		if victim, ok := c.entries[oldestHash]; ok {
+			c.decPeerLocked(victim.peerID)
+			delete(c.entries, oldestHash)
+		}
 	}
+
 	c.entries[ann.BlockHash] = &deferredAnnounceEntry{
 		announcement: ann,
 		peerID:       peerID,
 		receivedAt:   time.Now(),
 	}
+	c.perPeer[peerID]++
 }
 
 // take removes and returns the entry for blockHash if present and fresh.
@@ -305,6 +366,7 @@ func (c *deferredAnnounceCache) take(blockHash common.Hash) (*deferredAnnounceEn
 		return nil, false
 	}
 	delete(c.entries, blockHash)
+	c.decPeerLocked(e.peerID)
 	if time.Since(e.receivedAt) > wit2AnnounceTTL {
 		return nil, false
 	}
@@ -328,6 +390,7 @@ func (c *deferredAnnounceCache) gcLocked() {
 	cutoff := time.Now().Add(-wit2AnnounceTTL)
 	for h, e := range c.entries {
 		if e.receivedAt.Before(cutoff) {
+			c.decPeerLocked(e.peerID)
 			delete(c.entries, h)
 		}
 	}

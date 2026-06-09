@@ -278,6 +278,59 @@ func TestHandleGetWitnessMetadata_HashCountBound(t *testing.T) {
 	}
 }
 
+// TestHandleGetWitness_PageCountBound exercises the per-request page-entry cap
+// on the witness *data* handler (F-1). The in-loop byte guards only count data
+// bytes on the needToQuery branch, so a request packed with unknown hashes or
+// out-of-range pages accumulates zero bytes and never trips them — yet each
+// distinct hash still costs a DB size lookup and each page a response entry.
+// MaxWitnessPagesServe bounds that amplification up front. This mirrors
+// TestHandleGetWitnessMetadata_HashCountBound for the metadata handler.
+func TestHandleGetWitness_PageCountBound(t *testing.T) {
+	handler := newTestHandler()
+	defer handler.close()
+
+	witHandler := (*witHandler)(handler.handler)
+	peer := newTestWitPeer()
+	defer peer.Close()
+
+	tests := []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{"at limit", MaxWitnessPagesServe, false},
+		{"one over limit", MaxWitnessPagesServe + 1, true},
+		{"far over limit", MaxWitnessPagesServe * 100, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// All distinct, unknown hashes: this is the cheap-to-build,
+			// zero-byte request that the byte guards alone fail to bound.
+			pages := make([]wit.WitnessPageRequest, tc.count)
+			for i := range pages {
+				pages[i] = wit.WitnessPageRequest{
+					Hash: common.Hash{byte(i), byte(i >> 8), byte(i >> 16)},
+					Page: 0,
+				}
+			}
+			packet := &wit.GetWitnessPacket{
+				RequestId:         55555,
+				GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: pages},
+			}
+
+			response, err := witHandler.handleGetWitness(peer, packet)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, response)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.count, len(response))
+			}
+		})
+	}
+}
+
 // TestHandleGetWitnessMetadata_PageCalculation tests page calculation edge cases
 func TestHandleGetWitnessMetadata_PageCalculation(t *testing.T) {
 	handler := newTestHandler()

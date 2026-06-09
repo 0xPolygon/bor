@@ -310,6 +310,56 @@ func TestHandleWitnessBroadcastSkipsCacheWhenNoSignature(t *testing.T) {
 	}
 }
 
+// TestDeferredAnnounceCachePerPeerCap is the regression for W-1: a single peer
+// must not be able to monopolise the deferred-announce queue and evict honest
+// header-racing announces. The cache is keyed by blockHash, so bounding the
+// claimed BlockNumber is no defence (an attacker just reuses a near-tip number
+// with distinct fake hashes). The effective bound is per-peer: one peer may
+// hold at most capacity/divisor slots; honest peers keep theirs.
+func TestDeferredAnnounceCachePerPeerCap(t *testing.T) {
+	// capacity 16 → perPeerCap = 16/8 = 2, small enough to exercise cheaply.
+	c := newDeferredAnnounceCache(16)
+	require.Equal(t, 2, c.perPeerCap)
+
+	mkAnn := func(n byte) wit.SignedWitnessAnnouncement {
+		return wit.SignedWitnessAnnouncement{
+			BlockHash:   common.Hash{n},
+			BlockNumber: uint64(n),
+			WitnessHash: common.Hash{0xff, n},
+			Signature:   make([]byte, wit.SignatureLength),
+		}
+	}
+
+	// One peer fills its share, then its next NEW-hash put is dropped.
+	c.put(mkAnn(1), "attacker")
+	c.put(mkAnn(2), "attacker")
+	c.put(mkAnn(3), "attacker")
+	assert.True(t, c.has(common.Hash{1}))
+	assert.True(t, c.has(common.Hash{2}))
+	assert.False(t, c.has(common.Hash{3}),
+		"third new-hash deferral from a saturating peer must be dropped by the per-peer cap")
+
+	// An honest peer is unaffected by the attacker's saturation.
+	c.put(mkAnn(10), "honest")
+	assert.True(t, c.has(common.Hash{10}),
+		"honest peer must not be starved by a peer that filled its own share")
+
+	// Draining one of the peer's entries returns a credit so it can defer again
+	// — the cap tracks *live* entries, it is not a lifetime quota.
+	if _, ok := c.take(common.Hash{1}); !ok {
+		t.Fatal("take should return the live entry")
+	}
+	c.put(mkAnn(3), "attacker")
+	assert.True(t, c.has(common.Hash{3}),
+		"after a drain freed a slot, the peer may defer a new hash again")
+
+	// Re-deferring an existing hash (same peer) is an overwrite, not a new
+	// slot, so it must never be rejected by the cap even at the limit.
+	c.put(mkAnn(2), "attacker") // attacker currently holds {2},{3} == cap
+	c.put(mkAnn(2), "attacker") // overwrite, must succeed
+	assert.True(t, c.has(common.Hash{2}))
+}
+
 // TestSignedAnnounceDoesNotMarkPeerAsBodyHolder is the load-bearing
 // regression test for the announce/body separation. A WIT2 peer that has
 // only relayed a signed announcement (no body) MUST NOT show up in
