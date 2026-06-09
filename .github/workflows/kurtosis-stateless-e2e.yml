@@ -1,11 +1,15 @@
 name: Kurtosis Stateless E2E Tests
 
 on:
+  push:
+    branches:
+      - 'master'
+      - 'develop'
   pull_request:
     branches:
-      - '**'
-    types: [opened, synchronize, reopened]
-  workflow_dispatch:
+      - 'master'
+      - 'develop'
+    types: [opened, synchronize]
 
 concurrency:
   group: kurtosis-stateless-e2e-${{ github.event.pull_request.number || github.ref }}
