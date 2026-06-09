@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1030,4 +1033,50 @@ func TestHandleWitnessBroadcastAcceptedWhileAnnounceDeferred(t *testing.T) {
 	if peer.KnownWitnessContainsHash(otherHash) {
 		t.Fatal("bytes contradicting the deferred commitment were accepted")
 	}
+}
+
+// TestMaySignAnnouncementForBlockBindsToSealer is the regression for the
+// honest-validator strike storm observed on the 2026-06-09 devnet: every node
+// with an authorized signer (all validators) signed WIT2 announcements for
+// *every* block it announced — including blocks other validators produced.
+// Receivers enforce announce-signer == header-sealer and strike on mismatch,
+// so honest validators repeatedly strike-disconnected each other (~3/min),
+// and the self-signed foreign announce could shadow the producer's real one
+// in signedWitnesses (putIfNewer dedups by blockHash), suppressing its
+// transitive relay. The sign path must refuse any block the local signer did
+// not seal; WIT1 unsigned announces remain the fallback for foreign blocks.
+func TestMaySignAnnouncementForBlockBindsToSealer(t *testing.T) {
+	engine := bor.New(params.BorUnittestChainConfig, rawdb.NewMemoryDatabase(),
+		nil, nil, nil, nil, nil, false, time.Second, vm.Config{})
+	defer engine.Close()
+
+	producerKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	producer := crypto.PubkeyToAddress(producerKey.PublicKey)
+
+	header := &types.Header{
+		Number:     big.NewInt(200),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, 32+65),
+	}
+	sig, err := crypto.Sign(bor.SealHash(header, params.BorUnittestChainConfig.Bor).Bytes(), producerKey)
+	require.NoError(t, err)
+	copy(header.Extra[len(header.Extra)-65:], sig)
+
+	require.True(t,
+		maySignAnnouncementForBlock(engine, header, producer, 200, header.Hash()),
+		"the sealer of the block must be allowed to sign its announcement")
+
+	other := common.HexToAddress("0x0000000000000000000000000000000000000bad")
+	require.False(t,
+		maySignAnnouncementForBlock(engine, header, other, 200, header.Hash()),
+		"a signer that did not seal the block must not sign an announcement for it; receivers strike on signer != producer")
+
+	require.False(t,
+		maySignAnnouncementForBlock(engine, nil, producer, 200, header.Hash()),
+		"without a local header the producer binding is unverifiable; do not sign")
+
+	require.False(t,
+		maySignAnnouncementForBlock(engine, header, producer, 201, header.Hash()),
+		"announce blockNumber must match the local header")
 }

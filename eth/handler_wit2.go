@@ -716,17 +716,16 @@ func verifySignedAnnouncement(ann wit.SignedWitnessAnnouncement) (common.Address
 // cosendWitnessAnnouncement co-sends a witness announcement to every peer
 // that just received the full block via the propagate=true fanout, provided
 // the peer doesn't already have the witness. WIT2 peers receive the signed
-// variant; older peers receive the unsigned WIT1 announce. Skipped entirely
-// when the local node hasn't yet stored the witness or doesn't have a
-// signing key configured.
+// variant when one is available — our own (we produced the block) or the
+// producer's (relayed to us and cached). Otherwise, and for older peers,
+// the unsigned WIT1 hash announce is sent: truthful, since this path is
+// gated on HasWitness. Skipped entirely when the local node hasn't yet
+// stored the witness.
 func (h *handler) cosendWitnessAnnouncement(blockHash common.Hash, blockNumber uint64, transfer []*ethPeer, staticAndTrustedPeers []*ethPeer) {
 	if !h.chain.HasWitness(blockHash) {
 		return
 	}
 	ann, hasSigned := h.signLocalWitnessAnnouncement(blockHash, blockNumber)
-	if !hasSigned {
-		return
-	}
 	witnessRecipientsByID := make(map[string]*witPeer)
 	for _, wp := range h.peers.peersWithoutWitness(blockHash) {
 		witnessRecipientsByID[wp.Peer.ID()] = wp
@@ -736,7 +735,7 @@ func (h *handler) cosendWitnessAnnouncement(blockHash common.Hash, blockNumber u
 		if !ok {
 			return
 		}
-		if wp.Peer.Version() >= wit.WIT2 {
+		if hasSigned && wp.Peer.Version() >= wit.WIT2 {
 			wp.Peer.AsyncSendSignedWitnessAnnouncement(ann)
 		} else {
 			wp.Peer.AsyncSendNewWitnessHash(blockHash, blockNumber)
@@ -787,6 +786,7 @@ func (h *handler) cacheVerifiedWitnessForServing(blockHash common.Hash, witnessB
 //
 // Returns (announcement, true) on success. Returns (_, false) if any of:
 // - no signer configured (full node not producing blocks)
+// - the local signer is not the sealer of blockHash (foreign block)
 // - witness bytes not yet stored in chain
 // - signing failed
 //
@@ -802,7 +802,19 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 	if !ok {
 		return wit.SignedWitnessAnnouncement{}, false
 	}
-	if (borEngine.CurrentSigner() == common.Address{}) {
+	signer := borEngine.CurrentSigner()
+	if (signer == common.Address{}) {
+		return wit.SignedWitnessAnnouncement{}, false
+	}
+	// Only the producer of the block may sign its announcement. Receivers
+	// enforce announce-signer == header-sealer and strike-disconnect on a
+	// mismatch, so signing a foreign block guarantees rejection plus peer
+	// discipline against us — and caching the self-signed announce here
+	// would shadow the producer's real one (signedWitnesses dedups by
+	// blockHash), suppressing its transitive relay. For blocks we did not
+	// seal, the caller falls back to the unsigned WIT1 hash announce, which
+	// is truthful: every announce path is gated on HasWitness.
+	if !maySignAnnouncementForBlock(borEngine, h.chain.GetHeaderByHash(blockHash), signer, blockNumber, blockHash) {
 		return wit.SignedWitnessAnnouncement{}, false
 	}
 
@@ -825,6 +837,17 @@ func (h *handler) signLocalWitnessAnnouncement(blockHash common.Hash, blockNumbe
 	}
 	h.signedWitnesses.putIfNewer(ann)
 	return ann, true
+}
+
+// maySignAnnouncementForBlock reports whether the locally authorized signer
+// sealed blockHash and is therefore the one party entitled to sign a WIT2
+// witness announcement for it. Same producer binding the receive side
+// enforces (verifyScheduledProducer), applied at the origination side. A nil
+// or number-mismatched header refuses: an announce we cannot bind locally
+// must not be signed either.
+func maySignAnnouncementForBlock(borEngine *bor.Bor, header *types.Header, localSigner common.Address, blockNumber uint64, blockHash common.Hash) bool {
+	ok, _ := verifyScheduledProducer(borEngine, header, localSigner, blockNumber, blockHash)
+	return ok
 }
 
 // canonicalWitnessHash reads the witness bytes for blockHash from chain
