@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/wit2test"
 )
 
 var (
@@ -225,6 +226,12 @@ func borVerify(ctx context.Context, eth *Ethereum, handler *ethHandler, start ui
 	}
 
 	hash = fmt.Sprintf("%v", block["hash"])
+
+	wit2test.Stamp("MILESTONE_VERIFIED",
+		"is_checkpoint", isCheckpoint,
+		"end_block", end,
+		"end_hash", hash,
+	)
 
 	return hash, nil
 }

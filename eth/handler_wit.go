@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/wit"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/wit2test"
 )
 
 const (
@@ -241,6 +242,17 @@ func (h *witHandler) handleWitnessHashesAnnounce(peer *wit.Peer, hashes []common
 // in the witness manager. All invalid announcements are also metered.
 func (h *witHandler) handleSignedWitnessAnnouncements(peer *wit.Peer, anns []wit.SignedWitnessAnnouncement) error {
 	wit2RelayInMeter.Mark(int64(len(anns)))
+
+	if wit2test.Enabled() {
+		for _, ann := range anns {
+			wit2test.Stamp("RX_SIGNED_ANNOUNCE",
+				"peer", peer.ID(),
+				"block_hash", ann.BlockHash.Hex(),
+				"block_number", ann.BlockNumber,
+				"witness_hash", ann.WitnessHash.Hex(),
+			)
+		}
+	}
 
 	// Per-peer rate limit: every announcement consumes one token. Rejected
 	// packets are dropped wholesale to keep accounting simple — an honest
@@ -489,10 +501,12 @@ func (h *witHandler) resolveWitnessBytes(pages []wit.WitnessPageRequest) (map[co
 		if cached, _, ok := (*handler)(h).pendingWitnessBodies.get(blockHash); ok {
 			bytesByHash[blockHash] = cached
 			sizeByHash[blockHash] = uint64(len(cached))
+			wit2test.Stamp("SERVED_FROM_CACHE", "block_hash", blockHash.Hex(), "size", len(cached))
 			continue
 		}
 		if size := rawdb.ReadWitnessSize(h.Chain().DB(), blockHash); size != nil {
 			sizeByHash[blockHash] = *size
+			wit2test.Stamp("SERVED_FROM_CHAIN", "block_hash", blockHash.Hex(), "size", *size)
 			continue
 		}
 		// No persisted size and no BP-signed body on file. The header check
@@ -508,6 +522,7 @@ func (h *witHandler) resolveWitnessBytes(pages []wit.WitnessPageRequest) (map[co
 		}
 		if w := h.Chain().GetWitnessUncachedWait(blockHash); len(w) > 0 {
 			sizeByHash[blockHash] = uint64(len(w))
+			wit2test.Stamp("SERVED_FROM_SRC_WAIT", "block_hash", blockHash.Hex(), "size", len(w))
 			if prefetchedBytes+uint64(len(w)) <= MaximumResponseSize {
 				bytesByHash[blockHash] = w
 				prefetchedBytes += uint64(len(w))

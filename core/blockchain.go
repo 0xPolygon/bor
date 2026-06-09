@@ -59,6 +59,7 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
+	"github.com/ethereum/go-ethereum/wit2test"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
 )
 
@@ -2883,6 +2884,15 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	rawdb.WritePreimages(blockBatch, statedb.Preimages())
 
 	if statedb.Witness() != nil {
+		// wit2test: optionally inflate the witness to exercise multi-page
+		// transport / pre-import caching. Deterministic per block so the
+		// producer and witness-producing relays agree on the commit hash.
+		if wit2test.Enabled() {
+			if pad := wit2test.PadBytesForBlock(block.NumberU64()); pad > 0 {
+				statedb.Witness().AddState(wit2test.WitnessPadNodes(block.Hash().Bytes(), pad))
+			}
+		}
+
 		encStart := time.Now()
 
 		var witBuf bytes.Buffer
@@ -3042,6 +3052,23 @@ func (bc *BlockChain) InsertChainWithWitnesses(chain types.Blocks, makeWitness b
 	// Sanity check that we have something meaningful to import
 	if len(chain) == 0 {
 		return 0, nil
+	}
+
+	if wit2test.Enabled() {
+		first := chain[0]
+		wit2test.Stamp("IMPORT_START",
+			"block_hash", first.Hash().Hex(),
+			"block_number", first.NumberU64(),
+			"chain_len", len(chain),
+		)
+		wit2test.MaybeSleep("InsertChain")
+		defer func() {
+			wit2test.Stamp("IMPORT_DONE",
+				"block_hash", first.Hash().Hex(),
+				"block_number", first.NumberU64(),
+				"chain_len", len(chain),
+			)
+		}()
 	}
 
 	// Do a sanity check that the provided chain is actually ordered and linked.
