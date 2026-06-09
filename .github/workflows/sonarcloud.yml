@@ -1,0 +1,63 @@
+name: Sonar Code Analysis
+
+on:
+  push:
+    branches:
+      - mock-develop
+  pull_request:
+    branches:
+      - '**'
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '25 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sonar:
+    name: SonarCloud (informational)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'mock-develop' }}
+
+      - name: Run SonarCloud analysis
+        id: sonar
+        if: github.event_name != 'pull_request' && env.SONAR_TOKEN != ''
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Report informational status
+        if: always()
+        run: |
+          {
+            echo "## Sonar Code Analysis"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "SonarCloud is informational for PRs and is not run automatically, so it cannot block or turn the PR red. Run this workflow manually for an on-demand SonarCloud scan."
+              exit 0
+            fi
+            case "${{ steps.sonar.outcome }}" in
+              success)
+                echo "SonarCloud analysis completed successfully."
+                ;;
+              skipped)
+                echo "SonarCloud analysis was skipped because SONAR_TOKEN is not available."
+                ;;
+              *)
+                echo "SonarCloud analysis did not complete successfully. This check is informational and does not fail CI."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
