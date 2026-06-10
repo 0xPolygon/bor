@@ -48,47 +48,58 @@ func WitnessCommitHash(rlpBytes []byte) common.Hash {
 	if len(rlpBytes) == 0 {
 		return common.Hash{}
 	}
-	chunks := splitWitnessChunks(rlpBytes, WitnessCommitChunkBytes)
-	chunkHashes := make([]common.Hash, len(chunks))
-
-	// Single-chunk inputs (≤1 MiB) skip the goroutine pool — the fan-out cost
-	// would dominate the keccak.
-	if len(chunks) == 1 {
-		chunkHashes[0] = crypto.Keccak256Hash(chunks[0])
-	} else {
-		workers := runtime.GOMAXPROCS(0)
-		if workers > witnessCommitMaxWorkers {
-			workers = witnessCommitMaxWorkers
-		}
-		if workers > len(chunks) {
-			workers = len(chunks)
-		}
-		if workers < 1 {
-			workers = 1
-		}
-		var wg sync.WaitGroup
-		work := make(chan int, len(chunks))
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for i := range work {
-					chunkHashes[i] = crypto.Keccak256Hash(chunks[i])
-				}
-			}()
-		}
-		for i := range chunks {
-			work <- i
-		}
-		close(work)
-		wg.Wait()
-	}
+	chunkHashes := hashWitnessChunks(splitWitnessChunks(rlpBytes, WitnessCommitChunkBytes))
 
 	concat := make([]byte, 0, len(chunkHashes)*common.HashLength)
 	for _, h := range chunkHashes {
 		concat = append(concat, h[:]...)
 	}
 	return crypto.Keccak256Hash(concat)
+}
+
+// hashWitnessChunks keccaks each chunk, fanning out across a bounded worker
+// pool. Single-chunk inputs (≤1 MiB) skip the goroutine pool — the fan-out
+// cost would dominate the keccak.
+func hashWitnessChunks(chunks [][]byte) []common.Hash {
+	chunkHashes := make([]common.Hash, len(chunks))
+	if len(chunks) == 1 {
+		chunkHashes[0] = crypto.Keccak256Hash(chunks[0])
+		return chunkHashes
+	}
+
+	var wg sync.WaitGroup
+	work := make(chan int, len(chunks))
+	for w := 0; w < witnessCommitWorkerCount(len(chunks)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				chunkHashes[i] = crypto.Keccak256Hash(chunks[i])
+			}
+		}()
+	}
+	for i := range chunks {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+	return chunkHashes
+}
+
+// witnessCommitWorkerCount clamps the keccak fan-out to the available
+// parallelism, the configured cap, and the amount of work on hand.
+func witnessCommitWorkerCount(chunks int) int {
+	workers := runtime.GOMAXPROCS(0)
+	if workers > witnessCommitMaxWorkers {
+		workers = witnessCommitMaxWorkers
+	}
+	if workers > chunks {
+		workers = chunks
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
 }
 
 // WitnessCommitHashFromWitness encodes a witness with the canonical sorted

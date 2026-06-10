@@ -112,6 +112,37 @@ func TestHandleSignedNewWitnessHashesRejectsMalformedPackets(t *testing.T) {
 		over[i] = testAnnouncement(byte(i))
 	}
 	require.Error(t, send(&SignedNewWitnessHashesPacket{Announcements: over}), "over-cap packet must be rejected")
+
+	// Structurally invalid payload: RLP that does not decode into the packet
+	// shape must error out at decode time.
+	sender, receiver, cleanup := newWit2PeerPair(t)
+	defer cleanup()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- p2p.Send(sender.rw, SignedNewWitnessHashesMsg, "not-a-packet")
+	}()
+	require.Error(t, handleMessage(backend, receiver), "undecodable payload must be rejected")
+	require.NoError(t, <-errc)
+}
+
+// TestAddKnownAnnounce pins the announce-known set semantics: recording an
+// announce marks only the announce set, never the body-holder set that
+// drives fetch peer selection.
+func TestAddKnownAnnounce(t *testing.T) {
+	var id enode.ID
+	rand.Read(id[:])
+
+	app, net := p2p.MsgPipe()
+	defer app.Close()
+	defer net.Close()
+	peer := NewPeer(WIT2, p2p.NewPeer(id, "wit2", nil), net, log.New())
+	defer peer.Close()
+
+	hash := common.HexToHash("0x77")
+	require.False(t, peer.KnownAnnounceContainsHash(hash))
+	peer.AddKnownAnnounce(hash)
+	require.True(t, peer.KnownAnnounceContainsHash(hash))
+	require.False(t, peer.KnownWitnessContainsHash(hash), "announce-known must not imply body-known")
 }
 
 // TestAsyncSendSignedWitnessAnnouncementGuards pins the two non-delivery

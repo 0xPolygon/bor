@@ -663,6 +663,95 @@ func TestDrainDeferredAnnouncesLifecycle(t *testing.T) {
 	h.handler.drainDeferredAnnouncesFor(annS.BlockHash)
 }
 
+// TestCacheGCSweepsExpiredEntries drives the TTL gc branch of each wit2
+// cache: an entry older than the TTL must be dropped by the next write,
+// including the relayer-credit refund in the deferred cache and the
+// emptied-hash map cleanup in the waiter registry.
+func TestCacheGCSweepsExpiredEntries(t *testing.T) {
+	stale := time.Now().Add(-2 * wit2AnnounceTTL)
+	hashA := common.HexToHash("0x0a")
+	hashB := common.HexToHash("0x0b")
+
+	// pendingWitnessBodyCache: gc fires on put.
+	bodies := newPendingWitnessBodyCache(4)
+	bodies.put(hashA, []byte{0x01}, common.HexToHash("0xa1"))
+	bodies.mu.Lock()
+	bodies.entries[hashA].receivedAt = stale
+	bodies.mu.Unlock()
+	bodies.put(hashB, []byte{0x02}, common.HexToHash("0xb1"))
+	bodies.mu.Lock()
+	_, sweptBody := bodies.entries[hashA]
+	bodies.mu.Unlock()
+	require.False(t, sweptBody, "expired pending body must be swept on the next put")
+
+	// witnessWaiterRegistry: gc fires on record; sweeping the expired waiter
+	// must also drop the now-empty per-hash map.
+	peer, cleanup := newTestWit2PeerWithReader()
+	defer cleanup()
+	reg := newWitnessWaiterRegistry()
+	reg.record(hashA, peer)
+	reg.mu.Lock()
+	reg.waiters[hashA][peer.ID()].at = stale
+	reg.mu.Unlock()
+	reg.record(hashB, peer)
+	reg.mu.Lock()
+	_, sweptWaiter := reg.waiters[hashA]
+	reg.mu.Unlock()
+	require.False(t, sweptWaiter, "expired waiter hash must be swept on the next record")
+
+	// deferredAnnounceCache: gc fires on put and must refund the relayer's
+	// per-peer credit.
+	deferred := newDeferredAnnounceCache(8)
+	deferred.put(wit.SignedWitnessAnnouncement{BlockHash: hashA, Signature: make([]byte, wit.SignatureLength)}, "relayer")
+	deferred.mu.Lock()
+	deferred.entries[hashA].receivedAt = stale
+	deferred.mu.Unlock()
+	deferred.put(wit.SignedWitnessAnnouncement{BlockHash: hashB, Signature: make([]byte, wit.SignatureLength)}, "other")
+	deferred.mu.Lock()
+	_, sweptDeferred := deferred.entries[hashA]
+	credit := deferred.perPeer["relayer"]
+	deferred.mu.Unlock()
+	require.False(t, sweptDeferred, "expired deferred announce must be swept on the next put")
+	require.Zero(t, credit, "swept deferred announce must refund its relayer credit")
+
+	// signedWitnessCache: gc fires on putIfNewer.
+	signed := newSignedWitnessCache()
+	signed.putIfNewer(wit.SignedWitnessAnnouncement{BlockHash: hashA, Signature: make([]byte, wit.SignatureLength)})
+	signed.mu.Lock()
+	signed.entries[hashA].receivedAt = stale
+	signed.mu.Unlock()
+	signed.putIfNewer(wit.SignedWitnessAnnouncement{BlockHash: hashB, Signature: make([]byte, wit.SignatureLength)})
+	signed.mu.Lock()
+	_, sweptSigned := signed.entries[hashA]
+	signed.mu.Unlock()
+	require.False(t, sweptSigned, "expired signed announce must be swept on the next putIfNewer")
+}
+
+// TestDrainDeferredAnnouncesGuards covers the drain entry guards: a handler
+// wired without wit2 state must no-op rather than panic, and a stashed
+// announcement that fails the signature re-check (in principle unreachable —
+// the same bytes passed verification before deferral) is dropped without
+// being cached or relayed.
+func TestDrainDeferredAnnouncesGuards(t *testing.T) {
+	(&handler{}).drainDeferredAnnouncesFor(common.HexToHash("0x01"))
+
+	h := newTestHandler()
+	defer h.close()
+
+	bad := wit.SignedWitnessAnnouncement{
+		BlockHash:   common.HexToHash("0x0bad"),
+		BlockNumber: 1,
+		WitnessHash: common.HexToHash("0x0bb1"),
+		Signature:   make([]byte, wit.SignatureLength), // all-zero: recovery fails
+	}
+	h.handler.deferredAnnounces.put(bad, "relayer")
+	h.handler.drainDeferredAnnouncesFor(bad.BlockHash)
+
+	_, promoted := h.handler.signedWitnesses.get(bad.BlockHash)
+	require.False(t, promoted, "announce failing the sig re-check must not be promoted")
+	require.False(t, h.handler.deferredAnnounces.has(bad.BlockHash), "failed drain must consume the deferred entry")
+}
+
 // TestCanonicalWitnessHashStorageGate pins the chain-storage gate: no stored
 // witness means no commitment (and thus nothing to sign), while stored bytes
 // hash to the canonical commitment directly.

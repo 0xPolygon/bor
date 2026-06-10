@@ -2,6 +2,8 @@ package bor
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -66,5 +68,54 @@ func TestSignBytesRejectsHeaderMimetype(t *testing.T) {
 	}
 	if _, _, err := bor.SignBytes(accounts.MimetypeBor, []byte{0x01}); err == nil {
 		t.Fatal("MimetypeBor must be rejected to prevent header-seal replay")
+	}
+}
+
+// TestSignBytesWithoutAuthorizedSigner covers the not-a-validator paths: a
+// node that never called Authorize (or authorized the zero address) must
+// refuse to sign rather than emit a signature under a zero identity.
+func TestSignBytesWithoutAuthorizedSigner(t *testing.T) {
+	bor := &Bor{}
+	if _, _, err := bor.SignBytes(accounts.MimetypeBorWitnessAnnounce, []byte{0x01}); err == nil {
+		t.Fatal("SignBytes must fail with no authorized signer")
+	}
+
+	bor.Authorize(common.Address{}, func(accounts.Account, string, []byte) ([]byte, error) {
+		t.Fatal("signFn must not be reached for a zero-address signer")
+		return nil, nil
+	})
+	if _, _, err := bor.SignBytes(accounts.MimetypeBorWitnessAnnounce, []byte{0x01}); err == nil {
+		t.Fatal("SignBytes must fail for a zero-address signer")
+	}
+}
+
+// TestSignBytesPropagatesSignFnError pins that wallet/clef failures surface to
+// the caller instead of returning a bogus (signer, nil-sig) pair.
+func TestSignBytesPropagatesSignFnError(t *testing.T) {
+	bor := &Bor{}
+	bor.Authorize(common.HexToAddress("0x1234"), func(accounts.Account, string, []byte) ([]byte, error) {
+		return nil, errors.New("wallet locked")
+	})
+
+	_, _, err := bor.SignBytes(accounts.MimetypeBorWitnessAnnounce, []byte{0x01})
+	if err == nil || !strings.Contains(err.Error(), "wallet locked") {
+		t.Fatalf("expected wallet error to propagate, got %v", err)
+	}
+}
+
+// TestCurrentSigner covers both states of the authorized-signer lookup used by
+// the wit2 announce path to decide whether this node may sign announcements.
+func TestCurrentSigner(t *testing.T) {
+	bor := &Bor{}
+	if got := bor.CurrentSigner(); got != (common.Address{}) {
+		t.Fatalf("expected zero address before Authorize, got %s", got)
+	}
+
+	addr := common.HexToAddress("0x5678")
+	bor.Authorize(addr, func(accounts.Account, string, []byte) ([]byte, error) {
+		return make([]byte, 65), nil
+	})
+	if got := bor.CurrentSigner(); got != addr {
+		t.Fatalf("CurrentSigner: got %s want %s", got, addr)
 	}
 }

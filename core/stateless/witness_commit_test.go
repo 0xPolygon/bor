@@ -10,10 +10,12 @@ package stateless
 
 import (
 	"bytes"
+	"math/big"
 	"runtime"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -65,6 +67,31 @@ func TestWitnessCommitHashSingleSubChunk(t *testing.T) {
 	want := crypto.Keccak256Hash(inner[:])
 	if got != want {
 		t.Fatalf("single-subchunk shape mismatch: got %s want %s", got.Hex(), want.Hex())
+	}
+}
+
+// TestWitnessCommitHashFromWitness pins the convenience wrapper to the
+// primitive: encoding a witness with the canonical EncodeRLP and hashing those
+// bytes must equal WitnessCommitHashFromWitness on the same witness, so the
+// producer (wrapper) and verifier (raw-bytes) paths can never diverge.
+func TestWitnessCommitHashFromWitness(t *testing.T) {
+	w := &Witness{
+		context: &types.Header{Number: big.NewInt(100)},
+		Headers: []*types.Header{{Number: big.NewInt(99)}},
+		State:   map[string]struct{}{"statenode": {}},
+	}
+
+	got, err := WitnessCommitHashFromWitness(w)
+	if err != nil {
+		t.Fatalf("WitnessCommitHashFromWitness: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := w.EncodeRLP(&buf); err != nil {
+		t.Fatalf("EncodeRLP: %v", err)
+	}
+	if want := WitnessCommitHash(buf.Bytes()); got != want {
+		t.Fatalf("wrapper mismatch: got %s want %s", got.Hex(), want.Hex())
 	}
 }
 
