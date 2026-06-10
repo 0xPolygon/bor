@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/stateless"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 )
 
@@ -22,6 +23,51 @@ func blockAnnounceForTest(origin string, hash common.Hash, number uint64) *block
 		number:       number,
 		time:         time.Now(),
 		fetchWitness: func(common.Hash, chan *eth.Response) (*eth.Request, error) { return nil, errors.New("noop") },
+	}
+}
+
+// primePendingWitness seeds manager.pending with a request state for the
+// block under the given origin, exactly as the announce → request flow would.
+func primePendingWitness(tw *testWitnessManager, origin string, block *types.Block) {
+	tw.manager.mu.Lock()
+	tw.manager.pending[block.Hash()] = &witnessRequestState{
+		op:       &blockOrHeaderInject{origin: origin, block: block},
+		announce: blockAnnounceForTest(origin, block.Hash(), block.NumberU64()),
+	}
+	tw.manager.mu.Unlock()
+}
+
+// witnessResponse wraps witnesses in a synthetic eth.Response, as the request
+// dispatcher would deliver them. Call with no arguments for an empty response
+// (peer does not hold the body).
+func witnessResponse(witnesses ...*stateless.Witness) *eth.Response {
+	return &eth.Response{
+		Time: time.Millisecond,
+		Done: make(chan error, 1),
+		Res:  witnesses,
+	}
+}
+
+// encodedCommitHash returns the WIT2 commit hash over the witness's canonical
+// RLP encoding — the value a BP would sign for this witness.
+func encodedCommitHash(t *testing.T, witness *stateless.Witness) common.Hash {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return stateless.WitnessCommitHash(buf.Bytes())
+}
+
+// requireNoDroppedPeers fails the test when any peer was drop-disconnected.
+func requireNoDroppedPeers(t *testing.T, tw *testWitnessManager, context string) {
+	t.Helper()
+
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	if len(tw.droppedPeers) != 0 {
+		t.Fatalf("%s; drops=%v", context, tw.droppedPeers)
 	}
 }
 
@@ -60,26 +106,11 @@ func TestProcessWitnessResponseDoesNotDropOnByteMismatch(t *testing.T) {
 		return common.Hash{}, false
 	}
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "honest", block: block},
-		announce: blockAnnounceForTest("honest", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
+	primePendingWitness(tw, "honest", block)
 
-	res := &eth.Response{
-		Time: time.Millisecond,
-		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{canonical},
-	}
+	tw.manager.processWitnessResponse("honest-server", hash, witnessResponse(canonical), time.Now())
 
-	tw.manager.processWitnessResponse("honest-server", hash, res, time.Now())
-
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	if len(tw.droppedPeers) != 0 {
-		t.Fatalf("byte-server must not be dropped on signed-hash mismatch (BP may have signed bogus); drops=%v", tw.droppedPeers)
-	}
+	requireNoDroppedPeers(t, tw, "byte-server must not be dropped on signed-hash mismatch (BP may have signed bogus)")
 }
 
 // TestProcessWitnessResponseAcceptsMatchingHash is the contrapositive: a
@@ -91,38 +122,18 @@ func TestProcessWitnessResponseAcceptsMatchingHash(t *testing.T) {
 	defer tw.Close()
 
 	block := createTestBlock(101)
-	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
-	var buf bytes.Buffer
-	if err := witness.EncodeRLP(&buf); err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	matchingHash := stateless.WitnessCommitHash(buf.Bytes())
+	matchingHash := encodedCommitHash(t, witness)
 
 	tw.manager.parentSignedWitnessHash = func(h common.Hash) (common.Hash, bool) {
 		return matchingHash, true
 	}
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "honest", block: block},
-		announce: blockAnnounceForTest("honest", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
+	primePendingWitness(tw, "honest", block)
 
-	res := &eth.Response{
-		Time: time.Millisecond,
-		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{witness},
-	}
+	tw.manager.processWitnessResponse("honest", block.Hash(), witnessResponse(witness), time.Now())
 
-	tw.manager.processWitnessResponse("honest", hash, res, time.Now())
-
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	if len(tw.droppedPeers) != 0 {
-		t.Fatalf("honest peer must not be dropped on hash match; drops=%v", tw.droppedPeers)
-	}
+	requireNoDroppedPeers(t, tw, "honest peer must not be dropped on hash match")
 }
 
 // TestProcessWitnessResponseCachesForServingAfterByteCheck is the regression
@@ -138,11 +149,7 @@ func TestProcessWitnessResponseCachesForServingAfterByteCheck(t *testing.T) {
 	block := createTestBlock(202)
 	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
-	var buf bytes.Buffer
-	if err := witness.EncodeRLP(&buf); err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	want := stateless.WitnessCommitHash(buf.Bytes())
+	want := encodedCommitHash(t, witness)
 
 	var (
 		gotBlock common.Hash
@@ -161,20 +168,9 @@ func TestProcessWitnessResponseCachesForServingAfterByteCheck(t *testing.T) {
 		return common.Hash{}, false
 	}
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "honest", block: block},
-		announce: blockAnnounceForTest("honest", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
+	primePendingWitness(tw, "honest", block)
 
-	res := &eth.Response{
-		Time: time.Millisecond,
-		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{witness},
-	}
-
-	tw.manager.processWitnessResponse("honest", hash, res, time.Now())
+	tw.manager.processWitnessResponse("honest", hash, witnessResponse(witness), time.Now())
 
 	if gotBlock != hash {
 		t.Fatalf("cache callback not invoked or wrong blockHash: got %s want %s", gotBlock.Hex(), hash.Hex())
@@ -196,7 +192,6 @@ func TestProcessWitnessResponseSkipsCheckWhenNoSignature(t *testing.T) {
 	defer tw.Close()
 
 	block := createTestBlock(101)
-	hash := block.Hash()
 	witness := createTestWitnessForBlock(block)
 
 	// No lookup configured → skip path.
@@ -204,26 +199,11 @@ func TestProcessWitnessResponseSkipsCheckWhenNoSignature(t *testing.T) {
 		return common.Hash{}, false
 	}
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "wit1-peer", block: block},
-		announce: blockAnnounceForTest("wit1-peer", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
+	primePendingWitness(tw, "wit1-peer", block)
 
-	res := &eth.Response{
-		Time: time.Millisecond,
-		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{witness},
-	}
+	tw.manager.processWitnessResponse("wit1-peer", block.Hash(), witnessResponse(witness), time.Now())
 
-	tw.manager.processWitnessResponse("wit1-peer", hash, res, time.Now())
-
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	if len(tw.droppedPeers) != 0 {
-		t.Fatalf("WIT1 fallback must not drop any peer; drops=%v", tw.droppedPeers)
-	}
+	requireNoDroppedPeers(t, tw, "WIT1 fallback must not drop any peer")
 }
 
 // TestVerifyAgainstSignedHashSkipsEncodeWhenNoSignedHash is the regression
@@ -285,22 +265,13 @@ func TestEmptyResponseBacksOffToAvoidHammering(t *testing.T) {
 	block := createTestBlock(606)
 	hash := block.Hash()
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "relay-only", block: block},
-		announce: blockAnnounceForTest("relay-only", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
-
-	emptyRes := func() *eth.Response {
-		return &eth.Response{Time: time.Millisecond, Done: make(chan error, 1), Res: []*stateless.Witness{}}
-	}
+	primePendingWitness(tw, "relay-only", block)
 
 	// Drive several consecutive empty responses, as an announce-only relayer
 	// that does not yet hold the body would produce.
 	var lastDelay time.Duration
 	for i := 0; i < 8; i++ {
-		tw.manager.processWitnessResponse("relay-only", hash, emptyRes(), time.Now())
+		tw.manager.processWitnessResponse("relay-only", hash, witnessResponse(), time.Now())
 		tw.manager.mu.Lock()
 		st := tw.manager.pending[hash]
 		if st == nil {
@@ -334,24 +305,9 @@ func TestProcessWitnessResponseEmptyDoesNotDropAnnounceOnlyPeer(t *testing.T) {
 	block := createTestBlock(404)
 	hash := block.Hash()
 
-	tw.manager.mu.Lock()
-	tw.manager.pending[hash] = &witnessRequestState{
-		op:       &blockOrHeaderInject{origin: "announce-only", block: block},
-		announce: blockAnnounceForTest("announce-only", hash, block.NumberU64()),
-	}
-	tw.manager.mu.Unlock()
+	primePendingWitness(tw, "announce-only", block)
 
-	res := &eth.Response{
-		Time: time.Millisecond,
-		Done: make(chan error, 1),
-		Res:  []*stateless.Witness{}, // empty/unavailable
-	}
+	tw.manager.processWitnessResponse("announce-only", hash, witnessResponse(), time.Now())
 
-	tw.manager.processWitnessResponse("announce-only", hash, res, time.Now())
-
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	if len(tw.droppedPeers) != 0 {
-		t.Fatalf("empty response must NOT drop the responder; drops=%v", tw.droppedPeers)
-	}
+	requireNoDroppedPeers(t, tw, "empty response must NOT drop the responder")
 }

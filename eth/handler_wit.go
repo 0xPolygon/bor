@@ -94,82 +94,17 @@ func (h *witHandler) Handle(peer *wit.Peer, packet wit.Packet) error {
 func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.Witness) error {
 	hash := witness.Header().Hash()
 
-	// WIT2: verify against the BP-signed witnessHash on file, then cache the
-	// encoded body so this node can serve it pre-import. We only expose the
-	// cache for serving when bytes match — otherwise an upstream that lied
-	// about the bytes would make us serve garbage and get dropped by
-	// downstream peers as liars, even though we just relayed what we received.
+	var accepted bool
 	if signed, hasSigned := (*handler)(h).signedWitnesses.get(hash); hasSigned {
-		var buf bytes.Buffer
-		if err := witness.EncodeRLP(&buf); err != nil {
-			// Can't re-encode → can't check the signed commitment. Treat as
-			// unverifiable rather than letting unchecked bytes through.
-			peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
-			return nil
-		}
-		bodyBytes := buf.Bytes()
-		bodyHash := stateless.WitnessCommitHash(bodyBytes)
-		if signed.WitnessHash != bodyHash {
-			// Upstream sent bytes that don't match the BP-signed commitment.
-			// Don't cache, don't mark the sender as a body-holder, don't
-			// inject: the broadcast path must not be a bypass of the byte
-			// verification the paged-fetch path performs. No disconnect — the
-			// sender may itself have been fed bad bytes upstream.
-			wit2BroadcastByteMismatchMeter.Mark(1)
-			peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; dropping",
-				"blockHash", hash, "expected", signed.WitnessHash, "actual", bodyHash)
-			return nil
-		}
-		peer.AddKnownWitness(hash)
-		(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
-		// We now hold servable bytes — push to any peer that asked us
-		// for this body before we had it.
-		(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
+		accepted = h.acceptSignedBroadcast(peer, witness, hash, signed.WitnessHash)
 	} else if deferred, _, hasDeferred := (*handler)(h).deferredAnnounces.peek(hash); hasDeferred {
-		// A signed announcement for this block is on file but still deferred:
-		// its producer-binding needs the block header, which a stateless node
-		// at the tip does not have yet — that is exactly the consumer-side
-		// state when a waiter push delivers the body for a block pending
-		// import. Bind the pushed bytes to the deferred commitment and, on
-		// match, accept for IMPORT ONLY: the witness flows to the block
-		// fetcher so the pending block can import (import re-verifies
-		// everything via stateless execution + state-root check). We do NOT
-		// cache for serving, do NOT promote into signedWitnesses, and do NOT
-		// relay — those carry the verified-announce trust property, and a
-		// deferred entry's producer is unverified until the post-import drain
-		// checks it against the chain-validated header. Verifying against the
-		// header embedded in the pushed witness instead would let a peer
-		// self-seal a fabricated header and pass its own announce as the
-		// producer's.
-		var buf bytes.Buffer
-		if err := witness.EncodeRLP(&buf); err != nil {
-			peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
-			return nil
-		}
-		if stateless.WitnessCommitHash(buf.Bytes()) != deferred.WitnessHash {
-			wit2BroadcastByteMismatchMeter.Mark(1)
-			peer.Log().Warn("wit2: broadcast bytes do not match deferred announce witnessHash; dropping",
-				"blockHash", hash, "expected", deferred.WitnessHash)
-			return nil
-		}
-		peer.AddKnownWitness(hash)
-		wit2BroadcastDeferredImportMeter.Mark(1)
+		accepted = h.acceptDeferredBroadcast(peer, witness, hash, deferred.WitnessHash)
 	} else {
-		// No signed announcement on file: WIT1 fallback. The only binding we
-		// can check is that the header belongs to a block we actually know —
-		// without it, an unsolicited 16MB body for an arbitrary hash would be
-		// decoded and cached purely on the sender's word. Drop silently: a
-		// peer racing ahead of our import is early, not malicious.
-		if h.Chain().GetHeaderByHash(hash) == nil {
-			wit2BroadcastUnknownHeaderDropMeter.Mark(1)
-			peer.Log().Debug("dropping witness broadcast for unknown header", "blockHash", hash)
-			return nil
-		}
-		peer.AddKnownWitness(hash)
-		// Header is known, but we cannot prove byte-correctness to downstream
-		// WIT2 peers — don't expose for pre-import serving. The body still
-		// flows into the import path below.
-		wit2BroadcastUnverifiedSkippedMeter.Mark(1)
+		accepted = h.acceptUnsignedBroadcast(peer, hash)
+	}
+
+	if !accepted {
+		return nil
 	}
 
 	// Inject the witness into the block fetcher's cache
@@ -186,6 +121,97 @@ func (h *witHandler) handleWitnessBroadcast(peer *wit.Peer, witness *stateless.W
 	}
 
 	return nil
+}
+
+// encodedBroadcastBytes canonically re-encodes a broadcast witness so its
+// bytes can be checked against a signed commitment. Returns ok=false when the
+// witness cannot be re-encoded — the caller must treat the broadcast as
+// unverifiable rather than letting unchecked bytes through.
+func encodedBroadcastBytes(peer *wit.Peer, witness *stateless.Witness, hash common.Hash) ([]byte, bool) {
+	var buf bytes.Buffer
+	if err := witness.EncodeRLP(&buf); err != nil {
+		peer.Log().Warn("wit2: failed to encode received witness", "hash", hash, "err", err)
+		return nil, false
+	}
+	return buf.Bytes(), true
+}
+
+// acceptSignedBroadcast is the WIT2 accept path of the witness broadcast:
+// verify against the BP-signed witnessHash on file, then cache the encoded
+// body so this node can serve it pre-import. We only expose the cache for
+// serving when bytes match — otherwise an upstream that lied about the bytes
+// would make us serve garbage and get dropped by downstream peers as liars,
+// even though we just relayed what we received. On mismatch nothing is
+// cached, the sender is not marked as a body-holder, and the witness is not
+// injected: the broadcast path must not be a bypass of the byte verification
+// the paged-fetch path performs. No disconnect — the sender may itself have
+// been fed bad bytes upstream.
+func (h *witHandler) acceptSignedBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, signedHash common.Hash) bool {
+	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
+	if !ok {
+		return false
+	}
+	bodyHash := stateless.WitnessCommitHash(bodyBytes)
+	if signedHash != bodyHash {
+		wit2BroadcastByteMismatchMeter.Mark(1)
+		peer.Log().Warn("wit2: broadcast bytes do not match signed witnessHash; dropping",
+			"blockHash", hash, "expected", signedHash, "actual", bodyHash)
+		return false
+	}
+	peer.AddKnownWitness(hash)
+	(*handler)(h).pendingWitnessBodies.put(hash, bodyBytes, bodyHash)
+	// We now hold servable bytes — push to any peer that asked us
+	// for this body before we had it.
+	(*handler)(h).pushWitnessToWaiters(hash, witness, len(bodyBytes))
+	return true
+}
+
+// acceptDeferredBroadcast handles a broadcast whose signed announcement is on
+// file but still deferred: its producer-binding needs the block header, which
+// a stateless node at the tip does not have yet — that is exactly the
+// consumer-side state when a waiter push delivers the body for a block
+// pending import. Bind the pushed bytes to the deferred commitment and, on
+// match, accept for IMPORT ONLY: the witness flows to the block fetcher so
+// the pending block can import (import re-verifies everything via stateless
+// execution + state-root check). We do NOT cache for serving, do NOT promote
+// into signedWitnesses, and do NOT relay — those carry the verified-announce
+// trust property, and a deferred entry's producer is unverified until the
+// post-import drain checks it against the chain-validated header. Verifying
+// against the header embedded in the pushed witness instead would let a peer
+// self-seal a fabricated header and pass its own announce as the producer's.
+func (h *witHandler) acceptDeferredBroadcast(peer *wit.Peer, witness *stateless.Witness, hash common.Hash, deferredHash common.Hash) bool {
+	bodyBytes, ok := encodedBroadcastBytes(peer, witness, hash)
+	if !ok {
+		return false
+	}
+	if stateless.WitnessCommitHash(bodyBytes) != deferredHash {
+		wit2BroadcastByteMismatchMeter.Mark(1)
+		peer.Log().Warn("wit2: broadcast bytes do not match deferred announce witnessHash; dropping",
+			"blockHash", hash, "expected", deferredHash)
+		return false
+	}
+	peer.AddKnownWitness(hash)
+	wit2BroadcastDeferredImportMeter.Mark(1)
+	return true
+}
+
+// acceptUnsignedBroadcast is the WIT1 fallback with no signed announcement on
+// file. The only binding we can check is that the header belongs to a block
+// we actually know — without it, an unsolicited 16MB body for an arbitrary
+// hash would be decoded and cached purely on the sender's word. Unknown
+// headers are dropped silently: a peer racing ahead of our import is early,
+// not malicious. For known headers we cannot prove byte-correctness to
+// downstream WIT2 peers — the body is not exposed for pre-import serving but
+// still flows into the import path.
+func (h *witHandler) acceptUnsignedBroadcast(peer *wit.Peer, hash common.Hash) bool {
+	if h.Chain().GetHeaderByHash(hash) == nil {
+		wit2BroadcastUnknownHeaderDropMeter.Mark(1)
+		peer.Log().Debug("dropping witness broadcast for unknown header", "blockHash", hash)
+		return false
+	}
+	peer.AddKnownWitness(hash)
+	wit2BroadcastUnverifiedSkippedMeter.Mark(1)
+	return true
 }
 
 // handleWitnessHashesAnnounce handles a witness hashes broadcast from a peer.

@@ -408,6 +408,54 @@ func TestSignedAnnounceDoesNotMarkPeerAsBodyHolder(t *testing.T) {
 // pushes the full body to those waiters the moment we obtain it — restoring the
 // WIT1-style hand-off without flooding (only peers that actually asked, and at
 // most one body each, exactly what a pull would have cost).
+// persistedSignedWitness builds a header persisted to the test chain DB, a
+// witness for it (padded with deterministic trie state when padBytes > 0),
+// and registers a BP-signed announcement for the witness's commit hash — the
+// shared precondition of every waiter-push scenario. Returns the block hash,
+// the canonical body bytes, and the signed commit hash. The body is NOT
+// stored anywhere: callers decide whether it lands in the in-flight cache,
+// chain storage, or nowhere.
+func persistedSignedWitness(t *testing.T, h *testHandler, blockNumber int64, padBytes int) (common.Hash, []byte, common.Hash) {
+	t.Helper()
+
+	header := &types.Header{Number: big.NewInt(blockNumber)}
+	hash := header.Hash()
+	rawdb.WriteHeader(h.chain.DB(), header)
+
+	witness, err := stateless.NewWitness(header, nil)
+	require.NoError(t, err)
+	if padBytes > 0 {
+		FillWitnessWithDeterministicRandomState(witness, padBytes)
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, witness.EncodeRLP(&buf))
+	bodyBytes := buf.Bytes()
+	witnessHash := stateless.WitnessCommitHash(bodyBytes)
+
+	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
+		BlockHash:   hash,
+		BlockNumber: header.Number.Uint64(),
+		WitnessHash: witnessHash,
+		Signature:   make([]byte, wit.SignatureLength),
+	})
+
+	return hash, bodyBytes, witnessHash
+}
+
+// requestFirstWitnessPage issues a single-page GetWitness for hash, as a
+// remote peer pulling the body would.
+func requestFirstWitnessPage(t *testing.T, witH *witHandler, peer *wit.Peer, hash common.Hash) wit.WitnessPacketResponse {
+	t.Helper()
+
+	resp, err := witH.handleGetWitness(peer, &wit.GetWitnessPacket{
+		RequestId:         1,
+		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
+	})
+	require.NoError(t, err)
+	return resp
+}
+
 func TestEmptyGetWitnessForSignedHashPushesBodyOnArrival(t *testing.T) {
 	h := newTestHandler()
 	defer h.close()
@@ -416,33 +464,13 @@ func TestEmptyGetWitnessForSignedHashPushesBodyOnArrival(t *testing.T) {
 	peer, cleanup := newTestWit2PeerWithReader()
 	defer cleanup()
 
-	header := &types.Header{Number: big.NewInt(7777)}
-	hash := header.Hash()
-	rawdb.WriteHeader(h.chain.DB(), header)
-
-	witness, err := stateless.NewWitness(header, nil)
-	require.NoError(t, err)
-	var buf bytes.Buffer
-	require.NoError(t, witness.EncodeRLP(&buf))
-	bodyBytes := buf.Bytes()
-	witnessHash := stateless.WitnessCommitHash(bodyBytes)
-
 	// We hold a BP-signed announcement for this hash (the witness provably
 	// exists) but not the body yet — neither in-flight cache nor chain storage.
-	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
-		BlockHash:   hash,
-		BlockNumber: header.Number.Uint64(),
-		WitnessHash: witnessHash,
-		Signature:   make([]byte, wit.SignatureLength),
-	})
+	hash, bodyBytes, witnessHash := persistedSignedWitness(t, h, 7777, 0)
 
 	// Peer asks for the body before we have it → empty response. This must
 	// register the peer as waiting for the body.
-	resp, err := witH.handleGetWitness(peer, &wit.GetWitnessPacket{
-		RequestId:         1,
-		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
-	})
-	require.NoError(t, err)
+	resp := requestFirstWitnessPage(t, witH, peer, hash)
 	require.Equal(t, 1, len(resp))
 	require.Equal(t, uint64(0), resp[0].TotalPages, "precondition: body absent, must serve empty")
 	require.False(t, peer.KnownWitnessContainsHash(hash), "peer must not yet be treated as a body-holder")
@@ -473,30 +501,10 @@ func TestFlushWitnessWaitersForImportedPushesFromChainStorage(t *testing.T) {
 	peer, cleanup := newTestWit2PeerWithReader()
 	defer cleanup()
 
-	header := &types.Header{Number: big.NewInt(8888)}
-	hash := header.Hash()
-	rawdb.WriteHeader(h.chain.DB(), header)
-
-	witness, err := stateless.NewWitness(header, nil)
-	require.NoError(t, err)
-	var buf bytes.Buffer
-	require.NoError(t, witness.EncodeRLP(&buf))
-	bodyBytes := buf.Bytes()
-	witnessHash := stateless.WitnessCommitHash(bodyBytes)
-
-	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
-		BlockHash:   hash,
-		BlockNumber: header.Number.Uint64(),
-		WitnessHash: witnessHash,
-		Signature:   make([]byte, wit.SignatureLength),
-	})
+	hash, bodyBytes, _ := persistedSignedWitness(t, h, 8888, 0)
 
 	// Peer asks before we hold the body → empty, registers as waiter.
-	_, err = witH.handleGetWitness(peer, &wit.GetWitnessPacket{
-		RequestId:         1,
-		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
-	})
-	require.NoError(t, err)
+	requestFirstWitnessPage(t, witH, peer, hash)
 	require.False(t, peer.KnownWitnessContainsHash(hash))
 
 	// Native import: witness lands in chain storage only. The chain-head flush
@@ -928,32 +936,11 @@ func TestWaiterPushSkipsOversizedWitness(t *testing.T) {
 	peer, cleanup := newTestWit2PeerWithReader()
 	defer cleanup()
 
-	header := &types.Header{Number: big.NewInt(7780)}
-	hash := header.Hash()
-	rawdb.WriteHeader(h.chain.DB(), header)
-
-	witness, err := stateless.NewWitness(header, nil)
-	require.NoError(t, err)
-	FillWitnessWithDeterministicRandomState(witness, witnessPushMaxSize+1024*1024)
-	var buf bytes.Buffer
-	require.NoError(t, witness.EncodeRLP(&buf))
-	bodyBytes := buf.Bytes()
+	hash, bodyBytes, witnessHash := persistedSignedWitness(t, h, 7780, witnessPushMaxSize+1024*1024)
 	require.Greater(t, len(bodyBytes), witnessPushMaxSize, "fixture must exceed the push cap")
-	witnessHash := stateless.WitnessCommitHash(bodyBytes)
-
-	h.handler.signedWitnesses.putIfNewer(wit.SignedWitnessAnnouncement{
-		BlockHash:   hash,
-		BlockNumber: header.Number.Uint64(),
-		WitnessHash: witnessHash,
-		Signature:   make([]byte, wit.SignatureLength),
-	})
 
 	// Register the peer as a waiter: it asks for the body before we hold it.
-	resp, err := witH.handleGetWitness(peer, &wit.GetWitnessPacket{
-		RequestId:         1,
-		GetWitnessRequest: &wit.GetWitnessRequest{WitnessPages: []wit.WitnessPageRequest{{Hash: hash, Page: 0}}},
-	})
-	require.NoError(t, err)
+	resp := requestFirstWitnessPage(t, witH, peer, hash)
 	require.Equal(t, uint64(0), resp[0].TotalPages, "precondition: body absent, must serve empty")
 
 	// Body arrives. The push must be skipped — encoded size is over the wit
@@ -1079,4 +1066,15 @@ func TestMaySignAnnouncementForBlockBindsToSealer(t *testing.T) {
 	require.False(t,
 		maySignAnnouncementForBlock(engine, header, producer, 201, header.Hash()),
 		"announce blockNumber must match the local header")
+
+	// A header whose extra-data cannot yield a sealer (too short for a seal)
+	// is unbindable: refuse rather than sign blind.
+	unsealable := &types.Header{
+		Number:     big.NewInt(200),
+		Difficulty: big.NewInt(1),
+		Extra:      make([]byte, 10),
+	}
+	require.False(t,
+		maySignAnnouncementForBlock(engine, unsealable, producer, 200, unsealable.Hash()),
+		"a header without a recoverable sealer must refuse the producer binding")
 }
