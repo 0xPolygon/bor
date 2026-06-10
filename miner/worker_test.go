@@ -3665,7 +3665,7 @@ func TestPrefetchStream_EvmAbortSkipsAndResumes(t *testing.T) {
 
 	var processedMu sync.Mutex
 	var processed []common.Hash
-	onSuccess := func(h common.Hash, _ uint64) {
+	onSuccess := func(h common.Hash, _ uint64, _ time.Duration) {
 		processedMu.Lock()
 		processed = append(processed, h)
 		processedMu.Unlock()

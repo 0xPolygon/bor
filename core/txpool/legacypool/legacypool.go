@@ -139,6 +139,13 @@ var (
 	// to understand delay in block building.
 	pendingWaitTimer = metrics.NewRegisteredTimer("txpool/pendingwait", nil)
 
+	// arrivalToPromotedTimer measures, per transaction, the time from first local
+	// arrival (tx.Time(), stamped on RPC/p2p ingress) to the NewTxsEvent that makes
+	// the tx visible to block builders — one leg of the submit→builder-visibility
+	// latency decomposition. Low percentiles reflect the direct-to-pending flow;
+	// the tail includes txs that sat in the queue behind a nonce gap.
+	arrivalToPromotedTimer = metrics.NewRegisteredTimer("txpool/arrival_to_promoted", nil)
+
 	// metrics to capture time taken in adding transactions
 	syncAddTimer                = metrics.NewRegisteredTimer("txpool/add/sync", nil)
 	asyncAddStage0Timer         = metrics.NewRegisteredTimer("txpool/add/stage0", nil)
@@ -1692,6 +1699,12 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 		var txs []*types.Transaction
 		for _, set := range events {
 			txs = append(txs, set.Flatten()...)
+		}
+		if metrics.Enabled() {
+			now := time.Now()
+			for _, tx := range txs {
+				arrivalToPromotedTimer.Update(now.Sub(tx.Time()))
+			}
 		}
 		pool.txFeed.Send(core.NewTxsEvent{Txs: txs})
 	}

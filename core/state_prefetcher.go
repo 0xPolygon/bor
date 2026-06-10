@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -86,8 +87,10 @@ func (p *StatePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 //	                           caller implement phase transitions without tearing
 //	                           down the worker pool. May be nil.
 //	txsCh                    — transaction source; stream exits when this closes.
-//	onSuccess                — called from worker goroutines on each successful tx.
-//	                           Must be safe for concurrent invocation. May be nil.
+//	onSuccess                — called from worker goroutines on each successful tx,
+//	                           with the wall-clock duration of that tx's prefetch
+//	                           execution. Must be safe for concurrent invocation.
+//	                           May be nil (durations are then not measured at all).
 func (p *StatePrefetcher) PrefetchStream(
 	header *types.Header,
 	statedb *state.StateDB,
@@ -96,7 +99,7 @@ func (p *StatePrefetcher) PrefetchStream(
 	hardKill *atomic.Bool,
 	evmAbort *atomic.Bool,
 	txsCh <-chan *types.Transaction,
-	onSuccess func(hash common.Hash, gasUsed uint64),
+	onSuccess func(hash common.Hash, gasUsed uint64, execDuration time.Duration),
 ) *PrefetchResult {
 	evmInterrupt := resolveEvmInterrupt(evmAbort, hardKill)
 
@@ -164,7 +167,7 @@ type streamCtx struct {
 	evmAbort                 *atomic.Bool
 	evmInterrupt             *atomic.Bool
 	txsCh                    <-chan *types.Transaction
-	onSuccess                func(common.Hash, uint64)
+	onSuccess                func(common.Hash, uint64, time.Duration)
 
 	fails         atomic.Int64
 	totalGasUsed  atomic.Uint64
@@ -190,6 +193,10 @@ func (s *streamCtx) runWorker() {
 
 func (s *streamCtx) processTx(tx *types.Transaction) {
 	idx := int(s.txIndex.Add(1) - 1)
+	var start time.Time
+	if s.onSuccess != nil {
+		start = time.Now()
+	}
 	gasUsed, ok := s.p.prefetchOneTx(
 		tx, idx, s.header, s.statedb, s.reader, s.signer, s.cfg,
 		s.intermediateRootPrefetch, s.evmInterrupt, &s.fails,
@@ -202,7 +209,7 @@ func (s *streamCtx) processTx(tx *types.Transaction) {
 	s.successfulTxs = append(s.successfulTxs, tx.Hash())
 	s.txsMutex.Unlock()
 	if s.onSuccess != nil {
-		s.onSuccess(tx.Hash(), gasUsed)
+		s.onSuccess(tx.Hash(), gasUsed, time.Since(start))
 	}
 }
 

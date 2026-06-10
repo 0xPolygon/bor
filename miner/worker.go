@@ -204,6 +204,47 @@ var (
 	workerSnapshotCommitTimer    = metrics.NewRegisteredResettingTimer("worker/chain/snapshot/commits", nil)
 	workerTriedbCommitTimer      = metrics.NewRegisteredResettingTimer("worker/chain/triedb/commits", nil)
 	workerWitnessCollectionTimer = metrics.NewRegisteredTimer("worker/chain/witness/collection", nil)
+
+	// Mid-block inclusion instrumentation (Phase 1, observation-only — no behavior
+	// change; see midblockObserverLoop / recordMidblockBuildWindow).
+
+	// prefetchDurationTimer measures per-transaction prefetch execution latency on
+	// the worker prefetch path (idle + builder phases). Feeds the readiness
+	// simulation in recordMidblockBuildWindow.
+	prefetchDurationTimer = newRegisteredCustomTimer("worker/prefetch_duration", 8192)
+	// snapshotMissedByHistogram records, per transaction included in a produced
+	// block, the signed nanosecond delta visible_ts − prior build's snapshot_ts.
+	// Positive: the tx became builder-visible after the prior boundary (it could
+	// not have made the previous block — its delay is submit→visibility latency).
+	// Negative: it was visible in time yet missed the previous build (eligibility/
+	// filtering signal). A histogram rather than a timer because values are signed.
+	snapshotMissedByHistogram = metrics.NewRegisteredHistogram(
+		"worker/snapshot_missed_by",
+		nil,
+		metrics.NewExpDecaySample(8192, 0.015),
+	)
+	// candidatesDuringBuildMeter counts txs that became builder-visible while a
+	// build window (pool snapshot → tx-heap exhaustion) was open — the upper bound
+	// of the population a mid-block insertion mechanism could ever catch.
+	candidatesDuringBuildMeter = metrics.NewRegisteredMeter("worker/midblock/candidates_during_build", nil)
+	// candidatesReadyEstimateMeter counts the subset of candidates_during_build that
+	// would also have completed prefetch before heap exhaustion, simulated with the
+	// live p50 of worker/prefetch_duration. Optimistically biased: plan txs are
+	// timed mostly under idle-phase batching while real candidates would arrive
+	// under builder-phase contention. A screening signal, not a go/no-go gate.
+	candidatesReadyEstimateMeter = metrics.NewRegisteredMeter("worker/midblock/candidates_ready_estimate", nil)
+	// sealLeadTimeTimer measures, at seal completion, how far ahead of the block's
+	// own target time (sub-second header ActualTime) the sealed block is. In-turn
+	// post-Giugliano expectation ≈ +1.35 s (the slot wait is paid in Prepare, the
+	// build takes ~0.15 s). A shrinking lead means later broadcast.
+	sealLeadTimeTimer = metrics.NewRegisteredTimer("worker/seal_lead_time", nil)
+	// gasUsedRatioHistogram tracks produced-block fullness (gasUsed*100/gasLimit,
+	// 0–100) — the block-fullness regime under which the other readings hold.
+	gasUsedRatioHistogram = metrics.NewRegisteredHistogram(
+		"miner/block/gasusedratio",
+		nil,
+		metrics.NewExpDecaySample(1028, 0.015),
+	)
 )
 
 // firstNonZeroTime returns a if non-zero, otherwise b.
@@ -468,6 +509,16 @@ type worker struct {
 	noempty atomic.Bool
 
 	makeWitness bool
+
+	// Mid-block inclusion instrumentation (Phase 1, observation-only). A dedicated
+	// pool subscription feeds txVisibleAt because mainLoop's txsCh is not drained
+	// while commitWork is building — exactly the window being measured. All fields
+	// are nil/zero (and every hook a no-op) when metrics are disabled.
+	instrTxsCh     chan core.NewTxsEvent
+	instrTxsSub    event.Subscription
+	midblockMu     sync.Mutex                   // guards txVisibleAt and prevSnapshotAt
+	txVisibleAt    map[common.Hash]time.Time    // tx hash → when it became builder-visible
+	prevSnapshotAt time.Time                    // pool-snapshot time of the previous build
 }
 
 //nolint:staticcheck
@@ -502,6 +553,12 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker.noempty.Store(true)
 	// Subscribe for transaction insertion events (whether from network or resurrects)
 	worker.txsSub = eth.TxPool().SubscribeTransactions(worker.txsCh, true)
+	// Mid-block instrumentation subscription (metrics-gated: zero overhead otherwise).
+	if metrics.Enabled() {
+		worker.txVisibleAt = make(map[common.Hash]time.Time)
+		worker.instrTxsCh = make(chan core.NewTxsEvent, txChanSize)
+		worker.instrTxsSub = eth.TxPool().SubscribeTransactions(worker.instrTxsCh, true)
+	}
 	// Subscribe events for blockchain
 	worker.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(worker.chainHeadCh)
 
@@ -538,12 +595,107 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	go worker.resultLoop()
 	go worker.taskLoop()
 
+	if worker.instrTxsSub != nil {
+		worker.wg.Add(1)
+		go worker.midblockObserverLoop()
+	}
+
 	// Submit first work to initialize pending state.
 	if init {
 		worker.startCh <- struct{}{}
 	}
 
 	return worker
+}
+
+// Bounds for the mid-block instrumentation visibility map: a hard size cap
+// (arrivals beyond it are dropped until the per-build sweep frees room) and the
+// age beyond which a never-included entry is discarded by that sweep.
+const (
+	midblockVisibleCap = 65536
+	midblockVisibleTTL = 2 * time.Minute
+)
+
+// midblockObserverLoop stamps the wall-clock time at which each transaction
+// becomes pending-visible to block builders, on a subscription independent of
+// mainLoop (which is blocked inside commitWork for the whole build window).
+// Producers only: without the per-build consumption in recordMidblockBuildWindow
+// the map would otherwise grow to the cap and stay there.
+func (w *worker) midblockObserverLoop() {
+	defer w.wg.Done()
+	defer w.instrTxsSub.Unsubscribe()
+
+	for {
+		select {
+		case ev := <-w.instrTxsCh:
+			if !w.IsRunning() {
+				continue
+			}
+			now := time.Now()
+			w.midblockMu.Lock()
+			for _, tx := range ev.Txs {
+				if len(w.txVisibleAt) >= midblockVisibleCap {
+					break
+				}
+				w.txVisibleAt[tx.Hash()] = now
+			}
+			w.midblockMu.Unlock()
+		case <-w.exitCh:
+			return
+		case <-w.instrTxsSub.Err():
+			return
+		}
+	}
+}
+
+// recordMidblockBuildWindow emits the mid-block inclusion metrics for one
+// completed build window (pool snapshot → tx-heap exhaustion). Observation-only;
+// see the metric registrations for the semantics of each reading.
+func (w *worker) recordMidblockBuildWindow(env *environment, snapshotAt, exhaustionAt time.Time) {
+	if w.txVisibleAt == nil || !w.IsRunning() {
+		return
+	}
+
+	// Live sampled prefetch latency for the readiness simulation; zero until the
+	// first builds populate the timer, in which case the estimate is skipped.
+	prefetchP50 := time.Duration(prefetchDurationTimer.Snapshot().Percentile(0.5))
+
+	w.midblockMu.Lock()
+	defer w.midblockMu.Unlock()
+
+	// Signed snapshot miss per included tx, against the *prior* build's snapshot
+	// boundary — meaningful only from the second consecutive build onwards.
+	if !w.prevSnapshotAt.IsZero() {
+		for _, tx := range env.txs {
+			if visibleAt, ok := w.txVisibleAt[tx.Hash()]; ok {
+				snapshotMissedByHistogram.Update(int64(visibleAt.Sub(w.prevSnapshotAt)))
+			}
+		}
+	}
+	// Included txs can never be mid-block candidates again; consume their entries.
+	for _, tx := range env.txs {
+		delete(w.txVisibleAt, tx.Hash())
+	}
+
+	var during, ready int64
+	for hash, visibleAt := range w.txVisibleAt {
+		if visibleAt.After(snapshotAt) && !visibleAt.After(exhaustionAt) {
+			during++
+			if prefetchP50 > 0 && !visibleAt.Add(prefetchP50).After(exhaustionAt) {
+				ready++
+			}
+		} else if exhaustionAt.Sub(visibleAt) > midblockVisibleTTL {
+			// Never included and stale (dropped, replaced, or pre-dating our
+			// producer window): sweep it.
+			delete(w.txVisibleAt, hash)
+		}
+	}
+	candidatesDuringBuildMeter.Mark(during)
+	if prefetchP50 > 0 {
+		candidatesReadyEstimateMeter.Mark(ready)
+	}
+
+	w.prevSnapshotAt = snapshotAt
 }
 
 // setMockTxDelay sets the delay field used for inducing delay in between
@@ -1125,6 +1277,11 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
+
+			// Mid-block instrumentation: lead between seal completion and the
+			// block's own sub-second target time. The broadcast-lead guard for
+			// any future change composes this with worker/writeBlockAndSetHead.
+			sealLeadTimeTimer.Update(time.Until(block.Header().GetActualTime()))
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
 				receipts = make([]*types.Receipt, len(task.receipts))
@@ -2363,6 +2520,11 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	genParams.productionStart = time.Now()
 	// Fill pending transactions from the txpool into the block.
 	err = w.fillTransactions(interrupt, work, genParams)
+	// Mid-block instrumentation: the window between the pool snapshot (taken at
+	// the start of fillTransactions, == productionStart within microseconds) and
+	// tx-heap exhaustion (its return). Recorded regardless of err — an interrupted
+	// build still closed its window.
+	w.recordMidblockBuildWindow(work, genParams.productionStart, time.Now())
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.
@@ -2456,7 +2618,8 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	// low milliseconds, so the window is tiny but not zero.
 	inBuilderPhase := new(atomic.Bool)
 
-	onSuccess := func(hash common.Hash, _ uint64) {
+	onSuccess := func(hash common.Hash, _ uint64, execDuration time.Duration) {
+		prefetchDurationTimer.Update(execDuration)
 		if genParams.prefetchedTxHashes != nil {
 			genParams.prefetchedTxHashes.Store(hash, struct{}{})
 		}
@@ -2920,6 +3083,11 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 
 		if err != nil {
 			return err
+		}
+
+		// Mid-block instrumentation: block-fullness regime (0–100).
+		if gasLimit := block.GasLimit(); gasLimit > 0 {
+			gasUsedRatioHistogram.Update(int64(block.GasUsed() * 100 / gasLimit))
 		}
 
 		select {
