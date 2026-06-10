@@ -358,6 +358,40 @@ func TestBaseFee(t *testing.T) {
 		}
 	})
 
+	t.Run("LondonTransitionBlock", func(t *testing.T) {
+		// LondonBlock = 1 so the genesis block (number 0) is the pre-London
+		// parent of the first London block. IsLondon(0) is false, but
+		// IsLondon(0+1) is true, so BaseFee must return InitialBaseFee.
+		config := *params.NonActivatedConfig
+		config.HomesteadBlock = big.NewInt(0)
+		config.EIP150Block = big.NewInt(0)
+		config.EIP155Block = big.NewInt(0)
+		config.EIP158Block = big.NewInt(0)
+		config.ByzantiumBlock = big.NewInt(0)
+		config.ConstantinopleBlock = big.NewInt(0)
+		config.PetersburgBlock = big.NewInt(0)
+		config.IstanbulBlock = big.NewInt(0)
+		config.BerlinBlock = big.NewInt(0)
+		config.LondonBlock = big.NewInt(1)
+		db := rawdb.NewMemoryDatabase()
+		genesis := &core.Genesis{
+			Config:     &config,
+			Difficulty: big.NewInt(1),
+		}
+		chain, err := core.NewBlockChain(db, genesis, ethash.NewFaker(), nil)
+		require.NoError(t, err)
+		defer chain.Stop()
+		b := &EthAPIBackend{eth: &Ethereum{blockchain: chain}}
+		got := b.BaseFee(t.Context())
+		if got == nil {
+			t.Fatal("expected InitialBaseFee at London transition block, got nil")
+		}
+		expected := new(big.Int).SetUint64(params.InitialBaseFee)
+		if got.Cmp(expected) != 0 {
+			t.Fatalf("expected BaseFee %v, got %v", expected, got)
+		}
+	})
+
 	t.Run("PreLondon", func(t *testing.T) {
 		// NonActivatedConfig has no LondonBlock — IsLondon always returns false.
 		db := rawdb.NewMemoryDatabase()

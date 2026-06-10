@@ -530,7 +530,7 @@ func (b *EthAPIBackend) FeeHistory(ctx context.Context, blockCount uint64, lastB
 
 func (b *EthAPIBackend) BaseFee(ctx context.Context) *big.Int {
 	header := b.CurrentHeader()
-	if b.ChainConfig().IsLondon(header.Number) {
+	if b.ChainConfig().IsLondon(new(big.Int).Add(header.Number, common.Big1)) {
 		return eip1559.CalcBaseFee(b.ChainConfig(), header)
 	}
 	return nil
