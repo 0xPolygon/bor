@@ -17,7 +17,6 @@
 package legacypool
 
 import (
-	"fmt"
 	"math/big"
 	"math/rand"
 	"testing"
@@ -145,14 +144,14 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	state.AddBalance(common.Address{19: 1}, uint256.NewInt(1000), tracing.BalanceChangeTransfer)
 
 	trie, _ := state.StorageTrie(common.Address{19: 1})
-	fmt.Println("before", trie)
+	_ = trie
 
 	state.SetState(common.Address{19: 1}, common.Hash{}, common.Hash{30: 1})
 
 	state.Finalise(true)
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
-	fmt.Println("after", trie.Hash())
+	_ = trie
 
 	tx2.PutOptions(&options)
 	list.Add(tx2, DefaultConfig.PriceBump)
@@ -169,7 +168,7 @@ func TestFilterTxConditionalKnownAccounts(t *testing.T) {
 	state.Finalise(true)
 
 	trie, _ = state.StorageTrie(common.Address{19: 1})
-	fmt.Println("after2", trie.Hash())
+	_ = trie
 
 	// tx2 should be the single transaction filtered out
 	drops = list.FilterTxConditional(state, header)
